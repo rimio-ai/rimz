@@ -76,6 +76,7 @@ use super::aggregate::{
 /// v26: `g` response timing (`m` ms, `o` output tokens) for the per-model tok/s figure.
 /// v27 prices Codex turns after a priority `thread_settings_applied` at the
 /// model's fast multiplier, so finalized Codex sessions reprice once.
+/// Optional content anchors do not bump v27: legacy cursors retain their resume rule.
 pub(crate) const SPENDING_CACHE_VERSION: u32 = 27;
 
 /// Output tokens and elapsed milliseconds for timed responses.
@@ -126,8 +127,8 @@ impl SpendingDiskCache {
 /// Cached parse of one logical transcript or provider store.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileCacheEntry {
-    /// Exact identity captured before the last parse. Companion-free primary
-    /// growth can resume from the cursor; every other change re-parses cold.
+    /// Stat gate captured before the last parse. Companion-free changes can
+    /// resume an anchored cursor; legacy cursors resume only on primary growth.
     #[serde(default, rename = "s")]
     pub stat: TranscriptStat,
     /// Where the last parse left off — the next incremental parse resumes here.
@@ -163,6 +164,10 @@ pub struct FileCacheEntry {
 pub struct SpendCursor {
     #[serde(default, rename = "o", skip_serializing_if = "is_zero")]
     pub offset: u64,
+    /// CRC-32 of up to 4 KiB before the offset. Absent on legacy cursors and
+    /// adapters without rewrite detection; a mismatched anchor forces a cold read.
+    #[serde(default, rename = "a", skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<u32>,
     #[serde(default, rename = "s", skip_serializing_if = "Option::is_none")]
     pub state: Option<serde_json::Value>,
 }
@@ -183,6 +188,7 @@ impl SpendCursor {
     pub fn with_state<T: Serialize>(offset: u64, state: &T) -> Self {
         Self {
             offset,
+            anchor: None,
             state: serde_json::to_value(state).ok(),
         }
     }
@@ -190,18 +196,26 @@ impl SpendCursor {
 
 /// One spend parse: the entries read past the resume point, the single
 /// workspace origin observed for that parsed slice, and the cursor the cache
-/// stores for the next pass. A parser whose append-only log contains
-/// invalidation markers can request authoritative replacement after a cold
-/// fold instead of appending a suffix to stale cached entries.
+/// stores for the next pass. A cold fold can request authoritative replacement
+/// or a rewrite merge that preserves previously counted spend.
 #[derive(Debug, Default)]
 pub struct SpendParse {
     pub entries: Vec<CachedEntry>,
     pub origin: Option<PathBuf>,
     pub cursor: SpendCursor,
     pub unknown_models: BTreeMap<String, u64>,
-    /// Replace this file's cached entries and unknown-model set instead of
-    /// appending. Rewindable transcripts use this after an authoritative cold fold.
-    pub replace_entries: bool,
+    pub update: SpendUpdate,
+}
+
+/// How a parsed slice updates a previously cached file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpendUpdate {
+    #[default]
+    Extend,
+    /// The source is authoritative, including removal of prior entries.
+    Replace,
+    /// Keep prior spend and merge unseen recent keys after a content-anchor mismatch.
+    Rewritten,
 }
 
 /// A single cost entry with dedup keys for cross-file deduplication.

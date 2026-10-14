@@ -1,6 +1,117 @@
 use super::*;
 
 #[test]
+fn claude_rewrites_preserve_counted_spend() {
+    claude_rewrite_preserves_counted_spend("rename");
+}
+
+#[test]
+fn claude_shrink_preserves_counted_spend() {
+    claude_rewrite_preserves_counted_spend("shrink");
+}
+
+#[test]
+fn claude_tombstone_preserves_counted_spend() {
+    claude_rewrite_preserves_counted_spend("in-place");
+}
+
+fn claude_rewrite_preserves_counted_spend(mode: &str) {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let old = claude_line(&today, 1.0, "old", "old");
+    let kept = claude_line(&today, 2.0, "kept", "kept");
+    let new = claude_line(&today, 4.0, "new-longer-id", "new-longer-id");
+    let file = write_jsonl(dir.path(), "chat.jsonl", &[&old, &kept]);
+    let mut cache = SpendingDiskCache::default();
+    assert_eq!(
+        compute_total(std::slice::from_ref(&file), &mut cache)
+            .headline
+            .usd,
+        3.0
+    );
+    if mode == "in-place" {
+        write_jsonl(dir.path(), "chat.jsonl", &[&kept, &new]);
+    } else {
+        let replacement = write_jsonl(dir.path(), "replacement.jsonl", &[&kept]);
+        std::fs::rename(replacement, &file).unwrap();
+        if mode == "rename" {
+            append_line(&file, &new);
+        }
+    }
+    let expected = if mode == "shrink" { 3.0 } else { 7.0 };
+    assert_eq!(
+        compute_total(std::slice::from_ref(&file), &mut cache)
+            .headline
+            .usd,
+        expected,
+        "{mode}"
+    );
+    assert_eq!(compute_total(&[file], &mut cache).headline.usd, expected);
+}
+
+#[test]
+fn claude_legacy_growth_becomes_anchored() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let file = write_jsonl(
+        dir.path(),
+        "chat.jsonl",
+        &[&claude_line(&today, 1.0, "old", "old")],
+    );
+    let mut cache = SpendingDiskCache::default();
+    compute_total(std::slice::from_ref(&file), &mut cache);
+    let key = file.to_string_lossy().into_owned();
+    let cursor = &mut cache.files.get_mut(&key).unwrap().cursor;
+    let mut legacy = serde_json::to_value(&*cursor).unwrap();
+    legacy.as_object_mut().unwrap().remove("a");
+    *cursor = serde_json::from_value(legacy).unwrap();
+    let len = std::fs::metadata(&file).unwrap().len() as usize;
+    std::fs::write(&file, vec![b' '; len]).unwrap();
+    append_line(&file, &claude_line(&today, 2.0, "new", "new"));
+    assert_eq!(compute_total(&[file], &mut cache).headline.usd, 3.0);
+    assert!(
+        serde_json::to_value(&cache.files[&key].cursor)
+            .unwrap()
+            .get("a")
+            .is_some()
+    );
+}
+
+#[test]
+fn claude_rewrite_retains_rollups_and_unknowns_without_replaying_old_rows() {
+    let dir = TempDir::new().unwrap();
+    let old = claude_line_ago(10 * 86_400, 1.0, "old", "old");
+    let kept = claude_line_ago(0, 2.0, "kept", "kept");
+    let file = write_jsonl(dir.path(), "chat.jsonl", &[&old, &kept]);
+    let mut cache = SpendingDiskCache::default();
+    compute_total(std::slice::from_ref(&file), &mut cache);
+    let key = file.to_string_lossy().into_owned();
+    let prior = cache.files[&key].entries.clone();
+    assert!(prior.iter().any(|entry| entry.rolled));
+    cache
+        .files
+        .get_mut(&key)
+        .unwrap()
+        .unknown_models
+        .insert("missing-model".into(), NOW_SECS);
+    let new_old = claude_line_ago(10 * 86_400, 8.0, "unseen-old", "unseen-old");
+    let new = claude_line_ago(0, 4.0, "new", "new");
+    write_jsonl(dir.path(), "chat.jsonl", &[&kept, &old, &new_old, &new]);
+    compute_total(&[file], &mut cache);
+    let entry = &cache.files[&key];
+    assert_eq!(
+        entry
+            .entries
+            .iter()
+            .map(|entry| entry.cost_usd)
+            .sum::<f64>(),
+        7.0
+    );
+    assert!(prior.iter().all(|row| entry.entries.contains(row)));
+    assert_eq!(entry.unknown_models.get("missing-model"), Some(&NOW_SECS));
+}
+
+#[test]
 fn spending_discovery_override_reaches_worker_and_restores_prior() {
     let file = PathBuf::from("/fixture/claude.jsonl");
     let _discovery = override_discovered_spending_files_for_test(vec![spending_file(
@@ -233,7 +344,10 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     let suffix_file = write_jsonl(
         dir.path(),
         "suffix.jsonl",
-        &[&claude_line(&today, 1.0, "msg-1", "req-1")],
+        &[&claude_line(&today, 1.0, "msg-1", "req-1").replace(
+            "{\"timestamp\"",
+            &format!("{{\"unused\":\"{}\",\"timestamp\"", "x".repeat(8192)),
+        )],
     );
     let mut cache = SpendingDiskCache::default();
     let first = compute_spending(
@@ -251,7 +365,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
             .open(&suffix_file)
             .unwrap();
         f.seek(SeekFrom::Start(0)).unwrap();
-        f.write_all(&vec![b'x'; prefix_len - 1]).unwrap();
+        f.write_all(&vec![b'x'; prefix_len - 4096]).unwrap();
     }
     append_line(&suffix_file, &claude_line(&today, 0.25, "msg-2", "req-2"));
     let suffix = compute_spending(
@@ -279,7 +393,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((truncated.total.headline.usd - 1.0).abs() < 1e-9);
+    assert!((truncated.total.headline.usd - 1.5).abs() < 1e-9);
 
     let rewrite_file = write_jsonl(
         dir.path(),
@@ -298,7 +412,7 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     write_jsonl(
         dir.path(),
         "rewrite.jsonl",
-        &[&claude_line(&today, 3.0, "msg-r", "req-r")],
+        &[&claude_line(&today, 3.0, "msg-s", "req-s")],
     );
     set_file_mtime_nanos(&rewrite_file, NOW_SECS, 200);
     let rewritten_stat = crate::agents::TranscriptStat::from_path(&rewrite_file).unwrap();
@@ -306,13 +420,15 @@ fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     assert_eq!(warmed_stat.mtime_nanos, 100);
     assert_eq!(rewritten_stat.mtime_secs, i64::try_from(NOW_SECS).unwrap());
     assert_eq!(rewritten_stat.mtime_nanos, 200);
+    assert_eq!(warmed_stat.len, rewritten_stat.len);
     let rewritten = compute_spending(
         &[spending_file(claude_adapter(), rewrite_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((rewritten.total.headline.usd - 3.0).abs() < 1e-9);
+    // Only a nanosecond-aware stat gate re-parses; the merge keeps msg-r and adds msg-s.
+    assert!((rewritten.total.headline.usd - 4.0).abs() < 1e-9);
 }
 
 #[test]

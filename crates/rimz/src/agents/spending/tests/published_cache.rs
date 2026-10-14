@@ -262,6 +262,17 @@ fn cache_version_prefix_gates_reads_and_writes() {
 
 #[test]
 fn spending_cursor_cache_wire_shape_uses_short_keys() {
+    let anchored: SpendCursor =
+        serde_json::from_value(serde_json::json!({"o": 7, "a": 123})).unwrap();
+    assert_eq!(
+        serde_json::to_value(anchored).unwrap(),
+        serde_json::json!({"o": 7, "a": 123})
+    );
+    let legacy: SpendCursor = serde_json::from_value(serde_json::json!({"o": 7})).unwrap();
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap(),
+        serde_json::json!({"o": 7})
+    );
     let full = CachedEntry {
         ts_secs: 12_345,
         cost_usd: 0.125,
@@ -360,6 +371,7 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
             }),
         },
         cursor: SpendCursor {
+            anchor: None,
             offset: 77,
             state: Some(serde_json::json!({"acc": 3})),
         },

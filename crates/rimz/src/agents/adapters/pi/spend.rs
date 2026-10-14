@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path, price_split};
+use crate::agents::spending::{
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, price_split,
+};
 
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
@@ -322,7 +324,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         origin: state.cwd.clone(),
         cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 

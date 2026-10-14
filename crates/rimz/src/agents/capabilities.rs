@@ -947,7 +947,7 @@ pub trait SpendingCapability: CoreCapability {
         files
     }
 
-    /// Read the durable identity of one logical transcript or provider store.
+    /// Read the stat gate of one logical transcript or provider store.
     /// Adapters attach every provider-owned companion whose bytes participate
     /// in parsing the primary path; callers use this single boundary for cache
     /// invalidation without discovering companions as duplicate sources.

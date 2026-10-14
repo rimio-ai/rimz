@@ -26,7 +26,7 @@
 //! Entries are returned raw. Batch consumers apply the shared
 //! `SidechainDedup` policy in the fleet walk, seat fold, or per-session
 //! selector; live folds retain a contiguous-duplicate window. An incremental
-//! suffix parse therefore never has to see the lines before its resume point.
+//! suffix parse only rereads the content anchor before its resume point.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,11 +35,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_ms, iso_to_unix_secs, origin_path,
-    price_split, response_timing,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_ms, iso_to_unix_secs,
+    origin_path, price_split, response_timing,
 };
 
-use crate::agents::transcript_fs::{bytes_contains, read_transcript_lines};
+use crate::agents::transcript_fs::{bytes_contains, read_anchored_transcript};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
@@ -376,27 +376,32 @@ struct ClaudeInput {
 /// Entries are returned raw, duplicates and sidechain replays included. Batch
 /// consumers apply the shared `(message.id, requestId)` policy in the fleet
 /// walk, seat fold, or per-session selector; live folds retain a
-/// contiguous-duplicate window. A suffix parse therefore never needs the lines
-/// before its resume point.
+/// contiguous-duplicate window. A suffix parse checks its content anchor;
+/// a mismatch resets timing state and reports a rewrite for the consumer to merge.
 pub fn parse_claude_spend(
     path: &Path,
     resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
-    let mut state: ClaudeSpendState = resume.map(SpendCursor::state_as).unwrap_or_default();
-    state.pricing_fingerprint = super::managed_pricing::fingerprint_current();
-    let Some((content, next_offset)) = read_transcript_lines(path, from_offset) else {
-        return SpendParse {
-            cursor: SpendCursor::with_state(from_offset, &state),
-            ..SpendParse::default()
-        };
+    let Some(read) =
+        read_anchored_transcript(path, from_offset, resume.and_then(|cursor| cursor.anchor))
+    else {
+        return SpendParse::stalled(resume);
     };
+    if read.content.is_empty() && !read.rewritten && resume.is_some() {
+        return SpendParse::stalled(resume);
+    }
+    let mut state: ClaudeSpendState = resume
+        .filter(|_| !read.rewritten)
+        .map(SpendCursor::state_as)
+        .unwrap_or_default();
+    state.pricing_fingerprint = super::managed_pricing::fingerprint_current();
     let mut entries: Vec<CachedEntry> = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
 
-    for line in content.split(|&b| b == b'\n') {
+    for line in read.content.split(|&b| b == b'\n') {
         if bytes_contains(line, br#""user""#)
             && let Ok(input) = serde_json::from_slice::<ClaudeInput>(line)
             && input.kind == "user"
@@ -515,12 +520,18 @@ pub fn parse_claude_spend(
         }
     }
 
+    let mut cursor = SpendCursor::with_state(read.offset, &state);
+    cursor.anchor = read.anchor;
     SpendParse {
         entries,
         origin,
-        cursor: SpendCursor::with_state(next_offset, &state),
+        cursor,
         unknown_models,
-        replace_entries: false,
+        update: if read.rewritten {
+            SpendUpdate::Rewritten
+        } else {
+            SpendUpdate::Extend
+        },
     }
 }
 

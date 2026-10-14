@@ -83,12 +83,15 @@ The shared `spending.json` cursor cache ([`cache.rs`](../../../crates/rimz/src/a
 | Source state | Work |
 | --- | --- |
 | exact stamp hit | served from cache |
-| primary grew, no companion | parse the appended suffix from the cursor |
+| changed primary, no companion, anchored cursor | validate the content anchor, then parse the suffix or merge a rewritten file |
+| primary grew, no companion, legacy cursor | parse the appended suffix from the cursor |
 | a companion appears, changes, or is removed | cold parse |
 | several cold sources | parse in a bounded worker pool |
 | a new source whose newest mtime predates the widest window plus a skew margin | skipped without a record; dead records past that boundary are evicted |
 
 Append-only stores advance incrementally. Rewind-prone stores return an authoritative replacement: OpenCode ignores resume state for every changed SQLite database, cold-folds the whole mutable table, and replaces that file's cached entries, so in-place row completion never loses spend.
+
+Claude cursors anchor their nonzero byte offset with the CRC-32 of up to 4 KiB immediately before it. A shrink or mismatched anchor restarts the parse, including after an in-place tombstone or a rename followed by regrowth. A non-heal fleet refresh keeps all previously counted rows and unknown models, adding only unseen `(message.id, requestId)` pairs inside the eight-day raw-retain window (keyless rows join too). Older fresh rows are excluded because their prior spend may already be in keyless rollups. Legacy cursors without anchors keep the old growth-only resume rule and become anchored on progress; unchanged stamps still skip reading. This optional field does not bump the cache version. Pricing heals still replace rather than merge, so a heal coinciding with a rewrite can lose rows removed from the source.
 
 The cursor carries provider resume state where a parser needs it: Claude's object-shaped pricing fingerprint and response timing, Codex's cumulative-totals fold, response timing, service tier, and learned file origin (which survives cold re-parses), Copilot's per-model shutdown baselines and session-start directory, and Pi's session header directory. Rows dedup against retry writes within each parsed chunk. Finalized rows stay exact for 8 days, which covers the trailing week and cross-file retry and sidechain dedup; older rows compact into per-day, per-model, per-thread rollups out to 365 days.
 

@@ -120,7 +120,7 @@ A matcher on a provider error body (an auth rejection, a lapsed plan) is written
 
 `spend.rs` is sidebar-safe by construction: read-only, and the `ensure_spend_parser_boundaries` invariant grep ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) rejects store-write, run-wake, and broker imports in any spend path.
 
-Spend results are cached per file stat, so a `spend.rs` change reaches only transcripts parsed after it. A change that drops, adds, or reprices entries for transcripts already on disk bumps `SPENDING_CACHE_VERSION` in [`spending/cache.rs`](../../crates/rimz/src/agents/spending/cache.rs) with a one-line reason, and any branch that must clear entries an earlier parse cached returns `replace_entries: true`.
+Spend results are cached per file stat, so a `spend.rs` change reaches only transcripts parsed after it. A change that drops, adds, or reprices entries for transcripts already on disk bumps `SPENDING_CACHE_VERSION` in [`spending/cache.rs`](../../crates/rimz/src/agents/spending/cache.rs) with a one-line reason, and any branch that must clear entries an earlier parse cached returns `SpendUpdate::Replace`.
 
 ## Step 9 — Test it
 

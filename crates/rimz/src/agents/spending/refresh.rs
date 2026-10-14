@@ -12,9 +12,13 @@ use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::{AgentDefinition, TranscriptStat};
 
 use super::aggregate::stamp_file_origin;
-use super::aggregate::{cold_parse_out_of_window, normalized_absolute_path, within_widest_window};
+use super::aggregate::{
+    cold_parse_out_of_window, normalized_absolute_path, within_raw_retain_window,
+    within_widest_window,
+};
 use super::cache::{
-    CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendingDiskCache, compact_spending_cache,
+    CachedEntry, FileCacheEntry, SpendCursor, SpendParse, SpendUpdate, SpendingDiskCache,
+    compact_spending_cache,
 };
 use super::{SpendProgress, WalkStats};
 
@@ -112,6 +116,7 @@ pub(crate) fn refresh_spending_cache(
             stat,
             resume,
             parse_origin,
+            now_secs,
         });
     }
 
@@ -157,7 +162,7 @@ pub(crate) fn refresh_decision(
             (!heals
                 && entry.stat.companion.is_none()
                 && stat.companion.is_none()
-                && stat.len > entry.stat.len)
+                && (entry.cursor.anchor.is_some() || stat.len > entry.stat.len))
                 .then(|| entry.cursor.clone())
         }),
     }
@@ -175,6 +180,7 @@ struct SpendingParseJob<'a> {
     stat: TranscriptStat,
     resume: Option<SpendCursor>,
     parse_origin: Option<PathBuf>,
+    now_secs: u64,
 }
 
 fn refresh_spending_cache_jobs(
@@ -243,17 +249,35 @@ fn spending_parse_workers(job_count: usize) -> usize {
 fn fold_spending_parse_job(
     cache: &mut SpendingDiskCache,
     job: &SpendingParseJob<'_>,
-    parsed: SpendParse,
+    mut parsed: SpendParse,
 ) {
     let file_origin = job.parse_origin.clone().or(parsed.origin);
-    if job.resume.is_some() && !parsed.replace_entries {
-        // Grown jobs are created only from an existing cache entry.
+    if job.resume.is_some() && parsed.update != SpendUpdate::Replace {
+        // Resumed jobs are created only from an existing cache entry.
         let entry = cache
             .files
             .get_mut(&job.key)
-            .expect("grown spending parse job must have a cache entry");
+            .expect("resumed spending parse job must have a cache entry");
+        if parsed.update == SpendUpdate::Rewritten {
+            let kept_keys: BTreeSet<_> = entry
+                .entries
+                .iter()
+                .filter(|entry| !entry.rolled)
+                .map(|entry| (entry.message_id.as_deref(), entry.request_id.as_deref()))
+                .collect();
+            parsed.entries.retain(|fresh| {
+                within_raw_retain_window(fresh.ts_secs, job.now_secs)
+                    && ((fresh.message_id.is_none() && fresh.request_id.is_none())
+                        || !kept_keys
+                            .contains(&(fresh.message_id.as_deref(), fresh.request_id.as_deref())))
+            });
+            for (model, ts) in &parsed.unknown_models {
+                record_unknown_model(&mut entry.unknown_models, model, *ts);
+            }
+        } else {
+            entry.unknown_models.extend(parsed.unknown_models);
+        }
         entry.entries.extend(parsed.entries);
-        entry.unknown_models.extend(parsed.unknown_models);
         entry.cursor = parsed.cursor;
         entry.stat = job.stat;
         if let Some(origin) = file_origin.as_deref() {
@@ -466,6 +490,7 @@ mod tests {
         FileCacheEntry {
             stat,
             cursor: SpendCursor {
+                anchor: None,
                 offset: 10,
                 state: None,
             },
@@ -510,6 +535,7 @@ mod tests {
                     ..TranscriptStat::default()
                 },
                 cursor: SpendCursor {
+                    anchor: None,
                     offset: 10,
                     state: None,
                 },
@@ -528,17 +554,19 @@ mod tests {
                 ..TranscriptStat::default()
             },
             resume: Some(SpendCursor {
+                anchor: None,
                 offset: 10,
                 state: None,
             }),
             parse_origin: None,
+            now_secs: 2,
         };
         fold_spending_parse_job(
             &mut cache,
             &job,
             SpendParse {
                 entries: vec![entry(2)],
-                replace_entries: true,
+                update: SpendUpdate::Replace,
                 ..SpendParse::default()
             },
         );

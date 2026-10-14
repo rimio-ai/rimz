@@ -209,6 +209,7 @@ fn stale_provider_observation_updates_latest_locked_record() {
     let mut refresh = full_local_refresh();
     let mut spend_fold = LocalSpendFold::default();
     spend_fold.cursor = crate::agents::spending::SpendCursor {
+        anchor: None,
         offset: 42,
         state: None,
     };
@@ -260,6 +261,7 @@ fn foldless_local_refresh_preserves_prior_spend_fold() {
     let mut prior = codex_record(observed_at);
     let mut spend_fold = LocalSpendFold::default();
     spend_fold.cursor = crate::agents::spending::SpendCursor {
+        anchor: None,
         offset: 42,
         state: None,
     };

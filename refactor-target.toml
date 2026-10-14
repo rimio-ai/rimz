@@ -194,7 +194,8 @@ upward-dependencies = ["address"]
 # The fast-mode switch declaration is shared by adapters and definition load.
 # model_label_parts and window_short share model and window spelling across renderers (+2).
 # model_label_source shares version-aware model source selection between CLI and sidebar (+1).
-surface-budget = 1034
+# SpendUpdate distinguishes authoritative replacement from a counted-spend rewrite merge (+1).
+surface-budget = 1035
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -262,7 +263,8 @@ surface-budget = 15
 path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
 # ResponseTiming and the timed window counters/rate cross the adapter and stats seams.
-surface-budget = 87
+# SpendUpdate exposes the parser's three-way cache update policy (+1).
+surface-budget = 88
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -2300,6 +2302,11 @@ reason = "One durable normalized row: aggregation, dedup and compaction read tok
 kind = "item"
 key = "agents::spending::cache::SpendParse"
 reason = "Return type of the public SpendingCapability::parse_spend; the parser wire (SpendParse, SpendCursor, SpendingSource*) stays public for that trait and the adapters (pass 13)."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::cache::SpendUpdate"
+reason = "Public SpendParse update policy distinguishes incremental extension, authoritative replacement, and a rewrite merge preserving counted spend."
 
 [[verdict]]
 kind = "item"

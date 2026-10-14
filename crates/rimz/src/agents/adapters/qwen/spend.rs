@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, origin_path, price_split,
 };
 use crate::agents::transcript_fs::home_dir;
 
@@ -56,7 +56,7 @@ pub(super) fn parse_qwen_spend(
         origin,
         cursor: SpendCursor::default(),
         unknown_models,
-        replace_entries: true,
+        update: SpendUpdate::Replace,
     }
 }
 
@@ -146,11 +146,12 @@ mod tests {
         .unwrap();
 
         let resumed = SpendCursor {
+            anchor: None,
             offset: 999,
             state: Some("ignored".into()),
         };
         let second = parse_qwen_spend(&path, Some(&resumed), &PriceBook::fixture());
-        assert!(second.replace_entries);
+        assert_eq!(second.update, SpendUpdate::Replace);
         assert_eq!(second.cursor, SpendCursor::default());
         assert_eq!(second.entries.len(), 2);
         assert!(
@@ -180,7 +181,7 @@ mod tests {
         .unwrap();
         let parsed = parse_qwen_spend(&path, None, &PriceBook::fixture());
         assert!(parsed.entries.is_empty());
-        assert!(parsed.replace_entries);
+        assert_eq!(parsed.update, SpendUpdate::Replace);
     }
 
     #[test]
@@ -225,6 +226,6 @@ mod tests {
     fn unreadable_transcript_is_not_authoritative() {
         let dir = tempfile::tempdir().unwrap();
         let parsed = parse_qwen_spend(dir.path(), None, &PriceBook::fixture());
-        assert!(!parsed.replace_entries);
+        assert_ne!(parsed.update, SpendUpdate::Replace);
     }
 }
