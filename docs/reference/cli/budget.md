@@ -5,10 +5,10 @@ Two commands read and change dollar caps while the room runs: `rimz agents budge
 | Scope | Armed by | Window | Command |
 | --- | --- | --- | --- |
 | One agent | `--budget` at launch, or the profile `budget` field | session, or `/day` | `rimz agents budget <REF>` |
-| Room fleet | `harness.budget` in `config.toml` | `/day` only | `rimz budget` |
-| Provider account | `[accounts.budget]` in `config.toml` | `/day` only | `rimz budget --account <KIND>` |
+| Room fleet | `harness.budget` in `config.toml`, or `rimz budget N/day` | `/day` only | `rimz budget` |
+| Provider account | `[accounts.budget]` in `config.toml`, or `rimz budget --account KIND N/day` | `/day` only | `rimz budget --account <KIND>` |
 
-A cap is a non-negative dollar amount with an optional `$`, such as `5` or `$4.50`. A bare amount caps the whole session; the `/day` suffix caps each local day, measured from midnight in the configured time zone. Neither command has `--json`; both take the [global flags](../cli.md#global-flags).
+A cap is a non-negative dollar amount with an optional `$`, such as `5` or `$4.50`. A bare amount caps the whole session; the `/day` suffix caps each local day in the configured time zone. Room and account spend is measured from midnight; an agent's day window starts when its cap takes effect and restarts on the first check after midnight. Both commands support `--json` and take the [global flags](../cli.md#global-flags).
 
 ## Cap one agent
 
@@ -19,7 +19,7 @@ rimz agents budget @coder          # inspect
 rimz agents budget @coder 10       # set a $10 session cap
 rimz agents budget @coder 20/day   # set a $20 daily cap
 rimz agents budget @coder +5       # raise the current cap by $5
-rimz agents budget @coder clear    # remove the cap
+rimz agents budget @coder off      # remove the cap
 ```
 
 | `VALUE` | Effect |
@@ -27,26 +27,20 @@ rimz agents budget @coder clear    # remove the cap
 | omitted | Print the report and change nothing. |
 | `AMOUNT` or `AMOUNT/day` | Set the cap and its window. Switching a session cap to `/day` counts only spend from that moment for the rest of today. |
 | `+AMOUNT` | Raise the current cap by `AMOUNT`, keeping its window. On an agent that never had a cap, this sets an `AMOUNT` session cap. A cleared cap refuses the raise (`cannot raise a cleared budget; set an absolute cap first`), and `+AMOUNT/day` is refused. |
-| `clear` | Remove the cap. `off` is not accepted here. |
+| `off`, `clear` | Remove the cap. |
 
-Every form prints the report, after the change when there is one:
+Every form prints one line naming the handle and window (`session` or `day`). With a cap it shows spend of cap, parked or not, the source, and the raise and lift commands. Without a cap it shows the command to set one. Unknown spend is labelled `unknown spend`.
 
-| Field | Shows |
-| --- | --- |
-| `agent` | The agent's [handle](./agents.md#addressing-agents), channel suffix included (`@coder#auth`). |
-| `spend` | Spend counted against the cap in its window, as `$N.NN`, or `-` when the agent's cost is unknown. |
-| `cap` | The cap in effect as `$N.NN`, or `none` when unset or cleared. |
-| `window` | `session` or `day`, or `-` when the agent never had a cap. A cleared cap keeps its last window. |
-| `parked` | `yes` when this agent's own cap has parked it, otherwise `no`. |
+With `--json`, the report is one object: `agent` (handle, channel included), `spend_usd` and `cap_usd` (numbers or null), `window` (`session`, `day`, or null when never capped), `source`, and `parked` (boolean). A cleared cap keeps its last window. Source is `launch` for the original launch/profile cap, `override` for runtime edits (absolute or relative), `cleared` after lifting, and `none` when never capped.
 
 Any change lifts the park this agent's cap set. When that park had interrupted a running turn, RimZ also queues the configured continue prompt (`[resume] auto_continue_text`, default `continue`) to the agent; `--no-continue` lifts the park and leaves the agent at rest. A park set by the room or account cap stays until `rimz budget` lifts it.
 
 ## Cap the room and accounts
 
-`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. A cap belongs to a history pool, so `default` and every shared account of a kind name the same scope, printed as `<KIND>@default account`; a standalone account names its own. Config supplies the default through `harness.budget` or `[accounts.budget].<kind>`; the command can also set a cap without either key, without editing config.
+`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. A cap belongs to a history pool, so `default` and every shared account of a kind name the same scope, identified as `<KIND>@default`; a standalone account names its own. Config supplies the default through `harness.budget` or `[accounts.budget].<kind>`; the command can also set a cap without either key, without editing config.
 
 ```sh
-rimz budget                        # fleet cap plus every configured account cap
+rimz budget                        # fleet cap plus every active or adjusted account pool
 rimz budget 30/day                 # replace the fleet cap
 rimz budget +10                    # raise it by $10
 rimz budget off                    # disable it
@@ -60,22 +54,15 @@ rimz budget +25 --account claude   # raise this room's Claude account cap
 | `+AMOUNT` | Raise the cap in effect by `AMOUNT`. A cleared or unarmed cap refuses the raise (``cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first``), and `+AMOUNT/day` is refused. |
 | `off`, `clear` | Disable the cap until a later `AMOUNT/day` re-arms it. Editing the config value does not re-arm it. |
 
-An account cap applies to one provider login and sums that login's spend across every room running on it; each room parks only the panes it owns. A bare `KIND` resolves the room's default login, and fails with ``cannot resolve this room's <kind> account; check `rimz accounts list` `` when the room has none. An explicit `KIND@NAME` must exist in the machine's account catalog. Each login has its own ledger, while the configured cap stays per provider kind.
+An account cap applies to one history pool and sums spend across every room using its members; each room parks only the panes it owns. A bare `KIND` resolves the room's default login, and fails with ``cannot resolve this room's <kind> account; check `rimz accounts list` `` when the room has none. An explicit `KIND@NAME` must exist in the machine's account catalog. Each pool has its own ledger, while the configured cap stays per provider kind.
 
 Account caps need authoritative account-level dollar history, which the built-in Claude, Codex, Grok, OpenCode, and Pi adapters provide (the `spend` column of the [wiring matrix](../agent-support.md#the-wiring-matrix) reads ✓), as does a plugin that declares a spend probe. Any other kind in `[accounts.budget]` is refused by config validation and room start. `rimz budget --account KIND` validates only the targeted kind and names the key to remove if it is ineligible; ineligible siblings do not block it or produce warnings.
 
-Every form prints the scope's report, after the change when there is one:
+Every form prints one line: with a cap, spend of cap today, parked or not, the source, and the raise and lift commands; without a cap, `no daily cap` and the command to set one. Source is `config`, `override` (an absolute runtime cap), `raised` (a raise on a base), `cleared`, or `none`. A configured turn cap prints separately and cannot be changed here.
 
-| Field | Shows |
-| --- | --- |
-| `scope` | `fleet`, or `<kind>@<login> account`. |
-| `cap` | The cap in effect as `$N.NN/day`, or `none`. |
-| `source` | Where the cap comes from: `config`, `override` (a cap set with `AMOUNT/day`), `raised` (a `+AMOUNT` raise on a base cap), `cleared` (disabled with `off` or `clear`), or `none` (no base cap is set). |
-| `spend` | Today's spend for the scope, as `$N.NN today`. |
-| `parked` | `yes` when the cap has parked agents, otherwise `no`. |
-| `turn cap` | Printed only when `harness.turn_budget` is set, as `$N.NN/turn (source: config; per turn)`. `rimz budget` cannot change it. |
+An account scope line names the requested account, its history pool, and the other pool members. A bare kind also says it resolved through this room's account. Without `--account`, a table lists every eligible pool with an effective cap or a non-`none` source, including runtime-only caps and cleared pools. The columns are `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED`. Each ineligible configured key is omitted and gets one warning on stderr naming the key to remove and why. Fleet writes still proceed.
 
-Without `--account`, when `[accounts.budget]` has any key, a table follows with one row per history pool of each eligible capped kind (`<KIND>@default` for the default and shared accounts, plus one per standalone account), including pools no agent in this room uses. Its columns `ACCOUNT`, `CAP`, `SOURCE`, `SPEND`, and `PARKED` carry the same values as the fields above, except that `SPEND` prints `$N.NN` without `today`. Each ineligible key is omitted and gets one `rimz: warning: ...` line on stderr after the table, naming the key to remove and why. Fleet writes still proceed and print the same report and warnings afterward.
+With `--json`, the report is one object with `fleet` (a scope object, or null under `--account`), `accounts` (the table's scopes, or the one requested pool), and `turn_cap_usd` (number or null). Each scope has `scope` (`fleet` or the pool's `kind@name`), `cap_usd` (number or null), `source`, `spend_usd` (local-day spend), and `parked` (boolean). Account scopes add `members` (all pool members as `kind@name`); the targeted view also adds `requested`, the requested token resolved to `kind@name`. JSON replaces human output, including after an edit.
 
 Any change lifts the scope's park for this room's agents. When the cap had parked the scope, RimZ queues the configured continue prompt to each agent in this room that the park interrupted; `--no-continue` leaves them at rest. Agents another room interrupted on the same account stay at rest.
 

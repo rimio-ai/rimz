@@ -5272,7 +5272,7 @@ fn agent_budget_edits_and_views_use_local_day() {
     for (value, expected_cap, disabled) in [
         ("10", Some(10.0), false),
         ("+5", Some(15.0), false),
-        ("clear", None, true),
+        ("off", None, true),
     ] {
         loop_ok(
             &env,
@@ -5317,7 +5317,7 @@ fn agent_budget_edits_and_views_use_local_day() {
     // handle the reader can type back, never by the session id behind it.
     let view = loop_ok(&env, &["agents", "budget", "@claude"]);
     assert!(
-        view.contains("agent:  @claude#main"),
+        view.contains("@claude#main · $10.00 of $20.00 day"),
         "budget view must print the handle: {view}"
     );
     assert!(
@@ -5333,6 +5333,71 @@ fn agent_budget_edits_and_views_use_local_day() {
     assert_eq!(budget["spent_usd"], 10.0);
     assert_eq!(budget["parked"], false);
     assert_eq!(budget["park"], serde_json::Value::Null);
+}
+
+#[test]
+fn agent_budget_plain_reports_json_and_overflow() {
+    use assert_cmd::assert::OutputAssertExt;
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-budget", "feature-budget");
+    let text = loop_ok(&env, &["agents", "budget", "@claude"]);
+    insta::assert_snapshot!(text, @"@claude#main · no cap · set one: rimz agents budget @claude#main 5");
+    let json = loop_ok(&env, &["agents", "budget", "@claude", "--json"]);
+    insta::assert_json_snapshot!(serde_json::from_str::<serde_json::Value>(&json).unwrap(), @r#"
+    {
+      "agent": "@claude#main",
+      "cap_usd": null,
+      "parked": false,
+      "source": "none",
+      "spend_usd": null,
+      "window": null
+    }
+    "#);
+    let text = loop_ok(&env, &["agents", "budget", "@claude", "5"]);
+    insta::assert_snapshot!(text, @"@claude#main · unknown spend of $5.00 session · not parked · source override · raise: rimz agents budget @claude#main +10 · lift: rimz agents budget @claude#main off");
+    let kind = AgentKind::new_unchecked("claude");
+    let id = AgentSessionId::from("sess-budget");
+    let mut ledger = rimz::harness::budget::read_ledger(&env.runtime_paths(), &kind, &id).unwrap();
+    ledger.parked = Some(rimz::harness::budget::BudgetParkStamp {
+        at_cost: 5.0,
+        at: Timestamp::now(),
+    });
+    write_ledger(&env.runtime_paths(), &kind, &id, &ledger).unwrap();
+    let json = loop_ok(&env, &["agents", "budget", "@claude", "--json"]);
+    insta::assert_json_snapshot!(serde_json::from_str::<serde_json::Value>(&json).unwrap(), @r#"
+    {
+      "agent": "@claude#main",
+      "cap_usd": 5.0,
+      "parked": true,
+      "source": "override",
+      "spend_usd": null,
+      "window": "session"
+    }
+    "#);
+    let text = loop_ok(&env, &["agents", "budget", "@claude"]);
+    assert!(text.contains(" · parked · source override"));
+    loop_ok(
+        &env,
+        &["agents", "budget", "@claude", "off", "--no-continue"],
+    );
+    assert!(
+        rimz::harness::budget::read_ledger(&env.runtime_paths(), &kind, &id)
+            .unwrap()
+            .disabled
+    );
+    ledger.raised_cap_usd = Some(f64::MAX);
+    write_ledger(&env.runtime_paths(), &kind, &id, &ledger).unwrap();
+    env.rimz()
+        .args(["agents", "budget", "@claude", &format!("+{}", f64::MAX)])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("budget raise is too large"));
+    assert_eq!(
+        rimz::harness::budget::read_ledger(&env.runtime_paths(), &kind, &id).unwrap(),
+        ledger
+    );
 }
 
 #[test]

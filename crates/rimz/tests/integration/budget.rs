@@ -7,6 +7,141 @@ use crate::common::Env;
 use rimz::ids::{AgentKind, LoginKey};
 
 #[test]
+fn budget_reports_configured_pools_when_the_catalog_is_invalid() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[accounts.budget]\nclaude = '50/day'\n[accounts.codex.work]\nhome = 'relative-home'\n",
+    )
+    .unwrap();
+    let json = env.rimz().args(["budget", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["scope"], "claude@default");
+    assert_eq!(report["accounts"][0]["cap_usd"], 50.0);
+}
+
+#[test]
+fn budget_reports_plain_facts_and_runtime_pools() {
+    use rimz::harness::budget::{BudgetParkStamp, DailyBudgetScope};
+    let env = Env::new();
+    env.record(&env.project_root);
+    let text = env.rimz().arg("budget").assert().success();
+    insta::assert_snapshot!(String::from_utf8_lossy(&text.get_output().stdout), @"no daily cap · set one: rimz budget 50/day");
+    let json = env.rimz().args(["budget", "--json"]).assert().success();
+    insta::assert_json_snapshot!(serde_json::from_slice::<serde_json::Value>(&json.get_output().stdout).unwrap(), @r#"
+    {
+      "accounts": [],
+      "fleet": {
+        "cap_usd": null,
+        "parked": false,
+        "scope": "fleet",
+        "source": "none",
+        "spend_usd": 0.0
+      },
+      "turn_cap_usd": null
+    }
+    "#);
+    let text = env.rimz().args(["budget", "5/day"]).assert().success();
+    insta::assert_snapshot!(String::from_utf8_lossy(&text.get_output().stdout), @"$0.00 of $5.00 today · not parked · source override · raise: rimz budget +10 · lift: rimz budget off");
+    let parked = BudgetParkStamp {
+        at_cost: 5.0,
+        at: jiff::Timestamp::now(),
+    };
+    // Fleet choices and the producer's park are separate records.
+    std::fs::write(
+        env.runtime_paths().lane_path("budget.fleet-park.json"),
+        serde_json::to_vec(&parked).unwrap(),
+    )
+    .unwrap();
+    let text = env.rimz().arg("budget").assert().success();
+    insta::assert_snapshot!(String::from_utf8_lossy(&text.get_output().stdout), @"$0.00 of $5.00 today · parked · source override · raise: rimz budget +10 · lift: rimz budget off");
+    let json = env.rimz().args(["budget", "--json"]).assert().success();
+    insta::assert_json_snapshot!(serde_json::from_slice::<serde_json::Value>(&json.get_output().stdout).unwrap(), @r#"
+    {
+      "accounts": [],
+      "fleet": {
+        "cap_usd": 5.0,
+        "parked": true,
+        "scope": "fleet",
+        "source": "override",
+        "spend_usd": 0.0
+      },
+      "turn_cap_usd": null
+    }
+    "#);
+    env.rimz().args(["config", "init"]).assert().success();
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "accounts.claude.work.home",
+            "/srv/budget-work",
+        ])
+        .assert()
+        .success();
+    let text = env
+        .rimz()
+        .args(["budget", "--account", "claude@work", "5/day"])
+        .assert()
+        .success();
+    insta::assert_snapshot!(String::from_utf8_lossy(&text.get_output().stdout), @"
+    claude@work (shares the claude@default pool with default)
+    $0.00 of $5.00 today · not parked · source override · raise: rimz budget --account claude@work +10 · lift: rimz budget --account claude@work off
+    ");
+    let scope = DailyBudgetScope::Account("claude@default".parse().unwrap());
+    let mut ledger = scope.read_ledger(&env.runtime_paths(), Some(env.store().paths()));
+    ledger.parked = Some(BudgetParkStamp {
+        at_cost: 5.0,
+        at: jiff::Timestamp::now(),
+    });
+    scope
+        .write_ledger(&env.runtime_paths(), env.store().paths(), &ledger)
+        .unwrap();
+    let text = env
+        .rimz()
+        .args(["budget", "--account", "claude"])
+        .assert()
+        .success();
+    insta::assert_snapshot!(String::from_utf8_lossy(&text.get_output().stdout), @"
+    claude resolves through this room's account: claude@default (shares the claude@default pool with work)
+    $0.00 of $5.00 today · parked · source override · raise: rimz budget --account claude@default +10 · lift: rimz budget --account claude@default off
+    ");
+    let json = env
+        .rimz()
+        .args(["budget", "--account", "claude@work", "--json"])
+        .assert()
+        .success();
+    insta::assert_json_snapshot!(serde_json::from_slice::<serde_json::Value>(&json.get_output().stdout).unwrap(), @r#"
+    {
+      "accounts": [
+        {
+          "cap_usd": 5.0,
+          "members": [
+            "claude@default",
+            "claude@work"
+          ],
+          "parked": true,
+          "requested": "claude@work",
+          "scope": "claude@default",
+          "source": "override",
+          "spend_usd": 0.0
+        }
+      ],
+      "fleet": null,
+      "turn_cap_usd": null
+    }
+    "#);
+    let json = env.rimz().args(["budget", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&json.get_output().stdout).unwrap();
+    assert_eq!(report["accounts"][0]["scope"], "claude@default");
+    assert_eq!(report["accounts"][0]["source"], "override");
+    assert!(report["accounts"][0].get("requested").is_none());
+    let text = env.rimz().arg("budget").assert().success();
+    assert!(String::from_utf8_lossy(&text.get_output().stdout).contains("claude@default"));
+}
+
+#[test]
 fn budget_set_raise_clear_and_config_routes() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -51,7 +186,7 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "--account", "claude@pooled"])
         .assert()
         .success()
-        .stdout(contains("scope:  claude@default account"));
+        .stdout(contains("claude@default pool"));
     let inspected = env.rimz().arg("budget").assert().success();
     let output = String::from_utf8_lossy(&inspected.get_output().stdout);
     let table_rows = output
@@ -71,25 +206,25 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "20/day", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("cap:    $20.00/day"))
-        .stdout(contains("source: override"));
+        .stdout(contains("of $20.00 today"))
+        .stdout(contains("source override"));
     env.rimz()
         .args(["budget", "+10", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("cap:    $30.00/day"))
-        .stdout(contains("source: raised"));
+        .stdout(contains("of $30.00 today"))
+        .stdout(contains("source raised"));
     env.rimz()
         .args(["budget", "--account", "claude", "80/day", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("scope:  claude@default account"))
-        .stdout(contains("cap:    $80.00/day"));
+        .stdout(contains("claude@default pool"))
+        .stdout(contains("of $80.00 today"));
     env.rimz()
         .args(["budget", "--account", "claude", "clear", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("source: cleared"));
+        .stdout(contains("no daily cap"));
 
     env.rimz()
         .args([
@@ -101,13 +236,13 @@ fn budget_set_raise_clear_and_config_routes() {
         ])
         .assert()
         .success()
-        .stdout(contains("scope:  claude@work account"))
-        .stdout(contains("cap:    $60.00/day"));
+        .stdout(contains("claude@work (pool claude@work)"))
+        .stdout(contains("of $60.00 today"));
     env.rimz()
         .args(["budget", "--account", "claude"])
         .assert()
         .success()
-        .stdout(contains("source: cleared"));
+        .stdout(contains("no daily cap"));
     env.rimz()
         .args(["budget", "--account", "claude@missing"])
         .assert()
@@ -124,7 +259,7 @@ fn budget_set_raise_clear_and_config_routes() {
         .args(["budget", "off", "--no-continue"])
         .assert()
         .success()
-        .stdout(contains("source: cleared"));
+        .stdout(contains("no daily cap"));
 }
 
 #[test]
@@ -144,7 +279,7 @@ fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
     ] {
         let inspected = env.rimz().args(args).assert().success().stderr("");
         let output = String::from_utf8_lossy(&inspected.get_output().stdout);
-        assert!(output.contains("scope:  claude@default account"));
+        assert!(output.contains("claude@default (pool claude@default)"));
         assert!(!output.contains("antigravity"));
         assert!(!output.contains("unknown"));
     }
@@ -169,8 +304,8 @@ fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
             ]]
         );
         if args.len() > 1 {
-            assert!(output.contains("cap:    $20.00/day"));
-            assert!(output.contains("source: override"));
+            assert!(output.contains("of $20.00 today"));
+            assert!(output.contains("source override"));
         }
         assert_eq!(
             String::from_utf8_lossy(&inspected.get_output().stderr),
@@ -237,7 +372,7 @@ fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
             .args(["0/day", "--no-continue"])
             .assert()
             .success()
-            .stdout(contains("source: override"));
+            .stdout(contains("source override"));
         refresh();
         let runtime = env.runtime_paths();
         let store = env.store();
@@ -252,7 +387,7 @@ fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
             .args(["off", "--no-continue"])
             .assert()
             .success()
-            .stdout(contains("source: cleared"));
+            .stdout(contains("no daily cap"));
         refresh();
         let ledger = scope.read_ledger(&runtime, Some(store.paths()));
         assert!(ledger.disabled);
@@ -541,9 +676,9 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
         .args(["budget", "--account", "claude@two"])
         .assert()
         .success()
-        .stdout(contains("scope:  claude@default account"))
-        .stdout(contains("spend:  $2.00 today"))
-        .stdout(contains("parked: yes"));
+        .stdout(contains("claude@default pool"))
+        .stdout(contains("$2.00 of"))
+        .stdout(contains("· parked ·"));
     second.kill().unwrap();
     second.wait().unwrap();
 }

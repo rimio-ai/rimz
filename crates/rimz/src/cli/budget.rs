@@ -6,6 +6,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 use jiff::Timestamp;
+use serde::Serialize;
 
 use super::{Ctx, GlobalFlags};
 use rimz::agents::{BudgetWindow, LoginCatalog, RoomLoginSet};
@@ -25,6 +26,9 @@ pub struct BudgetArgs {
     /// Lift a park without queueing the configured continue prompt.
     #[arg(long)]
     no_continue: bool,
+    /// Print structured budget facts.
+    #[arg(long)]
+    json: bool,
 }
 
 pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
@@ -52,18 +56,20 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let now = Timestamp::now();
     let catalog = LoginCatalog::from_config(&config.accounts).unwrap_or_default();
-    let scope = match account {
-        None => DailyBudgetScope::Fleet,
-        Some((_, Some(key))) => DailyBudgetScope::account(&catalog, &key),
-        Some((kind, None)) => DailyBudgetScope::account(
-            &catalog,
-            &RoomLoginSet::for_runtime(store.runtime_paths())
+    let requested = match account {
+        None => None,
+        Some((_, Some(key))) => Some(key),
+        Some((kind, None)) => Some(
+            RoomLoginSet::for_runtime(store.runtime_paths())
                 .default_key(kind)
                 .with_context(|| {
                     format!("cannot resolve this room's {kind} account; check `rimz accounts list`")
                 })?,
         ),
     };
+    let scope = requested.as_ref().map_or(DailyBudgetScope::Fleet, |key| {
+        DailyBudgetScope::account(&catalog, key)
+    });
     let fleet_spend =
         matches!(scope, DailyBudgetScope::Fleet).then(|| live_fleet_spend(&ctx, &config, now));
     if args.value.is_none() {
@@ -71,7 +77,8 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             store.runtime_paths(),
             store.paths(),
             &config,
-            &scope,
+            &args,
+            requested.as_ref(),
             now,
             fleet_spend,
         );
@@ -128,7 +135,8 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         store.runtime_paths(),
         store.paths(),
         &config,
-        &scope,
+        &args,
+        requested.as_ref(),
         now,
         fleet_spend,
     )
@@ -208,118 +216,172 @@ fn parse_day_cap(raw: &str) -> Result<DayCap> {
     })
 }
 
+#[derive(Serialize)]
+struct ScopeReport {
+    scope: String,
+    cap_usd: Option<f64>,
+    source: String,
+    spend_usd: f64,
+    parked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    members: Option<Vec<LoginKey>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested: Option<LoginKey>,
+}
+
+impl ScopeReport {
+    fn read(
+        scope: &DailyBudgetScope,
+        runtime: &rimz::RuntimePaths,
+        state: &rimz::StatePaths,
+        config: &MachineConfig,
+        catalog: &LoginCatalog,
+        spend_usd: f64,
+    ) -> Self {
+        let ledger = scope.read_ledger(runtime, Some(state));
+        let pool = scope.account_login();
+        Self {
+            scope: pool.map_or_else(|| "fleet".to_owned(), ToString::to_string),
+            cap_usd: scope.effective_cap_usd(&ledger, config),
+            source: scope.cap_source(&ledger, config).to_string(),
+            spend_usd,
+            parked: ledger.parked.is_some(),
+            members: pool.map(|pool| {
+                catalog
+                    .all()
+                    .filter(|login| &login.pool() == pool)
+                    .map(|login| login.key())
+                    .collect()
+            }),
+            requested: None,
+        }
+    }
+
+    fn write(&self, out: &mut impl Write, command: &str) -> std::io::Result<()> {
+        let Some(cap) = self.cap_usd else {
+            return writeln!(out, "no daily cap · set one: {command} 50/day");
+        };
+        let park = if self.parked { "parked" } else { "not parked" };
+        writeln!(
+            out,
+            "${:.2} of ${cap:.2} today · {park} · source {} · raise: {command} +10 · lift: {command} off",
+            self.spend_usd, self.source
+        )
+    }
+}
+
+#[derive(Serialize)]
+struct BudgetReport {
+    fleet: Option<ScopeReport>,
+    accounts: Vec<ScopeReport>,
+    turn_cap_usd: Option<f64>,
+}
+
 fn inspect(
     runtime: &rimz::RuntimePaths,
     state: &rimz::StatePaths,
     config: &MachineConfig,
-    scope: &DailyBudgetScope,
+    args: &BudgetArgs,
+    requested: Option<&LoginKey>,
     now: Timestamp,
     fleet_spend: Option<f64>,
 ) -> Result<()> {
-    let provider_needed = matches!(scope, DailyBudgetScope::Account(_))
-        || (matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty());
-    let provider = provider_needed.then(|| {
-        rimz::agents::spending::read_provider_spending_cache(
-            &runtime.shared_provider_spending_path(),
-        )
-    });
-    let ledger = scope.read_ledger(runtime, Some(state));
-    let mut kv = crate::cli::render::KeyVals::new();
-    kv.push("scope", crate::cli::render::cell(scope.label()));
-    kv.push(
-        "cap",
-        crate::cli::render::cell(cap_label(scope.effective_cap_usd(&ledger, config))),
+    let catalog = LoginCatalog::from_config(&config.accounts).unwrap_or_default();
+    let provider = rimz::agents::spending::read_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
     );
-    kv.push(
-        "source",
-        crate::cli::render::cell(scope.cap_source(&ledger, config).to_string()),
-    );
-    kv.push(
-        "spend",
-        crate::cli::render::cell(format!(
-            "${:.2} today",
-            fleet_spend.unwrap_or_else(|| {
-                scope.day_spend_usd(runtime, config, now, provider.as_ref())
+    let read = |scope: &DailyBudgetScope| {
+        let spend = if matches!(scope, DailyBudgetScope::Fleet) {
+            fleet_spend
+        } else {
+            None
+        }
+        .unwrap_or_else(|| scope.day_spend_usd(runtime, config, now, Some(&provider)));
+        ScopeReport::read(scope, runtime, state, config, &catalog, spend)
+    };
+    let report = if let Some(key) = requested {
+        let mut account = read(&DailyBudgetScope::account(&catalog, key));
+        account.requested = Some(key.clone());
+        BudgetReport {
+            fleet: None,
+            accounts: vec![account],
+            turn_cap_usd: config.harness.turn_budget.map(|cap| cap.as_usd()),
+        }
+    } else {
+        let fleet = read(&DailyBudgetScope::Fleet);
+        let scopes: std::collections::BTreeSet<_> = catalog
+            .all()
+            .map(|login| login.key())
+            .chain(
+                rimz::agents::known_kinds()
+                    .map(|kind| LoginKey::default_for(AgentKind::new_unchecked(kind))),
+            )
+            .filter(|key| {
+                rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str()).is_ok()
             })
-        )),
-    );
-    kv.push(
-        "parked",
-        crate::cli::render::cell(if ledger.parked.is_some() { "yes" } else { "no" }),
-    );
-    if let Some(cap) = config.harness.turn_budget {
-        kv.push(
-            "turn cap",
-            crate::cli::render::cell(format!(
-                "${:.2}/turn (source: config; per turn)",
-                cap.as_usd()
-            )),
-        );
-    }
-    let mut out = crate::cli::render::out();
-    kv.render(&mut out)?;
-
-    if matches!(scope, DailyBudgetScope::Fleet) && !config.accounts.budget.is_empty() {
-        // One row per history pool: `default` and its shared accounts spend
-        // against one cap.
-        let scopes: std::collections::BTreeSet<_> = LoginCatalog::from_config(&config.accounts)
-            .map(|catalog| {
-                catalog
-                    .all()
-                    .map(|login| DailyBudgetScope::account(&catalog, &login.key()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|_| {
-                config
-                    .accounts
-                    .budget
-                    .keys()
-                    .map(|kind| {
-                        DailyBudgetScope::Account(LoginKey::default_for(AgentKind::new_unchecked(
-                            kind,
-                        )))
-                    })
-                    .collect()
-            })
-            .into_iter()
-            .filter(|scope| {
-                scope.account_login().is_some_and(|key| {
-                    config.accounts.budget(key.kind.as_str()).is_some()
-                        && rimz::config::AccountsConfig::validate_budget_kind(key.kind.as_str())
-                            .is_ok()
-                })
-            })
+            .map(|key| DailyBudgetScope::account(&catalog, &key))
             .collect();
-        // Every configured key can be ineligible, and a header with no rows
-        // reads as a broken command; the warnings below still name each one.
-        if !scopes.is_empty() {
+        BudgetReport {
+            fleet: Some(fleet),
+            accounts: scopes
+                .iter()
+                .map(read)
+                .filter(|scope| scope.cap_usd.is_some() || scope.source != "none")
+                .collect(),
+            turn_cap_usd: config.harness.turn_budget.map(|cap| cap.as_usd()),
+        }
+    };
+    if args.json {
+        crate::cli::render::json(&report)?;
+    } else {
+        let mut out = crate::cli::render::out();
+        if let Some(fleet) = &report.fleet {
+            fleet.write(&mut out, "rimz budget")?;
+        } else if let Some((key, account)) = requested.zip(report.accounts.first()) {
+            if args.account.as_ref().is_some_and(|raw| !raw.contains('@')) {
+                write!(out, "{} resolves through this room's account: ", key.kind)?;
+            }
+            write!(out, "{key}")?;
+            let others = account
+                .members
+                .iter()
+                .flatten()
+                .filter(|member| *member != key)
+                .map(|member| member.name.to_string())
+                .collect::<Vec<_>>();
+            if !others.is_empty() {
+                write!(
+                    out,
+                    " (shares the {} pool with {})",
+                    account.scope,
+                    others.join(", ")
+                )?;
+            } else {
+                write!(out, " (pool {})", account.scope)?;
+            }
+            writeln!(out)?;
+            account.write(&mut out, &format!("rimz budget --account {key}"))?;
+        }
+        if let Some(cap) = report.turn_cap_usd {
+            writeln!(out, "turn cap: ${cap:.2}/turn (source: config; per turn)")?;
+        }
+        if report.fleet.is_some() && !report.accounts.is_empty() {
             writeln!(out)?;
             let mut table =
                 crate::cli::render::Table::new(["ACCOUNT", "CAP", "SOURCE", "SPEND", "PARKED"]);
-            for scope in scopes {
-                let account = scope.read_ledger(runtime, Some(state));
+            for account in &report.accounts {
                 table.row([
-                    crate::cli::render::cell(
-                        scope
-                            .account_login()
-                            .expect("account table contains account scopes")
-                            .to_string(),
-                    ),
-                    crate::cli::render::cell(cap_label(scope.effective_cap_usd(&account, config))),
-                    crate::cli::render::cell(scope.cap_source(&account, config).to_string()),
-                    crate::cli::render::cell(format!(
-                        "${:.2}",
-                        scope.day_spend_usd(runtime, config, now, provider.as_ref())
-                    )),
-                    crate::cli::render::cell(if account.parked.is_some() {
-                        "yes"
-                    } else {
-                        "no"
-                    }),
+                    crate::cli::render::cell(&account.scope),
+                    crate::cli::render::cell(cap_label(account.cap_usd)),
+                    crate::cli::render::cell(&account.source),
+                    crate::cli::render::cell(format!("${:.2}", account.spend_usd)),
+                    crate::cli::render::cell(if account.parked { "yes" } else { "no" }),
                 ]);
             }
             table.render(&mut out)?;
         }
+    }
+    if requested.is_none() {
         let mut stderr = crate::cli::render::err();
         for kind in config.accounts.budget.keys() {
             if let Err(detail) = rimz::config::AccountsConfig::validate_budget_kind(kind) {

@@ -1,9 +1,11 @@
 //! Inspect and change one agent's runtime dollar cap.
 
+use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use serde::Serialize;
 
 use super::{Ctx, GlobalFlags};
 use rimz::agents::BudgetWindow;
@@ -17,11 +19,14 @@ use rimz::store::message::{DeliveryGate, MessageSender};
 pub struct BudgetArgs {
     /// Agent address (`@coder`, kind, name, or exact session id).
     reference: String,
-    /// New cap, `+AMOUNT`, or `clear`; omit to inspect.
+    /// New cap, `+AMOUNT`, or `off`/`clear`; omit to inspect.
     value: Option<String>,
-    /// Clear a park without queueing the configured continue prompt.
+    /// Lift a park without queueing the configured continue prompt.
     #[arg(long)]
     no_continue: bool,
+    /// Print structured budget facts.
+    #[arg(long)]
+    json: bool,
 }
 
 pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
@@ -41,7 +46,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     let peers = rimz::address::addressable_agents(&snapshot);
 
     if args.value.is_none() {
-        return render_budget(agent, &peers, existing.as_ref(), launched);
+        return render_budget(agent, &peers, existing.as_ref(), launched, args.json);
     }
 
     let mut ledger = existing
@@ -54,7 +59,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         });
     let was_paused = ledger.parked.is_some() && ledger.last_interrupt_at.is_some();
     match args.value.as_deref().map(str::trim) {
-        Some("clear") => {
+        Some("clear" | "off") => {
             ledger.disabled = true;
             ledger.raised_cap_usd = None;
         }
@@ -68,7 +73,11 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
             let current = ledger
                 .effective_cap_usd()
                 .context("cannot raise a cleared budget; set an absolute cap first")?;
-            ledger.raised_cap_usd = Some(current + delta.cap_usd);
+            let raised = current + delta.cap_usd;
+            if !raised.is_finite() {
+                bail!("budget raise is too large");
+            }
+            ledger.raised_cap_usd = Some(raised);
             ledger.disabled = false;
         }
         Some(raw) => {
@@ -117,7 +126,17 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
                 .context("queueing budget continue prompt")?;
         }
     }
-    render_budget(agent, &peers, Some(&ledger), launched)
+    render_budget(agent, &peers, Some(&ledger), launched, args.json)
+}
+
+#[derive(Serialize)]
+struct AgentBudgetReport {
+    agent: String,
+    spend_usd: Option<f64>,
+    cap_usd: Option<f64>,
+    window: Option<&'static str>,
+    source: &'static str,
+    parked: bool,
 }
 
 fn render_budget(
@@ -125,51 +144,60 @@ fn render_budget(
     peers: &[&rimz::agents::AgentState],
     ledger: Option<&BudgetLedger>,
     launched: Option<BudgetSpec>,
+    json: bool,
 ) -> Result<()> {
-    let mut kv = crate::cli::render::KeyVals::new();
-    kv.push(
-        "agent",
-        crate::cli::render::cell(rimz::address::agent_handle(agent, peers, true)),
-    );
     let spec = ledger.map(|ledger| ledger.spec).or(launched);
-    let spend = total_cost_usd(agent).map(|total| {
+    let spend_usd = total_cost_usd(agent).map(|total| {
         ledger
             .cloned()
             .or_else(|| spec.map(BudgetLedger::new))
             .map_or(total, |ledger| ledger.spend_usd(total))
     });
-    kv.push(
-        "spend",
-        crate::cli::render::cell(
-            spend
-                .map(|cost| format!("${cost:.2}"))
-                .unwrap_or_else(|| "-".to_owned()),
-        )
-        .dash(),
-    );
-    let cap = match ledger {
+    let cap_usd = match ledger {
         Some(ledger) => ledger.effective_cap_usd(),
         None => launched.map(|spec| spec.cap_usd),
     };
-    kv.push(
-        "cap",
-        crate::cli::render::cell(
-            cap.map(|cap| format!("${cap:.2}"))
-                .unwrap_or_else(|| "none".to_owned()),
-        ),
+    let source = match ledger {
+        Some(ledger) if ledger.disabled => "cleared",
+        Some(ledger) if ledger.raised_cap_usd.is_some() => "override",
+        _ if spec.is_some() => "launch",
+        _ => "none",
+    };
+    let report = AgentBudgetReport {
+        agent: rimz::address::agent_handle(agent, peers, true),
+        spend_usd,
+        cap_usd,
+        window: spec.map(|spec| spec.window.label()),
+        source,
+        parked: ledger.is_some_and(|ledger| ledger.parked.is_some()),
+    };
+    if json {
+        return crate::cli::render::json(&report);
+    }
+    let mut out = crate::cli::render::out();
+    let command = format!("rimz agents budget {}", report.agent);
+    let Some(cap) = report.cap_usd else {
+        writeln!(out, "{} · no cap · set one: {command} 5", report.agent)?;
+        return Ok(());
+    };
+    let spend = report.spend_usd.map_or_else(
+        || "unknown spend".to_owned(),
+        |spend| format!("${spend:.2}"),
     );
-    kv.push(
-        "window",
-        crate::cli::render::cell(spec.map_or("-", |spec| spec.window.label())).dash(),
-    );
-    kv.push(
-        "parked",
-        crate::cli::render::cell(if ledger.is_some_and(|ledger| ledger.parked.is_some()) {
-            "yes"
-        } else {
-            "no"
-        }),
-    );
-    crate::cli::render::finish(kv.render(&mut crate::cli::render::out()))?;
+    let window = if report.window == Some("day") {
+        "day"
+    } else {
+        "session"
+    };
+    let park = if report.parked {
+        "parked"
+    } else {
+        "not parked"
+    };
+    writeln!(
+        out,
+        "{} · {spend} of ${cap:.2} {window} · {park} · source {source} · raise: {command} +10 · lift: {command} off",
+        report.agent
+    )?;
     Ok(())
 }
