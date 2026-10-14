@@ -26,17 +26,19 @@ rimz teams list
 rimz teams ls --json
 ```
 
-Bare `rimz teams`, with no verb and no team name (an empty name counts as none), refuses with exit 2 and prints the `list` command to run. `list` and `ls` print one row per live cohort, and one row for each defined team with no live cohort:
+Bare `rimz teams`, with no verb and no team name (an empty name counts as none), refuses with exit 2 and prints the `list` command to run. `list` and `ls` open with cohort counts and a `needs you` block using the same attention rule and age columns as [`agents list`](./agents.md#list-and-manage-agents). A missing stage owner adds a `not live` attention row unless the board is at `Done`; it does not change the cohort's state. With no recorded flip, that row's age falls back to the newest member activity. Definitions with no live cohort collapse into a trailing `no live cohort: …` line.
 
-| Column | Live cohort | No live cohort |
-| --- | --- | --- |
-| `TEAM` | Team name. | Team name. |
-| `LANE` | `#<lane>`. | `-` |
-| `STAGE` | The board stage, with ` (@owner)` when the board names one. | `-` |
-| `PR` | `#<number>` from the room's cached PR facts, followed by the CI glyph unless the PR is closed; `-` when no pull request is cached. | `-` |
-| `STATUS` | The cohort [state](#cohort-state). | `ready` |
+| Column | Live cohort |
+| --- | --- |
+| `TEAM` | Team name. |
+| `LANE` | `#<lane>`. |
+| `STAGE` | The board stage and owner, with `not live` for an absent owner, followed by the time since its recorded flip. No age when no flip is recorded. |
+| `STATUS` | The cohort [state](#cohort-state), followed by the time since the newest member activity. |
+| `PR` | `#<number>` from the room's cached PR facts, followed by the CI glyph unless the PR is closed; `-` when no pull request is cached. |
 
-A broken definition replaces `STATUS` with `broken: <error>` on every row of that team. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
+Cohorts needing attention sort first, then blocked, paused, idle, working, and sleeping cohorts; `Done` cohorts sort last. Within each group, the longest time since member activity comes first. The summary omits zero counts and counts attention rows, not blocked cohorts, as `need(s) you`.
+
+A broken definition keeps a row at the top, with `STATUS` replaced by `broken: <error>`. A live cohort whose team is no longer defined keeps its state with ` · not defined` appended. Resolved roles and models appear in [`show`](#inspect-one-team).
 
 The catalogue merges machine [Markdown definitions](../definitions.md) under `<agents_home>/teams/<name>.md` with the repository's `.rimz/config.toml` when trusted. Invalid definitions fail with their source errors; unknown frontmatter keys are errors, not ignored settings. Run `rimz agents validate` to inspect the complete library. The built-in roleless `peer` team remains unless replaced. With no user teams, the listing includes an install hint.
 
@@ -134,11 +136,13 @@ A lane block reads top to bottom:
 | `stage` | Always present. The [board stage](#board-stage) with ` (@owner)` when the board names one, then ` for <age>`, the time since the flip into that stage; `Done for <age>` once the board is flipped to `Done`; `none` without a board stage. The age is omitted when no recorded flip matches (a hand-edited board, or a flip rotated out of the event log). |
 | `pipeline` | The declared `stages` with the implicit `Done` last, bracketing the board stage when it matches a name exactly. Omitted when the team declares no `stages`. |
 | `pr` | The cached pull request: number, state (`open`, `merged`, `closed`), its `ci passing`, `ci pending`, or `ci failing` verdict, and URL, as far as known; `none` when no pull request is cached. A trunk lane has no pull request, so it reads `none` however its branch CI stands; that verdict shows on the [sidebar](../../interface/sidebar.md). |
-| Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
+| Member table | `MEMBER STATUS AGE ACTIVITY CTX COST`, members in the team's declared role order. Absent declared roles show `not live` and dashes. `STATUS` uses the [agent status words](./agents.md#list-and-manage-agents), `AGE` is the time since the member's last activity, and `COST` is each role's lifetime spend in this worktree. |
 | `signals` | One line per subscription RimZ armed for a member from its role bindings: `<signal> → @<member> · <fire> · <loop task name>`. `<fire>` is `fired <age> ago` when the last fire delivered, or the [loop run result](./loop.md#read-run-history) with its age; ` ×<n>` gives the fire count once it has fired more than once. A subscription that has not fired reads `heard <signal> <age> ago` when it has heard another signal of its family, otherwise `never fired`. Heard signals are never counted as fires. Omitted when nothing is armed. The roster's `signals` line shows what is declared; this one shows what is armed now and whether it fired. |
 | `worktree` | The members' absolute checkout path, with ` · branch <name>` when the branch differs from the directory name; `-` when members disagree. |
 | `isolation` | `host · shared <dir>` or `sandbox · shared <dir>`: the room's shared directory (`$RIMZ_SHARED`, the same host path in both isolations), and where each member ran: the isolation its launch enforced, else the `--isolation` recorded at launch or replaced on resume, else the machine's `agents.isolation`. The enforced isolation already folds in a profile `isolation` default. Members that disagree show the machine setting. |
 | `memory` | Files matching the team's effective scratch patterns (defaults or explicit `scratch-files`), relative to the worktree, with line counts and modification ages. Omitted when none exist. |
+
+When the stage owner is absent, its stage label reads `Implement (@coder, not live) for <age>`.
 
 A script that blocks until the work is done runs [`rimz teams wait`](#wait-for-a-cohort-to-finish) rather than polling `.stage.name` from `--json`. The report ends with the definition, with no launch, resume, or focus hints.
 
@@ -146,7 +150,7 @@ The definition includes a `(prompt stack: rimz teams show <team> --json)` hint w
 
 ### Cohort state
 
-A cohort's state is the first rule that matches its members' statuses:
+A cohort's state is the first rule that matches its members' projected card statuses, including the sidebar's attention lift when a provider-native child waits or fails:
 
 | State | When |
 | --- | --- |
@@ -185,7 +189,7 @@ PR and CI facts come from the room's sidebar cache. `rimz teams list` and `show`
 | `worktree`, `branch` | Absolute checkout path and branch; `null` when unavailable or when members disagree. |
 | `isolation`, `shared_dir` | `host` or `sandbox`; the absolute host path of the room's shared directory. |
 | `stages` | Declared stage names in order; `[]` when undeclared or the team is no longer defined. |
-| `stage` | `{ "name": "Implement", "owner": "coder", "since": "2026-09-15T08:33:23Z" }`; `null` when the board has no stage. `name` is `Done` once the board is flipped to `Done`, so `.stage.name` is the field to script against. `owner` is without `@` and nullable; `since` is the UTC time of the flip into this stage, `null` when no recorded flip matches. |
+| `stage` | `{ "name": "Implement", "owner": "coder", "owner_live": true, "since": "2026-09-15T08:33:23Z" }`; `null` when the board has no stage. `name` is `Done` once the board is flipped to `Done`, so `.stage.name` is the field to script against. `owner` is without `@` and nullable; `owner_live` is `true` or `false` by the same role-holder rule as flip delivery, and `null` when no owner is named. `since` is the UTC time of the flip into this stage, `null` when no recorded flip matches. |
 | `pr` | `number`, `state` (`open`, `merged`, `closed`), `ci` (`passing`, `pending`, `failing`), and `url`, each nullable; `null` when no pull request is cached. |
 | `memory[]` | `path` (absolute), `lines`, and `modified_at` (UTC timestamp or `null`). |
 | `members[]` | In declared role order: `role` (nullable), `handle`, `kind`, `status`, `phase`, `activity` (nullable), `last_activity_at` (UTC timestamp), `signals`, and optional `context_fill_pct` and `cost_usd`. |

@@ -306,6 +306,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                demotion: &Default::default(),
                 isolation: Isolation::Host,
                 shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),
@@ -322,6 +323,26 @@ fn catalog_projects_cohort_observability_by_worktree() {
     };
     let reports = build(&snapshot);
     let first_report = &reports[0].instances[0];
+    assert_eq!(
+        first_report.state,
+        CohortState::Idle,
+        "cohort status follows its projected card, not raw lifecycle status"
+    );
+    assert_eq!(
+        serde_json::to_value(first_report).unwrap()["stage"]["owner_live"],
+        true
+    );
+    for (board, expected) in [
+        ("Stage: Plan (@planner)\n", serde_json::json!(false)),
+        ("Stage: Plan\n", serde_json::Value::Null),
+    ] {
+        std::fs::write(second.join("blackboard.md"), board).unwrap();
+        let projected = build(&snapshot);
+        let json = serde_json::to_value(&projected[0].instances[1]).unwrap();
+        assert!(json["stage"].get("owner_live").is_some());
+        assert_eq!(json["stage"]["owner_live"], expected);
+    }
+    std::fs::remove_file(second.join("blackboard.md")).unwrap();
     assert_eq!(first_report.worktree.as_deref(), Some(first.as_path()));
     assert_eq!(first_report.branch.as_deref(), Some("branch-first"));
     assert_eq!(
@@ -380,13 +401,6 @@ fn catalog_projects_cohort_observability_by_worktree() {
         json[0]["roles"][0]["append_system_prompt_files"][0],
         "consensus.md"
     );
-    let mut rendered = anstream::StripStream::new(Vec::new());
-    write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
-    insta::assert_snapshot!(
-        "human_catalog_has_one_row_per_cohort",
-        String::from_utf8(rendered.into_inner()).unwrap()
-    );
-
     let mut conflicting = snapshot.agents[0].clone();
     conflicting.agent_id = "conflicting".into();
     conflicting.worktree_path = Some(second.to_string_lossy().into_owned());
@@ -450,6 +464,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -468,15 +483,21 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
     assert!(instance.pr.is_none(), "{:?}", instance.pr);
     assert!(serde_json::to_value(&reports).unwrap()[0]["instances"][0]["pr"].is_null());
     let mut rendered = anstream::StripStream::new(Vec::new());
-    write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
+    write_catalog(
+        &mut rendered,
+        &reports,
+        &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
+    )
+    .unwrap();
     let row = String::from_utf8(rendered.into_inner()).unwrap();
     let cells = row
         .lines()
-        .nth(1)
+        .find(|line| line.starts_with("forge "))
         .unwrap()
         .split_whitespace()
         .collect::<Vec<_>>();
-    assert_eq!(cells, ["forge", "#main", "-", "-", "working"], "{row}");
+    assert_eq!(cells, ["forge", "#main", "-", "idle", "2m", "-"], "{row}");
 }
 
 #[test]
@@ -516,6 +537,7 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -584,6 +606,7 @@ fn catalog_merges_definition_and_live_instance() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -600,9 +623,15 @@ fn catalog_merges_definition_and_live_instance() {
     assert!(!removed[0].defined);
     assert_eq!(removed[0].instances[0].channel, "feat-x");
     let mut rendered = anstream::StripStream::new(Vec::new());
-    write_catalog(&mut rendered, &removed, &ThemeConfig::default()).unwrap();
+    write_catalog(
+        &mut rendered,
+        &removed,
+        &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
+    )
+    .unwrap();
     let rendered = String::from_utf8(rendered.into_inner()).unwrap();
-    assert!(rendered.contains("working · not defined"));
+    assert!(rendered.contains("working · not defined"), "{rendered}");
 }
 
 #[test]
@@ -629,6 +658,7 @@ fn live_member_cost_comes_from_its_audit_slot() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -705,6 +735,7 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                demotion: &Default::default(),
                 isolation: Isolation::Host,
                 shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),
@@ -776,6 +807,7 @@ fn invalid_team_stays_visible_with_its_error() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -807,41 +839,28 @@ fn invalid_team_stays_visible_with_its_error() {
 #[test]
 fn live_instance_state_follows_team_attention_priority() {
     for (other, expected) in [
-        ("waiting", "blocked"),
-        ("failed", "blocked"),
-        ("paused", "paused"),
-        ("running", "working"),
-        ("success", "sleeping"),
-        ("idle", "sleeping"),
+        (AgentStatus::Waiting, "blocked"),
+        (AgentStatus::Failed, "blocked"),
+        (AgentStatus::Paused, "paused"),
+        (AgentStatus::Running, "working"),
+        (AgentStatus::Success, "sleeping"),
+        (AgentStatus::Idle, "sleeping"),
     ] {
         assert_eq!(
-            instance_state(&BTreeMap::from([
-                ("sleeping".to_owned(), 1),
-                (other.to_owned(), 1),
-            ]))
-            .as_str(),
+            instance_state([AgentStatus::Sleeping, other]).as_str(),
             expected,
-            "sleeping with {other}"
+            "sleeping with {other:?}"
         );
     }
     assert_eq!(
-        instance_state(&BTreeMap::from([
-            ("running".to_owned(), 2),
-            ("failed".to_owned(), 1),
-        ])),
+        instance_state([AgentStatus::Running, AgentStatus::Failed]),
         CohortState::Blocked
     );
     assert_eq!(
-        instance_state(&BTreeMap::from([
-            ("success".to_owned(), 1),
-            ("paused".to_owned(), 1),
-        ])),
+        instance_state([AgentStatus::Success, AgentStatus::Paused]),
         CohortState::Paused
     );
-    assert_eq!(
-        instance_state(&BTreeMap::from([("success".to_owned(), 2)])),
-        CohortState::Idle
-    );
+    assert_eq!(instance_state([AgentStatus::Success]), CohortState::Idle);
 }
 
 #[test]
@@ -851,6 +870,7 @@ fn human_catalog_and_empty_state_teach_the_command() {
         &ProfilesConfig::default(),
         &CommandsConfig::default(),
         LiveCatalog {
+            demotion: &Default::default(),
             isolation: Isolation::Host,
             shared_dir: Path::new("/state/room/shared"),
             tasks: &BTreeMap::new(),
@@ -865,14 +885,25 @@ fn human_catalog_and_empty_state_teach_the_command() {
         |_| None,
     );
     let mut rendered = Vec::new();
-    write_catalog(&mut rendered, &reports, &ThemeConfig::default()).unwrap();
+    write_catalog(
+        &mut rendered,
+        &reports,
+        &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
+    )
+    .unwrap();
     let rendered = String::from_utf8(rendered).unwrap();
-    assert!(rendered.contains("forge"));
-    assert!(rendered.contains("STAGE"));
-    assert!(rendered.contains("ready"));
+    assert!(!rendered.contains("STAGE"), "{rendered}");
+    assert!(rendered.contains("no live cohort: forge"));
 
     let mut empty = Vec::new();
-    write_catalog(&mut empty, &[], &ThemeConfig::default()).unwrap();
+    write_catalog(
+        &mut empty,
+        &[],
+        &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
+    )
+    .unwrap();
     let empty = String::from_utf8(empty).unwrap();
     assert!(empty.contains("rimz teams install forge"));
     assert!(empty.contains("docs/guide/teams.md"));
@@ -894,6 +925,7 @@ fn human_catalog_and_empty_state_teach_the_command() {
             instances: Vec::new(),
         }],
         &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
     )
     .unwrap();
     assert!(
@@ -901,6 +933,112 @@ fn human_catalog_and_empty_state_teach_the_command() {
             .unwrap()
             .contains("No installed teams")
     );
+}
+
+#[test]
+fn human_catalog_prioritizes_attention_and_collapses_definitions() {
+    let root = tempfile::tempdir().unwrap();
+    let mut agents = Vec::new();
+    let mut flips = Vec::new();
+    for (lane, status, second) in [
+        ("done", AgentStatus::Idle, 60),
+        ("sleeping", AgentStatus::Sleeping, 50),
+        ("working", AgentStatus::Running, 40),
+        ("idle", AgentStatus::Idle, 30),
+        ("missing", AgentStatus::Idle, 20),
+        ("paused", AgentStatus::Paused, 10),
+        ("blocked", AgentStatus::Failed, 0),
+    ] {
+        let path = root.path().join(lane);
+        std::fs::create_dir(&path).unwrap();
+        let stage = if lane == "done" { "Done" } else { "Plan" };
+        std::fs::write(
+            path.join("blackboard.md"),
+            format!("Stage: {stage} (@planner)\n"),
+        )
+        .unwrap();
+        let mut agent = AgentState::stub("claude", lane, status);
+        agent.team = Some("forge".into());
+        agent.role = Some(
+            if lane == "missing" {
+                "coder"
+            } else {
+                "planner"
+            }
+            .into(),
+        );
+        agent.channel = Some(lane.into());
+        agent.worktree_path = Some(path.display().to_string());
+        agent.last_activity = jiff::Timestamp::from_second(second).unwrap();
+        agents.push(agent);
+        flips.push(StageSignal {
+            team: "forge".into(),
+            instance: format!("forge#{lane}"),
+            to: stage.into(),
+            by: "user".into(),
+            board: path.join("blackboard.md"),
+            at: jiff::Timestamp::UNIX_EPOCH,
+            from: None,
+            owner: None,
+            note: None,
+        });
+    }
+    let snapshot = snapshot(agents);
+    let reports = build_catalog(
+        &TeamsConfig(BTreeMap::from([
+            ("forge".into(), team()),
+            ("rest".into(), team()),
+        ])),
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        LiveCatalog {
+            demotion: &Default::default(),
+            isolation: Isolation::Host,
+            shared_dir: Path::new("/state/room/shared"),
+            tasks: &BTreeMap::new(),
+            flips: &flips,
+            runs: &BTreeMap::new(),
+            snapshot: &snapshot,
+            audit_agents: &[],
+            lifetimes: &rimz::worktree::lane_lifetimes([]),
+            prices: &rimz::agents::PriceBook::default(),
+            worktree: None,
+        },
+        |_| None,
+    );
+    let mut output = anstream::StripStream::new(Vec::new());
+    write_catalog(
+        &mut output,
+        &reports,
+        &ThemeConfig::default(),
+        jiff::Timestamp::from_second(120).unwrap(),
+    )
+    .unwrap();
+    let output = String::from_utf8(output.into_inner()).unwrap();
+    assert!(output.starts_with("7 cohorts · 3 need you"), "{output}");
+    assert!(output.contains("@planner#missing  not live"), "{output}");
+    assert!(output.contains("Plan (@planner) for 2m"), "{output}");
+    assert!(output.ends_with("no live cohort: rest\n"), "{output}");
+    let lanes = output
+        .lines()
+        .filter_map(|line| {
+            let mut cells = line.split_whitespace();
+            (cells.next() == Some("forge")).then(|| cells.next().unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lanes,
+        [
+            "#blocked",
+            "#paused",
+            "#missing",
+            "#idle",
+            "#working",
+            "#sleeping",
+            "#done"
+        ]
+    );
+    insta::assert_snapshot!(output);
 }
 
 #[test]
@@ -917,6 +1055,7 @@ fn catalog_filter_matches_an_exact_lane_or_member_worktree() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             LiveCatalog {
+                demotion: &Default::default(),
                 isolation: Isolation::Host,
                 shared_dir: Path::new("/state/room/shared"),
                 tasks: &BTreeMap::new(),

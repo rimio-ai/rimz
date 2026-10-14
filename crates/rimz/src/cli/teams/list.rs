@@ -45,6 +45,8 @@ pub(super) struct TeamReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RoleReport {
+    #[serde(skip)]
+    pub declared: bool,
     pub signals: Vec<DeclaredSignal>,
     pub role: String,
     pub profile: String,
@@ -89,13 +91,14 @@ pub(super) struct LiveInstance {
 pub(super) struct StageReport {
     pub name: String,
     pub owner: Option<String>,
+    pub owner_live: Option<bool>,
     /// When the latest durable flip into this stage landed; `None` for a hand-edited board or a rotated event log.
     pub since: Option<jiff::Timestamp>,
 }
 
 /// A cohort's attention state, folded from its members' statuses.
 /// Pipeline completion is the board's `Done` stage, never a member status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum CohortState {
     Blocked,
@@ -139,6 +142,8 @@ pub(super) struct LiveMember {
     pub handle: String,
     pub kind: String,
     pub status: AgentStatus,
+    #[serde(skip)]
+    pub needs_you: Option<rimz::store::snapshot::NeedsYou>,
     pub phase: TurnPhase,
     pub activity: Option<String>,
     pub last_activity_at: jiff::Timestamp,
@@ -181,7 +186,12 @@ pub(super) fn run(json: bool, globals: &GlobalFlags) -> Result<()> {
     if json {
         return render::json_pretty(&reports);
     }
-    write_catalog(&mut render::out(), &reports, &machine.theme)
+    write_catalog(
+        &mut render::out(),
+        &reports,
+        &machine.theme,
+        jiff::Timestamp::now(),
+    )
 }
 
 pub(super) fn load_catalog(
@@ -194,6 +204,15 @@ pub(super) fn load_catalog(
     report_unknown_config_keys(machine)?;
     let effective = rimz::config::effective::load(machine, &ctx.workspace.project_root)?;
     let snapshot = ctx.published_snapshot()?;
+    let demotion = rimz::harness::park_demotion(
+        Some(&ctx.store),
+        ctx.store.paths(),
+        ctx.runtime(),
+        machine,
+        &snapshot.agents,
+        snapshot.resume_outcomes.as_deref().unwrap_or_default(),
+        snapshot.now,
+    );
     let audit = ctx
         .store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -222,6 +241,7 @@ pub(super) fn load_catalog(
         &effective.profiles,
         &machine.agents.commands,
         LiveCatalog {
+            demotion: &demotion,
             snapshot: &snapshot,
             tasks: tasks.visible(),
             flips: &flips,
@@ -290,6 +310,7 @@ fn build_catalog(
 }
 
 struct LiveCatalog<'a> {
+    demotion: &'a rimz::agents::ParkDemotion,
     snapshot: &'a SidebarSnapshot,
     tasks: &'a BTreeMap<String, LoadedTask>,
     flips: &'a [StageSignal],
@@ -415,6 +436,7 @@ fn origins(sources: &[PromptSource]) -> Vec<PathBuf> {
 
 fn role_report(role: String, cell: &AgentCell) -> RoleReport {
     RoleReport {
+        declared: cell.launch.role.is_some(),
         tier: None,
         tier_fallback: None,
         signals: Vec::new(),
@@ -444,6 +466,7 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
             // An unresolvable profile leaves the binding's own values as the report.
             let resolved = rimz::harness::spec::resolve_role(binding, profiles).ok();
             RoleReport {
+                declared: true,
                 tier: None,
                 tier_fallback: None,
                 signals: Vec::new(),
@@ -549,6 +572,9 @@ fn live_instances(
             .as_deref()
             .and_then(rimz::harness::scratch::board_stage)
             .map(|stage| StageReport {
+                owner_live: stage.owner.as_deref().map(|owner| {
+                    !rimz::address::role_holders(members.iter().copied(), owner).is_empty()
+                }),
                 since: catalog
                     .flips
                     .iter()
@@ -609,14 +635,6 @@ fn live_instances(
                     url: group.pr_url.clone(),
                 })
         });
-        let mut status_counts = BTreeMap::new();
-        for agent in &members {
-            *status_counts
-                .entry(agent.effective_status().as_str().to_owned())
-                .or_default() += 1;
-        }
-        let state = instance_state(&status_counts);
-        let last_activity_at = members.iter().map(|agent| agent.last_activity).max();
         let isolation = unique_value(
             members
                 .iter()
@@ -626,12 +644,21 @@ fn live_instances(
         let mut members = members
             .iter()
             .map(|agent| {
-                let status = agent.effective_status();
-                let card = snapshot
+                let row = snapshot
                     .rows()
-                    .find(|row| row.is_agent() && row.id == agent.agent_id.as_str())
-                    .and_then(|row| row.as_agent());
+                    .find(|row| row.is_agent() && row.id == agent.agent_id.as_str());
+                let card = row.and_then(|row| row.as_agent());
+                let (status, phase) = card.map_or_else(
+                    || agent.rowless_status(catalog.demotion),
+                    |card| (card.status, card.phase),
+                );
                 LiveMember {
+                    needs_you: rimz::store::snapshot::needs_you(
+                        agent,
+                        row,
+                        catalog.demotion,
+                        snapshot.now,
+                    ),
                     role: agent.role.clone(),
                     signals: catalog
                         .tasks
@@ -657,20 +684,29 @@ fn live_instances(
                     handle: rimz::address::agent_handle(agent, &members, false),
                     kind: agent.kind.to_string(),
                     status,
-                    phase: if status == AgentStatus::Running {
-                        agent.phase
-                    } else {
-                        TurnPhase::Idle
-                    },
+                    phase,
                     context_fill_pct: agent.context_fill_pct(),
                     activity: render::agent_activity_line(agent, card),
-                    last_activity_at: agent.last_activity,
+                    last_activity_at: row.map_or(agent.last_activity, |row| row.last_activity),
                     cost_usd: effort_by_session
                         .get(&agent.agent_id)
                         .and_then(|effort| effort.cost_usd),
                 }
             })
             .collect::<Vec<_>>();
+        let mut status_counts = BTreeMap::new();
+        for member in &members {
+            *status_counts
+                .entry(member.status.as_str().to_owned())
+                .or_default() += 1;
+        }
+        let state = instance_state(members.iter().map(|member| {
+            member
+                .needs_you
+                .as_ref()
+                .map_or(member.status, |attention| attention.status)
+        }));
+        let last_activity_at = members.iter().map(|member| member.last_activity_at).max();
         let role_rank = |member: &LiveMember| {
             team.and_then(|team| {
                 team.roles
@@ -740,97 +776,193 @@ fn live_signal(
     })
 }
 
-fn instance_state(counts: &BTreeMap<String, usize>) -> CohortState {
-    if counts.contains_key("waiting") || counts.contains_key("failed") {
-        CohortState::Blocked
-    } else if counts.contains_key("paused") {
-        CohortState::Paused
-    } else if counts.contains_key("running") {
-        CohortState::Working
-    } else if counts.contains_key("sleeping") {
-        CohortState::Sleeping
-    } else {
-        CohortState::Idle
-    }
+pub(super) fn instance_state(statuses: impl IntoIterator<Item = AgentStatus>) -> CohortState {
+    statuses
+        .into_iter()
+        .map(|status| match status {
+            AgentStatus::Waiting | AgentStatus::Failed => CohortState::Blocked,
+            AgentStatus::Paused => CohortState::Paused,
+            AgentStatus::Running => CohortState::Working,
+            AgentStatus::Sleeping => CohortState::Sleeping,
+            _ => CohortState::Idle,
+        })
+        .min()
+        .unwrap_or(CohortState::Idle)
 }
 
-fn write_catalog(w: &mut impl Write, reports: &[TeamReport], theme: &ThemeConfig) -> Result<()> {
+fn write_catalog(
+    w: &mut impl Write,
+    reports: &[TeamReport],
+    theme: &ThemeConfig,
+    now: jiff::Timestamp,
+) -> Result<()> {
     if reports.is_empty() {
         writeln!(w, "No teams defined.")?;
         writeln!(w, "Install forge with: rimz teams install forge")?;
         writeln!(w, "Guide: docs/guide/teams.md")?;
         return Ok(());
     }
-    let mut table = render::Table::new(["TEAM", "LANE", "STAGE", "PR", "STATUS"])
-        .max_width(render::terminal_columns(120));
-    let glyph = rimz::theme::theme_glyphs(theme);
-    for report in reports {
-        for instance in report
-            .instances
-            .iter()
-            .map(Some)
-            .chain(report.instances.is_empty().then_some(None))
-        {
-            let state = instance.map_or("ready", |instance| instance.state.as_str());
-            let status = if let Some(error) = &report.error {
-                format!("broken: {error}")
-            } else if !report.defined {
-                format!("{state} · not defined")
+    let instances = reports
+        .iter()
+        .flat_map(|report| &report.instances)
+        .collect::<Vec<_>>();
+    let attention = instances
+        .iter()
+        .flat_map(|instance| instance_attention(instance, now))
+        .collect::<Vec<_>>();
+    let mut summary = vec![format!(
+        "{} cohort{}",
+        instances.len(),
+        if instances.len() == 1 { "" } else { "s" }
+    )];
+    if !attention.is_empty() {
+        summary.push(format!(
+            "{} {} you",
+            attention.len(),
+            if attention.len() == 1 {
+                "needs"
             } else {
-                state.to_owned()
-            };
-            let pr = instance.and_then(|instance| instance.pr.as_ref());
-            let mut pr_text = pr
-                .and_then(|pr| pr.number)
-                .map(|number| format!("#{number}"))
-                .unwrap_or_default();
-            let mut pr_style = render::palette::accent();
-            if let Some(ci) = pr
-                .filter(|pr| pr.state != Some(WorktreePrState::Closed))
-                .and_then(|pr| pr.ci)
-            {
-                let role = match ci {
-                    WorktreeCi::Passing => rimz::config::GlyphRole::WorktreeCiPassing,
-                    WorktreeCi::Pending => rimz::config::GlyphRole::WorktreeCiPending,
-                    WorktreeCi::Failing => rimz::config::GlyphRole::WorktreeCiFailing,
-                };
-                if !pr_text.is_empty() {
-                    pr_text.push(' ');
-                }
-                pr_text.push_str(&glyph(role));
-                pr_style = ci_style(ci);
+                "need"
             }
-            table.row([
-                render::cell(&report.name).fg(render::palette::accent()),
-                render::cell(
-                    instance
-                        .map(|instance| format!("#{}", instance.channel))
-                        .unwrap_or_else(|| "-".to_owned()),
-                )
-                .dash(),
-                render::cell(
-                    instance
-                        .and_then(|instance| instance.stage.as_ref())
-                        .map(stage_label)
-                        .unwrap_or_else(|| "-".to_owned()),
-                )
-                .dash(),
-                render::cell(if pr_text.is_empty() {
-                    "-".to_owned()
-                } else {
-                    pr_text
-                })
-                .fg(pr_style)
-                .dash(),
-                render::cell(status).fg(if report.error.is_some() {
-                    render::palette::alarm()
-                } else {
-                    render::palette::muted()
-                }),
-            ]);
+        ));
+    }
+    for state in [
+        CohortState::Working,
+        CohortState::Sleeping,
+        CohortState::Idle,
+    ] {
+        let count = instances
+            .iter()
+            .filter(|instance| instance.state == state)
+            .count();
+        if count > 0 {
+            summary.push(format!("{count} {}", state.as_str()));
         }
     }
-    table.render(w)?;
+    summary.push("whole room".into());
+    writeln!(w, "{}", summary.join(" · "))?;
+    render::needs_you(w, &attention, now)?;
+    if attention.is_empty() {
+        writeln!(w)?;
+    }
+
+    let mut rows = reports
+        .iter()
+        .flat_map(|report| {
+            report
+                .instances
+                .iter()
+                .map(Some)
+                .chain((report.instances.is_empty() && report.error.is_some()).then_some(None))
+                .map(move |instance| (report, instance))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|(report, instance)| {
+        let rank = if report.error.is_some() {
+            0
+        } else {
+            instance.map_or(0, |instance| {
+                if instance
+                    .stage
+                    .as_ref()
+                    .is_some_and(|stage| stage.name == rimz::config::DONE_STAGE)
+                {
+                    return 7;
+                }
+                if missing_owner(instance).is_some()
+                    || instance
+                        .members
+                        .iter()
+                        .any(|member| member.needs_you.is_some())
+                {
+                    return 1;
+                }
+                match instance.state {
+                    CohortState::Blocked => 2,
+                    CohortState::Paused => 3,
+                    CohortState::Idle => 4,
+                    CohortState::Working => 5,
+                    CohortState::Sleeping => 6,
+                }
+            })
+        };
+        (
+            rank,
+            instance
+                .and_then(|instance| instance.last_activity_at)
+                .unwrap_or(now),
+            report.name.as_str(),
+            instance.map(|instance| instance.channel.as_str()),
+        )
+    });
+    let mut table = render::Table::new(["TEAM", "LANE", "STAGE", "STATUS", "PR"])
+        .max_width(render::terminal_columns(120));
+    let glyph = rimz::theme::theme_glyphs(theme);
+    let has_rows = !rows.is_empty();
+    for (report, instance) in rows {
+        let state = instance.map_or_else(
+            || "ready".to_owned(),
+            |instance| super::show::state_with_age(instance.state, instance.last_activity_at, now),
+        );
+        let status = if let Some(error) = &report.error {
+            format!("broken: {error}")
+        } else if !report.defined {
+            format!("{state} · not defined")
+        } else {
+            state
+        };
+        let pr = instance.and_then(|instance| instance.pr.as_ref());
+        let mut pr_text = pr
+            .and_then(|pr| pr.number)
+            .map(|number| format!("#{number}"))
+            .unwrap_or_default();
+        let mut pr_style = render::palette::accent();
+        if let Some(ci) = pr
+            .filter(|pr| pr.state != Some(WorktreePrState::Closed))
+            .and_then(|pr| pr.ci)
+        {
+            let role = match ci {
+                WorktreeCi::Passing => rimz::config::GlyphRole::WorktreeCiPassing,
+                WorktreeCi::Pending => rimz::config::GlyphRole::WorktreeCiPending,
+                WorktreeCi::Failing => rimz::config::GlyphRole::WorktreeCiFailing,
+            };
+            if !pr_text.is_empty() {
+                pr_text.push(' ');
+            }
+            pr_text.push_str(&glyph(role));
+            pr_style = ci_style(ci);
+        }
+        table.row([
+            render::cell(&report.name).fg(render::palette::accent()),
+            render::cell(
+                instance
+                    .map(|instance| format!("#{}", instance.channel))
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
+            render::cell(
+                instance
+                    .and_then(|instance| super::show::stage_with_age(instance, now))
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
+            render::cell(status).fg(if report.error.is_some() {
+                render::palette::alarm()
+            } else {
+                render::palette::muted()
+            }),
+            render::cell(if pr_text.is_empty() {
+                "-".to_owned()
+            } else {
+                pr_text
+            })
+            .fg(pr_style)
+            .dash(),
+        ]);
+    }
+    if has_rows {
+        table.render(w)?;
+    }
     if reports
         .iter()
         .all(|report| report.source.as_deref() == Some("built-in"))
@@ -842,13 +974,70 @@ fn write_catalog(w: &mut impl Write, reports: &[TeamReport], theme: &ThemeConfig
         )?;
         writeln!(w, "Guide: docs/guide/teams.md")?;
     }
+    let inactive = reports
+        .iter()
+        .filter(|report| report.instances.is_empty() && report.error.is_none())
+        .map(|report| report.name.as_str())
+        .collect::<Vec<_>>();
+    if !inactive.is_empty() {
+        writeln!(w, "no live cohort: {}", inactive.join(", "))?;
+    }
     Ok(())
+}
+
+fn missing_owner(instance: &LiveInstance) -> Option<&StageReport> {
+    instance
+        .stage
+        .as_ref()
+        .filter(|stage| stage.name != rimz::config::DONE_STAGE && stage.owner_live == Some(false))
+}
+
+fn instance_attention(instance: &LiveInstance, now: jiff::Timestamp) -> Vec<render::NeedsYouRow> {
+    let mut rows = instance
+        .members
+        .iter()
+        .filter_map(|member| {
+            let attention = member.needs_you.as_ref()?;
+            Some(render::NeedsYouRow {
+                handle: format!("{}#{}", member.handle, instance.channel),
+                kind: Some(member.kind.clone()),
+                status: Some(attention.status),
+                since: attention.since,
+                reason: attention.reason.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(stage) = missing_owner(instance)
+        && let Some(owner) = &stage.owner
+    {
+        rows.push(render::NeedsYouRow {
+            handle: format!("@{owner}#{}", instance.channel),
+            kind: None,
+            status: None,
+            since: stage.since.or(instance.last_activity_at).unwrap_or(now),
+            reason: Some(stage.since.map_or_else(
+                || stage.name.clone(),
+                |since| format!("{} for {}", stage.name, render::age_short(since, now)),
+            )),
+        });
+    }
+    rows
 }
 
 pub(super) fn stage_label(stage: &StageReport) -> String {
     stage.owner.as_ref().map_or_else(
         || stage.name.clone(),
-        |owner| format!("{} (@{owner})", stage.name),
+        |owner| {
+            format!(
+                "{} (@{owner}{})",
+                stage.name,
+                if stage.owner_live == Some(false) {
+                    ", not live"
+                } else {
+                    ""
+                }
+            )
+        },
     )
 }
 

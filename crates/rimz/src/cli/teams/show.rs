@@ -131,7 +131,7 @@ fn write_report(
         return Err(missing_cohort(report, lane));
     }
     for instance in &report.instances {
-        write_lane(w, &report.name, instance, now)?;
+        write_lane(w, &report.name, &report.roles, instance, now)?;
         writeln!(w)?;
     }
     write_spec(w, report)
@@ -244,14 +244,19 @@ fn write_cohort_table(w: &mut impl Write, report: &TeamReport, now: jiff::Timest
                 .and_then(|pr| pr.ci)
                 .map_or_else(render::palette::accent, ci_style))
             .dash(),
-            render::cell(state_with_age(instance, now)).fg(state_style(instance.state)),
+            render::cell(state_with_age(
+                instance.state,
+                instance.last_activity_at,
+                now,
+            ))
+            .fg(state_style(instance.state)),
         ]);
     }
     table.render(w)?;
     Ok(())
 }
 
-fn stage_with_age(instance: &LiveInstance, now: jiff::Timestamp) -> Option<String> {
+pub(super) fn stage_with_age(instance: &LiveInstance, now: jiff::Timestamp) -> Option<String> {
     let stage = instance.stage.as_ref()?;
     let label = stage_label(stage);
     Some(match stage.since {
@@ -260,12 +265,16 @@ fn stage_with_age(instance: &LiveInstance, now: jiff::Timestamp) -> Option<Strin
     })
 }
 
-fn state_with_age(instance: &LiveInstance, now: jiff::Timestamp) -> String {
-    match instance.last_activity_at {
-        Some(at) if instance.state != CohortState::Working => {
-            format!("{} {}", instance.state.as_str(), render::age_short(at, now))
+pub(super) fn state_with_age(
+    state: CohortState,
+    activity: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
+) -> String {
+    match activity.filter(|_| state != CohortState::Working) {
+        Some(at) => {
+            format!("{} {}", state.as_str(), render::age_short(at, now))
         }
-        _ => instance.state.as_str().to_owned(),
+        None => state.as_str().to_owned(),
     }
 }
 
@@ -308,6 +317,7 @@ const SIGNALS_PREFIX_WIDTH: usize = 11;
 fn write_lane(
     w: &mut impl Write,
     team: &str,
+    roles: &[super::list::RoleReport],
     instance: &LiveInstance,
     now: jiff::Timestamp,
 ) -> Result<()> {
@@ -322,7 +332,10 @@ fn write_lane(
     writeln!(
         w,
         " · {}",
-        render::paint(state_style(instance.state), &state_with_age(instance, now))
+        render::paint(
+            state_style(instance.state),
+            &state_with_age(instance.state, instance.last_activity_at, now)
+        )
     )?;
 
     let mut progress = render::KeyVals::new().indent(2);
@@ -368,7 +381,34 @@ fn write_lane(
         .indent(2)
         .right(&[2, 4, 5])
         .max_width(render::terminal_columns(120));
-    for member in &instance.members {
+    for role in roles.iter().filter(|role| role.declared) {
+        let mut members = instance
+            .members
+            .iter()
+            .filter(|member| member.role.as_deref() == Some(role.role.as_str()))
+            .peekable();
+        if members.peek().is_none() {
+            live.row([
+                render::cell(format!("@{}", role.role)).fg(role
+                    .kind
+                    .as_deref()
+                    .map_or_else(render::palette::accent, render::palette::identity)),
+                render::cell("not live").fg(render::palette::warn()),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+                render::cell("-").dash(),
+            ]);
+        }
+        for member in members {
+            live.row(member_cells(member, now));
+        }
+    }
+    for member in instance.members.iter().filter(|member| {
+        !roles
+            .iter()
+            .any(|role| role.declared && member.role.as_deref() == Some(role.role.as_str()))
+    }) {
         live.row(member_cells(member, now));
     }
     live.render(w)?;
@@ -532,6 +572,7 @@ mod tests {
             layout: Some("planner,coder+reviewer".to_owned()),
             leader: Some("planner".to_owned()),
             roles: vec![RoleReport {
+                declared: true,
                 tier: None,
                 tier_fallback: None,
                 signals: vec![super::super::list::DeclaredSignal {
@@ -582,11 +623,13 @@ mod tests {
             stage: Some(super::super::list::StageReport {
                 name: "Plan (delta)".into(),
                 owner: Some("planner".into()),
+                owner_live: Some(true),
                 since: Some(jiff::Timestamp::UNIX_EPOCH),
             }),
             pr: None,
             memory: Vec::new(),
             members: vec![LiveMember {
+                needs_you: None,
                 role: Some("planner".to_owned()),
                 signals: vec![super::super::list::LiveSignal {
                     name: "team-forge-feat-x-planner-ci-failed".to_owned(),
@@ -680,6 +723,7 @@ mod tests {
     #[test]
     fn json_show_includes_declared_and_live_signals() {
         let json = serde_json::to_value(report(vec![live_instance()])).unwrap();
+        assert_eq!(json["instances"][0]["stage"]["owner_live"], true);
         assert_eq!(
             json["roles"][0]["signals"],
             serde_json::json!([{
@@ -708,6 +752,37 @@ mod tests {
     #[test]
     fn human_show_lane_form_leads_with_status() {
         insta::assert_snapshot!(rendered(&report(vec![live_instance()]), Some("feat-x")));
+    }
+
+    #[test]
+    fn human_show_includes_absent_declared_roles() {
+        let mut report = report(vec![live_instance()]);
+        let mut absent = report.roles[0].clone();
+        absent.role = "coder".into();
+        report.roles.push(absent);
+        let text = rendered(&report, Some("feat-x"));
+        assert!(
+            text.lines().any(|line| line
+                .split_whitespace()
+                .eq(["@coder", "not", "live", "-", "-", "-", "-"])),
+            "{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn roleless_seats_do_not_become_absent_roles() {
+        let mut report = report(vec![live_instance()]);
+        report.roles[0].declared = false;
+        report.instances[0].members[0].role = None;
+        report.instances[0].stage = None;
+        let text = rendered(&report, Some("feat-x"));
+        assert!(!text.contains("not live"), "{text}");
+        assert!(
+            text.lines()
+                .any(|line| line.split_whitespace().take(2).eq(["@planner", "running"])),
+            "{text}"
+        );
     }
 
     #[test]

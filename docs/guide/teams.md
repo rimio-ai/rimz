@@ -84,7 +84,7 @@ Two siblings ship beside forge and work exactly the same way. `mill` leads with 
 
 A team is one line of work, so the room treats it as one. The sidebar names the group with `· forge`, keeps its members in one contiguous block with a single derived state, and lets one member asking for you lift the whole block ([the sidebar guide](./sidebar.md#teams-read-as-one)).
 
-`rimz teams list` lists every definition on the machine, with one row per live copy. A live copy is a cohort, and its address is `team#worktree`:
+`rimz teams list` opens with who needs you, including a stage owner who is not live, then lists live cohorts in attention order with stage and activity ages. Definitions with no live cohort share a trailing line. A live copy is a cohort, and its address is `team#worktree`:
 
 ```sh
 rimz teams list                         # every definition, and every cohort now live

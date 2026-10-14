@@ -3093,6 +3093,21 @@ reason = "Agents and teams render the same oldest-first attention block."
 
 [[verdict]]
 kind = "item"
+key = "cli::teams::list::instance_state"
+reason = "Catalog and wait diagnostics fold the same typed attention statuses."
+
+[[verdict]]
+kind = "item"
+key = "cli::teams::show::stage_with_age"
+reason = "Team list and show share stage-owner and flip-age presentation."
+
+[[verdict]]
+kind = "item"
+key = "cli::teams::show::state_with_age"
+reason = "Team list, show, and wait share cohort activity-age presentation."
+
+[[verdict]]
+kind = "item"
 key = "store::snapshot::view::model::SidebarProviderPanel::login_key"
 reason = "Account-scoped cache projection, renderer selection, carry episodes and diagnostics share the panel's login identity."
 
