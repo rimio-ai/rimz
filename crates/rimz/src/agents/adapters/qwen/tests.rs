@@ -113,7 +113,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     assert!(!install::MANAGED_SOURCE.upgrade_available_at(&path));
     let installed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     for entries in installed["hooks"].as_object().unwrap().values() {
-        assert_eq!(entries[0]["hooks"][0]["timeout"], 2_000);
+        assert_eq!(entries[0]["hooks"][0]["timeout"], 2);
     }
     assert_eq!(
         installed
