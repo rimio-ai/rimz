@@ -156,7 +156,7 @@ fn parse_message(data: &str, table_created: Option<i64>, kind: &str) -> Option<M
         role,
         at: created.and_then(|millis| Timestamp::from_millisecond(millis).ok()),
         text_parts: match role {
-            TranscriptRole::User => data.text.into_iter().collect(),
+            TranscriptRole::User | TranscriptRole::Steering => data.text.into_iter().collect(),
             TranscriptRole::Assistant => data
                 .content
                 .into_iter()
@@ -175,7 +175,7 @@ fn push_message(messages: &mut Vec<TranscriptMessage>, builder: Option<MessageBu
     };
     let visible = builder.text_parts.join("\n");
     let text = match builder.role {
-        TranscriptRole::User => sanitize_user_prompt(Some(&visible)),
+        TranscriptRole::User | TranscriptRole::Steering => sanitize_user_prompt(Some(&visible)),
         TranscriptRole::Assistant => (!visible.is_empty()).then_some(visible),
     };
     if let Some(text) = text {

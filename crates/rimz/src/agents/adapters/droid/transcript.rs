@@ -401,7 +401,7 @@ fn normalize_record(record: &Record) -> Option<TranscriptMessage> {
     let role = visible_role(record)?;
     let visible = visible_text(record)?;
     let text = match role {
-        TranscriptRole::User => sanitize_user_prompt(Some(&visible))?,
+        TranscriptRole::User | TranscriptRole::Steering => sanitize_user_prompt(Some(&visible))?,
         TranscriptRole::Assistant => visible,
     };
     Some(TranscriptMessage {

@@ -360,7 +360,9 @@ pub(crate) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
                 _ => return None,
             };
             let text = match role {
-                TranscriptRole::User => sanitize_user_prompt(conversation_text(&value).as_deref())?,
+                TranscriptRole::User | TranscriptRole::Steering => {
+                    sanitize_user_prompt(conversation_text(&value).as_deref())?
+                }
                 TranscriptRole::Assistant => conversation_text(&value)?,
             };
             Some(TranscriptMessage {

@@ -39,7 +39,9 @@ pub(super) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
             };
             let visible = visible_text(message.content.as_ref()?)?;
             let text = match role {
-                TranscriptRole::User => sanitize_user_prompt(Some(&visible))?,
+                TranscriptRole::User | TranscriptRole::Steering => {
+                    sanitize_user_prompt(Some(&visible))?
+                }
                 TranscriptRole::Assistant => visible,
             };
             Some(TranscriptMessage {

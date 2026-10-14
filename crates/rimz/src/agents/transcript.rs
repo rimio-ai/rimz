@@ -14,6 +14,8 @@ use super::AgentDefinition;
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptRole {
     User,
+    /// Human input inside an open turn, not a new turn's prompt.
+    Steering,
     Assistant,
 }
 

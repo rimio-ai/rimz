@@ -52,7 +52,7 @@ fn normalize_message(record: EventRecord) -> Option<TranscriptMessage> {
     };
     let content = record.data?.content?;
     let text = match role {
-        TranscriptRole::User => sanitize_user_prompt(Some(&content))?,
+        TranscriptRole::User | TranscriptRole::Steering => sanitize_user_prompt(Some(&content))?,
         TranscriptRole::Assistant => {
             if content.trim().is_empty() {
                 return None;

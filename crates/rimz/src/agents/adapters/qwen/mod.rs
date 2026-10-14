@@ -812,7 +812,16 @@ fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
                 return None;
             }
             let role = match record.r#type.as_deref() {
-                Some("user") => TranscriptRole::User,
+                Some("user") if record.subtype.as_deref() == Some("mid_turn_user_message") => {
+                    TranscriptRole::Steering
+                }
+                Some("user")
+                    if record.subtype.is_none()
+                        && matches!(record.provenance.as_deref(), None | Some("real_user"))
+                        && record.background_turn.is_none() =>
+                {
+                    TranscriptRole::User
+                }
                 Some("assistant") => TranscriptRole::Assistant,
                 _ => return None,
             };

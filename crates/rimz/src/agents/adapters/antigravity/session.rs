@@ -481,7 +481,9 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
             let role = visible_role(&record)?;
             let content = record.content.as_deref()?;
             let text = match role {
-                TranscriptRole::User => normalize_user_content(Some(content)),
+                TranscriptRole::User | TranscriptRole::Steering => {
+                    normalize_user_content(Some(content))
+                }
                 TranscriptRole::Assistant => normalized(Some(content)),
             }?;
             Some(TranscriptMessage {
@@ -851,6 +853,7 @@ fn fold(lines: &str) -> FoldedSession {
             continue;
         }
         match role {
+            TranscriptRole::Steering => continue,
             TranscriptRole::User => {
                 folded.native_prompt_detail = None;
                 folded.waiting_since = None;
