@@ -1452,6 +1452,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         match &row.status {
             HookStatus::Installed => installed.push(row.kind.as_str()),
             HookStatus::InstalledUntrusted { .. }
+            | HookStatus::InstalledDisabled { .. }
             | HookStatus::NotInstalled { .. }
             | HookStatus::Blocked { .. } => {
                 needs_action.push(row);
@@ -1491,6 +1492,7 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
         let mut table = Table::new(["", "AGENT", "STATUS", "FIX"]);
         for row in needs_action {
             let (health, fix) = match &row.status {
+                HookStatus::InstalledDisabled { fix } => (Health::Warn, fix.clone()),
                 HookStatus::InstalledUntrusted { events, fix } => (
                     Health::Warn,
                     format!(

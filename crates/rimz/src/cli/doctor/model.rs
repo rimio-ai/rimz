@@ -559,6 +559,7 @@ pub(super) struct PluginProbeRow {
 pub(super) enum HookStatus {
     Installed,
     InstalledUntrusted { events: Vec<String>, fix: String },
+    InstalledDisabled { fix: String },
     NotInstalled { fix: String },
     Blocked { fix: String },
     NotDetected,
@@ -571,6 +572,7 @@ impl HookStatus {
         match self {
             Self::Installed => "installed",
             Self::InstalledUntrusted { .. } => "installed, untrusted",
+            Self::InstalledDisabled { .. } => "installed, disabled",
             Self::NotInstalled { .. } => "not installed",
             Self::Blocked { .. } => "blocked",
             Self::NotDetected => "not detected",
