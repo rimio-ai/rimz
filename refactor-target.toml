@@ -200,7 +200,9 @@ upward-dependencies = ["address"]
 # LaunchDirMode separates supervised folder-screen refusals from headless judges (+1).
 # SpendingCapability::spending_session_id and the spending role/history surface (+9).
 # UnattributedTally shares the provider split with the stats consumer (+1).
-surface-budget = 1051
+# LaunchCapability::changed_system_prompt_args lets launch compilation refresh changed prompts on resume (+1).
+# LaunchCapability::system_prompt_arg_matchers identifies native configured prompt inputs (+1).
+surface-budget = 1053
 
 [[verdict]]
 kind = "item"

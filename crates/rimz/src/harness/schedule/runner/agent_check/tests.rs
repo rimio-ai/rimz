@@ -1313,6 +1313,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
             (crate::workspace::ENV_CHANNEL.into(), "parent-lane".into()),
         ]);
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: root.path(),
             project_root: root.path(),

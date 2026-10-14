@@ -1092,6 +1092,7 @@ fn peer_launch_reports_only_launcher_opened_turns() {
             &session_name,
             &env.project_root,
             &rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_2"),
+            None,
         )
         .unwrap();
     let hook =

@@ -321,7 +321,15 @@ fn launch_and_supervise(
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
-        record_own_launch_pane(invocation, identity);
+        record_own_launch_pane(
+            invocation,
+            identity,
+            matches!(
+                request.action,
+                rimz::harness::launch::ExecAction::Launch { .. }
+            )
+            .then_some(plan.system_prompt_digest.as_str()),
+        );
         if attach_target.is_none() {
             attach_own_launch_pane(invocation, identity);
         }
@@ -1347,13 +1355,23 @@ fn repair_own_launch_winsize(workspace: &rimz::ResolvedWorkspace, diag: &rimz::d
     }
 }
 
-fn record_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {
+fn record_own_launch_pane(
+    invocation: &ExecInvocationContext<'_>,
+    identity: &LaunchIdentity,
+    system_prompt_digest: Option<&str>,
+) {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
         return;
     };
     let workspace = invocation.workspace;
     match invocation.store().and_then(|store| {
-        store.bind_agent_launch(identity, &workspace.session_name, &invocation.cwd, &pane_id)?;
+        store.bind_agent_launch(
+            identity,
+            &workspace.session_name,
+            &invocation.cwd,
+            &pane_id,
+            system_prompt_digest,
+        )?;
         Ok(())
     }) {
         Ok(()) => {}

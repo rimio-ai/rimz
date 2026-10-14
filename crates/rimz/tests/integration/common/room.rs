@@ -241,6 +241,7 @@ pub fn bind_child_panes(
                     session_name,
                     &record.worktree_path,
                     &PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", bound.len() + 3)),
+                    None,
                 )
                 .expect("bind child pane");
             bound.push(name);

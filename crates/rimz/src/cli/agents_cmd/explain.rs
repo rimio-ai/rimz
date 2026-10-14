@@ -54,7 +54,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
     let runtime = rimz::RuntimePaths::for_state(&state)?;
     let channel = cli::current_channel(&workspace, store.as_ref());
     let mut warnings = Vec::new();
-    let (request, cwd, action_note) = if args.target.starts_with('@') {
+    let (request, cwd, action_note, system_prompt_digest) = if args.target.starts_with('@') {
         let store = store.as_ref().with_context(|| {
             cli::no_room(format_args!("at {}", workspace.project_root.display()))
         })?;
@@ -102,6 +102,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             restart::relaunch_request(&agent, &posture, action, login, None),
             cwd,
             note.map(str::to_owned),
+            agent.system_prompt_digest.clone(),
         )
     } else {
         let finalized = launch_resolve::resolve_finalized_layout(
@@ -205,7 +206,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
             None,
             false,
         );
-        (request, workspace.worktree_root.clone(), None)
+        (request, workspace.worktree_root.clone(), None, None)
     };
     let adapter = rimz::agents::find_definition(request.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", request.kind))?;
@@ -225,6 +226,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         warnings.push("the rendered skill view is planned from this pane's sandbox view and can differ from the host's".to_owned());
     }
     let plan = launch_plan::compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: system_prompt_digest.as_deref(),
         request: &request,
         cwd: &cwd,
         project_root: &workspace.project_root,

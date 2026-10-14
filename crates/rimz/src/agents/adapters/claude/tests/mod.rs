@@ -14,6 +14,24 @@ mod local_context;
 mod subagents;
 
 #[test]
+fn system_prompt_snapshot_requires_a_known_supported_version() {
+    use crate::agents::version::CliVersion;
+    for version in [None, Some(CliVersion::new(2, 1, 256))] {
+        assert!(system_prompt_snapshot_args(version).is_empty());
+    }
+    for version in [
+        CliVersion::new(2, 1, 257),
+        CliVersion::new(2, 1, 296),
+        CliVersion::new(3, 0, 0),
+    ] {
+        assert_eq!(
+            system_prompt_snapshot_args(Some(version)),
+            ["--system-prompt-snapshot", "off"]
+        );
+    }
+}
+
+#[test]
 fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
     let request = crate::agents::HeadlessRequest {
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),

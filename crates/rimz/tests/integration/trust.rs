@@ -586,6 +586,10 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
         "resumed agent misses the resume argv:\n{dumped}"
     );
     assert!(
+        !dumped.contains("--system-prompt-snapshot"),
+        "an unknown CLI version must not receive a snapshot switch:\n{dumped}"
+    );
+    assert!(
         dumped.lines().any(|line| line == "RIMZ_TEST_INJECTED=yes"),
         "resumed agent env misses the trusted project var:\n{dumped}"
     );

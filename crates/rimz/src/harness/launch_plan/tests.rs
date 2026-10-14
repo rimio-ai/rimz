@@ -2,6 +2,173 @@ use super::*;
 use crate::harness::launch::{ExecAction, ExecIdentity, ProviderAccountState};
 use crate::ids::AgentKind;
 
+fn compile_prompt_request(
+    project: &Path,
+    request: &ExecRequest,
+    baseline: Option<&str>,
+) -> LaunchPlan {
+    let id = crate::WorkspaceId::from_project_root(project);
+    let runtime = RuntimePaths::under(id.clone(), project).unwrap();
+    let state = StatePaths::under(id, project).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    compile(LaunchPlanInputs {
+        request,
+        cwd: project,
+        project_root: project,
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: None,
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: None,
+        agents: Ok(&[]),
+        ambient_env: &BTreeMap::new(),
+        agent_shell: None,
+        hibernate: false,
+        recorded_system_prompt_digest: baseline,
+    })
+    .unwrap()
+}
+
+#[test]
+fn configured_prompt_changes_control_snapshot_reuse() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if std::env::var_os("RIMZ_TEST_SNAPSHOT_CLI").is_none() {
+        let bin = tempfile::tempdir().unwrap();
+        let cli = bin.path().join("claude");
+        std::fs::write(
+            &cli,
+            "#!/bin/sh\nprintf 'probe\\n' >> \"$RIMZ_TEST_SNAPSHOT_PROBES\"\nprintf '2.1.296 (Claude Code)\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let paths = std::iter::once(bin.path().to_path_buf())
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            ))
+            .collect::<Vec<_>>();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch_plan::tests::configured_prompt_changes_control_snapshot_reuse",
+                "--nocapture",
+            ])
+            .env("RIMZ_TEST_SNAPSHOT_CLI", "1")
+            .env("RIMZ_TEST_SNAPSHOT_PROBES", bin.path().join("probes"))
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    let fresh = request("claude", action_with_args("launch", vec![]));
+    let baseline = compile_prompt_request(project.path(), &fresh, None).system_prompt_digest;
+    for (action, recorded, expected) in [
+        ("launch", None, false),
+        ("resume", Some(baseline.as_str()), false),
+        ("resume", Some("different"), true),
+        ("resume", None, true),
+        ("fork", Some("different"), true),
+        ("fork", Some(baseline.as_str()), false),
+    ] {
+        let request = request("claude", action_with_args(action, vec![]));
+        let plan = compile_prompt_request(project.path(), &request, recorded);
+        let flags: Vec<_> = plan
+            .process()
+            .provider_argv
+            .windows(2)
+            .filter(|args| args[0] == "--system-prompt-snapshot")
+            .collect();
+        assert_eq!(
+            flags.len(),
+            usize::from(expected),
+            "{action} with baseline {recorded:?}"
+        );
+        assert!(flags.iter().all(|args| args[1] == "off"));
+        assert_eq!(plan.system_prompt_digest, baseline);
+    }
+    let probes =
+        std::fs::read_to_string(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap()).unwrap();
+    assert_eq!(
+        probes.lines().count(),
+        3,
+        "only changed resumed prompts probe the CLI"
+    );
+}
+
+#[test]
+fn configured_prompt_fingerprint_ignores_reminders_and_reads_files() {
+    let project = tempfile::tempdir().unwrap();
+    let base = project.path().join("base.md");
+    std::fs::write(&base, "configured base").unwrap();
+    let mut launch = request(
+        "claude",
+        action_with_args(
+            "launch",
+            vec!["--append-system-prompt".into(), "configured append".into()],
+        ),
+    );
+    launch.system_prompt_file = Some(base.clone().into());
+    let fresh = compile_prompt_request(project.path(), &launch, None);
+    let baseline = fresh.system_prompt_digest.clone();
+    let mut resume = launch.clone();
+    resume.action = action_with_args("resume", launch.action.extra_args().to_vec());
+    resume.loop_reminder = Some("changed runtime reminder".into());
+    let resumed = compile_prompt_request(project.path(), &resume, Some(&baseline));
+    assert_ne!(fresh.process().reminder, resumed.process().reminder);
+    assert_eq!(resumed.system_prompt_digest, baseline);
+    std::fs::write(&base, "edited configured base").unwrap();
+    assert_ne!(
+        compile_prompt_request(project.path(), &launch, None).system_prompt_digest,
+        baseline
+    );
+    assert_eq!(baseline.len(), 64);
+    assert!(
+        baseline
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+
+    for flag in ["--system-prompt-file", "--append-system-prompt-file"] {
+        std::fs::write(&base, "raw file").unwrap();
+        let native = request(
+            "claude",
+            action_with_args("launch", vec![flag.into(), base.display().to_string()]),
+        );
+        let before = compile_prompt_request(project.path(), &native, None).system_prompt_digest;
+        std::fs::write(&base, "edited raw file").unwrap();
+        assert_ne!(
+            compile_prompt_request(project.path(), &native, None).system_prompt_digest,
+            before,
+            "{flag}"
+        );
+    }
+    for flag in ["--system-prompt", "--append-system-prompt"] {
+        let native = request(
+            "claude",
+            action_with_args("launch", vec![format!("{flag}=raw text")]),
+        );
+        let before = compile_prompt_request(project.path(), &native, None).system_prompt_digest;
+        let native = request(
+            "claude",
+            action_with_args("launch", vec![flag.into(), "changed raw text".into()]),
+        );
+        assert_ne!(
+            compile_prompt_request(project.path(), &native, None).system_prompt_digest,
+            before,
+            "{flag}"
+        );
+    }
+}
+
 fn exec_launch_reminders(
     request: &ExecRequest,
     machine: &crate::config::MachineConfig,
@@ -46,6 +213,7 @@ fn hibernation_scopes_ready_providers_outside_bwrap() {
     for bwrap in [None, Some(Path::new("/usr/bin/bwrap"))] {
         for enabled in [false, true] {
             let plan = compile(LaunchPlanInputs {
+                recorded_system_prompt_digest: None,
                 request: &request,
                 cwd: project.path(),
                 project_root: project.path(),
@@ -136,6 +304,7 @@ fn hibernation_leaves_qwen_reentry_outside_the_final_provider_scope() {
                 }
             };
             let plan = compile(LaunchPlanInputs {
+                recorded_system_prompt_digest: None,
                 request: &request,
                 cwd: project.path(),
                 project_root: project.path(),
@@ -304,6 +473,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             assert!(!warnings.is_empty());
         }
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &req,
             cwd: root.path(),
             project_root: root.path(),
@@ -449,6 +619,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                     request.skills = listed.then(|| vec!["commit".parse().unwrap()]);
                     request.allowed_tools = rules.then(|| vec!["Bash(git *)".parse().unwrap()]);
                     let plan = compile(LaunchPlanInputs {
+                        recorded_system_prompt_digest: None,
                         request: &request,
                         cwd: project.path(),
                         project_root: project.path(),
@@ -543,6 +714,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         action_with_args("launch", vec!["--settings".into(), "profile.json".into()]),
     );
     let plan = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
         request: &request,
         cwd: project.path(),
         project_root: project.path(),
@@ -584,6 +756,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
     let ambient = BTreeMap::from([("HOME".into(), project.path().display().to_string())]);
     let compile_request = |request: &ExecRequest| {
         compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request,
             cwd: project.path(),
             project_root: project.path(),
@@ -653,6 +826,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
     );
     request.skills = Some(Vec::new());
     let plan = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
         request: &request,
         cwd: project.path(),
         project_root: project.path(),
@@ -1056,6 +1230,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             request.append_system_prompt_files = vec![fragment.clone().into()];
         }
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1184,6 +1359,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
         for enabled in [true, false] {
             effective.env_reminder = enabled;
             let plan = compile(LaunchPlanInputs {
+                recorded_system_prompt_digest: None,
                 request: &request,
                 cwd,
                 project_root: &root,
@@ -1234,6 +1410,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
                 request.subagent = subagent;
                 let plan = compile(LaunchPlanInputs {
+                    recorded_system_prompt_digest: None,
                     request: &request,
                     cwd,
                     project_root: project.path(),
@@ -1340,6 +1517,7 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
         request.identity.params.team = Some("forge".to_owned());
         request.identity.params.role = Some("planner".to_owned());
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1430,6 +1608,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
         request.identity.params.login = Some("work".parse().unwrap());
 
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1473,6 +1652,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
     for kind in ["claude", "codex"] {
         let request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1517,6 +1697,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
     request.identity.params.login = Some("work".parse().unwrap());
 
     let error = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
         request: &request,
         cwd: project.path(),
         project_root: project.path(),
@@ -1572,6 +1753,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         ),
     ] {
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: &cwd,
             project_root: project.path(),
@@ -1601,6 +1783,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
     }
 
     let plan = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
         request: &request,
         cwd: project.path(),
         project_root: project.path(),
@@ -1699,6 +1882,7 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect();
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1772,6 +1956,7 @@ fn a_provider_temp_root_follows_tmpdir() {
             .map(|list| BTreeMap::from([(keys.to_owned(), list.to_owned())]))
             .unwrap_or_default();
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1831,6 +2016,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
     let ambient = BTreeMap::from([("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".to_owned())]);
     let compile_with = |agents: Result<&[crate::agents::AgentState], &str>| {
         compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
@@ -1955,6 +2141,7 @@ fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touch
         let mut request = request("codex", action_with_args("launch", Vec::new()));
         request.identity.params.login = Some(login.parse().unwrap());
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: project.path(),
             project_root: project.path(),
