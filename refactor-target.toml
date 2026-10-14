@@ -77,7 +77,7 @@ path = "crates/rimz/src/address.rs"
 # from the binary into the shared resolver and library dispatch callers;
 # Root-lane labels and record/filter predicates keep CLI readers on one rule (+4).
 # `launch_word_matches` lets the bare `rimz agents <word>` refusal reuse the
-# role, name, and profile tiers instead of matching them a second time (+1).
+# role and name tiers instead of matching them a second time (+1).
 # Reader-relative paste addresses share the resolver's verified selector chain (+1).
 surface-budget = 46
 

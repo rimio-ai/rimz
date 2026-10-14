@@ -1352,9 +1352,11 @@ pub(crate) fn recipient_channel(
 
 /// The agents among `agents` that a bare launch word also names, from where
 /// `rimz agents show <word>` would look: the caller's current lane, or the
-/// whole room outside every lane. They match by role, explicit name, profile,
-/// or pet name; a kind word or a session-id prefix never matches here, so a
-/// launch by kind stays unambiguous.
+/// whole room outside every lane. They match by role, explicit name, or pet
+/// name, each of which identifies one agent. A kind and a profile are launch
+/// recipes that any number of live agents share, so neither matches here and a
+/// launch by kind or profile stays unambiguous; a session-id prefix never
+/// matches either.
 pub fn launch_word_matches<'a>(
     word: &str,
     agents: &[&'a AgentState],
@@ -1364,7 +1366,6 @@ pub fn launch_word_matches<'a>(
     let tiers = [
         SelectorTier::Role,
         SelectorTier::ExplicitName,
-        SelectorTier::Profile,
         SelectorTier::Name,
     ];
     channel_candidates(agents, current_channel.channel.as_deref())
