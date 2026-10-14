@@ -2,6 +2,183 @@ use super::*;
 use rimz::theme::theme_glyphs;
 use std::path::{Path, PathBuf};
 
+#[test]
+fn spend_first_publication_has_compact_json_and_panel() {
+    let mut cache = ProviderSpendingCache {
+        timezone: "Asia/Shanghai".into(),
+        refreshed_at_ms: 1_728_921_600_000,
+        ..Default::default()
+    };
+    cache.spending.total = tally(1_000_000, 100.0, 10);
+    cache.days.insert(20_011, day(1_000_000, 100.0));
+    cache
+        .roles
+        .agents
+        .insert("codex".into(), tally(100, 20.0, 9));
+    cache.roles.unattributed.tally = tally(100, 40.0, 1);
+    cache.roles.unattributed.by_provider = BTreeMap::from([
+        ("claude".into(), tally(10, 5.0, 1)),
+        ("codex".into(), tally(50, 20.0, 1)),
+        ("grok".into(), tally(25, 10.0, 1)),
+        ("pi".into(), tally(15, 5.0, 1)),
+        ("zero".into(), tally(0, 0.0, 0)),
+    ]);
+    cache.roles.subagents.insert(
+        "fast".into(),
+        rimz::agents::spending::SubagentTally {
+            tally: model_tally(2_000_000, 40.0, 1_500_000, 500_000, 3_000_000),
+            models: BTreeMap::from([("model-0".into(), tally(100, 40.0, 1))]),
+        },
+    );
+    for index in 0..5 {
+        cache
+            .models
+            .insert(format!("model-{index}"), tally(100, 20.0, 1));
+    }
+    cache.models.insert("zero".into(), tally(100, 0.0, 1));
+    let stats = Stats::from_provider(cache);
+    let assists = AssistStats::default();
+    let value = json::stats_json_value(&stats, &assists, 20_011, false);
+    assert!(value["assists"].get("events").is_none());
+    assert_eq!(value["timezone"], "Asia/Shanghai");
+    assert!(value["as_of"].is_string());
+    assert!(value["windows"]["today"].is_object());
+    assert_eq!(value["agents"][0]["share"], 0.2);
+    assert_eq!(value["models"].as_array().unwrap().len(), 5);
+    assert_eq!(value["subagents"][0]["profile"], "fast");
+    assert_eq!(value["subagents"][0]["share"], 0.4);
+    assert_eq!(value["subagents"][0]["model"], "model-0");
+    assert_eq!(value["unattributed"]["tally"]["usd"], 40.0);
+    assert_eq!(value["unattributed"]["by_provider"]["claude"]["usd"], 5.0);
+    assert_eq!(value["unattributed"]["by_provider"]["codex"]["usd"], 20.0);
+    assert_eq!(
+        value["unattributed"]["by_provider"]
+            .as_object()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(value["unattributed"]["by_provider"].get("zero").is_none());
+    let mut out = Vec::new();
+    render_panel(
+        &mut out,
+        PanelStats {
+            usage: &stats,
+            assists: &assists,
+            active: None,
+        },
+        20_012,
+        false,
+        &panel_glyphs(),
+        true,
+        "\n",
+    )
+    .unwrap();
+    let panel = strip_ansi(std::str::from_utf8(&out).unwrap());
+    for label in [
+        "Spend",
+        "Today",
+        "Week",
+        "Month",
+        "Year",
+        "Models (year)",
+        "Agents (year)",
+        "Subagents (year)",
+        "SHARE",
+        "2 other models",
+        "Unattributed",
+        "as of",
+    ] {
+        assert!(panel.contains(label), "missing {label}: {panel}");
+    }
+    assert!(!panel.contains(WORDMARK.lines().next().unwrap()));
+    assert!(!panel.contains("zero"));
+    let unattributed = panel.split("Unattributed").nth(1).unwrap();
+    assert!(unattributed.contains("Providers"));
+    assert!(unattributed.find("Codex").unwrap() < unattributed.find("Grok").unwrap());
+    assert!(unattributed.find("Grok").unwrap() < unattributed.find("Claude").unwrap());
+    assert!(unattributed.find("Claude").unwrap() < unattributed.find("Pi").unwrap());
+    assert!(unattributed.contains("$20"));
+    assert!(unattributed.contains("$10"));
+    assert!(unattributed.contains("$5"));
+    assert!(panel.contains("as of Oct"));
+    let mut today = Vec::new();
+    panel::render_spend(
+        &mut today,
+        &stats,
+        stats.today_day(stats.refreshed_at_ms / 1000),
+        false,
+        true,
+        "\n",
+    )
+    .unwrap();
+    let today = String::from_utf8(today).unwrap();
+    assert!(today.contains("1.5M"));
+    assert!(!today.contains("as of Oct"));
+    assert!(!today.contains("Models (year)"));
+    assert!(today.contains("RUNS  MODEL"));
+    let mut held = Vec::new();
+    render_panel(
+        &mut held,
+        PanelStats {
+            usage: &stats,
+            assists: &assists,
+            active: Some(Window::Year),
+        },
+        20_011,
+        false,
+        &panel_glyphs(),
+        true,
+        "\n",
+    )
+    .unwrap();
+    assert!(String::from_utf8(held).unwrap().contains(TAGLINE));
+}
+
+#[test]
+fn refresh_q_respects_hold() {
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+    assert_eq!(key_outcome(key, false), KeyOutcome::Quit);
+    assert_eq!(key_outcome(key, true), KeyOutcome::Ignore);
+}
+
+#[test]
+fn queued_stall_notices_count_and_failed_ones_are_held() {
+    let records = [
+        serde_json::json!({"delivered": true}),
+        serde_json::json!({"delivered": false}),
+        serde_json::json!({"delivered": false, "error": "queue write failed"}),
+    ]
+    .into_iter()
+    .map(|outcome| {
+        let mut record = serde_json::json!({
+            "at": "2026-01-01T00:00:00Z", "assist": "stall_notice",
+            "kind": "codex", "agent_id": "session", "parent": "parent",
+            "silent_secs": 60, "message_id": "message"
+        });
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(outcome.as_object().unwrap().clone());
+        serde_json::from_value(record).unwrap()
+    })
+    .collect();
+    let stats = AssistStats::from_records("all", records);
+    assert_eq!(stats.rollup.stall_notices, 2, "a queued notice took effect");
+    assert_eq!(stats.rollup.held.get("stall_notices"), Some(&1));
+    assert_eq!(
+        stats.timeline(50, false).0.len(),
+        stats.rollup.stall_notices
+    );
+    assert_eq!(stats.timeline(0, true).0.len(), 3);
+    assert_eq!(stats.timeline(1, true).1, 2);
+    assert!(
+        assists::category_rows(&stats.rollup)
+            .iter()
+            .any(|row| strip_ansi(row) == "Stall notice: 2 (1 held)")
+    );
+}
+
 fn day(tokens: u64, usd: f64) -> DaySpend {
     DaySpend { tokens, usd }
 }
@@ -192,6 +369,10 @@ fn published_stats_reads_rollups_and_windows() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: 123,
+            roles: rimz::agents::spending::RoleTallies {
+                agents: spending.by_provider.clone(),
+                ..Default::default()
+            },
             spending,
             days: by_day.clone(),
             models: by_model.clone(),
@@ -235,6 +416,10 @@ fn stats_serves_published_cache_without_walking() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: 1,
+            roles: rimz::agents::spending::RoleTallies {
+                agents: spending.by_provider.clone(),
+                ..Default::default()
+            },
             spending,
             days: by_day.clone(),
             models: by_model.clone(),
@@ -315,7 +500,8 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         published.spending.total.month.tokens,
         stats.total.month.tokens
     );
-    assert_eq!(published.spending.by_provider, stats.by_agent);
+    assert_eq!(published.roles.agents, stats.by_agent);
+    assert_eq!(published.roles.unattributed, stats.unattributed);
     for transcript in [first, second] {
         assert!(
             cursor
@@ -337,7 +523,7 @@ fn activity_reads_streaks_active_ratio_and_busiest_day() {
     by_day.insert(today - 10, day(99, 1.0)); // the heaviest day
     by_day.insert(today - 11, day(5, 1.0));
 
-    let a = Activity::of(&by_day, today, Window::AllTime);
+    let a = Activity::of(&by_day, today, Window::Year);
     assert_eq!(a.current_streak, 5);
     assert_eq!(a.longest_streak, 5);
     assert_eq!(
@@ -355,7 +541,7 @@ fn current_streak_survives_an_inactive_today() {
     by_day.insert(today - 1, day(10, 1.0));
     by_day.insert(today - 2, day(10, 1.0));
     // Nothing logged today yet.
-    let a = Activity::of(&by_day, today, Window::AllTime);
+    let a = Activity::of(&by_day, today, Window::Year);
     assert_eq!(
         a.current_streak, 2,
         "a pending today does not break the streak"
@@ -405,7 +591,7 @@ fn spend_trend_needs_a_supported_window_and_prior_spend() {
     let by_day = BTreeMap::from([(20_000, day(1, 10.0))]);
 
     assert_eq!(spend_trend(&by_day, 20_000, Window::Week), None);
-    assert_eq!(spend_trend(&by_day, 20_000, Window::AllTime), None);
+    assert_eq!(spend_trend(&by_day, 20_000, Window::Year), None);
     assert_eq!(spend_trend(&by_day, 20_000, Window::Year), None);
 }
 
@@ -419,10 +605,10 @@ fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
 
 #[test]
 fn windows_wrap_forward_and_back() {
-    assert_eq!(Window::AllTime.next(), Window::Week);
-    assert_eq!(Window::Year.next(), Window::AllTime);
-    assert_eq!(Window::AllTime.prev(), Window::Year);
-    assert_eq!(Window::Week.prev(), Window::AllTime);
+    assert_eq!(Window::Year.next(), Window::Week);
+    assert_eq!(Window::Month.next(), Window::Year);
+    assert_eq!(Window::Year.prev(), Window::Month);
+    assert_eq!(Window::Week.prev(), Window::Year);
 }
 
 #[test]
@@ -508,7 +694,7 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
     let mut state = HeldStats::new(false, panel_glyphs(), false);
     let mut out = Vec::new();
 
-    for expected in [Window::Week, Window::Month, Window::Year, Window::AllTime] {
+    for expected in [Window::Week, Window::Month, Window::Year, Window::Week] {
         assert_eq!(
             state
                 .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out,)
@@ -578,6 +764,9 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     let today = unix_secs_now() as i64 / DAY_SECS;
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -595,7 +784,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     assert!(state.has_frame());
     assert!(state.has_refresh_failure());
     let frame = String::from_utf8(out.clone()).unwrap();
-    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year 42"), "frame was {frame:?}");
     assert!(
         !frame.contains("Spending refresh unavailable"),
         "held frame must outrank the failure: {frame:?}"
@@ -606,7 +795,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
         .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out)
         .unwrap();
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year 42"), "frame was {frame:?}");
 }
 
 #[test]
@@ -626,6 +815,9 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
         .accept_refresh(
             Ok(Stats {
                 timezone: "UTC".into(),
+                refreshed_at_ms: 0,
+                subagents: BTreeMap::new(),
+                unattributed: Default::default(),
                 by_day: BTreeMap::new(),
                 by_model: BTreeMap::new(),
                 by_agent: BTreeMap::new(),
@@ -691,6 +883,9 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     let today = unix_secs_now() as i64 / DAY_SECS;
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -703,7 +898,7 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     assert!(state.has_frame());
     assert!(!state.has_refresh_failure());
     let frame = String::from_utf8(out).unwrap();
-    assert!(frame.contains("All time 42"), "frame was {frame:?}");
+    assert!(frame.contains("Year 42"), "frame was {frame:?}");
     assert!(!frame.contains("Spending refresh unavailable"));
 }
 
@@ -724,6 +919,9 @@ fn refresh_result_carries_success_error_and_panic() {
     let success = refresh_result(|| {
         let mut stats = Stats {
             timezone: "UTC".into(),
+            refreshed_at_ms: 0,
+            subagents: BTreeMap::new(),
+            unattributed: Default::default(),
             by_day: BTreeMap::new(),
             by_model: BTreeMap::new(),
             by_agent: BTreeMap::new(),
@@ -794,6 +992,9 @@ fn heatmap_cells_render_spaced() {
     }
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day,
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -841,9 +1042,12 @@ fn month_row_skips_one_column_leading_partial_month() {
 }
 
 #[test]
-fn windows_lines_fold_cache_read_so_all_time_equals_year() {
+fn windows_lines_fold_cache_read_for_trailing_windows() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -860,7 +1064,7 @@ fn windows_lines_fold_cache_read_so_all_time_equals_year() {
 
     assert_eq!(lines.len(), 1);
     let row = strip_ansi(&lines[0]);
-    assert!(row.contains("All time 400"));
+    assert!(!row.contains("All time"));
     assert!(row.contains("Week 10"));
     assert!(row.contains("Month 50"));
     assert!(row.contains("Year 400"));
@@ -872,6 +1076,9 @@ fn windows_lines_fold_cache_read_so_all_time_equals_year() {
 fn windows_lines_paint_only_the_active_tab_as_a_chip() {
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -886,9 +1093,9 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
 
     let active_start = active_tab().render().to_string();
     assert_eq!(lines[0].matches(&active_start).count(), 1);
-    assert!(lines[0].contains(&render::paint(active_tab(), " Week 7       ")));
+    assert!(lines[0].contains(&render::paint(active_tab(), " Week 7   ")));
     let row = strip_ansi(&lines[0]);
-    assert!(row.contains("All time 365"));
+    assert!(!row.contains("All time"));
     assert!(row.contains("Week 7"));
     assert!(row.contains("Month 30"));
     assert!(row.contains("Year 365"));
@@ -978,6 +1185,9 @@ fn model_cells_show_usd_and_cache_read_detail() {
     let spend = model_tally(1_700_000, 12.4, 1_200_000, 500_000, 2_500_000);
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), spend),
@@ -986,7 +1196,7 @@ fn model_cells_show_usd_and_cache_read_detail() {
         by_agent: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
@@ -994,7 +1204,12 @@ fn model_cells_show_usd_and_cache_read_detail() {
         .unwrap_or(0);
     let mut lines = Vec::new();
 
-    let cells = model_cells(&models, name_w, &glyphs);
+    let cells = model_cells(
+        &models,
+        name_w,
+        &glyphs,
+        models.iter().map(|(_, spend)| spend.usd).sum(),
+    );
     let pct_w = stat_pct_width(&cells, &[]);
     let layout = stat_section_layout(&cells, &[], pct_w, 120);
     emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
@@ -1008,9 +1223,9 @@ fn model_cells_show_usd_and_cache_read_detail() {
     assert!(row.contains("Opus 4.8"));
     assert!(row.contains("100.0%"));
     assert!(row.contains("$12"));
-    assert!(row.contains("↘ 1.2m"));
-    assert!(row.contains("↗ 500.0k"));
-    assert!(row.contains("◌ 2.5m"));
+    assert!(row.contains("↘ 1.2M"));
+    assert!(row.contains("↗ 500.0K"));
+    assert!(row.contains("◌ 2.5M"));
     assert!(row.contains("· 68%"));
 }
 
@@ -1024,6 +1239,9 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     let untimed = model_tally(500, 5.0, 400, 100, 0);
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_model: BTreeMap::from([
             ("timed".to_owned(), timed.clone()),
             ("untimed".to_owned(), untimed.clone()),
@@ -1034,7 +1252,12 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     };
     let glyphs = panel_glyphs();
     let render_rows = |models: &[(String, SpendWindow)], compact| {
-        let cells = model_cells(models, 7, &glyphs);
+        let cells = model_cells(
+            models,
+            7,
+            &glyphs,
+            models.iter().map(|(_, spend)| spend.usd).sum(),
+        );
         let mut lines = Vec::new();
         emit_stat_section(
             &mut lines,
@@ -1053,7 +1276,7 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
             .map(|line| strip_ansi(&line))
             .collect::<Vec<_>>()
     };
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
     let full = render_rows(&models, false);
     assert!(full.iter().any(|row| row.contains("67 tok/s")));
     assert!(
@@ -1083,7 +1306,7 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     );
     let week = render_rows(&model_breakdown(&stats, Window::Week, MAX_MODELS), false);
     assert!(week.iter().any(|row| row.contains("100 tok/s")));
-    let other = render_rows(&model_breakdown(&stats, Window::AllTime, 1), false);
+    let other = render_rows(&model_breakdown(&stats, Window::Year, 1), false);
     assert!(
         other
             .iter()
@@ -1112,6 +1335,9 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     total.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), claude_model),
@@ -1149,6 +1375,9 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
 fn model_breakdown_ranks_by_usd_before_tokens() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             (
@@ -1161,7 +1390,7 @@ fn model_breakdown_ranks_by_usd_before_tokens() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
 
     assert_eq!(models[0].0, "Opus 4.8");
     assert_eq!(models[1].0, "GPT 5");
@@ -1174,6 +1403,9 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
     let year_only = model_tally(2_000, 20.0, 800, 1_200, 180);
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), week_model),
@@ -1195,6 +1427,9 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
 fn model_breakdown_reserves_the_last_capped_row_for_other() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
@@ -1206,7 +1441,7 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::AllTime, 3);
+    let models = model_breakdown(&stats, Window::Year, 3);
 
     assert_eq!(models.len(), 3);
     assert_eq!(models[0].0, "Model A");
@@ -1220,6 +1455,9 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
 fn model_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
@@ -1232,9 +1470,9 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
 
-    assert_eq!(model_breakdown_size(&stats, Window::AllTime), 4);
+    assert_eq!(model_breakdown_size(&stats, Window::Year), 4);
     assert_eq!(
         models
             .iter()
@@ -1251,6 +1489,9 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
 fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(100, 0.0, 100, 0, 0)),
@@ -1260,7 +1501,7 @@ fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
         total: SpendTally::default(),
     };
 
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
 
     assert_eq!(models.len(), 2);
     assert!(models.iter().all(|(name, _)| name != "Other"));
@@ -1284,22 +1525,25 @@ fn agent_display_name_uses_descriptor_and_kind_fallback() {
 }
 
 #[test]
-fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
+fn agent_cells_rank_by_dollars_and_skip_empty_agents() {
     let mut claude = tally(300, 3.0, 2);
     claude.year.cache_read = 50;
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
             ("claude".to_owned(), claude),
             ("codex".to_owned(), tally(100, 9.0, 4)),
         ]),
-        total: SpendTally::default(),
+        total: tally(0, 12.0, 0),
     };
     let mut lines = Vec::new();
     let glyphs = panel_glyphs();
-    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
+    let agents = agent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
     let name_w = agents
         .iter()
         .map(|agent| display_width(&agent.name))
@@ -1320,16 +1564,16 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
         .iter()
         .position(|line| line.contains("Claude"))
         .expect("claude row");
-    assert!(codex < claude, "larger trailing-year session count leads");
+    assert!(codex < claude, "larger trailing-year dollar spend leads");
     let codex = strip_ansi(&lines[codex]);
     let claude = strip_ansi(&lines[claude]);
     assert!(codex.contains("$9 · ◎ 4 · ◇ 100"), "{codex:?}");
-    assert!(codex.contains("66.7%"));
+    assert!(codex.contains("75.0%"));
     assert!(!codex.contains("sess"));
     assert!(!codex.contains("(66.7%)"));
     assert!(claude.contains("$3 · ◎ 2 · ◇ 350"), "{claude:?}");
     assert!(claude.contains("◇ 350 · 100%"));
-    assert!(claude.contains("33.3%"));
+    assert!(claude.contains("25.0%"));
 
     let empty_cells = agent_cells(&[], 0, &glyphs);
     let mut empty_lines = Vec::new();
@@ -1352,6 +1596,9 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
 fn agent_breakdown_folds_tail_totals_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1361,10 +1608,10 @@ fn agent_breakdown_folds_tail_totals_into_other() {
             ("agent-d".to_owned(), tally(200, 2.0, 2)),
             ("agent-e".to_owned(), tally(100, 1.0, 1)),
         ]),
-        total: SpendTally::default(),
+        total: tally(0, 15.0, 0),
     };
 
-    let agents = agent_breakdown(&stats, Window::AllTime, Some(3));
+    let agents = agent_breakdown(&stats, Window::Year, Some(3));
 
     assert_eq!(agents.len(), 3);
     assert_eq!(agents[0].window.sessions, 5);
@@ -1389,7 +1636,7 @@ fn agent_breakdown_folds_tail_totals_into_other() {
     assert!(other.contains(&render::paint(render::palette::muted(), "●")));
     assert!(other.contains(&render::paint(render::palette::muted(), "Other")));
 
-    let all = agent_breakdown(&stats, Window::AllTime, None);
+    let all = agent_breakdown(&stats, Window::Year, None);
     assert_eq!(all.len(), 5, "uncapped JSON data stays complete");
 }
 
@@ -1397,6 +1644,9 @@ fn agent_breakdown_folds_tail_totals_into_other() {
 fn agent_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1405,12 +1655,12 @@ fn agent_breakdown_folds_rows_below_one_percent_into_other() {
             ("agent-c".to_owned(), tally(50, 0.5, 1)),
             ("agent-d".to_owned(), tally(25, 0.25, 1)),
         ]),
-        total: SpendTally::default(),
+        total: tally(0, 100.0, 0),
     };
 
-    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
+    let agents = agent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
 
-    assert_eq!(agent_breakdown_size(&stats, Window::AllTime), 3);
+    assert_eq!(agent_breakdown_size(&stats, Window::Year), 3);
     assert_eq!(
         agents
             .iter()
@@ -1422,9 +1672,9 @@ fn agent_breakdown_folds_rows_below_one_percent_into_other() {
     assert_eq!(agents[2].window.sessions, 2);
     assert_eq!(agents[2].window.tokens, 75);
     assert_eq!(agents[2].window.usd, 0.75);
-    assert!((agents[2].share - 0.01).abs() < f64::EPSILON);
+    assert!((agents[2].share - 0.0075).abs() < f64::EPSILON);
 
-    let all = agent_breakdown(&stats, Window::AllTime, None);
+    let all = agent_breakdown(&stats, Window::Year, None);
     assert_eq!(all.len(), 4, "uncapped JSON data stays complete");
     assert!(all.iter().all(|agent| !agent.folded));
 }
@@ -1450,6 +1700,9 @@ fn stat_share_bar_stretches_to_panel_width() {
     let glyphs = panel_glyphs();
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             (
@@ -1461,13 +1714,18 @@ fn stat_share_bar_stretches_to_panel_width() {
         by_agent: BTreeMap::new(),
         total: SpendTally::default(),
     };
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
         .max()
         .unwrap_or(0);
-    let cells = model_cells(&models, name_w, &glyphs);
+    let cells = model_cells(
+        &models,
+        name_w,
+        &glyphs,
+        models.iter().map(|(_, spend)| spend.usd).sum(),
+    );
     let pct_w = stat_pct_width(&cells, &[]);
     let panel_width = 120;
     let layout = stat_section_layout(&cells, &[], pct_w, panel_width);
@@ -1490,23 +1748,31 @@ fn stat_sections_share_a_percent_column() {
     let glyphs = panel_glyphs();
     let stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([(
             "claude-opus-4-8".to_owned(),
             model_tally(1_000, 12.0, 200, 800, 50),
         )]),
         by_agent: BTreeMap::from([("claude".to_owned(), tally(1_000, 12.0, 4))]),
-        total: SpendTally::default(),
+        total: tally(0, 12.0, 0),
     };
-    let models = model_breakdown(&stats, Window::AllTime, MAX_MODELS);
-    let agents = agent_breakdown(&stats, Window::AllTime, Some(MAX_AGENTS));
+    let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
+    let agents = agent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
     let name_w = models
         .iter()
         .map(|(name, _)| display_width(name))
         .chain(agents.iter().map(|agent| display_width(&agent.name)))
         .max()
         .unwrap_or(0);
-    let model_rows = model_cells(&models, name_w, &glyphs);
+    let model_rows = model_cells(
+        &models,
+        name_w,
+        &glyphs,
+        models.iter().map(|(_, spend)| spend.usd).sum(),
+    );
     let agent_rows = agent_cells(&agents, name_w, &glyphs);
     let pct_w = stat_pct_width(&model_rows, &agent_rows);
     let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, 120);
@@ -1540,6 +1806,9 @@ fn stat_sections_share_a_percent_column() {
 fn insights_sessions_line_has_no_glyph() {
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1548,7 +1817,7 @@ fn insights_sessions_line_has_no_glyph() {
     stats.total.year.sessions = 7;
     let mut lines = Vec::new();
 
-    insights_lines(&mut lines, &stats, 0, 80, Window::AllTime);
+    insights_lines(&mut lines, &stats, 0, 80, Window::Year);
 
     let row = strip_ansi(&lines[0]);
     let modern_glyphs = resolve_panel_glyphs(&ThemeConfig {
@@ -1564,6 +1833,9 @@ fn insights_sessions_line_has_no_glyph() {
 fn insights_sessions_scope_to_the_active_window() {
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1595,6 +1867,9 @@ fn insights_append_the_prior_window_spend_trend() {
     let today = 20_000;
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1618,10 +1893,13 @@ fn insights_append_the_prior_window_spend_trend() {
 }
 
 #[test]
-fn all_time_daily_average_uses_year_days_without_changing_recent_activity() {
+fn year_daily_average_keeps_recent_activity() {
     let today = 20_000;
     let mut stats = Stats {
         timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1630,7 +1908,7 @@ fn all_time_daily_average_uses_year_days_without_changing_recent_activity() {
     stats.total.year.usd = 12.0;
     let mut lines = Vec::new();
 
-    insights_lines(&mut lines, &stats, today, 80, Window::AllTime);
+    insights_lines(&mut lines, &stats, today, 80, Window::Year);
 
     let rendered = strip_ansi(&lines.join("\n"));
     assert!(rendered.contains("Active days: 1/28"), "{rendered}");
@@ -1672,10 +1950,13 @@ fn stall_notice_names_child_parent_and_silence_in_stats() {
     let stats = assists::AssistStats::from_records("all", vec![record.unwrap()]);
     assert_eq!(
         serde_json::to_value(&stats.rollup).unwrap()["stall_notices"],
-        1
+        0
     );
     let rows = assists::category_rows(&stats.rollup).join("\n");
-    assert!(rows.contains("Stall notice:"), "{rows}");
+    assert!(
+        strip_ansi(&rows).contains("Stall notice: 0 (1 held)"),
+        "{rows}"
+    );
     let line = assists::benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
     for fact in ["@still-silver", "@planner", "32m", "pane send failed"] {
         assert!(line.contains(fact), "{line}");
@@ -1705,8 +1986,8 @@ fn token_and_dollar_formatting() {
     assert_eq!(fmt_tokens(412_000_000), "412M");
     assert_eq!(fmt_tokens(5_200_000_000), "5.2B");
     assert_eq!(fmt_tokens(950_000), "950K");
-    assert_eq!(fmt_tokens_lower(61_000_000), "61.0m");
-    assert_eq!(fmt_tokens_lower(1_200_000_000), "1.2b");
+    assert_eq!(fmt_tokens_precise(61_000_000), "61.0M");
+    assert_eq!(fmt_tokens_precise(1_200_000_000), "1.2B");
     assert_eq!(fmt_usd(8_666.0), "$8,666");
     assert_eq!(fmt_usd(1_000_000.0), "$1,000,000");
     assert_eq!(rimz::theme::fmt::group_thousands(1_741), "1,741");
@@ -1863,9 +2144,12 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             restored_sessions: 2,
             sweeps: 1,
             reclaimed_bytes: 2_048,
+            held: [("resumes", 1), ("sweeps", 1)].into(),
         }
     );
     assert_eq!(stats.events.len(), 8, "every assist outcome stays forensic");
+    assert_eq!(stats.timeline(0, false).0.len(), 6);
+    assert_eq!(stats.timeline(0, true).0.len(), 8);
     let categories = category_rows(&stats.rollup)
         .into_iter()
         .map(|row| strip_ansi(&row))
@@ -1874,7 +2158,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
         categories[categories.len() - 2],
         "Auto-resume: 1 (2 agents)"
     );
-    assert_eq!(categories.last().unwrap(), "Auto-gc: 1 (2 KB)");
+    assert_eq!(categories.last().unwrap(), "Auto-gc: 1 (2 KB, 1 held)");
     let zone = jiff::tz::TimeZone::UTC;
     let lines = stats
         .events
@@ -2187,6 +2471,9 @@ fn assists_load_scopes_the_log_to_the_selected_window() {
 fn today_index_uses_the_publications_zone() {
     let stats = Stats {
         timezone: "Asia/Shanghai".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),

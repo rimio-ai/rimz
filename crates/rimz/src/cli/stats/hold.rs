@@ -1,6 +1,4 @@
-use super::panel::{
-    PanelGeometry, PanelGlyphs, emit, header_lines, render_panel, resolve_panel_glyphs,
-};
+use super::panel::{PanelGlyphs, render_panel, resolve_panel_glyphs};
 use super::*;
 
 pub(super) struct RefreshWorker {
@@ -122,7 +120,7 @@ impl HeldStats {
         Self {
             current: None,
             refresh_failure: None,
-            active: Window::AllTime,
+            active: Window::Year,
             dollars,
             glyphs,
             hold,
@@ -300,6 +298,7 @@ pub(super) enum KeyOutcome {
 
 pub(super) fn key_outcome(key: KeyEvent, hold: bool) -> KeyOutcome {
     match key.code {
+        KeyCode::Char('q') if !hold => KeyOutcome::Quit,
         KeyCode::Tab => KeyOutcome::NextWindow,
         KeyCode::BackTab => KeyOutcome::PrevWindow,
         KeyCode::Char('r') | KeyCode::Char('R') => KeyOutcome::Reload,
@@ -326,15 +325,6 @@ pub(super) fn reexec(target: &Path) -> anyhow::Error {
 }
 
 pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
-    let geometry = PanelGeometry::current();
-    let mut out = render::out();
-    emit(
-        &mut out,
-        &header_lines(geometry.panel_width),
-        geometry.outer,
-        "\n",
-    )?;
-
     let spinner = Spinner::delayed(
         progress_line(SpendProgress {
             finished_files: 0,
@@ -346,7 +336,7 @@ pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Loade
     let stats = load_direct_stats_with_progress(paths, &mut progress)?;
     Ok(LoadedStats {
         stats,
-        header_printed: true,
+        header_printed: false,
     })
 }
 

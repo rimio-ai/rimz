@@ -4,10 +4,7 @@ Your agents spend on every provider you use, and each provider keeps its own tal
 
 If you have run `ccusage` over Claude's transcripts, you already know the answer is on disk. Every transcript-backed turn writes the model, the token counts, and the timestamps to a local file, and `ccusage` reads Claude's. RimZ reads all of them, folds them into one account-global picture, and keeps that picture live in the room while the work lands.
 
-<p align="center">
-  <img src="../rimz-stats.png" alt="The rimz stats dashboard: a year-long token heatmap, the All time / Week / Month / Year window row, per-model and per-agent spend breakdowns, and activity insights" width="100%">
-  <br/><sub><code>rimz stats</code>: a year of token activity, then where it went by model and by agent.</sub>
-</p>
+
 
 You read the picture in three places. `rimz stats` prints the whole year on demand, from anywhere on the machine. The sidebar keeps a live slice in front of you: the cockpit for the room you are standing in, the provider dashboard for each provider's current account. And `rimz providers` prints every account's block as text, in or out of a room.
 
@@ -30,26 +27,21 @@ The complete glyph legend, with every meter and tone, is the [interface referenc
 
 ## The full picture: rimz stats
 
-`rimz stats` prints your account-global history: a heatmap of daily token use, totals for a chosen window, and where the spend went by model and by agent. It reads the same published cache the sidebar writes, so it runs inside a room or anywhere else on the machine, in or out of a project, and it touches no agent and no session. RimZ keeps a year of history, so All time means the trailing 365 days and matches Year.
+`rimz stats` answers what the fleet cost, which models earned it, and who spent it. It reads the same published history the sidebar writes, anywhere on the machine, without touching an agent or session.
 
-Top to bottom:
+The first table puts dollars and tokens side by side for Today, Week, Month, and Year. Today starts at midnight in your configured timezone; Week, Month, and Year trail 7, 30, and 365 days.
 
-- **The heatmap** is a contribution graph of tokens per day, one column per week. Your terminal's width sets how far back it reaches, from four weeks up to fifty-two. Shading is relative to the days on screen, with the ceiling at your 90th-percentile active day, so one record-breaking Tuesday does not flatten the rest of the grid into grey. `--dollars` shades by cost instead of tokens.
-- **The window row** (All time, Week, Month, Year) scopes everything below it. The heatmap ignores it. A plain `rimz stats` prints the All-time view; in the held dashboard, `Tab` and `Shift-Tab` cycle the window.
-- **Models** ranks where the dollars went, each model under its friendly name (`gpt-5.5` reads as `GPT 5.5`) with its token split, its cache-hit percentage, generation throughput in `tok/s`, and its share of the window's dollars. A model with no timed responses shows `-`; if none is timed the column disappears. Narrow terminals keep only dollars. **Agents** ranks by session count instead and leads each row with dollars. Both fold anything below 1% of their section into a final `Other` row, along with whatever falls past the sixth. An unpriced model keeps its own row as long as nothing in the section has a price, and its tokens count either way.
-- **The insight lines** close it:
+Models, Agents, and Subagents then explain the trailing-year dollars. Every percentage is a share of the same fleet total, so the sections are comparable. Agents means top-level sessions RimZ observed; Subagents groups delegated sessions by profile. Native provider children count with the pane that ran them. Each section shows its three largest spenders and combines the rest as `N other …`. Zero-dollar rows do not crowd the report, but their tokens still count in totals.
 
-  ```console
-    Sessions: 7,179              Spend: $38,120.53
-    Active days: 28/28           Longest streak: 72 days
-    Most active day: Jul 18      Current streak: 32 days
-    Cost/session: $5.31          Daily avg: $171.71
-  ```
+Unattributed stays separate and never folds away. It means RimZ has spend but no matching role record, which includes older sessions, unobserved sessions, and records without a joinable identity. It does not mean the work happened outside RimZ. Its provider breakdown shows where those dollars went even before any sessions have a recorded role. To compare every delegated profile, use `rimz stats --subagents`; it unfolds the list and shows each profile's top-spend model and distinct-session run count.
 
-  `Active days` counts the days in the window that saw any activity, except under All time, which keeps the recent cadence and reads `N/28`. `Daily avg` divides the window's spend by those active days rather than by every day on the calendar, so it tells you what a working day costs. Week and Month add a comparison against the preceding equal window, `(↑n% vs prior week)`, whenever that window had spend.
-- **Assists** counts the work RimZ saved you, one row per category that has anything to report: delivered auto-continues and the parked hours they recovered, compactions, agents relaunched after their CLI died while starting, redeemed reset credits, rooms restored after a crash or reboot, and automatic `rimz gc` sweeps. `Auto-compact` covers every compaction RimZ ran ahead of a delivery, plus the idle and stage-flip compactions that were delivered. The whole section is absent until one of these has happened.
+The heatmap follows: one local calendar day per cell and one week per column, with four to fifty-two weeks depending on terminal width. Shading uses the 90th-percentile active day as its ceiling, so a record day does not flatten the rest. `--dollars` shades cost rather than tokens. The final `as of` time tells you when these figures were published, with a date when they are not from today.
 
-For a script, `rimz stats --json` is the same data unfolded. It gives you the per-day buckets to window yourself, the trailing week, month, and year, both breakdowns complete with no `Other` fold and no row cap, tool-call counts by tool name, and the assist rollup with its events. `rimz stats --assists` prints the assist timeline as text, newest first, with the message and agent ids to trace each one. Every flag and every JSON field is the [stats reference](../reference/cli/stats.md).
+For a live screen, `rimz stats --refresh` keeps the wordmark, heatmap, breakdowns, activity insights and assist counts. Tab and Shift-Tab select Week, Month or Year; q quits (except in the daemon's held pane). Year keeps a recent 28-day activity count; Week and Month compare spend with their preceding equal window.
+
+To see what RimZ did for you, `rimz stats --assists` lists the latest 50 assists that took effect. Its counts cover all retained records, and each count names its held attempts beside it. `-n 0` shows all retained events, and `--all` includes held and failed attempts when you need to explain a missing action.
+
+For scripts, `rimz stats --json` unfolds every non-zero spender and includes local-date buckets and assist counts, without the event stream. `--subagents --json` returns the profile report; `--assists --json` returns the filtered timeline. Every field is in the [stats reference](../reference/cli/stats.md).
 
 **The figures are as fresh as the last walk, and no fresher.** A running sidebar keeps the spending cache current, and a one-shot `rimz stats` prints that cache however old it is. With no cache to print, the run walks every agent transcript on the machine behind a progress bar and publishes what it found; that walk is also the only thing on this path that fetches the price table. So a one-shot run on a machine whose rooms have been closed all day shows you yesterday's figures. `rimz stats --refresh` fixes that: it holds the panel open on the alternate screen and repaints from a live reread every minute, leaving no scrollback behind. What each mode reads, writes, and fetches is [how fresh the figures are](../reference/cli/stats.md#how-fresh-the-figures-are).
 
@@ -119,7 +111,7 @@ How a token becomes a dollar:
 
 Live figures are priced the same way as historical ones, request by request, which is what lets a long-context tier land exactly. Copilot and Qwen are the exception: their statuslines publish only a session-cumulative total, with the request boundaries already summed away, so RimZ estimates those at base rates.
 
-Scope splits in two. The cockpit is the room you are standing in. Everything else, the provider dashboard and all of `rimz stats`, is account-global, summed per provider account across every project on the machine. Windows follow the surface: the cockpit and the dashboard's spend rows share whichever `spend_window` you configured, the dashboard's totals rows are the trailing week and month, `rimz stats` adds year and all-time, and its heatmap buckets by calendar day in your configured `timezone`.
+Scope splits in two. The cockpit is the room you are standing in. Everything else, the provider dashboard and all of `rimz stats`, is account-global, summed per provider account across every project on the machine. Windows follow the surface: the cockpit and the dashboard's spend rows share whichever `spend_window` you configured, the dashboard's totals rows are the trailing week and month, `rimz stats` adds today (from local midnight) and the trailing year, and its heatmap buckets by calendar day in your configured `timezone`.
 
 Per-agent and per-team lifetime figures group every continuation of one agent and deduplicate the API calls a resume replayed, so an agent you have restarted five times reports one history rather than five overlapping ones. `rimz agents show`, `rimz teams show`, a finished group's sidebar receipt, and `rimz agents attribution` all use that same all-in fold across the agent and every subagent it launched.
 

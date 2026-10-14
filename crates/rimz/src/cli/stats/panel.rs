@@ -284,6 +284,9 @@ pub(super) fn render_panel(
         assists,
         active,
     } = stats;
+    if active.is_none() {
+        return render_spend(w, stats, today_day, dollars, false, nl);
+    }
     let geometry = PanelGeometry::current();
     let assist_categories = assists::category_rows(&assists.rollup);
     let mut lines: Vec<String> = Vec::new();
@@ -305,7 +308,7 @@ pub(super) fn render_panel(
         return emit(w, &lines, geometry.outer, nl);
     }
 
-    let selected = active.unwrap_or(Window::AllTime);
+    let selected = active.unwrap_or(Window::Year);
     let natural_models = model_breakdown_size(stats, selected);
     let natural_agents = agent_breakdown_size(stats, selected);
     let plan = fit(
@@ -331,7 +334,7 @@ pub(super) fn render_panel(
 
     lines.push(String::new());
     windows_lines(&mut lines, stats, active);
-    let model_rows = model_cells(&models, name_w, glyphs);
+    let model_rows = model_cells(&models, name_w, glyphs, selected.select(&stats.total).usd);
     let agent_rows = agent_cells(&agents, name_w, glyphs);
     let pct_w = stat_pct_width(&model_rows, &agent_rows);
     let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, geometry.panel_width);
@@ -351,6 +354,232 @@ pub(super) fn render_panel(
     }
 
     emit(w, &lines, geometry.outer, nl)
+}
+
+pub(super) fn render_spend(
+    w: &mut impl Write,
+    stats: &Stats,
+    today_day: i64,
+    dollars: bool,
+    subagents_only: bool,
+    nl: &str,
+) -> Result<()> {
+    let mut lines = Vec::new();
+    if !subagents_only {
+        lines.push(format!(
+            "  {:20} {:>12} {:>12} {:>12} {:>12}",
+            "Spend", "Today", "Week", "Month", "Year"
+        ));
+        let today = stats.by_day.get(&today_day).cloned().unwrap_or_default();
+        lines.push(format!(
+            "  {:20} {:>12} {:>12} {:>12} {:>12}",
+            "dollars",
+            rimz::theme::fmt::dollars2(today.usd),
+            fmt_usd(stats.total.week.usd),
+            fmt_usd(stats.total.month.usd),
+            fmt_usd(stats.total.year.usd)
+        ));
+        lines.push(format!(
+            "  {:20} {:>12} {:>12} {:>12} {:>12}",
+            "tokens",
+            fmt_tokens(today.tokens),
+            fmt_tokens(stats.total.week.display_tokens()),
+            fmt_tokens(stats.total.month.display_tokens()),
+            fmt_tokens(stats.total.year.display_tokens())
+        ));
+        for (label, tallies) in [("Models", &stats.by_model), ("Agents", &stats.by_agent)] {
+            let rows = tallies
+                .iter()
+                .map(|(name, tally)| {
+                    let name = if label == "Models" {
+                        if name.is_empty() {
+                            "Unknown model".into()
+                        } else {
+                            rimz::agents::model_display::display_model(name)
+                        }
+                    } else {
+                        render::paint(render::palette::identity(name), &agent_display_name(name))
+                    };
+                    (name, tally.year.clone(), String::new())
+                })
+                .collect();
+            spend_section(&mut lines, label, rows, stats.total.year.usd, Some(3));
+        }
+    }
+    let rows = stats
+        .subagents
+        .iter()
+        .map(|(profile, spend)| {
+            let model = spend
+                .models
+                .iter()
+                .max_by(|a, b| a.1.year.usd.total_cmp(&b.1.year.usd))
+                .map(|(model, _)| rimz::agents::model_display::display_model(model))
+                .unwrap_or_default();
+            (profile.clone(), spend.tally.year.clone(), model)
+        })
+        .collect();
+    spend_section(
+        &mut lines,
+        "Subagents",
+        rows,
+        stats.total.year.usd,
+        if subagents_only { None } else { Some(3) },
+    );
+    if stats.unattributed.tally.year.usd > 0.0 {
+        let spend = &stats.unattributed.tally.year;
+        lines.push(format!(
+            "\n  Unattributed  {}  {:.1}%  spend not tied to a recorded agent or subagent session",
+            fmt_usd(spend.usd),
+            dollar_share(spend.usd, stats.total.year.usd) * 100.0
+        ));
+        let mut providers: Vec<_> = stats
+            .unattributed
+            .by_provider
+            .iter()
+            .filter(|(_, tally)| tally.year.usd > 0.0)
+            .map(|(kind, tally)| (kind, agent_display_name(kind), tally.year.usd))
+            .collect();
+        providers.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
+        let width = providers
+            .iter()
+            .map(|(_, name, _)| display_width(name))
+            .max()
+            .unwrap_or(0)
+            .max(display_width("Providers (year)"));
+        lines.push(format!(
+            "    {} {:>10}",
+            pad_to("Providers (year)", width),
+            "SPEND"
+        ));
+        for (kind, name, usd) in providers {
+            let amount = if usd < 10.0 {
+                rimz::theme::fmt::dollars2(usd)
+            } else {
+                fmt_usd(usd)
+            };
+            lines.push(format!(
+                "    {} {:>10}",
+                render::paint(render::palette::identity(kind), &pad_to(&name, width)),
+                amount
+            ));
+        }
+    }
+    if !subagents_only {
+        lines.push(String::new());
+        heatmap_lines(
+            &mut lines,
+            stats,
+            today_day,
+            PanelGeometry::current().weeks,
+            dollars,
+        );
+    }
+    let as_of = stats.as_of();
+    let same_day = stats.today_day(stats.refreshed_at_ms / 1000) == today_day;
+    lines.push(format!(
+        "\n  as of {}",
+        as_of.strftime(if same_day { "%H:%M" } else { "%b %d %H:%M" })
+    ));
+    emit(w, &lines, 0, nl)
+}
+
+fn dollar_share(usd: f64, total: f64) -> f64 {
+    if total > 0.0 { usd / total } else { 0.0 }
+}
+
+fn spend_section(
+    lines: &mut Vec<String>,
+    label: &str,
+    mut rows: Vec<(String, SpendWindow, String)>,
+    total: f64,
+    cap: Option<usize>,
+) {
+    rows.retain(|(_, spend, _)| spend.usd > 0.0);
+    rows.sort_by(|a, b| b.1.usd.total_cmp(&a.1.usd).then_with(|| a.0.cmp(&b.0)));
+    if rows.is_empty() {
+        return;
+    }
+    if let Some(cap) = cap.filter(|cap| rows.len() > *cap) {
+        let tail = rows.split_off(cap);
+        let mut spend = SpendWindow::default();
+        for (_, row, _) in &tail {
+            spend.merge(row);
+        }
+        rows.push((
+            format!("{} other {}", tail.len(), label.to_lowercase()),
+            spend,
+            String::new(),
+        ));
+    }
+    let width = rows
+        .iter()
+        .map(|(name, _, _)| display_width(name))
+        .max()
+        .unwrap_or(0)
+        .max(20);
+    lines.push(String::new());
+    let detail_header = match label {
+        "Agents" => format!("{:>8} {:>8} {:>4}", "SESSIONS", "TOKENS", "HIT"),
+        "Subagents" if cap.is_some() => "   RUNS  MODEL".into(),
+        _ => format!(
+            "{:>8} {:>8} {:>8} {:>4}{}",
+            "INPUT",
+            "OUTPUT",
+            "CACHED",
+            "HIT",
+            if label == "Subagents" {
+                "    RUNS  MODEL"
+            } else {
+                ""
+            }
+        ),
+    };
+    lines.push(render::paint(
+        render::palette::header(),
+        &format!(
+            "  {} {:>10} {:>7}  {detail_header}",
+            pad_to(&format!("{label} (year)"), width),
+            "SPEND",
+            "SHARE",
+        ),
+    ));
+    for (name, spend, model) in rows {
+        let hit = spend
+            .cache_hit_percent()
+            .map(|hit| format!("{hit}%"))
+            .unwrap_or_else(|| "-".into());
+        let detail = match label {
+            "Agents" => format!(
+                "{:>8} {:>8} {:>4}",
+                spend.sessions,
+                fmt_tokens(spend.display_tokens()),
+                hit
+            ),
+            "Subagents" if cap.is_some() => format!("{:>7}  {model}", spend.sessions),
+            _ => format!(
+                "{:>8} {:>8} {:>8} {:>4}{}",
+                fmt_tokens_precise(spend.input),
+                fmt_tokens_precise(spend.output),
+                fmt_tokens_precise(spend.cache_read),
+                hit,
+                if label == "Subagents" {
+                    format!(" {:>7}  {model}", spend.sessions)
+                } else {
+                    String::new()
+                }
+            ),
+        };
+        lines.push(format!(
+            "  {} {} {:>6.1}%  {detail}",
+            pad_to(&name, width),
+            render::paint(
+                render::palette::money(),
+                &format!("{:>10}", fmt_usd(spend.usd))
+            ),
+            dollar_share(spend.usd, total) * 100.0,
+        ));
+    }
 }
 
 pub(super) fn render_unavailable(w: &mut impl Write, error: &str, nl: &str) -> Result<()> {
@@ -569,9 +798,8 @@ pub(super) fn model_cells(
     models: &[(String, SpendWindow)],
     name_w: usize,
     glyphs: &PanelGlyphs,
+    total_usd: f64,
 ) -> Vec<StatCell> {
-    let total_usd: f64 = models.iter().map(|(_, model)| model.usd).sum();
-
     struct ModelRow {
         name: String,
         usd: String,
@@ -594,9 +822,9 @@ pub(super) fn model_cells(
             ModelRow {
                 name: name.clone(),
                 usd: fmt_usd(spend.usd),
-                input: fmt_tokens_lower(spend.input),
-                output: fmt_tokens_lower(spend.output),
-                cache_read: fmt_tokens_lower(spend.cache_read),
+                input: fmt_tokens_precise(spend.input),
+                output: fmt_tokens_precise(spend.output),
+                cache_read: fmt_tokens_precise(spend.cache_read),
                 cache_hit: spend
                     .cache_hit_percent()
                     .map(|percent| (percent, format!("{percent}%"))),
@@ -790,19 +1018,15 @@ pub(super) struct AgentBreakdown<'a> {
 }
 
 pub(super) fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
-    let total_sessions: u32 = stats
-        .by_agent
-        .values()
-        .map(|tally| active.select(tally).sessions)
-        .sum();
+    let total_usd = active.select(&stats.total).usd;
     let mut named = 0;
     let mut other = false;
     for tally in stats.by_agent.values() {
         let window = active.select(tally);
-        if window.tokens == 0 {
+        if window.usd <= 0.0 {
             continue;
         }
-        if below_minimum_share(window.sessions.into(), total_sessions.into()) {
+        if below_minimum_share(window.usd, total_usd) {
             other = true;
         } else {
             named += 1;
@@ -816,23 +1040,15 @@ pub(super) fn agent_breakdown(
     active: Window,
     cap: Option<usize>,
 ) -> Vec<AgentBreakdown<'_>> {
-    let total_sessions: u32 = stats
-        .by_agent
-        .values()
-        .map(|tally| active.select(tally).sessions)
-        .sum();
+    let total_usd = active.select(&stats.total).usd;
 
     let mut agents: Vec<_> = stats
         .by_agent
         .iter()
         .filter_map(|(kind, tally)| {
             let window = active.select(tally);
-            let share = if total_sessions > 0 {
-                window.sessions as f64 / total_sessions as f64
-            } else {
-                0.0
-            };
-            (window.tokens > 0).then(|| AgentBreakdown {
+            let share = dollar_share(window.usd, total_usd);
+            (window.usd > 0.0).then(|| AgentBreakdown {
                 kind: kind.as_str(),
                 name: agent_display_name(kind),
                 window,
@@ -843,8 +1059,8 @@ pub(super) fn agent_breakdown(
         .collect();
     agents.sort_by(|a, b| {
         b.window
-            .sessions
-            .cmp(&a.window.sessions)
+            .usd
+            .total_cmp(&a.window.usd)
             .then_with(|| b.window.tokens.cmp(&a.window.tokens))
     });
     let Some(cap) = cap.map(|cap| cap.min(MAX_AGENTS)) else {
@@ -857,7 +1073,7 @@ pub(super) fn agent_breakdown(
     let mut other_share = 0.0;
     let mut has_other = false;
     agents.retain(|agent| {
-        if below_minimum_share(agent.window.sessions.into(), total_sessions.into()) {
+        if below_minimum_share(agent.window.usd, total_usd) {
             other_window.merge(&agent.window);
             other_share += agent.share;
             has_other = true;
@@ -1110,10 +1326,7 @@ pub(super) fn insights_lines(
     } else {
         "—".to_owned()
     };
-    let average_span = match active {
-        Window::AllTime => Window::Year.span_days(),
-        _ => active.span_days(),
-    };
+    let average_span = active.span_days();
     let average_cutoff = today_day - i64::from(average_span - 1);
     let average_active_days = stats
         .by_day
@@ -1152,7 +1365,7 @@ pub(super) fn insights_lines(
                 match active {
                     Window::Week => "week",
                     Window::Month => "month",
-                    Window::AllTime | Window::Year => "window",
+                    Window::Year => "window",
                 }
             )
         })
@@ -1183,7 +1396,7 @@ pub(super) fn spend_trend(
     let span = match window {
         Window::Week => 7,
         Window::Month => 30,
-        Window::AllTime | Window::Year => return None,
+        Window::Year => return None,
     };
     let current_start = today_day - span + 1;
     let prior_start = current_start - span;
@@ -1332,8 +1545,9 @@ impl Activity {
             .map(|(&day, _)| day)
             .collect();
 
-        if window == Window::AllTime {
-            let active_count = (today_day - 27..=today_day)
+        if window == Window::Year {
+            const RECENT_ACTIVITY_DAYS: u32 = 28;
+            let active_count = (today_day - i64::from(RECENT_ACTIVITY_DAYS - 1)..=today_day)
                 .filter(|day| active.contains(day))
                 .count() as u32;
             let most_active = by_day
@@ -1344,7 +1558,7 @@ impl Activity {
             let (longest_streak, current_streak) = streaks(&active, today_day);
             return Activity {
                 active_count,
-                window_days: window.span_days(),
+                window_days: RECENT_ACTIVITY_DAYS,
                 most_active,
                 longest_streak,
                 current_streak,

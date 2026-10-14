@@ -121,7 +121,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     );
     let stats = loop_ok(&env, &["stats", "--json"]);
     let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
-    assert_eq!(stats["assists"]["rollup"]["judge_declines"], 1);
+    assert_eq!(stats["assists"]["judge_declines"], 1);
     assert!(loop_ok(&env, &["stats", "--assists"]).contains("No actionable work."));
     let key = serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap();
     let fire_path = runtime.lane_path("loop-fire.json");

@@ -2855,9 +2855,12 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             helper
         };
         let idle_stop_assists = || {
-            let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
+            let output = run_success(
+                env.rimz().args(["stats", "--assists", "--all", "--json"]),
+                "assist stats",
+            );
             let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            let assists = stats["assists"]["events"]
+            let assists = stats["events"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2937,7 +2940,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
         assert!(stopped.get("error").is_none(), "{stopped}");
         assert_eq!(stopped["label"], "@claude");
         assert_eq!(stopped["idle_after_secs"], 0);
-        assert_eq!(stats["assists"]["rollup"]["idle_stops"], 1);
+        assert_eq!(stats["rollup"]["idle_stops"], 1);
         let trace = std::fs::read_to_string(env.project_root.join("idle-stop-trace.log")).unwrap();
         assert_eq!(trace.matches("close-pane").count(), 2, "{trace}");
     }
@@ -3570,9 +3573,12 @@ fn cache_keepalive_rechecks_and_terminalizes_a_miss_with_an_assist() {
             ping.text
         );
         assert_eq!(ping.gate, DeliveryGate::Done);
-        let output = run_success(env.rimz().args(["stats", "--json"]), "assist stats");
+        let output = run_success(
+            env.rimz().args(["stats", "--assists", "--all", "--json"]),
+            "assist stats",
+        );
         let stats: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        let assist = stats["assists"]["events"]
+        let assist = stats["events"]
             .as_array()
             .unwrap()
             .iter()

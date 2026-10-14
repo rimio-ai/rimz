@@ -1368,8 +1368,8 @@ fn claude_redeem_results_persist_once_and_refresh_only_a_reset() {
                 .unwrap();
             assert!(output.status.success());
             let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(stats["assists"]["rollup"]["manual_redeems"], 1, "{stats}");
-            assert_eq!(stats["assists"]["rollup"]["manual_resets"], 1);
+            assert_eq!(stats["assists"]["manual_redeems"], 1, "{stats}");
+            assert_eq!(stats["assists"]["manual_resets"], 1);
         }
     }
 }

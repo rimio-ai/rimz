@@ -2819,15 +2819,18 @@ rimz start
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz stats
+    --all  [action=set-true takes=0..=0]
     --assists  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     --dollars  [action=set-true takes=0..=0]
     -h, --help  [action=help takes=0..=0]
     --hold  [action=set-true takes=0..=0 hidden]
     --json  [action=set-true takes=0..=0]
+    -n <LIMIT>  [action=set takes=1..=1 default=50]
     --mux <MUX>  [action=set takes=1..=1 global]
     --refresh  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --subagents  [action=set-true takes=0..=0]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
