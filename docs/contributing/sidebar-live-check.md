@@ -24,7 +24,7 @@ target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/probe2" -- git init -q .
 target/debug/xtask sandbox in "$ROOT" --cwd "$ROOT/home/probe2" -- "$BIN" --<mux> start "$ROOT/home/probe2" --no-attach
 ```
 
-A command run with `--cwd "$ROOT/home/probe2"` resolves the second room. Plain `sandbox in` scrubs the Zellij and tmux session keys, so a raw Zellij action from outside a pane picks no session once two are live; name one with `env ZELLIJ_SESSION_NAME=<session>` ahead of the command.
+A command run with `--cwd "$ROOT/home/probe2"` resolves the second room. Plain `sandbox in` scrubs the Zellij and tmux session keys, so a raw Zellij action from outside a pane picks no session once two are live; name one with `env ZELLIJ_SESSION_NAME=<session>` ahead of the command. A second Zellij room started with `--no-attach` has no client, and Zellij builds a new tab's panes only while a client is attached, so every tab launch into it fails with `layout panes did not materialize`. Attach a client first, as `sandbox room` does for the first room, for example from a detached tmux session running `"$BIN" --zellij attach <session>`.
 
 ## Room cards
 
