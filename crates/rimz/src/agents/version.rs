@@ -129,7 +129,7 @@ pub(super) fn conventional_cli_version(stdout: &str, stderr: &str) -> Option<Str
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "{kind} {found} at {path} is older than {minimum}, the first release with {flags}, which RimZ passes on every launch; {fix}"
+    "{kind} {found} at {path} is older than {minimum}, the oldest release RimZ supports; {fix}"
 )]
 pub struct LaunchVersionErr {
     kind: &'static str,
@@ -137,7 +137,6 @@ pub struct LaunchVersionErr {
     path: std::path::PathBuf,
     found: CliVersion,
     minimum: CliVersion,
-    flags: Box<str>,
 }
 
 /// Check the resolved launch binary, abstaining when its version is unreadable.
@@ -169,7 +168,6 @@ fn check_launch_version(
             path: path.to_owned(),
             found,
             minimum,
-            flags: adapter.spec().launch.fixed_args.join(" ").into_boxed_str(),
         });
     }
     Ok(())
@@ -187,7 +185,7 @@ mod tests {
         assert!(result.is_err(), "OpenCode 1 must refuse standalone launch");
         assert_eq!(
             result.unwrap_err().to_string(),
-            "opencode 1.19.0 at /opt/bin/opencode is older than 2.0.0, the first release with --standalone, which RimZ passes on every launch; run `opencode upgrade --major`"
+            "opencode 1.19.0 at /opt/bin/opencode is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`"
         );
         for found in [
             None,
@@ -212,6 +210,7 @@ mod tests {
         assert!(message.contains("0.156.0"));
         assert!(message.contains("/opt/bin/codex"));
         assert!(message.contains("upgrade Codex"));
+        assert!(message.contains("the oldest release RimZ supports"));
         let claude = crate::agents::find_definition("claude").unwrap();
         assert!(check_launch_version(claude, path, Some(CliVersion::new(0, 0, 1))).is_ok());
     }

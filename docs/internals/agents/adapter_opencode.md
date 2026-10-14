@@ -48,7 +48,7 @@ Child model resolution re-emits `SubagentStart` once per changed model, enrichin
 
 `crates/rimz/src/agents/adapters/opencode/mod.rs::OpencodeAdapter` launches `opencode --standalone [--auto] [--prompt <text>]` and resumes with `opencode --session <id> --standalone`. A private serve child inherits the pane environment and has the TUI as parent. The default shared service is outside this contract: its environment and parent do not identify the pane. Process detection still recognizes `opencode` and `bun`.
 
-Detection searches `PATH`, then `~/.opencode/bin`. Launch, install/setup, and doctor refuse a readable version below 2.0.0 with the reason that this is the first release with the required standalone flag and the fix `opencode upgrade --major`. An unreadable version abstains. Fork and model presets are unsupported; a configured model preset is refused before launch.
+Detection searches `PATH`, then `~/.opencode/bin`. Launch, install/setup, and doctor refuse a readable version below 2.0.0, the oldest release RimZ supports, with the fix `opencode upgrade --major`. An unreadable version abstains. Fork and model presets are unsupported; a configured model preset is refused before launch.
 
 Supervised children append `{"action":"subagent","resource":"*","effect":"deny"}` to `OPENCODE_CONFIG_CONTENT.permissions`, preserving the configured object and preceding rules while accepting JSONC comments and trailing commas on input. The emitted value is strict JSON. Absent, invalid, or non-object content becomes an object with that permissions array. Agent-specific permission rules can override this global deny because upstream appends them later. See [subagents](../harness/subagents.md) for the surrounding delegation contract.
 
