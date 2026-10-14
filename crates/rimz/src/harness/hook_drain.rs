@@ -351,6 +351,23 @@ impl DrainerLease {
     }
 }
 
+pub(crate) enum RestartOutcome {
+    NotRunning,
+    Restarted,
+}
+
+pub(crate) fn restart(
+    store: &Store,
+) -> Result<RestartOutcome, crate::store::event_log::EventLogErr> {
+    if Connection::connect(store).is_err() {
+        return Ok(RestartOutcome::NotRunning);
+    }
+    drop(ingress::stop_drainer(store.runtime_paths())?);
+    // The next spawner uses the recorded build even if this latency hint fails.
+    let _ = nudge(store, 0);
+    Ok(RestartOutcome::Restarted)
+}
+
 pub fn nudge(store: &Store, through: u64) -> Result<(), HookDrainErr> {
     if let Ok(mut stream) = UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()) {
         stream.set_write_timeout(Some(SOCKET_WAIT))?;

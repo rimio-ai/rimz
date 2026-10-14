@@ -81,6 +81,210 @@ fn spawned_drainer_uses_the_room_binary() {
     );
 }
 
+fn reload_command(env: &Env, binary: &std::path::Path) -> Command {
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let mut command = env.rimz_at(binary);
+    command
+        .arg("reload")
+        .env_remove("RIMZ_BIN")
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LOG",
+            env.project_root.join("reload.trace"),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+#[test]
+fn reload_does_not_start_an_absent_drainer() {
+    use crate::common::CommandTimeoutExt;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let output = reload_command(&env, &env.rimz_bin())
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        WorkspaceLock::try_acquire(&env.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .is_some()
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("hook drainer"));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn reload_replaces_the_drainer_after_its_inflight_frame() {
+    use std::os::unix::net::UnixListener;
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let binary = env.rimz_bin();
+    let binaries = tempfile::tempdir_in(binary.parent().unwrap()).unwrap();
+    let first = binaries.path().join("first-rimz");
+    let second = binaries.path().join("second-rimz");
+    std::fs::hard_link(binary, &first).unwrap();
+    let note = env.project_root.join("build-id.note");
+    let dump = Command::new("objcopy")
+        .args([
+            "--only-section=.note.gnu.build-id",
+            "--output-target=binary",
+        ])
+        .arg(&first)
+        .arg(&note)
+        .output()
+        .unwrap();
+    assert!(dump.status.success(), "{dump:?}");
+    let mut bytes = std::fs::read(&note).unwrap();
+    assert_eq!(&bytes[12..16], b"GNU\0");
+    bytes[16] ^= 0x80;
+    std::fs::write(&note, bytes).unwrap();
+    let patch = Command::new("objcopy")
+        .arg("--update-section")
+        .arg(format!(".note.gnu.build-id={}", note.display()))
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+    assert!(patch.status.success(), "{patch:?}");
+    let first_id = rimz::build_id::of_file(&first).unwrap();
+    let second_id = rimz::build_id::of_file(&second).unwrap();
+    assert_ne!(first_id, second_id);
+    store
+        .record_room_bin(&workspace, first, first_id.clone())
+        .unwrap();
+
+    let mut hook = env.hook_command("claude");
+    hook.env_remove("RIMZ_BIN");
+    let output = env
+        .spawn_payload(
+            hook,
+            &json!({"hook_event_name":"Stop", "session_id":"reload-trigger"}).to_string(),
+        )
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    // Both drainers exec this test's private binary paths, whose first bind
+    // outlasts the shared 5 s deadline under full-gate load.
+    let mut connection =
+        drainer_connection_until(&store, Instant::now() + Duration::from_secs(15), "build A");
+    let before =
+        nix::sys::socket::getsockopt(&connection, nix::sys::socket::sockopt::PeerCredentials)
+            .unwrap()
+            .pid();
+    assert_eq!(
+        rimz::build_id::of_file(std::path::Path::new(&format!("/proc/{before}/exe"))).unwrap(),
+        first_id
+    );
+    assert!(
+        WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .is_none()
+    );
+    // Finish reload's staging before starting the apply barrier's timeout.
+    // The spawn lock holds its stop request until a frame is in flight.
+    let spawning =
+        WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_spawn_lock()).unwrap();
+    let reload = reload_command(&env, &second).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while rimz::build_id::of_file(&store.paths().room_bin).unwrap() != second_id {
+        assert!(Instant::now() < deadline, "reload never recorded build B");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let barrier_path = store.runtime_paths().sock_dir.join("reload-apply.sock");
+    let barrier = UnixListener::bind(&barrier_path).unwrap();
+    let mut frame = stop_frame(&env);
+    frame.env.insert(
+        "RIMZ_TEST_HOOK_APPLY".into(),
+        barrier_path.display().to_string(),
+    );
+    let (_, through) = append_frame(&env, frame);
+    writeln!(
+        connection,
+        "{}",
+        json!({"through": through, "reply_for": null})
+    )
+    .unwrap();
+    // The apply child starts from the newly staged build, which can be cold under gate load.
+    let mut release = apply_barrier_until(&barrier, Instant::now() + Duration::from_secs(15));
+    drop(spawning);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_spawn_lock())
+        .unwrap()
+        .is_some()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "reload never requested a frame-boundary stop"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut pending = stop_frame(&env);
+    pending.payload =
+        json!({"session_id":"reload-pending", "last_assistant_message":"finished"}).to_string();
+    append_frame(&env, pending);
+    let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = reload.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 hook drainer"),
+        "{output:?}"
+    );
+    let successor = drainer_connection_until(
+        &store,
+        Instant::now() + Duration::from_secs(15),
+        "successor",
+    );
+    let after =
+        nix::sys::socket::getsockopt(&successor, nix::sys::socket::sockopt::PeerCredentials)
+            .unwrap()
+            .pid();
+    assert_ne!(
+        before, after,
+        "reload must replace the lock-holding process"
+    );
+    assert!(
+        WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        rimz::build_id::of_file(std::path::Path::new(&format!("/proc/{after}/exe"))).unwrap(),
+        second_id
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let cursor = ingress::read_cursor(store.paths()).unwrap();
+        let length = std::fs::metadata(&store.paths().hook_ingress_log)
+            .unwrap()
+            .len();
+        if frames
+            .iter()
+            .all(|(frame, _)| derived(&env, &frame.event_id).len() == 1)
+            && cursor.applied == length
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "successor did not apply every frame exactly once"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn entitlement_marker_marks_the_recorded_login_but_replayed_drain_does_not() {
     for replay in [false, true] {
@@ -386,8 +590,14 @@ fn deferred_lifecycle_and_active_time_use_the_ingress_timestamp() {
 }
 
 fn apply_barrier(listener: &std::os::unix::net::UnixListener) -> std::os::unix::net::UnixStream {
+    apply_barrier_until(listener, Instant::now() + Duration::from_secs(5))
+}
+
+fn apply_barrier_until(
+    listener: &std::os::unix::net::UnixListener,
+    deadline: Instant,
+) -> std::os::unix::net::UnixStream {
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match listener.accept() {
             Ok((stream, _)) => return stream,
@@ -403,14 +613,21 @@ fn apply_barrier(listener: &std::os::unix::net::UnixListener) -> std::os::unix::
 }
 
 fn drainer_connection(store: &rimz::Store) -> std::os::unix::net::UnixStream {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    drainer_connection_until(store, Instant::now() + Duration::from_secs(5), "drainer")
+}
+
+fn drainer_connection_until(
+    store: &rimz::Store,
+    deadline: Instant,
+    which: &str,
+) -> std::os::unix::net::UnixStream {
     loop {
         match std::os::unix::net::UnixStream::connect(
             store.runtime_paths().hook_drainer_socket_path(),
         ) {
             Ok(stream) => return stream,
             Err(error) => {
-                assert!(Instant::now() < deadline, "drainer did not bind: {error}");
+                assert!(Instant::now() < deadline, "{which} did not bind: {error}");
                 std::thread::sleep(Duration::from_millis(5));
             }
         }

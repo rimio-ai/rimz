@@ -1,8 +1,9 @@
-//! Durable sidebar upgrade and structural repair orchestration.
+//! Durable room-build upgrade and structural repair orchestration.
 //!
 //! `rimz reload` stages the installed binary, writes it as each live room's
-//! durable target, nudges supervisors, hash-gates Zellij plugin convergence,
-//! and reports the bounded convergence window without changing terminal panes.
+//! durable target, restarts running hook drainers, nudges supervisors,
+//! hash-gates Zellij plugin convergence, and reports the bounded convergence
+//! window without changing terminal panes.
 //! `rimz sidebar repair` is the independent structural close/add pass. Held
 //! `rimz stats --refresh` dashboards are signalled to re-exec in place before
 //! workspace enumeration, so standalone dashboards reload even when no rooms
@@ -21,6 +22,7 @@ use std::time::{Duration, Instant};
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::diag::record::DiagEvent;
 use crate::disk::paths::{RuntimePaths, StatePaths};
+use crate::harness::hook_drain::{self, RestartOutcome};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::LiveSessions;
 use crate::mux::recovery;
@@ -246,6 +248,10 @@ pub struct ReloadOutcome {
     pub dead_swept: usize,
     /// `rimz stats --refresh` dashboards signalled to re-exec onto the new build.
     pub stats_reloaded: usize,
+    /// Hook drainers stopped for replacement on the room's current build.
+    pub drainers_restarted: usize,
+    /// Hook drainers whose frame-boundary stop failed.
+    pub drainers_stop_failed: usize,
     /// Views whose sidebar add or repair could not complete this pass.
     pub failed: usize,
     /// Views whose in-place add or geometry repair was deferred (no attached
@@ -277,6 +283,8 @@ impl ReloadOutcome {
             reaped,
             dead_swept,
             stats_reloaded,
+            drainers_restarted,
+            drainers_stop_failed,
             failed,
             deferred,
             redocked,
@@ -297,6 +305,8 @@ impl ReloadOutcome {
         self.reaped += reaped;
         self.dead_swept += dead_swept;
         self.stats_reloaded += stats_reloaded;
+        self.drainers_restarted += drainers_restarted;
+        self.drainers_stop_failed += drainers_stop_failed;
         self.failed += failed;
         self.deferred += deferred;
         self.redocked += redocked;
@@ -455,7 +465,25 @@ fn upgrade_live(
         ..ReloadOutcome::default()
     };
     let backend = backend_for(*mux);
-    let room_bin = record_live_room_bin(ws, runtime, staged).unwrap_or_else(|| staged.path.clone());
+    let recorded = record_live_room_bin(ws, runtime, staged);
+    if recorded.is_some()
+        && let Ok(paths) = StatePaths::for_project_root(&ws.project_root)
+        && let Some(store) = crate::store::Store::open_existing(paths, runtime.clone())
+    {
+        match hook_drain::restart(&store) {
+            Ok(RestartOutcome::NotRunning) => {}
+            Ok(RestartOutcome::Restarted) => outcome.drainers_restarted += 1,
+            Err(err) => {
+                outcome.drainers_stop_failed += 1;
+                tracing::warn!(
+                    session = %ws.session_name,
+                    error = %err,
+                    "reload: stopping hook drainer failed",
+                );
+            }
+        }
+    }
+    let room_bin = recorded.unwrap_or_else(|| staged.path.clone());
     let before_signal = session_heartbeats(runtime, *mux, &ws.session_name);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
@@ -1348,6 +1376,8 @@ mod tests {
             reaped: 11,
             dead_swept: 12,
             stats_reloaded: 13,
+            drainers_restarted: 2,
+            drainers_stop_failed: 3,
             failed: 14,
             deferred: 15,
             redocked: 16,
@@ -1369,6 +1399,8 @@ mod tests {
             reaped: 28,
             dead_swept: 29,
             stats_reloaded: 30,
+            drainers_restarted: 4,
+            drainers_stop_failed: 5,
             failed: 31,
             deferred: 32,
             redocked: 33,
@@ -1393,6 +1425,8 @@ mod tests {
                 reaped: 39,
                 dead_swept: 41,
                 stats_reloaded: 43,
+                drainers_restarted: 6,
+                drainers_stop_failed: 8,
                 failed: 45,
                 deferred: 47,
                 redocked: 49,

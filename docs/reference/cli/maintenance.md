@@ -173,12 +173,15 @@ rimz reload [--repair]
 `reload` moves every running RimZ surface on the machine to the binary you invoke, without changing any pane. It runs from any directory, inside or outside a room. One run:
 
 - publishes the invoking build as the target of every live room, so each room's sidebars restart onto it in place;
+- stops each live room's running hook drainer after its current frame, then nudges a replacement on the recorded build; a room with no running drainer starts none;
 - upgrades a room's Zellij presence plugin when its build or configuration differs, and leaves a current one alone;
 - restarts held `rimz stats --refresh` dashboards on the new build;
 - reaps sidebar processes whose pane is gone, and sweeps leftover processes and runtime files from stopped sessions;
 - restarts the shared [web](./web.md) daemon if it is running. A stopped daemon stays stopped, and a failed restart prints a warning without failing the reload.
 
 It never starts a stopped session, creates or closes a pane, or touches an agent process. If the new build fails to start, each sidebar keeps running on its old build.
+
+A drainer that cannot stop within the bounded wait keeps its old build until it goes idle or a later reload succeeds. Reload reports it and continues with the other surfaces and rooms. Pending hooks stay queued across a restart.
 
 A room whose sidebar pane was closed has nothing to reload, so the report counts it and names the verb that fixes it: ``1 room with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` That room still counts as a live session, so `No running sidebars to reload.` never covers this case. The same line covers a sidebar running a protocol this build cannot signal, which repair replaces rather than mounts. `--repair`, or [`rimz sidebar repair`](#repair-sidebars) on its own, is what does it; with `--repair` already passed the line is left out, since the repair runs next.
 
@@ -192,6 +195,8 @@ The report prints a line per non-zero count:
 | `N sidebars could not be build-verified.` | RimZ could not read which build these sidebars run. |
 | `Upgraded N presence plugins.`, `Reconciled N presence plugins.`, `N presence plugins already current.` | The Zellij presence plugin in each room. |
 | `Reloaded N stats dashboards.` | Held dashboards restarted. |
+| `Restarted N hook drainers onto the current build.` | Running drainers stopped at a frame boundary; their successors use the room's recorded build. |
+| `N hook drainers did not stop in time; they keep their old build until they go idle or the next reload.` | Stops that failed; reload continued. |
 | `Reaped N orphaned sidebar processes.`, `Swept N leftover processes from stopped sessions.` | Cleanup. |
 | ``N rooms with no sidebar reporting in; mount or replace it with `rimz reload --repair`.`` | Live rooms with no fresh, protocol-current sidebar heartbeat: the pane is gone, or its renderer is one this build cannot signal. Suppressed under `--repair`, which runs that repair next. |
 | `Restarted the shared web daemon.` | The web daemon was running and restarted. |

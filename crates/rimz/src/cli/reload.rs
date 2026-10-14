@@ -1,5 +1,5 @@
 //! `rimz reload` — publish a freshly-installed build and let every running
-//! sidebar converge onto it without changing panes.
+//! sidebar and hook drainer converge onto it without changing panes.
 //!
 //! User-scoped and cwd-independent (it runs from anywhere, even outside a rimz
 //! session): the orchestration lives in [`rimz::reload`]. For each workspace with
@@ -77,6 +77,20 @@ fn report(
             out,
             "Reloaded {}.",
             n(outcome.stats_reloaded, "stats dashboard")
+        )?;
+    }
+    if outcome.drainers_restarted > 0 {
+        writeln!(
+            out,
+            "Restarted {} onto the current build.",
+            n(outcome.drainers_restarted, "hook drainer"),
+        )?;
+    }
+    if outcome.drainers_stop_failed > 0 {
+        writeln!(
+            out,
+            "{} did not stop in time; they keep their old build until they go idle or the next reload.",
+            n(outcome.drainers_stop_failed, "hook drainer"),
         )?;
     }
     if outcome.plugin_upgraded > 0 {
@@ -173,6 +187,27 @@ mod tests {
 
     // The count carries the accent, so a styled report splits around it; each
     // assertion stays on one side.
+    #[test]
+    fn drainer_counts_are_reported_only_when_nonzero() {
+        let quiet = rendered(&ReloadOutcome::default(), false);
+        assert!(!quiet.contains("hook drainer"), "{quiet}");
+        let outcome = ReloadOutcome {
+            sessions: 1,
+            drainers_restarted: 2,
+            drainers_stop_failed: 1,
+            ..ReloadOutcome::default()
+        };
+        let report = rendered(&outcome, false);
+        assert!(report.contains("2 hook drainers"), "{report}");
+        assert!(report.contains("onto the current build"), "{report}");
+        assert!(report.contains("1 hook drainer"), "{report}");
+        assert!(report.contains("did not stop in time"), "{report}");
+        assert!(
+            report.contains("until they go idle or the next reload"),
+            "{report}"
+        );
+    }
+
     #[test]
     fn a_room_that_lost_its_sidebar_is_pointed_at_repair() {
         let outcome = ReloadOutcome {

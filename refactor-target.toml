@@ -621,7 +621,18 @@ path = "crates/rimz/src/harness"
 # Cached Admission/read and the doctor skipped reason share the start verdict (+5).
 # RefaultHelperRequest, its runner, wake_request and the focus timestamp cross the CLI seam (+4).
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
-surface-budget = 844 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+# hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
+surface-budget = 846 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+
+[[verdict]]
+kind = "item"
+key = "harness::hook_drain::restart"
+reason = "Reload delegates stop guards and best-effort successor wake to the drainer owner."
+
+[[verdict]]
+kind = "item"
+key = "harness::hook_drain::RestartOutcome"
+reason = "Reload distinguishes an absent drainer from a completed frame-boundary restart."
 
 [[verdict]]
 kind = "item"
