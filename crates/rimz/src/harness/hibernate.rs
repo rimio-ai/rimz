@@ -208,16 +208,10 @@ pub fn decide(
     }) {
         return Ok(Verdict::Hold(Hold::Clock));
     }
-    let Some(path) = &scope.scope else {
+    if scope.scope.is_none() {
         return Ok(Verdict::Hold(Hold::NoScope));
-    };
-    if !path
-        .as_path()
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(&scope_prefix(&store.paths().workspace_id)))
-        || !scope.members.contains(&scope.provider_pid)
-    {
+    }
+    if !scope.members.contains(&scope.provider_pid) {
         return Ok(Verdict::Hold(Hold::NoScope));
     }
     let mut ancestors = std::collections::BTreeSet::new();
@@ -323,16 +317,25 @@ fn cheap_hold(
 
 fn scoped_provider(
     mut root_pid: u32,
+    workspace: &WorkspaceId,
     provider: &dyn Fn(u32) -> Option<u32>,
     scope: &dyn Fn(u32) -> Option<ScopePath>,
     children: &dyn Fn(u32) -> Vec<u32>,
 ) -> Option<(u32, ScopePath)> {
+    let prefix = scope_prefix(workspace);
     loop {
         let pid = provider(root_pid)?;
-        if let Some(scope) = scope(pid) {
+        if let Some(scope) = scope(pid).filter(|scope| {
+            scope
+                .as_path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix))
+        }) {
             return Some((pid, scope));
         }
-        // Liveness also recognizes the exec wrapper, which stays outside the scope.
+        // Liveness also recognizes the exec wrapper, which stays outside this agent's
+        // scope and may sit in another room's agent scope its mux server inherited.
         let children = children(pid);
         let [child] = children.as_slice() else {
             return None;
@@ -342,9 +345,10 @@ fn scoped_provider(
 }
 
 impl ScopeView {
-    pub fn probe(kind: &AgentKind, root_pid: u32, focused: bool) -> Self {
+    pub fn probe(kind: &AgentKind, workspace: &WorkspaceId, root_pid: u32, focused: bool) -> Self {
         let (provider_pid, scope) = scoped_provider(
             root_pid,
+            workspace,
             &|pid| {
                 crate::proc::in_pane_agent_process_for_root(kind.as_str(), pid)
                     .map(|process| process.pid)

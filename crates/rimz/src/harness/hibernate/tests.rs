@@ -166,23 +166,62 @@ fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
 
 #[test]
 fn provider_scope_descends_past_unscoped_exec_wrapper() {
-    let (_dir, _store, _agent, _policy, view) = decision_fixture();
+    let (_dir, store, _agent, _policy, view) = decision_fixture();
+    let workspace = &store.paths().workspace_id;
     let scope = view.scope.unwrap();
     // Process classification recognizes both `rimz agents exec claude` and Claude.
     let provider = |pid| matches!(pid, 10 | 20).then_some(pid);
     let scope_of = |pid| (pid == 20).then(|| scope.clone());
     let children = |pid| if pid == 10 { vec![20] } else { vec![] };
     assert_eq!(
-        scoped_provider(10, &provider, &scope_of, &children),
+        scoped_provider(10, workspace, &provider, &scope_of, &children),
         Some((20, scope.clone())),
         "an unscoped exec wrapper must not hide its scoped provider"
     );
     assert_eq!(
-        scoped_provider(20, &provider, &scope_of, &children),
+        scoped_provider(20, workspace, &provider, &scope_of, &children),
         Some((20, scope.clone()))
     );
-    assert!(scoped_provider(10, &provider, &scope_of, &|_| vec![20, 30]).is_none());
-    assert!(scoped_provider(10, &provider, &|_| None, &children).is_none());
+    assert!(scoped_provider(10, workspace, &provider, &scope_of, &|_| vec![20, 30]).is_none());
+    assert!(scoped_provider(10, workspace, &provider, &|_| None, &children).is_none());
+}
+
+#[test]
+fn provider_scope_descends_past_a_scope_inherited_from_another_room() {
+    let (dir, store, _agent, _policy, view) = decision_fixture();
+    let workspace = &store.paths().workspace_id;
+    let own = view.scope.unwrap();
+    let uid = nix::unistd::Uid::current().as_raw();
+    let other = WorkspaceId::from_project_root(&dir.path().join("other"));
+    let inherited = ScopePath::from_cgroup(
+        dir.path(),
+        &format!(
+            "0::/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/{}outer.scope",
+            scope_prefix(&other)
+        ),
+    )
+    .unwrap();
+    // The exec wrapper runs in the mux server's cgroup, inherited from the
+    // agent pane that started this room's server.
+    let provider = |pid| matches!(pid, 10 | 20).then_some(pid);
+    let scope_of = |pid| match pid {
+        10 => Some(inherited.clone()),
+        20 => Some(own.clone()),
+        _ => None,
+    };
+    assert_eq!(
+        scoped_provider(10, workspace, &provider, &scope_of, &|pid| {
+            if pid == 10 { vec![20] } else { vec![] }
+        }),
+        Some((20, own.clone())),
+        "another room's agent scope must not hide the provider's own"
+    );
+    for children in [vec![], vec![20, 30]] {
+        assert!(
+            scoped_provider(10, workspace, &provider, &scope_of, &|_| children.clone()).is_none(),
+            "a foreign scope is never returned"
+        );
+    }
 }
 
 fn decision(
@@ -225,7 +264,7 @@ fn provider_ancestors_are_owned_but_their_other_children_are_foreign() {
 }
 
 #[test]
-fn decision_requires_unfocused_owned_scope_and_provider_membership() {
+fn decision_requires_unfocused_scope_and_provider_membership() {
     let (_dir, store, agent, config, clear) = decision_fixture();
     let ready = Verdict::Hibernate { idle_secs: 180 };
     assert_eq!(decision(&store, &agent, &config, &clear, 1_180), ready);

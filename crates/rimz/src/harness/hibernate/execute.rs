@@ -35,6 +35,7 @@ pub fn run_request(
     }
     let scope = ScopeView::probe(
         &agent.kind,
+        &store.paths().workspace_id,
         request.root_pid,
         pane_focused(store.runtime_paths(), snapshot, &request.pane_id),
     );
@@ -83,6 +84,7 @@ pub fn run_request(
                 };
                 let scope = ScopeView::probe(
                     &agent.kind,
+                    &store.paths().workspace_id,
                     request.root_pid,
                     pane_focused(store.runtime_paths(), &fresh, &request.pane_id),
                 );
