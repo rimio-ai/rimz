@@ -334,9 +334,30 @@ upward-dependencies = [
 # AccountHistory carries a named account's history mode to the login catalog and `rimz accounts` (+1).
 # KeepWarm parses the role/profile horizon and the floor for definitions, config edit, harness policy, and `agents validate` (+1).
 # ThrottleConfig::has_limits lets loop show distinguish admission limits from pacing (+1).
-# TaskCheck and AgentCheck share shell-or-agent guards across config, trust, delivery, and CLI (+2).
+# TaskCheck and Judge share legacy shell-or-agent guards across config, trust, delivery, and CLI (+2).
+# Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
-surface-budget = 191
+surface-budget = 194
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::Guard"
+reason = "Borrowed loop guard projection shared with scheduling and the binary's CLI."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::Judge"
+reason = "Renamed headless model guard shared by task files, trust, scheduling and the binary."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::TaskEntry::guard"
+reason = "Single legacy-aware guard reader for the scheduler and loop presentation."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::deserialize_judges"
+reason = "One table-or-array decoder shared by task files and the lenient trust schema."
 
 [[module]]
 path = "crates/rimz/src/daemon_content.rs"

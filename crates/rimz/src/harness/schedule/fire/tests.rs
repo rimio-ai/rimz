@@ -10,7 +10,7 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
     use super::super::launch_ledger::{DeclineRecord, Declines};
     let (_root, mut tasks, owned) = worktree_tasks(None);
     let mut entry = tasks[NAME].entry().clone();
-    entry.check = Some(crate::config::TaskCheck::Agent(crate::config::AgentCheck {
+    entry.check = Some(crate::config::TaskCheck::Agent(crate::config::Judge {
         agent: "codex".into(),
         prompt: Some("any work?".into()),
         prompt_file: None,

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest, PermissionMode};
-use crate::config::{AgentCheck, effective::ProfileScope};
+use crate::config::{Judge, effective::ProfileScope};
 use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest, decode_exec_envelope};
 use crate::harness::launch_plan::{self, LaunchPlan};
 use crate::harness::plan::{LaunchAvailability, LaunchFinalizeOptions, PermissionModeChoice};
@@ -43,7 +43,7 @@ pub(super) fn prompt_path(path: &Path, task: &LoadedTask) -> Result<PathBuf> {
 
 pub(super) fn run(
     fire: &TaskFire<'_>,
-    check: &AgentCheck,
+    check: &Judge,
     dir: &Path,
     root: &Path,
 ) -> Result<ControlFlow<(LoopRunResult, String), (CheckOutcome, AgentCheckRecord)>> {

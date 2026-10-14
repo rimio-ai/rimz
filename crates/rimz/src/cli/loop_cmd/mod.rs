@@ -23,7 +23,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
-use rimz::config::{AgentCheck, CheckOn, MachineConfig, TaskCheck, TaskEntry, TaskTarget};
+use rimz::config::{CheckOn, Judge, MachineConfig, TaskCheck, TaskEntry, TaskTarget};
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{

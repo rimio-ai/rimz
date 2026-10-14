@@ -91,8 +91,9 @@ pub(crate) use harness::PROMPT_CACHE_MARGIN;
 pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode, KeepWarm};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
+pub(crate) use loop_::deserialize_judges;
 pub use loop_::{
-    AgentCheck, CheckOn, FileMark, LoopConfig, TaskCheck, TaskEntry, TaskTarget, Tasks,
+    CheckOn, FileMark, Guard, Judge, LoopConfig, TaskCheck, TaskEntry, TaskTarget, Tasks,
     ThrottleConfig, ThrottleSwitch, WatchSpec,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};

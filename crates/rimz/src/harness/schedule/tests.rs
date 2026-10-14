@@ -379,6 +379,42 @@ fn task_action_from_entry_maps_field_combinations() {
     }
 }
 
+#[test]
+fn judges_require_explicit_polarity_and_an_action() {
+    for key in ["judge", "check"] {
+        let entry: TaskEntry = toml::from_str(&format!(
+            "agent = 'claude'\n{key} = {{ agent = 'haiku', prompt = 'q' }}"
+        ))
+        .unwrap();
+        let result = TaskAction::from_entry("task", &entry);
+        assert!(result.is_err(), "judge needs an explicit on: {entry:?}");
+        let message = result.unwrap_err().to_string();
+        for word in ["fail", "success", "any"] {
+            assert!(message.contains(word), "{message}");
+        }
+        let entry: TaskEntry = toml::from_str(&format!(
+            "on = 'fail'\n{key} = {{ agent = 'haiku', prompt = 'q' }}"
+        ))
+        .unwrap();
+        assert!(
+            TaskAction::from_entry("task", &entry).is_err(),
+            "judge is not a check-only action"
+        );
+    }
+}
+
+#[test]
+fn watch_refuses_a_judge_guard() {
+    let entry: TaskEntry = toml::from_str(
+        "agent = 'claude'\non = 'fail'\nwatch = 'true'\njudge = { agent = 'haiku', prompt = 'q' }",
+    )
+    .unwrap();
+    assert!(matches!(
+        parse_trigger("task", &entry),
+        Err(ScheduleErr::WatchWithCheck { .. })
+    ));
+}
+
 /// A row compiles into independent action and timing halves, so a malformed
 /// schedule leaves the action observable.
 #[test]

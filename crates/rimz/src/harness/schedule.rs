@@ -94,10 +94,31 @@ pub enum TaskActionErr {
     ConflictingActions { name: String },
     #[error("loop task `{name}` needs `agent`, `wait`, or `check`")]
     MissingAction { name: String },
+    #[error(
+        "loop task `{name}` needs `on` for its judge: `fail` acts on a fail verdict, `success` acts on a pass verdict, `any` acts whatever the verdict"
+    )]
+    JudgeWithoutOn { name: String },
+    #[error(
+        "loop task `{name}` needs `agent` or `wait` for its judge; a check-only task runs one shell command"
+    )]
+    JudgeWithoutAction { name: String },
 }
 
 impl TaskAction {
     fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
+        let guard = entry.guard();
+        if !guard.judges.is_empty() {
+            if entry.on.is_none() {
+                return Err(TaskActionErr::JudgeWithoutOn {
+                    name: name.to_owned(),
+                });
+            }
+            if entry.agent.is_none() && entry.wait.is_none() {
+                return Err(TaskActionErr::JudgeWithoutAction {
+                    name: name.to_owned(),
+                });
+            }
+        }
         if entry.verify.is_some() && entry.agent.is_none() {
             return Err(TaskActionErr::VerifyWithoutAgent {
                 name: name.to_owned(),
@@ -121,7 +142,7 @@ impl TaskAction {
         match (entry.agent.as_deref(), entry.wait.as_ref()) {
             (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent.to_owned())),
             (None, Some(target)) => Ok(Self::Deliver(target.clone())),
-            (None, None) if entry.check.is_some() => Ok(Self::CheckOnly),
+            (None, None) if guard.shell.is_some() => Ok(Self::CheckOnly),
             (Some(_), Some(_)) => Err(TaskActionErr::ConflictingActions {
                 name: name.to_owned(),
             }),
@@ -845,7 +866,8 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             name: name.to_owned(),
         });
     }
-    if has_watch && entry.check.is_some() {
+    let guard = entry.guard();
+    if has_watch && (guard.shell.is_some() || !guard.judges.is_empty()) {
         return Err(ScheduleErr::WatchWithCheck {
             name: name.to_owned(),
         });

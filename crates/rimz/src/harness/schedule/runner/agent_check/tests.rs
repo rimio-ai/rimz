@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::agents::{HeadlessRequest, HeadlessVerdict};
-use crate::config::{AgentCheck, Isolation};
+use crate::config::{Isolation, Judge};
 use crate::harness::launch_plan::LaunchPlan;
 use crate::harness::schedule::run_log::AgentCheckRecord;
 use std::os::unix::process::ExitStatusExt;
@@ -10,7 +10,7 @@ fn entry(root: &Path, stay: bool) -> TaskEntry {
         root: root.to_owned(),
         agent: Some("claude".into()),
         prompt: Some("repair the build\nmore instructions".into()),
-        check: Some(TaskCheck::Agent(AgentCheck {
+        check: Some(TaskCheck::Agent(Judge {
             agent: "codex".into(),
             prompt: Some("Is there work?".into()),
             prompt_file: None,

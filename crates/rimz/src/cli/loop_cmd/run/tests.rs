@@ -349,7 +349,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         };
         let outcome = RunOutcome::check_result(LoopRunResult::CheckSkipped, check, 2_000);
         let mut entry = spawn_entry(true, on);
-        entry.check = Some(TaskCheck::Agent(AgentCheck {
+        entry.check = Some(TaskCheck::Agent(Judge {
             agent: "haiku".into(),
             prompt: Some("Question.".into()),
             prompt_file: None,

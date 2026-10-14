@@ -868,6 +868,8 @@ pub struct ProjectTask {
     #[serde(rename = "prompt-file")]
     pub prompt_file: Option<PathBuf>,
     pub check: Option<TaskCheck>,
+    #[serde(deserialize_with = "crate::config::deserialize_judges")]
+    pub judge: Vec<crate::config::Judge>,
     pub verify: Option<String>,
     #[serde(rename = "max-attempts")]
     pub max_attempts: Option<u32>,
@@ -1005,6 +1007,8 @@ struct ExecutableTask<'a> {
     prompt: Option<&'a str>,
     prompt_file: Option<String>,
     check: Option<&'a TaskCheck>,
+    #[serde(skip_serializing_if = "<[crate::config::Judge]>::is_empty")]
+    judge: &'a [crate::config::Judge],
     verify: Option<&'a str>,
     max_attempts: Option<u32>,
     on: Option<CheckOn>,
@@ -1152,6 +1156,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
                     check: task.check.as_ref(),
+                    judge: &task.judge,
                     verify: task.verify.as_deref(),
                     max_attempts: task.max_attempts,
                     on: task.on,
