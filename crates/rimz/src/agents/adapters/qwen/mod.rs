@@ -251,7 +251,7 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     },
 };
 
-const QWEN_HOOK_TIMEOUT_MS: u64 = 2_000;
+const QWEN_HOOK_TIMEOUT_SECS: u64 = 2;
 const QWEN_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("SessionStart", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("SessionEnd", r#"{"session_id":"sess-1"}"#).session_ended(),
@@ -467,6 +467,14 @@ impl crate::agents::capabilities::CoreCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::LaunchCapability for QwenAdapter {
+    fn min_version(&self) -> Option<super::version::CliVersion> {
+        Some(super::version::CliVersion::new(0, 25, 1))
+    }
+
+    fn version_upgrade_fix(&self) -> Option<&'static str> {
+        Some("run `npm install -g @qwen-code/qwen-code@latest`")
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["QWEN_HOME"]
     }

@@ -172,6 +172,8 @@ RimZ launches each agent with the provider's own flags. A typed profile field or
 
 OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. Fork and model presets are unsupported. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
+Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `npm install -g @qwen-code/qwen-code@latest`; an unreadable version passes without a verdict. Refresh existing Qwen hooks with `rimz hooks install` to adopt the seconds-based timeout before launching.
+
 ### Permission modes
 
 A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. RimZ appends the arguments below. `none` means the mode adds no arguments, so the agent keeps its own default; for Auto and Yolo, the `<kind>-auto` and `<kind>-yolo` cells do not exist ([permission-mode cells](./cli/agents.md#permission-mode-cells)).
@@ -188,7 +190,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Cursor | none | `--auto-review` | `--mode=plan` | `--force --sandbox disabled` |
 | Amp | none | none | none | none |
 | Kiro | none | none | none | none |
-| Qwen | none | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
+| Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |

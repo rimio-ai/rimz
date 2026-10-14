@@ -35,7 +35,7 @@ pub(super) struct QwenSessionStart {
 pub(super) struct QwenUserPromptSubmit {
     /// Model-bound text, after slash-command and `@` file expansion.
     pub(super) prompt: Option<String>,
-    /// Composer text as the user typed it (Qwen Code 0.23 and newer).
+    /// Composer text as typed; absent for vim-mode, history-restored, and ToolResult/Hook sends.
     pub(super) submitted_prompt: Option<String>,
 }
 

@@ -178,6 +178,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn qwen_version_floor_requires_seconds_hook_timeouts() {
+        let agent = crate::agents::find_definition("qwen").unwrap();
+        let path = std::path::Path::new("/opt/bin/qwen");
+        let error = check_launch_version(agent, path, Some(CliVersion::new(0, 25, 0)))
+            .expect_err("Qwen before 0.25.1 must refuse");
+        assert_eq!(
+            error.to_string(),
+            "qwen 0.25.0 at /opt/bin/qwen is older than 0.25.1, the oldest release RimZ supports; run `npm install -g @qwen-code/qwen-code@latest`"
+        );
+        for found in [None, Some(CliVersion::new(0, 25, 1))] {
+            assert!(check_launch_version(agent, path, found).is_ok());
+        }
+    }
+
+    #[test]
     fn opencode_version_floor_names_the_major_upgrade() {
         let agent = crate::agents::find_definition("opencode").unwrap();
         let path = std::path::Path::new("/opt/bin/opencode");

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{QWEN_HOOK_TIMEOUT_MS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
+use super::{QWEN_HOOK_TIMEOUT_SECS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
 use crate::agents::managed_source::ManagedSource;
 use crate::agents::{Result, agent_config_path};
@@ -13,7 +13,7 @@ static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     catalog: QWEN_HOOKS,
     command: RIMZ_HOOK_COMMAND,
     legacy_command_marker: RIMZ_HOOK_MARKER,
-    timeout: QWEN_HOOK_TIMEOUT_MS,
+    timeout: QWEN_HOOK_TIMEOUT_SECS,
     sync: SyncEncoding::HandlerAsync,
     status_lines: &[&STATUS_LINE],
 };
