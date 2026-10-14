@@ -196,7 +196,8 @@ upward-dependencies = ["address"]
 # model_label_source shares version-aware model source selection between CLI and sidebar (+1).
 # SpendUpdate distinguishes authoritative replacement from a counted-spend rewrite merge (+1).
 # LaunchBlocker and LaunchCapability::launch_blocker share provider launch preconditions (+2).
-surface-budget = 1037
+# SettingsConflict, hooks_disabled, and ask_unenforced share provider settings refusals with launch and doctor (+3).
+surface-budget = 1040
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"
@@ -2989,6 +2990,21 @@ reason = "Two outputs on purpose: the fetch worker retains the workspace fold an
 kind = "item"
 key = "sidebar::produce::resolution_snapshot"
 reason = "The mux: Option<MuxName> parameter is real: seven callers pass five distinct sources (resolved workspace, ctx, CLI flag, auto-detect, fixture); not a one-caller flag (pass 17a)."
+
+[[verdict]]
+kind = "item"
+key = "agents::SettingsConflict"
+reason = "Provider-neutral settings provenance and fix shared by launch compilation and the doctor binary."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::InstallationCapability::hooks_disabled"
+reason = "Launch compilation and doctor need the same provider-owned disabled-hook decision without changing installation state."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::ask_unenforced"
+reason = "The shared launch chokepoint asks the provider whether its effective defaults defeat explicit ask permission flags."
 
 [[verdict]]
 kind = "item"

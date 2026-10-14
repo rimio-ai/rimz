@@ -137,6 +137,15 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// A provider setting that disables installed hooks for this launch directory.
+    fn hooks_disabled(
+        &self,
+        _cwd: &Path,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<super::SettingsConflict> {
+        None
+    }
+
     /// Carry provider-owned state before moving a private settings file aside.
     fn adopt_shared_file(
         &self,
@@ -300,6 +309,15 @@ pub struct RejectedLaunchArg {
 
 #[doc(hidden)]
 pub trait LaunchCapability: CoreCapability {
+    /// A provider default that prevents an ask launch from enforcing prompts.
+    fn ask_unenforced(
+        &self,
+        _cwd: &Path,
+        _login_env: &BTreeMap<String, String>,
+    ) -> Option<super::SettingsConflict> {
+        None
+    }
+
     /// Settings and user content shared with the provider's own home, never account data.
     fn shared_home_entries(&self) -> &'static [SharedHomeEntry] {
         &[]

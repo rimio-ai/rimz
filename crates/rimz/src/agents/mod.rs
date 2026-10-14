@@ -187,6 +187,28 @@ pub enum AgentErr {
 
 pub type Result<T> = std::result::Result<T, AgentErr>;
 
+/// A provider setting that prevents an explicitly requested capability.
+#[derive(Clone, Debug)]
+pub struct SettingsConflict {
+    pub path: PathBuf,
+    pub key: &'static str,
+    pub value: Value,
+    pub fix: String,
+}
+
+impl std::fmt::Display for SettingsConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}: {}; {}",
+            self.path.display(),
+            self.key,
+            self.value,
+            self.fix
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LaunchPreset {
     pub model: Option<String>,
