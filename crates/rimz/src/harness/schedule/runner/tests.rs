@@ -2,6 +2,30 @@ use std::path::Path;
 
 use super::*;
 
+#[test]
+fn guard_usage_sums_every_judge() {
+    let mut wire = serde_json::to_value(LoopRunRecord::new(
+        "guard",
+        LoopRunResult::Completed,
+        LoopRunMode::Manual,
+        1,
+    ))
+    .unwrap();
+    wire["cost_usd"] = serde_json::json!(1.0);
+    wire["input_tokens"] = serde_json::json!(100);
+    wire["output_tokens"] = serde_json::json!(50);
+    wire["judge"] = serde_json::json!([
+        {"profile": "haiku", "kind": "claude", "cost_usd": 0.25, "input_tokens": 10, "output_tokens": 5},
+        {"profile": "sonnet", "kind": "claude", "cost_usd": 0.5, "input_tokens": 20, "output_tokens": 10}
+    ]);
+    let mut row: LoopRunRecord = serde_json::from_value(wire).unwrap();
+    add_check_usage(&mut row);
+    assert_eq!(
+        (row.cost_usd, row.input_tokens, row.output_tokens),
+        (Some(1.75), Some(130), Some(65))
+    );
+}
+
 fn record_room(root: &Path) -> Result<()> {
     let workspace = crate::workspace::WorkspaceResolver::resolve(root, None)?;
     let paths = StatePaths::for_project_root(root)?;
@@ -540,6 +564,7 @@ fn spawn_timeout_prefers_task_then_config_then_builtin() {
 #[test]
 fn budget_refusal_finishes_as_a_recorded_gate() {
     let check = CheckRecord {
+        duration_ms: None,
         agent: None,
         code: Some(1),
         timed_out: false,

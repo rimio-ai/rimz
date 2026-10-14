@@ -2,6 +2,63 @@ use super::*;
 use std::io::Write as _;
 
 #[test]
+fn stages_fold_legacy_judges_and_use_the_last_answer() {
+    let legacy: LoopRunRecord = serde_json::from_value(serde_json::json!({
+        "task": "guard", "at": "2026-01-01T00:00:00Z", "result": "check_skipped",
+        "check": {"code": 0, "timed_out": false, "output": "old reason", "agent": {
+            "profile": "haiku", "kind": "claude", "verdict": {"pass": true, "reason": "old reason"}
+        }}
+    }))
+    .unwrap();
+    let stages: Vec<_> = legacy.stages().collect();
+    assert_eq!(
+        stages.len(),
+        1,
+        "a legacy model check is one judge, not a shell stage"
+    );
+    assert!(
+        matches!(&stages[0], RunStage::Judge(judge) if judge.reason.as_deref() == Some("old reason"))
+    );
+    assert_eq!(legacy.last_verdict(), Some(true));
+    let row: LoopRunRecord = serde_json::from_value(serde_json::json!({
+        "task": "guard", "at": "2026-01-01T00:00:00Z", "result": "check_skipped",
+        "check": {"code": 1, "timed_out": false, "output": "shell failed"},
+        "judge": [
+            {"profile": "haiku", "kind": "claude", "verdict": true, "reason": "fixed"},
+            {"profile": "sonnet", "kind": "claude", "error": "outage"}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(row.stages().count(), 3);
+    assert_eq!(
+        row.last_verdict(),
+        Some(true),
+        "no answer does not replace the last verdict"
+    );
+    assert_eq!(row.polarity(), Some(RunPolarity::Good));
+}
+
+#[test]
+fn every_judge_reason_and_error_is_capped() {
+    let evidence = format!("{}tail", "界".repeat(CHECK_OUTPUT_CAP));
+    let row: LoopRunRecord = serde_json::from_value(serde_json::json!({
+        "task": "guard", "at": "2026-01-01T00:00:00Z", "result": "check_skipped",
+        "judge": [
+            {"profile": "haiku", "kind": "claude", "verdict": false, "reason": evidence, "error": evidence},
+            {"profile": "sonnet", "kind": "claude", "reason": evidence, "error": evidence}
+        ]
+    })).unwrap();
+    let capped = serde_json::to_value(capped_record(&row)).unwrap();
+    assert_eq!(capped["judge"].as_array().map(Vec::len), Some(2));
+    for judge in capped["judge"].as_array().unwrap() {
+        for field in ["reason", "error"] {
+            let text = judge[field].as_str().unwrap();
+            assert!(text.len() <= CHECK_OUTPUT_CAP && text.ends_with("tail"));
+        }
+    }
+}
+
+#[test]
 fn agent_check_evidence_is_bounded_in_the_persisted_record() {
     let dir = tempfile::tempdir().unwrap();
     let evidence = format!("{}tail", "界".repeat(CHECK_OUTPUT_CAP));
@@ -64,6 +121,7 @@ fn skipped_check_cost_counts_and_old_check_rows_still_parse() {
 
 fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        judge: Vec::new(),
         checkout: None,
         task: task.to_owned(),
         root: None,
@@ -130,12 +188,13 @@ fn acting_polarity_preserves_show_membership() {
     }
     for (code, timed_out, expected) in [
         (Some(0), false, Some(RunPolarity::Good)),
-        (Some(0), true, Some(RunPolarity::Good)),
+        (Some(0), true, None),
         (Some(1), false, None),
         (None, true, None),
     ] {
         let mut row = record("task", 1, CheckSkipped);
         row.check = Some(CheckRecord {
+            duration_ms: None,
             agent: None,
             code,
             timed_out,
@@ -336,6 +395,7 @@ fn terminal_records_keep_durable_and_presentation_fields_separate() {
     }
 
     let check = CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(7),
@@ -607,6 +667,7 @@ fn new_fields_round_trip_and_task_records_filter() {
     with_detail.mode = Some(LoopRunMode::Manual);
     with_detail.duration_ms = Some(123);
     with_detail.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: Some(PathBuf::from("/tmp/wait.log")),
         code: Some(127),
@@ -678,6 +739,7 @@ fn append_caps_forensic_fields() {
     record.error = Some("e".repeat(ERROR_CAP + 20));
     record.last_message = Some("m".repeat(LAST_MESSAGE_CAP + 20));
     record.check = Some(CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(1),

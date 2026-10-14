@@ -262,6 +262,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let spawn = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            duration_ms: None,
             agent: None,
             output_path: None,
             code: Some(0),
@@ -302,6 +303,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
     let wait = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            duration_ms: None,
             agent: None,
             output_path: None,
             code: Some(1),
@@ -329,6 +331,7 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         ),
     ] {
         let check = CheckRecord {
+            duration_ms: None,
             agent: Some(
                 serde_json::from_value(serde_json::json!({
                     "profile": "haiku",
@@ -376,6 +379,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
     let outcome = RunOutcome::check_result(
         LoopRunResult::CheckSkipped,
         CheckRecord {
+            duration_ms: None,
             agent: None,
             output_path: None,
             code: Some(0),
@@ -401,6 +405,7 @@ fn scheduled_check_skip_keeps_compact_task_prefix() {
 #[test]
 fn trip_line_names_check_fact_and_action() {
     let check = CheckRecord {
+        duration_ms: None,
         agent: None,
         output_path: None,
         code: Some(101),
@@ -558,6 +563,7 @@ fn check_only_verdicts_name_the_check_fact() {
         ),
     ] {
         let outcome = RunOutcome::terminal(result).with_check(Some(CheckRecord {
+            duration_ms: None,
             agent: None,
             output_path: None,
             code,
@@ -636,6 +642,7 @@ fn watch_trip_and_summary_use_verdict_elapsed_once() {
         },
     ] {
         let check = CheckRecord {
+            duration_ms: None,
             agent: None,
             code: match verdict {
                 WatchVerdict::Exited { code, .. } => code,

@@ -111,6 +111,8 @@ pub struct LoopRunRecord {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub judge: Vec<JudgeRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watch: Option<WatchVerdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +138,36 @@ pub struct LoopRunRecord {
 }
 
 impl LoopRunRecord {
+    pub fn stages(&self) -> impl DoubleEndedIterator<Item = RunStage<'_>> {
+        self.check
+            .iter()
+            .map(|check| match &check.agent {
+                Some(agent) => RunStage::Judge(std::borrow::Cow::Owned(JudgeRecord {
+                    profile: agent.profile.clone(),
+                    kind: agent.kind.clone(),
+                    model: agent.model.clone(),
+                    verdict: agent.verdict.as_ref().map(|verdict| verdict.pass),
+                    reason: agent.verdict.as_ref().map(|verdict| verdict.reason.clone()),
+                    error: agent.error.clone(),
+                    cost_usd: agent.cost_usd,
+                    input_tokens: agent.input_tokens,
+                    output_tokens: agent.output_tokens,
+                    duration_ms: check.duration_ms,
+                    reused: false,
+                })),
+                None => RunStage::Check(check),
+            })
+            .chain(
+                self.judge
+                    .iter()
+                    .map(|judge| RunStage::Judge(std::borrow::Cow::Borrowed(judge))),
+            )
+    }
+
+    pub fn last_verdict(&self) -> Option<bool> {
+        self.stages().rev().find_map(|stage| stage.verdict())
+    }
+
     pub fn new(
         task: impl Into<String>,
         result: LoopRunResult,
@@ -153,6 +185,7 @@ impl LoopRunRecord {
             throttle_wait_ms: None,
             error: None,
             check: None,
+            judge: Vec::new(),
             watch: None,
             signal: None,
             condition: None,
@@ -192,6 +225,9 @@ pub struct CheckRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Legacy model-check rows only; new fires write the `judge` array.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentCheckRecord>,
 }
 
@@ -205,6 +241,38 @@ pub struct AgentCheckRecord {
     pub cost_usd: Option<f64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JudgeRecord {
+    pub profile: String,
+    pub kind: crate::ids::AgentKind,
+    pub model: Option<String>,
+    pub verdict: Option<bool>,
+    pub reason: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub reused: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunStage<'a> {
+    Check(&'a CheckRecord),
+    Judge(std::borrow::Cow<'a, JudgeRecord>),
+}
+
+impl RunStage<'_> {
+    pub fn verdict(&self) -> Option<bool> {
+        match self {
+            Self::Check(check) => Some(check.code == Some(0) && !check.timed_out),
+            Self::Judge(judge) => judge.verdict,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,12 +371,7 @@ impl LoopRunRecord {
             LoopRunResult::Completed | LoopRunResult::Delivered | LoopRunResult::Launched => {
                 Some(RunPolarity::Good)
             }
-            LoopRunResult::CheckSkipped
-                if self
-                    .check
-                    .as_ref()
-                    .is_some_and(|check| check.code == Some(0)) =>
-            {
+            LoopRunResult::CheckSkipped if self.last_verdict() == Some(true) => {
                 Some(RunPolarity::Good)
             }
             LoopRunResult::Errored
@@ -634,6 +697,14 @@ fn capped_record(record: &LoopRunRecord) -> LoopRunRecord {
             if let Some(error) = &mut agent.error {
                 *error = tail_string(error, CHECK_OUTPUT_CAP);
             }
+        }
+    }
+    for judge in &mut capped.judge {
+        if let Some(reason) = &mut judge.reason {
+            *reason = tail_string(reason, CHECK_OUTPUT_CAP);
+        }
+        if let Some(error) = &mut judge.error {
+            *error = tail_string(error, CHECK_OUTPUT_CAP);
         }
     }
     if let Some(signal) = &mut capped.signal
