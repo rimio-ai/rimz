@@ -59,6 +59,121 @@ fn hooks_test_store() -> (tempfile::TempDir, rimz::Store) {
 }
 
 #[test]
+fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
+    for derived_present in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(&repo)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let mut workspace =
+            rimz::workspace::WorkspaceResolver::resolve_under(&repo, None, dir.path()).unwrap();
+        let paths = rimz::StatePaths::for_project_root_under(&repo, dir.path()).unwrap();
+        let runtime =
+            rimz::disk::paths::RuntimePaths::under(paths.workspace_id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths.clone(), runtime).unwrap();
+        store.record_workspace(&workspace).unwrap();
+        rimz::testkit::fleet::seed_ended_carryover(&store, 3_300).unwrap();
+        let registration = rimz::testkit::fleet::registered_lifecycle(&paths.workspace_id, 0);
+        if derived_present {
+            store.append_event(&registration).unwrap();
+            // A changed snapshot field makes record_workspace republish, which backfills the copy.
+            workspace.session_name.push_str("-seeded");
+            store.record_workspace(&workspace).unwrap();
+        } else {
+            rimz::store::event_log::append(&paths.events_log, &registration).unwrap();
+        }
+        assert_eq!(paths.carryover_cache.exists(), derived_present);
+        let raw_len = std::fs::metadata(&paths.agents_carryover).unwrap().len();
+        let mut env = rimz::workspace::pin_env(&paths.workspace_id, &repo);
+        env.insert("HOME".into(), dir.path().display().to_string());
+        env.insert("RIMZ_HOME".into(), dir.path().display().to_string());
+        env.insert("RIMZ_AGENT_PID".into(), std::process::id().to_string());
+        let frame = rimz::store::ingress::HookIngress {
+            schema_version: "1".into(),
+            event_id: rimz::EventId::new(),
+            ts: jiff::Timestamp::now(),
+            source: rimz::ids::AgentKind::new_unchecked("claude"),
+            event: Some("UserPromptSubmit".into()),
+            payload: serde_json::json!({"session_id": "agent-0", "cwd": repo, "prompt": "work"})
+                .to_string(),
+            cwd: repo,
+            hook_pid: std::process::id(),
+            env,
+        };
+        std::thread::spawn(move || {
+            let raw_before = rimz::testkit::carryover_bytes_parsed();
+            let derived_before = rimz::testkit::derived_carryover_bytes_read();
+            let spawns_before = rimz::testkit::spawn_count();
+            rimz::harness::hook_drain::with_frame_env(
+                &frame,
+                rimz::harness::hook_drain::FrameAttempt::First,
+                || {
+                    super::process_frame(
+                        &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+                        &frame,
+                        &[],
+                    )
+                },
+            )
+            .unwrap();
+            let projection = store
+                .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
+                .unwrap();
+            let agent = projection
+                .agents
+                .iter()
+                .find(|agent| agent.agent_id == "agent-0")
+                .unwrap();
+            assert_eq!(agent.status, rimz::agents::AgentStatus::Running);
+            assert_eq!(agent.prompt.as_deref(), Some("work"));
+            assert_eq!(rimz::testkit::spawn_count() - spawns_before, 1);
+            if !paths.carryover_cache.exists() {
+                workspace.session_name.push_str("-published");
+                store.record_workspace(&workspace).unwrap();
+            }
+            assert!(
+                paths.carryover_cache.exists(),
+                "serialized publication backfills the copy"
+            );
+            assert_eq!(
+                rimz::testkit::carryover_bytes_parsed() - raw_before,
+                if derived_present { 0 } else { raw_len }
+            );
+            let derived_len = std::fs::metadata(&paths.carryover_cache).unwrap().len();
+            let derived_bytes = rimz::testkit::derived_carryover_bytes_read() - derived_before;
+            assert!(derived_bytes <= derived_len);
+            if derived_present {
+                assert_eq!(derived_bytes, derived_len);
+            }
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[test]
 fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
     let (_dir, store) = hooks_test_store();
     let home = store.paths().root.join("home");
