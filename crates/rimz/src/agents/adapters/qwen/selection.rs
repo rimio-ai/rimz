@@ -208,9 +208,8 @@ struct ModelProvider {
     env_key: Option<String>,
 }
 
-pub(super) fn resolve() -> SelectionState {
-    let Ok(settings_path) = super::install::qwen_settings_path(&crate::agents::ambient_env())
-    else {
+pub(super) fn resolve(login_env: &BTreeMap<String, String>) -> SelectionState {
+    let Ok(settings_path) = super::install::qwen_settings_path(login_env) else {
         return SelectionState::Unavailable;
     };
     let dotenv_path = settings_path
@@ -218,7 +217,7 @@ pub(super) fn resolve() -> SelectionState {
         .unwrap_or_else(|| Path::new("."))
         .join(".env");
     resolve_at(&settings_path, &dotenv_path, None, |name| {
-        std::env::var(name).ok()
+        login_env.get(name).cloned()
     })
 }
 
@@ -237,7 +236,7 @@ pub(super) fn resolve_managed_launch(
     let Ok(argv_model) = parse_launch_model(argv) else {
         return ManagedLaunchState::Unresolved;
     };
-    let Some(settings_path) = settings_path(env) else {
+    let Ok(settings_path) = super::install::qwen_settings_path(env) else {
         return ManagedLaunchState::Unresolved;
     };
     let dotenv_path = settings_path
@@ -297,22 +296,6 @@ fn managed_model_override(
     unique_value(values.iter().filter_map(|value| value.as_deref()))
 }
 
-fn settings_path(env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    if let Some(path) = env
-        .get("RIMZ_QWEN_SETTINGS")
-        .and_then(|path| non_empty(Some(path)))
-    {
-        return Some(PathBuf::from(path));
-    }
-    if let Some(home) = env.get("QWEN_HOME").and_then(|path| non_empty(Some(path))) {
-        return Some(PathBuf::from(home).join("settings.json"));
-    }
-    env.get("HOME")
-        .and_then(|path| non_empty(Some(path)))
-        .map(|home| PathBuf::from(home).join(".qwen/settings.json"))
-        .or_else(|| super::install::qwen_settings_path(&crate::agents::ambient_env()).ok())
-}
-
 fn unsupported_config_layer(cwd: &Path, env: &BTreeMap<String, String>) -> bool {
     if [
         "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
@@ -323,7 +306,7 @@ fn unsupported_config_layer(cwd: &Path, env: &BTreeMap<String, String>) -> bool 
     {
         return true;
     }
-    let Some(user_settings) = settings_path(env) else {
+    let Ok(user_settings) = super::install::qwen_settings_path(env) else {
         return true;
     };
     cwd.ancestors()
@@ -930,6 +913,36 @@ mod tests {
         assert!(selection.credentials_stamp().is_none());
         assert_eq!(selection.account_key().len(), 64);
         assert!(!format!("{selection:?}").contains("process-secret"));
+    }
+
+    #[test]
+    fn resolve_reads_settings_dotenv_and_credentials_from_the_login_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("qwen-work");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(
+            home.join("settings.json"),
+            alibaba_settings(ALIBABA_INTL_ENDPOINT, "settings-secret"),
+        )
+        .unwrap();
+        std::fs::write(home.join(".env"), format!("{ALIBABA_KEY}=dotenv-secret\n")).unwrap();
+        let mut env = BTreeMap::from([
+            ("QWEN_HOME".to_owned(), home.display().to_string()),
+            (ALIBABA_KEY.to_owned(), "login-secret".to_owned()),
+        ]);
+        let SelectionState::Found(selection) = resolve(&env) else {
+            panic!("expected selection");
+        };
+        assert_eq!(selection.credential, "login-secret");
+        env.remove(ALIBABA_KEY);
+        let SelectionState::Found(selection) = resolve(&env) else {
+            panic!("expected selection");
+        };
+        assert_eq!(selection.credential, "dotenv-secret");
+        assert!(matches!(
+            resolve(&BTreeMap::new()),
+            SelectionState::Unavailable
+        ));
     }
 
     #[test]

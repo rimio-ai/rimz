@@ -183,6 +183,80 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
 }
 
 #[test]
+fn settings_path_prefers_login_env_override_then_login_home() {
+    let env = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let resolved = |pairs: &[(&str, &str)]| install::qwen_settings_path(&env(pairs)).unwrap();
+    assert_eq!(
+        resolved(&[("HOME", "/home")]),
+        Path::new("/home/.qwen/settings.json")
+    );
+    assert_eq!(
+        resolved(&[("HOME", "/home"), ("QWEN_HOME", "/work")]),
+        Path::new("/work/settings.json")
+    );
+    assert_eq!(
+        resolved(&[
+            ("HOME", "/home"),
+            ("QWEN_HOME", "/work"),
+            ("RIMZ_QWEN_SETTINGS", "/override/settings.json"),
+        ]),
+        Path::new("/override/settings.json")
+    );
+    assert_eq!(
+        resolved(&[("QWEN_HOME", "/work"), ("RIMZ_QWEN_SETTINGS", "")]),
+        Path::new("/work/settings.json")
+    );
+    assert!(matches!(
+        install::qwen_settings_path(&BTreeMap::new()),
+        Err(crate::agents::AgentErr::Install { agent: "qwen", .. })
+    ));
+}
+
+#[test]
+fn spending_sources_follow_the_login_env_home_and_runtime_dir() {
+    use crate::agents::capabilities::SpendingCapability as _;
+    let temp = tempfile::tempdir().unwrap();
+    let named = temp.path().join("named");
+    let output = temp.path().join("output");
+    let runtime = temp.path().join("runtime");
+    let session = "projects/project/chats/session.jsonl";
+    for root in [&named, &output, &runtime] {
+        let path = root.join(session);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "{}\n").unwrap();
+    }
+    let files = |env: &BTreeMap<String, String>| {
+        QwenAdapter
+            .spending_sources(env)
+            .into_iter()
+            .flat_map(|source| source.complete_files())
+            .collect::<Vec<_>>()
+    };
+    assert!(QwenAdapter.spending_sources(&BTreeMap::new()).is_empty());
+    let mut env = BTreeMap::from([
+        ("QWEN_HOME".to_owned(), named.display().to_string()),
+        (
+            "QWEN_CODE_SYSTEM_SETTINGS_PATH".to_owned(),
+            temp.path().join("system.json").display().to_string(),
+        ),
+    ]);
+    assert_eq!(files(&env), vec![named.join(session)]);
+    fs::write(
+        named.join("settings.json"),
+        json!({"advanced": {"runtimeOutputDir": output}}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(files(&env), vec![output.join(session)]);
+    env.insert("QWEN_RUNTIME_DIR".to_owned(), runtime.display().to_string());
+    assert_eq!(files(&env), vec![runtime.join(session)]);
+}
+
+#[test]
 fn reinstall_reclaims_stale_and_matcherless_owned_pre_tool_use_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");

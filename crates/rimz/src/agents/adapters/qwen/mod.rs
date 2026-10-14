@@ -634,14 +634,14 @@ impl crate::agents::capabilities::ContextCapability for QwenAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for QwenAdapter {
-    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
-        account::probe()
+    fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
+        account::probe(login_env)
     }
     fn probe_account_usage(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> super::AccountUsageProbe {
-        match selection::resolve() {
+        match selection::resolve(login_env) {
             selection::SelectionState::Found(selection) => alibaba_usage::probe(selection),
             selection::SelectionState::LoggedOut => {
                 super::AccountUsageProbe::NoCredentials(Default::default())
@@ -665,12 +665,11 @@ impl crate::agents::capabilities::AccountCapability for QwenAdapter {
 impl crate::agents::capabilities::SpendingCapability for QwenAdapter {
     fn spending_sources(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSource::tree(
-            spend::runtime_base().join("projects"),
-            "*/chats/*.jsonl",
-        )
+        spend::runtime_base(login_env).map_or_else(Vec::new, |base| {
+            crate::agents::spending::SpendingSource::tree(base.join("projects"), "*/chats/*.jsonl")
+        })
     }
     fn parse_spend(
         &self,
