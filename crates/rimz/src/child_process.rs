@@ -576,6 +576,7 @@ fn spawn_detached_with(
     configure(&mut command)?;
     restore_user_temp_env(&mut command);
     let sender = reaper_sender()?;
+    crate::proc::testkit::count_spawn();
     match command.spawn() {
         Ok(mut child) => {
             if prefix.is_some()
@@ -894,8 +895,13 @@ mod tests {
 
     #[test]
     fn spawn_fast_child_returns_pid_and_reaps_it() {
+        let before = crate::proc::testkit::spawn_count();
         let pid = spawn_fast_child("child-process-fast").expect("spawn fast child");
 
+        assert!(
+            (1..=2).contains(&(crate::proc::testkit::spawn_count() - before)),
+            "count the helper attempt and any scope-escape retry"
+        );
         assert!(pid > 0);
         wait_until_reaped(pid);
     }
@@ -1125,6 +1131,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let output = root.path().join("ran");
         let prefix = vec!["sh".into(), "-c".into(), "exit 1".into(), "--".into()];
+        let before = crate::proc::testkit::spawn_count();
         let pid = spawn_detached_with(
             OsStr::new("sh"),
             |cmd| {
@@ -1136,6 +1143,7 @@ mod tests {
         )
         .unwrap();
         wait_until_reaped(pid);
+        assert_eq!(crate::proc::testkit::spawn_count() - before, 2);
         assert_eq!(std::fs::read_to_string(output).ok().as_deref(), Some("ran"));
     }
 

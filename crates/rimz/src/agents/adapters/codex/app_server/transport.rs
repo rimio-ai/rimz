@@ -288,6 +288,7 @@ impl FramedTransport {
         login_env: &BTreeMap<String, String>,
     ) -> Result<Self, AppServerErr> {
         let deadline = Instant::now() + total;
+        crate::proc::testkit::count_spawn();
         let mut child = app_server_command(bin, login_env)
             // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
@@ -563,6 +564,19 @@ mod tests {
             installed_codex_bin_from(Some(present.clone().into())),
             Some(present)
         );
+    }
+
+    #[test]
+    fn cold_app_server_spawn_attempt_is_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = crate::proc::testkit::spawn_count();
+        let result = FramedTransport::spawn(
+            &dir.path().join("missing-codex"),
+            Duration::from_secs(1),
+            &BTreeMap::new(),
+        );
+        assert!(matches!(result, Err(AppServerErr::Spawn(_))));
+        assert_eq!(crate::proc::testkit::spawn_count() - before, 1);
     }
 
     #[test]
