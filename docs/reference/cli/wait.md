@@ -58,6 +58,7 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 
 | Error | Cause |
 | --- | --- |
+| `` `--timeout` is now `--check-in`: it sends one still-running notice and never stops the command `` | `--timeout` passed to `rimz wait`; the flag was renamed. |
 | `choose exactly one wait trigger: --in, --pid, --check, --file, or --run` | Arming flags without a trigger, or more than one trigger. |
 | `--check needs a command` | An empty or whitespace-only check. |
 | `--run needs a command` | An empty or whitespace-only watched command. |
