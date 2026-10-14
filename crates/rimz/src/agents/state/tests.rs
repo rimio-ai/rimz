@@ -13,13 +13,18 @@ fn recent_prompts_truncate_multibyte_text_before_deduplication() {
 }
 
 #[test]
-fn hibernation_projects_resting_rows_before_armed_waits_but_not_running_rows() {
+fn hibernation_preserves_real_status_and_armed_waits() {
     for status in [
         AgentStatus::Idle,
         AgentStatus::Success,
         AgentStatus::Running,
     ] {
         let mut agent = test_agent(status, 1_000);
+        agent.hibernation = Some(Hibernation {
+            frozen_at: Timestamp::from_second(1_200).unwrap(),
+            reclaimed_bytes: 200,
+        });
+        assert_eq!(agent.effective_status(), status);
         agent.pending_waits.push(PendingWait {
             name: "watch".into(),
             trigger: PendingWaitTrigger::Command {
@@ -35,7 +40,7 @@ fn hibernation_projects_resting_rows_before_armed_waits_but_not_running_rows() {
         let expected = if status == AgentStatus::Running {
             "running"
         } else {
-            "hibernating"
+            "sleeping"
         };
         assert_eq!(projected.effective_status().as_str(), expected);
         assert!(!projected.effective_status().is_attention());
@@ -43,15 +48,12 @@ fn hibernation_projects_resting_rows_before_armed_waits_but_not_running_rows() {
 }
 
 #[test]
-fn hibernating_status_round_trips() {
+fn hibernation_is_not_a_wire_status() {
     let decoded = serde_json::from_str::<AgentStatus>("\"hibernating\"");
-    assert!(decoded.is_ok(), "hibernating is a projected wire state");
-    let status = decoded.unwrap();
-    assert_eq!(status.as_str(), "hibernating");
-    assert_eq!(serde_json::to_string(&status).unwrap(), "\"hibernating\"");
-    assert!(!status.is_attention());
-    assert!(!status.is_actionable());
-    assert!(!status.needs_a_look());
+    assert!(
+        decoded.is_err(),
+        "hibernation is metadata, not a wire state"
+    );
 }
 
 #[test]

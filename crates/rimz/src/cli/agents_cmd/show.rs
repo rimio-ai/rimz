@@ -1284,9 +1284,8 @@ mod tests {
 
     #[test]
     fn activity_shows_hibernation_time_and_reclaimed_bytes() {
-        let mut state =
-            rimz::testkit::agent_state("claude", "hibernating", jiff::Timestamp::UNIX_EPOCH);
-        state.status = rimz::agents::AgentStatus::Idle;
+        let mut state = rimz::testkit::agent_state("claude", "cold", jiff::Timestamp::UNIX_EPOCH);
+        state.status = rimz::agents::AgentStatus::Running;
         state.hibernation = Some(rimz::agents::state::Hibernation {
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 2048,
@@ -1304,6 +1303,8 @@ mod tests {
         let text = strip(|w| {
             render_activity_section(w, &entry, None, None, false, jiff::Timestamp::UNIX_EPOCH)
         });
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["hibernation"]["reclaimed_bytes"], 2048);
         assert!(
             text.contains("hibernating since 1970-01-01T00:00:00Z, 2 KB reclaimed"),
             "{text}"

@@ -21,6 +21,20 @@ fn sleeping() -> AgentState {
 }
 
 #[test]
+fn frozen_agents_never_receive_cache_pings() {
+    let mut agent = sleeping();
+    let config = HarnessConfig::default();
+    assert!(should_keepalive(&agent, &config, None, ts(3540)));
+    agent.hibernation = Some(crate::agents::state::Hibernation {
+        frozen_at: ts(100),
+        reclaimed_bytes: 200,
+    });
+    assert!(!should_keepalive(&agent, &config, None, ts(3540)));
+    agent.hibernation = None;
+    assert!(should_keepalive(&agent, &config, None, ts(3540)));
+}
+
+#[test]
 fn keepalive_window_and_recurrence_follow_requests_not_wait_arm_time() {
     let mut agent = sleeping();
     let config = HarnessConfig::default();

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn hibernating_fleet_keeps_its_nonzero_bucket() {
+fn frozen_fleet_keeps_its_real_status_bucket() {
     let mut sleeper = agent(
         "cold",
         "claude",
@@ -15,8 +15,9 @@ fn hibernating_fleet_keeps_its_nonzero_bucket() {
         reclaimed_bytes: 300,
     });
     let screen = snapshot_to_screen(&snapshot_with(vec![sleeper]), 50, 20);
-    assert!(screen.lines().nth(5).unwrap().contains("❄ 1"), "{screen}");
-    assert_snapshot("hibernating_fleet", screen);
+    assert!(screen.lines().nth(5).unwrap().contains("✓ 1"), "{screen}");
+    assert!(!screen.contains('❄'), "{screen}");
+    assert_snapshot("frozen_fleet", screen);
 }
 
 fn body_filter_hit(hit: &HitRegion) -> Option<&BodyFilter> {
@@ -96,7 +97,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     ];
     assert!(
         bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "make-up order is waiting failed paused success | running sleeping hibernating idle: {buckets}"
+        "make-up order is waiting failed paused success | running sleeping idle: {buckets}"
     );
     assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as

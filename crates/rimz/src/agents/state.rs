@@ -338,7 +338,7 @@ pub struct Hibernation {
 }
 
 /// Agent status as the sidebar reads it. The first five are the lifecycle
-/// rollup the agent owns and RimZ observes; `Paused`, `Sleeping`, and `Hibernating` are
+/// rollup the agent owns and RimZ observes; `Paused` and `Sleeping` are
 /// RimZ-derived projections, never emitted by a hook. They live in the one
 /// status enum so they share the cockpit tally,
 /// ranking, and glyph machinery the lifecycle states flow through.
@@ -359,8 +359,6 @@ pub enum AgentStatus {
     /// catalog: a wait timer, watched command, or one-shot subscription.
     /// Projected from `pending_waits`, never reported by a hook.
     Sleeping,
-    /// Resting with a durable hibernation entry; projected, never emitted by hooks.
-    Hibernating,
 }
 
 impl AgentStatus {
@@ -373,7 +371,6 @@ impl AgentStatus {
             Self::Failed => "failed",
             Self::Paused => "paused",
             Self::Sleeping => "sleeping",
-            Self::Hibernating => "hibernating",
         }
     }
 
@@ -424,7 +421,6 @@ impl TurnCompletion {
             AgentStatus::Idle
             | AgentStatus::Success
             | AgentStatus::Sleeping
-            | AgentStatus::Hibernating
             | AgentStatus::Running
             | AgentStatus::Waiting
             | AgentStatus::Paused => Self::Open,
@@ -1403,10 +1399,6 @@ impl AgentState {
     }
 
     pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
-        if matches!(status, AgentStatus::Idle | AgentStatus::Success) && self.hibernation.is_some()
-        {
-            return AgentStatus::Hibernating;
-        }
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !self.pending_waits.is_empty()
         {
@@ -1487,8 +1479,7 @@ impl AgentState {
             | AgentStatus::Success
             | AgentStatus::Failed
             | AgentStatus::Paused
-            | AgentStatus::Sleeping
-            | AgentStatus::Hibernating => false,
+            | AgentStatus::Sleeping => false,
         }
     }
 

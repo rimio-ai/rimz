@@ -19,17 +19,6 @@ use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
 
-pub fn seen_since(
-    runtime: &RuntimePaths,
-    agent: &crate::agents::AgentState,
-    since: jiff::Timestamp,
-) -> bool {
-    ReadMarks::load(runtime)
-        .cleared_at_ms(agent.agent_id.as_str())
-        .and_then(|seen| jiff::Timestamp::from_millisecond(seen).ok())
-        .is_some_and(|seen| seen >= since)
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadEpisodes {
     episodes: BTreeMap<String, i64>,
@@ -420,34 +409,6 @@ struct UnreadEpisodesFile {
 mod tests {
     use super::*;
 
-    #[test]
-    fn seen_receipt_must_reach_this_rest_boundary() {
-        let (_dir, runtime) = runtime();
-        let since = jiff::Timestamp::from_millisecond(1_000).unwrap();
-        let agent = crate::agents::AgentState::seed(
-            AgentKind::new_unchecked("claude"),
-            "session".into(),
-            AgentStatus::Idle,
-            since,
-        );
-        assert!(!seen_since(&runtime, &agent, since));
-        crate::sidebar::read_marks::write_read_marks(&runtime, ["session".into()], 999).unwrap();
-        assert!(!seen_since(&runtime, &agent, since));
-        crate::sidebar::read_marks::write_read_marks(&runtime, ["session".into()], 1_000).unwrap();
-        assert!(seen_since(&runtime, &agent, since));
-        assert!(!seen_since(
-            &runtime,
-            &agent,
-            since
-                .checked_add(jiff::SignedDuration::from_nanos(1))
-                .unwrap()
-        ));
-        assert!(!seen_since(
-            &runtime,
-            &agent,
-            jiff::Timestamp::from_millisecond(1_001).unwrap()
-        ));
-    }
     use crate::MuxName;
     use crate::pane::PaneRef;
     use crate::store::snapshot::{AgentCard, RowCard, SidebarStatusCount, SidebarWorktreeGroup};

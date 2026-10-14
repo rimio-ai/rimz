@@ -211,7 +211,7 @@ A card's line set is fixed before any content fills it, so a provider that start
 |---|---|
 | compact, not expanded: `idle` | identity |
 | compact, not expanded: `running`, `waiting` | identity, description, gauge |
-| compact, not expanded: `paused`, `success`, `failed`, `sleeping`, `hibernating` | identity, description |
+| compact, not expanded: `paused`, `success`, `failed`, `sleeping` | identity, description |
 | fresh unlabeled, not expanded | identity |
 | fresh labeled, not expanded | identity, description |
 | fresh unlabeled, expanded | identity, awaiting dots, gauge |

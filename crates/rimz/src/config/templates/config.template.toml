@@ -246,7 +246,7 @@ aggressive_resize = true
 
 # [agents.hibernate]
 # enabled = false                      # Linux cgroup scopes; needs a systemd user manager and swap
-# after = "10m"                        # grace after rest and read receipt, at most 24h
+# after = "10m"                        # grace after rest, at most 24h
 
 # [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

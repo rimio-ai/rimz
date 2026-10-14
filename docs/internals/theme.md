@@ -8,7 +8,7 @@ For what each knob does on screen, read the [theming guide](../guide/theme.md); 
 
 ## The four layers
 
-`GlyphRole::StatusHibernating` resolves to `❄` in both glyph presets. Hibernation uses the resting tone family shared with sleeping: the CLI's working state role and the sidebar's cool static animation head, customizable as `theme.animations.hibernating`. It is not an attention or failure state.
+Hibernation has no status glyph or animation role. Frozen agents retain their real displayed status and its theme.
 
 Color flows one way through four layers, and each layer holds one decision.
 

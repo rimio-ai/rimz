@@ -514,7 +514,6 @@ pub enum TurnWaitReason {
     WaitingOnPerson(Option<crate::agents::OpenAsk>),
     Sleeping(Vec<crate::agents::PendingWait>),
     WakeInFlight,
-    Hibernating,
     Paused,
     NoTurnStarted,
     Running,
@@ -534,7 +533,6 @@ impl TurnWaitView {
                 TurnWaitReason::WakeInFlight
             }
             AgentStatus::Sleeping => TurnWaitReason::Sleeping(agent.pending_waits.clone()),
-            AgentStatus::Hibernating => TurnWaitReason::Hibernating,
             AgentStatus::Paused => TurnWaitReason::Paused,
             AgentStatus::Idle | AgentStatus::Success => TurnWaitReason::NoTurnStarted,
             _ => TurnWaitReason::Running,

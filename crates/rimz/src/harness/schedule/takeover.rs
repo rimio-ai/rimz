@@ -133,11 +133,9 @@ fn open_turn(agent: &AgentState, now: Timestamp) -> Option<OpenTurn> {
         AgentStatus::Running => Some(OpenTurn::Working),
         AgentStatus::Waiting => Some(OpenTurn::WaitingOnUser),
         AgentStatus::Paused => Some(OpenTurn::Paused),
-        AgentStatus::Idle
-        | AgentStatus::Success
-        | AgentStatus::Failed
-        | AgentStatus::Sleeping
-        | AgentStatus::Hibernating => agent.is_compacting(now).then_some(OpenTurn::Compacting),
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed | AgentStatus::Sleeping => {
+            agent.is_compacting(now).then_some(OpenTurn::Compacting)
+        }
     }
 }
 

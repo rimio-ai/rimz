@@ -452,7 +452,6 @@ impl ResolvedAnimations {
             AgentStatus::Success => AnimationRole::Success,
             AgentStatus::Paused => AnimationRole::Paused,
             AgentStatus::Sleeping => AnimationRole::Sleeping,
-            AgentStatus::Hibernating => AnimationRole::Hibernating,
         }
     }
 
@@ -480,7 +479,6 @@ impl ResolvedAnimations {
         [
             AnimationRole::Paused,
             AnimationRole::Sleeping,
-            AnimationRole::Hibernating,
             AnimationRole::Idle,
             AnimationRole::Success,
         ]
@@ -612,12 +610,6 @@ fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animati
         ),
         AnimationRole::Sleeping => (
             head(GlyphRole::StatusSleeping),
-            tone_color(palette.animation_color(AnimationColor::Cool)),
-            AnimationEffect::Static,
-            AnimationSpeed::Normal,
-        ),
-        AnimationRole::Hibernating => (
-            head(GlyphRole::StatusHibernating),
             tone_color(palette.animation_color(AnimationColor::Cool)),
             AnimationEffect::Static,
             AnimationSpeed::Normal,

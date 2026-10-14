@@ -396,9 +396,7 @@ pub(super) fn build_entry(
         status,
         pending_waits: agent.pending_waits.clone(),
         idle_stop: agent.idle_stop.clone(),
-        hibernation: (agent.effective_status() == AgentStatus::Hibernating)
-            .then(|| agent.hibernation.clone())
-            .flatten(),
+        hibernation: agent.hibernation.clone(),
         background_shells: agent.background_shells.clone(),
         phase,
         turn_error,

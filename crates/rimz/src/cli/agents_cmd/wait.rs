@@ -64,7 +64,6 @@ fn wait_reason_text(reason: &TurnWaitReason, now: jiff::Timestamp) -> Option<Str
         ),
         TurnWaitReason::Sleeping(_) => "sleeping".to_owned(),
         TurnWaitReason::WakeInFlight => "wake in flight".to_owned(),
-        TurnWaitReason::Hibernating => "hibernating".to_owned(),
         TurnWaitReason::Paused => "paused".to_owned(),
         TurnWaitReason::NoTurnStarted => "no turn started".to_owned(),
     })

@@ -90,7 +90,7 @@ pub(super) fn resting(agent: &AgentState) -> Result<(), Hold> {
     }
     if !matches!(
         agent.effective_status(),
-        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Hibernating
+        AgentStatus::Idle | AgentStatus::Success
     ) || agent.phase == TurnPhase::Parked
         || !agent.background_shells.is_empty()
     {

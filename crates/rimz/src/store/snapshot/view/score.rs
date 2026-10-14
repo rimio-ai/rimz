@@ -22,7 +22,7 @@ pub(super) fn status_weight(status: AgentStatus) -> u32 {
         AgentStatus::Success => 300,
         AgentStatus::Running => 200,
         AgentStatus::Sleeping => 150,
-        AgentStatus::Idle | AgentStatus::Hibernating => 100,
+        AgentStatus::Idle => 100,
     }
 }
 
