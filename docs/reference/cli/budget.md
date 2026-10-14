@@ -43,7 +43,7 @@ Any change lifts the park this agent's cap set. When that park had interrupted a
 
 ## Cap the room and accounts
 
-`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. A cap belongs to a history pool, so `default` and every shared account of a kind name the same scope, printed as `<KIND>@default account`; a standalone account names its own. Config is the on-switch: the command adjusts a cap that `harness.budget` or `[accounts.budget].<kind>` armed, and refuses to set one that config never switched on.
+`rimz budget [VALUE]` inspects or changes the room's fleet cap, and `rimz budget --account <KIND> [VALUE]` the cap on this room's default account of one provider. Use `--account <KIND>@<NAME>` to target a particular declared login, including one still used by running agents after a room switch. A cap belongs to a history pool, so `default` and every shared account of a kind name the same scope, printed as `<KIND>@default account`; a standalone account names its own. Config supplies the default through `harness.budget` or `[accounts.budget].<kind>`; the command can also set a cap without either key, without editing config.
 
 ```sh
 rimz budget                        # fleet cap plus every configured account cap
@@ -56,7 +56,7 @@ rimz budget +25 --account claude   # raise this room's Claude account cap
 | `VALUE` | Effect |
 | --- | --- |
 | omitted | Print the report and change nothing. |
-| `AMOUNT/day` | Replace the cap. The `/day` suffix is required, and a scope that config never armed refuses with the `rimz config set` command that would arm it (`harness.budget 50/day`, or `accounts.budget.<kind> 100/day`). |
+| `AMOUNT/day` | Set or replace the cap, including when config has no cap. The `/day` suffix is required. |
 | `+AMOUNT` | Raise the cap in effect by `AMOUNT`. A cleared or unarmed cap refuses the raise (``cannot raise a cleared or unset fleet budget; set an absolute `/day` cap first``), and `+AMOUNT/day` is refused. |
 | `off`, `clear` | Disable the cap until a later `AMOUNT/day` re-arms it. Editing the config value does not re-arm it. |
 
@@ -70,7 +70,7 @@ Every form prints the scope's report, after the change when there is one:
 | --- | --- |
 | `scope` | `fleet`, or `<kind>@<login> account`. |
 | `cap` | The cap in effect as `$N.NN/day`, or `none`. |
-| `source` | Where the cap comes from: `config`, `override` (a fleet cap set with `AMOUNT/day`), `raised` (a `+AMOUNT` raise, or an account cap set with `AMOUNT/day`), `cleared` (disabled with `off` or `clear`), or `none` (config never armed it). |
+| `source` | Where the cap comes from: `config`, `override` (a cap set with `AMOUNT/day`), `raised` (a `+AMOUNT` raise on a base cap), `cleared` (disabled with `off` or `clear`), or `none` (no base cap is set). |
 | `spend` | Today's spend for the scope, as `$N.NN today`. |
 | `parked` | `yes` when the cap has parked agents, otherwise `no`. |
 | `turn cap` | Printed only when `harness.turn_budget` is set, as `$N.NN/turn (source: config; per turn)`. `rimz budget` cannot change it. |

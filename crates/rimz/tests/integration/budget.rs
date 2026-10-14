@@ -163,7 +163,7 @@ fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
             vec![vec![
                 "claude@default",
                 "$80.00/day",
-                "raised",
+                "override",
                 "$0.00",
                 "no"
             ]]
@@ -180,24 +180,84 @@ fn budget_ignores_ineligible_siblings_and_warns_only_for_fleet_reports() {
 }
 
 #[test]
-fn budget_refuses_to_arm_unconfigured_daily_caps() {
-    let env = Env::new();
-    env.record(&env.project_root);
+fn budget_arms_unconfigured_daily_caps_parks_and_lifts() {
+    use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+    use rimz::harness::budget::DailyBudgetScope;
+    use rimz::ids::AgentSessionId;
+    use rimz::store::event::EventEnvelope;
 
-    env.rimz()
-        .args(["budget", "20/day", "--no-continue"])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "turn it on with `rimz config set harness.budget 50/day`",
-        ));
-    env.rimz()
-        .args(["budget", "--account", "claude", "100/day", "--no-continue"])
-        .assert()
-        .failure()
-        .stderr(contains(
-            "turn it on with `rimz config set accounts.budget.claude 100/day`",
-        ));
+    for (scope, args) in [
+        (DailyBudgetScope::Fleet, vec!["budget"]),
+        (
+            DailyBudgetScope::Account(LoginKey::default_for(AgentKind::new_unchecked("claude"))),
+            vec!["budget", "--account", "claude"],
+        ),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("budget-session")),
+            LifecycleSignal::Registered,
+        );
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+        let panes = env.write_pane_fixture(&[]);
+        let refresh = || {
+            env.rimz()
+                .args([
+                    "sidebar",
+                    "snapshot",
+                    "--json",
+                    "--workspace-id",
+                    env.workspace_id.as_str(),
+                    "--session-name",
+                    &workspace.session_name,
+                ])
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .assert()
+                .success();
+        };
+        env.rimz()
+            .args(&args)
+            .args(["+10", "--no-continue"])
+            .assert()
+            .failure()
+            .stderr(contains("set an absolute `/day` cap first"));
+        // At zero dollars, a zero cap meets the boundary exactly, without a clock-sensitive transcript fixture.
+        env.rimz()
+            .args(&args)
+            .args(["0/day", "--no-continue"])
+            .assert()
+            .success()
+            .stdout(contains("source: override"));
+        refresh();
+        let runtime = env.runtime_paths();
+        let store = env.store();
+        let ledger = scope.read_ledger(&runtime, Some(store.paths()));
+        assert_eq!(ledger.override_spec.unwrap().cap_usd, 0.0);
+        assert!(
+            ledger.parked.is_some(),
+            "{scope:?} must park when spend equals the cap"
+        );
+        env.rimz()
+            .args(&args)
+            .args(["off", "--no-continue"])
+            .assert()
+            .success()
+            .stdout(contains("source: cleared"));
+        refresh();
+        let ledger = scope.read_ledger(&runtime, Some(store.paths()));
+        assert!(ledger.disabled);
+        assert!(ledger.parked.is_none(), "{scope:?} must stay lifted");
+    }
 }
 
 #[test]

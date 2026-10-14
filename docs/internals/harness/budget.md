@@ -20,8 +20,8 @@ Four scopes live in this module, and the sidebar producer evaluates them togethe
 | --- | --- | --- | --- | --- |
 | Agent | one agent session | launch identity: `--budget`, a profile, or a team role | session, or `/day` | `evaluate` |
 | Turn | every agent turn in one room | machine config `harness.turn_budget` | one turn | `evaluate_turn_scope` |
-| Room fleet | every agent under one project root | machine config `harness.budget` | `/day` only | `evaluate_daily_scope` |
-| Provider account | one history pool (`default` and every shared account of a kind, or one standalone account), across every room on it | machine config `[accounts.budget].<kind>`, applied once per pool of the kind | `/day` only | `evaluate_daily_scope` |
+| Room fleet | every agent under one project root | machine config `harness.budget` or `rimz budget` | `/day` only | `evaluate_daily_scope` |
+| Provider account | one history pool (`default` and every shared account of a kind, or one standalone account), across every room on it | machine config `[accounts.budget].<kind>`, applied once per pool of the kind, or `rimz budget --account` for one pool | `/day` only | `evaluate_daily_scope` |
 | Loop task | one task's scheduled runs | the task's `--budget-per-day` | `/day` only | `run_log::daily_budget_gate` ([loops.md § One fire](./loops.md#one-fire)) |
 
 Enforcement treats the scopes independently: the first cap crossed parks the agent. The displayed park picks one scope, in the order agent, turn, fleet, account (`project_parks`), so a card names the narrowest reason.
@@ -38,13 +38,15 @@ The two daily scopes combine a configured cap with a runtime ledger. `DailyBudge
 
 | Source | Means |
 | --- | --- |
-| `none` | machine config never armed this scope, or the account's kind is ineligible; nothing is enforced |
+| `none` | no base cap is set, including a raise whose configured base was removed; nothing is enforced |
 | `config` | the configured cap applies unchanged |
-| `override` | a runtime absolute `/day` cap replaces the configured one (fleet only) |
-| `raised` | a runtime cap in `raised_cap_usd` applies: the frozen total of a `+AMOUNT` raise, or, for an account, an absolute cap |
+| `override` | a runtime absolute `/day` cap, for fleet or account, replaces any configured default |
+| `raised` | a runtime cap in `raised_cap_usd` applies: the frozen total of a `+AMOUNT` raise on a base |
 | `cleared` | a runtime `off` or `clear` disables the scope; only a later absolute cap re-arms it, and config edits do not |
 
-Machine config is the on-switch and the ledger is the adjustment. A daily scope with no configured cap cannot be armed at runtime: `rimz budget 30/day` on an unconfigured scope fails with the `rimz config set` line that would arm it (`DailyBudgetScope::require_configured`). The per-agent CLI has no such rule, because an agent cap belongs to one session rather than to a standing promise.
+Machine config supplies a default; the ledger can arm a cap on its own. A cleared ledger disables the scope. Otherwise the base is its absolute `override_spec`, if present, or the configured cap. With no base, no cap applies. A raise replaces that base with its frozen total. Both `rimz budget 30/day` and `rimz budget --account claude 30/day` can therefore arm an unconfigured scope; `+AMOUNT` still requires a cap in effect. Arming only tightens the scope, so agent callers use the same rule.
+
+Removing config disarms a raise based only on config, but not a runtime absolute cap: use `off` to lift that cap. An older fleet ledger with an absolute override becomes active again if its config was removed; its source is `override`. Account absolute caps now use `override_spec` too. Older account ledgers stored absolute caps as raises, so those still need a configured base. Account choices remain in the persistent cache-class pool ledger, survive reboot, and never edit machine config; fleet choices remain in the durable room record.
 
 An account cap also requires an eligible provider: `configured_cap_usd` honours `[accounts.budget].<kind>` only when the adapter reports authoritative account-level dollar history. The eligibility rule and its rejection paths are [providers.md § Daily dollar caps](../agents/providers.md#daily-dollar-caps).
 
