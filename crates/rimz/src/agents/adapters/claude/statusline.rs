@@ -13,7 +13,8 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource, cap_turn_error_label, clamp_pct,
+    AgentTurnError, RateLimitWindow, RateLimitWindowScope, TurnErrorClass, WindowSource,
+    cap_turn_error_label, clamp_pct,
 };
 use crate::agents::{
     sanitize_user_prompt,
@@ -89,6 +90,7 @@ struct ThinkingField {
 struct RateLimitsField {
     five_hour: Option<RateWindowField>,
     seven_day: Option<RateWindowField>,
+    spend_limit: Option<RateWindowField>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -472,6 +474,14 @@ impl StatuslinePayload {
         let windows: Vec<RateLimitWindow> = [
             parse_rate_window(self.rate_limits.five_hour, super::account::FIVE_HOUR_MINS),
             parse_rate_window(self.rate_limits.seven_day, super::account::SEVEN_DAY_MINS),
+            parse_rate_window(self.rate_limits.spend_limit, 0).map(|window| RateLimitWindow {
+                scope: Some(RateLimitWindowScope {
+                    id: "spend".to_owned(),
+                    label: "$".to_owned(),
+                }),
+                duration_mins: None,
+                ..window
+            }),
         ]
         .into_iter()
         .flatten()

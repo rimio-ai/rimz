@@ -3,6 +3,38 @@ use crate::sidebar_pane::render::labels::mana_style;
 use crate::sidebar_pane::render::layout::text_width;
 
 #[test]
+fn gateway_spend_limit_draws_last_in_exhausted_tone() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((25, 70)));
+    panel.windows.push(RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: "spend".to_owned(),
+            label: "$".to_owned(),
+        }),
+        used_percentage: Some(100),
+        resets_at: Some(fixed_now() + Duration::from_secs(3_600)),
+        ..Default::default()
+    });
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 3);
+    for (row, label) in rows.iter().zip(["5h", "7d", "$"]) {
+        assert!(row.spans.iter().any(|span| span.content.trim() == label));
+    }
+    let (label, bar, reset) = bar_row_facts(&rows[2]);
+    assert_eq!(label, mana_style(&theme, 0, &Default::default()).fg);
+    assert_eq!(bar, label);
+    assert!(reset);
+    assert_eq!(reset_marker_style(&rows[2]), Some(theme.body()));
+    let text: String = rows[2]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(text.contains('▱'));
+    assert!(!text.contains('▰'));
+}
+
+#[test]
 fn lapsed_provider_replaces_plan_and_bars_with_one_alarm_row() {
     let theme = Theme::fixed(true);
     let panel = provider_panel("claude", "Claude · work", 173, true, true, Some((25, 40)));
