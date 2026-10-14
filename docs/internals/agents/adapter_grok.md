@@ -68,7 +68,7 @@ Native dollars take precedence on active-branch `_x.ai/session/update` `turn_com
 
 `inputTokens` includes cached reads, so the spend entry records `inputTokens - cachedReadTokens` as fresh input and keeps cache reads separate. `outputTokens` already contains reasoning and is recorded once. Trusted per-model rows carry exact attribution; any remaining aggregate tokens or cost form one residual row, while inconsistent or partial model rows fall back to the trusted aggregate. Locally priced single-model turns use the aggregate token counts so a sparse per-model row cannot lose usage.
 
-Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold with `replace_entries = true`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
+Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold returning `SpendUpdate::Replace`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
 
 A child session keeps its own top-level `updates.jsonl`, but the parent's `turn_completed` usage already folds the child in. Spend therefore skips any transcript whose `summary.json` `session_kind` starts with `subagent`; a transcript without that field is priced as before.
 

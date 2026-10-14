@@ -875,6 +875,7 @@ fn seed_transcript_context(runtime: &RuntimePaths) {
             }),
             spend_fold: crate::agents::FieldPatch::Set(LocalSpendFold {
                 cursor: crate::agents::spending::SpendCursor {
+                    anchor: None,
                     offset: 42,
                     state: None,
                 },

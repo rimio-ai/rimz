@@ -11,7 +11,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::agents::account::AccountProbe;
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, SpendUpdate};
 use crate::agents::{
     AccountUsageProbe, AccountUsageSnapshot, AgentAccount, AgentRateLimits, RateLimitWindow,
     TokenSplit,
@@ -116,11 +116,12 @@ pub(super) fn spend(
         entries,
         origin: response.origin,
         cursor: SpendCursor {
+            anchor: None,
             offset: std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
             state: response.cursor,
         },
         unknown_models: Default::default(),
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 

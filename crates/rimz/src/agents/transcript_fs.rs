@@ -281,10 +281,143 @@ pub(super) fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>
     Some((buf, offset + consumed as u64))
 }
 
+/// A complete JSONL suffix, or a cold read when the resume anchor no longer matches.
+pub(super) struct AnchoredTranscript {
+    pub(super) content: Vec<u8>,
+    pub(super) offset: u64,
+    pub(super) anchor: Option<u32>,
+    pub(super) rewritten: bool,
+}
+
+pub(super) fn read_anchored_transcript(
+    path: &Path,
+    mut offset: u64,
+    anchor: Option<u32>,
+) -> Option<AnchoredTranscript> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const ANCHOR_BYTES: u64 = 4096;
+    let mut file = fs::File::open(path).ok()?;
+    let start = offset.saturating_sub(ANCHOR_BYTES);
+    let mut window = (offset - start) as usize;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let rewritten = bytes.len() < window
+        || (offset > 0 && anchor.is_some_and(|hash| crc32fast::hash(&bytes[..window]) != hash));
+    if rewritten {
+        file.seek(SeekFrom::Start(0)).ok()?;
+        bytes.clear();
+        file.read_to_end(&mut bytes).ok()?;
+        offset = 0;
+        window = 0;
+    }
+    let (consumed, _) = complete_jsonl_prefix(&bytes[window..]);
+    let end = window + consumed;
+    let next_anchor = if offset == 0 && consumed == 0 {
+        None
+    } else if consumed == 0 && !rewritten {
+        anchor
+    } else {
+        (end > 0).then(|| crc32fast::hash(&bytes[end.saturating_sub(ANCHOR_BYTES as usize)..end]))
+    };
+    bytes.truncate(end);
+    bytes.drain(..window);
+    Some(AnchoredTranscript {
+        content: bytes,
+        offset: offset + consumed as u64,
+        anchor: next_anchor,
+        rewritten,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn anchored_transcript_resumes_append_and_legacy_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        fs::write(&path, b"1\n2\n").unwrap();
+        let first = read_anchored_transcript(&path, 0, None);
+        assert!(first.is_some(), "a start point consumes the file");
+        let first = first.unwrap();
+        assert_eq!(first.anchor, Some(crc32fast::hash(b"1\n2\n")));
+        fs::write(&path, b"1\n2\n3\n{\"torn\":").unwrap();
+        for anchor in [first.anchor, None] {
+            let next = read_anchored_transcript(&path, first.offset, anchor).unwrap();
+            assert!(!next.rewritten);
+            assert_eq!(next.content, b"3\n");
+            assert_eq!(next.offset, 6);
+            assert_eq!(next.anchor, Some(crc32fast::hash(b"1\n2\n3\n")));
+            let idle = read_anchored_transcript(&path, next.offset, next.anchor).unwrap();
+            assert!(idle.content.is_empty());
+            assert_eq!(idle.anchor, next.anchor);
+            assert_eq!(idle.offset, next.offset);
+        }
+    }
+
+    #[test]
+    fn anchored_transcript_detects_rename_and_in_place_regrowth() {
+        for rename in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("log.jsonl");
+            fs::write(&path, b"1\n2\n").unwrap();
+            let anchor = Some(crc32fast::hash(b"1\n2\n"));
+            if rename {
+                let replacement = dir.path().join("replacement");
+                fs::write(&replacement, b"2\n").unwrap();
+                fs::rename(replacement, &path).unwrap();
+            } else {
+                fs::write(&path, b"2\n").unwrap();
+            }
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"3\n4\n").unwrap();
+            let read = read_anchored_transcript(&path, 4, anchor);
+            assert!(read.is_some(), "rewrites return a cold read");
+            let read = read.unwrap();
+            assert!(read.rewritten);
+            assert_eq!(read.content, b"2\n3\n4\n");
+        }
+    }
+
+    #[test]
+    fn anchored_transcript_shrink_to_empty_reports_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        fs::write(&path, b"").unwrap();
+        let read = read_anchored_transcript(&path, 4, Some(crc32fast::hash(b"1\n2\n")));
+        assert!(read.is_some(), "even an empty rewrite resets the cursor");
+        let read = read.unwrap();
+        assert!(read.rewritten);
+        assert_eq!(read.offset, 0);
+        assert_eq!(read.anchor, None);
+        assert!(read.content.is_empty());
+    }
+
+    #[test]
+    fn anchored_transcript_hashes_only_the_last_four_kib() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let mut bytes = vec![b' '; 8192];
+        bytes.push(b'\n');
+        fs::write(&path, &bytes).unwrap();
+        let read = read_anchored_transcript(&path, 0, None);
+        assert!(read.is_some(), "a complete line advances the cursor");
+        let read = read.unwrap();
+        assert_eq!(
+            read.anchor,
+            Some(crc32fast::hash(&bytes[bytes.len() - 4096..]))
+        );
+        bytes[0] = b'x';
+        bytes.extend_from_slice(b"1\n");
+        fs::write(&path, bytes).unwrap();
+        let next = read_anchored_transcript(&path, read.offset, read.anchor).unwrap();
+        assert!(!next.rewritten);
+        assert_eq!(next.content, b"1\n");
+    }
 
     #[test]
     fn read_transcript_lines_consumes_lines_and_complete_json_fragments_only() {

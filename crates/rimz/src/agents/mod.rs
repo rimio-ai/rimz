@@ -646,7 +646,7 @@ fn refresh_context_argv(kind: &str, ctx: &LifecycleRefreshCtx<'_>) -> Vec<String
     )
 }
 
-/// File identity for a bounded transcript, rollout, or telemetry tail read. Producers persist it
+/// Stat gate for a bounded transcript, rollout, or telemetry tail read. Producers persist it
 /// beside the sidecar so a high-frequency hook can stat-gate local enrichment
 /// before reading the tail again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -831,7 +831,7 @@ impl FoldedRequest {
 }
 
 impl TranscriptStat {
-    /// Read the durable identity of a transcript-like file.
+    /// Read the stat gate of a transcript-like file.
     pub fn from_path(path: &Path) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         let modified = metadata.modified().ok()?;

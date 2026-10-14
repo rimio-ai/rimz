@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path, price_split};
+use crate::agents::spending::{
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, price_split,
+};
 use crate::agents::{PriceBook, TokenSplit, read_transcript_lines};
 
 use super::transcript::{self, ModelUsage, TurnCompletion};
@@ -29,10 +31,11 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         return SpendParse {
             origin,
             cursor: SpendCursor {
+                anchor: None,
                 offset: next,
                 state: None,
             },
-            replace_entries: true,
+            update: SpendUpdate::Replace,
             ..SpendParse::default()
         };
     }
@@ -52,6 +55,7 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         (folded_completions(&suffix), next)
     };
     let cursor = SpendCursor {
+        anchor: None,
         offset,
         state: None,
     };
@@ -71,7 +75,11 @@ pub(super) fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBoo
         origin,
         cursor,
         unknown_models,
-        replace_entries: rewound,
+        update: if rewound {
+            SpendUpdate::Replace
+        } else {
+            SpendUpdate::Extend
+        },
     }
 }
 
@@ -485,7 +493,7 @@ mod tests {
         .unwrap();
         let child = parse(&path, None, &PriceBook::fixture());
         assert!(child.entries.is_empty());
-        assert!(child.replace_entries);
+        assert_eq!(child.update, SpendUpdate::Replace);
         assert_eq!(child.cursor.offset, parsed.cursor.offset);
         let mut grown = std::fs::OpenOptions::new()
             .append(true)
@@ -498,7 +506,7 @@ mod tests {
         .unwrap();
         let resumed = parse(&path, Some(&parsed.cursor), &PriceBook::fixture());
         assert!(resumed.entries.is_empty());
-        assert!(resumed.replace_entries);
+        assert_eq!(resumed.update, SpendUpdate::Replace);
     }
 
     #[test]
@@ -576,12 +584,12 @@ mod tests {
             .unwrap();
         let suffix = parse(&path, Some(&cold.cursor), &PriceBook::fixture());
         assert_eq!(suffix.entries.len(), 1);
-        assert!(!suffix.replace_entries);
+        assert_ne!(suffix.update, SpendUpdate::Replace);
 
         file.write_all(b"{\"timestamp\":2,\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"rewind_marker\",\"target_prompt_index\":0}}}\n")
             .unwrap();
         let rewound = parse(&path, Some(&suffix.cursor), &PriceBook::fixture());
-        assert!(rewound.replace_entries);
+        assert_eq!(rewound.update, SpendUpdate::Replace);
         assert!(rewound.entries.is_empty());
     }
 

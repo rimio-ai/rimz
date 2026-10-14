@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, price_split, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, price_split, record_unknown_model,
 };
 
 use super::wire;
@@ -123,7 +123,7 @@ fn fold_records(
         origin: None,
         cursor: SpendCursor::with_state(next, &state),
         unknown_models,
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 

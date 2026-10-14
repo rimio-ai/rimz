@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::LocalSpendFold;
 use crate::agents::pricing::{PriceBook, Pricing, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, record_unknown_model,
 };
 
 mod parse;
@@ -164,7 +164,7 @@ pub(crate) fn parse_codex_spend(
         origin: state.cwd.clone(),
         cursor: SpendCursor::with_state(next_offset, &state),
         unknown_models,
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 

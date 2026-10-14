@@ -292,6 +292,7 @@ fn cache_compaction_evicts_dead_file_records() {
                 FileCacheEntry {
                     stat: discovered_stat,
                     cursor: SpendCursor {
+                        anchor: None,
                         offset: discovered_len,
                         state: None,
                     },

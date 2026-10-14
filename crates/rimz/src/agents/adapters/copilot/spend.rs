@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::paths;
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, price_split,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, iso_to_unix_secs, origin_path, price_split,
 };
 use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
@@ -382,7 +382,7 @@ fn result(
         origin: state.cwd.clone(),
         cursor: SpendCursor::with_state(offset, &state),
         unknown_models,
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 
@@ -471,7 +471,7 @@ mod tests {
         let (_dir, path) = transcript(FIXTURE);
         let parsed = parse(&path, None, &PriceBook::fixture());
 
-        assert!(!parsed.replace_entries);
+        assert_ne!(parsed.update, SpendUpdate::Replace);
         assert_eq!(
             parsed.origin.as_deref(),
             Some(Path::new("/home/example/project"))
@@ -580,7 +580,7 @@ mod tests {
         let cold = parse(&path, None, &PriceBook::fixture());
 
         assert_eq!(incremental, cold.entries);
-        assert!(!second.replace_entries);
+        assert_ne!(second.update, SpendUpdate::Replace);
         assert_eq!(
             incremental
                 .iter()

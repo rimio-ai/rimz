@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use super::database::{MessageTime, open_readonly};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{
-    CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, SpendUpdate, origin_path, record_unknown_model,
 };
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
@@ -98,7 +98,7 @@ struct MessageCache {
 /// past such a row while it was still incomplete — priced as nothing — and never
 /// revisit it once finalized, silently dropping that turn's spend whenever the
 /// database later grew. Like other rewind-prone transcript stores, every
-/// refresh reparses the full table and returns `replace_entries`, trading the
+/// refresh reparses the full table and returns `SpendUpdate::Replace`, trading the
 /// append-only O(delta) read for correctness against an in-place store. The
 /// `resume` cursor is ignored.
 pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
@@ -180,7 +180,7 @@ pub(super) fn parse(path: &Path, _resume: Option<&SpendCursor>, prices: &PriceBo
         origin,
         cursor: SpendCursor::default(),
         unknown_models,
-        replace_entries: true,
+        update: SpendUpdate::Replace,
     }
 }
 
@@ -189,11 +189,12 @@ fn empty_parse(offset: u64) -> SpendParse {
         entries: Vec::new(),
         origin: None,
         cursor: SpendCursor {
+            anchor: None,
             offset,
             state: None,
         },
         unknown_models: BTreeMap::new(),
-        replace_entries: false,
+        update: SpendUpdate::Extend,
     }
 }
 
@@ -666,7 +667,7 @@ mod tests {
         assert!(first.entries.is_empty());
         // A mutable store is cold-folded whole: no resume cursor, and the fold is
         // authoritative for the file so it replaces the cache set.
-        assert!(first.replace_entries);
+        assert_eq!(first.update, SpendUpdate::Replace);
         assert_eq!(first.cursor, SpendCursor::default());
 
         insert_message(
@@ -675,7 +676,7 @@ mod tests {
         );
         let second = parse(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
-        assert!(second.replace_entries);
+        assert_eq!(second.update, SpendUpdate::Replace);
     }
 
     #[test]

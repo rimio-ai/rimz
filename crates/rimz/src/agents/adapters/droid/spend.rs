@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::agents::pricing::{PriceBook, TokenSplit};
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, SpendUpdate};
 use crate::agents::{AgentCost, AgentSessionUsage};
 
 use super::{config, droid_settings_path, transcript};
@@ -62,7 +62,7 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
         origin: snapshot.session_cwd,
         cursor: SpendCursor::default(),
         unknown_models: BTreeMap::new(),
-        replace_entries: true,
+        update: SpendUpdate::Replace,
     }
 }
 
@@ -137,7 +137,7 @@ mod tests {
         );
 
         let parsed = parse(&path, &prices);
-        assert!(parsed.replace_entries);
+        assert_eq!(parsed.update, SpendUpdate::Replace);
         let entry = &parsed.entries[0];
         assert_eq!(
             (

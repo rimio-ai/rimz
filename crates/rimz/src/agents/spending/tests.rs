@@ -485,6 +485,7 @@ fn an_unreadable_transcript_makes_no_progress() {
     let dir = TempDir::new().unwrap();
     let missing = dir.path().join("gone.jsonl");
     let resume = SpendCursor {
+        anchor: None,
         offset: 512,
         state: Some(serde_json::json!({"cwd": "/work"})),
     };
