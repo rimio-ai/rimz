@@ -1,4 +1,5 @@
 use super::*;
+use std::process::Command;
 
 #[test]
 fn resolve_under_reads_only_the_selected_home_record() {
@@ -359,6 +360,121 @@ fn init_git_repo(path: &Path) {
     std::fs::write(path.join("README.md"), "base\n").expect("base file");
     run(&["add", "README.md"]);
     run(&["commit", "-m", "base"]);
+}
+
+#[test]
+fn git_resolution_batches_probes_without_changing_roots_or_branches() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    init_git_repo(&repo);
+    let repo = repo.canonicalize().unwrap();
+    let linked = dir.path().join("linked");
+    assert!(
+        Command::new("git")
+            .current_dir(&repo)
+            .args(["worktree", "add", "-b", "linked"])
+            .arg(&linked)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let env = pin_of(
+        WorkspaceId::from_project_root(&repo).to_string(),
+        repo.clone(),
+    );
+    for (start, branch) in [(&repo, "main"), (&linked, "linked")] {
+        let before = crate::proc::testkit::spawn_count();
+        let resolved = WorkspaceResolver::resolve_with_home(
+            ResolveMode::Participate,
+            start,
+            None,
+            &env,
+            NO_SCAN,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(crate::proc::testkit::spawn_count() - before, 1);
+        assert_eq!(resolved.project_root, repo);
+        assert_eq!(resolved.cwd_project_root.as_ref(), Some(&repo));
+        assert_eq!(resolved.worktree_root, start.canonicalize().unwrap());
+        assert_eq!(resolved.worktree_branch.as_deref(), Some(branch));
+        assert_eq!(resolved.root_class, RootClass::Repo);
+    }
+    assert!(
+        Command::new("git")
+            .current_dir(&linked)
+            .args(["checkout", "--detach"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let before = crate::proc::testkit::spawn_count();
+    let detached = WorkspaceResolver::resolve_with_home(
+        ResolveMode::Participate,
+        &linked,
+        None,
+        &env,
+        NO_SCAN,
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(crate::proc::testkit::spawn_count() - before, 1);
+    assert_eq!(detached.worktree_branch, None);
+    for (name, class) in [
+        ("unborn", RootClass::Repo),
+        ("bare", RootClass::Directory),
+        ("marker", RootClass::Marker),
+    ] {
+        let root = dir.path().join(name);
+        std::fs::create_dir(&root).unwrap();
+        if name == "unborn" {
+            assert!(
+                Command::new("git")
+                    .current_dir(&root)
+                    .args(["init", "-b", "unborn"])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        } else if name == "marker" {
+            std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+        }
+        let before = crate::proc::testkit::spawn_count();
+        let resolved = WorkspaceResolver::resolve_with_home(
+            ResolveMode::Create,
+            &root,
+            None,
+            &no_env,
+            NO_SCAN,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(crate::proc::testkit::spawn_count() - before, 2);
+        assert_eq!(resolved.project_root, root.canonicalize().unwrap());
+        assert_eq!(resolved.worktree_root, resolved.project_root);
+        assert_eq!(resolved.root_class, class);
+        assert_eq!(resolved.worktree_branch, None);
+    }
+    let pinned = dir.path().join("bare").canonicalize().unwrap();
+    let env = pin_of(
+        WorkspaceId::from_project_root(&pinned).to_string(),
+        pinned.clone(),
+    );
+    let before = crate::proc::testkit::spawn_count();
+    let resolved = WorkspaceResolver::resolve_with_home(
+        ResolveMode::Participate,
+        &repo,
+        None,
+        &env,
+        NO_SCAN,
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(crate::proc::testkit::spawn_count() - before, 2);
+    assert_eq!(resolved.project_root, pinned);
+    assert_eq!(resolved.cwd_project_root, Some(repo));
+    assert_eq!(resolved.root_class, RootClass::Directory);
+    assert_eq!(resolved.worktree_branch.as_deref(), Some("main"));
 }
 
 #[test]
