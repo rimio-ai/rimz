@@ -228,18 +228,30 @@ pub(in crate::cli::loop_cmd) fn action_text(
 ) -> String {
     let mut action = match kind {
         TaskActionKind::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
-        TaskActionKind::Spawn if entry.is_some_and(|entry| entry.check.is_some()) => {
-            format!("check, then start {subject}")
-        }
         TaskActionKind::Spawn => format!("start {subject}"),
         TaskActionKind::CheckOnly => "run check".into(),
     };
-    if let Some(check @ TaskCheck::Agent(_)) = entry.and_then(|entry| entry.check.as_ref()) {
-        action = if kind.is_spawn() {
-            format!("{check}, then start {subject}")
-        } else {
-            format!("{action} · {check}")
-        };
+    if let Some(entry) = entry {
+        let guard = entry.guard();
+        let stages = guard
+            .shell
+            .map(|_| "check".to_owned())
+            .into_iter()
+            .chain(
+                guard
+                    .judges
+                    .iter()
+                    .map(|judge| format!("judge `{}`", judge.agent)),
+            )
+            .collect::<Vec<_>>();
+        if !stages.is_empty() && kind.has_effect() {
+            let guard = stages.join(", then ");
+            action = if kind.is_spawn() {
+                format!("{guard}, then start {subject}")
+            } else {
+                format!("{action} · {guard}")
+            };
+        }
     }
     if you {
         action.push_str(" (you)");

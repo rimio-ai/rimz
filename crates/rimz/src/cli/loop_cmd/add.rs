@@ -152,7 +152,7 @@ fn add_delivery(
     target: TaskTarget,
     selector: Option<schedule::signal::SignalSelector>,
     matches: BTreeMap<String, String>,
-    check: Option<TaskCheck>,
+    check: Option<DeliveryCheck>,
 ) -> Result<()> {
     let timing = resolve_add_timing(args)?;
     let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
@@ -242,7 +242,6 @@ fn add_delivery(
         (_, Some(path)) => DeliveryPrompt::File(path.clone()),
         _ => DeliveryPrompt::None,
     };
-    let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let surplus = args
         .surplus
         .as_deref()
@@ -262,11 +261,7 @@ fn add_delivery(
             trigger,
             prompt,
             provenance: DeliveryProvenance::Loop,
-            check: check.map(|check| DeliveryCheck {
-                check,
-                on,
-                timeout: args.timeout.clone(),
-            }),
+            check,
             deadline: timing.deadline,
             max_strikes: args.max_strikes,
             surplus: (surplus.is_some() || args.surplus_after.is_some()).then(|| DeliverySurplus {
@@ -307,43 +302,54 @@ fn add_delivery(
 
 fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
-    if args.check.is_some() && args.check_agent.is_some() {
-        bail!("--check cannot be combined with --check-agent");
+    if args.check_timeout.is_some() && args.check.is_none() {
+        bail!("--check-timeout requires --check");
     }
     for (used, flag) in [
-        (args.check_prompt.is_some(), "--check-prompt"),
-        (args.check_prompt_file.is_some(), "--check-prompt-file"),
-        (args.check_recheck.is_some(), "--check-recheck"),
-        (args.check_timeout.is_some(), "--check-timeout"),
+        (args.judge_prompt.is_some(), "--judge-prompt"),
+        (args.judge_prompt_file.is_some(), "--judge-prompt-file"),
+        (args.judge_recheck.is_some(), "--judge-recheck"),
+        (args.judge_timeout.is_some(), "--judge-timeout"),
     ] {
-        if used && args.check_agent.is_none() {
-            bail!("{flag} requires --check-agent");
+        if used && args.judge.is_none() {
+            let hint = if flag == "--judge-timeout" {
+                "; for the shell check use --check-timeout"
+            } else {
+                ""
+            };
+            bail!("{flag} requires --judge{hint}");
         }
     }
-    if args.check_agent.is_some() {
-        if args.check_prompt.is_some() == args.check_prompt_file.is_some() {
-            bail!("--check-agent requires exactly one of --check-prompt and --check-prompt-file");
+    if args.judge.is_some() {
+        if args.judge_prompt.is_some() == args.judge_prompt_file.is_some() {
+            bail!("--judge requires exactly one of --judge-prompt and --judge-prompt-file");
         }
         if args.agent.is_none() && args.wait.is_none() {
-            bail!("--check-agent requires --agent or --wait");
+            bail!("--judge requires --agent or --wait");
+        }
+        if args.on.is_none() {
+            bail!(
+                "--judge requires --on: fail acts on a negative verdict, success acts on a positive verdict, any acts whatever the verdict"
+            );
         }
     }
-    if args.check_recheck.is_some() && !args.stay {
-        bail!("--check-recheck requires --stay");
+    if args.judge_recheck.is_some() && !args.stay {
+        bail!("--judge-recheck requires --stay");
     }
     for (raw, flag) in [
-        (args.check_recheck.as_deref(), "--check-recheck"),
+        (args.judge_recheck.as_deref(), "--judge-recheck"),
         (args.check_timeout.as_deref(), "--check-timeout"),
+        (args.judge_timeout.as_deref(), "--judge-timeout"),
     ] {
         if let Some(raw) = raw {
-            if flag == "--check-recheck" && raw.trim() == "0" {
+            if flag == "--judge-recheck" && raw.trim() == "0" {
                 continue;
             }
             let duration = parse_task_timeout(raw)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("invalid {flag}"))?;
-            if flag == "--check-timeout" && duration.is_zero() {
-                bail!("--check-timeout must be greater than zero");
+            if flag != "--judge-recheck" && duration.is_zero() {
+                bail!("{flag} must be greater than zero");
             }
         }
     }
@@ -496,8 +502,8 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
                 args.name
             )
         })?;
-    if args.on.is_some() && args.check.is_none() && args.check_agent.is_none() {
-        bail!("--on requires --check or --check-agent");
+    if args.on.is_some() && args.check.is_none() && args.judge.is_none() {
+        bail!("--on requires --check or --judge");
     }
     let matches = parse_matches(&args.matches)?;
     if !args.matches.is_empty() && args.signal.is_none() {
@@ -528,8 +534,8 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     let until_error = args.until.as_ref().and_then(|_| {
         [
             (
-                args.check.is_none() && args.check_agent.is_none(),
-                "--until requires --check or --check-agent",
+                args.check.is_none() && args.judge.is_none(),
+                "--until requires --check or --judge",
             ),
             (args.every.is_none(), "--until requires --every"),
             (
@@ -550,30 +556,40 @@ fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
 fn resolve_add_check(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
-) -> Result<Option<TaskCheck>> {
-    let Some(profile) = args.check_agent.as_deref() else {
-        return Ok(args.check.clone().map(TaskCheck::Shell));
-    };
-    let resolved = resolve_single_agent_launch(
-        profile,
-        workspace,
-        &rimz::store::writer::LaunchLogin::RoomDefault,
-    )?;
-    let adapter = rimz::agents::find_definition(resolved.kind())
-        .with_context(|| format!("unknown checker kind `{}`", resolved.kind()))?;
-    if adapter.spec().launch.headless.is_none() {
-        bail!(
-            "{}: only claude and codex run headless checks",
-            resolved.kind()
-        );
+) -> Result<Option<DeliveryCheck>> {
+    if args.check.is_none() && args.judge.is_none() {
+        return Ok(None);
     }
-    Ok(Some(TaskCheck::Agent(Judge {
-        agent: profile.to_owned(),
-        prompt: args.check_prompt.clone(),
-        prompt_file: args.check_prompt_file.clone(),
-        recheck: args.check_recheck.clone(),
-        timeout: args.check_timeout.clone(),
-    })))
+    let mut judge = Vec::new();
+    if let Some(profile) = args.judge.as_deref() {
+        let resolved = resolve_single_agent_launch(
+            profile,
+            workspace,
+            &rimz::store::writer::LaunchLogin::RoomDefault,
+        )?;
+        let adapter = rimz::agents::find_definition(resolved.kind())
+            .with_context(|| format!("unknown judge kind `{}`", resolved.kind()))?;
+        if adapter.spec().launch.headless.is_none() {
+            bail!(
+                "{}: only claude and codex run headless judges",
+                resolved.kind()
+            );
+        }
+        judge.push(Judge {
+            agent: profile.to_owned(),
+            prompt: args.judge_prompt.clone(),
+            prompt_file: args.judge_prompt_file.clone(),
+            recheck: args.judge_recheck.clone(),
+            timeout: args.judge_timeout.clone(),
+        });
+    }
+    Ok(Some(DeliveryCheck {
+        check: args.check.clone().map(TaskCheck::Shell),
+        check_timeout: args.check_timeout.clone(),
+        judge,
+        on: args.on.as_deref().map(parse_check_on).transpose()?,
+        timeout: args.timeout.clone(),
+    }))
 }
 
 fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
@@ -731,7 +747,7 @@ fn build_task_entry(
     args: &AddArgs,
     action: AddTaskAction,
     workspace: &rimz::ResolvedWorkspace,
-    check: Option<TaskCheck>,
+    check: Option<DeliveryCheck>,
 ) -> Result<(TaskEntry, Option<ResolvedSingleAgentLaunch>)> {
     validate_task_timeout(args.timeout.as_deref())?;
     let budget = args
@@ -766,7 +782,6 @@ fn build_task_entry(
                 .trim()
                 .to_owned()
         });
-    let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args)?;
     if matches!(
@@ -780,7 +795,6 @@ fn build_task_entry(
             args.name
         );
     }
-    let uses_check_timeout = args.check.is_some();
     let mut entry = TaskEntry {
         label: args.label.clone(),
         stay: args.stay,
@@ -797,9 +811,7 @@ fn build_task_entry(
             .collect(),
         prompt: args.prompt.clone(),
         prompt_file: args.prompt_file.clone(),
-        check,
         max_strikes: args.max_strikes,
-        on,
         root: workspace.project_root.clone(),
         dir: (!args.project && workspace.worktree_root != workspace.project_root)
             .then(|| workspace.worktree_root.clone()),
@@ -814,8 +826,15 @@ fn build_task_entry(
         deadline: timing.deadline,
         surplus,
         surplus_after,
+        timeout: args.timeout.clone(),
         ..TaskEntry::default()
     };
+    if let Some(check) = check {
+        entry.check = check.check;
+        entry.check_timeout = check.check_timeout;
+        entry.judge = check.judge;
+        entry.on = check.on;
+    }
     let mut resolved_for_preflight = None;
     match action {
         AddTaskAction::Stay { .. } => {
@@ -839,12 +858,9 @@ fn build_task_entry(
             entry.budget = budget;
             entry.budget_per_day = budget_per_day;
             entry.system_prompt_file = args.system_prompt_file.clone();
-            entry.timeout = args.timeout.clone();
         }
         AddTaskAction::Deliver { .. } => unreachable!("deliveries use the shared domain builder"),
-        AddTaskAction::CheckOnly => {
-            entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
-        }
+        AddTaskAction::CheckOnly => {}
     }
     Ok((entry, resolved_for_preflight))
 }
@@ -1207,8 +1223,10 @@ fn write_add_feedback(
             writeln!(out, "action: runs check in {}", entry.run_dir().display())?;
         }
     }
-    if let Some(check @ TaskCheck::Agent(_)) = &entry.check {
-        writeln!(out, "check: {}", render::check_value(check))?;
+    if action.kind().has_effect()
+        && (entry.guard().shell.is_some() || !entry.guard().judges.is_empty())
+    {
+        writeln!(out, "guard: {}", render::guard_value(entry))?;
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
     if let Some(reset) = after_reset {
@@ -1300,6 +1318,217 @@ fn resolve_deadline(raw: &str) -> Result<Timestamp> {
 mod tests {
     use super::*;
     use clap::FromArgMatches;
+
+    fn judge_args(extra: &[&str]) -> AddArgs {
+        let matches = AddArgs::augment_args(clap::Command::new("add"))
+            .try_get_matches_from(["add", "resident"].into_iter().chain(extra.iter().copied()));
+        assert!(
+            matches.is_ok(),
+            "judge flags must be recognized: {matches:?}"
+        );
+        AddArgs::from_arg_matches(&matches.unwrap()).unwrap()
+    }
+
+    #[test]
+    fn shell_and_judge_flags_validate_caps_and_polarity() {
+        for action in [vec!["--agent", "codex"], vec!["--wait"]] {
+            let flags = action
+                .into_iter()
+                .chain([
+                    "--check",
+                    "cargo test",
+                    "--check-timeout",
+                    "10m",
+                    "--judge",
+                    "claude",
+                    "--judge-prompt",
+                    "q",
+                    "--judge-timeout",
+                    "2m",
+                    "--on",
+                    "fail",
+                    "--every",
+                    "15m",
+                ])
+                .collect::<Vec<_>>();
+            assert!(validate_add_args(&judge_args(&flags)).is_ok(), "{flags:?}");
+        }
+        assert!(
+            validate_add_args(&judge_args(&[
+                "--agent",
+                "codex",
+                "--stay",
+                "--check",
+                "true",
+                "--check-timeout",
+                "10m"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn judge_modifiers_require_judge_action_and_explicit_polarity() {
+        for (flags, expected) in [
+            (
+                vec![
+                    "--agent",
+                    "codex",
+                    "--judge",
+                    "claude",
+                    "--judge-prompt",
+                    "q",
+                ],
+                "--on",
+            ),
+            (
+                vec!["--judge", "claude", "--judge-prompt", "q", "--on", "fail"],
+                "--agent or --wait",
+            ),
+            (
+                vec!["--agent", "codex", "--judge-prompt", "q"],
+                "requires --judge",
+            ),
+            (
+                vec!["--agent", "codex", "--judge-prompt-file", "q.md"],
+                "requires --judge",
+            ),
+            (
+                vec!["--agent", "codex", "--judge-recheck", "1h"],
+                "requires --judge",
+            ),
+            (
+                vec!["--agent", "codex", "--judge-timeout", "1m"],
+                "--check-timeout",
+            ),
+            (
+                vec!["--agent", "codex", "--check-timeout", "1m"],
+                "requires --check",
+            ),
+            (
+                vec![
+                    "--agent",
+                    "codex",
+                    "--judge",
+                    "claude",
+                    "--judge-prompt",
+                    "q",
+                    "--judge-recheck",
+                    "1h",
+                    "--on",
+                    "fail",
+                ],
+                "requires --stay",
+            ),
+        ] {
+            let result = validate_add_args(&judge_args(&flags));
+            assert!(result.is_err(), "{flags:?} must be refused");
+            assert!(
+                result.unwrap_err().to_string().contains(expected),
+                "{flags:?}: expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_entry_builders_preserve_the_same_guard() {
+        if std::env::var_os("RIMZ_TEST_GUARD_BUILDERS").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli::loop_cmd::add::tests::both_entry_builders_preserve_the_same_guard",
+                    "--nocapture",
+                ])
+                .env("RIMZ_TEST_GUARD_BUILDERS", "1")
+                .env("RIMZ_HOME", home.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed;"),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
+        let state = StatePaths::for_project_root(root.path()).unwrap();
+        let runtime = RuntimePaths::for_state(&state).unwrap();
+        rimz::Store::open(state, runtime)
+            .unwrap()
+            .record_workspace(&workspace)
+            .unwrap();
+        let flags = [
+            "--check",
+            "cargo test",
+            "--check-timeout",
+            "10m",
+            "--judge",
+            "claude",
+            "--judge-prompt",
+            "q",
+            "--judge-timeout",
+            "2m",
+            "--on",
+            "fail",
+            "--every",
+            "15m",
+            "--prompt",
+            "fix",
+        ];
+        let spawn_args = judge_args(&[vec!["--agent", "codex"], flags.to_vec()].concat());
+        let action = resolve_add_action(&spawn_args, &workspace, TaskActionKind::Spawn).unwrap();
+        let (spawn, _) = build_task_entry(
+            &spawn_args,
+            action,
+            &workspace,
+            resolve_add_check(&spawn_args, &workspace).unwrap(),
+        )
+        .unwrap();
+        let wait_args = judge_args(&[vec!["--wait"], flags.to_vec()].concat());
+        add_delivery(
+            &wait_args,
+            &workspace,
+            TaskTarget {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                session: "session".into(),
+                handle: "@coder".into(),
+            },
+            None,
+            BTreeMap::new(),
+            resolve_add_check(&wait_args, &workspace).unwrap(),
+        )
+        .unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let delivered = catalog.visible()["resident"].entry().clone();
+        assert_eq!(spawn.guard().shell_timeout, Some("10m"));
+        assert_eq!(spawn.guard().judges.len(), 1);
+        assert_eq!(delivered.guard().shell, spawn.guard().shell);
+        assert_eq!(delivered.guard().shell_timeout, spawn.guard().shell_timeout);
+        assert_eq!(delivered.guard().judges, spawn.guard().judges);
+        assert_eq!(delivered.on, spawn.on);
+    }
+
+    #[test]
+    fn approved_watchdog_receipt_names_the_whole_guard() {
+        let entry: TaskEntry = toml::from_str("agent='codex'\nprompt='fix the failing test'\nevery='15m'\ncheck='cargo test'\ncheck-timeout='10m'\non='fail'\n[judge]\nagent='haiku'\nprompt='Are these failures flakes or already fixed on main?'\n").unwrap();
+        let shape = schedule::TaskShape::compile("watchdog", &entry);
+        let mut out = Vec::new();
+        write_add_feedback(
+            &mut out,
+            &entry,
+            shape.trigger().as_ref().unwrap(),
+            shape.action().unwrap(),
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail"), "{text}");
+    }
 
     fn args(extra: &[&str]) -> AddArgs {
         let matches = AddArgs::augment_args(clap::Command::new("add"))
@@ -1426,41 +1655,32 @@ mod tests {
     #[test]
     fn agent_check_flags_require_a_profile_prompt_and_action() {
         for (flags, message) in [
+            (vec!["--judge", "haiku"], "--judge-prompt"),
             (
                 vec![
-                    "--check",
-                    "true",
-                    "--check-agent",
+                    "--judge",
                     "haiku",
-                    "--check-prompt",
+                    "--judge-prompt",
                     "q",
-                ],
-                "--check cannot",
-            ),
-            (vec!["--check-agent", "haiku"], "--check-prompt"),
-            (
-                vec![
-                    "--check-agent",
-                    "haiku",
-                    "--check-prompt",
-                    "q",
-                    "--check-prompt-file",
+                    "--judge-prompt-file",
                     "q.md",
                 ],
                 "exactly one",
             ),
-            (vec!["--check-prompt", "q"], "--check-agent"),
-            (vec!["--check-prompt-file", "q.md"], "--check-agent"),
-            (vec!["--check-recheck", "6h"], "--check-agent"),
-            (vec!["--check-timeout", "5m"], "--check-agent"),
+            (vec!["--judge-prompt", "q"], "--judge"),
+            (vec!["--judge-prompt-file", "q.md"], "--judge"),
+            (vec!["--judge-recheck", "6h"], "--judge"),
+            (vec!["--judge-timeout", "5m"], "--judge"),
             (
                 vec![
-                    "--check-agent",
+                    "--judge",
                     "haiku",
-                    "--check-prompt",
+                    "--judge-prompt",
                     "q",
-                    "--check-recheck",
+                    "--judge-recheck",
                     "6h",
+                    "--on",
+                    "success",
                 ],
                 "--stay",
             ),
@@ -1472,14 +1692,14 @@ mod tests {
             let result = validate_add_args(&args(&argv));
             assert!(
                 result.is_err(),
-                "invalid checker flags must be rejected: {argv:?}"
+                "invalid judge flags must be rejected: {argv:?}"
             );
             assert!(
                 result.unwrap_err().to_string().contains(message),
                 "{argv:?}"
             );
         }
-        let result = validate_add_args(&args(&["--check-agent", "haiku", "--check-prompt", "q"]));
+        let result = validate_add_args(&args(&["--judge", "haiku", "--judge-prompt", "q"]));
         assert!(result.is_err());
         assert!(
             result
@@ -1497,21 +1717,23 @@ mod tests {
                 "1h",
                 "--every",
                 "1m",
-                "--check-agent",
+                "--judge",
                 "haiku",
-                "--check-prompt",
+                "--judge-prompt",
                 "q",
+                "--on",
+                "fail",
             ],
             vec!["--stay", "--check", "true", "--on", "success"],
             vec![
                 "--stay",
-                "--check-agent",
+                "--judge",
                 "haiku",
-                "--check-prompt",
+                "--judge-prompt",
                 "q",
-                "--check-recheck",
+                "--judge-recheck",
                 "6h",
-                "--check-timeout",
+                "--judge-timeout",
                 "5m",
                 "--on",
                 "success",
@@ -1526,9 +1748,9 @@ mod tests {
         assert!(
             validate_add_args(&args(&[
                 "--wait",
-                "--check-agent",
+                "--judge",
                 "haiku",
-                "--check-prompt-file",
+                "--judge-prompt-file",
                 "q.md",
                 "--on",
                 "any"
@@ -1543,12 +1765,14 @@ mod tests {
             "--agent",
             "claude",
             "--stay",
-            "--check-agent",
+            "--judge",
             "haiku",
-            "--check-prompt",
+            "--judge-prompt",
             "q",
-            "--check-recheck",
+            "--judge-recheck",
             "0",
+            "--on",
+            "success",
         ];
         assert!(
             validate_add_args(&args(&flags)).is_ok(),
@@ -1558,12 +1782,14 @@ mod tests {
             "--agent",
             "claude",
             "--stay",
-            "--check-agent",
+            "--judge",
             "haiku",
-            "--check-prompt",
+            "--judge-prompt",
             "q",
-            "--check-timeout",
+            "--judge-timeout",
             "0",
+            "--on",
+            "success",
         ];
         assert!(
             validate_add_args(&args(&timeout)).is_err(),

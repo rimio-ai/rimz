@@ -322,12 +322,12 @@ fn skipped_check_summary_uses_check_time_and_action_verbs() {
         (
             false,
             CheckOn::Success,
-            "○ check declined in 2.0s — codex not started; fires when the check passes\n",
+            "○ judge `haiku` declined in 2.0s — codex not started; fires when the guard passes\n",
         ),
         (
             true,
             CheckOn::Fail,
-            "✓ check passed in 2.0s — codex not started; fires when the check fails\n",
+            "✓ judge `haiku` passed in 2.0s — codex not started; fires when the guard fails\n",
         ),
     ] {
         let check = CheckRecord {

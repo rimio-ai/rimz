@@ -14,11 +14,11 @@ fn agent_check_rows_name_the_profile() {
     let action = TaskAction::Spawn("codex".into());
     assert_eq!(
         check_summary(&entry, Some(&action)).as_deref(),
-        Some("by `haiku` (starts codex on success)")
+        Some("asks haiku (cap 5m); acts when it passes")
     );
     assert_eq!(
         task_run_rule(&entry, &action),
-        "check by `haiku`, then start codex on success"
+        "judge `haiku`, then start codex on success"
     );
 }
 
@@ -1007,9 +1007,18 @@ fn agent_check_skips_name_a_decline_without_changing_passed_labels() {
     let mut check = check(Some(1), "No work.");
     check.agent = Some(serde_json::from_str(r#"{"profile":"haiku","kind":"claude","model":null,"verdict":{"pass":false,"reason":"No work."},"error":null,"cost_usd":0.02,"input_tokens":10,"output_tokens":5}"#).unwrap());
     row.check = Some(check);
-    assert_eq!(check_skipped_label(&row), "check declined");
-    row.check.as_mut().unwrap().code = Some(0);
-    assert_eq!(check_skipped_label(&row), "check passed");
+    assert_eq!(check_skipped_label(&row), "judge declined");
+    row.check
+        .as_mut()
+        .unwrap()
+        .agent
+        .as_mut()
+        .unwrap()
+        .verdict
+        .as_mut()
+        .unwrap()
+        .pass = true;
+    assert_eq!(check_skipped_label(&row), "judge passed");
 }
 
 /// An overlap as `prepare_run_lock` records it: a note no two fires share.
@@ -1330,7 +1339,10 @@ fn check_failure_line_uses_last_non_empty_failed_check_line() {
         timed_out: false,
         output: "ignored\n\nmissing command\n".to_owned(),
     });
-    assert_eq!(check_failure_line(&failed), Some("missing command"));
+    assert_eq!(
+        check_failure_line(&failed).as_deref(),
+        Some("missing command")
+    );
 
     let mut passed = record(11, LoopRunResult::Completed);
     passed.check = Some(CheckRecord {

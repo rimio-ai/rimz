@@ -293,7 +293,7 @@ impl std::fmt::Display for TaskCheck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Shell(command) => f.write_str(command),
-            Self::Agent(judge) => write!(f, "check by `{}`", judge.agent),
+            Self::Agent(judge) => write!(f, "judge `{}`", judge.agent),
         }
     }
 }
