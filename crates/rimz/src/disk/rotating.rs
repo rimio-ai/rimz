@@ -1,8 +1,11 @@
 //! Best-effort rotating JSONL mechanics; the caller owns the record schema,
-//! path, and cap.
+//! path, and cap. Incremental folds retain only their state and generation
+//! cursors, reading complete appended lines and rebuilding after rotation.
 
 use std::fs::OpenOptions;
-use std::io::BufRead;
+use std::io::{BufRead, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -11,6 +14,113 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::disk::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
+
+pub(crate) struct IncrementalFold<S> {
+    paths: [PathBuf; 2],
+    generations: Option<[Option<Generation>; 2]>,
+    offsets: [u64; 2],
+    state: S,
+    #[cfg(test)]
+    opens: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Generation {
+    device: u64,
+    inode: u64,
+    len: u64,
+}
+
+impl Generation {
+    fn of(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(not(unix))]
+            device: 0,
+            #[cfg(unix)]
+            inode: metadata.ino(),
+            #[cfg(not(unix))]
+            inode: 0,
+            len: metadata.len(),
+        }
+    }
+
+    fn continues(self, previous: Self, offset: u64) -> bool {
+        self.device == previous.device && self.inode == previous.inode && self.len >= offset
+    }
+}
+
+impl<S: Default> IncrementalFold<S> {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self {
+            paths: [rotated_path(&path), path],
+            generations: None,
+            offsets: [0; 2],
+            state: S::default(),
+            #[cfg(test)]
+            opens: 0,
+        }
+    }
+
+    pub(crate) fn refresh<T: DeserializeOwned>(&mut self, mut fold: impl FnMut(&mut S, T)) -> &S {
+        let observed = self
+            .paths
+            .each_ref()
+            .map(|path| path.metadata().ok().map(|meta| Generation::of(&meta)));
+        let reset = self.generations.is_none_or(|previous| {
+            // A late append to the rotated handle must precede current records.
+            observed[0] != previous[0]
+                || (0..2).any(|i| match (observed[i], previous[i]) {
+                    (Some(next), Some(old)) => !next.continues(old, self.offsets[i]),
+                    (None, None) => false,
+                    _ => true,
+                })
+        });
+        if reset {
+            self.state = S::default();
+            self.offsets = [0; 2];
+        }
+        let mut generations = self.generations.unwrap_or([None; 2]);
+        for i in 0..2 {
+            if !reset && observed[i] == generations[i] {
+                continue;
+            }
+            generations[i] = None;
+            let Ok(mut file) = std::fs::File::open(&self.paths[i]) else {
+                continue;
+            };
+            #[cfg(test)]
+            {
+                self.opens += 1;
+            }
+            let Ok(metadata) = file.metadata() else {
+                continue;
+            };
+            if file.seek(SeekFrom::Start(self.offsets[i])).is_err() {
+                continue;
+            }
+            generations[i] = Some(Generation::of(&metadata));
+            let mut reader = std::io::BufReader::new(file);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                let Ok(bytes) = reader.read_until(b'\n', &mut line) else {
+                    break;
+                };
+                if bytes == 0 || line.last() != Some(&b'\n') {
+                    break;
+                }
+                self.offsets[i] += bytes as u64;
+                if let Ok(record) = serde_json::from_slice(&line) {
+                    fold(&mut self.state, record);
+                }
+            }
+        }
+        self.generations = Some(generations);
+        &self.state
+    }
+}
 
 /// Appends best-effort; failures log at debug with the path.
 pub(crate) fn append<T: Serialize>(path: &Path, max_bytes: u64, record: &T) {
@@ -153,6 +263,74 @@ impl Drop for RotationLock {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    fn refresh(reader: &mut IncrementalFold<Vec<u64>>) -> Vec<u64> {
+        reader.refresh(|seen, n: u64| seen.push(n)).clone()
+    }
+
+    #[test]
+    fn incremental_unchanged_and_append_open_only_needed_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        std::fs::write(rotated_path(&path), b"1\n").unwrap();
+        std::fs::write(&path, b"2\n").unwrap();
+        let mut reader = IncrementalFold::new(path.clone());
+        assert_eq!(refresh(&mut reader), [1, 2]);
+        assert_eq!(reader.opens, 2);
+        for _ in 0..3 {
+            assert_eq!(refresh(&mut reader), [1, 2]);
+        }
+        assert_eq!(reader.opens, 2);
+        append(&path, 1024, &3);
+        assert_eq!(refresh(&mut reader), [1, 2, 3]);
+        assert_eq!(reader.opens, 3);
+        assert_eq!(refresh(&mut reader), [1, 2, 3]);
+        assert_eq!(reader.opens, 3);
+    }
+
+    #[test]
+    fn incremental_waits_for_newline_and_skips_bad_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        std::fs::write(&path, b"1\ninvalid\n2").unwrap();
+        let mut reader = IncrementalFold::new(path.clone());
+        assert_eq!(refresh(&mut reader), [1]);
+        assert_eq!(refresh(&mut reader), [1]);
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"\n")
+            .unwrap();
+        assert_eq!(refresh(&mut reader), [1, 2]);
+        assert_eq!(refresh(&mut reader), [1, 2]);
+    }
+
+    #[test]
+    fn incremental_resets_on_rotation_replacement_truncation_and_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        append(&path, 1, &1);
+        append(&path, 1, &222);
+        let mut reader = IncrementalFold::new(path.clone());
+        assert_eq!(refresh(&mut reader), [1, 222]);
+        append(&path, 1, &333);
+        let mut full = Vec::new();
+        visit_records::<u64>(&path, |n| full.push(n));
+        assert_eq!(refresh(&mut reader), full);
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, b"4\n").unwrap();
+        std::fs::rename(replacement, rotated_path(&path)).unwrap();
+        assert_eq!(refresh(&mut reader), [4, 333]);
+        std::fs::write(&path, b"5\n").unwrap();
+        assert_eq!(refresh(&mut reader), [4, 5]);
+        std::fs::remove_file(rotated_path(&path)).unwrap();
+        assert_eq!(refresh(&mut reader), [5]);
+        std::fs::remove_file(&path).unwrap();
+        assert!(refresh(&mut reader).is_empty());
+        append(&path, 1024, &6);
+        assert_eq!(refresh(&mut reader), [6]);
+    }
 
     #[test]
     fn appends_jsonl_and_rotates_one_generation() {

@@ -14,8 +14,9 @@ const WATCH_WIDE: usize = 68;
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
+    let mut held_stats = run_log::HeldStats::new(&rimz::disk::paths::logs_dir());
     loop {
-        repaint_watch(workspace.as_ref(), args.hold)?;
+        repaint_watch(workspace.as_ref(), args.hold, &mut held_stats)?;
         match event::poll(Duration::from_secs(1)) {
             Ok(true) => match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
@@ -36,9 +37,13 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn repaint_watch(workspace: Option<&rimz::ResolvedWorkspace>, hold: bool) -> Result<()> {
+fn repaint_watch(
+    workspace: Option<&rimz::ResolvedWorkspace>,
+    hold: bool,
+    held_stats: &mut run_log::HeldStats,
+) -> Result<()> {
     let mut frame = Vec::new();
-    render_watch_frame(&mut frame, workspace, hold)?;
+    render_watch_frame(&mut frame, workspace, hold, held_stats)?;
     if frame.last() == Some(&b'\n') {
         frame.pop();
         if frame.last() == Some(&b'\r') {
@@ -54,8 +59,9 @@ fn render_watch_frame(
     out: &mut impl Write,
     workspace: Option<&rimz::ResolvedWorkspace>,
     hold: bool,
+    held_stats: &mut run_log::HeldStats,
 ) -> Result<()> {
-    let model = list::load(workspace, list::LoadScope::CallerRoom)?;
+    let model = list::load(workspace, list::LoadScope::CallerRoom, held_stats)?;
     let groups = model
         .rooms
         .iter()

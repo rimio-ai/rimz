@@ -468,6 +468,57 @@ fn stats_accumulates_only_same_local_day_spend() {
 }
 
 #[test]
+fn held_stats_match_fresh_across_appends_rotation_and_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = Path::new("/room");
+    let other = Path::new("/other");
+    let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().unwrap();
+    let mut held = HeldStats::new(dir.path());
+    for (i, cap) in [u64::MAX, u64::MAX, 1, u64::MAX].into_iter().enumerate() {
+        let mut row = record("task", i as i64, LoopRunResult::Completed);
+        row.root = match i {
+            0 => None,
+            1 => Some(other.into()),
+            _ => Some(root.into()),
+        };
+        crate::disk::rotating::append(&log_path(dir.path()), cap, &row);
+        for filter in [root, other] {
+            assert_eq!(
+                held.stats(filter, &now),
+                &stats(dir.path(), &now, Some(filter))
+            );
+        }
+    }
+}
+
+#[test]
+fn held_stats_reset_on_local_day_and_time_zone_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = Path::new("/room");
+    let mut row = record("task", 0, LoopRunResult::Completed);
+    row.at = "2026-06-02T23:00:00Z".parse().unwrap();
+    row.cost_usd = Some(3.0);
+    append_to(dir.path(), &row);
+    row.at = "2026-06-03T01:00:00Z".parse().unwrap();
+    row.cost_usd = Some(4.0);
+    append_to(dir.path(), &row);
+    let mut held = HeldStats::new(dir.path());
+    for (time, spend) in [
+        ("2026-06-02T12:00:00Z[UTC]", 3.0),
+        ("2026-06-03T12:00:00Z[UTC]", 4.0),
+        ("2026-06-03T12:00:00+02:00[Europe/Berlin]", 7.0),
+    ] {
+        let now = time.parse::<Zoned>().unwrap();
+        assert_eq!(
+            held.stats(root, &now)
+                .get("task")
+                .map(|s| s.spend_today_usd),
+            Some(spend)
+        );
+    }
+}
+
+#[test]
 fn daily_gate_reserves_the_next_runs_full_cap() {
     let dir = tempfile::tempdir().expect("tempdir");
     let now = "2026-06-02T12:00:00Z[UTC]".parse::<Zoned>().expect("zoned");
