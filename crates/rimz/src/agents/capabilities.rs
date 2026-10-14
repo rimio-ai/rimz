@@ -78,9 +78,12 @@ pub trait HookCapability: CoreCapability {
         }))
     }
 
-    /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.
+    /// Derive provider-store-backed subagent lifecycle observations after a root observation.
     /// Hook ingestion owns rollup deduplication and durable appends; adapters only map local truth.
-    fn derive_subagent_observations(&self, _workspace: &Path) -> Vec<AgentLifecycleObservation> {
+    fn derive_subagent_observations(
+        &self,
+        _input: SubagentSpawnInput<'_>,
+    ) -> Vec<AgentLifecycleObservation> {
         Vec::new()
     }
 

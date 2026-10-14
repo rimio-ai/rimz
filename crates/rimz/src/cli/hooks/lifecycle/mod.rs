@@ -108,12 +108,19 @@ pub(super) fn handle_lifecycle_frame(
                 ingress_owner,
                 globals,
             )?;
-            let derived = if recorded.as_ref().is_some_and(|recorded| {
+            let derived = if let Some(recorded) = recorded.as_ref().filter(|recorded| {
                 recorded.receipt.side_conversation.is_none()
                     && recorded.observation.agent_id.is_some()
                     && recorded.observation.parent_agent_id.is_none()
             }) {
-                derive_subagent_lifecycle(workspace, store, agent, ingress_owner, globals)?
+                derive_subagent_lifecycle(
+                    workspace,
+                    store,
+                    agent,
+                    &recorded.observation,
+                    ingress_owner,
+                    globals,
+                )?
             } else {
                 Vec::new()
             };
@@ -412,10 +419,18 @@ fn derive_subagent_lifecycle(
     workspace: &ResolvedWorkspace,
     store: &Store,
     agent: &AgentDefinition,
+    parent: &AgentLifecycleObservation,
     ingress_owner: rimz::agents::HookIngressOwner,
     globals: &GlobalFlags,
 ) -> Result<Vec<RecordedLifecycle>> {
-    let observations = agent.derive_subagent_observations(&workspace.worktree_root);
+    let Some(parent_agent_id) = parent.agent_id.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let observations = agent.derive_subagent_observations(rimz::agents::SubagentSpawnInput {
+        parent_agent_id,
+        parent_transcript_path: parent.transcript_path.as_deref().map(std::path::Path::new),
+        parent_workspace: Some(&workspace.worktree_root),
+    });
     if observations.is_empty() {
         return Ok(Vec::new());
     }

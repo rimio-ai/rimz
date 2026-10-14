@@ -33,8 +33,9 @@ use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentLifecycleObservation, HookOutput, HookRouting, LocalSessionObservation,
-    LocallyPricedTurnCost, PriceBook, Result, SanitizedPrompt, SubagentIdentity, TokenSplit,
-    locate_binary, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    LocallyPricedTurnCost, PriceBook, Result, SanitizedPrompt, SubagentIdentity,
+    SubagentSpawnInput, TokenSplit, locate_binary, non_empty_trimmed, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::agents::PermissionMode;
@@ -463,7 +464,13 @@ impl crate::agents::capabilities::HookCapability for CursorAdapter {
         Ok(decoded)
     }
 
-    fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {
+    fn derive_subagent_observations(
+        &self,
+        input: SubagentSpawnInput<'_>,
+    ) -> Vec<AgentLifecycleObservation> {
+        let Some(workspace) = input.parent_workspace else {
+            return Vec::new();
+        };
         let Some(roots) = session::CursorRoots::resolve(&crate::agents::login::ambient_env())
         else {
             return Vec::new();
