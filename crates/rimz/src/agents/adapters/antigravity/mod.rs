@@ -209,7 +209,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
         permission: super::LaunchPermissionArgs {
             ask: &[],
             auto: &["--mode", "accept-edits"],
-            yolo: &["--dangerously-skip-permissions"],
+            yolo: &["--dangerously-skip-permissions", "--mode", "accept-edits"],
             plan: &["--mode", "plan"],
         },
         max_turn_flag: None,

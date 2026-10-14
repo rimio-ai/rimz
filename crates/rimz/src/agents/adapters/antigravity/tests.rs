@@ -1512,7 +1512,7 @@ fn launch_resume_permissions_and_model_preset_match_agy() {
         (PermissionMode::Plan, &["--mode", "plan"][..]),
         (
             PermissionMode::Yolo,
-            &["--dangerously-skip-permissions"][..],
+            &["--dangerously-skip-permissions", "--mode", "accept-edits"][..],
         ),
     ] {
         assert_eq!(
