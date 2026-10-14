@@ -181,7 +181,7 @@ impl ResumeArgs {
             prompt: self.prompt,
             cohort: agents_cmd::CohortLaunchArgs {
                 worktree: self.worktree,
-                resume: true,
+                continue_cohort: true,
                 bg: self.bg,
                 ..Default::default()
             },
@@ -908,6 +908,7 @@ mod tests {
 
     #[test]
     fn all_team_launch_doorways_parse_the_same_cohort_payload() {
+        assert!(TeamsHarness::try_parse_from(["rimz", "forge", "--resume"]).is_err());
         let agents = AgentsHarness::try_parse_from([
             "rimz", "forge", "ship", "-w", "feat-x", "--budget", "20", "--bg", "--fresh",
         ])
@@ -932,15 +933,22 @@ mod tests {
         assert_eq!(verb.prompt.as_deref(), Some("ship"));
         assert_eq!(verb.launch, bare.launch);
         for argv in [
-            &["rimz", "forge", "--resume", "--isolation", "host"][..],
-            &["rimz", "launch", "forge", "--resume", "--isolation", "host"],
+            &["rimz", "forge", "--continue", "--isolation", "host"][..],
+            &[
+                "rimz",
+                "launch",
+                "forge",
+                "--continue",
+                "--isolation",
+                "host",
+            ],
         ] {
             let args = parse_teams(argv);
             let (launch, isolation) = match args.command {
                 Some(TeamsSubcmd::Launch(args)) => (args.launch, args.isolation),
                 _ => (args.launch, args.isolation),
             };
-            assert!(launch.resume);
+            assert!(launch.continue_cohort);
             assert_eq!(isolation, Some(rimz::config::Isolation::Host));
         }
         let resume = parse_teams(&[
@@ -964,7 +972,7 @@ mod tests {
         };
         let args = args.into_agents_args();
         assert_eq!(args.launch.spec.as_deref(), Some("forge"));
-        assert!(args.launch.cohort.resume);
+        assert!(args.launch.cohort.continue_cohort);
         assert_eq!(args.launch.prompt.as_deref(), Some("ship"));
         assert_eq!(args.launch.overrides.agent.as_deref(), Some("reviewer"));
         assert_eq!(args.launch.overrides.model.as_deref(), Some("opus[1m]"));

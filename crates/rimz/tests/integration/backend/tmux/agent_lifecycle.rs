@@ -1770,7 +1770,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
             .env("SHELL", "/definitely/not/a/shell")
             .env("RIMZ_TEST_AGENT_ARGV", &argv_path)
             .env("RIMZ_TEST_AGENT_READY", &ready)
-            .args(["--mux", "tmux", "agents", "astra", "--resume"])
+            .args(["--mux", "tmux", "agents", "astra", "--continue"])
             .stdin(std::process::Stdio::null());
         command
     };
@@ -2170,7 +2170,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     let hint = run_launch(false, false);
     assert!(hint.contains("has work in progress"), "{hint}");
     assert!(
-        hint.contains("rimz agents 'claude,claude' -w fresh --resume"),
+        hint.contains("rimz agents 'claude,claude' -w fresh --continue"),
         "{hint}"
     );
     assert!(

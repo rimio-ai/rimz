@@ -876,7 +876,7 @@ fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
     )
 }
 
-/// Whether the pane's ended session is one `--resume` can redeem: a real
+/// Whether the pane's ended session is one `--continue` can redeem: a real
 /// provider session id whose adapter compiles a resume command for this
 /// directory. The hint then teaches resume; anything else relaunches fresh.
 fn exited_session_resumable(ended: Option<&EndedSession>, cwd: &Path) -> bool {
@@ -898,7 +898,7 @@ fn exit_hint(
     } else if resumable {
         let resume =
             if request.identity.params.team.is_some() && request.identity.params.role.is_some() {
-                format!("{relaunch} --resume")
+                format!("{relaunch} --continue")
             } else {
                 // Resumability requires an ended provider session id.
                 let name = ended_name

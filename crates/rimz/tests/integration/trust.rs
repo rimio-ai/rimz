@@ -555,7 +555,7 @@ fn trusted_claude_agent_view_env_reaches_the_process() {
 }
 
 /// A resumed agent funnels through the same exec wrapper as a fresh launch:
-/// the pane runs `rimz agents exec <kind> --resume <id>`, so trusted project
+/// the pane runs `rimz agents exec` with a resume request, so trusted project
 /// env reaches the resumed process, and the child receives the adapter's own
 /// resume argv.
 #[cfg(unix)]

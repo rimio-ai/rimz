@@ -334,7 +334,7 @@ fn relaunch_commands(
             vec!["rimz", "teams", target, "--fresh"],
         ),
         None => (
-            vec!["rimz", "agents", spec_display, "-w", name, "--resume"],
+            vec!["rimz", "agents", spec_display, "-w", name, "--continue"],
             vec!["rimz", "agents", spec_display, "-w", name, "--fresh"],
         ),
     };
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(
             relaunch_commands("topic", "claude,codex", None, None),
             (
-                "rimz agents 'claude,codex' -w topic --resume".to_owned(),
+                "rimz agents 'claude,codex' -w topic --continue".to_owned(),
                 "rimz agents 'claude,codex' -w topic --fresh".to_owned(),
             )
         );

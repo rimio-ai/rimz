@@ -826,7 +826,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     command
         .args(match surface {
             "same-pane" => vec!["--mux", "zellij", "agents", "preview"],
-            _ if resume && !lane => vec!["--mux", "zellij", "agents", "duo", "--resume"],
+            _ if resume && !lane => vec!["--mux", "zellij", "agents", "duo", "--continue"],
             _ if lane => vec!["--mux", "zellij", "agents", "resume", "#restore"],
             _ => vec!["--mux", "zellij", "subagents", "worker", "work"],
         })

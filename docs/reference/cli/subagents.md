@@ -74,7 +74,7 @@ A launch refuses before it writes a run record or opens a pane when:
 | `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
 | `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
 
-`rimz subagents` has no `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--resume`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
+`rimz subagents` has no `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 
 ## Fan out a task list
 

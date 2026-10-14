@@ -640,6 +640,7 @@ pub(super) struct PlannedTeamTab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CohortResumeErr {
     NothingToResume { spec: String },
+    SessionNotResumable { label: String },
     MembersStillLive { labels: Vec<String> },
     LoginMismatch(RelaunchLoginErr),
 }
@@ -2475,6 +2476,11 @@ pub fn plan_cohort_resume(
                 }))
             }
             Some(agent) => {
+                if team.is_none() && cells.len() == 1 {
+                    return Err(CohortResumeErr::SessionNotResumable {
+                        label: cohort_agent_label(agent),
+                    });
+                }
                 fresh.push(cohort_fresh_label_for_agent(agent));
                 refilled.insert((agent.kind.clone(), agent.agent_id.clone()));
                 CohortSeed::Fresh
@@ -3412,7 +3418,7 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 
 /// The launch spec that re-addresses one durable agent identity: a named team
 /// role (`team.role`), then its profile, then its bare kind. The exit hint and
-/// the cohort-resume suggestions teach the same spec the `--resume` matcher
+/// the cohort-resume suggestions teach the same spec the `--continue` matcher
 /// keys on, so the command a user retypes finds the stamps that produced it.
 pub fn relaunch_spec(
     team: Option<&str>,
@@ -3431,7 +3437,7 @@ pub fn relaunch_spec(
 }
 
 /// Distinct relaunch specs for the closed, resume-capable full members of a
-/// scoped roster, newest first. When an explicit `--resume` spec matches
+/// scoped roster, newest first. When an explicit `--continue` spec matches
 /// nothing, these name what the same scope can actually resume.
 pub fn closed_cohort_specs(
     agents: &[AgentState],

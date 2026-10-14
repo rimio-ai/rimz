@@ -2186,7 +2186,7 @@ fn resume_prompt_wakes_and_sends_after_registration_without_a_stop() {
                 "zellij",
                 "agents",
                 "claude",
-                "--resume",
+                "--continue",
                 "--new-tab",
                 "say hi",
             ]),
@@ -3192,7 +3192,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @coder (claude); resume: rimz agents forge.coder --resume"
+        "stopped @coder (claude); resume: rimz agents forge.coder --continue"
     );
     // A seat in a RimZ worktree resumes by the name `-w` maps back to its path.
     let repo = env.project_root.file_name().unwrap().to_str().unwrap();
@@ -3225,7 +3225,7 @@ fn stop_and_focus_print_paste_ready_receipts() {
     assert!(stop.status.success(), "{stop:?}");
     assert_eq!(
         String::from_utf8_lossy(&stop.stdout).trim(),
-        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --resume -w feat-b"
+        "stopped @reviewer (claude); resume: rimz agents forge.reviewer --continue -w feat-b"
     );
 }
 

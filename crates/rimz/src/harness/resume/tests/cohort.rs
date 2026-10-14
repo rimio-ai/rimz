@@ -1665,9 +1665,8 @@ fn cohort_refuses_live_and_unmatched_specs() {
     }
 }
 
-/// A cell that matched a prior member but cannot resume it keeps the match and
-/// relaunches fresh, rather than asking an adapter to reopen a session that is
-/// not there.
+/// An unresumable match refuses a solo launch, but a multi-cell cohort refills
+/// the seat rather than asking an adapter to reopen a session that is not there.
 #[test]
 fn cohort_relaunches_an_unresumable_match_fresh() {
     for (label, agents, cells, team, redeemable, fresh, cwd) in [
@@ -1693,10 +1692,28 @@ fn cohort_relaunches_an_unresumable_match_fresh() {
             "/code/query-engine",
         ),
     ] {
+        assert!(
+            cohort_with(&agents, &cells, team, dead, |_| true, |_| redeemable).is_err(),
+            "single non-team cell must refuse: {label}"
+        );
+        let mut cells = cells;
+        cells.push(cohort_cell("codex", None));
+        let agents = agents
+            .into_iter()
+            .map(|agent| AgentState {
+                launch_group: Some("launch_saved".to_owned()),
+                launch_ordinal: Some(0),
+                ..agent
+            })
+            .collect::<Vec<_>>();
         let plan = cohort_with(&agents, &cells, team, dead, |_| true, |_| redeemable).expect(label);
 
-        assert_eq!(plan.seeds, vec![CohortSeed::Fresh], "{label}");
-        assert_eq!(plan.fresh, vec![fresh.to_owned()], "{label}");
+        assert_eq!(
+            plan.seeds,
+            vec![CohortSeed::Fresh, CohortSeed::Fresh],
+            "{label}"
+        );
+        assert_eq!(plan.fresh[0], fresh, "{label}");
         assert_eq!(plan.cwd.as_deref(), Some(Path::new(cwd)), "{label}");
     }
 }

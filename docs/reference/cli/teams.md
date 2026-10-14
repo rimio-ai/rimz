@@ -222,15 +222,15 @@ A checkout holding another team (a live member, or team history with a board sta
 | `--channel NAME` | Launch into the durable named lane `NAME` in the room root. Conflicts with `-w` and `team#worktree`. |
 | `--from-pr PR` | Create or reuse a worktree from a pull-request number or URL. |
 | `--description TEXT` | Seed the member cards' description until the agents name their sessions. |
-| `--resume` (alias `--continue`) | Resume the matching closed cohort instead of launching; the same as [`rimz teams resume`](#resume-a-team). |
+| `--continue` | Resume the matching closed cohort instead of launching; the same as [`rimz teams resume`](#resume-a-team). |
 | `--fresh` | Start new sessions in an existing named worktree instead of resuming its closed cohort, keeping the checkout and its files. Needs `-w NAME` or `team#NAME`. |
 | `--budget AMOUNT[/day]` | Cap each member's spend for the session (`5`) or the local day (`20/day`). Each member is capped separately; there is no pooled team cap. See [`rimz budget`](./budget.md). |
 | `--isolation host\|sandbox` | Run every member under this isolation instead of the machine's `agents.isolation`, recorded per member. |
 | `--bg` | Keep focus where it is, as agent callers always do. See the [focus rule](./agents.md#channel-worktree-and-placement). |
 | `--new-tab` | Open the launch in a new tab or tmux window. |
-| `--detach` | Launch the prompt without a [team report](#team-reports) and without holding the launching agent. Refused without a prompt and with `--resume`. |
+| `--detach` | Launch the prompt without a [team report](#team-reports) and without holding the launching agent. Refused without a prompt and with `--continue`. |
 
-`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Without `--resume` or `--fresh`, a launch into a named worktree whose cohort has closed offers the choice only at a terminal: run unattended (stdin not a terminal), it prints the resume and fresh commands to stderr and exits 1 without launching. Launch flags without a team name are refused with `team launch options require a team name`.
+`--continue` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--continue` and `--from-pr`. Without `--continue` or `--fresh`, a launch into a named worktree whose cohort has closed offers the choice only at a terminal: run unattended (stdin not a terminal), it prints the resume and fresh commands to stderr and exits 1 without launching. Launch flags without a team name are refused with `team launch options require a team name`.
 
 A launch that opens new panes prints a receipt:
 
@@ -272,7 +272,7 @@ rimz teams resume forge -w --bg
 
 `resume` reopens the newest closed cohort of the team, with the identity, directory, and lane recorded in the store and each role's saved launch record over its current profile. `team#worktree` or `-w NAME` limits the match to that worktree. Bare `-w`, or no flag while you stand in a linked worktree, scopes to the current worktree; from the root checkout the newest match anywhere in the room wins. A matched member that is still live refuses the command. Matching rules are on [`rimz agents` → Resume a cohort](./agents.md#resume-a-cohort).
 
-`--model MODEL`, `--effort LEVEL`, `--fast` or `--no-fast`, `--agent PROFILE|KIND`, `--tier TIER`, `--ask` or `--yolo`, and `--isolation host|sandbox` become the saved launch settings, with the same provider and tier restrictions as [`rimz agents forge --resume`](./agents.md#resume-a-cohort). A positional `PROMPT` is queued to the team's leader as a user message after reopening. Omitting isolation preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches.
+`--model MODEL`, `--effort LEVEL`, `--fast` or `--no-fast`, `--agent PROFILE|KIND`, `--tier TIER`, `--ask` or `--yolo`, and `--isolation host|sandbox` become the saved launch settings, with the same provider and tier restrictions as [`rimz agents forge --continue`](./agents.md#resume-a-cohort). A positional `PROMPT` is queued to the team's leader as a user message after reopening. Omitting isolation preserves each member's recorded override; a member with none recorded takes its profile's `isolation` default, then machine policy. The replacement survives restart, rebirth, and child launches.
 
 `--bg` and agent callers keep focus where it is under the [focus rule](./agents.md#channel-worktree-and-placement). `resume` prints one line per member, `resumed <kind>:<name> (<session id>)` or `started fresh <member>` for a member with nothing to resume, followed by `Check:`, `Reach:`, and `Wait:` command hints for the cohort.
 

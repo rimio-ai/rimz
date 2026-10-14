@@ -101,7 +101,7 @@ pub(super) fn normalize_stop(
     }
 }
 
-/// The `-w` name that `agents <team>.<role> --resume` maps back to this seat's
+/// The `-w` name that `agents <team>.<role> --continue` maps back to this seat's
 /// recorded worktree; `None` for a project-root seat or a worktree whose path
 /// that name does not reproduce.
 fn resume_worktree_name<'a>(
@@ -199,7 +199,7 @@ pub(super) fn stop_agent(
         {
             let command = if let (Some(team), Some(role)) = (&live_agent.team, &live_agent.role) {
                 let spec = format!("{team}.{role}");
-                let mut args = vec!["rimz", "agents", &spec, "--resume"];
+                let mut args = vec!["rimz", "agents", &spec, "--continue"];
                 if let Some(name) = resume_worktree_name(workspace, live_agent) {
                     args.extend(["-w", name]);
                 }

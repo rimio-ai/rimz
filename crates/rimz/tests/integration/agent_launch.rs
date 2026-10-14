@@ -4283,11 +4283,11 @@ fn resume_with_empty_store_refuses_before_mux_probe() {
     env.record(&env.project_root);
 
     env.rimz()
-        .args(["agents", "claude", "--resume"])
+        .args(["agents", "claude", "--continue"])
         .assert()
         .failure()
         .stderr(contains(
-            "nothing to resume for `claude`; launch without `--resume`",
+            "nothing to resume for `claude`; launch without `--continue`",
         ));
 }
 
@@ -5606,7 +5606,7 @@ fn profile_isolation_is_preflighted_before_launch() {
     assert_eq!(report["isolation_source"], "profile default boxed");
 }
 
-/// `--resume` preflights a matched session on the isolation it will run
+/// `--continue` preflights a matched session on the isolation it will run
 /// under: the `--isolation` override, else the stored value, never the
 /// machine default. A failing `bwrap` on PATH makes any sandbox preflight
 /// refuse, so only the stored-sandbox case without an override reaches it.
@@ -5694,7 +5694,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         command
             .current_dir(&env.project_root)
             .env("PATH", path_with_front(&shim_dir))
-            .args(["agents", "codex", "--resume"]);
+            .args(["agents", "codex", "--continue"]);
         if let Some(flag) = flag {
             command.args(["--isolation", flag]);
         }
