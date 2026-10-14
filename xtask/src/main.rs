@@ -12,6 +12,7 @@ mod files;
 mod gates;
 mod hooks;
 mod invariants;
+mod loop_tests;
 mod pricing;
 mod prune;
 mod runner;
@@ -184,6 +185,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "resolve every relative markdown link target and #anchor against the working tree",
     },
     TaskInfo {
+        name: "loop-tests",
+        summary: "Run every repository loop's Python tests (requires uv).",
+        runs: "uv run --script <path> for each loops/*/tests/test_*.py, sorted, from the repository root; all files run even after a failure",
+    },
+    TaskInfo {
         name: "doc",
         summary: "Build workspace documentation with warnings denied.",
         runs: "RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --workspace --all-features --locked",
@@ -206,17 +212,17 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "gate",
         summary: "Run the fast pre-PR gate stack; --check verifies formatting instead of applying it, --keep-going runs every step and reports all failures.",
-        runs: "fmt --all (fix, or check-only under --check), invariants, conform, docs-links, all-feature + install-host lint, doc, test (nextest -P gate)",
+        runs: "fmt --all (fix, or check-only under --check), invariants, conform, docs-links, loop-tests, all-feature + install-host lint, doc, test (nextest -P gate)",
     },
     TaskInfo {
         name: "checks",
         summary: "Run the non-test CI gate stack.",
-        runs: "fmt, invariants, docs-links, deps, build-plugin, plugin-provenance, lint, doc",
+        runs: "fmt, invariants, conform, docs-links, deps, build-plugin, plugin-provenance, lint, doc",
     },
     TaskInfo {
         name: "ci",
         summary: "Run the full local CI gate stack.",
-        runs: "checks, then plain nextest over the workspace",
+        runs: "checks, then loop-tests, then plain nextest over the workspace",
     },
 ];
 
@@ -321,6 +327,7 @@ const QUIET_PASS_TASKS: &[&str] = &[
     "lint",
     "invariants",
     "docs-links",
+    "loop-tests",
     "doc",
     "deps",
     "deny",
@@ -378,6 +385,7 @@ fn dispatch(task: &str, args: &[String], root: &Path) -> Result<()> {
         "atlas" => atlas::atlas(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
+        "loop-tests" => loop_tests::loop_tests(root),
         "doc" => gates::doc(root),
         "gate" => gates::gate(root, args),
         "checks" => gates::checks(root),

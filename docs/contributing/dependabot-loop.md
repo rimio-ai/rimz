@@ -31,6 +31,8 @@ List kept trees with `rimz worktree list`. To abandon a branch with work but no 
 
 ## Inspect, enable, and run
 
+`cargo xtask loop-tests` runs the test command below along with every repository loop's tests; `cargo xtask gate` includes it.
+
 Run inspection commands from any checkout containing this implementation. Both Python scripts declare `requires-python = ">=3.14"`; `uv` selects a compatible interpreter, with no third-party Python dependencies. Help is uncolored and suggests argument typos. Machine prerequisites are the `spot` team (coder leads Implement and Reflect; reviewer owns Review and Submit; coder subscribes to `ci.failed`) and the enabled `sweep` loop (`each-worktree`, `takeover`, `when = ["pr=open && team.stage=Done && !ci=pending,failed"]`, `for = "3m"`). Both are machine-local, not installed by this repository. The seats must reach GitHub and writable cargo caches under their configured isolation policy; the launch does not widen it.
 
 ```sh

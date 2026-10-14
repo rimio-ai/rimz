@@ -210,6 +210,11 @@ jobs:
       - name: Trust checkout for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: cargo xtask loop-tests
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask loop-tests
+
       - name: cargo xtask test (compile)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
