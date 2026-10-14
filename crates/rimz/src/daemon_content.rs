@@ -244,14 +244,21 @@ fn watch_config(config_path: &Path, wake: mpsc::Sender<()>) -> Option<ConfigWatc
         return None;
     };
     let watched_parent = parent.to_path_buf();
+    let watched_name = config_path.file_name().map(ToOwned::to_owned);
     let (event_tx, event_rx) = mpsc::channel();
     let mut watcher =
         match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res
-                && event
-                    .paths
-                    .iter()
-                    .any(|path| path.parent() == Some(watched_parent.as_path()))
+                && matches!(
+                    event.kind,
+                    notify::EventKind::Create(_)
+                        | notify::EventKind::Modify(_)
+                        | notify::EventKind::Remove(_)
+                )
+                && event.paths.iter().any(|path| {
+                    path.parent() == Some(watched_parent.as_path())
+                        && path.file_name() == watched_name.as_deref()
+                })
             {
                 let _ = event_tx.send(());
                 let _ = wake.send(());
@@ -357,6 +364,62 @@ fn terminate_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_watch_ignores_access_and_sibling_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        let sibling = dir.path().join("sibling");
+        let sibling_dir = dir.path().join("ws");
+        std::fs::write(&config, "").unwrap();
+        std::fs::write(&sibling, "").unwrap();
+        std::fs::create_dir(&sibling_dir).unwrap();
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let watch = watch_config(&config, wake_tx).unwrap();
+
+        std::fs::read(&config).unwrap();
+        std::fs::read(&sibling).unwrap();
+        std::fs::read_dir(&sibling_dir).unwrap().count();
+        std::fs::read_dir(dir.path()).unwrap().count();
+        std::fs::write(&sibling, "changed").unwrap();
+        let renamed = dir.path().join("renamed");
+        std::fs::rename(&sibling, &renamed).unwrap();
+        std::fs::remove_file(&renamed).unwrap();
+        std::fs::write(dir.path().join("new-sibling"), "").unwrap();
+
+        assert_eq!(
+            wake_rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        assert!(!drain_config_changes(Some(&watch)));
+    }
+
+    #[test]
+    fn config_watch_wakes_for_config_mutations() {
+        for mutation in ["create", "write", "replace", "remove"] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = dir.path().join("config.toml");
+            let replacement = dir.path().join("config.tmp");
+            if mutation != "create" {
+                std::fs::write(&config, "").unwrap();
+            }
+            std::fs::write(&replacement, "[daemon]\n").unwrap();
+            let (wake_tx, wake_rx) = mpsc::channel();
+            let watch = watch_config(&config, wake_tx).unwrap();
+
+            match mutation {
+                "create" | "write" => std::fs::write(&config, "[daemon]\n").unwrap(),
+                "replace" => std::fs::rename(&replacement, &config).unwrap(),
+                "remove" => std::fs::remove_file(&config).unwrap(),
+                _ => unreachable!(),
+            }
+
+            wake_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_else(|err| panic!("no wake for {mutation}: {err}"));
+            assert!(drain_config_changes(Some(&watch)), "{mutation}");
+        }
+    }
 
     fn pane(command: &str, cwd: Option<&str>) -> DaemonPane {
         DaemonPane {
