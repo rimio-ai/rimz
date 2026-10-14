@@ -21,6 +21,38 @@ use crate::common::{
 mod drain;
 
 #[test]
+fn failed_hook_feed_records_one_machine_diagnostic_without_changing_exit() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let output = env.run_hook("copilot", "{malformed");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    let path = env.rimz_home().join("logs/hook-feed.log.jsonl");
+    assert!(
+        path.exists(),
+        "failed hook feed must retain diagnostic evidence"
+    );
+    let contents = std::fs::read_to_string(path).unwrap();
+    let records: Vec<Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 1, "{contents}");
+    assert_eq!(records[0]["source"], "copilot");
+    assert!(records[0].get("event").is_some_and(Value::is_null));
+    assert!(
+        records[0]["at"]
+            .as_str()
+            .unwrap()
+            .parse::<Timestamp>()
+            .is_ok()
+    );
+    let error = records[0]["error"].as_str().unwrap();
+    assert!(error.contains("parsing hook payload"), "{error}");
+    assert!(error.contains("key must be a string"), "{error}");
+}
+
+#[test]
 fn copilot_stale_managed_hooks_are_reported_as_refreshed() {
     let env = Env::new();
     env.install_agent_hooks("copilot");

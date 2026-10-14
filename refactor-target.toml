@@ -390,7 +390,8 @@ path = "crates/rimz/src/diag"
 # SidebarHostUnavailableCause is the public payload vocabulary of the new diagnostic (+1).
 # Hibernation timeout repair exposes its diagnostic module and append sink (+2).
 # WakeEvent, RefaultSample and record share wake telemetry with the harness (+6).
-surface-budget = 101
+# Hook-feed failures expose hook_feed, Record, and append to the CLI (+3).
+surface-budget = 104
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -2588,6 +2589,21 @@ reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is requi
 kind = "item"
 key = "diag::record::FetchFoldCauseStats"
 reason = "No producer since 8c02a0b7a retired routine fetch-fold production; the variant is decoded wire the doctor fixture still reads (pass 16)."
+
+[[verdict]]
+kind = "item"
+key = "diag::hook_feed"
+reason = "The CLI records feed errors through this machine-scope diagnostic module, including errors before workspace resolution."
+
+[[verdict]]
+kind = "item"
+key = "diag::hook_feed::Record"
+reason = "The binary constructs the public feed-failure envelope with source, event, timestamp, and the full error chain."
+
+[[verdict]]
+kind = "item"
+key = "diag::hook_feed::append"
+reason = "The binary hands feed-failure evidence to the shared rotating machine-log sink."
 
 [[verdict]]
 kind = "item"
