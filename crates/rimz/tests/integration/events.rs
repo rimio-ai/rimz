@@ -87,6 +87,7 @@ fn events_emit_is_durable_and_replayed_by_follow() {
         "{}",
         String::from_utf8_lossy(&emitted.stderr)
     );
+    assert!(String::from_utf8_lossy(&emitted.stdout).contains("no task is subscribed to it"));
 
     let mut child = env
         .rimz()
@@ -123,6 +124,46 @@ fn events_emit_rejects_reserved_names_and_non_object_payloads() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(expected), "{stderr}");
     }
+}
+
+#[test]
+fn events_emit_distinguishes_started_disabled_and_sibling_subscriptions() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.subscriber]\ncheck = \"true\"\nroot = {:?}\nsignal = \"deploy.done\"\n",
+            env.project_root
+        ),
+    )
+    .unwrap();
+    let emit = |name| {
+        let output = env.rimz().args(["events", "emit", name]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert!(emit("deploy.other").contains("no task is subscribed to it"));
+    let started = emit("deploy.done");
+    assert!(
+        started.contains("· fired 1 task\n  subscriber\n"),
+        "{started}"
+    );
+    let output = env
+        .rimz()
+        .args(["loop", "disable", "subscriber"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let disabled = emit("deploy.done");
+    assert!(
+        disabled.contains("· fired no task\n  subscriber: did not start\n"),
+        "{disabled}"
+    );
 }
 
 fn append(env: &Env, signal: LifecycleSignal) {
@@ -211,4 +252,117 @@ fn next_event(recv: &mpsc::Receiver<std::io::Result<String>>) -> LifecycleEvent 
         .expect("lifecycle event before timeout")
         .expect("read lifecycle event line");
     serde_json::from_str(&line).expect("lifecycle event JSON")
+}
+
+#[test]
+fn events_list_filters_bounds_and_shares_follow_signal_lines() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    append(&env, LifecycleSignal::Registered);
+    let store = env.store();
+    for (name, seconds) in [("deploy.old", 7200), ("deploy.done", 10), ("ci.failed", 5)] {
+        let mut event = rimz::store::event::EventEnvelope::new(
+            rimz::ids::WorkspaceId::from_project_root(&env.project_root),
+            "rimz-test",
+            "test",
+            "test",
+            rimz::store::event::SIGNAL_METHOD,
+            json!({"name": name, "payload": {"branch": "topic", "number": 7}, "source": "cli"}),
+        );
+        event.timestamp = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(seconds);
+        rimz::store::event_log::append(&store.paths().events_log, &event).unwrap();
+    }
+    let list = |args: &[&str]| {
+        let output = env
+            .rimz()
+            .args(["events", "list"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let rows = |text: &str| {
+        text.lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let all = rows(&list(&["--json"]));
+    assert_eq!(
+        all.iter()
+            .map(|row| row["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["ci.failed", "deploy.done", "deploy.old"]
+    );
+    assert_eq!(rows(&list(&["--json", "--signal", "deploy.*"])), all[1..]);
+    assert_eq!(
+        rows(&list(&["--json", "--signal", "deploy.done"])),
+        all[1..2]
+    );
+    assert_eq!(rows(&list(&["--json", "--since", "1h"])), all[..2]);
+    assert_eq!(
+        rows(&list(&["--json", "--signal", "deploy.*", "-n", "1"])),
+        all[1..2]
+    );
+    assert!(list(&["--json", "-n", "0"]).is_empty());
+    let text = list(&[]);
+    for expected in ["WHEN", "SIGNAL", "SOURCE", "SUBJECT", "on topic #7"] {
+        assert!(text.contains(expected), "{text}");
+    }
+    let empty = list(&["--signal", "absent.*"]);
+    assert!(
+        empty.contains("no signal matched") && empty.contains("active log"),
+        "{empty}"
+    );
+
+    let mut child = env
+        .rimz()
+        .args(["events", "follow", "--replay", "--signal", "deploy.*"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (send, recv) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let followed: Vec<serde_json::Value> = (0..2)
+        .map(|_| {
+            let line = recv.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+            serde_json::from_str(&line).unwrap()
+        })
+        .collect();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    reader.join().unwrap();
+    assert_eq!(followed, all[1..].iter().rev().cloned().collect::<Vec<_>>());
+    assert!(
+        recv.try_recv().is_err(),
+        "filtered follower emitted an extra line"
+    );
+
+    store.rotate_event_log(1, None).unwrap();
+    assert!(list(&["--json"]).is_empty(), "archives must not be listed");
+    for _ in 0..22 {
+        store
+            .append_signal(
+                "rimz-test",
+                SignalEventPayload {
+                    name: "deploy.done".parse().unwrap(),
+                    payload: Default::default(),
+                    source: SignalSource::Cli,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(rows(&list(&["--json"])).len(), 20);
+    assert_eq!(rows(&list(&["--json", "--limit", "30"])).len(), 22);
 }

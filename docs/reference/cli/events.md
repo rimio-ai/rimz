@@ -5,11 +5,31 @@
 | Command | What it does |
 | --- | --- |
 | `rimz events follow` | Stream lifecycle and signal lines as JSON Lines. |
+| `rimz events list` | List recent signals from the active log. |
 | `rimz events emit <NAME>` | Append one signal and fire its subscribers. |
 
-Both take the [global flags](../cli.md#global-flags); `--root` picks the workspace whose log they use.
+All take the [global flags](../cli.md#global-flags); `--root` picks the workspace whose log they use.
 
-Both require an existing room. Outside a room they exit nonzero with `no room at <root>: run \`rimz start\` there, or pass --root <room>`; `follow` refuses before polling.
+All require an existing room. Outside a room they exit nonzero with `no room at <root>: run \`rimz start\` there, or pass --root <room>`; `follow` refuses before polling.
+
+## List recent signals
+
+```sh
+rimz events list
+rimz events list --signal 'ci.*' --since 2h -n 10
+rimz events list --signal deploy.finished --json
+```
+
+`list` prints signals newest first, with columns `WHEN`, `SIGNAL`, `SOURCE`, and `SUBJECT`. The subject is the same text that follows the signal name in a delivered notification, or `-` when empty. Lifecycle records are not listed.
+
+| Flag | Effect |
+| --- | --- |
+| `--signal <NAME\|FAMILY.*>` | Keep an exact name or every name in one family, using the [subscription selector grammar](./loop.md#signals). |
+| `--since <DUR>` | Keep records within this duration of now; integer `s`, `m`, `h`, or `d`. |
+| `-n, --limit <N>` | Maximum records after filtering; default `20`. |
+| `--json` | One [signal line](#signal-lines) per record, the same schema as `follow`, newest first. |
+
+Only the active event-log generation is searched, never archives, even when `--since` reaches farther back. When no signal matches, text output names the age of the active log's first record (or says the active log is empty). JSON output is empty.
 
 ## Follow the event stream
 
@@ -23,6 +43,7 @@ rimz events follow --replay | jq 'select(.event == "signal")'
 | Flag | Effect |
 | --- | --- |
 | `--replay` | Print the current log generation from its first record before following. |
+| `--signal <NAME\|FAMILY.*>` | Print only matching signal lines, with no lifecycle lines. |
 | `--json` | Accepted and ignored: JSON Lines is the only output. |
 
 The stream follows these rules:
@@ -106,18 +127,18 @@ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 
 ```console
 $ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
-emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 tasks
+emitted deploy.finished (evt_01a06d7d112171d0bdaceff9e4a3c6aa) · fired 1 task
   wait-noble-lane
 ```
 
-With no subscriber the line reads `fired 0 tasks` and nothing follows. The count leaves out a task that observed the signal and recorded `skipped`, such as a subscription to `deploy.failed`.
+With no matching subscriber the line reads `no task is subscribed to it` and nothing follows. A subscription to a sibling name, such as `deploy.failed`, does not count. With matching subscribers but no started task it reads `fired no task`. Each matching task that did not start gets an indented `<task>: did not start` line after any fired task names. Multiple started tasks read `fired N tasks`.
 
 | Argument | Rule |
 | --- | --- |
 | `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
 | `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
 
-Firing happens inside the `emit` process, with no daemon and no queue, so `emit` needs no open room. It spawns one detached run for each enabled subscription that exists in this workspace at that moment; a task added afterwards never sees the signal, and nothing replays it later. A disabled or paused task, or a project task whose project is untrusted, does not fire. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+Firing happens inside the `emit` process, with no daemon and no queue. It needs an existing room but no running agent. It spawns one detached run for each enabled subscription that exists in this workspace at that moment; a task added afterwards never sees the signal, and nothing replays it later. A disabled or paused task, or a project task whose project is untrusted, does not fire. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
 
 `emit` refuses these inputs with exit code 1, before it writes anything:
 

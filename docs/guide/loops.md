@@ -167,7 +167,7 @@ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
 ```console
-emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 tasks
+emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 task
   smoke
 ```
 
@@ -175,7 +175,7 @@ A CI job's last step, a git hook, a deploy script, a cron line, another agent: e
 
 Your own families observe and skip like the built-in ones, so it pays to name them by outcome. An agent waiting with `rimz loop add deploy-red --signal deploy.failed --wait --once` is woken by `deploy.failed`, left armed and quiet by `deploy.finished`, and untouched by anything outside the `deploy` family.
 
-The emitting process fires the subscribers itself, so this works with no daemon and no open room. Nothing is queued or replayed either: a signal reaches the subscriptions armed at that instant, which is why an agent arms its wait before starting the work that will emit it.
+The emitting process fires the subscribers itself, so this works with no daemon or running agent, but needs an existing room. Nothing is queued or replayed either: a signal reaches the subscriptions armed at that instant, which is why an agent arms its wait before starting the work that will emit it.
 
 ## Wait for Done and green
 

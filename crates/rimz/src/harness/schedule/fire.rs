@@ -574,20 +574,27 @@ pub(super) fn runnable_tasks_for(
     runtime: &RuntimePaths,
     project_root: Option<&Path>,
 ) -> BTreeMap<String, LoadedTask> {
+    let mut tasks = workspace_runnable_tasks(runtime, project_root);
+    tasks.retain(|_, task| !is_untrusted(task));
+    tasks
+}
+
+/// The workspace's runnable tasks, untrusted project tasks included.
+pub(super) fn workspace_runnable_tasks(
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+) -> BTreeMap<String, LoadedTask> {
     workspace_tasks(
-        TaskCatalog::load_lenient(project_root)
-            .runnable()
-            .iter()
-            .filter(|(_, task)| {
-                !matches!(
-                    task.source(),
-                    super::catalog::TaskSource::Project { state }
-                        if state != crate::trust::TrustState::Trusted
-                )
-            })
-            .map(|(name, task)| (name.clone(), task.clone()))
-            .collect(),
+        TaskCatalog::load_lenient(project_root).runnable().clone(),
         &runtime.workspace_id,
+    )
+}
+
+pub(super) fn is_untrusted(task: &LoadedTask) -> bool {
+    matches!(
+        task.source(),
+        super::catalog::TaskSource::Project { state }
+            if state != crate::trust::TrustState::Trusted
     )
 }
 

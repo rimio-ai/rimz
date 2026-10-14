@@ -23,7 +23,7 @@ To find a command's page by its name, use the command map in [cli.md](./cli.md).
 | [wait.md](./cli/wait.md) | `rimz wait`: a self-only wakeup after a delay, a process exit, or a watched command, and listing or canceling pending waits. |
 | [transcript.md](./cli/transcript.md) | `rimz transcript`: rendering a channel or one agent from RimZ's durable transcript log, as the human view or JSON. |
 | [pane.md](./cli/pane.md) | `rimz pane`: pane targets, listing, capturing, sending text and keys, focus, zoom, split, detach, and per-pane bandwidth. |
-| [events.md](./cli/events.md) | `rimz events`: following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
+| [events.md](./cli/events.md) | `rimz events`: listing recent signals, following lifecycle and signal lines as JSON Lines, both line schemas and signal sources, emitting signals, and the reserved families. |
 | [accounts.md](./cli/accounts.md) | `rimz accounts`: declaring, selecting, listing, and removing provider accounts, and redeeming Claude or Codex reset credits. |
 | [stats.md](./cli/stats.md) | `rimz stats`: the machine-wide token and dollar panel, cache freshness, the held dashboard, JSON fields, and the assist timeline. |
 | [providers.md](./cli/providers.md) | `rimz providers`: login status, rate-limit windows, credits, spend, and daily-cap state, with freshness and JSON fields. |

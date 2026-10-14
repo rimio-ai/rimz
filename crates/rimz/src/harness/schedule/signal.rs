@@ -36,6 +36,13 @@ pub enum SignalSelector {
 }
 
 impl SignalSelector {
+    pub fn matches(&self, name: &SignalName) -> bool {
+        match self {
+            Self::Exact(expected) => expected == name,
+            Self::Family(family) => family == name.family(),
+        }
+    }
+
     pub(in crate::harness) fn family(&self) -> &str {
         match self {
             Self::Exact(name) => name.family(),
@@ -617,8 +624,14 @@ pub fn fire_signal(
     runtime: &RuntimePaths,
     project_root: &Path,
     signal: &Signal,
-) -> Result<Vec<String>, serde_json::Error> {
+) -> Result<SignalFire, serde_json::Error> {
     fire_signal_with_wait(runtime, project_root, signal, false)
+}
+
+#[derive(Debug, Default)]
+pub struct SignalFire {
+    pub started: Vec<String>,
+    pub not_started: Vec<String>,
 }
 
 fn fire_signal_with_wait(
@@ -626,7 +639,7 @@ fn fire_signal_with_wait(
     project_root: &Path,
     signal: &Signal,
     wait: bool,
-) -> Result<Vec<String>, serde_json::Error> {
+) -> Result<SignalFire, serde_json::Error> {
     // A row pinned to a session that is durably ended must never be selected,
     // whoever ended it: the sibling-skip branch below returns before the fire
     // path's only liveness gate, so this is the decision point.
@@ -635,28 +648,32 @@ fn fire_signal_with_wait(
     }) {
         tracing::warn!(error = %err, "loop: failed to retire ended sessions before firing");
     }
-    let tasks = super::fire::runnable_tasks_for(runtime, Some(project_root));
+    let tasks = super::fire::workspace_runnable_tasks(runtime, Some(project_root));
     let arming_entries = arming::load();
-    let mut fired = Vec::new();
-    for (name, task) in tasks {
+    let mut fired = SignalFire::default();
+    for (name, task) in &tasks {
         let Ok(parsed) = task.trigger() else { continue };
-        let resolution = parsed.trigger.resolve(&name, signal);
+        let resolution = parsed.trigger.resolve(name, signal);
         if resolution == SignalResolution::Ignore {
             continue;
         }
-        let key = task.key(&name);
-        if arming::ArmState::resolve(
-            arming_entries.get(&key),
-            task.source(),
-            jiff::Timestamp::now(),
-        ) != arming::ArmState::Live
+        let key = task.key(name);
+        if super::fire::is_untrusted(task)
+            || arming::ArmState::resolve(
+                arming_entries.get(&key),
+                task.source(),
+                jiff::Timestamp::now(),
+            ) != arming::ArmState::Live
         {
+            if resolution == SignalResolution::Deliver {
+                fired.not_started.push(name.clone());
+            }
             continue;
         }
         if resolution == SignalResolution::Skip {
             use super::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult, SignalRecord};
             let mut record = LoopRunRecord::new(
-                &name,
+                name,
                 LoopRunResult::SignalSkipped,
                 LoopRunMode::Scheduled,
                 0,
@@ -665,17 +682,17 @@ fn fire_signal_with_wait(
                 name: signal.name.clone(),
                 payload: signal.payload.clone(),
             });
-            super::run_log::record_transition(&task, &record);
+            super::run_log::record_transition(task, &record);
             continue;
         }
         let outcome = if wait && matches!(parsed.trigger, super::Trigger::Watch(_)) {
-            super::fire::wait_loop_run(runtime, &task, Some(project_root), &name, signal)
+            super::fire::wait_loop_run(runtime, task, Some(project_root), name, signal)
         } else {
             super::fire::spawn_loop_run(
                 runtime,
-                &task,
+                task,
                 Some(project_root),
-                &name,
+                name,
                 Some(signal),
                 None,
                 None,
@@ -683,7 +700,9 @@ fn fire_signal_with_wait(
             )
         };
         if outcome == super::fire::LaunchOutcome::Started {
-            fired.push(name);
+            fired.started.push(name.clone());
+        } else {
+            fired.not_started.push(name.clone());
         }
     }
     Ok(fired)

@@ -588,7 +588,8 @@ path = "crates/rimz/src/harness"
 # `plan::validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
 # TaskHistory, HeardSummary, and task_history share the fire/heard view with the CLI (+3).
-surface-budget = 831 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+# Signal selector matching, shared signal subjects, and fan-out receipts serve events CLI (+3).
+surface-budget = 834 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
 
 [[verdict]]
 kind = "item"
@@ -876,7 +877,8 @@ path = "crates/rimz/src/store"
 # CardDescription and AgentCard::description share one styled description rule with CLI (+2).
 # SidebarSubAgent::holds_parent_turn is public for CLI delegation, within its existing slot.
 # AgentCard::from_agent shares the store's base card projection with rowless CLI reports (+1).
-surface-budget = 423
+# SignalEvent::from_envelope shares the signal-line projection with events list (+1).
+surface-budget = 424
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1443,7 +1445,8 @@ allowed-dependencies = [
 # Resident completion appends its assist after durable ledger publication.
 # `RunLocks` lists a root's run locks once for `loop list`/`watch`, replacing the per-row `probe_run_lock` (+3).
 # The CLI hears hold reasons and reports a resident launch through the fire (+2).
-surface-budget = 52
+# signal_subject shares delivered headline composition with events list (+1).
+surface-budget = 53
 
 [[strangler]]
 symbol = "invalidate_snapshot_caches"
@@ -1579,6 +1582,26 @@ reason = "Loop show serializes and renders the shared heard summary."
 kind = "item"
 key = "harness::schedule::run_log::task_history"
 reason = "Loop show and logs share the history split and wait arming cutoff."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::SignalSelector::matches"
+reason = "Events list, filtered follow, and subscription resolution share selector matching."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::signal::SignalFire"
+reason = "Emit receipts distinguish started subscribers from matching tasks that did not start."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::runner::prompt::signal_subject"
+reason = "Event listings and delivered signal headlines share subject composition."
+
+[[verdict]]
+kind = "item"
+key = "store::follow::SignalEvent::from_envelope"
+reason = "Events list and follow serialize the same signal-line projection."
 
 [[verdict]]
 kind = "item"

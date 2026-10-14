@@ -170,10 +170,22 @@ fn verdict_line(
 }
 
 fn signal_headline(signal: &Signal) -> String {
-    let payload = &signal.payload;
+    let subject = signal_subject(&signal.name, &signal.payload);
+    if subject.is_empty() {
+        signal.name.to_string()
+    } else {
+        format!("{} {subject}", signal.name)
+    }
+}
+
+/// The subject following the name in a delivered signal or event listing.
+pub fn signal_subject(
+    name: &crate::store::event::SignalName,
+    payload: &Map<String, Value>,
+) -> String {
     let text = |key: &str| payload.get(key).and_then(Value::as_str);
-    let mut headline = signal.name.to_string();
-    match signal.name.family() {
+    let mut headline = String::new();
+    match name.family() {
         family @ ("ci" | "pr") => {
             if let Some(branch) = text("branch") {
                 headline.push_str(&format!(" on {}", one_line(branch)));
@@ -204,7 +216,7 @@ fn signal_headline(signal: &Signal) -> String {
         "team" => append_identity(&mut headline, payload, "instance"),
         _ => {}
     }
-    match signal.name.as_str() {
+    match name.as_str() {
         "pr.behind" => {
             if let Some(behind) = payload.get("behind_by").and_then(Value::as_u64) {
                 headline.push_str(&format!(" · {behind} behind"));
@@ -253,7 +265,7 @@ fn signal_headline(signal: &Signal) -> String {
         }
         _ => {}
     }
-    headline
+    headline.strip_prefix(' ').unwrap_or(&headline).to_owned()
 }
 
 /// The lines under the verdict: nothing for a built-in family, whose agent
