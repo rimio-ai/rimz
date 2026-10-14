@@ -2473,21 +2473,31 @@ fn grok_managed_policy_refuses_install_and_preflight_before_missing_hooks() {
     let env = Env::new();
     let home = env.home_root.join(".grok");
     std::fs::create_dir_all(&home).unwrap();
-    let policy = home.join("managed_config.toml");
-    std::fs::write(&policy, "allow_managed_hooks_only = true").unwrap();
-    for args in [
-        vec!["agents", "grok", "summarize", "-p"],
-        vec!["hooks", "install", "grok"],
-    ] {
-        let output = env.rimz().args(args).output().unwrap();
-        assert!(!output.status.success());
-        let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("allow_managed_hooks_only"), "{error}");
-        assert!(error.contains(&policy.display().to_string()), "{error}");
-        assert!(error.contains("rimz hooks feed --source grok"), "{error}");
-        assert!(error.contains("/etc/grok/managed_config.toml"), "{error}");
-        assert!(!error.contains("untrusted"), "{error}");
-        assert!(!env.agent_config_path("grok").exists());
+    let user_policy = home.join("managed_config.toml");
+    std::fs::write(&user_policy, "allow_managed_hooks_only = true").unwrap();
+    let claude_policy = env.grok_policy_root().join(if cfg!(target_os = "macos") {
+        "Library/Application Support/ClaudeCode/managed-settings.json"
+    } else {
+        "etc/claude-code/managed-settings.json"
+    });
+    std::fs::create_dir_all(claude_policy.parent().unwrap()).unwrap();
+    std::fs::write(&claude_policy, r#"{"allowManagedHooksOnly": true}"#).unwrap();
+    for policy in [&user_policy, &claude_policy] {
+        for args in [
+            vec!["agents", "grok", "summarize", "-p"],
+            vec!["hooks", "install", "grok"],
+        ] {
+            let output = env.rimz().args(args).output().unwrap();
+            assert!(!output.status.success());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains("allow_managed_hooks_only"), "{error}");
+            assert!(error.contains(&policy.display().to_string()), "{error}");
+            assert!(error.contains("rimz hooks feed --source grok"), "{error}");
+            assert!(error.contains("/etc/grok/managed_config.toml"), "{error}");
+            assert!(!error.contains("untrusted"), "{error}");
+            assert!(!env.agent_config_path("grok").exists());
+        }
+        std::fs::remove_file(policy).unwrap();
     }
 }
 
