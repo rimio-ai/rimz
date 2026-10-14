@@ -45,12 +45,12 @@ A session is accepted when the directory and paired files are regular, non-symli
 
 The adapter walks complete JSONL records in physical order and ignores malformed or unknown complete records. Cursor reads retain a torn final record until it becomes complete. This validated fold is lifecycle-authoritative for status, phase, prompt, native wait, context percentage, and provider activity clocks; when merged over an exact durable row, it must be at least as current as durable `last_activity` at second precision.
 
-- Non-empty `user.content` becomes user transcript text.
+- Non-empty `user.content` becomes user transcript text and the latest prompt unless `source` is `hook` or `api`. Absent, `chat`, `steer`, and unknown sources remain user text. Kiro's own workflow notices using `steer` still appear as user text; separating those needs captured marker fields.
 - Non-empty assistant `content` becomes assistant text only when `operationType` is `Say`.
-- Late `session_start`, steering, tools, metadata, usage summaries, and internal context never enter conversation history.
+- Late `session_start`, tools, metadata, usage summaries, and internal context never enter conversation history.
 - `turn_start` enters running/reasoning.
 - Verified approved tool calls and successful results refresh work; observed `fs_write` enters acting/editing.
-- An unresolved `pending_interaction` with `interactionType: tool_approval` enters waiting. Matching `interaction_resolved` clears it. This pane-only native wait is visible lifecycle truth, not a routable RimZ ask.
+- An unresolved `pending_interaction` with `interactionType: tool_approval` or `user_input` enters waiting, with Kiro's question as the detail. `interaction_resolved` clears only the matching `(toolCallId, consentRound)` entry; an absent round means zero. A new `turn_start` clears stale pending entries. This pane-only native wait is visible lifecycle truth, not a routable RimZ ask.
 - A successful `session_pause` settles the turn. `turn_end.stopReason` closes it: `cancelled` returns to idle, `refusal` and `error` fail, and any other reason succeeds.
 - Tool calls whose status is `approved`, `executing`, or `completed` (the 2.21.4 value) count as running work.
 - The latest finite `contextUsage.usagePercentage` is rounded and clamped to `0..=100`.

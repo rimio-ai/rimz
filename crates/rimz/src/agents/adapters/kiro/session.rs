@@ -49,7 +49,11 @@ struct Envelope {
 #[serde(tag = "type")]
 enum Payload {
     #[serde(rename = "user")]
-    User { content: Option<String> },
+    User {
+        content: Option<String>,
+        #[serde(default)]
+        source: UserSource,
+    },
     #[serde(rename = "assistant")]
     Assistant {
         content: Option<String>,
@@ -87,11 +91,15 @@ enum Payload {
         #[serde(rename = "toolCallId")]
         tool_call_id: Option<String>,
         question: Option<String>,
+        #[serde(rename = "consentRound")]
+        consent_round: Option<u64>,
     },
     #[serde(rename = "interaction_resolved")]
     InteractionResolved {
         #[serde(rename = "toolCallId")]
         tool_call_id: Option<String>,
+        #[serde(rename = "consentRound")]
+        consent_round: Option<u64>,
     },
     #[serde(rename = "session_metadata")]
     SessionMetadata {
@@ -105,6 +113,16 @@ enum Payload {
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UserSource {
+    Hook,
+    Api,
+    #[default]
+    #[serde(other)]
+    User,
 }
 
 #[derive(Deserialize)]
@@ -253,7 +271,7 @@ struct FoldedSession {
     turn: TurnState,
     latest_prompt: Option<String>,
     waiting: Option<Waiting>,
-    pending: BTreeMap<String, Waiting>,
+    pending: BTreeMap<(String, u64), Waiting>,
     context_pct: Option<u8>,
 }
 
@@ -274,15 +292,22 @@ impl FoldedSession {
         self.first_event_at.get_or_insert(at);
         self.last_activity = at;
         match payload {
-            Payload::User { content } => self.latest_prompt = normalized(content),
+            Payload::User {
+                content,
+                source: UserSource::User,
+            } => self.latest_prompt = normalized(content),
             Payload::TurnStart { execution_id } => self.start_turn(execution_id),
             Payload::PendingInteraction {
                 interaction_type,
                 tool_call_id,
                 question,
-            } => self.request_approval(at, interaction_type, tool_call_id, question),
-            Payload::InteractionResolved { tool_call_id } => {
-                self.resolve_approval(tool_call_id);
+                consent_round,
+            } => self.request_approval(at, interaction_type, tool_call_id, question, consent_round),
+            Payload::InteractionResolved {
+                tool_call_id,
+                consent_round,
+            } => {
+                self.resolve_approval(tool_call_id, consent_round);
             }
             Payload::ToolCall {
                 tool_call_id,
@@ -298,7 +323,7 @@ impl FoldedSession {
                 self.apply_successful_pause(category, context);
             }
             Payload::TurnEnd { stop_reason } => self.apply_turn_end(stop_reason),
-            Payload::Assistant { .. } | Payload::Unknown => {}
+            Payload::User { .. } | Payload::Assistant { .. } | Payload::Unknown => {}
         }
     }
 
@@ -308,6 +333,7 @@ impl FoldedSession {
         }
         self.turn = TurnState::Running(TurnPhase::Reasoning);
         self.waiting = None;
+        self.pending.clear();
     }
 
     fn request_approval(
@@ -316,8 +342,12 @@ impl FoldedSession {
         interaction_type: Option<String>,
         tool_call_id: Option<String>,
         question: Option<String>,
+        consent_round: Option<u64>,
     ) {
-        if interaction_type.as_deref() != Some("tool_approval") {
+        if !matches!(
+            interaction_type.as_deref(),
+            Some("tool_approval" | "user_input")
+        ) {
             return;
         }
         let Some(tool_call_id) = normalized(tool_call_id) else {
@@ -325,18 +355,23 @@ impl FoldedSession {
         };
         let waiting = Waiting {
             since: at,
-            detail: normalized(question),
+            detail: question.filter(|question| !question.trim().is_empty()),
         };
-        self.pending.insert(tool_call_id, waiting.clone());
+        self.pending
+            .insert((tool_call_id, consent_round.unwrap_or(0)), waiting.clone());
         self.turn = TurnState::Waiting;
         self.waiting = Some(waiting);
     }
 
-    fn resolve_approval(&mut self, tool_call_id: Option<String>) {
+    fn resolve_approval(&mut self, tool_call_id: Option<String>, consent_round: Option<u64>) {
         let Some(tool_call_id) = normalized(tool_call_id) else {
             return;
         };
-        if self.pending.remove(&tool_call_id).is_none() {
+        if self
+            .pending
+            .remove(&(tool_call_id, consent_round.unwrap_or(0)))
+            .is_none()
+        {
             return;
         }
         if let Some((_, waiting)) = self.pending.iter().max_by_key(|(_, waiting)| waiting.since) {
@@ -355,8 +390,6 @@ impl FoldedSession {
         status: Option<String>,
     ) {
         if non_empty(tool_call_id.as_deref()).is_none()
-            // 2.12.1 recorded an approved call as `approved`; 2.21.4 records
-            // the finished call once, as `completed`.
             || !matches!(
                 non_empty(status.as_deref()),
                 Some("approved" | "executing" | "completed")
@@ -671,7 +704,10 @@ pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
 pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
     parse_records(lines)
         .filter_map(|(at, payload)| match payload {
-            Payload::User { content } => normalized(content).map(|text| TranscriptMessage {
+            Payload::User {
+                content,
+                source: UserSource::User,
+            } => normalized(content).map(|text| TranscriptMessage {
                 role: TranscriptRole::User,
                 at: Some(at),
                 text,
