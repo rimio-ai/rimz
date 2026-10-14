@@ -43,7 +43,7 @@ pub struct TeamsArgs {
 
 #[derive(Debug, Subcommand)]
 enum TeamsSubcmd {
-    /// Show team definitions and live instances.
+    /// Show team definitions and live cohorts.
     #[command(alias = "inspect")]
     Show {
         /// Team for its definition and cohorts, team#lane for one cohort, or #lane for every team live there.

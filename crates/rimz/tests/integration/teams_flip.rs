@@ -32,6 +32,37 @@ roles:
 "#;
 
 #[test]
+fn stop_receipt_names_the_cohort_and_held_board() {
+    let fixture = Fixture::new();
+    fixture.running("coder", Some("terminal_3"));
+    fixture.live_panes(&["terminal_3"]);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = success(
+        fixture
+            .command()
+            .args(["teams", "stop", "forge#feature-team"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        receipt.starts_with("stopped forge#feature-team (1 member)\n"),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains("board at Build; the checkout stays held"),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains("rimz teams resume 'forge#feature-team'"),
+        "{receipt}"
+    );
+    assert!(
+        receipt.contains("rimz teams flip 'forge#feature-team' Done"),
+        "{receipt}"
+    );
+}
+
+#[test]
 fn user_can_finish_a_board_without_live_members() {
     use rimz::harness::team_stage::{self, FlipRequest, Flipper};
     let fixture = Fixture::new();
@@ -1303,7 +1334,7 @@ fn flip_selects_the_worktree_cohort_not_the_current_channel() {
         assert!(!output.status.success());
         let error = String::from_utf8(output.stderr).unwrap();
         insta::allow_duplicates! {
-            insta::assert_snapshot!(error.replace(fixture.env.project_root.to_str().unwrap(), "<worktree>"), @"error: team `forge` has multiple live cohorts in worktree <worktree> in channels #duplicate-channel, #feature-team; stop the extra cohorts with `rimz teams stop forge -w <channel>` before flipping");
+            insta::assert_snapshot!(error.replace(fixture.env.project_root.to_str().unwrap(), "<worktree>"), @"error: team `forge` has multiple live cohorts in worktree <worktree> in lanes #duplicate-channel, #feature-team; stop the extra cohorts with `rimz teams stop forge#<lane>` before flipping");
         }
     }
     assert_eq!(std::fs::read_to_string(fixture.board()).unwrap(), board);
