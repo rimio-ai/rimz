@@ -22,6 +22,74 @@ struct AgentsHarness {
 }
 
 #[test]
+fn provider_resume_consumes_id_instead_of_prompt() {
+    for verb in [false, true] {
+        for suffix in [
+            vec!["--resume", "session-id"],
+            vec!["--resume=session-id"],
+            vec!["--resume"],
+        ] {
+            let mut argv = vec!["agents"];
+            if verb {
+                argv.push("launch");
+            }
+            argv.push("claude");
+            argv.extend(&suffix);
+            let parsed = AgentsHarness::try_parse_from(argv);
+            assert!(parsed.is_ok(), "provider resume must parse: {parsed:?}");
+            let args = parsed.unwrap().args;
+            let launch = match args.command {
+                Some(AgentsSubcmd::Launch(args)) => *args,
+                _ => args.launch,
+            };
+            assert_eq!(launch.prompt, None);
+            assert_eq!(
+                launch.resume,
+                Some((suffix != ["--resume"]).then(|| "session-id".to_owned()))
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_resume_rejects_launch_inputs() {
+    for suffix in [
+        vec!["prompt"],
+        vec!["-w", "topic"],
+        vec!["--continue"],
+        vec!["--model", "opus"],
+        vec!["--fresh"],
+        vec!["--detach"],
+        vec!["--cwd", "/repo"],
+        vec!["-n", "coder"],
+        vec!["-p"],
+        vec!["--channel", "docs"],
+        vec!["--from-pr", "12"],
+        vec!["--description", "note"],
+        vec!["--budget", "5"],
+        vec!["--tier", "senior"],
+        vec!["--agent", "codex"],
+        vec!["--effort", "high"],
+        vec!["--fast"],
+        vec!["--no-fast"],
+        vec!["--isolation", "host"],
+        vec!["--ask"],
+        vec!["--yolo"],
+        vec!["--system-prompt-file", "/prompt"],
+        vec!["--append-system-prompt-file", "/prompt"],
+        vec!["--", "extra"],
+    ] {
+        let argv = [vec!["agents", "claude", "--resume=id"], suffix].concat();
+        let error = AgentsHarness::try_parse_from(&argv).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{argv:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn logs_last_and_tail_are_aliases() {
     for flag in ["--last", "--tail"] {
         let parsed = AgentsHarness::try_parse_from(["agents", "logs", "@coder", flag, "2"]);

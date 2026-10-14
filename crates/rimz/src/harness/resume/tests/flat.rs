@@ -4,6 +4,42 @@
 use super::*;
 
 #[test]
+fn provider_resume_adopts_one_session_with_profile_login_and_handle() {
+    for kind in ["claude", "codex"] {
+        let cwd = tempfile::tempdir().unwrap();
+        let observation = LocalSessionObservation {
+            kind: AgentKind::new_unchecked(kind),
+            login: Some("work".parse().unwrap()),
+            session_id: "native-session".into(),
+            workspace: cwd.path().to_path_buf(),
+            transcript_path: PathBuf::from("/account/transcript.jsonl"),
+            created_at: Timestamp::UNIX_EPOCH,
+            fresh_binding_at: None,
+            first_event_at: None,
+            last_activity: Timestamp::UNIX_EPOCH,
+            projection: crate::agents::LocalSessionProjection::IdentityOnly,
+        };
+        let profiles = profiles("solo", profile(kind));
+        let (name, plan) = plan_provider_resume(
+            &observation,
+            Some("solo"),
+            &[],
+            ctx(1, Some(Path::new("/repo")), &profiles),
+        );
+        assert_eq!(plan.tabs.len(), 1, "one flat resume tab");
+        assert!(crate::agents::petname::valid_agent_name(&name));
+        assert_eq!(plan.tabs[0].cwd, observation.workspace);
+        let request = decode_exec_request(&first_argv(&plan.tabs[0]));
+        assert_eq!(request.identity.name.as_deref(), Some(name.as_str()));
+        assert_eq!(request.identity.params.profile.as_deref(), Some("solo"));
+        assert_eq!(request.identity.params.login, observation.login);
+        assert!(
+            matches!(request.action, crate::harness::launch::ExecAction::Resume { session_id, .. } if session_id == observation.session_id.as_str())
+        );
+    }
+}
+
+#[test]
 fn one_ended_solo_session_can_resume_in_place() {
     let mut saved = agent("codex", "saved", "/code/project", 0);
     saved.ended_at = Some(saved.last_seen);

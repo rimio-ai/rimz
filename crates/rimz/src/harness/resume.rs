@@ -2141,6 +2141,32 @@ pub fn plan_resume(
     plan_resume_detailed(agents, ended, ctx, worktree_exists, session_backed).lower()
 }
 
+/// Adopt an exact provider session with a new handle and the selected solo profile.
+pub fn plan_provider_resume(
+    observation: &LocalSessionObservation,
+    profile: Option<&str>,
+    agents: &[AgentState],
+    ctx: ResumeContext<'_>,
+) -> (String, ResumePlan) {
+    let name = crate::agents::petname::mint(|name| {
+        agents
+            .iter()
+            .any(|agent| agent.name.as_deref() == Some(name))
+    });
+    let candidates = ResumeCandidate::from_observation(observation)
+        .map(|mut candidate| {
+            candidate.identity.name = Some(name.clone());
+            candidate.identity.profile = profile.map(str::to_owned);
+            candidate
+        })
+        .into_iter()
+        .collect();
+    let mut plan = plan_resume_candidates_detailed(candidates, ctx, Path::is_dir).lower();
+    // An unrecorded session has no RimZ row to end when its cwd is gone.
+    plan.agents_to_end.clear();
+    (name, plan)
+}
+
 pub(super) fn plan_resume_detailed(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,

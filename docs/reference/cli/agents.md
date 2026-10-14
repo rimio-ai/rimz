@@ -165,10 +165,12 @@ A command, profile, `term`, or kind whose exact name ends in `-fast` wins over t
 
 ### Shared launch params
 
-These flags apply to every agent cell in the launch, and each adapter renders them into its own native flags.
+These flags select a resume path or override the launch's agent cells. Each adapter renders supported overrides into its native flags; `--resume` has the [separate conflicts below](#resume-a-provider-session).
 
 | Flag | Effect |
 | --- | --- |
+| `--continue` | Reopen the newest matching RimZ cohort. |
+| `--resume[=<ID>]` | Resume one exact provider session. Only a kind or solo profile; bare `--resume` is not yet supported. |
 | `--model <MODEL>` | Model for every agent cell, replacing the profile's. Droid refuses it; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
 | `--tier <TIER>` | Select `intern`, `junior`, `senior`, or `principal` for the launched Markdown profile. Conflicts with `--model`. |
 | `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation, so levels are whatever the provider accepts. Kinds with no effort flag refuse the launch; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
@@ -245,7 +247,7 @@ The same table applies to `--from-pr` when it reuses the tree holding the PR hea
 
 Enter takes the default, and an unrecognized answer or end of input refuses with `canceled; nothing launched` and exit 1. Without a terminal on stdin, RimZ refuses with exit 1 and prints the resume-or-remove command and the `--fresh` command instead of prompting. Relaunch commands preserve the supplied prompt; teams use `team#lane` addresses. A single-agent spec launches fresh without reconciling.
 
-Two flags answer the prompt in advance. `--continue` resumes the prior cohort even when the worktree is clean or merged; see [Resume a cohort](#resume-a-cohort). `--fresh` starts new sessions in the existing checkout:
+Two flags answer the prompt in advance. `--continue` resumes the prior cohort even when the worktree is clean or merged; see [Continue a cohort](#continue-a-cohort). `--fresh` starts new sessions in the existing checkout:
 
 ```sh
 rimz agents forge -w restore-living-team --fresh   # new sessions, same checkout and files
@@ -331,7 +333,7 @@ From the session's recorded directory inside the room, default placement takes o
 
 A closed session's record is retained for at least 14 days after it ended; `rimz agents list --all` and `rimz agents show @<name>` still find it. Resuming also needs its working directory and the provider's saved conversation. A resumable solo exit prints `resume with rimz agents resume @<name>`, naming that exact session rather than matching a newer one by profile.
 
-### Resume a cohort
+### Continue a cohort
 
 `--continue` relaunches the prior cohort that matches the spec, taking identity, working directory, and channel from the store:
 
@@ -363,6 +365,25 @@ A single-cell resume run from the cohort's own directory takes over the current 
 `--agent` must name a profile or kind matching every resumed member's provider. `--tier` requires Markdown definitions and selects only same-provider entries in the requested tier, never a higher tier; a missing entry refuses the whole resume and names the tiers that carry that provider. `--model` and `--tier` conflict. A positional `PROMPT` is queued to the layout's leader as a user message for its first available turn after reopening, not as a new-session prompt.
 
 Resume refuses `--system-prompt-file`, `--append-system-prompt-file` (update the profile instead), and passthrough arguments after `--` (use supported profile settings or launch fresh). The same overrides and refusals apply when you choose resume at the named-worktree prompt: rerun without a refused input, or choose fresh. Identity and cohort options `--from-pr`, `--channel`, `--cwd`, `--name`, `--description`, `--budget`, `-p`, and `--fresh` still conflict with resume.
+
+### Resume a provider session
+
+`rimz agents claude --resume=<ID>` and `rimz agents launch claude --resume <ID>` reopen that exact provider session, not the newest matching cohort. Put the kind or solo profile before the flag. The optional value consumes the next word: `rimz agents claude --resume "fix it"` looks up the id `fix it`, and `rimz agents --resume claude` consumes `claude` as the id rather than the spec. Bare `--resume` is reserved for provider pickers; currently every kind refuses it and names the supported alternatives.
+
+An exact id already recorded in this room keeps its handle and history, with the same account and lifecycle checks as `rimz agents resume @<handle>`. A kind name does not constrain the saved profile; a separately named solo profile must match it. A kind or profile mismatch refuses and names that handle. Prefix matching is available only through the `agents resume @<ref>` subcommand.
+
+Otherwise Claude and Codex look only in the room account's provider home, including old and archived Codex sessions. A found session opens in its recorded working directory with a new RimZ handle, the room's login, and the selected solo profile. No session files are copied or linked between accounts. Both recorded and adopted sessions print `resumed <kind>:<handle> (<id>)`.
+
+This flag conflicts with the positional prompt, `--continue`, `--channel`, `--from-pr`, `--description`, `--budget`, `-w`, `--fresh`, `--detach`, `--cwd`, `-n`, `-p`, and all launch overrides (`--model`, `--tier`, `--agent`, `--effort`, `--fast`, `--no-fast`, `--isolation`, `--ask`, `--yolo`, system-prompt files, and `--` passthrough). `--bg`, `--new-tab`, and `--new-pane` remain available. Send an instruction afterwards with `rimz message`; use `--continue` when you need cohort overrides.
+
+| Refusal | Next step |
+| --- | --- |
+| Team, team role, or multi-cell spec | Use `--continue`. |
+| Recorded kind or profile differs | Use the printed `rimz agents resume @<handle>` command. |
+| Recorded session is live | Use the printed `rimz agents focus @<handle>` command. |
+| Recorded team member or child | Use its team-role `--continue` command or `rimz subagents`. |
+| Id not found | Check the kind, exact id, and account home named in the error. |
+| Provider has no by-id locator | Resume a session already recorded by RimZ, or use `--continue`. |
 
 ### Resume a lane by place
 
@@ -404,7 +425,7 @@ When RimZ's own records for a lane are gone, Claude and Codex sessions are recov
 | `no lane '#docs' in this workspace` | The scope matches no lane. |
 | `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs` | The lane's checkout is gone. |
 | `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69` | No local worktree came from that pull request. |
-| `nothing to resume in '#docs'` | Neither RimZ nor the Claude and Codex session stores hold a resumable session for the lane. |
+| `nothing to resume in '#docs'` | No eligible lane session was found in RimZ's records or bounded provider discovery. To name an older Claude or Codex session directly, use `rimz agents <kind> --resume=<ID>`. |
 | `cannot relaunch '#docs' fresh with live members @coder; stop them with rimz agents stop, or resume without --fresh` | Fresh relaunch would duplicate live members; the error names their handles. |
 | `no saved team shape in '#docs'; resume without --fresh, or launch with rimz agents <spec> -w docs` | Fresh relaunch needs durable lane records; provider session files alone cannot reconstruct its shape. |
 | `no saved team in '#docs' to relaunch fresh; launch with:` | No saved team can be restored; the error includes the standalone relaunch commands. |

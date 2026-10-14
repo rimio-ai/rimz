@@ -392,6 +392,9 @@ The store remembers agents whose processes are gone, and resume turns those reco
 | Cohort resume | `rimz agents <spec> --continue` in a live room | one prior cohort matched from the spec, after its tab or pane was closed |
 | Lane resume | `rimz agents resume <scope>` | one lane, resolved by `harness::resume` |
 | Session resume | `rimz agents resume @<ref>` | one retained closed solo root, qualified by `plan_resume` without cohort matching |
+| Provider-session resume | `rimz agents <kind-or-profile> --resume=<id>` | exact audit id first, otherwise one session located in the room account's provider home |
+
+Provider-session resume keeps recorded rows on the shared single-session path, including live, team, child, and history-pool refusals. An unrecorded id uses `crates/rimz/src/agents/login.rs::ProviderLogin::locate_session` to stamp the account and `crates/rimz/src/harness/resume.rs::plan_provider_resume` to feed the same flat candidate planner as lane discovery, with a minted handle and the selected solo profile. Claude scans the account's projects and reads the cwd from JSONL; Codex scans active and archived rollouts without the discovery or hook day budgets. Neither locator falls back to a different home. Bare `--resume` parses but refuses until an adapter picker form is implemented.
 
 Rebirth restores a named team in its declared layout, resuming members that can resume and fresh-launching missing or unsupported agent cells so the shape stays whole; other lanes restore as one column. Cohort resume scopes to one exact worktree with `-w <NAME>` or the caller's current worktree, while a resume from the project root takes the newest match for the spec.
 

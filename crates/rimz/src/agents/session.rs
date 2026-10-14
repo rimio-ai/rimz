@@ -8,6 +8,14 @@ use jiff::Timestamp;
 
 use super::{AgentTurnError, ProviderCapacity};
 
+/// Result of an exact-id lookup in one provider account home.
+#[derive(Debug)]
+pub enum LocalSessionLookup {
+    Unsupported,
+    NotFound,
+    Found(Box<super::LocalSessionObservation>),
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DaemonSessionEvidence {
     pub pids: BTreeSet<u32>,
