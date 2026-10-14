@@ -749,13 +749,20 @@ fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
         .map(|c| c.to_ascii_lowercase())
         .collect();
     match key.as_str() {
-        "usagelimitexceeded" => Some(TurnErrorClass::PausedRateLimit),
-        "serveroverloaded" | "internalservererror" => Some(TurnErrorClass::PausedOverloaded),
+        "usagelimitexceeded" | "ratelimitexceeded" => Some(TurnErrorClass::PausedRateLimit),
+        "serveroverloaded" | "internalservererror" | "flexunavailable" => {
+            Some(TurnErrorClass::PausedOverloaded)
+        }
         "contextwindowexceeded"
         | "unauthorized"
         | "badrequest"
         | "sandboxerror"
         | "cyberpolicy"
+        | "biopolicy"
+        | "invalidprompt"
+        | "toomanydenials"
+        | "misalignmentpolicyviolation"
+        | "sessionbudgetexceeded"
         | "threadrollbackfailed" => Some(TurnErrorClass::Failed),
         _ => None,
     }
