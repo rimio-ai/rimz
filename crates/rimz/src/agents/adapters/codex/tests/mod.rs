@@ -380,33 +380,75 @@ fn codex_commands_and_permission_args_match_run_posture() {
     let argv = CodexAdapter
         .resume_command("sess-abc", Path::new("/code/query-engine"))
         .expect("codex resumes");
-    assert_eq!(argv, vec!["codex", "resume", "sess-abc", "--no-daemon"]);
+    assert_eq!(
+        argv,
+        vec![
+            "codex",
+            "resume",
+            "sess-abc",
+            "--no-daemon",
+            "-c",
+            "tui.question_esc_back=false"
+        ]
+    );
 
     assert_eq!(
         CodexAdapter.spec().launch.fork_command("sess-abc"),
         Some(
-            ["codex", "fork", "sess-abc", "--no-daemon"]
-                .map(ToOwned::to_owned)
-                .to_vec()
+            [
+                "codex",
+                "fork",
+                "sess-abc",
+                "--no-daemon",
+                "-c",
+                "tui.question_esc_back=false"
+            ]
+            .map(ToOwned::to_owned)
+            .to_vec()
         )
     );
 
     assert_eq!(
         CodexAdapter.launch_command(&[], None),
-        Some(vec!["codex".to_owned(), "--no-daemon".to_owned()])
+        Some(
+            ["codex", "--no-daemon", "-c", "tui.question_esc_back=false"]
+                .map(ToOwned::to_owned)
+                .to_vec()
+        )
     );
     assert_eq!(
         CodexAdapter.launch_command(&[], Some("review this")),
         Some(vec![
             "codex".to_owned(),
             "--no-daemon".to_owned(),
+            "-c".to_owned(),
+            "tui.question_esc_back=false".to_owned(),
             "--".to_owned(),
             "review this".to_owned()
         ])
     );
     assert_eq!(
         CodexAdapter.launch_command(&[], Some("")),
-        Some(vec!["codex".to_owned(), "--no-daemon".to_owned()])
+        Some(
+            ["codex", "--no-daemon", "-c", "tui.question_esc_back=false"]
+                .map(ToOwned::to_owned)
+                .to_vec()
+        )
+    );
+    assert_eq!(
+        CodexAdapter.launch_command(&["-c".into(), "tui.question_esc_back=true".into()], None),
+        Some(
+            [
+                "codex",
+                "--no-daemon",
+                "-c",
+                "tui.question_esc_back=false",
+                "-c",
+                "tui.question_esc_back=true"
+            ]
+            .map(ToOwned::to_owned)
+            .to_vec()
+        )
     );
     assert_eq!(
         CodexAdapter.launch_command(
@@ -421,6 +463,8 @@ fn codex_commands_and_permission_args_match_run_posture() {
         Some(vec![
             "codex".to_owned(),
             "--no-daemon".to_owned(),
+            "-c".to_owned(),
+            "tui.question_esc_back=false".to_owned(),
             "--model".to_owned(),
             "gpt-5-codex".to_owned(),
             "-c".to_owned(),

@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use rimz::message::DeliveryKind;
 use rimz::message::dispatch::{DispatchOutcome, ParkReason};
+use rimz::message::{DeliveryKind, InterruptConfirmation};
 use rimz::store::message::{AutoCompact, MessageSender};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 
@@ -317,9 +317,9 @@ pub(crate) fn render_dispatch_outcome(
         _ => {}
     }
     match outcome {
-        DispatchOutcome::Sent { label, message_id } => {
-            Some(format!("sent to {label} ({message_id})"))
-        }
+        DispatchOutcome::Sent {
+            label, message_id, ..
+        } => Some(format!("sent to {label} ({message_id})")),
         DispatchOutcome::Queued {
             label,
             message_id,
@@ -385,8 +385,11 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
             DispatchOutcome::SkippedWaiting { label, .. } => {
                 bail!("{label} is waiting on your input in its pane; answer it or pass --force")
             }
-            DispatchOutcome::Sent { label, .. } => {
+            DispatchOutcome::Sent {
+                label, interrupt, ..
+            } => {
                 print_compacted_if_needed(label, compacted);
+                report_interrupt_confirmation(label, *interrupt);
                 render_dispatch_outcome(DeliveryKind::Interrupt, outcome)
             }
             _ => render_dispatch_outcome(DeliveryKind::Interrupt, outcome),
@@ -399,6 +402,20 @@ fn report_interrupt(outcomes: &[DispatchOutcome], compacted: &[String]) -> Resul
         }
     }
     Ok(())
+}
+
+pub(crate) fn report_interrupt_confirmation(label: &str, confirmation: InterruptConfirmation) {
+    use std::io::Write as _;
+
+    let InterruptConfirmation::NotConfirmed { window } = confirmation else {
+        return;
+    };
+    let _ = writeln!(
+        super::render::err(),
+        "{} {label}: interrupt not confirmed within {} ms; its turn may still be running (rimz pane capture {label}), or Codex's Interrupt hook may not be trusted (rimz doctor)",
+        super::render::paint(super::render::palette::warn().bold(), "warning:"),
+        window.as_millis(),
+    );
 }
 
 fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
@@ -426,7 +443,9 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
     let mut pending = Vec::new();
     for outcome in outcomes {
         match outcome {
-            DispatchOutcome::Sent { label, message_id } => {
+            DispatchOutcome::Sent {
+                label, message_id, ..
+            } => {
                 sent.push(format!("{label} ({message_id})"));
                 sent_labels.push(label.as_str());
             }
@@ -729,6 +748,7 @@ mod tests {
                 &DispatchOutcome::Sent {
                     label: label.clone(),
                     message_id: message_id.clone(),
+                    interrupt: InterruptConfirmation::NotChecked,
                 }
             )
             .as_deref(),

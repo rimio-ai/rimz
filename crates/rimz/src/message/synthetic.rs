@@ -73,7 +73,7 @@ pub fn attempt_now(
         DeliveryPolicy::Boundary,
     );
     let reason = match &outcome {
-        Ok(DeliveryReport::Sent) => return Ok(true),
+        Ok(DeliveryReport::Sent { .. }) => return Ok(true),
         Ok(DeliveryReport::Refused(verdict)) => Some(verdict.reason()),
         Ok(DeliveryReport::Stopped) if on_miss == DeliveryFailureDisposition::Terminal => {
             Some(fallback_reason.to_owned())

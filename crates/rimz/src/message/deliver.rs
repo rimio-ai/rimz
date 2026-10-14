@@ -4,7 +4,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::DeliveryKind;
+use super::{DeliveryKind, InterruptConfirmation};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -98,7 +98,10 @@ pub(super) enum AttemptSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AttemptOutcome {
-    Sent { compacted: bool },
+    Sent {
+        compacted: bool,
+        interrupt: InterruptConfirmation,
+    },
     Queued,
     CompactionPending,
     SkippedWaiting,
@@ -257,8 +260,8 @@ fn is_no_pane_blocker(blocker: &str) -> bool {
         || (blocker.starts_with(PINNED_PANE_PREFIX) && blocker.ends_with(PINNED_PANE_SUFFIX))
 }
 
-pub(super) enum DeliveryReport {
-    Sent,
+pub enum DeliveryReport {
+    Sent { interrupt: InterruptConfirmation },
     Refused(DeliveryVerdict),
     Stopped,
 }
@@ -272,11 +275,11 @@ pub fn deliver_one(
 ) -> Result<bool> {
     Ok(matches!(
         deliver_one_report(workspace, store, message_id, mux, policy)?,
-        DeliveryReport::Sent
+        DeliveryReport::Sent { .. }
     ))
 }
 
-pub(super) fn deliver_one_report(
+pub fn deliver_one_report(
     workspace: &ResolvedWorkspace,
     store: &Store,
     message_id: &MessageId,
@@ -398,10 +401,9 @@ fn attempt_delivery(
         &mut live_send,
     )?;
     register_message_wake(workspace, store);
-    Ok(if matches!(outcome, AttemptOutcome::Sent { .. }) {
-        DeliveryReport::Sent
-    } else {
-        DeliveryReport::Stopped
+    Ok(match outcome {
+        AttemptOutcome::Sent { interrupt, .. } => DeliveryReport::Sent { interrupt },
+        _ => DeliveryReport::Stopped,
     })
 }
 
@@ -469,7 +471,13 @@ pub(super) fn execute_attempt(
     match send::send_batch_to_live_pane(
         workspace, store, snapshot, target, bound, records, live_send,
     ) {
-        Ok(send::Receipt::Sent { compacted }) => Ok(AttemptOutcome::Sent { compacted }),
+        Ok(send::Receipt::Sent {
+            compacted,
+            interrupt,
+        }) => Ok(AttemptOutcome::Sent {
+            compacted,
+            interrupt,
+        }),
         Ok(send::Receipt::ClaimLost) => Ok(AttemptOutcome::Queued),
         Ok(send::Receipt::SkippedWaiting) => {
             const WAITING: &str = "agent is waiting on input in its pane";
@@ -520,7 +528,10 @@ pub(super) fn execute_attempt(
                 &workspace.session_name,
             )?;
             if failure.head_sent {
-                return Ok(AttemptOutcome::Sent { compacted: false });
+                return Ok(AttemptOutcome::Sent {
+                    compacted: false,
+                    interrupt: InterruptConfirmation::NotChecked,
+                });
             }
             if durable_receiver {
                 return Ok(AttemptOutcome::Queued);
@@ -664,7 +675,7 @@ pub fn sweep(
                 )?
             };
             let verdict = match report {
-                DeliveryReport::Sent => continue,
+                DeliveryReport::Sent { .. } => continue,
                 DeliveryReport::Refused(verdict) => Some(verdict),
                 DeliveryReport::Stopped => None,
             };

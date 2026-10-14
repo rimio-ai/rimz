@@ -46,7 +46,7 @@ Every send writes a `queued` record first. The mode decides when RimZ types it i
 | --- | --- | --- |
 | Park | default | Delivers now if the agent can take it, otherwise waits for the next turn boundary that `--on` allows. |
 | Steer | `--steer` | Writes into the live turn now. It waits for any RimZ write already in progress to that pane. With no live pane yet, it parks the record. Conflicts with `--on`, `--schedule`, `--after`, and `--when`. |
-| Interrupt | `--interrupt` | Types the text into the live turn, then presses Escape three seconds later so the agent stops that turn and submits the text as a fresh one. Claude Code and Codex only; other agents are refused. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
+| Interrupt | `--interrupt` | Types the text into the live turn, then presses Escape three seconds later to stop it. Claude Code and Codex only; other agents are refused. Codex starts the text as a fresh turn only if it has not already taken it into the running turn; an expanded question editor takes the text as an answer instead. Conflicts with `--steer`, `--on`, `--schedule`, `--after`, and `--when`. |
 | Schedule | `--schedule <DUR\|HH:MM>` | Always parks, and the record cannot deliver before that time. After it comes due, the park rules still apply. |
 
 `--schedule` takes a duration with `s`, `m`, `h`, or `d` (`90s`, `60m`, `2h`, `1d`), or a 24-hour `HH:MM` time in the configured timezone. A time already past today means tomorrow. Zero is rejected. The room must be open, because its sidebar host wakes due messages.
@@ -61,9 +61,11 @@ A parked message delivers once all of these hold, checked in this order:
 
 Parking needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
 
-Interrupt skips Escape when the agent is already resting. A native prompt waiting for input is refused unless `--force` is passed; the Escape then also cancels that prompt. A live pane without a durable session is refused; a durable session without a live pane parks the message. Unsupported agents, including any unsupported member of a fan-out, are refused before any message is recorded. `RIMZ_MESSAGE_INTERRUPT_DELAY_MS` sets the gap between the text and Escape, in milliseconds (default 3000).
+Interrupt skips Escape when the agent is already resting. A native prompt waiting for input is refused unless `--force` is passed; that prompt then receives the text and Escape. A live pane without a durable session is refused; a durable session without a live pane parks the message. Unsupported agents, including any unsupported member of a fan-out, are refused before any message is recorded. `RIMZ_MESSAGE_INTERRUPT_DELAY_MS` sets the gap between the text and Escape, in milliseconds (default 3000).
 
 Interrupt requires an existing recipient and refuses `--create`.
+
+After pressing Escape for Codex, RimZ waits up to five seconds for its Interrupt hook to confirm the stop. `RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS` sets this window in milliseconds (default 5000), separately for each target. If no confirmation arrives, the stdout receipt stays unchanged and the command still exits 0: the text was already sent. A stderr warning says the turn may still be running, suggests `rimz pane capture @coder`, and names the other possible cause: Codex's Interrupt hook is not trusted (`rimz doctor` shows it). With `--wait`, the reply outcome still determines the exit status. Confirmation proves the stop, not that the text started a fresh turn. Claude interrupts are not confirmed this way.
 
 ### Receipts
 
@@ -71,7 +73,7 @@ The send prints one line per target:
 
 | Output | Meaning |
 | --- | --- |
-| `sent to @coder (msg_…)` | The text reached the pane: park mode found the agent free, `--steer` wrote into the live turn, or `--interrupt` wrote it and pressed Escape if the agent was mid-turn. The record is `sent` until the agent acknowledges it and it becomes [`delivered`](#message-statuses). |
+| `sent to @coder (msg_…)` | The text reached the pane: park mode found the agent free, `--steer` wrote into the live turn, or `--interrupt` wrote it and pressed Escape if the agent was mid-turn. This receipt alone proves neither a stop nor a fresh turn. The record is `sent` until the agent acknowledges it and it becomes [`delivered`](#message-statuses). |
 | `queued for @coder (msg_…): delivery deferred; send now: rimz message interrupt msg_…` | Interrupt could not deliver, for example because the pane was absent. |
 | `queued for @coder (msg_…) — @coder is running; send now: rimz message steer msg_…` | Parked because of the agent's status. |
 | `queued for @coder (msg_…) — @coder is resuming; delivers when its provider registers; send now: rimz message steer msg_…` | Waiting for a resumed provider to start. |
@@ -175,7 +177,7 @@ Agent senders receive at most one `MESSAGE_UNDELIVERED` and one `MESSAGE_QUEUED`
 
 ## Wait for replies
 
-With `--interrupt --wait`, the turn the prompt starts is the reply. RimZ waits for that prompt's delivery acknowledgement before following the reply, not the interrupted turn's remaining activity.
+If the prompt starts a fresh turn, that turn is the reply for `--interrupt --wait`. RimZ waits for that prompt's delivery acknowledgement before following the reply, not the interrupted turn's remaining activity. A confirmed stop alone does not satisfy the reply wait.
 
 `--wait` sends or parks one message per target, waits for each reply turn to finish, and prints the replies. It takes an optional total deadline in the attached form `--wait=<DURATION>` (`s`, `m`, or `h`), covering delivery plus the turn. Bare `--wait` takes no value, so it can sit before the text. A user shell's bare wait has no deadline; an agent's bare wait stops after one hour.
 

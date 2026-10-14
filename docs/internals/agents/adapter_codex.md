@@ -56,6 +56,8 @@ On `Stop` and `SubagentStop`, `decode_hook` scans the rollout tail once with [`s
 
 `Interrupt` fires only for a root turn and forwards Codex's `turn_id`; so do `PreToolUse` and `PostToolUse`. The rollup records the interrupted turn id and ignores a trailing tool completion from that turn, so a late `PostToolUse` cannot reopen the rested root. Codex versions without the hook ignore the installed key, and the rollout's [interruption marker](#turn-interruption-marker) settles those turns.
 
+Message interrupts follow durable `TurnInterrupted` events after the key, even if a subsequent `TurnStarted` has cleared the snapshot's interrupted id. The bounded confirmation wait runs outside the pane lock. Missing evidence means not confirmed, not necessarily still running: the optional Interrupt hook may be untrusted. This proves only the stop. Codex replays pending steers, not text already committed to the running turn, and an expanded question editor receives pasted text as an answer. An editing-owned Escape (for example Vim insert mode or history search) can still go to the editor first.
+
 ### Asks and answers
 
 | Ask | Opened by | Closed by | `rimz answer` |
@@ -86,8 +88,9 @@ Host skill lists render `-c skills.config` entries with `enabled=false` for unli
 | Intent | Codex argv |
 | --- | --- |
 | Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.156.0, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; unreadable versions pass |
-| Resume a session | `codex resume <id> --no-daemon` |
-| Fork a session | `codex fork <id> --no-daemon` |
+| Question editor Escape | `-c tui.question_esc_back=false` follows `--no-daemon` on launch, resume and fork; Escape interrupts instead of collapsing the expanded editor; later user overrides win; headless exec does not inherit these TUI args |
+| Resume a session | `codex resume <id> --no-daemon -c tui.question_esc_back=false` |
+| Fork a session | `codex fork <id> --no-daemon -c tui.question_esc_back=false` |
 | Remote app-server | `--remote X` and `--remote=X` are refused at compile time; remove the flag because managed panes run embedded |
 | Permission `ask`, `plan` | no flags |
 | Permission `auto` | `--ask-for-approval never --sandbox workspace-write` |
