@@ -21,6 +21,31 @@ use crate::common::{
 mod drain;
 
 #[test]
+fn copilot_stale_managed_hooks_are_reported_as_refreshed() {
+    let env = Env::new();
+    env.install_agent_hooks("copilot");
+    let hooks = env.home_root.join(".copilot/hooks/rimz.json");
+    let current = std::fs::read_to_string(&hooks).unwrap();
+    std::fs::write(&hooks, format!("{current}\n")).unwrap();
+    let output = env
+        .rimz()
+        .args(["hooks", "install", "copilot"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("refreshed"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&hooks).unwrap(), current);
+    let output = env
+        .rimz()
+        .args(["hooks", "install", "copilot"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("hooks up to date"));
+}
+
+#[test]
 fn hook_outside_a_room_ignores_the_event() {
     for (source, event, reply) in [("claude", "Stop", ""), ("cursor", "sessionStart", "{}\n")] {
         let env = Env::new();
