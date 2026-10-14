@@ -1376,12 +1376,27 @@ fn assert_lifecycle_hook_honest(
                 "{kind} {signal_kind:?} native event {event} must produce the declared lifecycle signal in the corpus"
             );
         }
-        HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => {
+        // A derived hook may also have a native path (Droid closes a
+        // `/handoff` natively, an in-place compaction by derivation); `via`
+        // must then name that event, so no native mapping goes undeclared.
+        HookCoverage::Derived { via, .. } => {
+            for sample in samples
+                .iter()
+                .filter(|sample| sample_produces_signal(adapter, sample, signal_kind))
+            {
+                assert!(
+                    via.contains(sample.event_name),
+                    "{kind} {signal_kind:?} is derived but corpus event {} produces it without being named in `via`",
+                    sample.event_name
+                );
+            }
+        }
+        HookCoverage::Absent { .. } => {
             assert!(
                 !samples
                     .iter()
                     .any(|sample| sample_produces_signal(adapter, sample, signal_kind)),
-                "{kind} {signal_kind:?} is declared non-native but a corpus sample produces it"
+                "{kind} {signal_kind:?} is declared absent but a corpus sample produces it"
             );
         }
     }
