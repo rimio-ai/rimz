@@ -958,6 +958,7 @@ fn ingress_keeps_the_launch_and_parent_stamp_after_the_room_switches() {
                 "rimz-test",
                 dir.path(),
                 &pane,
+                None,
             )
             .unwrap();
         store

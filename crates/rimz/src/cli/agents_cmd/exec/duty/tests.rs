@@ -20,7 +20,7 @@ fn card_evidence_stops_after_the_provider_registers() {
     };
     let pane = PaneId::parse("tmux:%1").unwrap();
     store
-        .bind_agent_launch(&identity, "room", dir.path(), &pane)
+        .bind_agent_launch(&identity, "room", dir.path(), &pane, None)
         .unwrap();
     assert!(run_card_evidence(&store, &identity.kind, &identity.agent_id, &identity.name).unwrap());
     let mut observation = rimz::agents::AgentLifecycleObservation::new(

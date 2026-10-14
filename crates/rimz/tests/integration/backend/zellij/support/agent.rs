@@ -9,7 +9,8 @@ pub(in crate::backend::zellij) fn write_sleeping_agent_shim(env: &Env, agent: &s
     write_path_shim(
         &dir,
         agent,
-        "printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
+        "if [ \"$1\" = --version ]; then printf '2.1.296 (Claude Code)\\n'; exit 0; fi\n\
+         printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
          trap 'exit 0' HUP TERM INT\n\
          while :; do sleep 1; done",
     );

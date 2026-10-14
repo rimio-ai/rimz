@@ -555,6 +555,16 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
+    /// Native prompt inputs: `Flag` values name files, `TextFlag` values carry text.
+    fn system_prompt_arg_matchers(&self) -> Vec<PresetArgMatcher> {
+        Vec::new()
+    }
+
+    /// Make a resumed session use changed configured system-prompt text.
+    fn changed_system_prompt_args(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Restrict provider-native delegation through launch environment for a
     /// `rimz subagents` child. Applied after every configured launch variable;
     /// the default leaves the environment unchanged.

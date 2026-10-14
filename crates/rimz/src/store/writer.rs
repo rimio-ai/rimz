@@ -543,6 +543,7 @@ impl Store {
                         scope.branch.as_deref(),
                         scope.description.as_deref(),
                         None,
+                        None,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -595,11 +596,13 @@ impl Store {
                 scope.branch.as_deref(),
                 None,
                 None,
+                None,
             ))
         })
     }
 
     /// Bind one provisional launch to the pane observed by its wrapper.
+    /// Only fresh launches supply a prompt digest; resumes and forks supply `None`.
     #[must_use = "durability barrier; check the result"]
     pub fn bind_agent_launch(
         &self,
@@ -607,6 +610,7 @@ impl Store {
         session_name: &str,
         cwd: &Path,
         pane_id: &crate::ids::PaneId,
+        system_prompt_digest: Option<&str>,
     ) -> Result<()> {
         self.commit(|txn| {
             txn.append(&self.agent_launch_event(
@@ -617,6 +621,7 @@ impl Store {
                 None,
                 None,
                 Some(pane_id),
+                system_prompt_digest,
             ))
         })
     }
@@ -730,6 +735,7 @@ impl Store {
                 None,
                 None,
                 None,
+                None,
             ))
         })
     }
@@ -744,6 +750,7 @@ impl Store {
         branch: Option<&str>,
         description: Option<&str>,
         pane_id: Option<&crate::ids::PaneId>,
+        system_prompt_digest: Option<&str>,
     ) -> EventEnvelope {
         let runtime_owner = pane_id.map(|_| {
             runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
@@ -753,7 +760,7 @@ impl Store {
             session_name,
             &identity.kind,
             AgentLaunchPayload {
-                system_prompt_digest: None,
+                system_prompt_digest: system_prompt_digest.map(ToOwned::to_owned),
                 agent_id: identity.agent_id.clone(),
                 launch_id: Some(identity.agent_id.clone()),
                 agent_name: identity.name.clone(),

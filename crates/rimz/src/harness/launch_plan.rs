@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 use crate::agents::ProviderLogin;
 use crate::agents::account_links::ShareErr;
 use crate::agents::capabilities::SystemTextChannel;
@@ -40,9 +42,11 @@ pub struct LaunchPlanInputs<'a> {
     /// `effective` is absent when the effective config fails to load.
     pub agent_shell: Option<&'a Path>,
     pub hibernate: bool,
+    pub recorded_system_prompt_digest: Option<&'a str>,
 }
 
 pub struct LaunchPlan {
+    pub system_prompt_digest: String,
     pub request: ExecRequest,
     pub cwd: PathBuf,
     /// The provider account this launch runs under.
@@ -281,6 +285,9 @@ pub fn prepare_exec(
             Ok(Vec::new())
         };
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: recorded_session
+                .as_ref()
+                .and_then(|agent| agent.system_prompt_digest.as_deref()),
             request: &request,
             cwd,
             project_root,
@@ -451,6 +458,22 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         },
         inputs.runtime,
     )?;
+    let system_prompt_digest = configured_system_prompt_digest(
+        adapter,
+        request.action.extra_args(),
+        prompt.composed.as_deref(),
+        inputs.cwd,
+    )?;
+    if matches!(
+        request.action,
+        launch::ExecAction::Resume { .. } | launch::ExecAction::Fork { .. }
+    ) && inputs.recorded_system_prompt_digest != Some(system_prompt_digest.as_str())
+    {
+        request
+            .action
+            .extra_args_mut()
+            .extend(adapter.changed_system_prompt_args());
+    }
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     if request
@@ -706,6 +729,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         );
     }
     Ok(LaunchPlan {
+        system_prompt_digest,
         request,
         cwd: inputs.cwd.to_path_buf(),
         login,
@@ -830,6 +854,46 @@ fn reminders(
     )
 }
 
+/// Lowercase hex SHA-256 of the configured system-prompt inputs: the composed
+/// replacement prompt and the adapter's native prompt text or file contents in
+/// the profile's own args. RimZ's per-launch reminder is merged later and so
+/// never reaches it.
+fn configured_system_prompt_digest(
+    adapter: &crate::agents::AgentDefinition,
+    extra_args: &[String],
+    composed: Option<&str>,
+    cwd: &Path,
+) -> Result<String, prompt_compose::PromptComposeErr> {
+    let mut configured_args = extra_args.to_vec();
+    if composed.is_some()
+        && let Some(matcher) = adapter
+            .spec()
+            .launch
+            .preset_arg_matcher(crate::agents::PresetField::SystemPromptFile)
+    {
+        matcher.remove_occurrences(&mut configured_args);
+    }
+    let mut native_prompts = Vec::new();
+    for matcher in adapter.system_prompt_arg_matchers() {
+        let mut values = Vec::new();
+        for occurrence in matcher.occurrences(&configured_args) {
+            let value = if matches!(matcher, crate::agents::PresetArgMatcher::Flag(_)) {
+                let path = cwd.join(&occurrence.value);
+                std::fs::read_to_string(&path)
+                    .map_err(|source| prompt_compose::PromptComposeErr::Read { path, source })?
+            } else {
+                occurrence.value
+            };
+            values.push(value);
+        }
+        native_prompts.push(values);
+    }
+    // Options, strings, and vectors serialize without fallible map keys or custom serializers.
+    let configured_prompt = serde_json::to_vec(&(composed, native_prompts))
+        .expect("configured prompt inputs are JSON-serializable");
+    Ok(hex::encode(Sha256::digest(configured_prompt)))
+}
+
 fn apply_materialized_system_prompt(
     request: &mut ExecRequest,
     materialized: &MaterializedSystemPrompt,
@@ -894,6 +958,7 @@ pub mod testkit {
         let mut request = request.clone();
         request.identity.params.isolation = Some(crate::config::Isolation::Host);
         let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
             request: &request,
             cwd: root,
             project_root: root,

@@ -70,7 +70,8 @@ use super::{
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::finished_task_notification_ids;
-use crate::agents::{TurnSettle, TurnSettleOutcome};
+use crate::agents::version::CliVersion;
+use crate::agents::{PresetArgMatcher, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
 
 /// Everything `const` about Claude Code, in one place. See
@@ -183,6 +184,15 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
 /// inline settings member and merged into the launch's one `--settings` by the
 /// process compiler, since Claude honours only the last `--settings`.
 const CLAUDE_FAST_SETTINGS: &str = r#"{"fastMode":true}"#;
+
+fn system_prompt_snapshot_args(version: Option<CliVersion>) -> Vec<String> {
+    const MIN_VERSION: CliVersion = CliVersion::new(2, 1, 257);
+    if version.is_some_and(|version| version >= MIN_VERSION) {
+        vec!["--system-prompt-snapshot".into(), "off".into()]
+    } else {
+        Vec::new()
+    }
+}
 
 const CLAUDE_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
@@ -832,6 +842,19 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Some(SystemTextChannel::TextFlag {
             flags: vec!["--append-system-prompt".to_owned()],
         })
+    }
+
+    fn changed_system_prompt_args(&self) -> Vec<String> {
+        system_prompt_snapshot_args(remote_control::probed_version())
+    }
+
+    fn system_prompt_arg_matchers(&self) -> Vec<PresetArgMatcher> {
+        vec![
+            PresetArgMatcher::Flag(vec!["--system-prompt-file".into()]),
+            PresetArgMatcher::Flag(vec!["--append-system-prompt-file".into()]),
+            PresetArgMatcher::TextFlag(vec!["--system-prompt".into()]),
+            PresetArgMatcher::TextFlag(vec!["--append-system-prompt".into()]),
+        ]
     }
 
     fn lockdown_subagent_args(&self, extra_args: &mut Vec<String>) {

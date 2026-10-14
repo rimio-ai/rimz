@@ -155,8 +155,15 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         )
         .expect("begin launch batch");
     let identity = batch.single_identity().expect("one identity");
+    let digest = "a".repeat(64);
     store
-        .bind_agent_launch(identity, "rimz-test", Path::new("/wrapper/cwd"), &pane_id)
+        .bind_agent_launch(
+            identity,
+            "rimz-test",
+            Path::new("/wrapper/cwd"),
+            &pane_id,
+            Some(&digest),
+        )
         .expect("bind launch");
     store
         .fail_agent_launch(identity, "rimz-test", Path::new("/restart/cwd"))
@@ -176,6 +183,13 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
         })
         .collect::<Vec<_>>();
     assert_eq!(payloads.len(), 4);
+    assert_eq!(
+        payloads
+            .iter()
+            .map(|payload| payload.system_prompt_digest.as_deref())
+            .collect::<Vec<_>>(),
+        [None, Some(digest.as_str()), None, None],
+    );
     for event in &events {
         assert_eq!(event.workspace_id, workspace_id);
         assert_eq!(event.session_name, "rimz-test");
@@ -673,6 +687,7 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
             "rimz-test",
             dir.path(),
             &pane_id,
+            None,
         )
         .expect("bind launch");
     store.fail_agent_launch_batch(&batch).expect("fail launch");
