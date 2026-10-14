@@ -41,9 +41,10 @@ pub struct WorktreeArgs {
 enum WorktreeSubcmd {
     /// Create a RimZ-owned worktree.
     New {
+        /// Name without `#`; `/` becomes `-` in the directory but stays in the branch. Omit for a generated name (or the PR's tree with --from-pr).
         #[arg(value_name = "NAME")]
         name: Option<String>,
-        /// Base ref: `head`, `fresh`, or any git ref.
+        /// Base: `head` (main checkout's HEAD, default unless [agents.worktree] base is set), `fresh` (origin/HEAD as last fetched), or any ref.
         #[arg(long, value_parser = parse_base)]
         base: Option<WorktreeBase>,
         /// Create the worktree from a pull request number or URL.
@@ -52,12 +53,55 @@ enum WorktreeSubcmd {
         /// Branch to create instead of `<name>`.
         #[arg(long)]
         branch: Option<String>,
+        /// Print the name, path, branch, base provenance, and reuse status as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// List RimZ-owned worktrees.
+    #[command(visible_alias = "ls")]
     List {
         /// Print worktree state, keep reasons, and holders as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Open a shell in a RimZ-owned worktree.
+    Cd {
+        /// Name without `#`; `/` becomes `-` in the directory but stays in the branch.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+    },
+    /// Print the absolute path of a RimZ-owned worktree.
+    Path {
+        /// Name without `#`; `/` becomes `-` in the directory but stays in the branch.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+    },
+    /// Rebase a clean worktree onto its base branch and fast-forward that branch to it; the tree stays.
+    Merge {
+        /// Name without `#`; `/` becomes `-` in the directory but stays in the branch.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+        /// Land on the target branch without asking for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Remove a RimZ-owned worktree.
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Name without `#`; `/` becomes `-` in the directory but stays in the branch.
+        #[arg(add = clap_complete::ArgValueCandidates::new(
+            crate::cli::complete::worktrees
+        ))]
+        name: String,
+        /// Remove even when the worktree is in use, dirty, unlanded, or unknown.
+        #[arg(long)]
+        force: bool,
     },
     /// Remove every clean, landed, unused RimZ-owned worktree.
     Sweep {
@@ -67,30 +111,6 @@ enum WorktreeSubcmd {
         /// Print the sweep report as JSON.
         #[arg(long)]
         json: bool,
-    },
-    /// Open a shell in a RimZ-owned worktree.
-    Cd {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::worktrees
-        ))]
-        name: String,
-    },
-    /// Rebase a clean worktree onto main and fast-forward main to it.
-    Merge {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::worktrees
-        ))]
-        name: String,
-    },
-    /// Remove a RimZ-owned worktree.
-    Remove {
-        #[arg(add = clap_complete::ArgValueCandidates::new(
-            crate::cli::complete::worktrees
-        ))]
-        name: String,
-        /// Remove even when the worktree is in use, dirty, unlanded, or unknown.
-        #[arg(long)]
-        force: bool,
     },
     /// Hidden helper used by long-lived agent wrappers.
     #[command(hide = true)]
@@ -131,13 +151,25 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             base,
             from_pr,
             branch,
-        } => new_worktree(&workspace, &config, name, base, from_pr, branch),
+            json,
+        } => new_worktree(&workspace, &config, name, base, from_pr, branch, json),
         WorktreeSubcmd::List { json } => list_worktrees(&workspace, &config, globals, json),
         WorktreeSubcmd::Sweep { dry_run, json } => {
             sweep_worktrees(&workspace, &config, globals, dry_run, json)
         }
         WorktreeSubcmd::Cd { name } => cd_worktree(&workspace, &config, &name),
-        WorktreeSubcmd::Merge { name } => merge_worktree(&workspace, &config, globals, &name),
+        WorktreeSubcmd::Path { name } => {
+            let managed = resolve_worktree(&workspace, &config, &name)?;
+            writeln!(
+                render::out(),
+                "{}",
+                rimz::utils::path::normalize_path_lexical(&managed.path).display()
+            )?;
+            Ok(())
+        }
+        WorktreeSubcmd::Merge { name, yes } => {
+            merge_worktree(&workspace, &config, globals, &name, yes)
+        }
         WorktreeSubcmd::Remove { name, force } => {
             remove_worktree(&workspace, &config, globals, name, force)
         }
@@ -152,6 +184,7 @@ fn new_worktree(
     base: Option<WorktreeBase>,
     from_pr: Option<PrTarget>,
     branch: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let store = require_existing_store(workspace)?;
     let requested_name = name
@@ -219,56 +252,101 @@ fn new_worktree(
             stale.upstream
         )?;
     }
-    report_created(&created, config.hooks.created.is_some());
+    if json {
+        let marker = &created.marker;
+        #[derive(Serialize)]
+        struct CreatedJson<'a> {
+            name: &'a str,
+            path: PathBuf,
+            branch: &'a str,
+            base_branch: Option<&'a str>,
+            base_ref: &'a str,
+            reused: bool,
+        }
+        render::json(&CreatedJson {
+            name: &marker.name,
+            path: rimz::utils::path::normalize_path_lexical(&marker.worktree_path),
+            branch: &marker.branch,
+            base_branch: marker.base_branch.as_deref(),
+            base_ref: &marker.base_ref,
+            reused: created.reused,
+        })?;
+    } else {
+        report_created(&created, config.hooks.created.is_some())?;
+    }
     Ok(())
 }
 
-#[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: bool) {
+fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: bool) -> Result<()> {
     let marker = &created.marker;
-    println!(
+    let mut out = render::out();
+    writeln!(
+        out,
         "{} {}",
         if created.reused { "reused" } else { "created" },
         marker.name
-    );
-    println!(
+    )?;
+    writeln!(
+        out,
         "  path   : {}",
         render::home_relative_path(&marker.worktree_path)
-    );
-    println!("  branch : {}", marker.branch);
+    )?;
+    let base = marker.base_ref.get(..7).unwrap_or(&marker.base_ref);
+    if let Some(base_branch) = marker.base_branch.as_deref() {
+        writeln!(
+            out,
+            "  branch : {}, from {base_branch} at {base}",
+            marker.branch
+        )?;
+    } else {
+        writeln!(out, "  branch : {}, from {base}", marker.branch)?;
+    }
     if created.reused {
-        return;
+        writeln!(
+            out,
+            "  next   : rimz agents <spec> -w {}    or    rimz worktree cd {}",
+            marker.name, marker.name
+        )?;
+        return Ok(());
     }
     if let Some(destination) = created.push_destination.as_ref() {
         let remote = &destination.remote;
         let merge_ref = &destination.merge_ref;
-        println!("  pushes : {remote} {merge_ref}");
+        writeln!(out, "  pushes : {remote} {merge_ref}")?;
         if merge_ref.strip_prefix("refs/heads/") != Some(marker.branch.as_str()) {
             let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(merge_ref);
-            println!("  push   : git push {remote} HEAD:{head}");
+            writeln!(out, "  push   : git push {remote} HEAD:{head}")?;
         }
     }
     if let Some(reason) = created.review_only_reason.as_deref() {
-        println!(
+        writeln!(
+            out,
             "  review : review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
-        );
+        )?;
     }
-    if let Some(base_branch) = marker.base_branch.as_deref() {
-        println!("  base branch: {base_branch}");
-    }
-    println!("  base   : {}", marker.base_ref);
     if created.included > 0 {
-        println!(
+        writeln!(
+            out,
             "  seeded : {} file(s) from .worktreeinclude",
             created.included
-        );
+        )?;
     }
     if created.linked > 0 {
-        println!("  linked : {} dir(s) from .worktreelink", created.linked);
+        writeln!(
+            out,
+            "  linked : {} dir(s) from .worktreelink",
+            created.linked
+        )?;
     }
     if created_hook_ran {
-        println!("  hook   : worktree.created ran");
+        writeln!(out, "  hook   : worktree.created ran")?;
     }
+    writeln!(
+        out,
+        "  next   : rimz agents <spec> -w {}    or    rimz worktree cd {}",
+        marker.name, marker.name
+    )?;
+    Ok(())
 }
 
 fn list_worktrees(
@@ -422,7 +500,7 @@ fn remove_worktree(
             "worktree `{name}` is in use by {}; use --force to remove it",
             guard.protections.holders(&path)
         ),
-        result => result?,
+        result => named_worktree_result(result, workspace, config, &name)?,
     };
     let retirement = rimz::worktree::retire_removal(
         &store,
@@ -644,8 +722,66 @@ fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool, dir: &Path
 }
 
 fn cd_worktree(workspace: &ResolvedWorkspace, config: &WorktreeConfig, name: &str) -> Result<()> {
-    let managed = rimz::worktree::resolve_owned(&workspace.project_root, config, name)?;
+    let managed = resolve_worktree(workspace, config, name)?;
+    let path = render::home_relative_path(&managed.path);
+    if !std::io::stdin().is_terminal() {
+        bail!(
+            "rimz worktree cd needs a terminal; the tree is at {path} (`rimz worktree path {name}` prints it)"
+        );
+    }
+    writeln!(
+        render::err(),
+        "entered {path} in a new shell; exit returns to {}",
+        render::home_relative_path(&std::env::current_dir()?)
+    )?;
     exec_shell(&managed.path)
+}
+
+fn resolve_worktree(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    name: &str,
+) -> Result<rimz::worktree::ManagedWorktree> {
+    named_worktree_result(
+        rimz::worktree::resolve_owned(&workspace.project_root, config, name),
+        workspace,
+        config,
+        name,
+    )
+}
+
+fn named_worktree_result<T>(
+    result: rimz::worktree::Result<T>,
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    name: &str,
+) -> Result<T> {
+    match result {
+        Err(rimz::worktree::WorktreeErr::Missing { .. }) => {
+            let managed = rimz::worktree::discover_owned(&workspace.project_root)?;
+            let names: Vec<_> = managed
+                .iter()
+                .map(|tree| tree.marker.name.as_str())
+                .collect();
+            let parent = rimz::worktree::worktree_parent(&workspace.project_root, config)?;
+            bail!("{}", missing_worktree_message(name, &parent, &names));
+        }
+        result => result.map_err(Into::into),
+    }
+}
+
+fn missing_worktree_message(name: &str, parent: &Path, names: &[&str]) -> String {
+    let parent = render::home_relative_path(parent);
+    let suggestion = rimz::utils::suggest::nearest_name(name, names.iter().copied())
+        .map(|near| format!("; did you mean `{near}`?"))
+        .unwrap_or_default();
+    let inventory = if names.is_empty() {
+        "none exist".to_owned()
+    } else {
+        format!("`rimz worktree list` shows the {} that exist", names.len())
+    };
+    let separator = if suggestion.is_empty() { "; " } else { " " };
+    format!("no worktree `{name}` in {parent}{suggestion}{separator}{inventory}")
 }
 
 fn merge_worktree(
@@ -653,14 +789,31 @@ fn merge_worktree(
     config: &WorktreeConfig,
     globals: &GlobalFlags,
     name: &str,
+    yes: bool,
 ) -> Result<()> {
-    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
-    let merged = match rimz::worktree::merge_to_main(
-        &workspace.project_root,
+    let plan = named_worktree_result(
+        rimz::worktree::landing_plan(&workspace.project_root, config, name),
+        workspace,
         config,
         name,
-        &guard.protections,
-    ) {
+    )?;
+    let target = &plan.target;
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "rimz worktree merge needs a terminal to confirm; pass --yes to land `{name}` on `{target}` without asking"
+            );
+        }
+        if !super::confirm(&format!("land {name} on {target}?"))? {
+            writeln!(render::err(), "nothing changed.")?;
+            return Ok(());
+        }
+    }
+    let guard = super::worktree_protection::for_explicit_removal(&workspace.project_root, globals);
+    let memo = rimz::worktree::LandedMemo::load(&workspace.project_root);
+    let result = rimz::worktree::land(&plan, &guard.protections, &memo);
+    memo.save();
+    let merged = match result {
         Err(rimz::worktree::WorktreeErr::MergeInUse { path, .. }) => bail!(
             "cannot merge worktree `{name}`: it is in use by {}",
             guard.protections.holders(&path)
@@ -668,9 +821,14 @@ fn merge_worktree(
         result => result?,
     };
     let mut out = render::out();
-    writeln!(out, "merged {} into main", merged.name)?;
+    writeln!(out, "landed {} on {target}", merged.name)?;
     writeln!(out, "  branch : {}", merged.branch)?;
     writeln!(out, "  head   : {}", merged.head)?;
+    writeln!(
+        out,
+        "  the worktree stays at {}; `rimz worktree remove {name}` reclaims it",
+        render::home_relative_path(&plan.managed.path)
+    )?;
     Ok(())
 }
 
@@ -876,6 +1034,23 @@ fn exec_shell(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_worktree_names_show_near_matches_and_owned_counts() {
+        let parent = Path::new("/repo-worktrees");
+        assert_eq!(
+            missing_worktree_message("dmo", parent, &["demo", "feature"]),
+            "no worktree `dmo` in /repo-worktrees; did you mean `demo`? `rimz worktree list` shows the 2 that exist"
+        );
+        assert_eq!(
+            missing_worktree_message("missing", parent, &["demo"]),
+            "no worktree `missing` in /repo-worktrees; `rimz worktree list` shows the 1 that exist"
+        );
+        assert_eq!(
+            missing_worktree_message("missing", parent, &[]),
+            "no worktree `missing` in /repo-worktrees; none exist"
+        );
+    }
 
     #[test]
     fn created_path_display_folds_parent_components() {

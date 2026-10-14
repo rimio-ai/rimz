@@ -72,19 +72,19 @@ The hook event names `worktree.created` and `worktree.removed` are also [loop si
 
 There are exactly two fire sites: `finish_worktree` calls `hooks::run_hook` with `WorktreeHookEvent::Created` after marker, includes, and links; `remove_marked_worktree` calls it with `Removed` after successful Git removal and before branch deletion. Reuse never enters `finish_worktree`. Rollback uses the same removal funnel, so it also fires `removed` to undo partial setup; a tree that adopted an existing local branch stops there and keeps the branch. Skips, refused removals, and dry-run sweeps never reach the removal fire site.
 
-On the fork PR strategy, `worktree/pr.rs::fork_checkout` calls `add_pr_worktree` before writing the branch's remote and merge configuration. The `created` hook therefore runs before that upstream/push configuration exists.
+On the fork PR strategy, `crates/rimz/src/worktree/pr.rs::fork_checkout` calls `add_pr_worktree` before writing the branch's remote and merge configuration. The `created` hook therefore runs before that upstream/push configuration exists.
 
 `hooks::run_hook` returns immediately when no command is configured, without spawning. Otherwise it uses `sh -c`, null stdin, and `proc::run_bounded_output`: captured stdout and stderr, a separate process group, and a ten-minute deadline that includes output draining after the direct child exits. Timeout kills the group. The runner overrides the five contract environment variables from the marker and leaves the rest inherited. A failure tail is bounded to the last 4096 bytes and 20 lines per stream; successful output is discarded.
 
-`WorktreeErr::CreatedHook` carries the hook failure and rollback outcome together: `tree removed`, or `rollback failed: <error>`, followed by the config key to fix. Ordinarily a fresh tree remains marked iff its configured `created` hook succeeded. A failed rollback is one exception: a locked tree can remain marked, and a later named launch reuses it without retrying the hook. `worktree/tests.rs::failed_created_hook_reports_rollback_failure` pins that case; no hook state is stored in the marker. SIGINT or SIGTERM interrupting RimZ during `created` can also leave a marked tree without rollback; remove it before retrying, since reuse will not re-hook it. Pre-existing trees are not retroactively initialized.
+`WorktreeErr::CreatedHook` carries the hook failure and rollback outcome together: `tree removed`, or `rollback failed: <error>`, followed by the config key to fix. Ordinarily a fresh tree remains marked iff its configured `created` hook succeeded. A failed rollback is one exception: a locked tree can remain marked, and a later named launch reuses it without retrying the hook. `crates/rimz/src/worktree/tests.rs::failed_created_hook_reports_rollback_failure` pins that case; no hook state is stored in the marker. SIGINT or SIGTERM interrupting RimZ during `created` can also leave a marked tree without rollback; remove it before retrying, since reuse will not re-hook it. Pre-existing trees are not retroactively initialized.
 
-`removed` failures only emit `tracing::warn!` and do not change the removal result. Detached wrapper cleanup has null stdio and garbage collection can run unattended, so this is best-effort teardown, not a promise that a person sees the warning. Domain code prints no report; `cli/worktree.rs::report_created` owns the success line for `new`.
+`removed` failures only emit `tracing::warn!` and do not change the removal result. Detached wrapper cleanup has null stdio and garbage collection can run unattended, so this is best-effort teardown, not a promise that a person sees the warning. Domain code prints no report; `crates/rimz/src/cli/worktree.rs::report_created` owns the success line for `new`.
 
 ### Who triggers creation
 
 - `crates/rimz/src/cli/worktree.rs::new_worktree` calls `create` or `create_from_pr` directly, without a launch; the PR path can reuse a branch holder and retry after a tip choice.
-- `cli/agents_cmd/launch.rs::launch_layout` routes agent layouts and teams through `cli::resolve_launch_checkout`, then the domain resolver. Cohort reconciliation can remove a landed tree before this path recreates it.
-- `cli/supervised/run.rs` uses the same resolver for `-p` runs, including scheduled loop launches. Hook failure precedes agent launch-batch and run-record creation, so no pane or launch row is created. The loop caller routes that error through `cli/loop_cmd/run.rs::record_task_error` to `TaskFire::finish_error`, which records `LoopRunResult::Errored` with the error text.
+- `crates/rimz/src/cli/agents_cmd/launch.rs::launch_layout` routes agent layouts and teams through `cli::resolve_launch_checkout`, then the domain resolver. Cohort reconciliation can remove a landed tree before this path recreates it.
+- `cli/supervised/run.rs` uses the same resolver for `-p` runs, including scheduled loop launches. Hook failure precedes agent launch-batch and run-record creation, so no pane or launch row is created. The loop caller routes that error through `crates/rimz/src/cli/loop_cmd/run.rs::record_task_error` to `TaskFire::finish_error`, which records `LoopRunResult::Errored` with the error text.
 
 Both domain creation entrypoints converge on `add_worktree` and `finish_worktree`, including the same-repository and fetched PR strategies in `worktree/pr.rs`. A reused tree skips seeding and hooks regardless of the caller.
 
@@ -200,11 +200,13 @@ The sidebar's git-stats refresh (`sidebar/refresh/git_stats.rs`) uses the same p
 
 The sidebar reads markers through `read_marker_from_checkout_metadata`, which follows the checkout's `.git` file directly and forks no Git process.
 
-## Landing on main
+## Landing on the comparison branch
 
-`rimz worktree merge <name>` is the one path that moves a branch onto the trunk, and it is deliberately narrower than the landed proof. `merge_to_main` requires a marked tree whose checked-out branch matches the marker, `main` checked out in the room's main checkout, both checkouts clean, no rebase, merge, cherry-pick, or revert in progress in either, and no other pane or live agent inside the tree (explicit-removal protection facts, below).
+`crates/rimz/src/worktree.rs::landing_plan` resolves the marked tree and starts from `comparison_ref`. A remote-tracking comparison maps to the local branch whose upstream is that ref (`git for-each-ref --format='%(refname:short) %(upstream:short)' refs/heads`), otherwise the trunk's local branch; with neither, it refuses with `NoLandingTarget`. `LandingPlan::target` names the local branch, including in prompts, receipts, and errors. Status comparison remains remote-tracking, so `list` still reads `unlanded` until the local destination is pushed.
 
-It rebases the worktree branch onto `main` with `rebase.updateRefs=false`, aborting a failed rebase so neither checkout is left mid-operation. It then rechecks that the worktree is clean and that `main` has neither moved nor become dirty, and advances `main` with `merge --ff-only` to the rebased head. It never creates a merge commit and never forces. The tree stays marked afterwards, and `sweep` or `gc` reclaims it once the proof passes.
+Landing requires that local branch to be held by a checkout in `git worktree list --porcelain`; a snapshot-only target refuses with `NoLandingTarget`, and a branch with no checkout refuses with `TargetNotCheckedOut`. The CLI confirms the named destination before execution (or accepts `--yes`); non-terminal stdin without `--yes` refuses.
+
+`crates/rimz/src/worktree.rs::land` requires the marked branch still checked out, the target still held by the planned checkout, both checkouts clean, no rebase, merge, cherry-pick, or revert in progress in either, and no other pane or live agent inside the source tree (explicit-removal protection facts, below). It rebases onto the target with `rebase.updateRefs=false`, aborting a failed rebase so neither checkout is left mid-operation. It then rechecks that the worktree is clean and that the target checkout has neither moved, switched branch, nor become dirty, and advances the target there with `merge --ff-only` to the rebased head. It never creates a merge commit and never forces. The tree stays marked afterwards, and `sweep` or `gc` reclaims it once the proof passes. The caller supplies the memo last, as for removal.
 
 ## Removing a worktree
 
@@ -279,7 +281,7 @@ Cleanup runs `rimz worktree cleanup <path>` through `reload::current_reexec_targ
 
 **Cohort relaunch** handles a team or multi-agent layout launched with `-w <name>` into a tree that already exists, as described under [the assessment](#the-assessment).
 
-**Supervised retry cleanup** in `cli/supervised/run.rs` defers wrapper cleanup while retries remain and calls `cli/worktree.rs::cleanup_worktree` after the run settles. That helper loads machine config and reaches `remove_marked_worktree` through `remove_for_cleanup`, so retry teardown uses the same hooks as wrapper cleanup.
+**Supervised retry cleanup** in `cli/supervised/run.rs` defers wrapper cleanup while retries remain and calls `crates/rimz/src/cli/worktree.rs::cleanup_worktree` after the run settles. That helper loads machine config and reaches `remove_marked_worktree` through `remove_for_cleanup`, so retry teardown uses the same hooks as wrapper cleanup.
 
 ## Invariants worth preserving
 

@@ -893,7 +893,8 @@ path = "crates/rimz/src/worktree"
 # LinkedWorktree and linked_worktree carry creation records into launch reminders (+2).
 # LaunchBase and TrunkFetchFailure carry team checkout policy and fetch warnings (+2).
 # Typed state, holders, shared inspection and LandedMemo serve all CLI verbs.
-surface-budget = 76
+# LandingPlan, landing_plan and land replace merge_to_main (+2).
+surface-budget = 78
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -4415,6 +4416,21 @@ reason = "Returned by pub parse_requested_name, which the binary crate calls; at
 kind = "item"
 key = "worktree::WorktreeMerge"
 reason = "Named by the binary crate's worktree command (cli/worktree.rs:502-503); cli sees only pub (pass 23b)."
+
+[[verdict]]
+kind = "item"
+key = "worktree::LandingPlan"
+reason = "The binary confirms the resolved comparison branch before executing the domain-owned landing."
+
+[[verdict]]
+kind = "item"
+key = "worktree::landing_plan"
+reason = "The binary resolves the domain landing destination before asking for confirmation."
+
+[[verdict]]
+kind = "item"
+key = "worktree::land"
+reason = "The binary executes the confirmed landing through the shared Git and occupancy guards."
 
 [[verdict]]
 kind = "item"

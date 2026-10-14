@@ -505,7 +505,8 @@ fn worktree_remove_distinguishes_missing_from_unmarked() {
         .args(["worktree", "remove", "ghost"])
         .assert()
         .failure()
-        .stderr(contains("worktree `ghost` does not exist at"));
+        .stderr(contains("no worktree `ghost` in"))
+        .stderr(contains("none exist"));
 
     let plain = env.home_root.join("project-worktrees/plain");
     std::fs::create_dir_all(&plain).expect("create unmarked directory");
@@ -753,12 +754,13 @@ fn worktree_cd_execs_the_user_shell_inside_the_named_checkout() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&shell, permissions).expect("chmod shell");
 
-    env.rimz()
-        .env("SHELL", &shell)
-        .env("RIMZ_TEST_CD_PWD", &observed)
-        .args(["worktree", "cd", "demo"])
-        .assert()
-        .success();
+    let (success, output) = worktree_pty(&env, &["cd", "demo"], "", Some(&shell));
+    assert!(success, "{output}");
+    assert!(
+        output
+            .contains("entered ~/project-worktrees/demo in a new shell; exit returns to ~/project"),
+        "{output}"
+    );
 
     assert_eq!(
         std::fs::read_to_string(observed)
@@ -766,6 +768,355 @@ fn worktree_cd_execs_the_user_shell_inside_the_named_checkout() {
             .trim(),
         worktree.display().to_string()
     );
+}
+
+#[test]
+fn worktree_merge_lands_on_master_and_a_stacked_base_checkout() {
+    for target in ["master", "stack/base"] {
+        let env = Env::new();
+        init_repo(&env.project_root);
+        env.record(&env.project_root);
+        let target_checkout = if target == "master" {
+            git(&env.project_root, &["branch", "-m", "master"]);
+            env.project_root.clone()
+        } else {
+            env.rimz()
+                .args(["worktree", "new", "stack/base"])
+                .assert()
+                .success();
+            let path = env.home_root.join("project-worktrees/stack-base");
+            commit_file(&path, "base.txt", "base\n", "base");
+            path
+        };
+        env.rimz()
+            .args(["worktree", "new", "demo", "--base", target])
+            .assert()
+            .success();
+        let path = env.home_root.join("project-worktrees/demo");
+        commit_file(&path, "feature.txt", "feature\n", "feature");
+        commit_file(&target_checkout, "advance.txt", "advance\n", "advance base");
+        let before = git_stdout(&target_checkout, &["rev-parse", "HEAD"]);
+        env.rimz()
+            .args(["worktree", "merge", "demo", "--yes"])
+            .assert()
+            .success()
+            .stdout(contains(format!("landed demo on {target}")));
+        let head = git_stdout(&path, &["rev-parse", "HEAD"]);
+        assert_eq!(git_stdout(&target_checkout, &["rev-parse", "HEAD"]), head);
+        assert!(git_succeeds(
+            &path,
+            &["merge-base", "--is-ancestor", &before, &head]
+        ));
+        assert!(path.exists());
+    }
+}
+
+#[test]
+fn worktree_merge_fresh_maps_to_a_local_branch_but_list_waits_for_push() {
+    for (target, tracking) in [("main", true), ("master", false), ("release", true)] {
+        let env = Env::new();
+        let repo = &env.project_root;
+        init_repo(repo);
+        env.record(repo);
+        let origin = env.home_root.join("origin.git");
+        git(repo, &["clone", "--bare", ".", origin.to_str().unwrap()]);
+        git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(repo, &["fetch", "origin"]);
+        git(repo, &["remote", "set-head", "origin", "--auto"]);
+        match target {
+            "master" => git(repo, &["branch", "-m", "master"]),
+            "release" => git(repo, &["checkout", "-b", "release"]),
+            _ => {}
+        }
+        if tracking {
+            git(repo, &["branch", "--set-upstream-to=origin/main", target]);
+        }
+        env.rimz()
+            .args(["worktree", "new", "demo", "--base", "fresh"])
+            .assert()
+            .success();
+        let path = env.home_root.join("project-worktrees/demo");
+        commit_file(&path, "feature.txt", "feature\n", "feature");
+        commit_file(repo, "advance.txt", "advance\n", "advance target");
+        env.rimz()
+            .args(["worktree", "merge", "demo", "--yes"])
+            .assert()
+            .success()
+            .stdout(contains(format!("landed demo on {target}")));
+        assert_eq!(
+            git_stdout(repo, &["rev-parse", "HEAD"]),
+            git_stdout(&path, &["rev-parse", "HEAD"])
+        );
+        for pushed in [false, true] {
+            if pushed {
+                git(repo, &["push", "origin", &format!("{target}:main")]);
+            }
+            let output = env
+                .rimz()
+                .args(["worktree", "list", "--json"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(rows[0]["base_branch"], "origin/main");
+            assert_eq!(rows[0]["landed"], pushed);
+        }
+    }
+}
+
+#[test]
+fn worktree_merge_fresh_requires_a_local_checked_out_target() {
+    let env = Env::new();
+    let repo = &env.project_root;
+    init_repo(repo);
+    env.record(repo);
+    let origin = env.home_root.join("origin.git");
+    git(repo, &["clone", "--bare", ".", origin.to_str().unwrap()]);
+    git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(repo, &["fetch", "origin"]);
+    git(repo, &["remote", "set-head", "origin", "--auto"]);
+    git(repo, &["branch", "--set-upstream-to=origin/main", "main"]);
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", "fresh"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let before = git_stdout(&path, &["rev-parse", "HEAD"]);
+    git(repo, &["checkout", "--detach"]);
+    env.rimz()
+        .args(["worktree", "merge", "demo", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("main must be checked out"))
+        .stderr(contains("origin/main must be checked out").not());
+    git(repo, &["branch", "-D", "main"]);
+    env.rimz()
+        .args(["worktree", "merge", "demo", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("no branch landing target"));
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), before);
+}
+
+#[test]
+fn worktree_merge_uses_the_superseded_bases_comparison_target() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "base"])
+        .assert()
+        .success();
+    let base = env.home_root.join("project-worktrees/base");
+    commit_file(&base, "base.txt", "base\n", "base");
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", "base"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    commit_file(&env.project_root, "trunk.txt", "trunk\n", "trunk");
+    git(&env.project_root, &["merge", "--squash", "base"]);
+    git(&env.project_root, &["commit", "-m", "land base"]);
+    let base_before = git_stdout(&base, &["rev-parse", "HEAD"]);
+    env.rimz()
+        .args(["worktree", "merge", "demo", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("landed demo on main"));
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        git_stdout(&path, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(git_stdout(&base, &["rev-parse", "HEAD"]), base_before);
+}
+
+#[test]
+fn worktree_merge_requires_a_checked_out_branch_target() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let before = git_stdout(&path, &["rev-parse", "HEAD"]);
+    git(&env.project_root, &["checkout", "--detach"]);
+    env.rimz()
+        .args(["worktree", "merge", "demo", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("main must be checked out"));
+    git(&env.project_root, &["branch", "-D", "main"]);
+    env.rimz()
+        .args(["worktree", "merge", "demo", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("no branch landing target"));
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), before);
+}
+
+#[test]
+fn worktree_merge_without_a_terminal_requires_yes_and_changes_nothing() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    env.rimz().args(["worktree", "merge", "demo"]).assert().failure()
+        .stderr(contains("rimz worktree merge needs a terminal to confirm; pass --yes to land `demo` on `main` without asking"));
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        before
+    );
+}
+
+#[cfg(unix)]
+fn worktree_pty(env: &Env, args: &[&str], answer: &str, shell: Option<&Path>) -> (bool, String) {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::Write;
+
+    let pair = native_pty_system()
+        .openpty(PtySize::default())
+        .expect("open pty");
+    let mut command = CommandBuilder::new(env.rimz().get_program());
+    env.pin_pty_command(&mut command);
+    command.cwd(&env.project_root);
+    command.arg("worktree");
+    command.args(args);
+    if let Some(shell) = shell {
+        command.env("SHELL", shell);
+        command.env("RIMZ_TEST_CD_PWD", env.home_root.join("cd-pwd"));
+    }
+    let mut reader = pair.master.try_clone_reader().expect("pty reader");
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    let mut child = pair.slave.spawn_command(command).expect("spawn worktree");
+    drop(pair.slave);
+    writer.write_all(answer.as_bytes()).expect("answer prompt");
+    let status = child.wait().expect("wait worktree");
+    let mut output = String::new();
+    reader.read_to_string(&mut output).expect("read pty output");
+    (status.success(), output)
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_merge_prompts_and_declining_changes_nothing() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    let (success, output) = worktree_pty(&env, &["merge", "demo"], "n\n", None);
+    assert!(success, "{output}");
+    assert!(output.contains("land demo on main? [y/N]"), "{output}");
+    assert!(output.contains("nothing changed."), "{output}");
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        before
+    );
+    let (success, output) = worktree_pty(&env, &["merge", "demo"], "y\n", None);
+    assert!(success, "{output}");
+    assert!(output.contains("landed demo on main"), "{output}");
+    assert_eq!(
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        git_stdout(&path, &["rev-parse", "HEAD"])
+    );
+}
+
+#[test]
+fn worktree_path_cd_aliases_and_missing_names() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "feat/demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/feat-demo");
+    env.rimz()
+        .args(["worktree", "path", "feat/demo"])
+        .assert()
+        .success()
+        .stdout(format!("{}\n", path.display()))
+        .stderr("");
+    env.rimz().args(["worktree", "cd", "feat/demo"]).assert().failure()
+        .stderr(contains("rimz worktree cd needs a terminal; the tree is at ~/project-worktrees/feat-demo (`rimz worktree path feat/demo` prints it)"));
+    env.rimz()
+        .args(["worktree", "ls", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("feat-demo"));
+    for verb in ["cd", "path", "merge", "remove"] {
+        env.rimz().args(["worktree", verb, "feat-dmo"]).assert().failure()
+            .stderr(contains("no worktree `feat-dmo` in ~/project-worktrees; did you mean `feat-demo`? `rimz worktree list` shows the 1 that exist"));
+        env.rimz().args(["worktree", verb, "missing"]).assert().failure()
+            .stderr(contains("no worktree `missing` in ~/project-worktrees; `rimz worktree list` shows the 1 that exist"));
+    }
+    env.rimz()
+        .args(["worktree", "rm", "feat/demo"])
+        .assert()
+        .success()
+        .stdout(contains("removed feat/demo"));
+    assert!(!path.exists());
+}
+
+#[test]
+fn worktree_new_reports_short_provenance_next_step_and_curated_json() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    let base = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "branch : demo, from main at {}",
+            &base[..7]
+        )))
+        .stdout(contains(
+            "next   : rimz agents <spec> -w demo    or    rimz worktree cd demo",
+        ))
+        .stdout(contains("base branch:").not())
+        .stdout(contains("base   :").not());
+    let output = env
+        .rimz()
+        .args(["worktree", "new", "feat/json", "--json"])
+        .output()
+        .expect("new json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let row: Value = serde_json::from_slice(&output.stdout).expect("json receipt");
+    assert_eq!(
+        row,
+        serde_json::json!({
+            "name": "feat-json", "path": env.home_root.join("project-worktrees/feat-json"),
+            "branch": "feat/json", "base_branch": "main", "base_ref": base, "reused": false,
+        })
+    );
+    git(&env.project_root, &["checkout", "--detach"]);
+    env.rimz()
+        .args(["worktree", "new", "detached"])
+        .assert()
+        .success()
+        .stdout(contains(format!("branch : detached, from {}", &base[..7])));
 }
 
 #[test]
@@ -786,10 +1137,11 @@ fn worktree_merge_rebases_then_fast_forwards_main() {
     let main_before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
 
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .success()
-        .stdout(contains("merged demo into main"));
+        .stdout(contains("landed demo on main"))
+        .stdout(contains("the worktree stays at ~/project-worktrees/demo; `rimz worktree remove demo` reclaims it"));
 
     let main_after = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
     assert_eq!(main_after, git_stdout(&worktree, &["rev-parse", "HEAD"]));
@@ -821,7 +1173,7 @@ fn worktree_merge_refuses_dirty_checkouts() {
     std::fs::write(worktree.join("dirty.txt"), "dirty\n").expect("dirty worktree");
 
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .failure()
         .stderr(contains("its checkout has local changes"));
@@ -829,7 +1181,7 @@ fn worktree_merge_refuses_dirty_checkouts() {
     std::fs::remove_file(worktree.join("dirty.txt")).expect("clean worktree");
     std::fs::write(env.project_root.join("dirty.txt"), "dirty\n").expect("dirty main");
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .failure()
         .stderr(contains("the main checkout has local changes"));
@@ -870,7 +1222,7 @@ fn worktree_merge_refuses_a_checkout_with_a_live_agent() {
         .expect("append live worktree session");
 
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .failure()
         .stderr(contains(
@@ -894,7 +1246,7 @@ fn worktree_merge_refuses_an_in_progress_git_operation() {
         .expect("mark merge in progress");
 
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .failure()
         .stderr(contains(
@@ -925,11 +1277,14 @@ fn worktree_merge_aborts_a_conflicting_rebase_without_advancing_main() {
     let main_before = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
 
     env.rimz()
-        .args(["worktree", "merge", "demo"])
+        .args(["worktree", "merge", "demo", "--yes"])
         .assert()
         .failure()
-        .stderr(contains("rebase onto main failed"))
-        .stderr(contains("no commits were merged into main"));
+        .stderr(contains(format!(
+            "rebase onto {} failed",
+            git_stdout(&env.project_root, &["symbolic-ref", "--short", "HEAD"])
+        )))
+        .stderr(contains("no commits were landed on main"));
 
     assert_eq!(
         git_stdout(&env.project_root, &["rev-parse", "HEAD"]),

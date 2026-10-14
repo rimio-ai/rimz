@@ -3,16 +3,19 @@
 `rimz worktree` creates, lists, enters, lands, and removes RimZ-owned worktrees: ordinary `git worktree` checkouts, each on its own branch, that RimZ marks at creation. Every verb acts only on a marked tree, so a checkout you made with `git worktree add` is never listed, merged, swept, or removed. A worktree's name is also its [channel](../../guide/messaging.md#channels), and `rimz agents --worktree` launches agents into the same trees ([Channel, worktree, and placement](./agents.md#channel-worktree-and-placement)). Why and when to isolate work this way is the [worktrees guide](../../guide/worktrees.md); the marker, the landed proof, and the protection rules are in [the worktree internals](../../internals/harness/worktrees.md).
 
 ```sh
-rimz worktree new [NAME] [--base <BASE>] [--branch <BRANCH>]
-rimz worktree new [NAME] --from-pr <PR> [--branch <BRANCH>]
+rimz worktree new [NAME] [--base <BASE>] [--branch <BRANCH>] [--json]
+rimz worktree new [NAME] --from-pr <PR> [--branch <BRANCH>] [--json]
 rimz worktree list [--json]
 rimz worktree cd <NAME>
-rimz worktree merge <NAME>
+rimz worktree path <NAME>
+rimz worktree merge <NAME> [--yes]
 rimz worktree remove <NAME> [--force]
-rimz worktree sweep [--dry-run]
+rimz worktree sweep [--dry-run] [--json]
 ```
 
 Every verb must run inside a Git repository, and elsewhere refuses with `rimz worktree requires a git repository; cd into a repo checkout`. The [global flags](../cli.md#global-flags) apply to every verb.
+
+`list` has alias `ls`; `remove` has alias `rm`. Bare `rimz worktree` runs `list`.
 
 ## Names and paths
 
@@ -26,7 +29,9 @@ A name is one or more segments of ASCII letters, digits, `_`, or `-`, separated 
 | nothing | a generated adjective-noun pair, such as `swift-harbor` | the same |
 | nothing, with `--from-pr 42` | The existing marked tree holding the same-repository head branch, otherwise `pr-42` | [from the pull request](#check-out-a-pull-request) |
 
-Trees live under the `[agents.worktree] dir` template, `../{repo}-worktrees` by default, where `{repo}` is the repository's directory name and a relative path resolves from the repository root ([configuration](../../guide/configuration.md#worktrees)). `cd`, `merge`, and `remove` take the same name and resolve it the same way, so `feat/login` and `feat-login` both reach the `feat-login` tree.
+Trees live under the `[agents.worktree] dir` template, `../{repo}-worktrees` by default, where `{repo}` is the repository's directory name and a relative path resolves from the repository root ([configuration](../../guide/configuration.md#worktrees)). `cd`, `path`, `merge`, and `remove` take the same name and resolve it the same way, so `feat/login` and `feat-login` both reach the `feat-login` tree.
+
+For those four verbs, a missing name reports ``no worktree `NAME` in DIR; did you mean `NEAR`? `rimz worktree list` shows the N that exist``. The suggestion appears only for a near match; an empty inventory says `none exist`. An unmarked checkout still refuses as ``worktree `NAME` is not a RimZ-managed worktree at PATH``.
 
 Explicit `--channel` lanes and worktrees share one namespace in a repository room ([`--channel`](./agents.md#channel-worktree-and-placement)).
 
@@ -38,14 +43,15 @@ The hook event names `worktree.created` and `worktree.removed` are also [loop si
 $ rimz worktree new feat-a
 created feat-a
   path   : ~/code/query-engine-worktrees/feat-a
-  branch : feat-a
-  base branch: main
-  base   : bece28e8adc3d54ed07a03764b25452117cdce6d
+  branch : feat-a, from main at bece28e
   seeded : 2 file(s) from .worktreeinclude
   linked : 1 dir(s) from .worktreelink
+  next   : rimz agents <spec> -w feat-a    or    rimz worktree cd feat-a
 ```
 
 `new` runs `git worktree add --no-track -b <branch> <path> <base>`, writes the ownership marker, and seeds the tree from the repository's `.worktreeinclude` and `.worktreelink` files ([seed the tree](../../guide/worktrees.md#seed-the-tree)). The new branch does not track its base. It then runs the optional `created` hook; success adds `  hook   : worktree.created ran` to the report, and failure fails the command ([hook lifecycle and errors](../../guide/worktrees.md#prepare-the-tree-with-a-hook)). It launches nothing into the tree. Any open messages still queued on the channel of that name are archived.
+
+The branch receipt uses the recorded base branch and seven-character commit prefix, or just the prefix when no base branch was recorded. `new --json` prints one object with `name`, normalized absolute `path`, `branch`, `base_branch` (string or `null`), full `base_ref`, and `reused` (boolean). Warnings stay on stderr.
 
 Seed only paths Git already ignores. A seed Git neither tracks nor ignores lands as an untracked change in every tree it reaches, which is enough for `sweep` to keep that tree with `uncommitted changes` and for `remove` to refuse it. Linked directories need no `.gitignore` entry: `new` adds each one to the exclude file `git rev-parse --git-path info/exclude` names, which for a linked worktree is usually the main checkout's `.git/info/exclude`.
 
@@ -143,32 +149,47 @@ feat-a    feat-a  landed            -
 rimz worktree cd auth
 ```
 
-`cd` replaces the `rimz` process with your user shell, started in the tree. A command cannot change its parent shell's directory, so exiting that shell returns you to the directory where you ran `cd`. It refuses a name with no checkout (``worktree `NAME` does not exist at PATH``) and a checkout RimZ did not create (``worktree `NAME` is not a RimZ-managed worktree at PATH``).
+`cd` requires terminal stdin and replaces the `rimz` process with your user shell, started in the tree. It first prints `entered PATH in a new shell; exit returns to CWD` on stderr. A command cannot change its parent shell's directory, so exiting that shell returns you to the directory where you ran `cd`. Without a terminal it refuses with ``rimz worktree cd needs a terminal; the tree is at PATH (`rimz worktree path NAME` prints it)``.
 
-## Land a worktree on main
+## Print a worktree path
 
-```console
-$ rimz worktree merge auth
-merged auth into main
-  branch : auth
-  head   : 5f0c2a9e1d7b4c3f8a6e2d1b0c9f8e7d6a5b4c3d
+```sh
+rimz worktree path auth
 ```
 
-`merge` rebases the tree's branch onto `main`, then advances `main` in the main checkout with `git merge --ff-only`. It never creates a merge commit and has no `--force`. The branch must be named `main` exactly: a repository whose trunk is `master` cannot use `merge`. The tree stays in place afterwards; `sweep` or `remove` reclaims it.
+`path` prints the normalized absolute checkout path and nothing else. It needs no terminal and can feed scripts or your shell's `cd`.
+
+## Land a worktree on its base
+
+```console
+$ rimz worktree merge auth --yes
+landed auth on main
+  branch : auth
+  head   : 5f0c2a9e1d7b4c3f8a6e2d1b0c9f8e7d6a5b4c3d
+  the worktree stays at ~/code/query-engine-worktrees/auth; `rimz worktree remove auth` reclaims it
+```
+
+`merge` starts from the recorded base while it remains a live destination, otherwise the trunk. This supports `master` and stacked feature branches. A remote-tracking base such as `origin/main` maps to the local branch whose upstream is that ref, otherwise the trunk's local branch; with neither, landing refuses. The prompt and receipt name the local destination. `list` still measures against the remote-tracking base, so the tree remains `unlanded` until that local branch is pushed.
+
+The target must be a branch checked out somewhere in this repository; a snapshot commit is not a landing target. RimZ rebases the tree's branch onto the target, then advances that branch in its own checkout with `git merge --ff-only`. It never creates a merge commit and has no `--force`. The tree stays in place afterwards; `sweep` or `remove` reclaims it.
+
+Without `--yes`, terminal stdin prompts `land NAME on TARGET? [y/N]`. Declining prints `nothing changed.` on stderr and succeeds. Without a terminal it refuses with ``rimz worktree merge needs a terminal to confirm; pass --yes to land `NAME` on `TARGET` without asking``. `--yes` skips confirmation, not the preconditions.
 
 Every precondition is checked before anything moves. Each refusal begins ``cannot merge worktree `NAME`: ``.
 
 | Refusal | When |
 | --- | --- |
 | `it is in use by HANDLES` | A live agent or another open pane is in the tree. A stale record from a crashed agent does not count. |
-| `main must be checked out at PATH` | The main checkout is on another branch. |
-| `the main checkout has a Git operation in progress` | A rebase, merge, cherry-pick, or revert is under way there. The same refusal names `the worktree checkout`. |
-| `the main checkout has local changes; commit or stash them first` | The main checkout is dirty. |
+| `TARGET must be checked out in a worktree` | No checkout holds the target branch. |
+| `no branch landing target; land it yourself` | The comparison is not a branch (for example, a snapshot commit), no comparison ref is available, or a remote-tracking base has no local destination. |
+| `the TARGET checkout has a Git operation in progress` | A rebase, merge, cherry-pick, or revert is under way there. The same refusal names `the worktree checkout`. |
+| `the TARGET checkout has local changes; commit or stash them first` | The target checkout is dirty. |
 | `its checkout has local changes; commit or stash them first` | The tree is dirty. |
 | ``expected branch `BRANCH`, found `OTHER` `` | The tree has switched away from the branch it was created on. |
-| `rebase onto main failed; no commits were merged into main: ...` | The rebase conflicted. RimZ aborts it, so neither checkout is left mid-rebase. |
-| `main changed while the worktree was rebasing; rerun the command` | Someone committed to `main` during the rebase. |
-| `the worktree was rebased onto main but now has local changes; main was not updated` | The tree changed during the rebase. |
+| `rebase onto TARGET failed; no commits were landed on TARGET: ...` | The rebase conflicted. RimZ aborts it, so neither checkout is left mid-rebase. |
+| `TARGET changed while the worktree was rebasing; rerun the command` | The target moved, changed branch, or became dirty during the rebase. |
+| `the worktree was rebased onto TARGET but now has local changes; TARGET was not updated` | The tree changed during the rebase. |
+| `fast-forwarding TARGET failed: ...` | Git could not advance the target branch. |
 
 ## Remove a worktree
 

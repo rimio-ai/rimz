@@ -101,16 +101,15 @@ pub enum WorktreeErr {
     #[error("cannot merge worktree `{name}`: it is in use by a live agent or an open pane")]
     MergeInUse { name: String, path: PathBuf },
     #[error(
-        "cannot merge worktree `{name}`: the main checkout has local changes; commit or stash them first"
+        "cannot merge worktree `{name}`: the {target} checkout has local changes; commit or stash them first"
     )]
-    MergeDirtyMain { name: String },
+    MergeDirtyTarget { name: String, target: String },
     #[error("cannot merge worktree `{name}`: {checkout} has a Git operation in progress")]
-    MergeOperationInProgress {
-        name: String,
-        checkout: &'static str,
-    },
-    #[error("cannot merge worktree `{name}`: main must be checked out at {path}")]
-    MainNotCheckedOut { name: String, path: PathBuf },
+    MergeOperationInProgress { name: String, checkout: String },
+    #[error("cannot merge worktree `{name}`: {target} must be checked out in a worktree")]
+    TargetNotCheckedOut { name: String, target: String },
+    #[error("cannot merge worktree `{name}`: no branch landing target; land it yourself")]
+    NoLandingTarget { name: String },
     #[error("cannot merge worktree `{name}`: expected branch `{expected}`, found `{actual}`")]
     MergeBranchMismatch {
         name: String,
@@ -118,19 +117,27 @@ pub enum WorktreeErr {
         actual: String,
     },
     #[error(
-        "cannot merge worktree `{name}`: rebase onto main failed; no commits were merged into main: {stderr}"
+        "cannot merge worktree `{name}`: rebase onto {target} failed; no commits were landed on {target}: {stderr}"
     )]
-    RebaseFailed { name: String, stderr: String },
+    RebaseFailed {
+        name: String,
+        target: String,
+        stderr: String,
+    },
     #[error(
-        "cannot merge worktree `{name}`: main changed while the worktree was rebasing; rerun the command"
+        "cannot merge worktree `{name}`: {target} changed while the worktree was rebasing; rerun the command"
     )]
-    MainChanged { name: String },
+    TargetChanged { name: String, target: String },
     #[error(
-        "cannot merge worktree `{name}`: the worktree was rebased onto main but now has local changes; main was not updated"
+        "cannot merge worktree `{name}`: the worktree was rebased onto {target} but now has local changes; {target} was not updated"
     )]
-    MergeDirtyAfterRebase { name: String },
-    #[error("cannot merge worktree `{name}`: fast-forwarding main failed: {stderr}")]
-    FastForwardFailed { name: String, stderr: String },
+    MergeDirtyAfterRebase { name: String, target: String },
+    #[error("cannot merge worktree `{name}`: fast-forwarding {target} failed: {stderr}")]
+    FastForwardFailed {
+        name: String,
+        target: String,
+        stderr: String,
+    },
     #[error("git command failed in {cwd}: git {args}: {stderr}")]
     Git {
         cwd: PathBuf,
@@ -316,6 +323,12 @@ pub struct WorktreeMerge {
     pub name: String,
     pub branch: String,
     pub head: String,
+}
+
+pub struct LandingPlan {
+    pub managed: ManagedWorktree,
+    pub target: String,
+    pub target_checkout: PathBuf,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -1167,96 +1180,164 @@ pub fn resolve_owned(
     })
 }
 
-/// Rebase one clean managed worktree onto `main`, then advance the clean main
-/// checkout with a fast-forward-only merge.
-///
-/// The main checkout is updated only after the rebase succeeds. A failed
-/// rebase is aborted before returning, so conflicts never strand the managed
-/// checkout in an in-progress operation.
-pub fn merge_to_main(
-    repo_root: &Path,
-    config: &WorktreeConfig,
-    name: &str,
-    protections: &ProtectionSet,
-) -> Result<WorktreeMerge> {
+/// Resolve a local landing branch from the status comparison and its checkout.
+pub fn landing_plan(repo_root: &Path, config: &WorktreeConfig, name: &str) -> Result<LandingPlan> {
     let managed = resolve_owned(repo_root, config, name)?;
-    if protections.protects(&managed.path) {
+    let memo = LandedMemo::load(repo_root);
+    let target = comparison_ref(&managed.path, &managed.marker, &memo);
+    memo.save();
+    let target = target
+        .and_then(|target| {
+            let symbolic = git_stdout(
+                &managed.path,
+                ["rev-parse", "--symbolic-full-name", &target],
+            )
+            .ok()?;
+            if let Some(branch) = symbolic.strip_prefix("refs/heads/") {
+                return Some(branch.to_owned());
+            }
+            let remote = symbolic.strip_prefix("refs/remotes/")?;
+            let branches = git_stdout(
+                repo_root,
+                [
+                    "for-each-ref",
+                    "--format=%(refname:short) %(upstream:short)",
+                    "refs/heads",
+                ],
+            )
+            .ok()?;
+            let branches: Vec<_> = branches
+                .lines()
+                .map(|row| row.split_once(' ').unwrap_or((row, "")))
+                .collect();
+            branches
+                .iter()
+                .find_map(|(branch, upstream)| (*upstream == remote).then(|| (*branch).to_owned()))
+                .or_else(|| {
+                    let trunk = trunk_ref(repo_root)?;
+                    let trunk = trunk.strip_prefix("origin/").unwrap_or(&trunk);
+                    branches
+                        .iter()
+                        .find_map(|(branch, _)| (*branch == trunk).then(|| (*branch).to_owned()))
+                })
+        })
+        .ok_or_else(|| WorktreeErr::NoLandingTarget {
+            name: name.to_owned(),
+        })?;
+    let target_checkout =
+        parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?)
+            .into_iter()
+            .find(|row| row.branch.as_deref() == Some(target.as_str()))
+            .map(|row| row.path)
+            .ok_or_else(|| WorktreeErr::TargetNotCheckedOut {
+                name: name.to_owned(),
+                target: target.clone(),
+            })?;
+    Ok(LandingPlan {
+        managed,
+        target,
+        target_checkout,
+    })
+}
+
+/// Rebase a clean managed branch onto its planned target, then fast-forward it.
+/// A failed rebase is aborted before returning; the target is never forced.
+pub fn land(
+    plan: &LandingPlan,
+    protections: &ProtectionSet,
+    memo: &LandedMemo,
+) -> Result<WorktreeMerge> {
+    let LandingPlan {
+        managed,
+        target,
+        target_checkout,
+    } = plan;
+    let name = &managed.marker.name;
+    let state = inspect(&managed.path, &managed.marker, protections, memo)?;
+    if !state.holders.is_empty() {
         return Err(WorktreeErr::MergeInUse {
             name: name.to_owned(),
-            path: managed.path,
+            path: managed.path.clone(),
         });
     }
-    if current_branch(repo_root).as_deref() != Some("main") {
-        return Err(WorktreeErr::MainNotCheckedOut {
+    if current_branch(target_checkout).as_deref() != Some(target) {
+        return Err(WorktreeErr::TargetNotCheckedOut {
             name: name.to_owned(),
-            path: repo_root.to_owned(),
+            target: target.clone(),
         });
     }
-    if repository_operation_in_progress(repo_root) {
+    if repository_operation_in_progress(target_checkout) {
         return Err(WorktreeErr::MergeOperationInProgress {
             name: name.to_owned(),
-            checkout: "the main checkout",
+            checkout: format!("the {target} checkout"),
         });
     }
     if repository_operation_in_progress(&managed.path) {
         return Err(WorktreeErr::MergeOperationInProgress {
             name: name.to_owned(),
-            checkout: "the worktree checkout",
+            checkout: "the worktree checkout".to_owned(),
         });
     }
-    if !git_stdout(repo_root, ["status", "--porcelain"])?.is_empty() {
-        return Err(WorktreeErr::MergeDirtyMain {
+    if !git_stdout(target_checkout, ["status", "--porcelain"])?.is_empty() {
+        return Err(WorktreeErr::MergeDirtyTarget {
             name: name.to_owned(),
+            target: target.clone(),
         });
     }
-    if !git_stdout(&managed.path, ["status", "--porcelain"])?.is_empty() {
+    if state.status.dirty() {
         return Err(WorktreeErr::MergeDirtyWorktree {
             name: name.to_owned(),
         });
     }
-    let actual_branch = managed.branch.as_deref().unwrap_or("detached HEAD");
+    let branch = current_branch(&managed.path);
+    let actual_branch = branch.as_deref().unwrap_or("detached HEAD");
     if actual_branch != managed.marker.branch {
         return Err(WorktreeErr::MergeBranchMismatch {
             name: name.to_owned(),
-            expected: managed.marker.branch,
+            expected: managed.marker.branch.clone(),
             actual: actual_branch.to_owned(),
         });
     }
 
-    let main_head = git_stdout(repo_root, ["rev-parse", "HEAD"])?;
+    let target_head = git_stdout(target_checkout, ["rev-parse", "HEAD"])?;
     if let Err(err) = git_run(
         &managed.path,
-        ["-c", "rebase.updateRefs=false", "rebase", "main"],
+        ["-c", "rebase.updateRefs=false", "rebase", target],
     ) {
         let _ = git_run(&managed.path, ["rebase", "--abort"]);
         return Err(WorktreeErr::RebaseFailed {
             name: name.to_owned(),
+            target: target.clone(),
             stderr: git_error_detail(err),
         });
     }
     if !git_stdout(&managed.path, ["status", "--porcelain"])?.is_empty() {
         return Err(WorktreeErr::MergeDirtyAfterRebase {
             name: name.to_owned(),
+            target: target.clone(),
         });
     }
-    if git_stdout(repo_root, ["rev-parse", "HEAD"])? != main_head
-        || !git_stdout(repo_root, ["status", "--porcelain"])?.is_empty()
+    if current_branch(target_checkout).as_deref() != Some(target)
+        || git_stdout(target_checkout, ["rev-parse", "HEAD"])? != target_head
+        || !git_stdout(target_checkout, ["status", "--porcelain"])?.is_empty()
     {
-        return Err(WorktreeErr::MainChanged {
+        return Err(WorktreeErr::TargetChanged {
             name: name.to_owned(),
+            target: target.clone(),
         });
     }
 
     let head = git_stdout(&managed.path, ["rev-parse", "HEAD"])?;
-    if let Err(err) = git_run(repo_root, ["merge", "--ff-only", head.as_str()]) {
+    if let Err(err) = git_run(target_checkout, ["merge", "--ff-only", head.as_str()]) {
         return Err(WorktreeErr::FastForwardFailed {
             name: name.to_owned(),
+            target: target.clone(),
             stderr: git_error_detail(err),
         });
     }
     Ok(WorktreeMerge {
-        name: managed.marker.name,
-        branch: managed.marker.branch,
+        name: managed.marker.name.clone(),
+        branch: managed.marker.branch.clone(),
         head,
     })
 }
