@@ -52,6 +52,7 @@ pub(super) struct ModelUsage {
 pub(super) struct TurnCompletion {
     pub at_secs: u64,
     pub session_id: Option<String>,
+    pub event_id: Option<String>,
     pub prompt_id: String,
     pub stop_reason: String,
     pub agent_result: Option<String>,
@@ -399,6 +400,11 @@ fn apply_row(folded: &mut FoldedSession, row: DecodedRow) {
 fn completion_from_update(row: &Value, params: &Value, update: &Value) -> Option<TurnCompletion> {
     Some(TurnCompletion {
         at_secs: row.get("timestamp").and_then(Value::as_u64).unwrap_or(0),
+        event_id: params
+            .get("_meta")
+            .and_then(|meta| meta.get("eventId"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         session_id: params
             .get("sessionId")
             .and_then(Value::as_str)
