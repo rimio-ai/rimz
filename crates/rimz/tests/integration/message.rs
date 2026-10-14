@@ -1414,11 +1414,29 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
         let env = Env::new();
         env.record(&env.project_root);
         env.install_agent_hooks("claude");
-        register_running_agent(
+        // Every rimz process here, hooks included, reaches the trace shim rather
+        // than a live multiplexer; the empty trace at the end proves none tried.
+        let trace_log = env.project_root.join("zellij-missing-pane-wake-trace.log");
+        let shim = zellij_trace_shim();
+        let pane_env: &[(&str, &str)] = &[
+            ("ZELLIJ_PANE_ID", "3"),
+            ("RIMZ_ZELLIJ_BIN", shim.to_str().expect("shim path")),
+            (
+                "RIMZ_TEST_ZELLIJ_LOG",
+                trace_log.to_str().expect("trace path"),
+            ),
+        ];
+        register_running_agent(&env, "sess-missing-pane", "feature-missing-pane", pane_env);
+        // The wake is queued after Stop: a Stop with a queued head spawns a
+        // detached `message deliver` the test cannot await, which would race the sweep.
+        run_hook(
             &env,
-            "sess-missing-pane",
-            "feature-missing-pane",
-            &[("ZELLIJ_PANE_ID", "3")],
+            json!({
+                "hook_event_name": "Stop",
+                "session_id": "sess-missing-pane",
+                "worktree_branch": "feature-missing-pane",
+            }),
+            pane_env,
         );
         let pane_fixture = env.write_pane_fixture(&[]);
         let snapshot = env.store().snapshot_cached().expect("snapshot");
@@ -1438,17 +1456,7 @@ fn sweep_records_missing_pane_blocker_without_losing_harness_wake_pin() {
             "stuck: no live pane"
         };
         env.store().queue_message(&wake, "rimz-test").unwrap();
-        run_hook(
-            &env,
-            json!({
-                "hook_event_name": "Stop",
-                "session_id": "sess-missing-pane",
-                "worktree_branch": "feature-missing-pane",
-            }),
-            &[("ZELLIJ_PANE_ID", "3")],
-        );
 
-        let trace_log = env.project_root.join("zellij-missing-pane-wake-trace.log");
         run_success(
             traced_rimz(&env, &trace_log)
                 .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
