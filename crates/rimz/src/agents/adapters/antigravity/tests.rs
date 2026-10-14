@@ -473,6 +473,10 @@ fn statusline_normalizes_reasoning_qualifiers_without_changing_model_id() {
         ("Gemini 3.5 Flash (Low)", FLASH, Some("low"), None),
         ("Gemini 3.5 Flash (Medium)", FLASH, Some("medium"), None),
         ("Gemini 3.1 Pro (High)", PRO, Some("high"), None),
+        // These selector spellings are uncaptured; the effort levels are documented.
+        ("Gemini 3.1 Pro (Extra High)", PRO, Some("xhigh"), None),
+        ("Gemini 3.1 Pro (XHigh)", PRO, Some("xhigh"), None),
+        ("Gemini 3.1 Pro (Max)", PRO, Some("max"), None),
         ("Claude Sonnet 4.6 (Thinking)", SONNET, None, Some(true)),
         (
             "  Gemini 3.5 Flash (mEdIuM) \t",
@@ -532,30 +536,32 @@ fn statusline_native_model_effort_wins_over_label_qualifier() {
 #[test]
 fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
     let prices = PriceBook::from_litellm_json(
-        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"cache_creation_input_token_cost":3e-6,"cache_read_input_token_cost":0.25e-6},"gemini-3.5-flash":{"input_cost_per_token":1.5e-6,"output_cost_per_token":9e-6,"cache_creation_input_token_cost":1.875e-6,"cache_read_input_token_cost":0.15e-6}}"#,
+        r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"cache_creation_input_token_cost":3e-6,"cache_read_input_token_cost":0.25e-6},"gemini-3.5-flash":{"input_cost_per_token":1.5e-6,"output_cost_per_token":9e-6,"cache_creation_input_token_cost":1.875e-6,"cache_read_input_token_cost":0.15e-6},"vertex_ai/openai/gpt-oss-120b-maas":{"input_cost_per_token":9e-8,"output_cost_per_token":3.6e-7},"gemini-3.8-flash":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6},"claude-sonnet-5":{"input_cost_per_token":3e-6,"output_cost_per_token":15e-6}}"#,
     );
     for (id, usage, expected) in [
         ("  agy-priced-via-router  ", (10, 20, 30, 40), 150e-6),
+        ("GPT-OSS 120B (Medium)", (10, 20, 0, 0), 8.1e-6),
+        ("Gemini 3.8 Flash (Max)", (10, 20, 0, 0), 50e-6),
         (
             "Gemini 3.5 Flash (Medium)",
             (2_971, 630, 0, 16_270),
             0.012_567,
         ),
     ] {
-        let cost = AntigravityAdapter
-            .context_cost(
-                &json!({
-                    "model": {"id": id, "display_name": id},
-                    "context_window": {"current_usage": {
-                        "input_tokens": usage.0,
-                        "output_tokens": usage.1,
-                        "cache_creation_input_tokens": usage.2,
-                        "cache_read_input_tokens": usage.3
-                    }}
-                }),
-                &prices,
-            )
-            .unwrap();
+        let cost = AntigravityAdapter.context_cost(
+            &json!({
+                "model": {"id": id, "display_name": id},
+                "context_window": {"current_usage": {
+                    "input_tokens": usage.0,
+                    "output_tokens": usage.1,
+                    "cache_creation_input_tokens": usage.2,
+                    "cache_read_input_tokens": usage.3
+                }}
+            }),
+            &prices,
+        );
+        assert!(cost.is_some(), "{id} must have an exact selector price");
+        let cost = cost.unwrap();
         assert_eq!(cost.coverage, crate::agents::CostCoverage::CurrentUsage);
         assert!((cost.total_cost_usd.unwrap() - expected).abs() < 1e-15);
     }
@@ -565,6 +571,7 @@ fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
         r#"{"model":{"id":"agy-priced"},"context_window":{"current_usage":{"input_tokens":0}}}"#,
         r#"{"model":{"id":"   "},"context_window":{"current_usage":{"input_tokens":10}}}"#,
         r#"{"model":{"id":"Gemini 3.5 Flash Turbo (Medium)"},"context_window":{"current_usage":{"input_tokens":10}}}"#,
+        r#"{"model":{"id":"Claude Sonnet 5.5 (Thinking)"},"context_window":{"current_usage":{"input_tokens":10}}}"#,
     ] {
         assert!(
             AntigravityAdapter
