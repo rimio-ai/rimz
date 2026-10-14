@@ -1385,7 +1385,8 @@ fn assert_lifecycle_hook_honest(
                 .filter(|sample| sample_produces_signal(adapter, sample, signal_kind))
             {
                 assert!(
-                    via.contains(sample.event_name),
+                    via.split(|c: char| !c.is_alphanumeric() && c != '_')
+                        .any(|word| word == sample.event_name),
                     "{kind} {signal_kind:?} is derived but corpus event {} produces it without being named in `via`",
                     sample.event_name
                 );
