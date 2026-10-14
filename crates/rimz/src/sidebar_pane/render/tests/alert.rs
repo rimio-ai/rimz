@@ -63,7 +63,7 @@ fn bottom_chrome_active_alert_suppresses_dashboard_store_and_footer() {
         true,
         Some((25, 40)),
     )];
-    snapshot.value_tally = Some(bottom_tally());
+    snapshot.value_tally = Some(bottom_tally().into());
     let alert = Alert::active("snapshot failed", snapshot.now);
 
     let (lines, hits) = bottom_chrome_texts(&snapshot, Some(&alert));

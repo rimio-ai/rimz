@@ -362,11 +362,11 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
     let mut values = vec![
         (
             AggregateKey::CockpitTally,
-            year(snapshot.value_tally.as_ref()),
+            year(snapshot.value_tally.as_deref()),
         ),
         (
             AggregateKey::WorkspaceTally,
-            year(snapshot.workspace_value_tally.as_ref()),
+            year(snapshot.workspace_value_tally.as_deref()),
         ),
     ];
     for panel in &snapshot.providers {
@@ -584,7 +584,7 @@ mod tests {
             plan: Some("Claude Max".to_owned()),
             remote_control: crate::store::snapshot::RemoteControlBadge::Healthy,
             active_sessions: 3,
-            spending: Some(tally.clone()),
+            spending: Some(tally.clone().into()),
             day_budget: Some(crate::store::snapshot::DailyBudgetView {
                 cap_usd: 50.0,
                 spend_usd: 12.5,
@@ -617,8 +617,8 @@ mod tests {
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/sig-full")),
             vec![panel],
         );
-        snapshot.value_tally = Some(tally.clone());
-        snapshot.workspace_value_tally = Some(tally);
+        snapshot.value_tally = Some(tally.clone().into());
+        snapshot.workspace_value_tally = Some(tally.into());
         snapshot
     }
 

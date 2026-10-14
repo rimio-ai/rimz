@@ -461,6 +461,8 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
                 AgentSessionId::from(format!("ended-{index}")),
             ));
         }
+        shared.value_tally = Some(crate::SpendTally::default().into());
+        shared.workspace_value_tally = Some(crate::SpendTally::default().into());
         let retained = shared.clone();
         let subscribers = Subscribers::default();
         let mut receivers = Vec::new();
@@ -501,6 +503,18 @@ fn publication_shares_agent_scaled_fields_at_room_scale() {
             assert_eq!(shown.agents.len(), 200);
             assert_eq!(shown.fenced_sessions.len(), 4000);
             assert_shared_fields(shown, &retained);
+            for (shown, retained) in [
+                (&shown.value_tally, &retained.value_tally),
+                (
+                    &shown.workspace_value_tally,
+                    &retained.workspace_value_tally,
+                ),
+            ] {
+                assert!(std::ptr::eq(
+                    &shown.as_ref().unwrap().headline,
+                    &retained.as_ref().unwrap().headline,
+                ));
+            }
         }
     }
 }

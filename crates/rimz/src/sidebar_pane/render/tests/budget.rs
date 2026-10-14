@@ -136,12 +136,15 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         metered: true,
         remote_control: Default::default(),
         active_sessions: 0,
-        spending: Some(SpendTally {
-            headline: spend_window(4.2 + index as f64),
-            week: spend_window(31.0 + index as f64),
-            month: spend_window(118.0 + index as f64),
-            year: spend_window(960.0 + index as f64),
-        }),
+        spending: Some(
+            SpendTally {
+                headline: spend_window(4.2 + index as f64),
+                week: spend_window(31.0 + index as f64),
+                month: spend_window(118.0 + index as f64),
+                year: spend_window(960.0 + index as f64),
+            }
+            .into(),
+        ),
         day_budget: None,
         extra_credits: None,
         reset_credits: None,

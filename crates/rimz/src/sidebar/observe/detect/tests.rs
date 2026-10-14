@@ -239,7 +239,7 @@ fn snapshot_with_spend(year_usd: Option<f64>) -> crate::store::snapshot::Sidebar
         Vec::new(),
         jiff::Timestamp::now(),
     );
-    snapshot.value_tally = year_usd.map(spend_tally);
+    snapshot.value_tally = year_usd.map(spend_tally).map(Into::into);
     snapshot
 }
 
@@ -274,7 +274,7 @@ fn panel_frame(at_ms: u64, panels: Vec<SidebarProviderPanel>) -> FrameSig {
 
 fn claude_panel(year_usd: f64) -> SidebarProviderPanel {
     SidebarProviderPanel {
-        spending: Some(spend_tally(year_usd)),
+        spending: Some(spend_tally(year_usd).into()),
         ..provider_panel("claude", Vec::new())
     }
 }
@@ -1489,12 +1489,15 @@ fn aggregate_spend_drops_record_only_a_year_reset() {
         panel_frame(
             at_ms,
             vec![SidebarProviderPanel {
-                spending: Some(SpendTally {
-                    headline: spent(headline),
-                    week: spent(week),
-                    month: spent(month),
-                    year: spent(year),
-                }),
+                spending: Some(
+                    SpendTally {
+                        headline: spent(headline),
+                        week: spent(week),
+                        month: spent(month),
+                        year: spent(year),
+                    }
+                    .into(),
+                ),
                 ..provider_panel("codex", Vec::new())
             }],
         )

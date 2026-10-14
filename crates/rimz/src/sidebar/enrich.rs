@@ -737,9 +737,9 @@ fn enrich_core(
     // read by the cockpit's headline figure and the bottom value corner — attaches
     // once, after every fold; `None` when nothing has ever been recorded.
     snapshot.value_tally = (!spending_caches.provider.spending.total.is_zero())
-        .then_some(spending_caches.provider.spending.total.clone());
+        .then(|| Arc::new(spending_caches.provider.spending.total.clone()));
     snapshot.workspace_value_tally = (!spending_caches.workspace.tally.is_zero())
-        .then_some(spending_caches.workspace.tally.clone());
+        .then(|| Arc::new(spending_caches.workspace.tally.clone()));
     // The live overlay rides the same fold: a context sidecar push wakes the
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the

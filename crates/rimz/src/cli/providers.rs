@@ -326,13 +326,15 @@ fn build_report(
         windows: panel.map_or_else(Vec::new, |panel| panel.windows.clone()),
         extra_credits: panel.and_then(|panel| panel.extra_credits.clone()),
         reset_credits: panel.and_then(|panel| panel.reset_credits.clone()),
-        spending: panel.and_then(|panel| panel.spending.clone()).or_else(|| {
-            provider_spending
-                .spending
-                .by_login
-                .get(&login.pool())
-                .cloned()
-        }),
+        spending: panel
+            .and_then(|panel| panel.spending.as_deref().cloned())
+            .or_else(|| {
+                provider_spending
+                    .spending
+                    .by_login
+                    .get(&login.pool())
+                    .cloned()
+            }),
         day_budget: panel.and_then(|panel| panel.day_budget),
         active_sessions: panel.map_or(0, |panel| panel.active_sessions),
         active: false,

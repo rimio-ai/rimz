@@ -463,8 +463,8 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
     .map(worktree_group)
     .collect::<Vec<_>>()
     .into();
-    snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));
-    snapshot.workspace_value_tally = Some(spend_tally(6.84, 481_000, 5));
+    snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8).into());
+    snapshot.workspace_value_tally = Some(spend_tally(6.84, 481_000, 5).into());
     snapshot.today_spend_live_usd = Some(10.08);
 }
 
@@ -856,8 +856,8 @@ fn add_cockpit_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             now,
         ),
     ];
-    snapshot.value_tally = Some(spend_tally(1_425.0, 91_100_000, 96));
-    snapshot.workspace_value_tally = Some(spend_tally(1_168.0, 68_100_000, 78));
+    snapshot.value_tally = Some(spend_tally(1_425.0, 91_100_000, 96).into());
+    snapshot.workspace_value_tally = Some(spend_tally(1_168.0, 68_100_000, 78).into());
     snapshot.today_spend_live_usd = Some(392.0);
 }
 
@@ -1283,8 +1283,8 @@ fn add_focus_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             now,
         ),
     ];
-    snapshot.value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
-    snapshot.workspace_value_tally = Some(spend_tally(1_125.0, 76_200_000, 88));
+    snapshot.value_tally = Some(spend_tally(1_125.0, 76_200_000, 88).into());
+    snapshot.workspace_value_tally = Some(spend_tally(1_125.0, 76_200_000, 88).into());
     snapshot.today_spend_live_usd = Some(268.0);
     snapshot.link = Some(SidebarLinkHealth {
         rtt_ms: Some(48),
@@ -1642,8 +1642,8 @@ fn add_economy_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             now,
         ),
     ];
-    snapshot.value_tally = Some(spend_tally(1_780.0, 118_000_000, 108));
-    snapshot.workspace_value_tally = Some(spend_tally(1_416.0, 88_400_000, 83));
+    snapshot.value_tally = Some(spend_tally(1_780.0, 118_000_000, 108).into());
+    snapshot.workspace_value_tally = Some(spend_tally(1_416.0, 88_400_000, 83).into());
     snapshot.today_spend_live_usd = Some(486.0);
 }
 
@@ -1981,8 +1981,8 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             now,
         ),
     ];
-    snapshot.value_tally = Some(spend_tally(980.0, 63_800_000, 84));
-    snapshot.workspace_value_tally = Some(spend_tally(724.0, 41_100_000, 64));
+    snapshot.value_tally = Some(spend_tally(980.0, 63_800_000, 84).into());
+    snapshot.workspace_value_tally = Some(spend_tally(724.0, 41_100_000, 64).into());
     snapshot.today_spend_live_usd = Some(204.0);
 }
 
@@ -2474,7 +2474,7 @@ fn provider_panel(
             RemoteControlBadge::Hidden
         },
         active_sessions: spending.headline.sessions,
-        spending: Some(spending),
+        spending: Some(spending.into()),
         day_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),
         reset_credits: None,

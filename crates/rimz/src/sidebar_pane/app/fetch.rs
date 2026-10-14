@@ -367,8 +367,16 @@ fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> boo
         && theme == &right.theme
         && attention == &right.attention
         && providers == &right.providers
-        && value_tally == &right.value_tally
-        && workspace_value_tally == &right.workspace_value_tally
+        && match (value_tally, &right.value_tally) {
+            (Some(left), Some(right)) => shared_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+        && match (workspace_value_tally, &right.workspace_value_tally) {
+            (Some(left), Some(right)) => shared_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
         && today_spend_live_usd == &right.today_spend_live_usd
         && today_spend_epoch_secs == &right.today_spend_epoch_secs
         && fleet_day_spend_usd == &right.fleet_day_spend_usd

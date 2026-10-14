@@ -261,14 +261,14 @@ pub struct SidebarSnapshot {
     /// `week` and `month` rows; provider dashboard panels read the per-provider
     /// entries produced alongside this total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_tally: Option<SpendTally>,
+    pub value_tally: Option<Arc<SpendTally>>,
     /// Workspace-scoped spend and token tally for the cockpit, limited to the
     /// room's project root plus grouped worktree roots. Unknown-origin
     /// transcript entries are omitted. This is cached under the workspace
     /// runtime root and folded beside [`Self::value_tally`] so the provider
     /// dashboard and fleet store stay account-global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_value_tally: Option<SpendTally>,
+    pub workspace_value_tally: Option<Arc<SpendTally>>,
     /// The cockpit's live headline spend: walked workspace headline USD with
     /// active live-card sessions excluded, plus those cards' current costs.
     /// This keeps the headline aligned with visible cards while the W/M store

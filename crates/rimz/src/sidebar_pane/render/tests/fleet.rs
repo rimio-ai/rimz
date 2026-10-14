@@ -114,7 +114,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
 #[test]
 fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.value_tally = Some(bottom_tally());
+    snapshot.value_tally = Some(bottom_tally().into());
     let headline = crate::SpendWindow {
         usd: 1.23,
         tokens: 30_000,
@@ -124,12 +124,15 @@ fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
         sessions: 2,
         ..Default::default()
     };
-    snapshot.workspace_value_tally = Some(crate::SpendTally {
-        headline: headline.clone(),
-        week: headline.clone(),
-        month: headline.clone(),
-        year: headline,
-    });
+    snapshot.workspace_value_tally = Some(
+        crate::SpendTally {
+            headline: headline.clone(),
+            week: headline.clone(),
+            month: headline.clone(),
+            year: headline,
+        }
+        .into(),
+    );
 
     let rendered = snapshot_to_screen(&snapshot, 60, 14);
     let summary = rendered.lines().nth(2).unwrap();
