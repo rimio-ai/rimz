@@ -1,9 +1,7 @@
 //! Managed global Kiro hook file, `~/.kiro/hooks/rimz.json`.
 //!
-//! Kiro CLI 2.13.0 made `~/.kiro/hooks/*.json` fire in every workspace, so
-//! RimZ owns one whole file there. Earlier releases ran those hooks only when
-//! the workspace was the home directory, so install refuses on them. A file
-//! from the older unmarked RimZ install is reclaimed rather than refused.
+//! RimZ requires Kiro CLI 2.31.0's shared configuration, session, and hook home.
+//! A file from the older unmarked RimZ install is reclaimed rather than refused.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -19,7 +17,7 @@ use crate::agents::{
 
 const AGENT: &str = "kiro";
 const RECLAIM_KEY: &str = "hooks feed --source kiro";
-pub(super) const MIN_GLOBAL_HOOKS: CliVersion = CliVersion::new(2, 13, 0);
+pub(super) const MIN_SUPPORTED_CLI: CliVersion = CliVersion::new(2, 31, 0);
 
 pub(super) static MANAGED_INTEGRATION: KiroManagedIntegration = KiroManagedIntegration;
 
@@ -64,36 +62,36 @@ fn installed_cli_version() -> Option<CliVersion> {
 pub(super) fn hooks_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     resolve_hooks_path(
         std::env::var_os("RIMZ_KIRO_HOOKS").as_deref(),
+        login_env.get("KIRO_HOME").map(OsStr::new),
         login_env.get("HOME").map(OsStr::new),
     )
 }
 
-/// The `.kiro` directory the v3 engine reads sessions and global hooks from.
-/// The engine resolves it from the OS home and never reads `KIRO_HOME`, which
-/// moves only the launcher's settings (verified on Kiro CLI 2.21.4).
-pub(super) fn engine_home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    resolve_home(None, login_env.get("HOME").map(OsStr::new))
-}
-
 pub(super) fn resolve_home(kiro_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    let home = home
+        .filter(|value| !value.is_empty())
+        .map(Path::new)
+        .map(crate::utils::path::normalize_path_lexical);
     kiro_home
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            home.filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .map(|home| home.join(".kiro"))
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .map(crate::utils::path::normalize_path_lexical)
+        .filter(|path| {
+            path.parent().is_some() && !home.as_ref().is_some_and(|home| home.starts_with(path))
         })
+        .or_else(|| home.map(|home| home.join(".kiro")))
 }
 
 pub(super) fn resolve_hooks_path(
     override_path: Option<&OsStr>,
+    kiro_home: Option<&OsStr>,
     home: Option<&OsStr>,
 ) -> Result<PathBuf> {
     if let Some(path) = override_path.filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    let home = resolve_home(None, home).ok_or_else(|| AgentErr::Install {
+    let home = resolve_home(kiro_home, home).ok_or_else(|| AgentErr::Install {
         agent: AGENT,
         reason: "$HOME is not set; cannot resolve ~/.kiro/hooks/rimz.json".to_owned(),
     })?;
@@ -101,13 +99,13 @@ pub(super) fn resolve_hooks_path(
 }
 
 /// An unprobeable binary installs: the version gate only refuses a release
-/// known to predate global hooks.
+/// known to predate the shared-home contract.
 fn refuse_old_cli(version: Option<CliVersion>) -> Result<()> {
     match version {
-        Some(found) if found < MIN_GLOBAL_HOOKS => Err(AgentErr::Install {
+        Some(found) if found < MIN_SUPPORTED_CLI => Err(AgentErr::Install {
             agent: AGENT,
             reason: format!(
-                "Kiro CLI {found} runs ~/.kiro/hooks only in the home workspace; upgrade to {MIN_GLOBAL_HOOKS} or later"
+                "RimZ's Kiro integration needs Kiro CLI {MIN_SUPPORTED_CLI} or later (found {found}); upgrade to {MIN_SUPPORTED_CLI} or later"
             ),
         }),
         _ => Ok(()),

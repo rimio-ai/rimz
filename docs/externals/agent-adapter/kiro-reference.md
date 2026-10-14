@@ -10,6 +10,8 @@ Wire claims use the [Linux x86_64 release archive](https://prod.download.cli.kir
 
 **Inline pins.** Record order inside real turns comes from stock sessions captured on Kiro CLI 2.12.1 and 2.21.4 and was not re-captured, because running a session is outside a refresh pass. Each such claim retains its capture version. The redacted captures are RimZ's fixtures under `crates/rimz/src/agents/adapters/kiro/tests/fixtures/`.
 
+**Targeted 2.31.0 check.** The home resolution, `--trust-all-tools`, positional prompt parsing, `SessionEnd`, and `user_input` facts were also checked statically against the [2.31.0 release bundle](https://prod.download.cli.kiro.dev/stable/2.31.0/kirocli-x86_64-linux.tar.xz). The rest of this page retains its 2.30.0 baseline and was not re-verified.
+
 ## Upstream sources
 
 The docs are rolling and unversioned. Several pages cover the Kiro IDE and CLI together.
@@ -116,7 +118,7 @@ A new local TUI session sends the launch working directory as ACP `cwd` (TUI bun
 
 The bucket is the first 16 hex characters of SHA-256 over the session's workspace paths. The engine normalizes each path (absolute, forward slashes, no trailing slash, lowercased on Windows), sorts them, and joins them with a NUL byte. A session with no workspace path uses the bucket `_global` (engine bundle, the `createHash("sha256")` call that feeds `computeWorkspaceHash`). For one workspace, the input is its normalized absolute path. To find an existing session, the engine tries the caller's bucket, then the session index, then every bucket directory. Local Kiro state uses owner-only access since 2.27.0 ([changelog](https://kiro.dev/changelog/cli/)).
 
-The sessions root and `KIRO_HOME` disagree between docs and wire. The settings reference says `KIRO_HOME` "Overrides the `~/.kiro` directory used for global agents, prompts, skills, steering, settings, and sessions" ([Settings](https://kiro.dev/docs/reference/settings/)). The engine bundle sets `sessionsPath` to `<homeDir>/.kiro/sessions`, with `homeDir` defaulting to Node's `os.homedir()`, and contains no `KIRO_HOME` read. The TUI bundle and `kiro-cli-chat` do read `KIRO_HOME` for their own paths. A live 2.21.4 launch with `KIRO_HOME` set wrote `settings/cli.json` under that directory but created the session under `$HOME/.kiro/sessions/`, and hooks under `$HOME/.kiro/hooks/` fired: the sessions root and global hooks ignore `KIRO_HOME`. The session-management page describes a "Local database (~/.kiro/)". The v3 wire uses the file layout above ([Session management](https://kiro.dev/docs/cli/chat/session-management/)).
+In 2.31.0, the engine bundle's `P8o` resolves `userConfigDir` from `KIRO_HOME`, rejecting a relative path, a filesystem root, or a path equal to or containing `HOME`, and falling back to `$HOME/.kiro`. It derives `sessionsPath`, `homeGlobalHooksDir`, and the skills base from that directory. This agrees with the [settings reference](https://kiro.dev/docs/reference/settings/), which says `KIRO_HOME` overrides the global configuration and sessions directory. In 2.30.0 the engine instead used `$HOME/.kiro` irrespective of that override; the TUI used the override independently. The session-management page describes a "Local database (~/.kiro/)"; the v3 wire uses the file layout above ([Session management](https://kiro.dev/docs/cli/chat/session-management/)).
 
 The engine creates `session.json` and an empty `messages.jsonl` before the first prompt (captured on 2.12.1). It validates `session.json` against this schema on load (engine bundle, the object with `schemaVersion`, `dataModelVersion`, and `workspacePaths`):
 
@@ -212,7 +214,7 @@ The v3 engine runs command and agent-prompt hooks from three sources (engine bun
 | Source | Location | Notes |
 | --- | --- | --- |
 | Workspace | `<workspace root>/.kiro/hooks/*.json` | Files load in sorted filename order. |
-| Global | `~/.kiro/hooks/*.json` | Added in 2.13.0: "Hooks placed in `~/.kiro/hooks/` now fire in every workspace automatically" ([changelog 2.13.0](https://kiro.dev/changelog/cli/)). The engine resolves `~` from its `homeDir`. |
+| Global | `<userConfigDir>/hooks/*.json` | Added in 2.13.0: "Hooks placed in `~/.kiro/hooks/` now fire in every workspace automatically" ([changelog 2.13.0](https://kiro.dev/changelog/cli/)). Since 2.31.0 the home follows [Session store](#session-store). |
 | Agent profile | the profile's `hooks` array | Each entry uses the standalone hook fields. Legacy object-form input converts `{command, matcher}` entries and drops `timeout_ms`, `max_output_size`, and `cache_ttl_seconds`. |
 
 The terminal UI enables hooks with `hooks: {enabled: true, v2: true}` (TUI bundle). Here `v2` names the internal hook implementation. Standalone hook files use `version: "v1"` and a non-empty `hooks` array (engine bundle, hook schema). Agent profiles use a flat `hooks` array without that wrapper ([Hooks migration](https://kiro.dev/docs/cli/v3/hooks-migration/)).
@@ -346,7 +348,7 @@ Configuration has global (`~/.kiro/`), project (`<project>/.kiro/`), and agent s
 
 | Setting or variable | Meaning |
 | --- | --- |
-| `KIRO_HOME` | Documented override for `~/.kiro`. See the disagreement under [Session store](#session-store). |
+| `KIRO_HOME` | Override for `~/.kiro`, shared by the engine since 2.31.0. See validation under [Session store](#session-store). |
 | `KIRO_API_KEY` | API-key authentication for headless runs. |
 | `KIRO_HEADLESS_WORKFLOW_TIMEOUT_SECS` | Lower the default six-hour headless workflow wait. |
 | `KIRO_SKIP_BINARY_PINNING=1` | Disable binary pinning for fixed-path installations. Do not use when an installer can replace the running binary ([changelog 2.22.0](https://kiro.dev/changelog/cli/)). |
