@@ -74,6 +74,29 @@ fn usage_block_with_advisor_line(
 }
 
 #[test]
+fn local_context_rewrite_regrowth_restarts_fold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, format!("{}\n", usage_line("old", 100, 5, 0, 0))).unwrap();
+    let first = refresh(&path, None, None).unwrap();
+    let replacement = format!(
+        "{}\n{}\n",
+        usage_line("new-one", 10, 2, 0, 0),
+        usage_line("new-two", 20, 3, 0, 0)
+    );
+    assert!(replacement.len() as u64 > first.transcript_stat.unwrap().len);
+    std::fs::write(&path, replacement).unwrap();
+    let resumed = refresh(
+        &path,
+        first.transcript_stat.as_ref(),
+        first.spend_fold.as_set(),
+    )
+    .unwrap();
+    let fresh = refresh(&path, None, None).unwrap();
+    assert_eq!(resumed.spend_fold, fresh.spend_fold);
+}
+
+#[test]
 fn local_context_fold_counts_content_block_rows_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session-1.jsonl");

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use super::managed_pricing;
 use super::spend::{claude_config_dirs_from, parse_claude_spend};
 use crate::agents::pricing;
+use crate::agents::spending::SpendUpdate;
 use crate::agents::{
     AgentTokenUsage, FieldPatch, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
     LocalSpendFold, LocalTokenPatch, TranscriptStat,
@@ -33,6 +34,9 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
     let prices = managed_pricing::overlay(&prices);
     let parsed = parse_claude_spend(&path, Some(&fold.cursor), &prices);
+    if parsed.update == SpendUpdate::Rewritten {
+        fold = LocalSpendFold::default();
+    }
     fold.absorb(&parsed.entries);
     fold.cursor = parsed.cursor;
     let session_usage = fold.session_usage();
