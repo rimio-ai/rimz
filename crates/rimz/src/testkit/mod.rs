@@ -428,6 +428,7 @@ pub mod fleet {
                             kind,
                         )),
                         ProviderRecord {
+                            probe_error: None,
                             login: None,
                             probed_at_ms: now_ms,
                             ok: false,

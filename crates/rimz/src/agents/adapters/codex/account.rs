@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::context::{
     AgentAccount, AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource,
@@ -137,7 +137,7 @@ pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     match std::fs::read(&path) {
         Ok(bytes) => with_credentials_mtime(parse_codex_auth(&bytes), &path),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => probe_login_status(login_env),
-        Err(_) => AccountProbe::Unavailable,
+        Err(_) => AccountProbe::Unavailable(AccountProbeError::ReadFailed),
     }
 }
 
@@ -170,14 +170,18 @@ fn probe_login_status_with(command: &mut Command) -> AccountProbe {
         command,
         crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
     ) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::SpawnFailed);
     };
     if output.timed_out {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::TimedOut);
     }
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
-    parse_login_status(&text)
+    let probe = parse_login_status(&text);
+    if matches!(probe, AccountProbe::Unavailable(_)) && !output.status.success() {
+        return AccountProbe::Unavailable(AccountProbeError::ExitNonZero(output.status.code()));
+    }
+    probe
 }
 
 /// Map `codex login status` output onto a probe outcome. Codex prints one line
@@ -214,7 +218,7 @@ fn parse_login_status(text: &str) -> AccountProbe {
         });
     }
     let Some(metered) = metered else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
     AccountProbe::Found(AgentAccount {
         metered,
@@ -411,7 +415,7 @@ mod tests {
         ));
         assert!(matches!(
             parse_login_status("Error checking login status: boom\n"),
-            AccountProbe::Unavailable
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
     }
 
@@ -424,6 +428,17 @@ mod tests {
         assert!(matches!(
             probe_login_status_with(&mut command),
             AccountProbe::LoggedOut
+        ));
+
+        let mut failed = Command::new("/bin/sh");
+        failed.args(["-c", "exit 7"]);
+        assert!(matches!(
+            probe_login_status_with(&mut failed),
+            AccountProbe::Unavailable(AccountProbeError::ExitNonZero(Some(7)))
+        ));
+        assert!(matches!(
+            probe_login_status_with(&mut Command::new("/nonexistent/rimz-account-probe")),
+            AccountProbe::Unavailable(AccountProbeError::SpawnFailed)
         ));
     }
 

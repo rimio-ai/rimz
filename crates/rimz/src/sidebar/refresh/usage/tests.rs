@@ -733,6 +733,7 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    probe_error: None,
                     login: None,
                     probed_at_ms: 1,
                     ok: true,
@@ -794,6 +795,7 @@ fn account_usage_changed_cached_credentials_claim_once_without_rereading_owner()
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    probe_error: None,
                     login: None,
                     probed_at_ms: 1,
                     ok: true,
@@ -872,6 +874,7 @@ fn failed_spawn_cancels_claim_for_immediate_retry() {
             logins: std::collections::BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    probe_error: None,
                     login: None,
                     probed_at_ms: 1,
                     ok: true,
@@ -922,6 +925,7 @@ fn simultaneous_schedulers_spawn_once_per_provider_kind() {
             logins: BTreeMap::from([(
                 crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("claude")),
                 ProviderRecord {
+                    probe_error: None,
                     login: None,
                     probed_at_ms: 1,
                     ok: true,

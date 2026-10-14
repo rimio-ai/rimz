@@ -63,6 +63,8 @@ pub struct ProviderRecord {
     /// reads from `ok` and `account`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<RecordedLogin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe_error: Option<AccountProbeError>,
 }
 
 /// A confident probe's login outcome as `ProviderRecord` stores it.
@@ -725,7 +727,33 @@ pub enum AccountProbe {
     LoggedOut,
     /// The probe could not complete — the binary is missing, it exited non-zero,
     /// or its file was unreadable. Retry soon; absence here is not logged-out.
-    Unavailable,
+    Unavailable(AccountProbeError),
+}
+
+/// Secret-free cause of an unsuccessful account probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountProbeError {
+    SpawnFailed,
+    TimedOut,
+    ExitNonZero(Option<i32>),
+    UnparseableOutput,
+    ReadFailed,
+    SourceUnavailable,
+}
+
+impl std::fmt::Display for AccountProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SpawnFailed => f.write_str("could not start"),
+            Self::TimedOut => f.write_str("timed out"),
+            Self::ExitNonZero(Some(code)) => write!(f, "exited {code}"),
+            Self::ExitNonZero(None) => f.write_str("terminated by signal"),
+            Self::UnparseableOutput => f.write_str("unparseable output"),
+            Self::ReadFailed => f.write_str("could not read credentials"),
+            Self::SourceUnavailable => f.write_str("account source unavailable"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

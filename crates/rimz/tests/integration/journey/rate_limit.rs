@@ -144,6 +144,7 @@ fn accounts() -> AccountsCache {
             (
                 kind.to_owned(),
                 ProviderRecord {
+                    probe_error: None,
                     login: None,
                     probed_at_ms: now_ms,
                     ok: true,
@@ -155,6 +156,7 @@ fn accounts() -> AccountsCache {
     providers.insert(
         "claude".to_owned(),
         ProviderRecord {
+            probe_error: None,
             login: None,
             probed_at_ms: now_ms,
             ok: true,

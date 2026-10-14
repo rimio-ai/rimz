@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use jiff::{SignedDuration, Timestamp};
 use serde::Deserialize;
 
-use crate::agents::account::{AccountProbe, file_mtime_ms};
+use crate::agents::account::{AccountProbe, AccountProbeError, file_mtime_ms};
 use crate::agents::{AgentAccount, ProviderAccountScope};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -160,12 +160,12 @@ fn probe_at(
     let bytes = match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return AccountProbe::Unavailable,
+        Err(_) => return AccountProbe::Unavailable(AccountProbeError::ReadFailed),
     };
     if let Some(bytes) = bytes {
         let records: BTreeMap<String, AuthRecord> = match serde_json::from_slice(&bytes) {
             Ok(records) => records,
-            Err(_) => return AccountProbe::Unavailable,
+            Err(_) => return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput),
         };
         let mut usable = records
             .iter()
@@ -244,7 +244,7 @@ mod tests {
         std::fs::write(&path, "{").unwrap();
         assert!(matches!(
             probe_at(&path, true, None, now),
-            AccountProbe::Unavailable
+            AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
         std::fs::remove_file(&path).unwrap();
         let AccountProbe::Found(account) = probe_at(&path, true, None, now) else {

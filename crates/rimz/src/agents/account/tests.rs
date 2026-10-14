@@ -66,6 +66,7 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
         (false, planned(), None, Unavailable, "a failed probe"),
     ] {
         let record = ProviderRecord {
+            probe_error: None,
             probed_at_ms: 1,
             ok,
             account,
@@ -87,12 +88,14 @@ fn a_record_reads_its_recorded_login_and_an_ambiguous_legacy_shape_as_unknown() 
     let legacy: ProviderRecord =
         serde_json::from_str(r#"{"probed_at_ms":1,"ok":true,"account":null}"#).unwrap();
     assert_eq!(legacy.login, None);
+    assert_eq!(legacy.probe_error, None);
     assert_eq!(
         serde_json::to_string(&legacy).unwrap(),
         r#"{"probed_at_ms":1,"ok":true,"account":null}"#,
         "an unrecorded login leaves the bytes an older build reads"
     );
     let recorded = ProviderRecord {
+        probe_error: None,
         login: Some(Login::LoggedOut),
         ..legacy
     };

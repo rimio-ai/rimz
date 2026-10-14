@@ -8923,6 +8923,7 @@ fn loop_fire_skips_when_its_pinned_account_cannot_run() {
         logins: BTreeMap::from([(
             "claude@work".parse().unwrap(),
             rimz::agents::account::ProviderRecord {
+                probe_error: None,
                 login: None,
                 probed_at_ms: 1,
                 ok: true,

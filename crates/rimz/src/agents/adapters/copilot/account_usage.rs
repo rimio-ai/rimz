@@ -129,7 +129,9 @@ pub(super) fn probe_usage() -> crate::agents::AccountUsageProbe {
 fn process_config() -> Result<(Option<super::account::CopilotConfig>, Option<u64>)> {
     match super::account::load_process_config() {
         super::account::CopilotConfigLoad::Missing => Ok((None, None)),
-        super::account::CopilotConfigLoad::Unavailable => Err(CopilotUsageErr::ConfigUnavailable),
+        super::account::CopilotConfigLoad::Unavailable(_) => {
+            Err(CopilotUsageErr::ConfigUnavailable)
+        }
         super::account::CopilotConfigLoad::Loaded { config, stamp } => Ok((Some(config), stamp)),
     }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::agents::account::AccountProbe;
+use crate::agents::account::{AccountProbe, AccountProbeError};
 use crate::agents::context::AgentAccount;
 
 #[derive(Debug, Default, Deserialize)]
@@ -83,10 +83,10 @@ fn probe_at(path: &Path) -> AccountProbe {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return AccountProbe::LoggedOut;
         }
-        Err(_) => return AccountProbe::Unavailable,
+        Err(_) => return AccountProbe::Unavailable(AccountProbeError::ReadFailed),
     };
     let Ok(shape) = serde_json::from_slice::<CredentialShape>(&bytes) else {
-        return AccountProbe::Unavailable;
+        return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput);
     };
     let has_access = shape
         .access_token

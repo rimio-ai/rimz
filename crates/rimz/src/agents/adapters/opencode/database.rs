@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn unreadable_credentials_are_unavailable_not_logged_out() {
-        use crate::agents::account::AccountProbe;
+        use crate::agents::account::{AccountProbe, AccountProbeError};
         use crate::agents::delegated_account::{Adapter, Config, probe_account};
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
@@ -283,7 +283,10 @@ mod tests {
         };
         assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
         std::fs::write(&path, b"not a SQLite database").unwrap();
-        assert!(matches!(probe_account(&config), AccountProbe::Unavailable));
+        assert!(matches!(
+            probe_account(&config),
+            AccountProbe::Unavailable(AccountProbeError::ReadFailed)
+        ));
     }
 
     #[test]
