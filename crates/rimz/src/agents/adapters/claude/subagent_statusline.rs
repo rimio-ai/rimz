@@ -24,8 +24,8 @@ pub(crate) struct SubagentStatuslinePayload {
     tasks: Vec<SubagentTask>,
 }
 
-/// One child row. `name`, `status`, `label`, `cwd`, and `tokenSamples` are
-/// carried by the upstream payload but RimZ ignores them; `type`, `model`,
+/// One child row. `type`, `name`, `status`, `label`, `cwd`, and `tokenSamples` are
+/// carried by the upstream payload but RimZ ignores them; `agentType`, `model`,
 /// `effort`, `description`, and `startTime` are painted.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -36,8 +36,8 @@ struct SubagentTask {
     /// The agent's type label (`Explore`, `review`, …). Folds onto
     /// `AgentState.task` when the lifecycle hook never provided one — common
     /// for fork agents that carry no `agent_type` in `SubagentStart`.
-    #[serde(rename = "type")]
-    r#type: Option<String>,
+    #[serde(rename = "agentType")]
+    agent_type: Option<String>,
     /// Model and reasoning effort for the running task.
     model: Option<String>,
     effort: Option<String>,
@@ -63,7 +63,7 @@ impl SubagentStatuslinePayload {
                     agent_id,
                     context: SubagentContext {
                         usage: None,
-                        agent_type: task.r#type.filter(|t| !t.is_empty()),
+                        agent_type: task.agent_type.filter(|t| !t.is_empty()),
                         model: task.model.filter(|model| !model.is_empty()),
                         effort: task.effort.filter(|effort| !effort.is_empty()),
                         description: task.description.filter(|d| !d.is_empty()),
@@ -126,7 +126,7 @@ mod tests {
             "tasks": [
                 {
                     "id": "child-1",
-                    "type": "Explore",
+                    "agentType": "Explore",
                     "model": "claude-opus-4-6",
                     "effort": "high",
                     "status": "running",
@@ -135,7 +135,7 @@ mod tests {
                 },
                 {
                     "id": "child-2",
-                    "type": "review",
+                    "agentType": "review",
                     "description": "audit the trust hash",
                     "startTime": 1_700_000_055
                 }
@@ -174,9 +174,9 @@ mod tests {
         assert_eq!(obs[0].context.usage, None);
         assert_eq!(obs[0].context.started_at, None);
 
-        // An empty `type` string is not a useful label — treat it as absent so
+        // An empty `agentType` string is not a useful label — treat it as absent so
         // fork agents without a type don't render as an empty name.
-        let obs = observe(json!({ "tasks": [{ "id": "c", "type": "" }] }));
+        let obs = observe(json!({ "tasks": [{ "id": "c", "agentType": "" }] }));
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].context.agent_type, None);
 
@@ -192,6 +192,13 @@ mod tests {
         assert_eq!(obs[0].context.description.as_deref(), Some("still here"));
         assert_eq!(obs[0].context.started_at, None);
         assert_eq!(obs[0].context.usage, None);
+    }
+
+    #[test]
+    fn task_kind_is_not_an_agent_type() {
+        let obs = observe(json!({ "tasks": [{ "id": "c", "type": "local_agent" }] }));
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].context.agent_type, None);
     }
 
     #[test]

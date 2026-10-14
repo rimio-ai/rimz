@@ -3528,7 +3528,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
         "tasks": [
             {
                 "id": "child-1",
-                "type": "Explore",
+                "agentType": "Explore",
                 "status": "running",
                 "description": "locate the render seam",
                 "startTime": 1700000000,
@@ -3536,7 +3536,7 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
             },
             {
                 "id": "child-2",
-                "type": "review",
+                "agentType": "review",
                 "description": "audit the trust hash",
                 "startTime": 1700000055,
                 "tokenCount": 3100
