@@ -10,6 +10,7 @@
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,11 +49,12 @@ fn remote_setup_snippet_installs_or_names_latest_under_sh_and_zsh() {
         "ssh",
         r#"for arg; do snippet=$arg; done; exec "$SETUP_TEST_SHELL" -c "$snippet""#,
     );
-    // An empty release directory stands in for an unpublished release.
+    // An empty release directory stands in for an unpublished release. dd copies by read and
+    // write: cp and cat clone, and cloning a just-written file on ZFS waits for a pool sync.
     crate::common::write_path_shim(
         &bin,
         "curl",
-        r#"for arg; do url=$arg; done; cp "$SETUP_TEST_RELEASE/${url##*/}" . 2>/dev/null || exit 22"#,
+        r#"for arg; do url=$arg; done; src="$SETUP_TEST_RELEASE/${url##*/}"; [ -f "$src" ] || exit 22; dd if="$src" of="${url##*/}" 2>/dev/null"#,
     );
     crate::common::write_path_shim(
         &bin,
@@ -88,6 +90,7 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
             .status()
             .is_ok_and(|status| status.success())
     });
+    let installed = env.home_root.join(".local/bin");
     for shell in shells {
         let setup = |release: &Path| {
             env.rimz()
@@ -108,6 +111,12 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
             stdout.contains("rimz 0.0.0-test installed on dev-box at ~/.local/bin/rimz"),
             "{shell}: {stdout}\n{stderr}"
         );
+        assert_installed_alone(&installed, shell);
+        let mode = std::fs::metadata(installed.join("rimz"))
+            .expect("installed rimz")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "{shell}");
 
         let out = setup(&unpublished);
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -120,7 +129,17 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
             stderr.contains("failed with exit status: 22"),
             "{shell}: {stderr}"
         );
+        assert_installed_alone(&installed, shell);
     }
+}
+
+/// The snippet stages inside the bin directory, so it must leave nothing there but `rimz`.
+fn assert_installed_alone(bin: &Path, shell: &str) {
+    let entries: Vec<_> = std::fs::read_dir(bin)
+        .expect("read installed bin dir")
+        .map(|entry| entry.expect("bin dir entry").file_name())
+        .collect();
+    assert_eq!(entries, ["rimz"], "{shell}");
 }
 
 #[test]
