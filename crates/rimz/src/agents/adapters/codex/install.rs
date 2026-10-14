@@ -204,8 +204,8 @@ fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) 
     CODEX_HOOKS
         .iter()
         .filter(|hook| include(hook))
-        .filter(|hook| has_rimz_hook_command(&root, hook.event))
         .filter(|hook| {
+            let slots = rimz_hook_slots(&root, hook.event);
             let token = snake_event_token(hook.event);
             let is_trusted = |group, handler| {
                 [Some(path), canonical.as_deref()]
@@ -223,25 +223,10 @@ fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) 
                             })
                     })
             };
-            !root
-                .get(HOOKS_TABLE)
-                .and_then(toml::Value::as_table)
-                .and_then(|hooks| hooks.get(hook.event))
-                .and_then(toml::Value::as_array)
-                .is_some_and(|groups| {
-                    groups.iter().enumerate().any(|(group_index, group)| {
-                        group
-                            .as_table()
-                            .and_then(|table| table.get("hooks"))
-                            .and_then(toml::Value::as_array)
-                            .is_some_and(|handlers| {
-                                handlers.iter().enumerate().any(|(handler_index, handler)| {
-                                    is_current_rimz_hook_handler(handler)
-                                        && is_trusted(group_index, handler_index)
-                                })
-                            })
-                    })
-                })
+            !slots.is_empty()
+                && !slots
+                    .iter()
+                    .any(|&(group, handler)| is_trusted(group, handler))
         })
         .map(|hook| hook.event.to_owned())
         .collect()
@@ -440,19 +425,35 @@ fn strip_rimz_hook_commands(root: &mut toml::Table) -> Vec<String> {
 }
 
 pub(super) fn has_rimz_hook_command(root: &toml::Table, event: &str) -> bool {
-    root.get(HOOKS_TABLE)
+    !rimz_hook_slots(root, event).is_empty()
+}
+
+/// Raw zero-based `(group, handler)` positions of current RimZ handlers under
+/// `hooks.<event>`, counted over every array element as Codex keys trust state.
+fn rimz_hook_slots(root: &toml::Table, event: &str) -> Vec<(usize, usize)> {
+    let Some(groups) = root
+        .get(HOOKS_TABLE)
         .and_then(toml::Value::as_table)
         .and_then(|hooks| hooks.get(event))
         .and_then(toml::Value::as_array)
-        .is_some_and(|groups| {
-            groups.iter().any(|group| {
-                group
-                    .as_table()
-                    .and_then(|table| table.get("hooks"))
-                    .and_then(toml::Value::as_array)
-                    .is_some_and(|handlers| handlers.iter().any(is_current_rimz_hook_handler))
-            })
+    else {
+        return Vec::new();
+    };
+    groups
+        .iter()
+        .enumerate()
+        .filter_map(|(group, value)| {
+            let handlers = value.as_table()?.get("hooks")?.as_array()?;
+            Some((group, handlers))
         })
+        .flat_map(|(group, handlers)| {
+            handlers
+                .iter()
+                .enumerate()
+                .filter(|(_, handler)| is_current_rimz_hook_handler(handler))
+                .map(move |(handler, _)| (group, handler))
+        })
+        .collect()
 }
 
 fn has_any_rimz_hook_command(root: &toml::Table) -> bool {
