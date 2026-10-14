@@ -670,7 +670,9 @@ impl IdleCycleFixture {
 
     /// Fold once without production; return clock-only mailbox deliveries unless renderer application is enabled.
     pub fn run_cycle(&mut self) -> usize {
-        self.worker.producer_cadence.last_attempt = Some(Instant::now());
+        // A stamp ahead of the clock keeps production not-due however long the fold takes.
+        self.worker.producer_cadence.last_attempt =
+            Some(Instant::now() + Duration::from_secs(3600));
         self.worker
             .run_cycle(&self.state, FetchRequest::default(), &mut self.sink);
         let mut unchanged = 0;

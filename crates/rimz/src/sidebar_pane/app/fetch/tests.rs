@@ -1424,7 +1424,7 @@ impl FetchFixture {
                 .as_ref()
                 .map(|inputs| inputs.frame.clone()),
         );
-        worker.producer_cadence.last_attempt = Some(Instant::now());
+        worker.producer_cadence.last_attempt = Some(Instant::now() + Duration::from_secs(3600));
         worker.session_listed = |_, _| panic!("a unit test must not ask a multiplexer");
         worker
     }
@@ -1492,7 +1492,7 @@ fn host_start_fast_fold_uses_publications_before_the_first_produce() {
         last_projection,
     );
     assert_eq!(worker.last_projection, Some(projection));
-    worker.producer_cadence.last_attempt = Some(Instant::now());
+    worker.producer_cadence.last_attempt = Some(Instant::now() + Duration::from_secs(3600));
     worker.session_listed = |_, _| panic!("the fast fold must not query a mux");
     std::fs::remove_file(fixture.runtime.pane_frame_path()).unwrap();
     std::fs::remove_file(fixture.runtime.agent_projection_path()).unwrap();
