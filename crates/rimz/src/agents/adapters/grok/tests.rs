@@ -116,10 +116,32 @@ fn launch_keeps_streaming_flags_out_of_interactive_sessions() {
             "session-1".to_owned(),
         ])
     );
-    assert_eq!(
-        resumed_session_id("/usr/local/bin/grok --resume=session-1").as_deref(),
-        Some("session-1")
-    );
+    let id = "3b129972-4ff9-46dc-9539-aef06169231b";
+    for flags in [
+        format!("-r {id}"),
+        format!("--resume {id}"),
+        format!("--resume={id}"),
+    ] {
+        assert_eq!(
+            resumed_session_id(&format!("/usr/local/bin/grok {flags}")).as_deref(),
+            Some(id)
+        );
+    }
+    for flags in [
+        "--resume",
+        "--resume --yolo",
+        "--resume \"my title\"",
+        "--resume=my-title",
+    ] {
+        assert!(resumed_session_id(&format!("grok {flags}")).is_none());
+    }
+    for command in [
+        format!("grok --resume {id} --fork-session"),
+        format!("grok --fork-session --resume={id}"),
+        format!("other --resume {id}"),
+    ] {
+        assert!(resumed_session_id(&command).is_none());
+    }
 }
 
 #[test]

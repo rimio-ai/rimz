@@ -444,11 +444,6 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                 .map(|path| path.to_string_lossy().into_owned())
         });
         if canonical == "SessionStart" {
-            observation.origin = match parsed.source.as_deref() {
-                Some("new" | "startup" | "clear") => Some(SessionOrigin::Fresh),
-                Some("fork") => Some(SessionOrigin::Forked),
-                _ => None,
-            };
             let summary = observation
                 .transcript_path
                 .as_deref()
@@ -460,6 +455,24 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                         .as_deref()
                         .is_none_or(|summary_id| Some(summary_id) == root_id.as_deref())
                 });
+            observation.origin = match parsed.source.as_deref() {
+                Some("new") => Some(SessionOrigin::Fresh),
+                Some("load")
+                    if summary.as_ref().is_some_and(|summary| {
+                        summary
+                            .parent_session_id
+                            .as_deref()
+                            .is_some_and(|parent| !parent.is_empty())
+                            && matches!(
+                                summary.session_kind.as_deref(),
+                                Some("fork" | "worktree" | "headless")
+                            )
+                    }) =>
+                {
+                    Some(SessionOrigin::Forked)
+                }
+                _ => None,
+            };
             observation.worktree_path = observation
                 .worktree_path
                 .or_else(|| summary.as_ref().and_then(|value| value.info.cwd.clone()));
@@ -801,18 +814,20 @@ fn canonical_event_name(raw: &str) -> String {
 fn resumed_session_id(cmdline: &str) -> Option<AgentSessionId> {
     let mut tokens = cmdline.split_whitespace();
     let program = Path::new(tokens.next()?).file_name()?.to_str()?;
-    if program != "grok" {
+    if program != "grok" || tokens.clone().any(|token| token == "--fork-session") {
         return None;
     }
     while let Some(token) = tokens.next() {
-        let id = if token == "--resume" {
+        let id = if matches!(token, "-r" | "--resume") {
             tokens.next()?
         } else if let Some(id) = token.strip_prefix("--resume=") {
             id
         } else {
             continue;
         };
-        return non_empty_trimmed(id).map(AgentSessionId::from);
+        return uuid::Uuid::parse_str(id)
+            .ok()
+            .map(|_| AgentSessionId::from(id));
     }
     None
 }

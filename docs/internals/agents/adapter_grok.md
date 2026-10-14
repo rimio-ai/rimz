@@ -14,7 +14,7 @@ Shared-server gap: this adapter has no verified switch to suppress Grok's native
 
 | Native event | RimZ signal |
 | --- | --- |
-| `SessionStart` | register the root `sessionId`; `new`, `startup`, and `clear` mark fresh lineage |
+| `SessionStart` | register the root `sessionId`; `new` marks fresh lineage; `load` marks forked lineage when the session summary names a parent and kind `fork`, `worktree`, or `headless` |
 | `UserPromptSubmit` | start a turn with the sanitized optional prompt |
 | `PostToolUse` / `PostToolUseFailure` | successful descriptor-classified tool activity or failed non-editing activity plus error detail |
 | `Notification` | exact permission, plan, diff-review, or question wait |
@@ -37,6 +37,8 @@ Notification classification is exact: `permission_prompt` plus `Tool permission 
 **Install.** The installer writes one four-second managed command, `rimz hooks feed --source grok`, for every passive event. The hook helper attributes the event through its bounded process-ancestor walk when `RIMZ_AGENT_PID` is absent. The installer omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, reclaims older marker-owned RimZ commands on reinstall, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
 
 ## Launch and resume
+
+Process discovery recognizes `-r <uuid>`, `--resume <uuid>`, and `--resume=<uuid>`. A title, missing value, or any `--fork-session` leaves the session identity unknown. Loading a fork retains forked lineage on later resumes; no creation-time heuristic is needed.
 
 Interactive launches remain `grok [flags]`. A supervised prompt alone adds `-p <prompt> --output-format streaming-json`; the streaming flags never reach an interactive TUI. Resume is `--resume <id>`, fork is `--resume <id> --fork-session`, model is `--model`, reasoning effort is `--reasoning-effort`, the headless turn cap is `--max-turns`, manual compaction sends `/compact` with any guidance as trailing text, and launch reminders ride `--rules` (alias `--append-system-prompt`), merged into a user-supplied occurrence so Grok appends one `<human_rules>` block at session creation.
 

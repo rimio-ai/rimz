@@ -548,6 +548,7 @@ pub(super) struct Summary {
     pub agent_name: Option<String>,
     pub reasoning_effort: Option<String>,
     pub session_kind: Option<String>,
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

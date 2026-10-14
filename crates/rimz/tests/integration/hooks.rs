@@ -2345,6 +2345,45 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
 }
 
 #[test]
+fn grok_load_uses_the_sessions_fork_lineage() {
+    for (kind, parent, source, expected) in [
+        ("fork", Some("parent"), "load", Some("forked")),
+        ("worktree", Some("parent"), "load", Some("forked")),
+        ("headless", Some("parent"), "load", Some("forked")),
+        ("fork", None, "load", None),
+        ("fork", Some(""), "load", None),
+        ("interactive", Some("parent"), "load", None),
+        ("interactive", None, "new", Some("fresh")),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let session = env.home_root.join(".grok/sessions/lineage");
+        std::fs::create_dir_all(&session).unwrap();
+        let transcript = session.join("updates.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        std::fs::write(
+            session.join("summary.json"),
+            json!({"info":{"id":"lineage"}, "session_kind":kind, "parent_session_id":parent})
+                .to_string(),
+        )
+        .unwrap();
+        let payload = json!({"hookEventName":"session_start", "sessionId":"lineage", "source":source, "transcriptPath":transcript});
+        let output = env
+            .spawn_payload(env.hook_command("grok"), &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert_hook_succeeded_neutral("grok", output);
+        env.drain_hooks();
+        let snapshot = env.snapshot_json();
+        assert_eq!(
+            snapshot["agents"][0]["origin"].as_str(),
+            expected,
+            "{kind}/{parent:?}/{source}"
+        );
+    }
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that RimZ cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker
