@@ -948,7 +948,10 @@ fn hook_append_completes_while_another_process_holds_workspace_lock() {
     hook.env("RIMZ_WORKSPACE_ID", env.workspace_id.as_str())
         .env("RIMZ_PROJECT_ROOT", &env.project_root);
     let mut child = env.spawn_payload(hook, &json!({"hook_event_name": "Stop", "session_id": "unblocked-stop", "last_assistant_message": "done"}).to_string());
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // Sized for a cold hook exec under parallel load. The holder keeps
+    // workspace.lock until after this deadline, so a hook that waited on it
+    // would still miss the deadline.
+    let deadline = Instant::now() + Duration::from_secs(15);
     let completed = loop {
         if child.try_wait().unwrap().is_some() {
             break true;
