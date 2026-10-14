@@ -128,7 +128,7 @@ fn install_blocker_refuses_only_old_opencode() {
             assert_eq!(
                 reason,
                 format!(
-                    "opencode 1.19.0 at {} is older than 2.0.0, the first release with --standalone, which RimZ passes on every launch; run `opencode upgrade --major`",
+                    "opencode 1.19.0 at {} is older than 2.0.0, the oldest release RimZ supports; run `opencode upgrade --major`",
                     binary.display()
                 )
             );
