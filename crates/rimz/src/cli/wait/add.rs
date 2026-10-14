@@ -29,7 +29,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         bail!("the calling agent has not registered a real session yet");
     }
     let config = rimz::config::MachineConfig::load_lenient();
-    let timeout = args.timeout.or_else(|| {
+    let timeout = args.check_in.or_else(|| {
         (!(config.harness.cache_keepalive
             && config.harness.prompt_cache_ttl(&agent.kind).is_some()))
         .then_some(Duration::from_secs(30 * 60))
@@ -94,7 +94,7 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
         DeliveryTrigger::Watch {
             timeout: Some(timeout),
             ..
-        } => format!(" (timeout {})", duration_label(*timeout)),
+        } => format!(" (check-in {})", duration_label(*timeout)),
         _ => String::new(),
     };
     let ArmOutcome::Armed { name, .. } = arm_delivery(
@@ -145,6 +145,11 @@ fn watch_trigger(
 }
 
 fn validate_shape(args: &WaitArgs) -> Result<()> {
+    if args.timeout.is_some() {
+        bail!(
+            "`--timeout` is now `--check-in`: it sends one still-running notice and never stops the command"
+        );
+    }
     if usize::from(args.in_after.is_some())
         + usize::from(args.pid.is_some())
         + usize::from(args.check.is_some())
@@ -188,12 +193,12 @@ fn validate_shape(args: &WaitArgs) -> Result<()> {
     if args.every.is_some() && args.check.is_none() {
         bail!("--every requires --check");
     }
-    if args.timeout.is_some() && args.in_after.is_some() {
-        bail!("--timeout requires --pid, --check, --file, or --run");
+    if args.check_in.is_some() && args.in_after.is_some() {
+        bail!("--check-in requires --pid, --check, --file, or --run");
     }
     for (name, duration) in [
         ("--in", args.in_after),
-        ("--timeout", args.timeout),
+        ("--check-in", args.check_in),
         ("--every", args.every),
     ] {
         if duration.is_some_and(|duration| duration.is_zero()) {

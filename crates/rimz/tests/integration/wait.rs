@@ -243,13 +243,31 @@ fn wait_run_rejects_empty_commands() {
 }
 
 #[test]
+fn wait_rejects_retired_timeout_with_fix() {
+    let env = Env::new();
+    for extra in [vec![], vec!["--run", "true"], vec!["--in", "5m"]] {
+        let output = env
+            .rimz()
+            .args(["wait", "--timeout", "5m"])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            "error: `--timeout` is now `--check-in`: it sends one still-running notice and never stops the command"
+        );
+    }
+}
+
+#[test]
 fn wait_check_lists_elapsed_and_checkin_limit() {
     let env = Env::new();
     env.record(&env.project_root);
     register_calling_agent(&env);
-    let receipt = wait_ok(&env, &["wait", "--check", "false", "--timeout", "12m"]);
+    let receipt = wait_ok(&env, &["wait", "--check", "false", "--check-in", "12m"]);
     assert!(
-        receipt.lines().next().unwrap().ends_with("(timeout 12m)"),
+        receipt.lines().next().unwrap().ends_with("(check-in 12m)"),
         "{receipt}"
     );
     wait_until(&env, "watcher holds its lock", || {
@@ -263,11 +281,14 @@ fn wait_check_lists_elapsed_and_checkin_limit() {
     assert_eq!(row["type"], "check");
     assert_eq!(row["state"], "watching");
     assert_eq!(row["trigger"], "false");
-    assert_eq!(row["timeout"], "12m");
-    assert_eq!(row["timeout_s"], 720);
+    assert_eq!(row["check_in"], "12m");
+    assert_eq!(row["check_in_s"], 720);
     assert!(row["elapsed_s"].is_u64());
     assert!(row["watcher_pid"].is_u64());
     assert!(row.get("age").is_none());
+    assert!(row.get("timeout").is_none());
+    assert!(row.get("timeout_s").is_none());
+    assert!(wait_ok(&env, &["wait", "list"]).contains("CHECK-IN"));
     wait_ok(&env, &["wait", "cancel", "--all"]);
 }
 
@@ -300,8 +321,8 @@ fn lost_watch_keeps_elapsed_and_recorded_checkin_limit() {
             serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
         assert_eq!(rows[0]["state"], "lost");
         assert!(rows[0]["elapsed_s"].is_u64());
-        assert_eq!(rows[0]["timeout"], timeout, "keepalive {switch}");
-        assert_eq!(rows[0]["timeout_s"], timeout_s, "keepalive {switch}");
+        assert_eq!(rows[0]["check_in"], timeout, "keepalive {switch}");
+        assert_eq!(rows[0]["check_in_s"], timeout_s, "keepalive {switch}");
         assert!(rows[0].get("watcher_pid").is_none());
     }
 }
@@ -337,7 +358,7 @@ fn loop_clock_wait_does_not_expose_check_guard_timeout_as_budget() {
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
     assert_eq!(rows[0]["type"], "schedule");
     assert_eq!(rows[0]["state"], "waiting");
-    for key in ["elapsed", "elapsed_s", "timeout", "timeout_s"] {
+    for key in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
         assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
     }
 }
@@ -363,7 +384,7 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
     assert!(stdout.starts_with("armed wait-"), "{stdout}");
     assert!(stdout.contains("in 5m"), "{stdout}");
     assert!(stdout.contains("→ @planner"), "{stdout}");
-    assert!(!stdout.lines().next().unwrap().contains("(timeout"));
+    assert!(!stdout.lines().next().unwrap().contains("(check-in"));
     let listed = wait_ok(&env, &["wait", "list"]);
     assert_eq!(
         listed
@@ -373,15 +394,15 @@ fn wait_delay_arms_instance_for_the_calling_agent() {
             .split_whitespace()
             .collect::<Vec<_>>(),
         [
-            "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "TIMEOUT", "TRIGGER"
+            "NAME", "TYPE", "STATE", "TARGET", "ELAPSED", "CHECK-IN", "TRIGGER"
         ]
     );
     let rows: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
     assert_eq!(rows[0]["type"], "timer");
     assert_eq!(rows[0]["state"], "pending");
-    assert_eq!(rows[0]["timeout"], "5m");
-    assert_eq!(rows[0]["timeout_s"], 300);
+    assert_eq!(rows[0]["check_in"], "5m");
+    assert_eq!(rows[0]["check_in_s"], 300);
     assert!(rows[0]["elapsed_s"].is_u64());
     assert!(rows[0].get("watcher_pid").is_none());
     let tasks = wait_instances(&env);
@@ -472,7 +493,7 @@ fn wait_checkin_default_yields_to_keepalive_but_explicit_timeout_wins() {
         );
         let mut args = vec!["wait", "--json"];
         if let Some(timeout) = explicit {
-            args.extend(["--timeout", timeout]);
+            args.extend(["--check-in", timeout]);
         }
         args.extend(["--run", "sleep 600"]);
         let receipt: serde_json::Value = serde_json::from_str(&wait_ok(&env, &args)).unwrap();
@@ -535,7 +556,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     assert_eq!(rows[0]["name"], name);
     assert_eq!(rows[0]["type"], "signal");
     assert_eq!(rows[0]["state"], "waiting");
-    for key in ["elapsed", "elapsed_s", "timeout", "timeout_s"] {
+    for key in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
         assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
     }
     assert!(rows[0].get("dir").is_none());
@@ -590,13 +611,13 @@ fn wait_rejects_watch_checkins_at_or_above_24_hours() {
     register_calling_agent(&env);
     for timeout in ["24h", "25h"] {
         let output = agent_wait(&env)
-            .args(["wait", "--timeout", timeout, "--run", "true"])
+            .args(["wait", "--check-in", timeout, "--run", "true"])
             .output()
             .expect("reject long watch check-in");
-        assert!(!output.status.success(), "accepted --timeout {timeout}");
+        assert!(!output.status.success(), "accepted --check-in {timeout}");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("--timeout must be less than 24h"),
+            stderr.contains("--check-in must be less than 24h"),
             "{stderr}"
         );
     }
@@ -614,7 +635,7 @@ fn wait_pid_checks_in_then_delivers_after_process_disappears_without_output_file
         .spawn()
         .unwrap();
     let pid = process.id().to_string();
-    let receipt = wait_ok(&env, &["wait", "--pid", &pid, "--timeout", "1s", "--json"]);
+    let receipt = wait_ok(&env, &["wait", "--pid", &pid, "--check-in", "1s", "--json"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     assert_eq!(receipt["trigger"], format!("pid {pid}"));
     assert_eq!(receipt["pending"][0]["type"], "pid");
@@ -815,7 +836,15 @@ fn wait_check_on_fail_checks_in_with_still_not_met() {
     let check = format!("test -e '{}'", flag.display());
     let receipt = wait_ok(
         &env,
-        &["wait", "--check", &check, "--on", "fail", "--timeout", "1s"],
+        &[
+            "wait",
+            "--check",
+            &check,
+            "--on",
+            "fail",
+            "--check-in",
+            "1s",
+        ],
     );
     assert!(
         receipt.contains(&format!(": check: {check} on fail →")),
@@ -896,8 +925,8 @@ fn wait_check_rejects_shapes_without_a_meaning() {
             "choose exactly one wait trigger",
         ),
         (
-            vec!["wait", "--in", "5m", "--timeout", "1m"],
-            "--timeout requires --pid, --check, --file, or --run",
+            vec!["wait", "--in", "5m", "--check-in", "1m"],
+            "--check-in requires --pid, --check, --file, or --run",
         ),
         (
             vec!["wait", "--check", "true", "--every", "24h"],
@@ -1525,7 +1554,7 @@ fn watch_checkin_parks_at_an_open_prompt_without_consuming_or_killing_command() 
         shlex::try_quote(release.to_str().unwrap()).unwrap()
     );
     let output = traced_wait(&env, &pane_fixture)
-        .args(["wait", "--json", "--timeout", "1s", "--run", &command])
+        .args(["wait", "--json", "--check-in", "1s", "--run", &command])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -1597,7 +1626,7 @@ fn watch_checkin_is_canceled_when_the_final_wake_steers_live() {
         shlex::try_quote(release.to_str().unwrap()).unwrap()
     );
     let output = traced_wait(&env, &pane_fixture)
-        .args(["wait", "--timeout", "1s", "--run", &command])
+        .args(["wait", "--check-in", "1s", "--run", &command])
         .output()
         .unwrap();
     assert!(output.status.success());
@@ -1790,7 +1819,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
                 "--json",
                 "--on",
                 on,
-                "--timeout",
+                "--check-in",
                 "1s",
                 "--run",
                 &format!(
@@ -1808,7 +1837,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
             serde_json::from_str(&wait_ok(&env, &["wait", "list", "--json"])).unwrap();
         assert_eq!(listed[0]["state"], "watching");
         assert!(
-            listed[0]["elapsed_s"].as_u64().unwrap() >= listed[0]["timeout_s"].as_u64().unwrap()
+            listed[0]["elapsed_s"].as_u64().unwrap() >= listed[0]["check_in_s"].as_u64().unwrap()
         );
         assert!(
             notice.text.contains("still running after"),
@@ -1965,7 +1994,7 @@ fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
         &[
             "wait",
             "--json",
-            "--timeout",
+            "--check-in",
             "1s",
             "--run",
             &format!(
