@@ -495,18 +495,28 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
 
 pub(super) fn last_assistant_message(path: &Path) -> Option<String> {
     let tail = read_transcript_tail(path)?;
-    newest_assistant(&tail).or_else(|| {
-        let full = fs::read_to_string(path).ok()?;
-        newest_assistant(&full)
-    })
+    let (answer, has_turn_start) = newest_assistant(&tail);
+    if has_turn_start || answer.is_some() {
+        return answer;
+    }
+    newest_assistant(&fs::read_to_string(path).ok()?).0
 }
 
-fn newest_assistant(lines: &str) -> Option<String> {
-    messages(lines)
-        .into_iter()
-        .rev()
-        .find(|message| message.role == TranscriptRole::Assistant)
-        .map(|message| message.text)
+fn newest_assistant(lines: &str) -> (Option<String>, bool) {
+    let mut answer = None;
+    let mut has_turn_start = false;
+    for record in parse_records(lines) {
+        if is_turn_start(&record) {
+            answer = None;
+            has_turn_start = true;
+        } else if record.status == "DONE"
+            && visible_role(&record) == Some(TranscriptRole::Assistant)
+            && let Some(text) = normalized(record.content.as_deref())
+        {
+            answer = Some(text);
+        }
+    }
+    (answer, has_turn_start)
 }
 
 pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
@@ -819,17 +829,27 @@ fn fold(lines: &str) -> FoldedSession {
         waiting_since: None,
     };
     for record in parse_records(lines) {
-        if record.status != "DONE" {
-            continue;
-        }
         let Some(role) = visible_role(&record) else {
             continue;
         };
+        if !is_turn_start(&record)
+            && !(role == TranscriptRole::Assistant
+                && matches!(record.status.as_str(), "DONE" | "ERROR"))
+        {
+            continue;
+        }
         let Ok(at) = record.created_at.parse::<Timestamp>() else {
             continue;
         };
         folded.first_event_at.get_or_insert(at);
         folded.last_activity = Some(at);
+        if record.status == "ERROR" {
+            folded.status = AgentStatus::Failed;
+            folded.phase = TurnPhase::Idle;
+            folded.native_prompt_detail = None;
+            folded.waiting_since = None;
+            continue;
+        }
         match role {
             TranscriptRole::User => {
                 folded.native_prompt_detail = None;
@@ -854,6 +874,10 @@ fn fold(lines: &str) -> FoldedSession {
         }
     }
     folded
+}
+
+fn is_turn_start(record: &TranscriptRecord) -> bool {
+    record.status == "DONE" && visible_role(record) == Some(TranscriptRole::User)
 }
 
 fn visible_role(record: &TranscriptRecord) -> Option<TranscriptRole> {

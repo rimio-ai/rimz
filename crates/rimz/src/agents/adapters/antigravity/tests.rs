@@ -653,6 +653,133 @@ fn final_assistant_uses_tail_then_full_fallback() {
         Some("tail answer")
     );
 }
+
+#[test]
+fn final_assistant_is_bounded_to_the_latest_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    let old = record(1, "MODEL", "PLANNER_RESPONSE", "DONE", AT_10, "old answer");
+    let padding = record(
+        4,
+        "SYSTEM",
+        "CHECKPOINT",
+        "DONE",
+        AT_12,
+        &"x".repeat(70_000),
+    );
+    for prompt in ["second", "<USER_REQUEST>missing close"] {
+        for suffix in [String::new(), format!("{padding}\n")] {
+            let lines = format!(
+                "{}\n{old}\n{}\n{suffix}",
+                user_record(0, AT_09, "first"),
+                user_record(2, AT_11, prompt)
+            );
+            std::fs::write(&path, lines).unwrap();
+            assert_eq!(session::last_assistant_message(&path), None);
+        }
+    }
+}
+
+#[test]
+fn final_assistant_does_not_reuse_an_answer_after_error() {
+    let dir = tempfile::tempdir().unwrap();
+    // Terminal error source/type are uncaptured; assume MODEL/PLANNER_RESPONSE.
+    let error = record(
+        3,
+        "MODEL",
+        "PLANNER_RESPONSE",
+        "ERROR",
+        AT_12,
+        "error details",
+    );
+    let lines = format!(
+        "{}\n{}\n{}\n{error}\n",
+        user_record(0, AT_09, "first"),
+        planner_record(1, AT_10, None),
+        user_record(2, AT_11, "second")
+    );
+    let path = write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &lines);
+    assert_eq!(session::last_assistant_message(&path), None);
+    assert_eq!(session::messages(&lines).len(), 3);
+}
+
+#[test]
+fn planner_error_projects_failed_and_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    // Terminal error source/type are uncaptured; assume MODEL/PLANNER_RESPONSE.
+    let error = record(
+        3,
+        "MODEL",
+        "PLANNER_RESPONSE",
+        "ERROR",
+        AT_12,
+        "error details",
+    );
+    let lines = format!(
+        "{}\n{}\n{}\n{error}\n",
+        user_record(0, AT_09, "first"),
+        planner_record(1, AT_10, None),
+        user_record(2, AT_11, "second")
+    );
+    write_transcript_named(dir.path(), SESSION_ID, "transcript_full.jsonl", &lines);
+    let observation =
+        session::discover_under(dir.path(), Path::new("/workspace/project")).remove(0);
+    let state = local_state(&observation);
+    assert_eq!(
+        (state.status, state.phase),
+        (AgentStatus::Failed, TurnPhase::Idle)
+    );
+    assert_eq!(observation.last_activity, AT_12.parse().unwrap());
+    assert_eq!(observation.first_event_at, Some(AT_09.parse().unwrap()));
+    assert!(state.native_prompt_detail.is_none() && state.waiting_since.is_none());
+}
+
+#[test]
+fn planner_error_recovery_and_tool_error_keep_existing_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let error = record(
+        1,
+        "MODEL",
+        "PLANNER_RESPONSE",
+        "ERROR",
+        AT_10,
+        "error details",
+    );
+    let answer = record(
+        2,
+        "MODEL",
+        "PLANNER_RESPONSE",
+        "DONE",
+        AT_11,
+        "retry answer",
+    );
+    let state = state_after(
+        dir.path(),
+        workspace,
+        vec![error.to_string(), answer.to_string()],
+    );
+    assert_eq!(
+        (state.status, state.phase),
+        (AgentStatus::Success, TurnPhase::Idle)
+    );
+    let path = dir
+        .path()
+        .join("brain")
+        .join(SESSION_ID)
+        .join(".system_generated/logs/transcript_full.jsonl");
+    assert_eq!(
+        session::last_assistant_message(&path).as_deref(),
+        Some("retry answer")
+    );
+    let tool_error = record(1, "MODEL", "RUN_COMMAND", "ERROR", AT_10, "tool failed");
+    let state = state_after(dir.path(), workspace, vec![tool_error.to_string()]);
+    assert_eq!(
+        (state.status, state.phase),
+        (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+}
+
 #[test]
 fn transcript_questions_project_and_clear_native_waits() {
     let dir = tempfile::tempdir().unwrap();
