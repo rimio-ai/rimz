@@ -919,8 +919,11 @@ fn read_authoritative_pane_probe(
     let probe = serde_json::from_slice::<AuthoritativePaneProbe>(&bytes).ok()?;
     (probe.mux == watchdog.mux
         && probe.session_name == watchdog.session_name
-        && now_ms.saturating_sub(probe.observed_at_ms) < pane_probe_interval().as_millis() as u64)
-        .then_some(probe)
+        && now_ms.saturating_sub(probe.observed_at_ms) < pane_probe_interval().as_millis() as u64
+        && watchdog
+            .last_observed_at_ms
+            .is_none_or(|seen_ms| probe.observed_at_ms > seen_ms))
+    .then_some(probe)
 }
 
 fn pane_probe_for(probe: &AuthoritativePaneProbe, pane: &crate::ids::PaneId) -> PaneProbe {
