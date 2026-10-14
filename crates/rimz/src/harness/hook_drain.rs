@@ -571,6 +571,7 @@ fn drain_clients(
             .any(|client| client.request.as_ref().is_some_and(|request| request.stop))
         {
             stopping = true;
+            answer_clients(drain, clients, false)?;
             return Ok(true);
         }
         for client in clients.iter_mut() {
@@ -671,6 +672,7 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
             .iter()
             .any(|client| client.request.as_ref().is_some_and(|request| request.stop))
         {
+            answer_clients(&mut drain, &mut clients, false)?;
             return Ok(());
         }
         if clients.iter().any(|client| client.request.is_some()) {
