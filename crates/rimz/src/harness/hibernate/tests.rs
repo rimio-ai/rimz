@@ -862,7 +862,7 @@ fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
     let mut host = FakeHost::new();
     let mut config = HibernateConfig::default();
     assert!(!Admission::read(runtime).available);
-    let admitted = admit_with(&config, runtime, &host).unwrap();
+    let admitted = admit_with(&config, &host).unwrap();
     assert!(admitted.available);
     assert!(
         !runtime
@@ -874,7 +874,7 @@ fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
     admitted.publish(runtime).unwrap();
     assert!(Admission::read(runtime).available);
     host.missing = Some("swap");
-    let skipped = admit_with(&config, runtime, &host).unwrap();
+    let skipped = admit_with(&config, &host).unwrap();
     skipped.publish(runtime).unwrap();
     assert!(!skipped.available);
     assert!(
@@ -887,14 +887,14 @@ fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
     assert_eq!(Admission::read(runtime).reason, skipped.reason);
     config.enabled = Some(false);
     assert_eq!(
-        admit_with(&config, runtime, &host)
+        admit_with(&config, &host)
             .unwrap()
             .reason
             .as_deref(),
         Some("disabled")
     );
     config.after = "bad".into();
-    assert!(admit_with(&config, runtime, &host).is_err());
+    assert!(admit_with(&config, &host).is_err());
     let report = inspect_with(&config, &host);
     assert!(matches!(report.checks[0].status, CheckStatus::Error));
 }

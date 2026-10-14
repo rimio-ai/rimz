@@ -230,8 +230,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
-    let runtime = rimz::RuntimePaths::for_state(&paths)?;
-    let admission = rimz::harness::hibernate::admit(&machine.agents.hibernate, &runtime)?;
+    let admission = rimz::harness::hibernate::admit(&machine.agents.hibernate)?;
     rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to

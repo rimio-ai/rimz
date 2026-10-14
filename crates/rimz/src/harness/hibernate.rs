@@ -646,18 +646,11 @@ impl Admission {
     }
 }
 
-pub fn admit(
-    config: &HibernateConfig,
-    runtime: &crate::RuntimePaths,
-) -> Result<Admission, HibernateErr> {
-    admit_with(config, runtime, &SystemHost)
+pub fn admit(config: &HibernateConfig) -> Result<Admission, HibernateErr> {
+    admit_with(config, &SystemHost)
 }
 
-fn admit_with(
-    config: &HibernateConfig,
-    _runtime: &crate::RuntimePaths,
-    host: &impl Host,
-) -> Result<Admission, HibernateErr> {
+fn admit_with(config: &HibernateConfig, host: &impl Host) -> Result<Admission, HibernateErr> {
     config.schedule()?;
     let report = inspect_with(config, host);
     Ok(Admission {
