@@ -142,6 +142,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Permission, plan, diff-review, and question prompts reach `rimz asks` through Grok's `Notification` hook.
 - Errored and cancelled turns end through Grok's `StopFailure` and `StopCancelled` hooks, and child agents resolve from their own session hooks.
 - Launch reminders reach Grok through `--rules`.
+- Idle notifications rest the card only when their timestamp is newer than its last activity.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
 
 ## Config homes and skills
@@ -314,7 +315,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
-| Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 

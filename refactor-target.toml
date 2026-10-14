@@ -202,7 +202,8 @@ upward-dependencies = ["address"]
 # UnattributedTally shares the provider split with the stats consumer (+1).
 # LaunchCapability::changed_system_prompt_args lets launch compilation refresh changed prompts on resume (+1).
 # LaunchCapability::system_prompt_arg_matchers identifies native configured prompt inputs (+1).
-surface-budget = 1053
+# AgentDefinition::is_foreign_hook_payload and HookCapability::recognizes_hook_payload keep native recognition in adapters (+2).
+surface-budget = 1055
 
 [[verdict]]
 kind = "item"
@@ -5000,6 +5001,16 @@ reason = "The binary's ingress frontend constructs the in-hook deadline reply wi
 kind = "item"
 key = "agents::capabilities::HookCapability::payload_hook_reply"
 reason = "The ingress frontend answers Cursor and preserves Antigravity's native neutral JSON on a late reply; provider-reading decode stays in the apply child."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::AgentDefinition::is_foreign_hook_payload"
+reason = "The hook ingress frontend rejects native envelopes recognized by other registered adapters before replies or durable ingress, without interpreting provider wire fields in shared code."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::HookCapability::recognizes_hook_payload"
+reason = "Adapters own unambiguous native envelope recognition; the definition's cross-provider ingress guard consults the registry rather than restating native protocol rules."
 
 [[verdict]]
 kind = "item"

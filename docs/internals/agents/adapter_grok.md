@@ -34,6 +34,10 @@ Grok uses three naming conventions on one surface: hook config keys are PascalCa
 
 Notification classification is exact: `permission_prompt` plus `Tool permission requested` or `Diff review requested` is Permission; `Plan approval requested` is PlanApproval; and `elicitation_dialog` plus `User question requested` is Question. Near matches and `agent_error` do not open an ask. Human answers stay in Grok's native pane, and hook stdout stays empty.
 
+**Idle notifications.** A root `Notification:idle_prompt` with a parseable timestamp writes an `Interrupted` context settle marker, not a lifecycle report. The card rests only when that timestamp is newer than its last activity; a delayed older notification cannot settle a newer prompt. Child notifications and missing or invalid timestamps attach nothing. Local context refresh preserves the marker, and later hook activity clears it. Grok and its feed child share the host clock. If Grok builds a delayed envelope after a new prompt has already reached ingress, the card can briefly read idle until the next hook.
+
+**Cross-kind compatibility.** Grok can invoke hooks installed for other providers. The provider-neutral ingress guard recognizes its envelope by the presence of both `hookEventName` and `workspaceRoot`. Under any non-Grok source it returns success with empty stdout before replying or recording ingress, lifecycle events, or agent rows. This leaves the user's Grok configuration untouched.
+
 **Install.** The installer writes one four-second managed command, `rimz hooks feed --source grok`, for every passive event. The hook helper attributes the event through its bounded process-ancestor walk when `RIMZ_AGENT_PID` is absent. The installer omits `PreToolUse`, Grok's blocking decision channel, preserves unrelated global hooks, reclaims older marker-owned RimZ commands on reinstall, and restores only RimZ-owned entries on uninstall. `RIMZ_GROK_HOOKS` provides an isolated hook-file override for tests.
 
 ## Launch and resume

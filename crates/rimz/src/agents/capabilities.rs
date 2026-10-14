@@ -46,6 +46,11 @@ pub trait CoreCapability: Send + Sync {
 
 #[doc(hidden)]
 pub trait HookCapability: CoreCapability {
+    /// Recognize an unambiguous native envelope without decoding it or reading provider state.
+    fn recognizes_hook_payload(&self, _payload: &Value) -> bool {
+        false
+    }
+
     /// Provider path overrides needed to apply a captured hook, beyond the account home.
     fn hook_env_keys(&self) -> &'static [&'static str] {
         &[]
