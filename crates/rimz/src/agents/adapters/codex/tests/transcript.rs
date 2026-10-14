@@ -695,7 +695,7 @@ fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
 #[test]
 fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
     // Esc and `/clear` of a running Codex turn leave a resting
-    // `turn_aborted` tail without a Stop hook. Any abort reason counts; the
+    // `turn_aborted` tail without a Stop hook or error. Any abort reason counts; the
     // "resting at the tail" filter is what keeps steer/replaced aborts from
     // sticking once the next turn starts.
     let interrupted = json!({
@@ -774,6 +774,29 @@ fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
         ))
     );
     assert_eq!(refresh.context.turn_error, crate::agents::FieldPatch::Clear);
+}
+
+#[test]
+fn errored_abort_is_a_failed_turn_death_not_an_interruption() {
+    use super::super::transcript::{RestingTurnOutcome, TranscriptScanNeed, scan_transcript_tail};
+    let label = "rate limit: guardian denial limit";
+    let tail = json!({
+        "timestamp": "2026-07-07T14:12:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_aborted",
+            "reason": "interrupted",
+            "error": {"message": label, "codex_error_info": "too_many_denials"}
+        }
+    })
+    .to_string();
+    let Some(RestingTurnOutcome::Died(error)) =
+        scan_transcript_tail(&tail, TranscriptScanNeed::UsageAndOutcome).into_outcome()
+    else {
+        panic!("an errored abort must be a turn death");
+    };
+    assert_eq!(error.class, crate::agents::TurnErrorClass::Failed);
+    assert_eq!(error.label.as_deref(), Some(label));
 }
 
 #[test]

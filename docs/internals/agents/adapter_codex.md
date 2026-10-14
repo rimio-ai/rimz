@@ -237,7 +237,7 @@ The tail scan also classifies how the newest turn rests, which settles rows whos
 | an error record | `Died` | [turn death](#turn-death-marker) |
 | `task_complete` with no error field and an empty or missing `last_agent_message` | `Died`, class unknown | [turn death](#turn-death-marker) |
 | `task_complete` with no error field and a non-empty `last_agent_message` | `Complete` | [turn completion](#turn-completion-marker) |
-| `turn_aborted` | `Interrupted` | [turn interruption](#turn-interruption-marker) |
+| `turn_aborted` without an error | `Interrupted` | [turn interruption](#turn-interruption-marker) |
 | `task_complete` with an empty error field (`null`, `false`, `""`, `{}`) | none | none |
 
 The stat gate skips an unchanged rollout, so a marker lands only after the rollout's next write.
@@ -250,7 +250,7 @@ When `Stop` was missed, the local refresh stamps `settle` as `PlanProposed`. A `
 
 #### Turn-death marker
 
-Codex writes most provider errors to the rollout. An error record is a `turn_error`, `stream_error`, or `error` event, or a `task_complete` that carries an error. RimZ caps its label at 80 characters and classifies it: the Codex error kind decides first, in either the app-server camelCase or the rollout snake_case spelling.
+Codex writes most provider errors to the rollout. An error record is a `turn_error`, `stream_error`, or `error` event, or a `task_complete` or `turn_aborted` that carries an error. RimZ caps its label at 80 characters and classifies it: the Codex error kind decides first, in either the app-server camelCase or the rollout snake_case spelling.
 
 | Codex error kind | Class |
 | --- | --- |
@@ -274,7 +274,7 @@ Codex `/review` runs in review mode and ends on a clean `task_complete` without 
 
 #### Turn-interruption marker
 
-Codex writes `turn_aborted` when Esc aborts a turn and when `/clear` interrupts one. RimZ accepts any `reason`, because the abort resting at the tail is what matters. The local refresh stamps `settle` as `Interrupted`, and the projection shows the row as `idle`. This marker is the fallback for Codex versions without the [`Interrupt` hook](#turn-endings). A steer that replaces the turn writes new live records after the abort, so it never settles.
+Codex writes `turn_aborted` when Esc aborts a turn and when `/clear` interrupts one. Without an error, RimZ accepts any `reason`: the local refresh stamps `settle` as `Interrupted`, and the projection shows the row as `idle`. An abort carrying an error is instead a turn death, classified by its error kind with the message retained as its label; the guardian denial-limit stop takes this path, not a user's Esc. This marker is the fallback for Codex versions without the [`Interrupt` hook](#turn-endings). A steer that replaces the turn writes new live records after the abort, so it never settles.
 
 ## Remote control
 

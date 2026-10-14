@@ -582,8 +582,8 @@ pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
 
 /// Detect a turn interrupted without a `Stop` hook from a resting rollout tail.
 /// Codex writes `event_msg`/`turn_aborted` for Esc and `/clear` of a running
-/// turn. Any abort reason counts; a later live record makes the session no
-/// longer "at rest" and clears the marker.
+/// turn. Any abort reason counts when no error is present; an errored abort is
+/// a turn death. A later live record clears the resting marker.
 #[cfg(test)]
 pub(super) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
     match detect_resting_turn_outcome(tail) {
