@@ -1,0 +1,20 @@
+---
+source: crates/rimz/src/cli/teams/list/tests.rs
+expression: output
+---
+7 cohorts · 3 need you · 1 working · 1 sleeping · 3 idle · whole room
+
+needs you
+  @planner#blocked  failed    2m  -
+  @planner#missing  not live  2m  Plan for 2m
+  @planner#paused   paused    1m  -
+
+TEAM   LANE       STAGE                             STATUS       PR
+forge  #blocked   Plan (@planner) for 2m            blocked 2m   -
+forge  #paused    Plan (@planner) for 2m            paused 1m    -
+forge  #missing   Plan (@planner, not live) for 2m  idle 1m      -
+forge  #idle      Plan (@planner) for 2m            idle 1m      -
+forge  #working   Plan (@planner) for 2m            working      -
+forge  #sleeping  Plan (@planner) for 2m            sleeping 1m  -
+forge  #done      Done (@planner) for 2m            idle 1m      -
+no live cohort: rest
