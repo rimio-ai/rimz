@@ -48,6 +48,40 @@ fn append_stop(env: &Env) -> (HookIngress, u64) {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn spawned_drainer_uses_the_room_binary() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let binary = env.rimz_bin();
+    // Keep the hard link on the binary's filesystem, even with a separate TMPDIR.
+    let binaries = tempfile::tempdir_in(binary.parent().unwrap()).unwrap();
+    let room_binary = binaries.path().join("room-rimz");
+    std::fs::hard_link(binary, &room_binary).unwrap();
+    let _ = std::fs::remove_file(&store.paths().room_bin);
+    std::os::unix::fs::symlink(&room_binary, &store.paths().room_bin).unwrap();
+    let mut hook = env.hook_command("claude");
+    hook.env_remove("RIMZ_BIN");
+    let output = env
+        .spawn_payload(
+            hook,
+            &json!({"hook_event_name":"Stop", "session_id":"room-binary"}).to_string(),
+        )
+        .wait_with_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let connection = drainer_connection(&store);
+    let pid = nix::sys::socket::getsockopt(&connection, nix::sys::socket::sockopt::PeerCredentials)
+        .unwrap()
+        .pid();
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{pid}/exe")).unwrap(),
+        room_binary,
+        "the hook must elect the room's binary, not its own"
+    );
+}
+
+#[test]
 fn entitlement_marker_marks_the_recorded_login_but_replayed_drain_does_not() {
     for replay in [false, true] {
         let env = Env::new();
