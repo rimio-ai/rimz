@@ -51,6 +51,8 @@ pub(super) struct QwenToolUse {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(super) struct QwenStop {
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub(super) prompt_id: Option<String>,
     pub(super) background_tasks: Vec<BackgroundTask>,
     pub(super) crons: Vec<QwenCron>,
     pub(super) context_usage: Option<f64>,
@@ -113,6 +115,8 @@ pub(super) struct TranscriptRecord {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     pub(super) provenance: Option<String>,
     pub(super) background_turn: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub(super) prompt_id: Option<String>,
     pub(super) timestamp: Option<String>,
     pub(super) cwd: Option<String>,
     pub(super) model: Option<String>,

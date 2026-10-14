@@ -330,10 +330,14 @@ fn qwen_lifecycle(
         .unwrap_or_default();
     let start = (event_name == "SessionStart").then(|| parse_session_start(payload));
     let stop = (event_name == "Stop").then(|| parse_stop(payload));
-    let transcript_is_current = stop
-        .as_ref()
-        .and_then(|value| value.input_tokens)
-        .is_none_or(|prompt| usage.prompt_tokens == Some(prompt));
+    let transcript_is_current = stop.as_ref().is_none_or(|stop| {
+        match (stop.prompt_id.as_deref(), usage.prompt_id.as_deref()) {
+            (Some(stopped), Some(recorded)) => stopped == recorded,
+            _ => stop
+                .input_tokens
+                .is_none_or(|prompt| usage.prompt_tokens == Some(prompt)),
+        }
+    });
     let accepted_usage = transcript_is_current.then_some(&usage);
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
@@ -852,6 +856,7 @@ fn parse_physical_assistant_messages(lines: &str) -> Vec<String> {
 
 #[derive(Default)]
 struct TranscriptUsage {
+    prompt_id: Option<String>,
     total_tokens: Option<u64>,
     prompt_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
@@ -874,7 +879,28 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             .as_ref()
             .expect("latest active assistant is filtered to records with usage metadata");
         let prompt_tokens = usage.prompt_token_count;
+        // A tool result after the summarized call means the turn's final call
+        // has not reached disk yet, so prompt identity cannot vouch for it.
+        let awaits_final_call = folded
+            .active_root()
+            .rev()
+            .take_while(|candidate| !std::ptr::eq(*candidate, record))
+            .any(|candidate| candidate.r#type.as_deref() == Some("tool_result"));
+        let prompt_id = folded
+            .active_root()
+            .rev()
+            .skip_while(|candidate| !std::ptr::eq(*candidate, record))
+            .skip(1)
+            .find(|candidate| {
+                candidate.r#type.as_deref() == Some("user")
+                    && candidate.subtype.as_deref() != Some("mid_turn_user_message")
+                    && candidate.agent_id.is_none()
+                    && candidate.is_sidechain != Some(true)
+            })
+            .and_then(|opener| opener.prompt_id.clone())
+            .filter(|_| !awaits_final_call);
         return TranscriptUsage {
+            prompt_id,
             total_tokens: usage.live_total().or(Some(0)),
             prompt_tokens,
             cache_read_input_tokens: prompt_tokens.and(usage.cached_content_token_count),

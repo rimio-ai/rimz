@@ -260,7 +260,7 @@ Successful plain-text stdout becomes `additionalContext` for `SessionStart`, `Us
 
 `StopFailure` fires instead of `Stop` when an API error or loop detection ends the turn. `MessageDisplay` fires at most every 200 ms while a reply streams and always once with `is_final: true`.
 
-`context_usage` is a ratio that may exceed 1, `context_limit` is in tokens, and `input_tokens` is the provider-normalized prompt count. `Stop` does not await the transcript writer, so a hook can run before the just-finished assistant record reaches disk. Equal token counts do not establish turn identity. Use `prompt_id` and the transcript's `promptId` where present, with token counts as measurements. A background task entry carries `id`, `status`, `agent_type`, `started_at`, and optional `description`. A cron entry carries `id`, `schedule`, `prompt`, `recurring`, `enabled`, and optional `next_run` and `last_run`.
+`context_usage` is a ratio that may exceed 1, `context_limit` is in tokens, and `input_tokens` is the provider-normalized prompt count. `Stop` does not await the transcript writer, so a hook can run before the just-finished assistant record reaches disk. Equal token counts do not establish turn identity. Use `prompt_id` and the active user record's `promptId` where present, with token counts as measurements. A background task entry carries `id`, `status`, `agent_type`, `started_at`, and optional `description`. A cron entry carries `id`, `schedule`, `prompt`, `recurring`, `enabled`, and optional `next_run` and `last_run`.
 
 ### Decision shapes
 

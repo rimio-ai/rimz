@@ -838,6 +838,77 @@ fn rewound_transcript_supplies_active_hook_boundary_usage() {
 }
 
 #[test]
+fn stop_prompt_identity_overrides_token_equality() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity.jsonl");
+    fs::write(&path, concat!(
+        "{\"uuid\":\"u\",\"type\":\"user\",\"promptId\":\"current\"}\n",
+        "{\"uuid\":\"steer\",\"parentUuid\":\"u\",\"type\":\"user\",\"subtype\":\"mid_turn_user_message\"}\n",
+        "{\"uuid\":\"a\",\"parentUuid\":\"steer\",\"type\":\"assistant\",\"usageMetadata\":{\"promptTokenCount\":100,\"totalTokenCount\":105}}\n",
+    )).unwrap();
+    let matching = hook_lifecycle(
+        &QwenAdapter,
+        "Stop",
+        &json!({
+            "session_id":"s", "transcript_path":path, "prompt_id":"current", "input_tokens":200
+        }),
+    );
+    let mismatched = hook_lifecycle(
+        &QwenAdapter,
+        "Stop",
+        &json!({
+            "session_id":"s", "transcript_path":path, "prompt_id":"other", "input_tokens":100
+        }),
+    );
+    assert_eq!(
+        (matching.usage.output_tokens, mismatched.usage.output_tokens),
+        (Some(5), None)
+    );
+}
+
+#[test]
+fn prompt_identity_does_not_vouch_for_a_call_before_a_tool_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pending.jsonl");
+    fs::write(&path, concat!(
+        "{\"uuid\":\"u\",\"type\":\"user\",\"promptId\":\"current\"}\n",
+        "{\"uuid\":\"a\",\"parentUuid\":\"u\",\"type\":\"assistant\",\"usageMetadata\":{\"promptTokenCount\":100,\"totalTokenCount\":105}}\n",
+        "{\"uuid\":\"t\",\"parentUuid\":\"a\",\"type\":\"tool_result\"}\n",
+    )).unwrap();
+    for (tokens, expected) in [(200, None), (100, Some(5))] {
+        let observation = hook_lifecycle(
+            &QwenAdapter,
+            "Stop",
+            &json!({
+                "session_id":"s", "transcript_path":path, "prompt_id":"current", "input_tokens":tokens
+            }),
+        );
+        assert_eq!(observation.usage.output_tokens, expected);
+    }
+}
+
+#[test]
+fn cron_opener_uses_tokens_not_an_older_prompt_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cron.jsonl");
+    fs::write(&path, concat!(
+        "{\"uuid\":\"u\",\"type\":\"user\",\"promptId\":\"old\"}\n",
+        "{\"uuid\":\"cron\",\"parentUuid\":\"u\",\"type\":\"user\",\"subtype\":\"cron\"}\n",
+        "{\"uuid\":\"a\",\"parentUuid\":\"cron\",\"type\":\"assistant\",\"usageMetadata\":{\"promptTokenCount\":100,\"totalTokenCount\":105}}\n",
+    )).unwrap();
+    for (tokens, expected) in [(100, Some(5)), (200, None)] {
+        let observation = hook_lifecycle(
+            &QwenAdapter,
+            "Stop",
+            &json!({
+                "session_id":"s", "transcript_path":path, "prompt_id":"new", "input_tokens":tokens
+            }),
+        );
+        assert_eq!(observation.usage.output_tokens, expected);
+    }
+}
+
+#[test]
 fn successive_stops_publish_correlated_small_call_splits() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("successive.jsonl");
