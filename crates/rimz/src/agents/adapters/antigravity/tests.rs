@@ -895,12 +895,34 @@ fn subagent_correlation_rejects_unsafe_identity_uri_and_workspace() {
     });
     let escaped_parent = write_subagent_fixture(dir.path(), SESSION_ID, &escaped);
     assert!(correlate(&escaped_parent, SESSION_ID, &workspace).is_none());
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &escaped_parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_BETA,
+            &workspace,
+        )
+        .is_some()
+    );
 
     let remote = rewrite_subagent_result(fixture, |content| {
         content.replacen("__HOME_URI__", "https://example.invalid", 1)
     });
     let remote_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote);
     assert!(correlate(&remote_parent, SESSION_ID, &workspace).is_none());
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &remote_parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_BETA,
+            &workspace,
+        )
+        .is_some()
+    );
 
     let remote_workspace = fixture.replace("__WORKSPACE_URI__", "https://example.invalid");
     let remote_workspace_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote_workspace);
@@ -913,6 +935,58 @@ fn subagent_correlation_rejects_unsafe_identity_uri_and_workspace() {
     );
     let relative_parent = write_subagent_fixture(dir.path(), SESSION_ID, &relative_workspace);
     assert!(correlate(&relative_parent, SESSION_ID, &workspace).is_none());
+}
+
+#[test]
+fn subagent_correlation_keeps_inherit_sibling_of_branch_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+    let fixture = include_str!("tests/fixtures/subagents_two_children.jsonl")
+        .replacen(
+            "\"TypeName\":\"summary_agent\"}",
+            "\"TypeName\":\"summary_agent\",\"Workspace\":\"branch\"}",
+            1,
+        )
+        .replacen(
+            "\"TypeName\":\"research\"}",
+            "\"TypeName\":\"research\",\"Workspace\":\"inherit\"}",
+            1,
+        );
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, &fixture);
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_ALPHA,
+            &workspace
+        )
+        .is_none()
+    );
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_BETA,
+            &workspace
+        )
+        .is_some()
+    );
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), CHILD_BETA);
 }
 
 #[test]
@@ -931,17 +1005,19 @@ fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
     let fixture = include_str!("tests/fixtures/subagents_two_children.jsonl");
     let assert_rejected = |fixture: &str| {
         let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
-        assert!(
-            session::correlate_subagent_under(
-                dir.path(),
-                &parent,
-                SESSION_ID,
-                &workspace,
-                CHILD_ALPHA,
-                &workspace,
-            )
-            .is_none()
-        );
+        for child in [CHILD_ALPHA, CHILD_BETA] {
+            assert!(
+                session::correlate_subagent_under(
+                    dir.path(),
+                    &parent,
+                    SESSION_ID,
+                    &workspace,
+                    child,
+                    &workspace,
+                )
+                .is_none()
+            );
+        }
         assert!(
             session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace,)
                 .is_empty()
@@ -962,6 +1038,7 @@ fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
     assert_rejected(&extra);
     let duplicate = fixture.replace(CHILD_BETA, CHILD_ALPHA);
     assert_rejected(&duplicate);
+    assert_rejected(&format!("{fixture}\nnot json\n"));
     let malformed = rewrite_subagent_result(fixture, |content| {
         content.replacen("\"logAbsoluteUri\"", "\"missingLogUri\"", 1)
     });
@@ -974,17 +1051,19 @@ fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
         .open(&parent)
         .unwrap();
     write!(file, "\n{{\"step_index\":3").unwrap();
-    assert!(
-        session::correlate_subagent_under(
-            dir.path(),
-            &parent,
-            SESSION_ID,
-            &workspace,
-            CHILD_ALPHA,
-            &workspace,
-        )
-        .is_none()
-    );
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        assert!(
+            session::correlate_subagent_under(
+                dir.path(),
+                &parent,
+                SESSION_ID,
+                &workspace,
+                child,
+                &workspace,
+            )
+            .is_none()
+        );
+    }
     assert!(
         session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace,).is_empty()
     );
