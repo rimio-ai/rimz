@@ -22,7 +22,7 @@ fn remote_control_status_preserves_host_readiness_labels() {
         .unwrap()
         .runtime_control_readiness(true, &login_env)
     else {
-        panic!("empty Codex home has no standalone install");
+        panic!("empty Codex home has no managed install");
     };
     let ready = Ready { host_argv: None };
     let uninstalled = Uninstalled(issue.clone());
@@ -44,13 +44,13 @@ fn remote_control_status_preserves_host_readiness_labels() {
             Codex,
             &uninstalled,
             None,
-            ("enabled, standalone install missing", false),
+            ("enabled, managed install missing", false),
         ),
         (
             Codex,
             &blocked,
             None,
-            ("enabled, standalone install missing", false),
+            ("enabled, managed install missing", false),
         ),
         (Codex, &ready, None, ("ready", true)),
         (Codex, &Disabled, None, ("ready", true)),

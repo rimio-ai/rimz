@@ -1,8 +1,10 @@
-//! Codex managed-standalone remote-control daemon lifecycle and stale recovery.
+//! Codex dedicated and legacy managed daemon lifecycle and stale recovery.
 //!
 //! Provider commands run from durable `CODEX_HOME`. Recovery signals only the
 //! updater whose PID records, process start times, ownership, executable, argv,
 //! and sole zombie child prove the known upstream stale-daemon shape.
+//! Each namespace keeps its app/updater records paired. Pending thread restore
+//! handoffs block history moves even when neither daemon is running.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -23,16 +25,47 @@ const RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RECOVERY_POLL: Duration = Duration::from_millis(25);
 const START_RETRY_DELAY: Duration = Duration::from_secs(3);
 
-/// Official managed-standalone installer surfaced by readiness guidance.
+struct Namespace {
+    package: &'static str,
+    app_record: &'static str,
+    updater_record: &'static str,
+}
+
+const NAMESPACES: [Namespace; 2] = [
+    Namespace {
+        package: "packages/app-server-daemon",
+        app_record: "daemon.pid",
+        updater_record: "daemon-updater.pid",
+    },
+    Namespace {
+        package: "packages/standalone",
+        app_record: "app-server.pid",
+        updater_record: "app-server-updater.pid",
+    },
+];
+
+impl Namespace {
+    fn binary_relative(&self, home: &Path) -> Option<PathBuf> {
+        ["current/bin/codex", "current/codex"]
+            .into_iter()
+            .map(|suffix| Path::new(self.package).join(suffix))
+            .find(|relative| home.join(relative).is_file())
+    }
+}
+
+/// Official managed installer surfaced by readiness guidance.
 const INSTALL_COMMAND: &str = "curl -fsSL https://chatgpt.com/codex/install.sh | sh";
 /// Provider lifecycle command that refreshes both the app-server and updater.
 /// Shell expansion preserves non-UTF-8 environment bytes and mirrors
 /// [`CodexAdapter::config_home`]'s empty-value fallback without trusting `codex` on PATH.
-const RECYCLE_COMMAND: &str = "cd ~; \
-    \"${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/codex\" \
-    app-server daemon bootstrap --remote-control";
+fn recycle_command(binary_relative: &Path) -> String {
+    format!(
+        "cd ~; \"${{CODEX_HOME:-$HOME/.codex}}/{}\" app-server daemon bootstrap --remote-control",
+        binary_relative.display()
+    )
+}
 
-/// A live managed updater still executes a different standalone release from
+/// A live managed updater still executes a different release from
 /// the current managed binary. Codex's update loop can restart the shared
 /// app-server while this skew persists, disconnecting every attached client.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,19 +74,23 @@ pub struct UpdaterSkew {
     pub updater_exe: PathBuf,
     pub managed_exe: PathBuf,
     pub updater_exe_deleted: bool,
+    managed_bin_relative: PathBuf,
 }
 
-fn standalone_missing_guidance() -> String {
+fn managed_missing_guidance() -> String {
     format!(
         "Codex remote-control is enabled (`[remote_control] codex = true`) but the \
-                 managed standalone Codex install is missing, so `rimz start` brings the \
+                 managed Codex install is missing, so `rimz start` brings the \
                  room up without the Codex remote-control host.\n\
                  `codex remote-control start` boots its app-server daemon from \
-                 `$CODEX_HOME/packages/standalone/current/codex` (CODEX_HOME defaults to \
-                 `~/.codex`); a `codex` on PATH is a different binary and does not satisfy it.\n\n\
+                 `$CODEX_HOME/{dedicated}/current/bin/codex` (an existing `{legacy}` install \
+                 is also accepted; CODEX_HOME defaults to `~/.codex`); a `codex` on PATH is a \
+                 different binary and does not satisfy it.\n\n\
                  Install it with:\n    {INSTALL_COMMAND}\n\n\
                  then re-run to enable the host, or set `[remote_control] codex = false` to \
-                 silence this."
+                 silence this.",
+        dedicated = NAMESPACES[0].package,
+        legacy = NAMESPACES[1].package,
     )
 }
 
@@ -74,7 +111,7 @@ impl std::fmt::Display for UpdaterSkew {
              replace the updater with the managed binary. This should clear the skew \
              automatically, but it disconnects every daemon-backed Codex session.\n\n\
              To choose the timing, run one provider-owned bootstrap while no valuable Codex turns \
-             are running:\n    {RECYCLE_COMMAND}\n\
+             are running:\n    {}\n\
              This restarts both provider processes and disconnects daemon-backed Codex sessions \
              once; resume them afterwards. A `remote-control stop` / `start` pair restarts only the \
              app-server and does not clear updater skew.",
@@ -82,6 +119,7 @@ impl std::fmt::Display for UpdaterSkew {
             self.updater_exe.display(),
             deleted,
             self.managed_exe.display(),
+            recycle_command(&self.managed_bin_relative),
         )
     }
 }
@@ -94,19 +132,19 @@ pub fn readiness(
 
     if !enabled {
         RuntimeControlReadiness::Disabled
-    } else if standalone_bin(login_env).is_some() {
+    } else if managed_bin(login_env).is_some() {
         RuntimeControlReadiness::Ready { host_argv: None }
     } else {
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            &standalone_missing_guidance(),
+            &managed_missing_guidance(),
         ))
     }
 }
 
 /// Report a fully identified live updater whose executable differs from the
-/// managed standalone target while the daemon control socket is present.
+/// managed release while the daemon control socket is present.
 ///
 /// This is diagnostic only. A healthy but skewed daemon keeps serving until
 /// its next successful update pass or a user-scheduled provider bootstrap;
@@ -118,7 +156,8 @@ pub fn updater_skew(login_env: &BTreeMap<String, String>) -> Option<UpdaterSkew>
 
 /// The threads the app-server Codex recorded under this login's home holds
 /// loaded: the sessions whose history it appends by path. Read-only. A record
-/// whose process cannot be confirmed is clear, and no socket is opened for it.
+/// whose process cannot be confirmed is clear unless a pending restore handoff
+/// is present; neither case opens a socket.
 pub fn writes_history(login_env: &BTreeMap<String, String>) -> DaemonSessions {
     CodexAdapter
         .config_home(login_env)
@@ -128,6 +167,9 @@ pub fn writes_history(login_env: &BTreeMap<String, String>) -> DaemonSessions {
 /// Asks the control socket under `home` alone: the socket override of the
 /// login env could name another account's daemon.
 fn sessions_under(home: &Path) -> DaemonSessions {
+    if home.join("app-server-daemon/loaded-threads.json").exists() {
+        return DaemonSessions::Unknown;
+    }
     if !app_server_runs_under(home) {
         return DaemonSessions::Clear;
     }
@@ -142,9 +184,14 @@ fn sessions_under(home: &Path) -> DaemonSessions {
 }
 
 fn app_server_runs_under(home: &Path) -> bool {
-    read_pid_record(&home.join("app-server-daemon").join("app-server.pid")).is_some_and(|app| {
-        pid_record_matches(&app)
-            && crate::proc::stat_metrics(app.pid).is_some_and(|metrics| metrics.state != 'Z')
+    NAMESPACES.iter().any(|namespace| {
+        read_pid_record(&home.join("app-server-daemon").join(namespace.app_record)).is_some_and(
+            |app| {
+                pid_record_matches(&app)
+                    && crate::proc::stat_metrics(app.pid)
+                        .is_some_and(|metrics| metrics.state != 'Z')
+            },
+        )
     })
 }
 
@@ -158,10 +205,16 @@ fn updater_skew_under(home: &Path) -> Option<UpdaterSkew> {
     if !control_socket(home).exists() {
         return None;
     }
+    NAMESPACES
+        .iter()
+        .find_map(|namespace| updater_skew_in(home, namespace))
+}
+
+fn updater_skew_in(home: &Path, namespace: &Namespace) -> Option<UpdaterSkew> {
     let updater = read_pid_record(
         &home
             .join("app-server-daemon")
-            .join("app-server-updater.pid"),
+            .join(namespace.updater_record),
     )?;
     if !pid_record_matches(&updater) {
         return None;
@@ -180,8 +233,15 @@ fn updater_skew_under(home: &Path) -> Option<UpdaterSkew> {
     if !updater_argv(home, &argv) {
         return None;
     }
-    let managed_executable = std::fs::canonicalize(standalone_bin_under(home)?).ok()?;
-    classify_updater_skew(updater.pid, updater_executable, managed_executable, deleted)
+    let managed_bin_relative = namespace.binary_relative(home)?;
+    let managed_executable = std::fs::canonicalize(home.join(&managed_bin_relative)).ok()?;
+    classify_updater_skew(
+        updater.pid,
+        updater_executable,
+        managed_executable,
+        deleted,
+        managed_bin_relative,
+    )
 }
 
 fn classify_updater_skew(
@@ -189,25 +249,44 @@ fn classify_updater_skew(
     updater_exe: PathBuf,
     managed_exe: PathBuf,
     updater_exe_deleted: bool,
+    managed_bin_relative: PathBuf,
 ) -> Option<UpdaterSkew> {
     let resolved_updater =
         std::fs::canonicalize(&updater_exe).unwrap_or_else(|_| updater_exe.clone());
-    (updater_exe_deleted || resolved_updater != managed_exe).then_some(UpdaterSkew {
-        updater_pid,
-        updater_exe,
-        managed_exe,
-        updater_exe_deleted,
-    })
+    (updater_exe_deleted || release_path(&resolved_updater) != release_path(&managed_exe))
+        .then_some(UpdaterSkew {
+            updater_pid,
+            updater_exe,
+            managed_exe,
+            updater_exe_deleted,
+            managed_bin_relative,
+        })
 }
 
-/// Ensure the enabled per-user daemon once the managed standalone resolves.
+fn release_path(executable: &Path) -> &Path {
+    executable
+        .ancestors()
+        .find(|path| {
+            path.parent().is_some_and(|parent| {
+                parent.file_name() == Some(OsStr::new("releases"))
+                    && parent.parent().is_some_and(|root| {
+                        NAMESPACES
+                            .iter()
+                            .any(|namespace| root.ends_with(namespace.package))
+                    })
+            })
+        })
+        .unwrap_or(executable)
+}
+
+/// Ensure the enabled per-user daemon once the managed binary resolves.
 pub fn ensure(enabled: bool, login_env: &BTreeMap<String, String>) {
     let home = CodexAdapter.config_home(login_env);
-    let standalone = home.as_deref().and_then(standalone_bin_under);
-    if !should_ensure(enabled, standalone.is_some()) {
+    let managed = home.as_deref().and_then(managed_bin_under);
+    if !should_ensure(enabled, managed.is_some()) {
         return;
     }
-    let (Some(home), Some(bin)) = (home, standalone) else {
+    let (Some(home), Some(bin)) = (home, managed) else {
         return;
     };
     if recover_stale(&home) {
@@ -225,7 +304,7 @@ pub fn reconcile(enabled: bool, login_env: &BTreeMap<String, String>) -> Result<
     let Some(home) = CodexAdapter.config_home(login_env) else {
         return Ok(());
     };
-    let Some(bin) = standalone_bin_under(&home) else {
+    let Some(bin) = managed_bin_under(&home) else {
         return Ok(());
     };
     let argv = command(&bin, enabled);
@@ -383,30 +462,39 @@ fn spawn(bin: &Path, home: &Path, login_env: &BTreeMap<String, String>) {
     }
 }
 
-/// Managed standalone at `$CODEX_HOME/packages/standalone/current/codex`.
-fn standalone_bin(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
-    standalone_bin_under(&CodexAdapter.config_home(login_env)?)
+/// Managed binary, preferring the dedicated package over the legacy package.
+fn managed_bin(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    managed_bin_under(&CodexAdapter.config_home(login_env)?)
 }
 
-fn standalone_bin_under(home: &Path) -> Option<PathBuf> {
-    let bin = home
-        .join("packages")
-        .join("standalone")
-        .join("current")
-        .join("codex");
-    bin.is_file().then_some(bin)
+fn managed_bin_under(home: &Path) -> Option<PathBuf> {
+    NAMESPACES
+        .iter()
+        .find_map(|namespace| namespace.binary_relative(home))
+        .map(|relative| home.join(relative))
 }
 
-fn should_ensure(enabled: bool, standalone_present: bool) -> bool {
-    enabled && standalone_present
+fn should_ensure(enabled: bool, managed_present: bool) -> bool {
+    enabled && managed_present
 }
 
-/// PID plus `ps -o lstart` identity recorded by Codex.
+/// PID, required `ps -o lstart` text, and optional native identity recorded by Codex.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PidRecord {
     pid: u32,
     process_start_time: String,
+    #[cfg(target_os = "linux")]
+    #[serde(default, alias = "linuxProcessIdentity")]
+    process_identity: Option<serde_json::Value>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LinuxProcessIdentity {
+    boot_id: String,
+    start_ticks: u64,
 }
 
 struct ProcessSnapshot {
@@ -426,11 +514,17 @@ fn recover_stale(home: &Path) -> bool {
     if control_socket(home).exists() {
         return false;
     }
+    NAMESPACES
+        .iter()
+        .any(|namespace| recover_stale_in(home, namespace))
+}
+
+fn recover_stale_in(home: &Path, namespace: &Namespace) -> bool {
     let state_dir = home.join("app-server-daemon");
-    let Some(app) = read_pid_record(&state_dir.join("app-server.pid")) else {
+    let Some(app) = read_pid_record(&state_dir.join(namespace.app_record)) else {
         return false;
     };
-    let Some(updater) = read_pid_record(&state_dir.join("app-server-updater.pid")) else {
+    let Some(updater) = read_pid_record(&state_dir.join(namespace.updater_record)) else {
         return false;
     };
     let Some(snapshot) = process_snapshot(&app, &updater) else {
@@ -510,21 +604,39 @@ fn stale_updater_pid(
 }
 
 fn managed_executable(home: &Path, executable: &Path) -> bool {
-    executable.starts_with(home.join("packages").join("standalone"))
+    NAMESPACES
+        .iter()
+        .any(|namespace| executable.starts_with(home.join(namespace.package)))
         && executable.file_name() == Some(OsStr::new("codex"))
 }
 
 fn updater_argv(home: &Path, argv: &[OsString]) -> bool {
-    let [program, app_server, daemon, update_loop] = argv else {
+    let [program, app_server, daemon, update_loop, rest @ ..] = argv else {
         return false;
     };
     managed_executable(home, Path::new(program))
         && app_server == "app-server"
         && daemon == "daemon"
         && update_loop == "pid-update-loop"
+        && (rest.is_empty()
+            || matches!(rest, [flag, release] if flag == "--restore-release" && !release.is_empty()))
 }
 
 fn pid_record_matches(record: &PidRecord) -> bool {
+    #[cfg(target_os = "linux")]
+    if let Some(identity) = record
+        .process_identity
+        .as_ref()
+        .and_then(|value| LinuxProcessIdentity::deserialize(value).ok())
+        && let Some(boot_id) = crate::proc::boot_id()
+    {
+        if boot_id != identity.boot_id {
+            return false;
+        }
+        if let Some(metrics) = crate::proc::stat_metrics(record.pid) {
+            return metrics.start_ticks == identity.start_ticks;
+        }
+    }
     let pid = record.pid.to_string();
     let mut command = Command::new("ps");
     command

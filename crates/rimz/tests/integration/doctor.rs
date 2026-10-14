@@ -1781,7 +1781,7 @@ fn doctor_json_reports_remote_control_refusals_and_skips() {
         "{agents:?}"
     );
     assert!(
-        agents.contains(&("codex", "enabled, standalone install missing")),
+        agents.contains(&("codex", "enabled, managed install missing")),
         "{agents:?}"
     );
 
@@ -1801,7 +1801,7 @@ fn doctor_json_reports_remote_control_refusals_and_skips() {
         "{refusals}"
     );
     assert!(
-        !refusals.contains("managed standalone Codex install is missing"),
+        !refusals.contains("managed Codex install is missing"),
         "{refusals}"
     );
 
@@ -1813,7 +1813,7 @@ fn doctor_json_reports_remote_control_refusals_and_skips() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        skipped.contains("managed standalone Codex install is missing"),
+        skipped.contains("managed Codex install is missing"),
         "{skipped}"
     );
     assert!(

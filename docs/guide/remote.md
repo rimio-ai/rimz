@@ -133,7 +133,7 @@ For sessions reachable through the provider's remote control, the ask reaches yo
 RimZ stays out of the path: each toggle starts the provider's own command with the room and nothing more. Exactly what runs:
 
 - **Claude.** `claude remote-control --spawn worktree`, as a long-lived pane in the room's background `rimzd` tab, run from the project root, so a session you start from the phone is carved into its own on-demand worktree instead of touching your checkout. While the host is up, the Claude block on the [provider dashboard](./sidebar.md#the-provider-dashboard) wears a `⇅ rc` flag.
-- **Codex.** `codex remote-control start`, which brings up Codex's own daemon with remote control enabled, one per Codex account and shared by every room on that account. It runs from Codex's managed standalone install, not from whatever `codex` your `PATH` finds, so the toggle does nothing without that install; `rimz doctor` prints the installer command when it is missing.
+- **Codex.** `codex remote-control start`, which brings up Codex's own daemon with remote control enabled, one per Codex account and shared by every room on that account. It runs from Codex's managed install (dedicated or legacy standalone), not from whatever `codex` your `PATH` finds, so the toggle does nothing without that install; `rimz doctor` prints the installer command when it is missing.
 
 `rimz start` checks the preconditions before it opens the room. An enabled toggle whose agent is not installed is skipped so the room still opens, and `rimz doctor` names the install fix. An installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set) refuses at start with the fix spelled out, so a toggle you left on does not quietly do nothing.
 

@@ -853,7 +853,7 @@ fn remote_control_status(
         }
         (Claude, Uninstalled(_), _) => ("enabled, not on PATH", false),
         (Claude, Blocked(_), _) => ("enabled, blocked", false),
-        (Codex, Uninstalled(_) | Blocked(_), _) => ("enabled, standalone install missing", false),
+        (Codex, Uninstalled(_) | Blocked(_), _) => ("enabled, managed install missing", false),
         (_, Ready { .. } | Disabled, _) => ("ready", true),
     }
 }
