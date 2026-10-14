@@ -196,6 +196,10 @@ pub enum AgentProcessCompileErr {
         size: usize,
         limit: usize,
     },
+    #[error(
+        "`{kind}` CLI reads a prompt beginning with `-` as an option and would drop it; start the prompt with a word, or send it with `rimz message` once the agent is up"
+    )]
+    PositionalPromptOption { kind: String },
     #[error(transparent)]
     Trust(#[from] crate::trust::TrustErr),
     #[error(transparent)]
@@ -749,6 +753,20 @@ fn compile_provider_argv_with_headless(
             kind: kind.to_owned(),
             size: prompt.len(),
             limit: TEXT_PROMPT_LIMIT,
+        });
+    }
+    if let ExecAction::Launch {
+        prompt: Some(prompt),
+        ..
+    } = action
+        && matches!(
+            adapter.spec().launch.prompt,
+            crate::agents::definition::PromptStyle::Positional
+        )
+        && prompt.starts_with('-')
+    {
+        return Err(AgentProcessCompileErr::PositionalPromptOption {
+            kind: kind.to_owned(),
         });
     }
     let argv = match (headless, action) {

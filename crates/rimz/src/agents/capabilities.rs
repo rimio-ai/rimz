@@ -476,9 +476,9 @@ pub trait LaunchCapability: CoreCapability {
 
     /// The argv that launches a fresh interactive session of this agent in the
     /// pane's cwd. `extra_args` are direct agent CLI arguments from the chosen
-    /// tab layout; `prompt`, when present, is passed as the agent's positional
-    /// startup prompt after a `--` terminator. An agent with no launch CLI
-    /// returns `None`.
+    /// tab layout; `prompt`, when present, follows the definition's prompt
+    /// style (a flag, a bare positional, or a positional after `--`). An agent
+    /// with no launch CLI returns `None`.
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         self.spec().launch.launch_command(extra_args, prompt)
     }

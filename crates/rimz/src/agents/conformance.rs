@@ -39,6 +39,37 @@ fn unsupported_account_spend_exposes_no_spending_sources() {
     }
 }
 
+#[test]
+fn positional_prompt_refusal_follows_the_definition() {
+    use crate::harness::launch::{AgentProcessCompileErr, ExecAction, compile_provider_argv};
+    for adapter in BUILTINS {
+        if adapter.spec().launch.program.is_none() {
+            continue;
+        }
+        let result = compile_provider_argv(
+            adapter,
+            adapter.spec().kind,
+            &ExecAction::Launch {
+                prompt: Some("- fix it".to_owned()),
+                extra_args: Vec::new(),
+            },
+            Path::new("/repo"),
+        );
+        assert_eq!(
+            matches!(
+                result,
+                Err(AgentProcessCompileErr::PositionalPromptOption { .. })
+            ),
+            matches!(
+                adapter.spec().launch.prompt,
+                super::definition::PromptStyle::Positional
+            ),
+            "{}",
+            adapter.spec().kind
+        );
+    }
+}
+
 /// A declared reply variant must match an event the adapter really decodes: a
 /// wrong variant, or `Some` on an agent without that event, would route stops
 /// to the hook channel and never attach.
