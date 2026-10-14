@@ -174,6 +174,136 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
 }
 
 #[test]
+fn lifecycle_records_pane_roles_for_roots_and_native_children() {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::harness::launch::{ENV_AGENT_PROFILE, ENV_RUN_ID};
+    use rimz::store::run::RunRecord;
+    for (subagent, profile, native_child) in [
+        (Some(true), Some("fast"), false),
+        (Some(true), None, false),
+        (Some(false), Some("peer"), false),
+        (None, None, false),
+        (Some(true), Some("fast"), true),
+    ] {
+        let (_dir, store) = hooks_test_store();
+        let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+        let mut env = std::collections::BTreeMap::new();
+        if let Some(subagent) = subagent {
+            let mut run = RunRecord::new(
+                store.paths().workspace_id.clone(),
+                adapter.spec().kind_id(),
+                rimz::agents::PermissionMode::Auto,
+                "task".into(),
+                "/tmp/hooks-test".into(),
+            );
+            run.subagent = subagent;
+            env.insert(ENV_RUN_ID.into(), run.run_id.to_string());
+            rimz::harness::run::create(store.paths(), &run).unwrap();
+        }
+        if let Some(profile) = profile {
+            env.insert(ENV_AGENT_PROFILE.into(), profile.into());
+        }
+        let payload = if native_child {
+            serde_json::json!({"session_id":"parent", "agent_id":"child", "agent_type":"review"})
+        } else {
+            serde_json::json!({"session_id":"parent"})
+        };
+        let event = if native_child {
+            "SubagentStart"
+        } else {
+            "SessionStart"
+        };
+        let frame_for =
+            |event: &str, payload: &serde_json::Value| rimz::store::ingress::HookIngress {
+                schema_version: "1".into(),
+                event_id: rimz::EventId::new(),
+                ts: jiff::Timestamp::now(),
+                source: adapter.spec().kind_id(),
+                event: Some(event.into()),
+                payload: payload.to_string(),
+                cwd: "/tmp/hooks-test".into(),
+                hook_pid: std::process::id(),
+                env: env.clone(),
+            };
+        let frame = frame_for(event, &payload);
+        let feed_event = |event: &str, payload: &serde_json::Value| {
+            with_frame_env(&frame_for(event, payload), FrameAttempt::First, || {
+                let mut decoded = adapter.decode_hook(event, payload).unwrap();
+                handle_lifecycle_hook(
+                    &hooks_test_workspace(Some("main")),
+                    &store,
+                    adapter,
+                    &mut decoded,
+                    payload,
+                    rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                    &hooks_test_globals(),
+                )
+                .unwrap()
+            })
+        };
+        let feed = || feed_event(event, &payload);
+        let reply = feed();
+        let directory = store
+            .runtime_paths()
+            .shared_provider_spending_path()
+            .parent()
+            .unwrap()
+            .join("session-roles");
+        let path = directory.join(format!(
+            "{}.jsonl",
+            frame.ts.to_zoned(jiff::tz::TimeZone::UTC).year()
+        ));
+        assert!(path.exists(), "hook must persist session provenance");
+        let before = std::fs::read(&path).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&before).unwrap();
+        assert_eq!(
+            saved["session"],
+            if native_child { "child" } else { "parent" }
+        );
+        assert_eq!(
+            saved["role"],
+            if subagent == Some(true) {
+                "subagent"
+            } else {
+                "agent"
+            }
+        );
+        assert_eq!(
+            saved["profile"].as_str(),
+            profile.or((subagent == Some(true)).then_some("claude"))
+        );
+        feed();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        if !native_child {
+            std::fs::remove_file(&path).unwrap();
+            feed_event(
+                "UserPromptSubmit",
+                &serde_json::json!({"session_id":"parent", "prompt":"go"}),
+            );
+            assert!(
+                !path.exists(),
+                "a frame for a session already in the room must not reach the index"
+            );
+            feed();
+            let again: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                (&again["session"], &again["role"]),
+                (&saved["session"], &saved["role"]),
+                "a registering frame indexes a session the room already knows"
+            );
+        }
+        std::fs::remove_dir_all(&directory).unwrap();
+        std::fs::write(&directory, b"not a directory").unwrap();
+        assert_eq!(
+            feed(),
+            reply,
+            "provenance write failure must not fail or alter the hook reply"
+        );
+    }
+}
+
+#[test]
 fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
     let (_dir, store) = hooks_test_store();
     let home = store.paths().root.join("home");

@@ -195,7 +195,7 @@ impl HeldStats {
         let mut frame = anstream::AutoStream::new(Vec::new(), choice);
         match (self.current.as_ref(), self.refresh_failure.as_deref()) {
             (Some(stats), _) => {
-                let today_day = unix_secs_now() as i64 / DAY_SECS;
+                let today_day = stats.today_day(unix_secs_now());
                 let assists = AssistStats::load(&logs_dir(), self.active, Timestamp::now());
                 render_panel(
                     &mut frame,

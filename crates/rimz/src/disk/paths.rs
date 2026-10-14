@@ -997,6 +997,16 @@ impl RuntimePaths {
             .join(format!("{ACCOUNT_BUDGET_LEDGER_PREFIX}{component}.lock"))
     }
 
+    pub(crate) fn shared_session_roles(&self, year: i16) -> PathBuf {
+        Self::session_roles_for_cursor(&self.shared_spending_cursor_path(), year)
+    }
+
+    pub(crate) fn session_roles_for_cursor(cursor: &Path, year: i16) -> PathBuf {
+        cursor
+            .with_file_name("session-roles")
+            .join(format!("{year:04}.jsonl"))
+    }
+
     /// The component of an account budget ledger's file name; `None` for any
     /// other file.
     pub(crate) fn account_budget_ledger_component(path: &Path) -> Option<&str> {
@@ -1379,7 +1389,8 @@ pub fn account_lock(kind: &crate::ids::AgentKind) -> PathBuf {
 /// Account-global provider caches, `<home>/cache/providers`: probe memos,
 /// rate limits, credits, the spend cursor and aggregate, and the pricing
 /// book, which rebuild from the providers' own files. The account budget
-/// and auto-redeem ledgers beside them hold choices nothing rebuilds.
+/// and auto-redeem ledgers beside them hold choices nothing rebuilds;
+/// yearly session-role segments hold non-rebuildable spending provenance.
 pub fn providers_cache_dir() -> PathBuf {
     cache_dir().join("providers")
 }

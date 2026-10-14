@@ -70,7 +70,11 @@ The walk publishes machine-shared `provider-spending.json`, and every reader tak
 | fleet store `W:` and `M:` rows | the fleet-wide trailing-week and trailing-month totals; `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
 | cockpit `◎`, `¤`, and breakdown | a workspace-scoped tally limited to the room's project root and grouped worktrees, omitting unknown-origin files |
 | account daily caps | a local-calendar-day `SpendWindow` per kind (`day_by_provider`) and per history pool (`day_by_login`), computed for eligible kinds independently of the headline ([budget.md](../harness/budget.md)) |
-| `rimz stats` | UTC-day buckets and per-model buckets ([stats.md](../stats.md)) |
+| `rimz stats` | local-calendar-day buckets and per-model buckets ([stats.md](../stats.md)) |
+
+The publication names its resolved `timezone`; both its day keys (local civil dates expressed as epoch-day numbers) and the reader's today index use that zone. Raw rows use their local date. Rows compacted beyond eight days carry only a UTC rollup's maximum timestamp, so their heatmap cell uses that timestamp's local date, an approximation that does not change window totals. Local-midnight boundaries are computed once per history pass, not by converting every row. Only the aggregate version changes; the raw spending cache stays readable without reparsing pruned transcripts.
+
+An unnamed system timezone cannot be carried in the publication. History then uses and publishes UTC, with a tracing warning to set `timezone` in config. Named zones are unchanged. Account-day budget windows retain their existing configured/system-zone behavior.
 
 A provider with no historical tally keeps the full headline template: its separately derived active-session count stays live, and the token and dollar positions paint as dim `–` placeholders. Antigravity takes this path because its current usage is replace-style and `$0.00` would be false.
 
@@ -108,7 +112,7 @@ Two version constants gate schema changes:
 | Constant | Current version | Bump when | Effect |
 | --- | --- | --- | --- |
 | `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 27: Codex priority-tier pricing | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
-| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 16: timed window counters | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
+| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 17: local days and session roles | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
 
 Writers refuse a schema downgrade after a cheap leading-version probe. An older long-lived build therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
 
@@ -200,6 +204,16 @@ Long-context tiers follow the publisher's semantics, and the book keeps both:
 The 5-minute cache-creation slice bills at the cache-create rate, the 1-hour slice at twice the input rate (long-context tiers included), and a fast or priority turn multiplies the finished cost by the model's fast multiplier. Claude marks a fast turn with `usage.speed`; Codex with the priority `service_tier` of the latest `thread_settings_applied` ([adapter_codex.md](./adapter_codex.md#cost)).
 
 Two providers feed the split differently. Codex passes uncached input and output, and bills cached input at the cache-read rate when `cache_read_explicit` is set and at the input rate otherwise, so a model without a published discount does not discount cached tokens ([adapter_codex.md](./adapter_codex.md#cost)). Claude splits `message.usage.cache_creation` into 5-minute and 1-hour creation when present and treats flat `cache_creation_input_tokens` as 5-minute creation otherwise; managed contracted rates apply when deployed ([adapter_claude.md](./adapter_claude.md)).
+
+## Session role provenance
+
+`cache/providers/session-roles/<UTC-year>.jsonl` holds home-wide provenance independent of run records and room state. Each line carries `kind`, native `session`, `role` (`agent` or `subagent`), `profile`, and RFC 3339 `at`. A subagent requires a profile; an agent's profile is optional. Unknown fields are ignored and malformed lines are skipped. Appends use `append_record_bytes` followed by `sync_file_data`, without a lock; creating `session-roles/` syncs `cache/providers/`. Hook write errors warn and do not change the hook reply.
+
+The lifecycle funnel records primary, derived, and replayed observations with a native id, excluding side conversations, when the observation creates the session's row in the room or registers the session (a fresh start or a resume). Every other frame skips the index: each hook frame applies in a fresh `rimz hooks apply` child, so the parse memo is cold and a write reads the whole segment. A session already live when its room upgraded is indexed at its next registration. A pane's run resolving to `subagent = true` supplies the subagent role, with its environment profile or the provider kind as fallback. Other observed sessions are agents. Native provider children inherit the pane role: Claude companions join their parent's id; Codex children join their own observed id. Unobserved sessions remain unattributed.
+
+Readers fold previous-year then current-year segments, first record wins within retained provenance. On the first observation in a new year, the writer carries forward the previous year's role/profile instead of replacing it with the pane's current identity. A session absent from both segments is recorded fresh. Creating a segment removes segments older than the previous year; a stat-keyed parse memo bounds retained memory to those two segments.
+
+History publications include `roles.agents` by provider kind, `roles.subagents` by profile (each with `tally` and `models`), and `roles.unattributed` with `tally` and a provider-kind-keyed `by_provider` breakdown. The provider breakdown sums to the unattributed tally in every window, including when the role index is empty. The roles partition the deduplicated fleet dollars and tokens in every window; session counts retain their own grouping semantics.
 
 ## See also
 

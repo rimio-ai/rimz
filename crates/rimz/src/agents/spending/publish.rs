@@ -34,7 +34,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 // v15: per-login maps are keyed by history pool; a shared account's spend is
 // under its kind's `default` key.
 // v16: response timing counters in per-model windows for the stats tok/s figure.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 16;
+// v17: local-date history with its timezone and durable session-role attribution.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 17;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -73,7 +74,10 @@ pub struct ProviderSpendingCache {
     /// Epoch second at which the published local calendar day began.
     #[serde(default)]
     pub day_cutoff_secs: u64,
-    /// Account-global UTC-day buckets keyed by epoch day, published so the stats
+    /// Resolved timezone for local civil-date history and the reader's today index.
+    #[serde(default)]
+    pub timezone: String,
+    /// Account-global local-date buckets keyed by epoch day, published so the stats
     /// command can render its heatmap without walking transcripts.
     #[serde(default)]
     pub days: BTreeMap<i64, DaySpend>,
@@ -81,6 +85,9 @@ pub struct ProviderSpendingCache {
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
     pub models: BTreeMap<String, SpendTally>,
+    /// Session provenance partition of fleet spend, populated by history passes.
+    #[serde(default)]
+    pub roles: super::RoleTallies,
     #[serde(flatten)]
     pub spending: Spending,
 }
@@ -94,7 +101,9 @@ impl ProviderSpendingCache {
             day_by_login: result.login_day.clone(),
             day_cutoff_secs: result.day_cutoff_secs,
             days: result.days.clone(),
+            timezone: result.timezone.clone(),
             models: result.models.clone(),
+            roles: result.roles.clone(),
             spending: result.spending.clone(),
         }
     }

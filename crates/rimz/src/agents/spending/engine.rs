@@ -343,7 +343,7 @@ fn walk_fleet_spending_files(
     use crate::agents::pricing;
     use crate::agents::spending::{
         ProviderSpendingCache, SilentWalk, SpendProgress, SpendScope, SpendingCaches,
-        SpendingWalkResult, WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
+        WORKSPACE_SPENDING_VERSION, WalkRequest, WorkspaceSpendingCache,
         read_provider_spending_cache, write_provider_spending_cache,
     };
 
@@ -369,8 +369,16 @@ fn walk_fleet_spending_files(
             };
         }
         let refreshed_at_ms = unix_now_ms();
-        let result = SpendingWalkResult::default();
         let user_inputs = user_input::load();
+        let result = crate::agents::spending::aggregate_walk_publish(
+            files,
+            &Default::default(),
+            &user_inputs,
+            now_secs,
+            None,
+            context.headline,
+            &Default::default(),
+        );
         let scoped = compute_scoped_spending(
             files,
             &Default::default(),
@@ -481,6 +489,8 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
     }
 
     fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
+        let roles =
+            super::session_roles::load(&self.runtime.shared_spending_cursor_path(), self.now_secs);
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
             cache,
@@ -488,6 +498,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.now_secs,
             self.scope,
             self.spec,
+            &roles,
         );
         let published = read_provider_spending_cache(&self.provider_path);
         if published.is_current_version()

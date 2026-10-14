@@ -329,7 +329,7 @@ fn timestamp_from_stamp(stamp: &ProviderPathStamp) -> Option<Timestamp> {
     .ok()
 }
 
-fn session_id_from_filename(path: &Path) -> Option<String> {
+pub(super) fn session_id_from_filename(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let suffix = stem.get(stem.len().checked_sub(36)?..)?;
     Uuid::parse_str(suffix).ok().map(|_| suffix.to_owned())

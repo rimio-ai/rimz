@@ -198,7 +198,9 @@ upward-dependencies = ["address"]
 # LaunchBlocker and LaunchCapability::launch_blocker share provider launch preconditions (+2).
 # SettingsConflict, hooks_disabled, and ask_unenforced share provider settings refusals with launch and doctor (+3).
 # LaunchDirMode separates supervised folder-screen refusals from headless judges (+1).
-surface-budget = 1041
+# SpendingCapability::spending_session_id and the spending role/history surface (+9).
+# UnattributedTally shares the provider split with the stats consumer (+1).
+surface-budget = 1051
 
 [[verdict]]
 kind = "item"
@@ -287,7 +289,9 @@ path = "crates/rimz/src/agents/spending"
 # Parser wire, walker, and cache records stay public for the adapters, bench, perf and example crates.
 # ResponseTiming and the timed window counters/rate cross the adapter and stats seams.
 # SpendUpdate exposes the parser's three-way cache update policy (+1).
-surface-budget = 88
+# Local-day helpers, session-role module/record/writer, and published tallies (+8).
+# UnattributedTally carries the provider split across the publication/stats seam.
+surface-budget = 97
 
 [[module]]
 path = "crates/rimz/src/bin"
@@ -469,7 +473,63 @@ allowed-dependencies = [
 # Birth, reset, supervisors and integration tests share RoomLock's claim/hold/share and its classed path (+5).
 # Run listings construct full stamps from their single metadata read (+1).
 # IncrementalFold and its constructor/refresh share rotating-log cursors (+3).
-surface-budget = 240
+# Session-role segments share the provider cursor's durable root (+2).
+surface-budget = 242
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::SpendingCapability::spending_session_id"
+reason = "Native filename identity belongs to adapters; the historical role join cannot reparse provider paths or invalidate retained raw caches."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::aggregate::local_day_index"
+reason = "Stats computes today in the publication's timezone using the same civil-date convention as aggregation."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::aggregate::local_day_start_secs"
+reason = "Shared local-midnight convention is reachable for spending consumers independently of their configuration."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::RoleTallies"
+reason = "Published role partition shared with the stats reader, conserving fleet dollars and tokens."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::SubagentTally"
+reason = "Published profile spend carries model breakdowns without duplicating SpendTally serialization."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::UnattributedTally"
+reason = "Published unattributed spend retains provider visibility without claiming a session role."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::SessionRole"
+reason = "Typed durable role enforces a required subagent profile at the hook-to-ledger boundary."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::SessionRoleRecord"
+reason = "Home-wide provenance survives room and run removal and is shared with the hook writer."
+
+[[verdict]]
+kind = "item"
+key = "agents::spending::session_roles::record"
+reason = "Single durable append boundary, with retained first-record identity and annual carry-forward."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::shared_session_roles"
+reason = "Hook provenance shares the account-global durable provider root rather than room lifetime."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::session_roles_for_cursor"
+reason = "Walker reads provenance beside its explicit cursor, including isolated roots, without constructing paths outside disk."
 
 [[module]]
 path = "crates/rimz/src/forge"
@@ -2363,7 +2423,7 @@ reason = "Public SpendParse update policy distinguishes incremental extension, a
 [[verdict]]
 kind = "item"
 key = "agents::spending::aggregate::aggregate_counted_rollups"
-reason = "One fold for fleet, provider, workspace, day and model outputs; include_history_rollups is two behaviours (2ff96d1c3); raw-row session counts deliberately survive dedup (pass 13)."
+reason = "One fold for fleet, provider, workspace, day, model and role outputs; optional history inputs carry provenance; raw-row session counts deliberately survive dedup (pass 13)."
 
 [[verdict]]
 kind = "item"

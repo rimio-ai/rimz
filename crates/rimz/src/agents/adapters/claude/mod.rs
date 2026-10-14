@@ -1315,6 +1315,16 @@ impl crate::agents::capabilities::AccountCapability for ClaudeAdapter {
 }
 
 impl crate::agents::capabilities::SpendingCapability for ClaudeAdapter {
+    fn spending_session_id(&self, path: &Path) -> Option<String> {
+        let parent = path.parent()?;
+        let id = if parent.file_name().is_some_and(|name| name == "subagents") {
+            parent.parent()?.file_name()?.to_str()?
+        } else {
+            path.file_stem()?.to_str()?
+        };
+        uuid::Uuid::parse_str(id).ok().map(|_| id.to_owned())
+    }
+
     fn spending_sources(
         &self,
         login_env: &BTreeMap<String, String>,

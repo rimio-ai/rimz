@@ -92,7 +92,7 @@ fn compute_spending_with_origins_and_scope(
             now_secs,
             spec,
         },
-        false,
+        None,
     );
     (aggregate.spending, aggregate.workspace.tally)
 }
@@ -126,7 +126,7 @@ fn aggregate_spending_with_user_inputs(
             now_secs,
             spec,
         },
-        false,
+        None,
     )
     .spending
 }
@@ -167,9 +167,12 @@ fn compute_daily_spend(
         HeadlineContext {
             user_inputs: &user_inputs,
             now_secs: NOW_SECS,
-            spec: &HeadlineSpec::default(),
+            spec: &HeadlineSpec {
+                timezone: Some("UTC".to_owned()),
+                ..Default::default()
+            },
         },
-        true,
+        Some(&Default::default()),
     )
     .days
 }
@@ -191,7 +194,7 @@ fn compute_model_breakdown(
             now_secs,
             spec: &HeadlineSpec::default(),
         },
-        true,
+        Some(&Default::default()),
     )
     .models
 }

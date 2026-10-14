@@ -577,6 +577,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
     let mut out = Vec::new();
     let today = unix_secs_now() as i64 / DAY_SECS;
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -624,6 +625,7 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
     state
         .accept_refresh(
             Ok(Stats {
+                timezone: "UTC".into(),
                 by_day: BTreeMap::new(),
                 by_model: BTreeMap::new(),
                 by_agent: BTreeMap::new(),
@@ -688,6 +690,7 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
 
     let today = unix_secs_now() as i64 / DAY_SECS;
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -720,6 +723,7 @@ fn unavailable_message_ellipsizes_to_the_panel_width() {
 fn refresh_result_carries_success_error_and_panic() {
     let success = refresh_result(|| {
         let mut stats = Stats {
+            timezone: "UTC".into(),
             by_day: BTreeMap::new(),
             by_model: BTreeMap::new(),
             by_agent: BTreeMap::new(),
@@ -789,6 +793,7 @@ fn heatmap_cells_render_spaced() {
         by_day.insert(first_day + offset, day((offset + 1) as u64, 0.0));
     }
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day,
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -838,6 +843,7 @@ fn month_row_skips_one_column_leading_partial_month() {
 #[test]
 fn windows_lines_fold_cache_read_so_all_time_equals_year() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -865,6 +871,7 @@ fn windows_lines_fold_cache_read_so_all_time_equals_year() {
 #[test]
 fn windows_lines_paint_only_the_active_tab_as_a_chip() {
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -970,6 +977,7 @@ fn model_cells_show_usd_and_cache_read_detail() {
     let glyphs = panel_glyphs();
     let spend = model_tally(1_700_000, 12.4, 1_200_000, 500_000, 2_500_000);
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), spend),
@@ -1015,6 +1023,7 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     timed.week.timed_ms = 4_000;
     let untimed = model_tally(500, 5.0, 400, 100, 0);
     let stats = Stats {
+        timezone: "UTC".into(),
         by_model: BTreeMap::from([
             ("timed".to_owned(), timed.clone()),
             ("untimed".to_owned(), untimed.clone()),
@@ -1102,6 +1111,7 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     total.year.tool_calls = 3;
     total.year.tools = BTreeMap::from([("Read".to_owned(), 3)]);
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), claude_model),
@@ -1138,6 +1148,7 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
 #[test]
 fn model_breakdown_ranks_by_usd_before_tokens() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             (
@@ -1162,6 +1173,7 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
     week_model.week = spend_window(100, 1.0, 40, 60, 9, 0);
     let year_only = model_tally(2_000, 20.0, 800, 1_200, 180);
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("claude-opus-4-8".to_owned(), week_model),
@@ -1182,6 +1194,7 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
 #[test]
 fn model_breakdown_reserves_the_last_capped_row_for_other() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
@@ -1206,6 +1219,7 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
 #[test]
 fn model_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
@@ -1236,6 +1250,7 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
 #[test]
 fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             ("model-a".to_owned(), model_tally(100, 0.0, 100, 0, 0)),
@@ -1273,6 +1288,7 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
     let mut claude = tally(300, 3.0, 2);
     claude.year.cache_read = 50;
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1335,6 +1351,7 @@ fn agent_cells_rank_by_sessions_and_skip_empty_agents() {
 #[test]
 fn agent_breakdown_folds_tail_totals_into_other() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1379,6 +1396,7 @@ fn agent_breakdown_folds_tail_totals_into_other() {
 #[test]
 fn agent_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1431,6 +1449,7 @@ fn share_bar_fills_proportionally() {
 fn stat_share_bar_stretches_to_panel_width() {
     let glyphs = panel_glyphs();
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([
             (
@@ -1470,6 +1489,7 @@ fn stat_share_bar_stretches_to_panel_width() {
 fn stat_sections_share_a_percent_column() {
     let glyphs = panel_glyphs();
     let stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::from([(
             "claude-opus-4-8".to_owned(),
@@ -1519,6 +1539,7 @@ fn stat_sections_share_a_percent_column() {
 #[test]
 fn insights_sessions_line_has_no_glyph() {
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1542,6 +1563,7 @@ fn insights_sessions_line_has_no_glyph() {
 #[test]
 fn insights_sessions_scope_to_the_active_window() {
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1572,6 +1594,7 @@ fn insights_sessions_scope_to_the_active_window() {
 fn insights_append_the_prior_window_spend_trend() {
     let today = 20_000;
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1598,6 +1621,7 @@ fn insights_append_the_prior_window_spend_trend() {
 fn all_time_daily_average_uses_year_days_without_changing_recent_activity() {
     let today = 20_000;
     let mut stats = Stats {
+        timezone: "UTC".into(),
         by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -2158,4 +2182,19 @@ fn assists_load_scopes_the_log_to_the_selected_window() {
     assert_eq!(stats.rollup.redeems, 0);
     assert_eq!(stats.rollup.compacts, 1);
     assert_eq!(stats.events.len(), 1);
+}
+#[test]
+fn today_index_uses_the_publications_zone() {
+    let stats = Stats {
+        timezone: "Asia/Shanghai".into(),
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: SpendTally::default(),
+    };
+    let now: Timestamp = "2026-01-12T16:30:00Z".parse().unwrap();
+    assert_eq!(
+        stats.today_day(now.as_second() as u64),
+        now.as_second() / DAY_SECS + 1
+    );
 }

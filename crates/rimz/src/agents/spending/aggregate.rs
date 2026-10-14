@@ -12,8 +12,9 @@ use crate::agents::AgentDefinition;
 use crate::agents::definition::ThreadKey;
 
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
+use super::session_roles::SessionRole;
 use super::user_input::UserInputRecord;
-use super::{ScopedSpending, SpendingFile, SpendingWalkResult};
+use super::{RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult};
 use crate::ids::LoginKey;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
@@ -222,7 +223,7 @@ pub(crate) fn aggregate_counted_rollups(
     counted: &[impl CountedPayload],
     workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
-    include_history_rollups: bool,
+    history_roles: Option<&super::session_roles::RoleMap>,
 ) -> SpendingWalkResult {
     let HeadlineContext {
         user_inputs,
@@ -247,6 +248,33 @@ pub(crate) fn aggregate_counted_rollups(
     let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut models = BTreeMap::<&str, SpendTally>::new();
+    let mut roles = RoleTallies::default();
+    let mut role_sessions = FastHashMap::default();
+    let joined_roles = history_roles.filter(|roles| !roles.is_empty());
+    let file_sessions: FastHashMap<_, _> = if joined_roles.is_some() {
+        files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.as_path(),
+                    file.adapter.spending_session_id(&file.path),
+                )
+            })
+            .collect()
+    } else {
+        FastHashMap::default()
+    };
+    let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
+    let day_boundaries = if history_roles.is_some() {
+        let first = counted.iter().map(|row| row.entry().ts_secs).min();
+        let last = counted.iter().map(|row| row.entry().ts_secs).max();
+        first
+            .zip(last)
+            .map(|(first, last)| local_day_boundaries(first, last, zone))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     for counted in counted {
         let provider = counted.kind();
@@ -306,8 +334,13 @@ pub(crate) fn aggregate_counted_rollups(
             }
         }
 
-        if include_history_rollups {
-            let day = (entry.ts_secs / 86_400) as i64;
+        if history_roles.is_some() {
+            let index =
+                day_boundaries.partition_point(|(start, _)| *start <= i128::from(entry.ts_secs));
+            let day = index
+                .checked_sub(1)
+                .map(|index| day_boundaries[index].1)
+                .unwrap_or((entry.ts_secs / 86_400) as i64);
             let cell = days.entry(day).or_default();
             cell.usd += entry.cost_usd;
             cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
@@ -320,10 +353,67 @@ pub(crate) fn aggregate_counted_rollups(
                 now_secs,
                 u64::MAX,
             );
+            if let Some(index) = joined_roles {
+                let native = file_sessions
+                    .get(counted.path())
+                    .and_then(|id| id.as_deref())
+                    .or(entry.thread_id.as_deref())
+                    .filter(|id| !id.is_empty());
+                let role = native.and_then(|session| index.get(provider)?.get(session));
+                accum(
+                    role_tally(&mut roles, provider, role),
+                    entry,
+                    now_secs,
+                    cutoffs.total,
+                );
+                if let Some(SessionRole::Subagent { profile }) = role {
+                    accum(
+                        roles
+                            .subagents
+                            .entry(profile.clone())
+                            .or_default()
+                            .models
+                            .entry(entry.model.clone().unwrap_or_default())
+                            .or_default(),
+                        entry,
+                        now_secs,
+                        cutoffs.total,
+                    );
+                }
+                let session = native
+                    .map(|thread_id| SessionKey::Native {
+                        kind: provider,
+                        thread_id,
+                    })
+                    .unwrap_or_else(|| counted.session_key());
+                role_sessions
+                    .entry((provider, session))
+                    .and_modify(|(youngest, _): &mut (u64, _)| {
+                        *youngest = (*youngest).max(entry.ts_secs)
+                    })
+                    .or_insert((entry.ts_secs, role));
+            }
         }
     }
 
     add_spending_sessions(&mut spending, files, cache, now_secs, cutoffs.total);
+    if history_roles.is_some() && joined_roles.is_none() {
+        roles.unattributed.by_provider = spending.by_provider.clone();
+    }
+    for ((provider, _), (youngest, role)) in role_sessions {
+        bump_sessions(
+            role_tally(&mut roles, provider, role),
+            youngest,
+            now_secs,
+            cutoffs.total,
+        );
+    }
+    for tally in roles.unattributed.by_provider.values() {
+        roles.unattributed.tally.headline.merge(&tally.headline);
+        roles.unattributed.tally.week.merge(&tally.week);
+        roles.unattributed.tally.month.merge(&tally.month);
+        roles.unattributed.tally.year.merge(&tally.year);
+    }
     if let Some(scope) = workspace {
         add_scoped_sessions(
             &mut workspace_tally,
@@ -363,7 +453,8 @@ pub(crate) fn aggregate_counted_rollups(
         login_day,
         day_cutoff_secs,
         days,
-        models: if include_history_rollups {
+        timezone,
+        models: if history_roles.is_some() {
             models
                 .into_iter()
                 .map(|(model, tally)| (model.to_owned(), tally))
@@ -372,6 +463,25 @@ pub(crate) fn aggregate_counted_rollups(
             BTreeMap::new()
         },
         stats: Default::default(),
+        roles,
+    }
+}
+
+fn role_tally<'a>(
+    roles: &'a mut RoleTallies,
+    provider: &str,
+    role: Option<&SessionRole>,
+) -> &'a mut SpendTally {
+    match role {
+        Some(SessionRole::Agent { .. }) => roles.agents.entry(provider.to_owned()).or_default(),
+        Some(SessionRole::Subagent { profile }) => {
+            &mut roles.subagents.entry(profile.clone()).or_default().tally
+        }
+        None => roles
+            .unattributed
+            .by_provider
+            .entry(provider.to_owned())
+            .or_default(),
     }
 }
 
@@ -636,6 +746,7 @@ pub(crate) trait DedupPayload {
 pub(crate) trait CountedPayload: DedupPayload {
     fn login(&self) -> &LoginKey;
     fn kind(&self) -> &'static str;
+    fn path(&self) -> &Path;
     fn origin(&self) -> Option<&Path>;
     fn session_key(&self) -> SessionKey<'_>;
 }
@@ -776,6 +887,7 @@ impl SessionKey<'_> {
 pub(crate) struct Counted<'a> {
     login: &'a LoginKey,
     kind: &'static str,
+    path: &'a Path,
     origin: Option<&'a Path>,
     session_key: SessionKey<'a>,
     entry: &'a CachedEntry,
@@ -793,6 +905,10 @@ impl CountedPayload for Counted<'_> {
     }
     fn kind(&self) -> &'static str {
         self.kind
+    }
+
+    fn path(&self) -> &Path {
+        self.path
     }
 
     fn origin(&self) -> Option<&Path> {
@@ -843,6 +959,7 @@ pub(crate) fn dedup_cached_entries<'a>(
             deduped.insert(Counted {
                 login,
                 kind,
+                path: file,
                 origin: cached_file.origin_path.as_deref(),
                 session_key: session_key(adapter, file, entry),
                 entry,
@@ -928,6 +1045,7 @@ pub(crate) fn indexed_counted_entries<'a>(
             Counted {
                 login: file.login,
                 kind: file.adapter.spec().kind,
+                path: file.path,
                 origin: file.cache.origin_path.as_deref(),
                 session_key: session_key(file.adapter, file.path, entry),
                 entry,
@@ -953,11 +1071,55 @@ fn trailing_window_cutoff(now_secs: u64, span_secs: u64) -> u64 {
         .map_or(0, |cutoff| cutoff.saturating_add(1))
 }
 
-fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
+/// Epoch second of local midnight in the configured or system timezone.
+pub fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
     let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
     let zone = crate::config::resolve_time_zone(tz);
     let start = now.to_zoned(zone).start_of_day().ok()?.timestamp();
     u64::try_from(start.as_second()).ok()
+}
+
+/// Local civil date expressed as days since 1970-01-01, for published history.
+pub fn local_day_index(now_secs: u64, tz: Option<&str>) -> Option<i64> {
+    let now = Timestamp::from_second(i64::try_from(now_secs).ok()?).ok()?;
+    let local = now.to_zoned(crate::config::resolve_time_zone(tz));
+    Some((now.as_second() + i64::from(local.offset().seconds())).div_euclid(86_400))
+}
+
+pub(super) fn history_zone(zone: jiff::tz::TimeZone) -> (jiff::tz::TimeZone, String) {
+    if let Some(name) = zone.iana_name() {
+        let name = name.to_owned();
+        return (zone, name);
+    }
+    static WARN_UNNAMED_ZONE: std::sync::Once = std::sync::Once::new();
+    WARN_UNNAMED_ZONE.call_once(|| {
+        tracing::warn!("spending history uses UTC because the system timezone has no IANA name; set timezone in config to a named zone");
+    });
+    (jiff::tz::TimeZone::UTC, "UTC".to_owned())
+}
+
+fn local_day_boundaries(first: u64, last: u64, zone: jiff::tz::TimeZone) -> Vec<(i128, i64)> {
+    let Some(mut day) = i64::try_from(first)
+        .ok()
+        .and_then(|second| Timestamp::from_second(second).ok())
+        .and_then(|first| first.to_zoned(zone).start_of_day().ok())
+    else {
+        return Vec::new();
+    };
+    let mut boundaries = Vec::new();
+    while i128::from(day.timestamp().as_second()) <= i128::from(last) {
+        let start = day.timestamp().as_second();
+        let date = (start + i64::from(day.offset().seconds())).div_euclid(86_400);
+        boundaries.push((i128::from(start), date));
+        let Ok(next) = day
+            .checked_add(jiff::Span::new().days(1))
+            .and_then(|day| day.start_of_day())
+        else {
+            break;
+        };
+        day = next;
+    }
+    boundaries
 }
 
 fn burst_cutoff(prompts: &[u64], activity: &[u64], now_secs: u64) -> u64 {

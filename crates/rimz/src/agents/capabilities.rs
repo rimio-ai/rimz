@@ -966,6 +966,12 @@ pub trait AccountCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait SpendingCapability: CoreCapability {
+    /// Native session identity encoded in a spend file's path, when cached rows
+    /// do not carry it. Other providers join provenance through `thread_id`.
+    fn spending_session_id(&self, _path: &Path) -> Option<String> {
+        None
+    }
+
     /// Conversation/store candidates used to resolve a live session for
     /// transcript UI and session-cost lookup. Historical fleet spending uses
     /// [`spending_sources`](Self::spending_sources) instead.
