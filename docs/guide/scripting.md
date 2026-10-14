@@ -140,7 +140,7 @@ rimz agents wait "$name" --stream                               # block on it, t
 A `<ref>` below is the printed name, a run id, or any [agent address](./messaging.md#address-an-agent), so one identity threads through every verb here; `rimz message` wants it as a handle, `@swift-otter`.
 
 - `rimz agents wait <ref>...` blocks until every named run lands, printing each answer under a `--- <ref as typed> (<outcome>) ---` header. `--stream` tails one run's answer as it lands, and `--any` returns as soon as the first one finishes.
-- `rimz agents wait a b c --json` prints one result map, `{ref: {name, status, exit, cost, transcript_path, last_message}}`, once the join settles. Keys preserve what you typed; `name` carries the pet name. Duplicate references are waited on once. If a target needs input or is otherwise blocked, stderr explains why, and a timeout entry includes that `reason` without mixing diagnostics into JSON stdout.
+- `rimz agents wait a b c --json` prints one result map, `{ref: {name, status, exit, cost, transcript_path, last_message}}`, once the join settles. A single reference prints the same one-entry map, so scripts handle one shape. Keys preserve what you typed; `name` carries the pet name. Duplicate references are waited on once. If a target needs input or is otherwise blocked, stderr explains why, and a timeout entry includes that `reason` without mixing diagnostics into JSON stdout.
 - `rimz agents show <ref>` reports a run's activity, context, and recent transcript.
 - `rimz agents stop <ref>` cancels a live run or closes its pane.
 

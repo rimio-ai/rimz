@@ -42,7 +42,7 @@ rimz subagents wait "$first" "$second"
 | `PROMPT` or `--prompt-file <PATH>` | required | The whole assignment. A relative path resolves from the shell's current directory. An empty prompt is refused. |
 | `--cwd <DIR>` | parent's checkout | Working directory for the child; the room stays the caller's. Uses the same [path resolution as agent launches](./agents.md#channel-worktree-and-placement). |
 | `--wait[=DURATION]` | return at launch | Print the petname, then join the child like `subagents wait <name>`. The duration caps the join only; the child keeps its own deadline. Write `--wait=5m`: with a bare `--wait`, a prompt that parses as a duration is refused with that hint. |
-| `--json` | off | With `--wait`, print the full run record instead of the petname and answer. Refused without `--wait`. |
+| `--json` | off | With `--wait`, print a one-entry result map keyed by the child's petname instead of the petname and answer. The full run record is under `run` in `rimz agents show <ref> --json`. Refused without `--wait`. |
 | `--timeout <DURATION>` | `[agents.subagents] timeout`, `30m` | Tell pending or running children to stop at this deadline; kill them `grace` later. Does not bound a terminal child awaiting receipt. Units `s`, `m`, `h`, `d`. |
 | `--warn <OFFSETS>` | `[agents.subagents] warn`, `6m,3m` | Comma-separated warning offsets before the deadline; `none` disables warnings. |
 | `--grace <DURATION>` | `[agents.subagents] grace`, `3m` | Time to finish reporting after the deadline; `0s` kills at the deadline. |
@@ -116,7 +116,7 @@ For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout 
 | `--wait[=DURATION]` | Each answer as it finishes, under a `--- <petname> (<outcome>) ---` header; the exit code follows [`agents wait`](./agents.md#wait) |
 | `--wait --json` | The labeled result map of [`agents wait --json`](./agents.md#wait) |
 
-A fanout of one task under `--wait` behaves like a single join: the bare answer without a header, or the full run record with `--json`.
+A fanout of one task under `--wait` behaves like a single join: the bare answer without a header, or a one-entry result map with `--json`. For the full run record, use `rimz agents show <ref> --json` and read `run`.
 
 A launch that fails partway stops the remaining launches. The error names the children already started; they keep running under their normal deadline and stay reachable through `subagents wait` and `subagents stop --all`. A cap refusal partway exits `125` with the same message.
 
@@ -178,7 +178,7 @@ rimz subagents wait calm-fox bright-owl --json --timeout 10m
 
 `subagents wait` is [`rimz agents wait`](./agents.md#wait) restricted to the caller's own children: the same output, `--any`, `--stream`, `--timeout`, JSON map, and exit codes. Use it when the next step needs a child's text before the fleet settles, or to reread a result after its pane and response file are gone; results stay readable from the durable run record.
 
-Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. A single settled run still prints its full record with `--json`; timeouts use the keyed map. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
+Headers and JSON map keys preserve the reference as typed, including an `@` prefix or lane qualifier. Each summary entry carries the pet `name` separately. Identical typed references are deduplicated. `--json` prints the same compact keyed map for one target or several, settled or timed out. For the full run record, use `rimz agents show <ref> --json` and read `run`. Blocking reasons go to stderr even in JSON mode and appear in timed-out entries when the target is not running.
 
 `wait` keeps blocking on a child that is [paused on a provider limit](#a-child-paused-on-a-provider-limit): the run has no answer yet and may still resume. Bound the join with `--timeout`, then read `subagents list`.
 

@@ -4527,8 +4527,8 @@ async fn exec_prompt_failures_fail_provisional_launch_and_release_run_waiter() {
             command.bounded_output().expect("wait on a settled run")
         };
         let printed: serde_json::Value =
-            serde_json::from_slice(&wait(true).stdout).expect("run record json");
-        assert_eq!(printed["failure_tail"], reason.as_str());
+            serde_json::from_slice(&wait(true).stdout).expect("wait result map");
+        assert_eq!(printed[record.run_id.as_str()]["error"], reason.as_str());
         let human = wait(false);
         let human = String::from_utf8_lossy(&human.stderr);
         let (_, after_status) = human
