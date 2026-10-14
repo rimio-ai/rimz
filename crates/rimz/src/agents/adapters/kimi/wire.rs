@@ -408,6 +408,35 @@ pub(super) fn wire_path(session_id: &str, cwd: Option<&Path>) -> Option<PathBuf>
     Some(session_dir(session_id, cwd)?.join("agents/main/wire.jsonl"))
 }
 
+pub(super) fn session_wires(main: &Path) -> Vec<PathBuf> {
+    let mut wires = vec![main.to_path_buf()];
+    let Some(agent_dir) = main
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "main"))
+    else {
+        return wires;
+    };
+    let Some(agents_dir) = agent_dir
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "agents"))
+    else {
+        return wires;
+    };
+    if main.file_name().is_none_or(|name| name != "wire.jsonl") {
+        return wires;
+    }
+    if let Ok(entries) = std::fs::read_dir(agents_dir) {
+        wires.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path().join("wire.jsonl"))
+                .filter(|path| path != main && path.is_file()),
+        );
+    }
+    wires.sort();
+    wires
+}
+
 #[derive(Deserialize)]
 struct RawWireRecord {
     #[serde(rename = "type")]

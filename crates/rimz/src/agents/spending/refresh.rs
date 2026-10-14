@@ -574,6 +574,57 @@ mod tests {
     }
 
     #[test]
+    fn kimi_main_wire_with_children_resumes_on_append() {
+        use std::io::Write as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("session/agents/main/wire.jsonl");
+        let child = dir.path().join("session/agents/child/wire.jsonl");
+        for path in [&main, &child] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}\n").unwrap();
+        }
+        let adapter = crate::agents::definition_by_kind("kimi").unwrap();
+        let mut entry = cached(adapter.transcript_stat(&main).unwrap());
+        entry.cursor.offset = entry.stat.len;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&main)
+                .unwrap(),
+            "{{}}"
+        )
+        .unwrap();
+        let stat = adapter.transcript_stat(&main).unwrap();
+        assert_eq!(
+            refresh_decision(Some(&entry), stat, false, 0),
+            RefreshDecision::Parse {
+                resume: Some(entry.cursor.clone())
+            },
+            "a child-bearing main wire must retain its incremental cursor"
+        );
+        entry.stat = stat;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&child)
+                .unwrap(),
+            "{{}}"
+        )
+        .unwrap();
+        assert_eq!(
+            refresh_decision(
+                Some(&entry),
+                adapter.transcript_stat(&main).unwrap(),
+                false,
+                0
+            ),
+            RefreshDecision::Unchanged,
+            "a child has its own fleet cursor and must not invalidate the main wire"
+        );
+    }
+
+    #[test]
     fn refresh_decision_tracks_logical_source_changes() {
         let primary = stat(100, 10, 10);
         let cached_primary = cached(primary);

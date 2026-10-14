@@ -6,6 +6,123 @@ use super::*;
 use crate::agents::AgentHookClass;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 
+#[test]
+fn child_wires_join_fleet_and_seat_spending_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("sessions/bucket/s1/agents/main/wire.jsonl");
+    let child = dir
+        .path()
+        .join("sessions/bucket/s1/agents/child/wire.jsonl");
+    for path in [&main, &child] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    let mut expected = vec![main.clone(), child];
+    expected.sort();
+    let mut fleet = spending_sources_at(dir.path())
+        .iter()
+        .flat_map(|source| source.complete_files())
+        .collect::<Vec<_>>();
+    fleet.sort();
+    assert_eq!(fleet, expected);
+    let mut seat = KimiAdapter.session_spend_transcripts("s1", Some(&main), &BTreeMap::new());
+    seat.sort();
+    assert_eq!(seat, expected);
+}
+
+#[test]
+fn child_spend_growth_refreshes_parent_cost_without_double_counting_completion() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("s1/agents/main/wire.jsonl");
+    let child = dir.path().join("s1/agents/child/wire.jsonl");
+    std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(child.parent().unwrap()).unwrap();
+    let usage = json!({"type":"usage.record","time":1770000000000_u64,"model":"moonshot/kimi-k2.5","usageScope":"turn","usage":{"inputOther":100,"output":50}});
+    std::fs::write(&main, format!("{usage}\n")).unwrap();
+    let physical_main = TranscriptStat::from_path(&main).unwrap();
+    let main_text = main.to_string_lossy().into_owned();
+    let cache = dir.path().join("prices.json");
+    crate::agents::PriceBook::write_fixture_cache(&cache);
+    let ctx = LocalContextRefreshCtx {
+        login_env: &BTreeMap::new(),
+        agent_id: "s1",
+        model_hint: None,
+        prior_session_name: None,
+        current_transcript_path: None,
+        prior_transcript_path: Some(&main_text),
+        prior_transcript_stat: None,
+        prior_spend_fold: None,
+        shared_pricing_cache_path: &cache,
+    };
+    let first = KimiAdapter
+        .local_context_refresh(RefreshTrigger::Hook("PostToolUse"), &ctx)
+        .unwrap();
+    let base = first.context.cost.as_set().unwrap().total_cost_usd.unwrap();
+    assert!(base > 0.0);
+    let stat = first.transcript_stat.unwrap();
+    let unchanged = LocalContextRefreshCtx {
+        prior_transcript_stat: Some(&stat),
+        ..ctx
+    };
+    assert!(
+        KimiAdapter
+            .local_context_refresh(RefreshTrigger::Hook("PostToolUse"), &unchanged)
+            .is_none()
+    );
+    std::fs::write(&child, format!("{usage}\n{}\n", json!({"type":"subagent.completed","subagentId":"grandchild","usage":{"inputOther":99999999,"output":99999999}}))).unwrap();
+    let second = KimiAdapter
+        .local_context_refresh(RefreshTrigger::Hook("PostToolUse"), &unchanged)
+        .expect("new child spend must invalidate the gate");
+    assert!(
+        (second
+            .context
+            .cost
+            .as_set()
+            .unwrap()
+            .total_cost_usd
+            .unwrap()
+            - 2.0 * base)
+            .abs()
+            < 1e-10
+    );
+    let stat = second.transcript_stat.unwrap();
+    assert!(stat.companion.is_some());
+    assert_eq!(Some(physical_main), KimiAdapter.transcript_stat(&main));
+    let unchanged = LocalContextRefreshCtx {
+        prior_transcript_stat: Some(&stat),
+        ..ctx
+    };
+    let mut next_usage = usage;
+    next_usage["time"] = json!(1770000001000_u64);
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&child)
+            .unwrap(),
+        "{next_usage}"
+    )
+    .unwrap();
+    let third = KimiAdapter
+        .local_context_refresh(RefreshTrigger::Hook("PostToolUse"), &unchanged)
+        .expect("child-only growth must invalidate the gate");
+    assert_eq!(TranscriptStat::from_path(&main), Some(physical_main));
+    assert!(
+        (third.context.cost.as_set().unwrap().total_cost_usd.unwrap() - 3.0 * base).abs() < 1e-10
+    );
+    assert_ne!(third.transcript_stat, Some(stat));
+    assert_eq!(Some(physical_main), KimiAdapter.transcript_stat(&main));
+    let unchanged = LocalContextRefreshCtx {
+        prior_transcript_stat: third.transcript_stat.as_ref(),
+        ..ctx
+    };
+    assert!(
+        KimiAdapter
+            .local_context_refresh(RefreshTrigger::Hook("PostToolUse"), &unchanged)
+            .is_none()
+    );
+}
+
 fn main_wire_observation(event: &str, records: &[Value]) -> Option<AgentLifecycleObservation> {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("agents/main")).unwrap();
