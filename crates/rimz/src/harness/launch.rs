@@ -263,7 +263,7 @@ impl CompiledAgentProcess {
         }
     }
 
-    fn login_shell_argv(&self, agent_argv: &[String]) -> Vec<String> {
+    pub(super) fn login_shell_argv(&self, agent_argv: &[String]) -> Vec<String> {
         login_shell_argv_with(
             self.shell.as_deref(),
             Path::new(ENV_BIN).is_file(),

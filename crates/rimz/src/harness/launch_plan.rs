@@ -464,16 +464,6 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         prompt.composed.as_deref(),
         inputs.cwd,
     )?;
-    if matches!(
-        request.action,
-        launch::ExecAction::Resume { .. } | launch::ExecAction::Fork { .. }
-    ) && inputs.recorded_system_prompt_digest != Some(system_prompt_digest.as_str())
-    {
-        request
-            .action
-            .extra_args_mut()
-            .extend(adapter.changed_system_prompt_args());
-    }
     apply_materialized_system_prompt(&mut request, &prompt.materialized);
     let (mut reminders, mut warnings) = reminders(&request, inputs.effective, inputs.commands);
     if request
@@ -665,6 +655,19 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     }
     if !unset.is_empty() {
         process.pin_env(unset);
+    }
+    if matches!(
+        request.action,
+        launch::ExecAction::Resume { .. } | launch::ExecAction::Fork { .. }
+    ) && inputs.recorded_system_prompt_digest != Some(system_prompt_digest.as_str())
+        && let Ok(Some(program)) = process.resolve_program_after_shell_rc()
+    {
+        let args = adapter.changed_system_prompt_args(&program);
+        if !args.is_empty() {
+            request.action.extra_args_mut().extend(args.iter().cloned());
+            process.provider_argv.extend(args);
+            process.argv = process.login_shell_argv(&process.provider_argv);
+        }
     }
     let process = &*process;
     let mut env = inputs.ambient_env.clone();

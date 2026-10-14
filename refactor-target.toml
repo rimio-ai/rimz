@@ -1417,7 +1417,8 @@ allowed-dependencies = [
 # Fresh requests and selectively redacted process plans serve launch inspection.
 # Argument rejection uses the existing action accessor (+1).
 # `validate_agent_shell` and its error serve room start and config set (+2).
-surface-budget = 46
+# `CompiledAgentProcess::login_shell_argv` rewraps version-gated args after launch resolution (+1).
+surface-budget = 47
 
 [[module]]
 path = "crates/rimz/src/harness/launch_plan.rs"
@@ -3957,6 +3958,11 @@ reason = "Carried by LaunchPlanErr::Process #[from] and returned by pub stage co
 kind = "item"
 key = "harness::launch::ProgramLookupErr"
 reason = "Source field of pub AgentProcessCompileErr; atlas caveat 13 (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch::CompiledAgentProcess::login_shell_argv"
+reason = "Launch planning rewraps provider argv after the resolved executable's version selects snapshot arguments. Visible only within harness."
 
 [[verdict]]
 kind = "item"

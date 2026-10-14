@@ -563,8 +563,9 @@ pub trait LaunchCapability: CoreCapability {
         Vec::new()
     }
 
-    /// Make a resumed session use changed configured system-prompt text.
-    fn changed_system_prompt_args(&self) -> Vec<String> {
+    /// Make a resumed session use changed configured system-prompt text,
+    /// probing the executable resolved for this launch rather than ambient PATH.
+    fn changed_system_prompt_args(&self, _program: &Path) -> Vec<String> {
         Vec::new()
     }
 
