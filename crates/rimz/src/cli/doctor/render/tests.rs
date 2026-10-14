@@ -14,6 +14,25 @@ fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Res
     String::from_utf8(stream.into_inner()).expect("utf-8")
 }
 
+#[test]
+fn hibernate_reports_active_or_skipped() {
+    for skipped in [None, Some("swap is absent".to_owned())] {
+        let report = rimz::harness::hibernate::PreflightReport {
+            enabled: true,
+            skipped: skipped.clone(),
+            checks: Vec::new(),
+        };
+        let text = strip(|w| render_hibernate(w, &report, &mut Tally::default()));
+        assert!(text.contains("active"), "{text}");
+        assert!(
+            text.contains(
+                &skipped.map_or_else(|| "yes".into(), |reason| format!("skipped: {reason}"))
+            ),
+            "{text}"
+        );
+    }
+}
+
 fn terminal_fixture() -> Terminal {
     Terminal {
         theme_mode: rimz::config::ThemeMode::Auto,
@@ -450,6 +469,7 @@ fn report_fixture() -> DoctorReport {
     DoctorReport {
         hibernate: rimz::harness::hibernate::PreflightReport {
             enabled: false,
+            skipped: Some("disabled".into()),
             checks: Vec::new(),
         },
         folder_trust: None,

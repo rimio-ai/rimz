@@ -2020,6 +2020,43 @@ fn prepare(
 }
 
 #[test]
+fn exec_scope_requires_cached_admission_even_when_explicitly_enabled() {
+    let mut machine = crate::config::MachineConfig::default();
+    machine.agents.hibernate.enabled = Some(true);
+    let request = host_request("claude", action_with_args("launch", Vec::new()));
+    let root = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&state).unwrap();
+    for available in [false, true] {
+        if available {
+            crate::disk::atomic::write_temp_then_rename_cache(
+                &runtime.live_path("hibernate").join("admission.json"),
+                &super::super::hibernate::Admission {
+                    available,
+                    reason: None,
+                },
+            )
+            .unwrap();
+        }
+        let prepared = prepare_exec(
+            envelope(&request, None),
+            root.path(),
+            root.path(),
+            Path::new("/bin/rimz"),
+            &machine,
+            None,
+            &|| Ok(Vec::new()),
+            |_, _| Ok(Vec::new()),
+        );
+        let (plan, _) = prepared.outcome.unwrap();
+        assert_eq!(
+            plan.process().argv[0] == "systemd-run",
+            available && cfg!(target_os = "linux")
+        );
+    }
+}
+
+#[test]
 fn exec_refuses_only_fresh_launches_of_an_unshadowed_failed_profile() {
     let root = tempfile::tempdir().unwrap();
     let mut machine = crate::config::MachineConfig::default();

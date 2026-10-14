@@ -129,7 +129,10 @@ fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
 
 /// The `rimz start` notices: configuration notices plus the root-class line
 /// for a non-repo room. Notices go to stderr; stdout stays the protocol surface.
-pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
+pub(super) fn report_start_notices(
+    workspace: &rimz::ResolvedWorkspace,
+    admission: &rimz::harness::hibernate::Admission,
+) -> Result<()> {
     let errors = rimz::config::broken_machine_files();
     let definitions: Vec<_> = errors
         .iter()
@@ -155,6 +158,7 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
     notices.extend(machine.notices.unknown_keys.iter().map(ToString::to_string));
     notices.extend(machine.notices.host_isolation_fallback.iter().cloned());
     notices.extend(machine.notices.hibernate_unavailable.iter().cloned());
+    notices.extend(hibernate_notice(&machine.agents.hibernate, admission));
     notices.extend(root_class_notice(workspace));
     if notices.is_empty() {
         return Ok(());
@@ -164,6 +168,18 @@ pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Resul
         writeln!(stderr, "rimz: {notice}")?;
     }
     Ok(())
+}
+
+fn hibernate_notice(
+    config: &rimz::config::HibernateConfig,
+    admission: &rimz::harness::hibernate::Admission,
+) -> Option<String> {
+    if !config.explicit() || admission.available {
+        return None;
+    }
+    admission.reason.as_ref().map(|reason| {
+        format!("agents.hibernate.enabled is set but hibernation is skipped: {reason}")
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -253,6 +269,26 @@ pub(super) fn report_version_mismatch_notices(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn hibernate_notice_only_for_explicit_unavailable_capability() {
+        let mut config = rimz::config::HibernateConfig::default();
+        let mut admission = rimz::harness::hibernate::Admission {
+            available: false,
+            reason: Some("no swap".into()),
+        };
+        assert_eq!(hibernate_notice(&config, &admission), None);
+        config.enabled = Some(false);
+        assert_eq!(hibernate_notice(&config, &admission), None);
+        config.enabled = Some(true);
+        assert_eq!(
+            hibernate_notice(&config, &admission).as_deref(),
+            Some("agents.hibernate.enabled is set but hibernation is skipped: no swap")
+        );
+        admission.available = true;
+        admission.reason = None;
+        assert_eq!(hibernate_notice(&config, &admission), None);
+    }
 
     fn resolved(root: &str, class: rimz::workspace::RootClass) -> rimz::ResolvedWorkspace {
         use rimz::ids::WorkspaceId;

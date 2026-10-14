@@ -180,21 +180,29 @@ const fn default_max_chain_length() -> u8 {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct HibernateConfig {
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     pub after: String,
 }
 
 impl Default for HibernateConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: None,
             after: "10m".into(),
         }
     }
 }
 
 impl HibernateConfig {
-    pub fn after(&self) -> Result<Duration, HibernateAfterErr> {
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+
+    pub fn explicit(&self) -> bool {
+        self.enabled == Some(true)
+    }
+
+    pub fn schedule(&self) -> Result<Duration, HibernateAfterErr> {
         use crate::utils::time::{DurationUnit, parse_duration_units};
         let refuse = |reason: String| HibernateAfterErr {
             value: self.after.clone(),

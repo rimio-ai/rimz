@@ -245,7 +245,7 @@ aggressive_resize = true
 # grace = "3m"                         # reporting time after the deadline; "0s" kills at it
 
 # [agents.hibernate]
-# enabled = false                      # Linux cgroup scopes; needs a systemd user manager and swap
+## enabled = true                      # default on; skips where systemd, Linux controls or swap are unavailable
 # after = "10m"                        # grace after rest, at most 24h
 
 # [agents.commands]

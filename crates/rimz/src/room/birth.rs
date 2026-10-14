@@ -232,6 +232,9 @@ impl RoomContext {
             }
         }
         clear_birth_publications(&self.runtime, pre_existed)?;
+        let hibernation =
+            crate::harness::hibernate::admit(&self.machine_config.agents.hibernate, &self.runtime)?;
+        self.publish_hibernation_admission(&hibernation)?;
 
         #[cfg(unix)]
         {
@@ -358,8 +361,17 @@ impl RoomContext {
             })
             .unwrap_or_default();
         let reset = health?;
+        self.publish_hibernation_admission(&hibernation)?;
         self.load_presence();
         Ok(BirthOutcome { resume, reset })
+    }
+
+    fn publish_hibernation_admission(
+        &self,
+        admission: &crate::harness::hibernate::Admission,
+    ) -> Result<()> {
+        admission.publish(&self.runtime)?;
+        Ok(())
     }
 
     fn launch_background_view(&self, options: &BackgroundViewOptions) {

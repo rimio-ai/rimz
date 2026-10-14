@@ -368,6 +368,18 @@ fn mode_path(log_path: &Path) -> std::path::PathBuf {
 }
 
 fn trace_mode(log_path: &Path) -> FailureMode {
+    if env::var_os("RIMZ_TEST_ZELLIJ_RECOVER_AFTER_RESET").is_some()
+        && std::fs::read_to_string(log_path).is_ok_and(|trace| {
+            // Sidebar birth and the health retry delete first; reset deletes third.
+            trace
+                .lines()
+                .filter(|line| line.split('\t').any(|arg| arg == "delete-session"))
+                .count()
+                >= 3
+        })
+    {
+        return FailureMode::Normal;
+    }
     mode_from_log_path(log_path)
         .or_else(|| {
             env::var("RIMZ_TEST_ZELLIJ_MODE")

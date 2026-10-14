@@ -2378,14 +2378,37 @@ fn model_aliases_reject_alias_targets() {
     }
 }
 #[test]
+fn hibernate_defaults_on() {
+    assert!(HibernateConfig::default().enabled());
+    assert!(!HibernateConfig::default().explicit());
+    for (text, enabled, explicit) in [
+        ("", true, false),
+        ("enabled = true", true, true),
+        ("enabled = false", false, false),
+    ] {
+        let config: HibernateConfig = toml::from_str(text).unwrap();
+        assert_eq!(config.enabled(), enabled);
+        assert_eq!(config.explicit(), explicit);
+    }
+    let mut config = MachineConfig::default();
+    let mut notices = ConfigNotices::default();
+    config.disable_unavailable_hibernation(false, &mut notices);
+    assert!(!config.agents.hibernate.enabled());
+    assert!(notices.hibernate_unavailable.is_empty());
+}
+
+#[test]
 fn hibernate_duration_is_validated_at_use() {
     let mut config = HibernateConfig::default();
-    assert_eq!(config.after().unwrap(), std::time::Duration::from_secs(600));
+    assert_eq!(
+        config.schedule().unwrap(),
+        std::time::Duration::from_secs(600)
+    );
     for value in ["oops", "25h"] {
         config.after = value.into();
         assert!(
             config
-                .after()
+                .schedule()
                 .unwrap_err()
                 .to_string()
                 .contains("agents.hibernate.after")
@@ -2393,7 +2416,7 @@ fn hibernate_duration_is_validated_at_use() {
     }
     config.after = "24h".into();
     assert_eq!(
-        config.after().unwrap(),
+        config.schedule().unwrap(),
         std::time::Duration::from_secs(86400)
     );
 }
@@ -2403,11 +2426,11 @@ fn hibernate_off_linux_warns_once_and_disables() {
     let mut config: MachineConfig = toml::from_str("[agents.hibernate]\nenabled = true").unwrap();
     let mut notices = ConfigNotices::default();
     config.disable_unavailable_hibernation(true, &mut notices);
-    assert!(config.agents.hibernate.enabled);
+    assert!(config.agents.hibernate.enabled());
     assert!(notices.hibernate_unavailable.is_empty());
     config.disable_unavailable_hibernation(false, &mut notices);
     config.disable_unavailable_hibernation(false, &mut notices);
-    assert!(!config.agents.hibernate.enabled);
+    assert!(!config.agents.hibernate.enabled());
     assert_eq!(notices.hibernate_unavailable.len(), 1);
     assert!(notices.hibernate_unavailable[0].contains("agents.hibernate.enabled"));
 }

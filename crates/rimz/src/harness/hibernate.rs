@@ -32,7 +32,7 @@ impl Policy {
         keep_warm: &KeepWarmPolicy,
     ) -> Result<Self, crate::config::HibernateAfterErr> {
         Ok(Self {
-            after: config.agents.hibernate.after()?,
+            after: config.agents.hibernate.schedule()?,
             remote_control: config.remote_control.clone(),
             harness: config.harness.clone(),
             keep_warm: keep_warm.clone(),
@@ -410,7 +410,7 @@ fn hibernate_idle_agents_with(
             wake,
         );
     }
-    if !config.agents.hibernate.enabled {
+    if !config.agents.hibernate.enabled() || !Admission::read(runtime).available {
         return;
     }
     let policy = match Policy::new(config, keep_warm) {
@@ -569,8 +569,6 @@ pub enum HibernateErr {
     Cgroup(#[from] crate::proc::cgroup::CgroupErr),
     #[error(transparent)]
     After(#[from] crate::config::HibernateAfterErr),
-    #[error("{0}")]
-    Preflight(String),
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -591,7 +589,54 @@ pub struct Check {
 #[derive(Debug, serde::Serialize)]
 pub struct PreflightReport {
     pub enabled: bool,
+    pub skipped: Option<String>,
     pub checks: Vec<Check>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Admission {
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+impl Admission {
+    pub(crate) fn publish(&self, runtime: &crate::RuntimePaths) -> Result<(), HibernateErr> {
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.live_path("hibernate").join("admission.json"),
+            self,
+        )?;
+        Ok(())
+    }
+
+    pub fn read(runtime: &crate::RuntimePaths) -> Self {
+        std::fs::read(runtime.live_path("hibernate").join("admission.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| Self {
+                available: false,
+                reason: Some("admission unavailable; run rimz start".into()),
+            })
+    }
+}
+
+pub fn admit(
+    config: &HibernateConfig,
+    runtime: &crate::RuntimePaths,
+) -> Result<Admission, HibernateErr> {
+    admit_with(config, runtime, &SystemHost)
+}
+
+fn admit_with(
+    config: &HibernateConfig,
+    _runtime: &crate::RuntimePaths,
+    host: &impl Host,
+) -> Result<Admission, HibernateErr> {
+    config.schedule()?;
+    let report = inspect_with(config, host);
+    Ok(Admission {
+        available: report.enabled && report.skipped.is_none(),
+        reason: report.skipped,
+    })
 }
 
 trait Host {
@@ -603,29 +648,7 @@ trait Host {
     fn root(&self) -> &Path;
 }
 
-pub fn preflight(config: &HibernateConfig) -> Result<(), HibernateErr> {
-    if !cfg!(target_os = "linux") || !config.enabled {
-        return Ok(());
-    }
-    config.after()?;
-    let report = inspect(config);
-    if let Some(check) = report
-        .checks
-        .into_iter()
-        .find(|check| matches!(check.status, CheckStatus::Error))
-    {
-        return Err(HibernateErr::Preflight(check.detail));
-    }
-    Ok(())
-}
-
 pub fn inspect(config: &HibernateConfig) -> PreflightReport {
-    if !cfg!(target_os = "linux") {
-        return PreflightReport {
-            enabled: false,
-            checks: Vec::new(),
-        };
-    }
     inspect_with(config, &SystemHost)
 }
 
@@ -657,13 +680,12 @@ impl Host for SystemHost {
 
 fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
     let mut report = PreflightReport {
-        enabled: config.enabled,
+        enabled: config.enabled(),
+        skipped: None,
         checks: Vec::new(),
     };
-    if !config.enabled {
-        return report;
-    }
-    if let Err(error) = config.after() {
+    if let Err(error) = config.schedule() {
+        report.skipped = Some(error.to_string());
         report.checks.push(Check {
             name: "after",
             status: CheckStatus::Error,
@@ -671,13 +693,24 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         });
         return report;
     }
-    let mut check = |name, ok, success: &str, failure: &str| {
+    if !cfg!(target_os = "linux") {
+        report.skipped = Some("Linux cgroup freezing is unavailable".into());
+        return report;
+    }
+    if !config.enabled() {
+        report.skipped = Some("disabled".into());
+        return report;
+    }
+    let mut check = |name, ok: bool, success: &str, failure: &str| {
+        if !ok && report.skipped.is_none() {
+            report.skipped = Some(failure.into());
+        }
         report.checks.push(Check {
             name,
             status: if ok {
                 CheckStatus::Ok
             } else {
-                CheckStatus::Error
+                CheckStatus::Warning
             },
             detail: if ok { success.into() } else { failure.into() },
         });

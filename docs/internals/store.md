@@ -82,7 +82,7 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `out/` | State | RimZ-written results under `out/<reader>/`; `out/` and each reader directory are created at mode `0700`. A response file goes once it is older than 7 days and no run record names its agent (the stem before the first `.`); a `wait-` file once it is older than 7 days and its watcher is not live. An empty reader directory goes. |
 | `locks/` | State | Try-lock and unlink while held; keep busy files (including shared supervisor holds on `room.lock`) and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
 | `sock/` | Runtime | Remove sockets whose connect probe is refused, after the sidebar heartbeat TTL startup grace. |
-| `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exception: keep agent telemetry while its room is live, because the external exporter holds its inode open. |
+| `live/` | Runtime | Mtime TTL (`gc.older_than`, default 7 days); renderer-instance claims also expire by heartbeat liveness. Exceptions: keep agent telemetry while its room is live, because the external exporter holds its inode open; preserve `hibernate/admission.json` until room teardown, since only birth republishes it. |
 | `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
 
 ### The workspace store

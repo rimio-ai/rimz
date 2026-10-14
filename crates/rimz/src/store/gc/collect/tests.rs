@@ -408,6 +408,19 @@ fn runtime_gc_does_not_unlink_a_live_room_exporter() {
     rt.ensure_dirs().unwrap();
 
     let telemetry = rt.copilot_otel_path();
+    let admission = rt.live_path("hibernate").join("admission.json");
+    fs::create_dir_all(admission.parent().unwrap()).unwrap();
+    fs::write(&admission, br#"{"available":true}"#).unwrap();
+    let pacing = rt.live_path("hibernate").join("wake.json");
+    fs::write(&pacing, b"{}").unwrap();
+    fs::File::open(&pacing)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(7200))
+        .unwrap();
+    fs::File::open(&admission)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(7200))
+        .unwrap();
     fs::write(&telemetry, b"open exporter\n").unwrap();
     fs::File::open(&telemetry)
         .unwrap()
@@ -434,8 +447,10 @@ fn runtime_gc_does_not_unlink_a_live_room_exporter() {
     )
     .unwrap();
 
-    assert_eq!(report.sidecar_files_removed, 0);
+    assert_eq!(report.sidecar_files_removed, 1);
     assert!(telemetry.exists(), "live exporter inode remains linked");
+    assert!(admission.exists(), "live room admission must not expire");
+    assert!(!pacing.exists(), "ordinary hibernation caches still expire");
     assert!(rt.agent_telemetry_dir.exists());
 }
 

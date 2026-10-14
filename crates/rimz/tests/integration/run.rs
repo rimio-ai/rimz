@@ -1107,6 +1107,10 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         "supervised birth failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(
+        runtime.root.join("live/hibernate/admission.json").exists(),
+        "non-start birth must publish admission in the room runtime"
+    );
     let record: serde_json::Value = serde_json::from_slice(
         &std::fs::read(env.store().paths().workspace_record.clone()).expect("workspace record"),
     )
