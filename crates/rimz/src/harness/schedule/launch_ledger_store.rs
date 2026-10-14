@@ -186,7 +186,7 @@ mod tests {
                 ..Default::default()
             };
             instances::insert(&paths, "guard", &entry).unwrap();
-            let decline = serde_json::json!({"at": "2026-06-01T00:00:00Z", "since": null, "profile": "codex", "reason": "nothing to do"});
+            let mut decline = serde_json::json!({"at": "2026-06-01T00:00:00Z", "since": null, "profile": "codex", "reason": "nothing to do"});
             crate::disk::atomic::write_temp_then_rename(
                 &launch_ledger::decline_path(&paths),
                 &serde_json::json!({
@@ -215,6 +215,7 @@ mod tests {
                 memory.get("guard").is_none(),
                 "{operation} must clear the old key: {memory}"
             );
+            decline["tier"] = serde_json::json!(0);
             assert_eq!(memory["other"][root.path().display().to_string()], decline);
             assert_eq!(memory.get("renamed").is_some(), operation == "rename");
         }

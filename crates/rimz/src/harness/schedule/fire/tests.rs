@@ -34,6 +34,7 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
         BTreeMap::from([(
             owned[0].clone(),
             DeclineRecord {
+                tier: 0,
                 at: now,
                 since: Some(since),
                 reason: "No work".into(),
@@ -76,6 +77,66 @@ fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
             .contains_key(&key),
             expected
         );
+    }
+}
+
+#[test]
+fn held_judges_suppress_helpers_only_without_a_shell_check() {
+    use super::super::launch_ledger::{DeclineRecord, Declines};
+    let (_root, mut tasks, owned) = worktree_tasks(None);
+    let now = Timestamp::from_second(1000).unwrap();
+    for each_worktree in [false, true] {
+        for shell in [None, Some("cargo test")] {
+            let mut entry = tasks[NAME].entry().clone();
+            entry.each_worktree = each_worktree;
+            entry.check = shell.map(|command| crate::config::TaskCheck::Shell(command.into()));
+            entry.judge = vec![crate::config::Judge {
+                agent: "codex".into(),
+                prompt: Some("any work?".into()),
+                prompt_file: None,
+                recheck: None,
+                timeout: None,
+            }];
+            entry.on = Some(crate::config::CheckOn::Success);
+            let checkout = if each_worktree {
+                owned[0].clone()
+            } else {
+                entry.run_dir()
+            };
+            let key = if each_worktree {
+                scope_key(NAME, &checkout)
+            } else {
+                NAME.into()
+            };
+            let declines = Declines::from([(
+                NAME.into(),
+                BTreeMap::from([(
+                    checkout,
+                    DeclineRecord {
+                        at: now,
+                        since: None,
+                        reason: "No work".into(),
+                        profile: "codex".into(),
+                        tier: 0,
+                        fingerprint: super::super::launch_ledger::check_fingerprint(&entry),
+                    },
+                )]),
+            )]);
+            tasks.insert(NAME.into(), loaded(entry));
+            assert_eq!(
+                scoped_tasks(
+                    &tasks,
+                    &BTreeMap::new(),
+                    &owned,
+                    &declines,
+                    &BTreeMap::new(),
+                    now
+                )
+                .contains_key(&key),
+                shell.is_some(),
+                "each-worktree={each_worktree}, shell={shell:?}"
+            );
+        }
     }
 }
 

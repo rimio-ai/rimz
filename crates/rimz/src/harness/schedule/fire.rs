@@ -62,15 +62,16 @@ fn scoped_tasks(
         if !entry.each_worktree {
             if entry.stay
                 && (launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
-                    || super::launch_ledger::holding_decline(
-                        declines,
-                        name,
-                        entry,
-                        &entry.run_dir(),
-                        when_states.get(name).map(|state| state.since),
-                        now,
-                    )
-                    .is_some())
+                    || (entry.guard().shell.is_none()
+                        && super::launch_ledger::holding_decline(
+                            declines,
+                            name,
+                            entry,
+                            &entry.run_dir(),
+                            when_states.get(name).map(|state| state.since),
+                            now,
+                        )
+                        .is_some()))
             {
                 continue;
             }
@@ -90,15 +91,16 @@ fn scoped_tasks(
                 continue;
             }
             let key = scope_key(name, &checkout);
-            if super::launch_ledger::holding_decline(
-                declines,
-                name,
-                entry,
-                &checkout,
-                when_states.get(&key).map(|state| state.since),
-                now,
-            )
-            .is_some()
+            if entry.guard().shell.is_none()
+                && super::launch_ledger::holding_decline(
+                    declines,
+                    name,
+                    entry,
+                    &checkout,
+                    when_states.get(&key).map(|state| state.since),
+                    now,
+                )
+                .is_some()
             {
                 continue;
             }
