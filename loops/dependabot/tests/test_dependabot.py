@@ -416,7 +416,7 @@ class CheckoutFixture(unittest.TestCase):
 
     def test_refused_reclaim_reports_reason_and_stops_before_publish_or_launch(self):
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
-        self.rimz.refusal = "worktree `deps-repair-1` has local changes or work not proven landed; use --force to remove it"
+        self.rimz.refusal = "worktree `deps-repair-1` has 1 commits not landed on origin/deps/repair-1; run `rimz worktree merge deps-repair-1`, or pass --force to delete them"
         with self.planned(), patch.object(repair, "launch", side_effect=AssertionError("a kept checkout must prevent launch")) as launch, \
              self.assertRaisesRegex(RuntimeError, "push it, or discard it with rimz worktree remove deps/repair-1 --force"):
             self.run_quietly(repair.run)

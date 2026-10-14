@@ -13,6 +13,14 @@ use rimz::trust::TrustState;
 
 use super::palette;
 
+pub(crate) fn worktree(verdict: rimz::worktree::LandedVerdict) -> anstyle::Style {
+    match verdict {
+        rimz::worktree::LandedVerdict::Landed => role(StateRole::Success),
+        rimz::worktree::LandedVerdict::Unlanded => role(StateRole::Waiting),
+        rimz::worktree::LandedVerdict::Unknown => role(StateRole::Neutral),
+    }
+}
+
 /// A shared language server's registry state. Returns the role because verdict glyphs and doctor's health tally both start from it.
 pub(crate) fn lsp(state: &rimz::lsp::registry::State) -> StateRole {
     use rimz::lsp::registry::{State, StopReason};

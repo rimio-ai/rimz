@@ -417,7 +417,7 @@ The rebuilt room comes up with no agents in it, whichever flags you pass. A plai
 
 ### Sweep stale state with `rimz gc`
 
-When stale state piles up, `rimz gc` cleans the current room: expired scratch, terminal runs and audit history, orphaned temp files, abandoned messages, and clean RimZ-marked worktrees whose work has landed with no live pane inside. It keeps anything dirty, pending, or unproven and reports why. Add `--all` to sweep other rooms and shared state, including dead workspace stores. It never creates a store. Open rooms sweep daily, with one elected machine sweep also covering closed rooms ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first:
+When stale state piles up, `rimz gc` cleans the current room: expired scratch, terminal runs and audit history, orphaned temp files, abandoned messages, and clean RimZ-marked worktrees whose work has landed with no live pane inside. It keeps anything dirty, unlanded, or unknown and reports why. Add `--all` to sweep other rooms and shared state, including dead workspace stores. It never creates a store. Open rooms sweep daily, with one elected machine sweep also covering closed rooms ([automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps)). Run `--dry-run` first:
 
 ```sh
 rimz gc --dry-run          # preview the current room, remove nothing
@@ -427,7 +427,7 @@ rimz gc --all --dry-run    # preview every room and shared machine state
 rimz gc --all              # sweep that machine-wide scope
 ```
 
-A kept worktree carries its reason (`in use`, `not merged yet`), so nothing with unlanded work is ever swept.
+A kept worktree carries every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and its live holders, so nothing with unlanded work is ever swept.
 
 ### Where state lives, and full removal
 

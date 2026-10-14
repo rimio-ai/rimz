@@ -107,23 +107,23 @@ Without terminal stdin, only a behind branch advances automatically, with a `fas
 
 ```console
 $ rimz worktree list
-WORKTREE  BRANCH  AGENTS  DIRTY  MERGED   PATH
-auth      auth    @coder  dirty  pending  ~/code/query-engine-worktrees/auth
-feat-a    feat-a  -       -      yes      ~/code/query-engine-worktrees/feat-a
+2 worktrees in ~/code/query-engine-worktrees · 1 removable (rimz worktree sweep) · 1 in use
+
+WORKTREE  BRANCH  STATE             AGENTS
+auth      auth    unlanded · dirty  @coder#auth
+feat-a    feat-a  landed            -
 ```
 
-`list` prints one row per RimZ-owned worktree of the repository, sorted by name.
+`list` prints one row per RimZ-owned worktree of the repository, sorted by name. Bare `rimz worktree` does the same. The summary counts removable trees, occupied trees, and unlanded or unknown trees that are not occupied; zero counts are omitted. With none, it prints `no worktrees in DIR`.
 
 | Column | Value |
 | --- | --- |
 | `WORKTREE` | The name, which is also the channel. |
 | `BRANCH` | The branch checked out now, or `-` on a detached `HEAD`. |
-| `AGENTS` | Handles of the agents the room records in the tree, or `-`. |
-| `DIRTY` | `dirty` when `git status` shows any change, untracked files included. |
-| `MERGED` | `yes` when the work is proven landed, `pending` when it is not, `?` when RimZ cannot tell. |
-| `PATH` | The checkout, relative to your home directory where possible. |
+| `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included. |
+| `AGENTS` | Live holders using the sweep's occupancy rules: at most three handles then `+N`, `pane` for a pane-only holder, or `-`. Ended agents are omitted. |
 
-`--json` prints an array of objects, `[]` when there are none. It carries no agent handles.
+`--json` prints an array of objects, `[]` when there are none.
 
 | Field | Value |
 | --- | --- |
@@ -131,8 +131,11 @@ feat-a    feat-a  -       -      yes      ~/code/query-engine-worktrees/feat-a
 | `path` | The absolute checkout path. |
 | `branch` | The branch checked out now; `null` on a detached `HEAD`. |
 | `base_ref` | The full commit the tree was cut from. |
+| `base_branch` | The recorded base branch, or `null` for an older marker without one. |
 | `dirty` | `true` or `false`. |
-| `landed` | `true`, `false`, or `null` when unknown; the `MERGED` column as a value. |
+| `landed` | `true`, `false`, or `null` when unknown. |
+| `reasons` | All keep reason ids in precedence order: `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. Empty means removable. |
+| `holders` | `agents` (full handles) and `panes` (the count of protected panes with no agent). |
 
 ## Open a shell in a worktree
 
@@ -171,7 +174,7 @@ Every precondition is checked before anything moves. Each refusal begins ``canno
 
 ```console
 $ rimz worktree remove auth
-error: worktree `auth` is in use by @coder; use --force to remove it
+error: worktree `auth` is in use by @coder#auth; use --force to remove it
 $ rimz worktree remove feat-a
 removed feat-a
 ```
@@ -181,11 +184,13 @@ removed feat-a
 | Refusal | When |
 | --- | --- |
 | ``worktree `NAME` is in use by HANDLES; use --force to remove it`` | A live agent or an open pane is in the tree. `HANDLES` reads `an open pane` when no agent is recorded there. A stale record from a crashed agent does not count. |
-| ``worktree `NAME` has local changes or work not proven landed; use --force to remove it`` | The tree is dirty, or its work is not proven landed on its base. One message covers both; `rimz worktree list` shows which. |
+| ``worktree `NAME` has uncommitted changes (N files); commit or stash them, or pass --force to discard them`` | The tree is dirty. |
+| ``worktree `NAME` has N commits not landed on TARGET; run `rimz worktree merge NAME`, or pass --force to delete them`` | The work is unlanded on its comparison ref. |
+| ``worktree `NAME` has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch`` | RimZ cannot prove whether the work landed. |
 
-Without `--force`, the branch is deleted when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `  branch kept: work not proven merged into its base`.
+Without `--force`, the branch is deleted when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `  branch kept: its work is not proven landed on TARGET`.
 
-`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. Unlanded commits on that branch are deleted with it, and no notice says so. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HANDLES; removing it anyway`` on stderr.
+`--force` skips these checks and removes the tree with `git worktree remove --force`, then deletes the branch with `git branch -D`. When its tip could be read, the receipt prints ``branch deleted: BRANCH was at OID; restore with `git branch BRANCH OID` `` with the full commit id. When the tree was in use, `--force` first prints ``warning: worktree `NAME` is in use by HANDLES; removing it anyway`` on stderr. Holders include agent handles and any unassociated open panes.
 
 `remove` exits 1 if ending the sessions or archiving the messages fails, even though the checkout is already gone. A failure to append the message history only warns and leaves the exit code 0 ([write classes](../../internals/store.md#write-classes)).
 
@@ -194,9 +199,17 @@ Without `--force`, the branch is deleted when Git considers it merged or RimZ pr
 ```console
 $ rimz worktree sweep --dry-run
 sweep — would remove 1 · 18 MB · 2 kept
-  would remove: feat-a — /home/me/code/query-engine-worktrees/feat-a
-  kept: auth — in use
-  kept: spike — not merged yet
+
+kept, in use (1)
+  auth  @coder#auth
+
+kept, unlanded work (1)
+  spike
+
+would remove (1) from ~/code/query-engine-worktrees
+  feat-a
+
+nothing was removed; run `rimz worktree sweep` to remove the 1
 ```
 
 `sweep` removes every RimZ-owned worktree that is clean, proven landed, and unoccupied, deleting each branch the way `remove` does without `--force`, and then runs `git worktree prune`. It never forces. `--dry-run` prints the same report and removes nothing; in a repository with no RimZ store it prints `sweep — skipped · no RimZ store here` and creates none. A sweep with nothing to remove prints `sweep — nothing to remove · N kept`.
@@ -207,7 +220,10 @@ Each removal runs the optional [`removed` hook](../../guide/worktrees.md#prepare
 | --- | --- |
 | `in use` | An open pane or an agent is in the tree. Unlike `remove`, an agent RimZ cannot prove dead still counts. |
 | `uncommitted changes` | The tree is dirty. |
-| `not merged yet` | The work is pending or unknown. |
+| `unlanded work` | The work has not landed. |
+| `unknown` | RimZ cannot prove whether the work landed. |
+
+The report groups each kept tree under its first reason, then names additional reasons with `· also REASON`. The removed names wrap to the terminal width; the directory prints once. `--json` prints `dry_run`, `removed`, `kept`, and `failed`. Removed entries carry `name`, `branch`, `path`, `bytes`, `branch_deleted` (`null` on a dry run), and `archive_error`; kept entries carry `name`, `path`, `reasons`, and `holders` with the same ids and holder shape as `list --json`. A dry run with no store adds `skipped: "no_store"` and empty arrays.
 
 Quitting the agent that worked in a tree reclaims nothing: its pane says the worktree was kept and names `rimz worktree sweep`, then drops back to a shell, and the tree, its branch, and its files stay. A tree goes away through `sweep`, through `remove`, or through the daily `gc` below, which runs this same sweep.
 

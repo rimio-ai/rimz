@@ -185,13 +185,15 @@ What happens when the last agent in a tree exits depends on how it exits, and th
 - **An unattended run finishes.** Same check, same outcomes. This is the path a [scripted `-p` run](./scripting.md) or a [scheduled loop turn](./loops.md) takes, and it is why a fleet that works while you sleep does not leave trees behind.
 - **You quit the agent normally.** Nothing is reclaimed. The pane prints ``rimz: worktree <path> kept; `rimz worktree sweep` reclaims it once its work lands``, then drops to a shell inside the tree so you can commit, push, or look around.
 
-`rimz worktree list` is the status read. Two of its columns decide everything: a tree that is clean under `DIRTY` and `yes` under `MERGED` is one RimZ can reclaim, and anything else is the reason it cannot.
+`rimz worktree list` is the status read, and bare `rimz worktree` does the same. `STATE` says `landed`, `unlanded`, or `unknown`, appending ` · dirty` for uncommitted changes. The summary counts what is removable and what is occupied. Agent handles are the live holders that sweeping uses, not ended sessions; a pane with no agent reads `pane`.
 
 ```console
 $ rimz worktree list
-WORKTREE  BRANCH  AGENTS  DIRTY  MERGED   PATH
-auth      auth    @coder  dirty  pending  ~/code/query-engine-worktrees/auth
-feat-a    feat-a  -       -      yes      ~/code/query-engine-worktrees/feat-a
+2 worktrees in ~/code/query-engine-worktrees · 1 removable (rimz worktree sweep) · 1 in use
+
+WORKTREE  BRANCH  STATE             AGENTS
+auth      auth    unlanded · dirty  @coder#auth
+feat-a    feat-a  landed            -
 ```
 
 `rimz worktree merge auth` takes the deliberately narrow landing path: with no agent or pane left in the worktree and both checkouts clean, the branch rebases onto `main` and the main checkout advances by fast-forward only. A conflict aborts the rebase and leaves `main` unchanged rather than creating a merge commit. Your main checkout must have a branch named `main` out, so a repository whose trunk is `master` lands its branches with Git or a pull request instead.
@@ -208,23 +210,27 @@ Merging leaves the tree in place. `rimz worktree sweep` is the routine that take
 ```console
 $ rimz worktree sweep
 sweep — removed 1 · 203 B · 1 kept
-  removed: auth — /home/you/code/query-engine-worktrees/auth
-  kept: feat-a — uncommitted changes
+
+kept, uncommitted changes (1)
+  feat-a
+
+removed (1) from ~/code/query-engine-worktrees
+  auth
 ```
 
 `rimz worktree remove <name>` reclaims one tree on demand, and refuses twice before it does:
 
 ```console
 $ rimz worktree remove auth
-error: worktree `auth` is in use by @coder; use --force to remove it
+error: worktree `auth` is in use by @coder#auth; use --force to remove it
 
 $ rimz worktree remove feat-a
 removed feat-a
 ```
 
-The first refusal is for an agent or an open pane still working in the tree, naming what holds it. A stale record left by a crashed agent does not count, so a crash never leaves you unable to reclaim the tree. Once the tree is empty, a dirty or unlanded one refuses again with ``worktree `auth` has local changes or work not proven landed; use --force to remove it``, one message for both conditions; `rimz worktree list` says which.
+The first refusal is for an agent or an open pane still working in the tree, naming what holds it. A stale record left by a crashed agent does not count, so a crash never leaves you unable to reclaim the tree. Once the tree is empty, uncommitted changes refuse with the file count and a commit-or-stash fix. Unlanded work refuses with the commit count, comparison ref, and `rimz worktree merge NAME` hint; unknown landing asks you to land the work yourself. Sweeping shows every keep reason, grouped under the first; use `sweep --json` or `list --json` for reason ids and full holders.
 
-Removal deletes the branch with the tree when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `branch kept: work not proven merged into its base`, so the commits are still reachable by name. `--force` skips both refusals and deletes the branch regardless, taking any unlanded commits on it with no further warning; when a live agent is in the tree it warns first, then removes anyway.
+Removal deletes the branch with the tree when Git considers it merged or RimZ proves its work landed. Otherwise the branch stays and the report adds `branch kept: its work is not proven landed on TARGET`, so the commits are still reachable by name. `--force` skips the refusals and deletes the branch regardless, printing its full tip and a `git branch BRANCH OID` restore command when the tip could be read; when a live agent is in the tree it warns first, then removes anyway.
 
 `rimz worktree cd auth` opens your user shell rooted in that checkout, for the times you want to look before you decide. Exit the shell to return to the directory where you started.
 

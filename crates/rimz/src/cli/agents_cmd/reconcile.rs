@@ -62,12 +62,13 @@ pub(super) fn reconcile_cohort_launch(
                 return launch_fresh(name, &subject);
             }
             let (resume_command, fresh_command) = relaunch_commands(name, spec_display, team);
-            let status = rimz::worktree::status(path, &marker)?;
             // Cohort liveness was already decided above, so Git state alone
             // separates "recreate it" from "resume into it". A concurrent
             // cleanup may still remove the checkout after this decision.
             let protections = rimz::worktree::ProtectionSet::default();
-            if protections.assess(path, status) == rimz::worktree::RemovalAssessment::Removable {
+            let memo = rimz::worktree::LandedMemo::load(path);
+            let state = rimz::worktree::inspect(path, &marker, &protections, &memo)?;
+            let result = if state.removable() {
                 recreate_or_done(
                     workspace,
                     machine_config,
@@ -77,10 +78,13 @@ pub(super) fn reconcile_cohort_launch(
                     &subject,
                     &protections,
                     &fresh_command,
+                    &memo,
                 )
             } else {
                 resume_or_done(name, &subject, path, &resume_command, &fresh_command)
-            }
+            };
+            memo.save();
+            result
         }
     }
 }
@@ -137,17 +141,18 @@ fn recreate_or_done(
     subject: &str,
     protections: &rimz::worktree::ProtectionSet,
     fresh_command: &str,
+    memo: &rimz::worktree::LandedMemo,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
         writeln!(
             std::io::stderr().lock(),
-            "worktree `{name}` is clean and merged; recreate {subject} with `rimz worktree remove {name}` then relaunch, or launch fresh into it with `{fresh_command}`"
+            "worktree `{name}` is clean and landed; recreate {subject} with `rimz worktree remove {name}` then relaunch, or launch fresh into it with `{fresh_command}`"
         )?;
         return Ok(Reconciled::Done);
     }
     match crate::cli::choose(
         &format!(
-            "worktree `{name}` is clean and merged; remove it and recreate {subject}, launch it fresh, or cancel?"
+            "worktree `{name}` is clean and landed; remove it and recreate {subject}, launch it fresh, or cancel?"
         ),
         &["remove", "fresh", "cancel"],
         2,
@@ -163,6 +168,7 @@ fn recreate_or_done(
         path,
         false,
         protections,
+        memo,
     ) {
         Err(rimz::worktree::WorktreeErr::Missing { .. }) => {
             writeln!(

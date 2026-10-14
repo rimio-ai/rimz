@@ -232,6 +232,8 @@ fn removal_retirement_returns_both_independent_results() {
         branch: "demo".to_owned(),
         removed_path: PathBuf::from("/repo-worktrees/demo"),
         branch_deletion: BranchDeletion::Deleted,
+        branch_tip: None,
+        target: None,
     };
 
     let retirement = retire_removal(&store, &removed, "worktree removed", "rimz-test");
@@ -548,17 +550,319 @@ fn landed_verdict_and_status_constructors() {
     assert_eq!(
         WorktreeStatus::default(),
         WorktreeStatus {
-            dirty: false,
+            changed_files: 0,
             landed: LandedVerdict::Landed,
+            ..WorktreeStatus::default()
         }
     );
     assert_eq!(
         WorktreeStatus::unknown(),
         WorktreeStatus {
-            dirty: false,
+            changed_files: 0,
             landed: LandedVerdict::Unknown,
+            ..WorktreeStatus::default()
         }
     );
+}
+
+#[test]
+fn keep_reasons_are_complete_and_ordered() {
+    let mut state = WorktreeState {
+        status: WorktreeStatus {
+            changed_files: 1,
+            landed: LandedVerdict::Unlanded,
+            ..WorktreeStatus::default()
+        },
+        holders: Holders {
+            agents: vec!["@coder".to_owned()],
+            panes: 1,
+        },
+    };
+    assert_eq!(
+        state.keep_reasons(),
+        [KeepReason::InUse, KeepReason::Dirty, KeepReason::Unlanded]
+    );
+    assert!(!state.removable());
+    state.status = WorktreeStatus::unknown();
+    assert_eq!(
+        state.keep_reasons(),
+        [KeepReason::InUse, KeepReason::Unknown]
+    );
+    state.status = WorktreeStatus::default();
+    state.holders = Holders::default();
+    assert!(state.removable());
+}
+
+#[test]
+fn dirty_is_derived_from_changed_files() {
+    let mut status = WorktreeStatus::default();
+    assert!(!status.dirty());
+    status.changed_files = 3;
+    assert!(status.dirty());
+}
+
+#[test]
+fn holders_share_occupancy_and_do_not_double_count_bound_panes() {
+    let candidate = Path::new("/repo-worktrees/demo");
+    let pane = PaneProtectionFact {
+        pane_id: PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+        cwd: Some(candidate.join("src")),
+        sidebar: false,
+    };
+    let mut agent = AgentProtectionFact {
+        handle: "@coder#demo".to_owned(),
+        pane_id: Some(pane.pane_id.clone()),
+        liveness: AgentLiveness::Unknown,
+        stored_path: Some(candidate.to_path_buf()),
+        process_cwd: Some(candidate.join("src")),
+    };
+    for occupancy in [Occupancy::Unproven, Occupancy::ProvenLive] {
+        let holders = ProtectionSet::from_facts(
+            std::slice::from_ref(&pane),
+            std::slice::from_ref(&agent),
+            None,
+            occupancy,
+        )
+        .holders(candidate);
+        assert_eq!(
+            holders,
+            if occupancy == Occupancy::Unproven {
+                Holders {
+                    agents: vec!["@coder#demo".to_owned()],
+                    panes: 0,
+                }
+            } else {
+                Holders {
+                    agents: vec![],
+                    panes: 1,
+                }
+            }
+        );
+    }
+    agent.liveness = AgentLiveness::Live { pid: 7 };
+    assert_eq!(
+        ProtectionSet::from_facts(
+            std::slice::from_ref(&pane),
+            std::slice::from_ref(&agent),
+            None,
+            Occupancy::ProvenLive
+        )
+        .holders(candidate),
+        Holders {
+            agents: vec!["@coder#demo".to_owned()],
+            panes: 0
+        }
+    );
+    assert!(
+        ProtectionSet::from_facts(
+            std::slice::from_ref(&pane),
+            std::slice::from_ref(&agent),
+            Some(&pane.pane_id),
+            Occupancy::Unproven
+        )
+        .holders(candidate)
+        .is_empty()
+    );
+    agent.liveness = AgentLiveness::Dead;
+    assert!(
+        ProtectionSet::from_facts(&[], &[agent], None, Occupancy::Unproven)
+            .holders(candidate)
+            .is_empty()
+    );
+}
+
+#[test]
+fn holders_keep_channel_scoped_agents_distinct() {
+    let mut agents = [
+        agent("one", Some("/repo-worktrees/demo/one"), None, at(1)),
+        agent("two", Some("/repo-worktrees/demo/two"), None, at(1)),
+    ];
+    for agent in &mut agents {
+        agent.name = Some("coder".to_owned());
+        agent.name_explicit = true;
+    }
+    let holders = protection_set_from_runtime(&[], &agents, None, Occupancy::Unproven)
+        .holders(Path::new("/repo-worktrees/demo"));
+    assert_eq!(holders.agents, ["@coder#one", "@coder#two"]);
+}
+
+#[test]
+fn holders_count_own_panes_only_when_not_exempt() {
+    let pane = PaneProtectionFact {
+        pane_id: PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+        cwd: Some(PathBuf::from("/repo-worktrees/demo/src")),
+        sidebar: false,
+    };
+    let candidate = Path::new("/repo-worktrees/demo");
+    assert_eq!(
+        ProtectionSet::from_facts(std::slice::from_ref(&pane), &[], None, Occupancy::Unproven)
+            .holders(candidate)
+            .panes,
+        1
+    );
+    assert!(
+        ProtectionSet::from_facts(
+            std::slice::from_ref(&pane),
+            &[],
+            Some(&pane.pane_id),
+            Occupancy::Unproven
+        )
+        .holders(candidate)
+        .is_empty()
+    );
+}
+
+#[test]
+fn landed_memo_serves_oid_pairs_and_never_caches_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let oid = git_stdout(&repo, ["rev-parse", "HEAD"]).unwrap();
+    let path = repo.join(".git/rimz-landed-memo.json");
+    let key = format!("{oid}:{oid}");
+    let seen_at_ms = crate::utils::time::unix_now_ms() - 24 * 60 * 60 * 1000;
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "entries": {key.clone(): {"landed": false, "ahead": 42, "seen_at_ms": seen_at_ms}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let memo = LandedMemo::load(&repo);
+    assert_eq!(
+        memo.proof(&repo, "main", "HEAD"),
+        (LandedVerdict::Unlanded, Some(42)),
+        "a hit bypasses the Git proof even when the seeded verdict is opposite"
+    );
+    memo.save();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["entries"][&key]["seen_at_ms"], seen_at_ms);
+    assert_eq!(
+        memo.proof(&repo, "missing-ref", "HEAD"),
+        (LandedVerdict::Unknown, None)
+    );
+    git_run(&repo, ["commit", "--allow-empty", "-m", "new oid"]).unwrap();
+    assert_eq!(
+        memo.proof(&repo, "main", "HEAD"),
+        (LandedVerdict::Landed, Some(0)),
+        "a moved ref uses a new pair"
+    );
+    std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+        "version": 1, "entries": {
+            "other:pair": {"landed": true, "ahead": 0, "seen_at_ms": crate::utils::time::unix_now_ms()},
+            "old:pair": {"landed": false, "ahead": 1, "seen_at_ms": 0}
+        }
+    })).unwrap()).unwrap();
+    memo.save();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["entries"].as_object().unwrap().len(),
+        3,
+        "Unknown adds no entry; save merges new entries and prunes old ones"
+    );
+    assert!(saved["entries"]["other:pair"]["landed"].as_bool().unwrap());
+    assert!(saved["entries"]["old:pair"].is_null());
+}
+
+#[test]
+fn landed_memo_recomputes_expired_proofs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let oid = git_stdout(&repo, ["rev-parse", "HEAD"]).unwrap();
+    let key = format!("{oid}:{oid}");
+    let path = repo.join(".git/rimz-landed-memo.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "entries": {key: {"landed": false, "ahead": 42, "seen_at_ms": 0}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let memo = LandedMemo::load(&repo);
+    assert_eq!(
+        memo.proof(&repo, "main", "HEAD"),
+        (LandedVerdict::Landed, Some(0)),
+        "expired entries must be proven again, not renewed by a hit"
+    );
+}
+
+#[test]
+fn landed_memo_is_disabled_in_shallow_repositories() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = init_test_repo(dir.path());
+    git_run(&source, ["commit", "--allow-empty", "-m", "second"]).unwrap();
+    let repo = dir.path().join("shallow");
+    git_run(
+        &source,
+        [
+            "clone",
+            "--depth=1",
+            &format!("file://{}", source.display()),
+            repo.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        git_stdout(&repo, ["rev-parse", "--is-shallow-repository"]).unwrap(),
+        "true"
+    );
+    assert_landed_memo_disabled(&repo);
+}
+
+#[test]
+fn landed_memo_is_disabled_with_replace_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    git_run(&repo, ["commit", "--allow-empty", "-m", "second"]).unwrap();
+    git_run(&repo, ["replace", "HEAD", "HEAD~1"]).unwrap();
+    assert_landed_memo_disabled(&repo);
+}
+
+fn assert_landed_memo_disabled(repo: &Path) {
+    let oid = git_stdout(repo, ["rev-parse", "HEAD"]).unwrap();
+    let key = format!("{oid}:{oid}");
+    let path = repo.join(".git/rimz-landed-memo.json");
+    let contents = serde_json::to_vec(&serde_json::json!({
+        "version": 1, "entries": {key: {"landed": false, "ahead": 42, "seen_at_ms": crate::utils::time::unix_now_ms()}}
+    })).unwrap();
+    std::fs::write(&path, &contents).unwrap();
+    let memo = LandedMemo::load(repo);
+    assert_eq!(
+        memo.proof(repo, "HEAD", "HEAD"),
+        (LandedVerdict::Landed, Some(0))
+    );
+    memo.save();
+    assert_eq!(std::fs::read(&path).unwrap(), contents);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        memo.proof(repo, "HEAD", "HEAD"),
+        (LandedVerdict::Landed, Some(0))
+    );
+    memo.save();
+    assert!(!path.exists(), "disabled memos must not write new files");
+}
+
+#[test]
+fn landed_memo_rebuilds_missing_unreadable_and_old_version_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let path = repo.join(".git/rimz-landed-memo.json");
+    for contents in [None, Some("{"), Some("{\"version\": 2, \"entries\": {}}")] {
+        if let Some(contents) = contents {
+            std::fs::write(&path, contents).unwrap();
+        }
+        let memo = LandedMemo::load(&repo);
+        assert_eq!(
+            memo.proof(&repo, "main", "HEAD"),
+            (LandedVerdict::Landed, Some(0))
+        );
+        memo.save();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], 1);
+        assert_eq!(saved["entries"].as_object().unwrap().len(), 1);
+    }
 }
 
 #[test]
@@ -608,6 +912,7 @@ fn protection_set_applies_agent_liveness_rules() {
         let protections = ProtectionSet::from_facts(
             &[],
             &[AgentProtectionFact {
+                handle: "@coder".to_owned(),
                 pane_id: None,
                 liveness,
                 stored_path,
@@ -639,50 +944,53 @@ fn removal_assessment_uses_in_use_dirty_landing_precedence() {
         (
             "/repo-worktrees/in-use",
             WorktreeStatus {
-                dirty: true,
-                landed: LandedVerdict::Pending,
+                changed_files: 1,
+                landed: LandedVerdict::Unlanded,
+                ..WorktreeStatus::default()
             },
-            RemovalAssessment::InUse,
+            vec![KeepReason::InUse, KeepReason::Dirty, KeepReason::Unlanded],
         ),
         (
             "/repo-worktrees/dirty",
             WorktreeStatus {
-                dirty: true,
-                landed: LandedVerdict::Pending,
+                changed_files: 1,
+                landed: LandedVerdict::Unlanded,
+                ..WorktreeStatus::default()
             },
-            RemovalAssessment::Dirty,
+            vec![KeepReason::Dirty, KeepReason::Unlanded],
         ),
         (
-            "/repo-worktrees/pending",
+            "/repo-worktrees/unlanded",
             WorktreeStatus {
-                dirty: false,
-                landed: LandedVerdict::Pending,
+                changed_files: 0,
+                landed: LandedVerdict::Unlanded,
+                ..WorktreeStatus::default()
             },
-            RemovalAssessment::NotLanded,
+            vec![KeepReason::Unlanded],
         ),
         (
             "/repo-worktrees/unknown",
             WorktreeStatus::unknown(),
-            RemovalAssessment::NotLanded,
+            vec![KeepReason::Unknown],
         ),
-        (
-            "/repo-worktrees/clean",
-            WorktreeStatus::default(),
-            RemovalAssessment::Removable,
-        ),
+        ("/repo-worktrees/clean", WorktreeStatus::default(), vec![]),
     ];
     for (path, status, expected) in cases {
-        assert_eq!(protections.assess(Path::new(path), status), expected);
+        let state = WorktreeState {
+            status,
+            holders: protections.holders(Path::new(path)),
+        };
+        assert_eq!(state.keep_reasons(), expected);
     }
 }
 
 #[test]
 fn sweep_partition_keeps_protected_dirty_and_unmerged_entries() {
     let entries = vec![
-        sweep_entry("protected", true, LandedVerdict::Pending),
+        sweep_entry("protected", true, LandedVerdict::Unlanded),
         sweep_entry("dirty", true, LandedVerdict::Landed),
         sweep_entry("unknown", false, LandedVerdict::Unknown),
-        sweep_entry("pending", false, LandedVerdict::Pending),
+        sweep_entry("unlanded", false, LandedVerdict::Unlanded),
         sweep_entry("clean", false, LandedVerdict::Landed),
     ];
     let protected = ProtectionSet::from_facts(
@@ -696,24 +1004,37 @@ fn sweep_partition_keeps_protected_dirty_and_unmerged_entries() {
         Occupancy::Unproven,
     );
 
-    let (candidates, kept) = partition_sweep_candidates(entries, &protected);
+    let entries = entries
+        .into_iter()
+        .map(|(managed, status)| {
+            let holders = protected.holders(&managed.path);
+            InspectedWorktree {
+                managed,
+                state: WorktreeState { status, holders },
+            }
+        })
+        .collect();
+    let (candidates, kept) = partition_sweep_candidates(entries);
 
     assert_eq!(
         candidates
             .iter()
-            .map(|(entry, _)| entry.marker.name.as_str())
+            .map(|entry| entry.managed.marker.name.as_str())
             .collect::<Vec<_>>(),
         ["clean"]
     );
     assert_eq!(
         kept.iter()
-            .map(|worktree| (worktree.name.as_str(), worktree.reason))
+            .map(|worktree| (worktree.name.as_str(), worktree.reasons.clone()))
             .collect::<Vec<_>>(),
         [
-            ("protected", KeptReason::InUse),
-            ("dirty", KeptReason::Dirty),
-            ("unknown", KeptReason::NotMerged),
-            ("pending", KeptReason::NotMerged),
+            (
+                "protected",
+                vec![KeepReason::InUse, KeepReason::Dirty, KeepReason::Unlanded]
+            ),
+            ("dirty", vec![KeepReason::Dirty]),
+            ("unknown", vec![KeepReason::Unknown]),
+            ("unlanded", vec![KeepReason::Unlanded]),
         ]
     );
 }
@@ -740,7 +1061,11 @@ fn sweep_entry(
             path,
             branch: Some(name.to_owned()),
         },
-        WorktreeStatus { dirty, landed },
+        WorktreeStatus {
+            changed_files: u32::from(dirty),
+            landed,
+            ..WorktreeStatus::default()
+        },
     )
 }
 
@@ -1021,15 +1346,21 @@ fn discovery_returns_owned_identity_before_explicit_inspection() {
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0].marker, created.marker);
     assert_eq!(discovered[0].branch.as_deref(), Some("demo"));
-    let inspected = status(&discovered[0].path, &discovered[0].marker).expect("inspect");
-    assert!(inspected.dirty);
-    assert_eq!(inspected.landed, LandedVerdict::Pending);
+    let inspected = status(
+        &discovered[0].path,
+        &discovered[0].marker,
+        &LandedMemo::load(&repo),
+    )
+    .expect("inspect");
+    assert!(inspected.dirty());
+    assert_eq!(inspected.landed, LandedVerdict::Unlanded);
 }
 
 #[test]
 fn occupancy_policy_decides_whether_an_unproven_agent_holds_a_checkout() {
     let worktree = Path::new("/repo-worktrees/demo");
     let facts = [AgentProtectionFact {
+        handle: "@coder".to_owned(),
         pane_id: None,
         liveness: AgentLiveness::Unknown,
         stored_path: Some(worktree.to_path_buf()),
@@ -1079,6 +1410,7 @@ fn remove_refuses_an_occupied_worktree_until_forced() {
         &created.marker.worktree_path,
         false,
         &occupied,
+        &LandedMemo::load(&repo),
     )
     .expect_err("in-use refusal");
 
@@ -1098,6 +1430,7 @@ fn remove_refuses_an_occupied_worktree_until_forced() {
         &created.marker.worktree_path,
         true,
         &occupied,
+        &LandedMemo::load(&repo),
     )
     .expect("forced removal");
     assert!(!created.marker.worktree_path.exists());
@@ -1126,6 +1459,7 @@ fn remove_accepts_a_clean_worktree_no_one_occupies() {
         &created.marker.worktree_path,
         false,
         &ProtectionSet::default(),
+        &LandedMemo::load(&repo),
     )
     .expect("remove");
 
@@ -1786,6 +2120,7 @@ fn removed_hook_uses_repo_cwd_and_failure_is_best_effort() {
         &created.marker.worktree_path,
         true,
         &ProtectionSet::default(),
+        &LandedMemo::load(&repo),
     )
     .unwrap();
     assert_eq!(

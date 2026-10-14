@@ -9,7 +9,7 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorkLane {
+pub enum WorkLane {
     Fetch,
     CacheRefresh,
     Other,

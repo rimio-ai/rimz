@@ -26,10 +26,12 @@ use crate::workspace::{ResolvedWorkspace, RootClass};
 mod exclude;
 mod hooks;
 mod include;
+mod landed_memo;
 mod link;
 mod pr;
 
 pub use exclude::exclude_team_scratch;
+pub use landed_memo::LandedMemo;
 pub use pr::{PrBranchChoice, PrBranchDivergence, create_from_pr};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
@@ -73,9 +75,21 @@ pub enum WorktreeErr {
     #[error("{path} is not a linked worktree of {repo_root}")]
     NotLinkedWorktree { path: PathBuf, repo_root: PathBuf },
     #[error(
-        "worktree `{name}` has local changes or work not proven landed; use --force to remove it"
+        "worktree `{name}` has uncommitted changes ({files} files); commit or stash them, or pass --force to discard them"
     )]
-    Dirty { name: String },
+    Dirty { name: String, files: u32 },
+    #[error(
+        "worktree `{name}` has {ahead} commits not landed on {target}; run `rimz worktree merge {name}`, or pass --force to delete them"
+    )]
+    Unlanded {
+        name: String,
+        ahead: u32,
+        target: String,
+    },
+    #[error(
+        "worktree `{name}` has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch"
+    )]
+    Unproven { name: String },
     #[error(
         "worktree `{name}` is in use by a live agent or an open pane; use --force to remove it"
     )]
@@ -304,7 +318,7 @@ pub struct WorktreeMerge {
     pub head: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WorktreeSweep {
     pub removed: Vec<SweptWorktree>,
     pub failed: Vec<FailedWorktree>,
@@ -319,52 +333,32 @@ impl WorktreeSweep {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SweptWorktree {
     pub name: String,
     pub branch: String,
     pub path: PathBuf,
     pub bytes: u64,
+    #[serde(
+        rename = "branch_deleted",
+        serialize_with = "serialize_branch_deletion"
+    )]
     pub branch_deletion: Option<BranchDeletion>,
     pub archive_error: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FailedWorktree {
     pub path: PathBuf,
     pub error: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct KeptWorktree {
     pub name: String,
     pub path: PathBuf,
-    pub reason: KeptReason,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeptReason {
-    InUse,
-    Dirty,
-    NotMerged,
-}
-
-impl KeptReason {
-    pub fn text(self) -> &'static str {
-        match self {
-            Self::InUse => "in use",
-            Self::Dirty => "uncommitted changes",
-            Self::NotMerged => "not merged yet",
-        }
-    }
-
-    pub fn json(self) -> &'static str {
-        match self {
-            Self::InUse => "in_use",
-            Self::Dirty => "uncommitted_changes",
-            Self::NotMerged => "not_merged",
-        }
-    }
+    pub reasons: Vec<KeepReason>,
+    pub holders: Holders,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -373,26 +367,36 @@ struct WorktreeRow {
     branch: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorktreeStatus {
-    pub dirty: bool,
+    pub changed_files: u32,
+    pub ahead: Option<u32>,
     pub landed: LandedVerdict,
+    pub target: Option<String>,
 }
 
 impl Default for WorktreeStatus {
     fn default() -> Self {
         Self {
-            dirty: false,
+            changed_files: 0,
+            ahead: None,
             landed: LandedVerdict::Landed,
+            target: None,
         }
     }
 }
 
 impl WorktreeStatus {
+    pub const fn dirty(&self) -> bool {
+        self.changed_files > 0
+    }
+
     pub const fn unknown() -> Self {
         Self {
-            dirty: false,
+            changed_files: 0,
+            ahead: None,
             landed: LandedVerdict::Unknown,
+            target: None,
         }
     }
 }
@@ -400,14 +404,96 @@ impl WorktreeStatus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LandedVerdict {
     Landed,
-    Pending,
+    Unlanded,
     Unknown,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Holders {
+    pub agents: Vec<String>,
+    pub panes: u32,
+}
+
+impl Holders {
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty() && self.panes == 0
+    }
+}
+
+impl std::fmt::Display for Holders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = self.agents.clone();
+        match self.panes {
+            0 => {}
+            1 => parts.push("an open pane".to_owned()),
+            count => parts.push(format!("{count} open panes")),
+        }
+        f.write_str(&parts.join(", "))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeepReason {
+    InUse,
+    #[serde(rename = "uncommitted_changes")]
+    Dirty,
+    Unlanded,
+    Unknown,
+}
+
+impl KeepReason {
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::InUse => "in use",
+            Self::Dirty => "uncommitted changes",
+            Self::Unlanded => "unlanded work",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreeState {
+    pub status: WorktreeStatus,
+    pub holders: Holders,
+}
+
+impl WorktreeState {
+    pub fn keep_reasons(&self) -> Vec<KeepReason> {
+        let mut reasons = Vec::new();
+        if !self.holders.is_empty() {
+            reasons.push(KeepReason::InUse);
+        }
+        if self.status.dirty() {
+            reasons.push(KeepReason::Dirty);
+        }
+        match self.status.landed {
+            LandedVerdict::Landed => {}
+            LandedVerdict::Unlanded => reasons.push(KeepReason::Unlanded),
+            LandedVerdict::Unknown => reasons.push(KeepReason::Unknown),
+        }
+        reasons
+    }
+
+    pub fn removable(&self) -> bool {
+        self.keep_reasons().is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchDeletion {
     Deleted,
     KeptUnmerged,
+}
+
+fn serialize_branch_deletion<S: serde::Serializer>(
+    deletion: &Option<BranchDeletion>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    deletion
+        .map(|deletion| deletion == BranchDeletion::Deleted)
+        .serialize(serializer)
 }
 
 /// One live mux pane fact gathered before worktree removal assessment.
@@ -421,6 +507,7 @@ struct PaneProtectionFact {
 /// One durable agent fact with process state already probed by CLI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AgentProtectionFact {
+    handle: String,
     pane_id: Option<PaneId>,
     liveness: AgentLiveness,
     stored_path: Option<PathBuf>,
@@ -430,7 +517,13 @@ struct AgentProtectionFact {
 /// Normalized paths whose live panes or agents prevent checkout removal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionSet {
-    paths: Vec<PathBuf>,
+    paths: Vec<(PathBuf, Holder)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Holder {
+    Agent(String),
+    Pane(PaneId),
 }
 
 /// Which agent records keep a checkout occupied.
@@ -460,11 +553,13 @@ pub fn protection_set_from_runtime(
             sidebar: pane.is_rimz_sidebar(),
         })
         .collect::<Vec<_>>();
+    let peers = agents.iter().collect::<Vec<_>>();
     let agent_facts = agents
         .iter()
         .map(|agent| {
             let liveness = crate::store::runtime::agent_liveness(agent);
             AgentProtectionFact {
+                handle: crate::address::agent_handle(agent, &peers, true),
                 pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
                 liveness,
                 stored_path: agent.worktree_path.as_deref().map(PathBuf::from),
@@ -478,16 +573,30 @@ pub fn protection_set_from_runtime(
     ProtectionSet::from_facts(&pane_facts, &agent_facts, own, occupancy)
 }
 
-/// Removal policy result in fixed safety-precedence order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemovalAssessment {
-    Removable,
-    InUse,
-    Dirty,
-    NotLanded,
-}
-
 impl ProtectionSet {
+    pub fn holders(&self, candidate: &Path) -> Holders {
+        let candidate = normalize_path_lexical(candidate);
+        let mut holders = Holders::default();
+        let mut panes = HashSet::new();
+        for (path, holder) in &self.paths {
+            if !path.starts_with(&candidate) {
+                continue;
+            }
+            match holder {
+                Holder::Agent(handle) => {
+                    if !holders.agents.contains(handle) {
+                        holders.agents.push(handle.clone());
+                    }
+                }
+                Holder::Pane(pane) => {
+                    panes.insert(pane);
+                }
+            }
+        }
+        holders.panes = panes.len().try_into().unwrap_or(u32::MAX);
+        holders
+    }
+
     /// Fold already-probed pane and agent facts into one normalized set.
     fn from_facts(
         panes: &[PaneProtectionFact],
@@ -496,60 +605,57 @@ impl ProtectionSet {
         occupancy: Occupancy,
     ) -> Self {
         let mut protected = Self::default();
+        let agents = agents
+            .iter()
+            .filter(|agent| {
+                !(own_pane.is_some() && agent.pane_id.as_ref() == own_pane)
+                    && match agent.liveness {
+                        AgentLiveness::Dead => false,
+                        AgentLiveness::Unknown => occupancy == Occupancy::Unproven,
+                        AgentLiveness::Live { .. } => true,
+                    }
+            })
+            .collect::<Vec<_>>();
+        for agent in &agents {
+            protected.insert(
+                agent.stored_path.as_deref(),
+                Holder::Agent(agent.handle.clone()),
+            );
+            if matches!(agent.liveness, AgentLiveness::Live { .. }) {
+                protected.insert(
+                    agent.process_cwd.as_deref(),
+                    Holder::Agent(agent.handle.clone()),
+                );
+            }
+        }
         for pane in panes {
             if pane.sidebar || own_pane == Some(&pane.pane_id) {
                 continue;
             }
-            protected.insert(pane.cwd.as_deref());
-        }
-        for agent in agents {
-            if own_pane.is_some() && agent.pane_id.as_ref() == own_pane {
-                continue;
-            }
-            match agent.liveness {
-                AgentLiveness::Dead => {}
-                AgentLiveness::Unknown => {
-                    if occupancy == Occupancy::Unproven {
-                        protected.insert(agent.stored_path.as_deref());
-                    }
-                }
-                AgentLiveness::Live { .. } => {
-                    protected.insert(agent.stored_path.as_deref());
-                    protected.insert(agent.process_cwd.as_deref());
-                }
-            }
+            let holder = agents
+                .iter()
+                .find(|agent| agent.pane_id.as_ref() == Some(&pane.pane_id))
+                .map_or_else(
+                    || Holder::Pane(pane.pane_id.clone()),
+                    |agent| Holder::Agent(agent.handle.clone()),
+                );
+            protected.insert(pane.cwd.as_deref(), holder);
         }
         protected
     }
 
     /// Whether a candidate checkout contains any protected path.
     pub fn protects(&self, candidate: &Path) -> bool {
-        let candidate = normalize_path_lexical(candidate);
-        self.paths
-            .iter()
-            .any(|path| path == &candidate || path.starts_with(&candidate))
+        !self.holders(candidate).is_empty()
     }
 
-    /// Classify one checkout with in-use taking precedence over work state.
-    pub fn assess(&self, candidate: &Path, status: WorktreeStatus) -> RemovalAssessment {
-        if self.protects(candidate) {
-            RemovalAssessment::InUse
-        } else if status.dirty {
-            RemovalAssessment::Dirty
-        } else if status.landed != LandedVerdict::Landed {
-            RemovalAssessment::NotLanded
-        } else {
-            RemovalAssessment::Removable
-        }
-    }
-
-    fn insert(&mut self, path: Option<&Path>) {
+    fn insert(&mut self, path: Option<&Path>, holder: Holder) {
         let Some(path) = path else {
             return;
         };
-        let path = normalize_path_lexical(path);
-        if !self.paths.contains(&path) {
-            self.paths.push(path);
+        let entry = (normalize_path_lexical(path), holder);
+        if !self.paths.contains(&entry) {
+            self.paths.push(entry);
         }
     }
 }
@@ -562,6 +668,8 @@ pub struct RemovalOutcome {
     branch: String,
     removed_path: PathBuf,
     branch_deletion: BranchDeletion,
+    branch_tip: Option<String>,
+    target: Option<String>,
 }
 
 #[must_use = "both independent cleanup results must be handled"]
@@ -578,6 +686,14 @@ impl RemovalOutcome {
 
     pub const fn branch_deletion(&self) -> BranchDeletion {
         self.branch_deletion
+    }
+
+    pub fn branch_tip(&self) -> Option<&str> {
+        self.branch_tip.as_deref()
+    }
+
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
     }
 }
 
@@ -992,26 +1108,45 @@ pub fn remove(
     path: &Path,
     force: bool,
     protections: &ProtectionSet,
+    memo: &LandedMemo,
 ) -> Result<RemovalOutcome> {
     ensure_repo(repo_root)?;
     let marker = owned_marker(name, path)?;
-    let status = status(path, &marker)?;
+    let state = inspect(path, &marker, protections, memo)?;
     if !force {
-        match protections.assess(path, status) {
-            RemovalAssessment::Removable => {}
-            RemovalAssessment::InUse => {
+        match state.keep_reasons().first() {
+            None => {}
+            Some(KeepReason::InUse) => {
                 return Err(WorktreeErr::InUse {
                     name: name.to_owned(),
                 });
             }
-            RemovalAssessment::Dirty | RemovalAssessment::NotLanded => {
+            Some(KeepReason::Dirty) => {
                 return Err(WorktreeErr::Dirty {
+                    name: name.to_owned(),
+                    files: state.status.changed_files,
+                });
+            }
+            Some(KeepReason::Unlanded) => {
+                if let (Some(ahead), Some(target)) = (state.status.ahead, state.status.target) {
+                    return Err(WorktreeErr::Unlanded {
+                        name: name.to_owned(),
+                        ahead,
+                        target,
+                    });
+                }
+                return Err(WorktreeErr::Unproven {
+                    name: name.to_owned(),
+                });
+            }
+            Some(KeepReason::Unknown) => {
+                return Err(WorktreeErr::Unproven {
                     name: name.to_owned(),
                 });
             }
         }
     }
-    remove_marked_worktree(repo_root, path, &marker, force, &config.hooks)
+    remove_marked_worktree(repo_root, path, &marker, force, &config.hooks, memo)
 }
 
 /// Resolve one named RimZ-owned worktree without accepting an arbitrary Git
@@ -1138,20 +1273,15 @@ pub fn sweep_owned(
     hooks: &WorktreeHooks,
 ) -> Result<WorktreeSweep> {
     hooks.validate()?;
-    let entries = discover_owned(repo_root)?
-        .into_iter()
-        .map(|entry| {
-            let status =
-                status(&entry.path, &entry.marker).unwrap_or_else(|_| WorktreeStatus::unknown());
-            (entry, status)
-        })
-        .collect();
-    let (candidates, kept) = partition_sweep_candidates(entries, protections);
+    let memo = LandedMemo::load(repo_root);
+    let entries = inspect_owned_with_memo(repo_root, protections, &memo)?;
+    let (candidates, kept) = partition_sweep_candidates(entries);
     let mut sweep = WorktreeSweep {
         kept,
         ..WorktreeSweep::default()
     };
-    for (entry, _status) in candidates {
+    for inspected in candidates {
+        let entry = inspected.managed;
         let bytes = crate::disk::usage::dir_size(&entry.path);
         if dry_run {
             sweep.removed.push(SweptWorktree {
@@ -1164,7 +1294,7 @@ pub fn sweep_owned(
             });
             continue;
         }
-        match remove_marked_worktree(repo_root, &entry.path, &entry.marker, false, hooks) {
+        match remove_marked_worktree(repo_root, &entry.path, &entry.marker, false, hooks, &memo) {
             Ok(removed) => {
                 let retirement = retire_removal(
                     store,
@@ -1201,30 +1331,26 @@ pub fn sweep_owned(
     {
         tracing::debug!(error = %err, "could not prune worktree metadata after sweep");
     }
+    memo.save();
     Ok(sweep)
 }
 
 fn partition_sweep_candidates(
-    entries: Vec<(ManagedWorktree, WorktreeStatus)>,
-    protections: &ProtectionSet,
-) -> (Vec<(ManagedWorktree, WorktreeStatus)>, Vec<KeptWorktree>) {
+    entries: Vec<InspectedWorktree>,
+) -> (Vec<InspectedWorktree>, Vec<KeptWorktree>) {
     let mut candidates = Vec::new();
     let mut kept = Vec::new();
-    for (entry, status) in entries {
-        let reason = match protections.assess(&entry.path, status) {
-            RemovalAssessment::Removable => None,
-            RemovalAssessment::InUse => Some(KeptReason::InUse),
-            RemovalAssessment::Dirty => Some(KeptReason::Dirty),
-            RemovalAssessment::NotLanded => Some(KeptReason::NotMerged),
-        };
-        if let Some(reason) = reason {
+    for entry in entries {
+        let reasons = entry.state.keep_reasons();
+        if !reasons.is_empty() {
             kept.push(KeptWorktree {
-                name: entry.marker.name,
-                path: entry.path,
-                reason,
+                name: entry.managed.marker.name,
+                path: entry.managed.path,
+                reasons,
+                holders: entry.state.holders,
             });
         } else {
-            candidates.push((entry, status));
+            candidates.push(entry);
         }
     }
     (candidates, kept)
@@ -1236,9 +1362,20 @@ pub fn remove_marked_worktree(
     marker: &WorktreeMarker,
     force: bool,
     hooks: &WorktreeHooks,
+    memo: &LandedMemo,
 ) -> Result<RemovalOutcome> {
+    let target = comparison_ref(repo_root, marker, memo);
     remove_checkout(repo_root, path, marker, force, hooks)?;
-    let branch_deletion = delete_branch(repo_root, marker, force)?;
+    let branch_tip = git_stdout(
+        repo_root,
+        [
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{}", marker.branch),
+        ],
+    )
+    .ok();
+    let branch_deletion = delete_branch(repo_root, marker, force, memo)?;
     Ok(RemovalOutcome {
         repo_root: repo_root.to_path_buf(),
         from_pr: marker.from_pr,
@@ -1246,6 +1383,8 @@ pub fn remove_marked_worktree(
         branch: marker.branch.clone(),
         removed_path: path.to_owned(),
         branch_deletion,
+        branch_tip,
+        target,
     })
 }
 
@@ -1330,15 +1469,77 @@ pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     Ok(entries)
 }
 
-pub fn status(worktree: &Path, marker: &WorktreeMarker) -> Result<WorktreeStatus> {
+pub fn status(
+    worktree: &Path,
+    marker: &WorktreeMarker,
+    memo: &LandedMemo,
+) -> Result<WorktreeStatus> {
     let porcelain = git_stdout(worktree, ["status", "--porcelain"])?;
-    let landed = comparison_ref(worktree, marker)
-        .map(|comparison| content_landed(worktree, &comparison, "HEAD"))
-        .unwrap_or(LandedVerdict::Unknown);
+    let target = comparison_ref(worktree, marker, memo);
+    let (landed, ahead) = target
+        .as_deref()
+        .map(|comparison| memo.proof(worktree, comparison, "HEAD"))
+        .unwrap_or((LandedVerdict::Unknown, None));
     Ok(WorktreeStatus {
-        dirty: !porcelain.trim().is_empty(),
+        changed_files: porcelain.lines().count().try_into().unwrap_or(u32::MAX),
+        ahead,
         landed,
+        target,
     })
+}
+
+pub fn inspect(
+    path: &Path,
+    marker: &WorktreeMarker,
+    protections: &ProtectionSet,
+    memo: &LandedMemo,
+) -> Result<WorktreeState> {
+    Ok(WorktreeState {
+        status: status(path, marker, memo)?,
+        holders: protections.holders(path),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InspectedWorktree {
+    pub managed: ManagedWorktree,
+    pub state: WorktreeState,
+}
+
+pub fn inspect_owned(
+    repo_root: &Path,
+    protections: &ProtectionSet,
+) -> Result<Vec<InspectedWorktree>> {
+    let memo = LandedMemo::load(repo_root);
+    let inspected = inspect_owned_with_memo(repo_root, protections, &memo);
+    memo.save();
+    inspected
+}
+
+fn inspect_owned_with_memo(
+    repo_root: &Path,
+    protections: &ProtectionSet,
+    memo: &LandedMemo,
+) -> Result<Vec<InspectedWorktree>> {
+    let entries = discover_owned(repo_root)?;
+    Ok(crate::utils::parallel::bounded_map(
+        crate::lane::WorkLane::Other,
+        8,
+        &entries,
+        |managed| {
+            let state =
+                inspect(&managed.path, &managed.marker, protections, memo).unwrap_or_else(|_| {
+                    WorktreeState {
+                        status: WorktreeStatus::unknown(),
+                        holders: protections.holders(&managed.path),
+                    }
+                });
+            InspectedWorktree {
+                managed: managed.clone(),
+                state,
+            }
+        },
+    ))
 }
 
 fn leave_worktree_before_removal(repo_root: &Path, path: &Path) -> Result<()> {
@@ -1709,7 +1910,10 @@ fn finish_worktree(
         let removal = match checkout {
             Checkout::Existing => remove_checkout(repo_root, &path, &marker, true, hooks),
             Checkout::NewBranch(_) | Checkout::Tracking(_) => {
-                remove_marked_worktree(repo_root, &path, &marker, true, hooks).map(|_| ())
+                let memo = LandedMemo::load(repo_root);
+                let removed = remove_marked_worktree(repo_root, &path, &marker, true, hooks, &memo);
+                memo.save();
+                removed.map(|_| ())
             }
         };
         let rollback = match removal {
@@ -1809,11 +2013,11 @@ fn origin_head(repo_root: &Path) -> Option<String> {
     .ok()
 }
 
-fn comparison_ref(cwd: &Path, marker: &WorktreeMarker) -> Option<String> {
+fn comparison_ref(cwd: &Path, marker: &WorktreeMarker, memo: &LandedMemo) -> Option<String> {
     let trunk = trunk_ref(cwd);
     if let Some(base_branch) = marker.base_branch.as_deref()
         && ref_resolves(cwd, base_branch)
-        && !base_branch_superseded(cwd, base_branch, trunk.as_deref())
+        && !base_branch_superseded(cwd, base_branch, trunk.as_deref(), memo)
     {
         return Some(base_branch.to_owned());
     }
@@ -1837,13 +2041,18 @@ fn trunk_ref(cwd: &Path) -> Option<String> {
 /// trunk. Once a diverged base branch is itself content-landed there, the trunk
 /// is the authoritative comparison for work built on top of it. An ancestor base
 /// branch stays the comparison.
-fn base_branch_superseded(cwd: &Path, base_branch: &str, trunk: Option<&str>) -> bool {
+fn base_branch_superseded(
+    cwd: &Path,
+    base_branch: &str,
+    trunk: Option<&str>,
+    memo: &LandedMemo,
+) -> bool {
     let Some(trunk) = trunk else {
         return false;
     };
     base_branch != trunk
         && !is_ancestor(cwd, base_branch, trunk)
-        && content_landed(cwd, trunk, base_branch) == LandedVerdict::Landed
+        && memo.proof(cwd, trunk, base_branch).0 == LandedVerdict::Landed
 }
 
 fn is_ancestor(cwd: &Path, ancestor: &str, descendant: &str) -> bool {
@@ -1914,7 +2123,7 @@ pub(crate) fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -
         {
             LandedVerdict::Landed
         } else {
-            LandedVerdict::Pending
+            LandedVerdict::Unlanded
         };
     }
 
@@ -1956,7 +2165,7 @@ pub(crate) fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -
     if merge_trees.iter().all(|tree| base_trees.contains(tree)) {
         LandedVerdict::Landed
     } else {
-        LandedVerdict::Pending
+        LandedVerdict::Unlanded
     }
 }
 
@@ -2071,7 +2280,12 @@ fn ensure_repo(repo_root: &Path) -> Result<()> {
         })
 }
 
-fn delete_branch(repo_root: &Path, marker: &WorktreeMarker, force: bool) -> Result<BranchDeletion> {
+fn delete_branch(
+    repo_root: &Path,
+    marker: &WorktreeMarker,
+    force: bool,
+    memo: &LandedMemo,
+) -> Result<BranchDeletion> {
     let branch = marker.branch.as_str();
     let flag = if force { "-D" } else { "-d" };
     match git_run(repo_root, ["branch", flag, branch]) {
@@ -2081,7 +2295,7 @@ fn delete_branch(repo_root: &Path, marker: &WorktreeMarker, force: bool) -> Resu
         }
         Err(err) if force => Err(err),
         Err(WorktreeErr::Git { stderr, .. }) if branch_delete_failed_unmerged(&stderr) => {
-            if branch_landed(repo_root, marker) {
+            if branch_landed(repo_root, marker, memo) {
                 force_delete_branch(repo_root, branch)
             } else {
                 Ok(BranchDeletion::KeptUnmerged)
@@ -2099,11 +2313,11 @@ fn branch_already_gone(stderr: &str) -> bool {
     stderr.contains("not found") || stderr.contains("not a branch")
 }
 
-fn branch_landed(repo_root: &Path, marker: &WorktreeMarker) -> bool {
-    let Some(comparison) = comparison_ref(repo_root, marker) else {
+fn branch_landed(repo_root: &Path, marker: &WorktreeMarker, memo: &LandedMemo) -> bool {
+    let Some(comparison) = comparison_ref(repo_root, marker, memo) else {
         return false;
     };
-    content_landed(repo_root, &comparison, &marker.branch) == LandedVerdict::Landed
+    memo.proof(repo_root, &comparison, &marker.branch).0 == LandedVerdict::Landed
 }
 
 fn force_delete_branch(repo_root: &Path, branch: &str) -> Result<BranchDeletion> {

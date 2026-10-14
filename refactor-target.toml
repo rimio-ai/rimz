@@ -864,7 +864,8 @@ surface-budget = 18
 [[module]]
 path = "crates/rimz/src/utils.rs"
 # `tokens` and `env` join `path` and `time` as cross-domain helpers.
-surface-budget = 6
+# `parallel` shares the sidebar's bounded fan-out with worktree inspection (+1).
+surface-budget = 7
 
 [[module]]
 path = "crates/rimz/src/web"
@@ -891,7 +892,8 @@ path = "crates/rimz/src/worktree"
 # Stale-base observations let the CLI warn without domain output.
 # LinkedWorktree and linked_worktree carry creation records into launch reminders (+2).
 # LaunchBase and TrunkFetchFailure carry team checkout policy and fetch warnings (+2).
-surface-budget = 64
+# Typed state, holders, shared inspection and LandedMemo serve all CLI verbs.
+surface-budget = 76
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
@@ -2311,8 +2313,8 @@ reason = "Post-coordination reread and owned-write-before-emission remain PR pol
 
 [[verdict]]
 kind = "item"
-key = "sidebar::refresh::runner::bounded_map"
-reason = "Three lane callers need bounded parallel work with input-order results and explicit lane propagation (b68bcf82c); the module already hides the shared mechanics (pass 15b)."
+key = "utils::parallel::bounded_map"
+reason = "Sidebar refresh and worktree inspection share bounded parallel work with ordered results and explicit lane propagation."
 
 [[verdict]]
 kind = "item"
@@ -4348,6 +4350,36 @@ reason = "Error type of pub orphan_sweep::resolve (orphan_sweep.rs:85-97); atlas
 kind = "item"
 key = "worktree::StaleBase"
 reason = "Creation and launch results carry the stale-base observation for CLI warnings."
+
+[[verdict]]
+kind = "item"
+key = "lane::WorkLane"
+reason = "The public bounded_map signature carries lane attribution through utils::parallel."
+
+[[verdict]]
+kind = "item"
+key = "worktree::Holders"
+reason = "Shared inspection and sweep records carry live holder handles and bare-pane counts to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "worktree::KeepReason"
+reason = "All worktree consumers and JSON surfaces share the same ordered keep reason vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "worktree::WorktreeState"
+reason = "The separate CLI crate uses the common Git and occupancy classification for every state decision."
+
+[[verdict]]
+kind = "item"
+key = "worktree::InspectedWorktree"
+reason = "Listing and sweeping share the domain-owned identity and state projection."
+
+[[verdict]]
+kind = "item"
+key = "worktree::landed_memo::LandedMemo"
+reason = "CLI cleanup and cohort reconciliation share the same immutable oid-pair proof cache as domain inspection."
 
 [[verdict]]
 kind = "item"

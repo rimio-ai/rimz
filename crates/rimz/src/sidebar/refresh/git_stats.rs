@@ -500,7 +500,7 @@ fn refresh_entries(
     configured_trunk: Option<&str>,
     prior_memos: &HashMap<String, UntrackedLineMemo>,
 ) -> Vec<(String, DiffStatsCacheEntry, Option<UntrackedLineMemo>)> {
-    super::runner::bounded_map(
+    crate::utils::parallel::bounded_map(
         crate::lane::current(),
         MAX_PARALLEL_GIT,
         paths,
@@ -697,7 +697,7 @@ fn refresh_commit_facts(
         (Some(_), Some(true), Some(trunk)) => {
             match worktree::content_landed(worktree, trunk, "HEAD") {
                 LandedVerdict::Landed => Some(true),
-                LandedVerdict::Pending => Some(false),
+                LandedVerdict::Unlanded => Some(false),
                 LandedVerdict::Unknown => None,
             }
         }

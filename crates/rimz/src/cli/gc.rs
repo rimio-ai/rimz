@@ -18,7 +18,7 @@ use rimz::store::event_log::RepairOutcome;
 use rimz::store::gc;
 use rimz::utils::time::format_duration_compact;
 use rimz::workspace::WorkspaceResolver;
-use rimz::worktree::{FailedWorktree, KeptReason, KeptWorktree, SweptWorktree, WorktreeSweep};
+use rimz::worktree::{FailedWorktree, KeepReason, KeptWorktree, SweptWorktree, WorktreeSweep};
 
 #[derive(Debug, Args)]
 pub struct GcArgs {
@@ -651,11 +651,17 @@ fn render_worktrees(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             };
             render_row(w, verdict, "worktrees", &outcome)?;
             for kept in &sweep.kept {
-                render_subline(
-                    w,
-                    palette::muted(),
-                    &format!("kept: {} — {}", kept.name, kept.reason.text()),
-                )?;
+                let reasons = kept
+                    .reasons
+                    .iter()
+                    .map(|reason| reason.text())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut line = format!("kept: {} — {reasons}", kept.name);
+                if !kept.holders.is_empty() {
+                    line.push_str(&format!(" ({})", kept.holders));
+                }
+                render_subline(w, palette::muted(), &line)?;
             }
             let action = if out.dry_run {
                 "would remove"
@@ -964,41 +970,30 @@ fn skipped_area_count(out: &GcOutcome) -> usize {
 
 fn kept_summary(kept: &[KeptWorktree]) -> String {
     let mut parts = Vec::new();
-    let in_use = kept
-        .iter()
-        .filter(|worktree| worktree.reason == KeptReason::InUse)
-        .count();
-    if in_use > 0 {
-        parts.push(plural(in_use, "in use", "in use"));
-    }
-    let dirty = kept
-        .iter()
-        .filter(|worktree| worktree.reason == KeptReason::Dirty)
-        .count();
-    if dirty > 0 {
-        parts.push(plural(
-            dirty,
-            "with uncommitted changes",
-            "with uncommitted changes",
-        ));
-    }
-    let not_merged = kept
-        .iter()
-        .filter(|worktree| worktree.reason == KeptReason::NotMerged)
-        .count();
-    if not_merged > 0 {
-        parts.push(plural(not_merged, "not merged yet", "not merged yet"));
+    for (reason, label) in [
+        (KeepReason::InUse, "in use"),
+        (KeepReason::Dirty, "with uncommitted changes"),
+        (KeepReason::Unlanded, "with unlanded work"),
+        (KeepReason::Unknown, "unknown"),
+    ] {
+        let count = kept
+            .iter()
+            .filter(|tree| tree.reasons.first() == Some(&reason))
+            .count();
+        if count > 0 {
+            parts.push(format!("{count} {label}"));
+        }
     }
     parts.join(", ")
 }
 
 fn worktree_removal_detail(removed: &SweptWorktree) -> &'static str {
     match removed.branch_deletion {
-        Some(rimz::worktree::BranchDeletion::Deleted) => "merged, branch deleted",
+        Some(rimz::worktree::BranchDeletion::Deleted) => "landed, branch deleted",
         Some(rimz::worktree::BranchDeletion::KeptUnmerged) => {
-            "merged, branch kept (not proven merged)"
+            "landed, branch kept (not proven landed)"
         }
-        None => "merged",
+        None => "landed",
     }
 }
 
@@ -1086,9 +1081,9 @@ impl From<&GcOutcome> for JsonReport {
 
 #[derive(Serialize)]
 struct JsonWorktrees {
-    removed: Vec<JsonSweptWorktree>,
-    failed: Vec<JsonFailedWorktree>,
-    kept: Vec<JsonKeptWorktree>,
+    removed: Vec<SweptWorktree>,
+    failed: Vec<FailedWorktree>,
+    kept: Vec<KeptWorktree>,
     skipped: Option<&'static str>,
 }
 
@@ -1096,9 +1091,9 @@ impl From<&WorktreeSweepStatus> for JsonWorktrees {
     fn from(status: &WorktreeSweepStatus) -> Self {
         match status {
             WorktreeSweepStatus::Swept(sweep) => Self {
-                removed: sweep.removed.iter().map(JsonSweptWorktree::from).collect(),
-                failed: sweep.failed.iter().map(JsonFailedWorktree::from).collect(),
-                kept: sweep.kept.iter().map(JsonKeptWorktree::from).collect(),
+                removed: sweep.removed.clone(),
+                failed: sweep.failed.clone(),
+                kept: sweep.kept.clone(),
                 skipped: None,
             },
             WorktreeSweepStatus::Skipped(skip) => Self {
@@ -1107,63 +1102,6 @@ impl From<&WorktreeSweepStatus> for JsonWorktrees {
                 kept: Vec::new(),
                 skipped: Some(skip.json()),
             },
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct JsonSweptWorktree {
-    name: String,
-    branch: String,
-    path: String,
-    bytes: u64,
-    branch_deleted: Option<bool>,
-    archive_error: Option<String>,
-}
-
-impl From<&SweptWorktree> for JsonSweptWorktree {
-    fn from(worktree: &SweptWorktree) -> Self {
-        Self {
-            name: worktree.name.clone(),
-            branch: worktree.branch.clone(),
-            path: path_string(&worktree.path),
-            bytes: worktree.bytes,
-            branch_deleted: worktree
-                .branch_deletion
-                .map(|deletion| deletion == rimz::worktree::BranchDeletion::Deleted),
-            archive_error: worktree.archive_error.clone(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct JsonFailedWorktree {
-    path: String,
-    error: String,
-}
-
-impl From<&FailedWorktree> for JsonFailedWorktree {
-    fn from(failed: &FailedWorktree) -> Self {
-        Self {
-            path: path_string(&failed.path),
-            error: failed.error.clone(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct JsonKeptWorktree {
-    name: String,
-    path: String,
-    reason: &'static str,
-}
-
-impl From<&KeptWorktree> for JsonKeptWorktree {
-    fn from(worktree: &KeptWorktree) -> Self {
-        Self {
-            name: worktree.name.clone(),
-            path: path_string(&worktree.path),
-            reason: worktree.reason.json(),
         }
     }
 }
@@ -1434,7 +1372,7 @@ mod tests {
         assert!(out.contains("gc — all clean, nothing to reclaim"));
         assert!(out.contains("checked 8 areas · cutoff 1h · machine"));
         assert!(out.contains("✓ worktrees"));
-        assert!(out.contains("3 kept — 2 in use, 1 not merged yet"));
+        assert!(out.contains("3 kept — 2 in use, 1 with unlanded work"));
         assert!(out.contains("✓ workspaces"));
         assert!(out.contains("4 healthy"));
         assert!(out.contains("✓ runtime"));
@@ -1455,17 +1393,20 @@ mod tests {
                     KeptWorktree {
                         name: "active".to_owned(),
                         path: PathBuf::from("/repo-worktrees/active"),
-                        reason: KeptReason::InUse,
+                        reasons: vec![KeepReason::InUse, KeepReason::Dirty, KeepReason::Unlanded],
+                        holders: rimz::worktree::Holders::default(),
                     },
                     KeptWorktree {
                         name: "dirty".to_owned(),
                         path: PathBuf::from("/repo-worktrees/dirty"),
-                        reason: KeptReason::Dirty,
+                        reasons: vec![KeepReason::Dirty, KeepReason::Unlanded],
+                        holders: rimz::worktree::Holders::default(),
                     },
                     KeptWorktree {
-                        name: "pending".to_owned(),
-                        path: PathBuf::from("/repo-worktrees/pending"),
-                        reason: KeptReason::NotMerged,
+                        name: "unlanded".to_owned(),
+                        path: PathBuf::from("/repo-worktrees/unlanded"),
+                        reasons: vec![KeepReason::Unlanded],
+                        holders: rimz::worktree::Holders::default(),
                     },
                 ],
                 ..WorktreeSweep::default()
@@ -1473,10 +1414,12 @@ mod tests {
             ..GcOutcome::default()
         });
 
-        assert!(out.contains("3 kept — 1 in use, 1 with uncommitted changes, 1 not merged yet"));
-        assert!(out.contains("kept: active — in use"));
-        assert!(out.contains("kept: dirty — uncommitted changes"));
-        assert!(out.contains("kept: pending — not merged yet"));
+        assert!(
+            out.contains("3 kept — 1 in use, 1 with uncommitted changes, 1 with unlanded work")
+        );
+        assert!(out.contains("kept: active — in use, uncommitted changes, unlanded work"));
+        assert!(out.contains("kept: dirty — uncommitted changes, unlanded work"));
+        assert!(out.contains("kept: unlanded — unlanded work"));
     }
 
     #[test]
@@ -1489,11 +1432,11 @@ mod tests {
         assert!(out.contains("2 removed · 1.4 GB · 3 kept"));
         assert!(out.contains("kept: active — in use"));
         assert!(out.contains("kept: shell — in use"));
-        assert!(out.contains("kept: pending — not merged yet"));
+        assert!(out.contains("kept: unlanded — unlanded work"));
         assert!(out.contains("removed: demo"));
-        assert!(out.contains("merged, branch deleted"));
+        assert!(out.contains("landed, branch deleted"));
         assert!(out.contains("removed: gc-info"));
-        assert!(out.contains("merged, branch kept (not proven merged)"));
+        assert!(out.contains("landed, branch kept (not proven landed)"));
         assert!(out.contains(
             "removed: 1 heartbeat · 2 sidecars · 1 probe · 1 dir · 1 account budget ledger"
         ));
@@ -1516,7 +1459,7 @@ mod tests {
         assert!(out.contains("would remove 2 · 1.4 GB · 3 kept"));
         assert!(out.contains("kept: active — in use"));
         assert!(out.contains("kept: shell — in use"));
-        assert!(out.contains("kept: pending — not merged yet"));
+        assert!(out.contains("kept: unlanded — unlanded work"));
         assert!(out.contains("would prune 1 · 2 KB"));
         assert!(out.contains("would remove 6 stale files · 13 KB"));
         assert!(out.contains("probe · 1 dir · 1 account budget ledger"));
@@ -1527,7 +1470,7 @@ mod tests {
         assert!(out.contains("– event log       skipped (dry run)"));
         assert!(out.contains("– agent cache     skipped (dry run)"));
         assert!(out.contains("– loop schedules  skipped (dry run)"));
-        assert!(!out.contains("branch kept (not proven merged)"));
+        assert!(!out.contains("branch kept (not proven landed)"));
         assert!(!out.contains("message archive failed"));
     }
 
@@ -1578,8 +1521,14 @@ mod tests {
             "archive boom"
         );
         assert_eq!(value["worktrees"]["failed"][0]["error"], "remove boom");
-        assert_eq!(value["worktrees"]["kept"][0]["reason"], "in_use");
-        assert_eq!(value["worktrees"]["kept"][2]["reason"], "not_merged");
+        assert_eq!(
+            value["worktrees"]["kept"][0]["reasons"],
+            serde_json::json!(["in_use"])
+        );
+        assert_eq!(
+            value["worktrees"]["kept"][2]["reasons"],
+            serde_json::json!(["unlanded"])
+        );
         assert!(value["worktrees"]["skipped"].is_null());
         assert_eq!(
             value["workspaces"]["removed"][0]["reason"],
@@ -1742,17 +1691,20 @@ mod tests {
             KeptWorktree {
                 name: "active".to_owned(),
                 path: PathBuf::from("/repo-worktrees/active"),
-                reason: KeptReason::InUse,
+                reasons: vec![KeepReason::InUse],
+                holders: rimz::worktree::Holders::default(),
             },
             KeptWorktree {
                 name: "shell".to_owned(),
                 path: PathBuf::from("/repo-worktrees/shell"),
-                reason: KeptReason::InUse,
+                reasons: vec![KeepReason::InUse],
+                holders: rimz::worktree::Holders::default(),
             },
             KeptWorktree {
-                name: "pending".to_owned(),
-                path: PathBuf::from("/repo-worktrees/pending"),
-                reason: KeptReason::NotMerged,
+                name: "unlanded".to_owned(),
+                path: PathBuf::from("/repo-worktrees/unlanded"),
+                reasons: vec![KeepReason::Unlanded],
+                holders: rimz::worktree::Holders::default(),
             },
         ]
     }

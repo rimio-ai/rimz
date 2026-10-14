@@ -1,10 +1,12 @@
-//! Shared mechanics for independent refresh-lane work.
+//! Bounded, ordered fan-out for independent work, preserving lane attribution.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub(super) fn bounded_map<T: Sync, R: Send>(
-    work_lane: crate::lane::WorkLane,
+pub use crate::lane::WorkLane;
+
+pub fn bounded_map<T: Sync, R: Send>(
+    work_lane: WorkLane,
     max_workers: usize,
     items: &[T],
     map: impl Fn(&T) -> R + Sync,
