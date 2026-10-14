@@ -57,7 +57,7 @@ fn copilot_ask_refuses_nonmanual_defaults_without_gating_other_modes() {
 }
 
 #[test]
-fn copilot_disabled_hooks_refuse_even_a_modeless_launch() {
+fn copilot_disabled_hooks_refuse_a_modeless_launch_only_when_rimz_hooks_are_installed() {
     let root = tempfile::tempdir().unwrap();
     let settings = root.path().join("settings.json");
     std::fs::write(&settings, r#"{"disableAllHooks":true}"#).unwrap();
@@ -72,14 +72,23 @@ fn copilot_disabled_hooks_refuse_even_a_modeless_launch() {
         ),
     ]);
     let request = ExecRequest::bare_launch(AgentKind::new_unchecked("copilot"), Vec::new());
-    let result = compile_agent_process_with_extra_env(
-        None,
-        root.path(),
-        &request,
-        root.path(),
-        &login_env,
-        &LaunchReminders::default(),
-    );
+    let compile = || {
+        compile_agent_process_with_extra_env(
+            None,
+            root.path(),
+            &request,
+            root.path(),
+            &login_env,
+            &LaunchReminders::default(),
+        )
+    };
+    let result = compile();
+    assert!(result.is_ok(), "no RimZ hooks to silence: {result:?}");
+
+    let adapter = crate::agents::definition_by_kind("copilot").unwrap();
+    adapter.install_hooks(&login_env).unwrap();
+    assert!(adapter.hooks_installed(&login_env));
+    let result = compile();
     assert!(
         matches!(result, Err(AgentProcessCompileErr::SettingsConflict { ref conflict, .. }) if conflict.key == "disableAllHooks"),
         "{result:?}"

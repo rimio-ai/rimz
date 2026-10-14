@@ -871,7 +871,11 @@ fn compile_agent_process_with_extra_env(
         .spec()
         .launch
         .permission_args(crate::agents::PermissionMode::Ask);
-    let conflict = adapter.hooks_disabled(cwd, &login_env).or_else(|| {
+    let hooks_disabled = adapter
+        .hooks_installed(&login_env)
+        .then(|| adapter.hooks_disabled(cwd, &login_env))
+        .flatten();
+    let conflict = hooks_disabled.or_else(|| {
         if ask.is_empty()
             || !request
                 .action
