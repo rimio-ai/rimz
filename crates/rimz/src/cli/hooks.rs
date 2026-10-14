@@ -583,6 +583,9 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
     } else {
         serde_json::from_str(&buf).context("parsing hook payload")?
     };
+    if agent.is_foreign_hook_payload(&payload) {
+        return Ok(());
+    }
     let event_name = event
         .or_else(|| {
             payload

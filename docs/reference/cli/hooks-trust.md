@@ -70,7 +70,7 @@ Where the table says the statusline is wrapped, install puts RimZ's command in p
 
 ```console
 $ rimz hooks install --dry-run grok
-  grok  12 hooks → ~/.grok/hooks/rimz.json  updates existing config
+  grok  13 hooks → ~/.grok/hooks/rimz.json  updates existing config
     --- /home/me/.grok/hooks/rimz.json
     +++ /home/me/.grok/hooks/rimz.json
     @@ no changes @@

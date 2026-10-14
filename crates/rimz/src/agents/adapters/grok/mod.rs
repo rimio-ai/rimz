@@ -150,9 +150,8 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "background shells are not mapped",
     },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
-    idle_notification: ConcernCoverage::Partial {
-        via: "Notification",
-        gap: "only native asks and agent errors have stable discriminators",
+    idle_notification: ConcernCoverage::Wired {
+        via: "Notification:idle_prompt",
     },
     context_usage: ConcernCoverage::Wired {
         via: "updates.jsonl + signals.json",
@@ -365,6 +364,10 @@ impl crate::agents::capabilities::LaunchCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for GrokAdapter {
+    fn recognizes_hook_payload(&self, payload: &Value) -> bool {
+        payload.get("hookEventName").is_some() && payload.get("workspaceRoot").is_some()
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let canonical = canonical_event_name(event_name);
         let parsed = payloads::parse(payload);
@@ -397,6 +400,24 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
             }),
         );
         let root_id = parsed.session_id.as_deref().and_then(non_empty_trimmed);
+        if canonical == "Notification"
+            && parsed.notification_type.as_deref() == Some("idle_prompt")
+            && parsed.subagent_type.is_none()
+            && let Some(agent_id) = root_id.as_deref()
+            && let Some(at) = parsed.timestamp.as_deref().and_then(|raw| raw.parse().ok())
+        {
+            decoded.set_observed_context(super::ContextObservation::new(
+                agent_id,
+                super::AgentContext {
+                    source: self.spec().kind.to_owned(),
+                    settle: Some(super::TurnSettle {
+                        at,
+                        outcome: super::TurnSettleOutcome::Interrupted,
+                    }),
+                    ..Default::default()
+                },
+            ));
+        }
         let child_id = parsed.subagent_id.as_deref().and_then(non_empty_trimmed);
         let Some(signal) = lifecycle_signal(self.spec(), &canonical, &parsed) else {
             return Ok(decoded);
@@ -641,6 +662,7 @@ fn refresh_resolved_context(
                 .map_or(FieldPatch::Keep, FieldPatch::Set),
             tokens: LocalTokenPatch::PreserveEstablished(tokens),
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
+            settle: FieldPatch::Keep,
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),

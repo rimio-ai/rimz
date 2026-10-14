@@ -537,12 +537,12 @@ mod tests {
         );
 
         let grok = agent_cells(&matrix, "grok");
-        assert_eq!(count(&grok, MatrixCellState::Ok), 10);
-        assert_eq!(count(&grok, MatrixCellState::Partial), 4);
+        assert_eq!(count(&grok, MatrixCellState::Ok), 11);
+        assert_eq!(count(&grok, MatrixCellState::Partial), 3);
         assert_eq!(count(&grok, MatrixCellState::Absent), 5);
         assert_eq!(
             agent_labels(&matrix, "grok", MatrixCellState::Partial),
-            ["sub", "idle", "live$", "rich"]
+            ["sub", "live$", "rich"]
         );
         assert_eq!(
             agent_labels(&matrix, "grok", MatrixCellState::Absent),

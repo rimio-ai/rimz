@@ -2384,6 +2384,91 @@ fn grok_load_uses_the_sessions_fork_lineage() {
 }
 
 #[test]
+fn grok_idle_notification_cannot_settle_a_newer_prompt() {
+    use rimz::agents::AgentStatus;
+    let env = Env::new();
+    env.record(&env.project_root);
+    let send = |mut payload: Value| {
+        payload["sessionId"] = json!("idle-grok");
+        let output = env
+            .spawn_payload(env.hook_command("grok"), &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert_hook_succeeded_neutral("grok", output);
+        env.drain_hooks();
+    };
+    let check = |expected, open| {
+        let snapshot = env
+            .store()
+            .snapshot()
+            .unwrap()
+            .with_agent_context(env.agent_contexts());
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "idle-grok")
+            .unwrap();
+        assert_eq!(agent.effective_status(), expected);
+        assert_eq!(agent.holds_open_turn(), open);
+    };
+    send(json!({"hookEventName":"session_start", "source":"new"}));
+    let old = Timestamp::now();
+    send(json!({"hookEventName":"user_prompt_submit", "promptId":"p1", "prompt":"one"}));
+    send(
+        json!({"hookEventName":"notification", "notificationType":"idle_prompt", "timestamp":old.to_string()}),
+    );
+    check(AgentStatus::Running, true);
+    send(
+        json!({"hookEventName":"notification", "notificationType":"idle_prompt", "timestamp":Timestamp::now().to_string()}),
+    );
+    check(AgentStatus::Idle, false);
+    send(json!({"hookEventName":"user_prompt_submit", "promptId":"p2", "prompt":"two"}));
+    check(AgentStatus::Running, true);
+}
+
+#[test]
+fn cross_kind_grok_envelopes_are_dropped_before_recording_or_reply() {
+    for source in ["claude", "cursor"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let payload = json!({
+            "hook_event_name": "SessionStart", "hookEventName": "session_start",
+            "session_id": "grok-cross-kind", "sessionId": "grok-cross-kind",
+            "workspaceRoot": env.project_root, "cwd": env.project_root,
+            "source": "new"
+        });
+        let output = env
+            .spawn_payload(env.hook_command(source), &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "{source}: {:?}", output.stdout);
+        let store = env.store();
+        assert!(
+            std::fs::read(&store.paths().hook_ingress_log)
+                .unwrap_or_default()
+                .is_empty()
+        );
+        assert_eq!(lifecycle_event_count(&env), 0);
+        assert!(env.snapshot_json()["agents"].as_array().unwrap().is_empty());
+        if source == "claude" {
+            let payload = json!({"hook_event_name":"SessionStart", "session_id":"real-claude", "cwd":env.project_root, "source":"startup"});
+            let output = env
+                .spawn_payload(env.hook_command(source), &payload.to_string())
+                .wait_with_output()
+                .unwrap();
+            assert!(output.status.success());
+            env.drain_hooks();
+            assert_eq!(env.snapshot_json()["agents"].as_array().unwrap().len(), 1);
+        }
+    }
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that RimZ cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker

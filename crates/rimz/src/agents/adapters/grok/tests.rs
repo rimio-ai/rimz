@@ -6,6 +6,24 @@ use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook
 use crate::agents::{AgentHookClass, ClassificationSample, ClassifiedHook};
 
 #[test]
+fn native_hook_envelope_recognition_is_owned_by_grok() {
+    let envelope = json!({"hookEventName":"session_start", "workspaceRoot":"/project"});
+    for definition in crate::agents::registry::all_definitions() {
+        let is_grok = definition.spec().kind == "grok";
+        assert_eq!(definition.recognizes_hook_payload(&envelope), is_grok);
+        assert_eq!(definition.is_foreign_hook_payload(&envelope), !is_grok);
+        for payload in [
+            json!({"hookEventName":"session_start"}),
+            json!({"workspaceRoot":"/project"}),
+            json!({"hook_event_name":"SessionStart", "cwd":"/project"}),
+        ] {
+            assert!(!definition.recognizes_hook_payload(&payload));
+            assert!(!definition.is_foreign_hook_payload(&payload));
+        }
+    }
+}
+
+#[test]
 fn deadline_context_reply_matches_native_post_tool_contract() {
     let (post, other) = crate::agents::testkit::deadline_context_replies("grok", "PostToolUse");
     insta::assert_json_snapshot!(post, @r#"
@@ -21,6 +39,13 @@ fn deadline_context_reply_matches_native_post_tool_contract() {
 pub(super) fn classification_corpus() -> Vec<ClassificationSample> {
     let mut samples = crate::agents::hook_types::catalog_classification_corpus(GROK_HOOKS);
     samples.extend([
+        sample(
+            "Notification",
+            json!({"sessionId":"s1", "notificationType":"idle_prompt", "timestamp":"2026-01-01T00:00:00Z"}),
+            AgentHookClass::Lifecycle,
+            None,
+            "Notification",
+        ),
         sample(
             "notification",
             json!({"notificationType":"permission_prompt","message":"Plan approval requested"}),
@@ -537,6 +562,7 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     };
 
     let refresh = refresh_resolved_context(&updates, &ctx).unwrap();
+    assert_eq!(refresh.context.settle, FieldPatch::Keep);
     let tokens = refresh.context.tokens.clone().into_value().unwrap();
     assert_eq!(tokens.current_context_tokens, Some(4_000));
     assert_eq!(tokens.used_percentage, Some(40));
@@ -562,6 +588,44 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     let tokens = context.tokens.unwrap();
     assert_eq!(tokens.current_context_tokens, None);
     assert_eq!(tokens.used_percentage, None);
+}
+
+#[test]
+fn idle_notification_settles_only_activity_older_than_its_timestamp() {
+    use crate::agents::AgentStatus;
+    let activity = Timestamp::from_second(1_000).unwrap();
+    let mut state = crate::testkit::agent_state("grok", "s1", activity);
+    state.status = AgentStatus::Running;
+    for (at, status, open) in [
+        (990, AgentStatus::Running, true),
+        (1_010, AgentStatus::Idle, false),
+    ] {
+        let mut decoded = hook_output(
+            &GrokAdapter,
+            "Notification",
+            &json!({
+                "sessionId":"s1", "notificationType":"idle_prompt",
+                "timestamp": Timestamp::from_second(at).unwrap().to_string()
+            }),
+        );
+        assert!(decoded.lifecycle().is_none());
+        let context = decoded.take_observed_context().expect("idle marker");
+        assert_eq!(context.agent_id.as_str(), "s1");
+        state.context = Some(context.context);
+        assert_eq!(state.effective_status(), status);
+        assert_eq!(state.holds_open_turn(), open);
+    }
+    for payload in [
+        json!({"sessionId":"s1", "notificationType":"idle_prompt"}),
+        json!({"sessionId":"s1", "notificationType":"idle_prompt", "timestamp":"bad"}),
+        json!({"sessionId":"s1", "notificationType":"idle_prompt", "timestamp":"2026-01-01T00:00:00Z", "subagentType":"explore"}),
+    ] {
+        assert!(
+            hook_output(&GrokAdapter, "Notification", &payload)
+                .take_observed_context()
+                .is_none()
+        );
+    }
 }
 
 #[test]

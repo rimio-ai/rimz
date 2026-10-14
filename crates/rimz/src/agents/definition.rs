@@ -558,6 +558,13 @@ impl AgentDefinition {
         self.core.spec()
     }
 
+    pub fn is_foreign_hook_payload(&self, payload: &Value) -> bool {
+        super::registry::all_definitions().any(|definition| {
+            definition.spec().kind != self.spec().kind
+                && definition.recognizes_hook_payload(payload)
+        })
+    }
+
     pub fn validate(&self) -> Result<(), DefinitionValidationError> {
         let spec = self.spec();
         let invalid = |reason: String| DefinitionValidationError {
