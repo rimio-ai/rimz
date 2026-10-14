@@ -1217,6 +1217,13 @@ impl<'a> TaskFire<'a> {
                 ))));
             }
             if !polarity_fires(self.entry.on, &outcome) {
+                if self.entry.stay {
+                    super::launch_ledger_store::remove_checkout_decline(
+                        &StatePaths::for_project_root(&self.entry.resolved_root())?,
+                        &self.name,
+                        &self.launch_checkout(),
+                    )?;
+                }
                 return Ok(ControlFlow::Break(GuardStop::Declined));
             }
         }

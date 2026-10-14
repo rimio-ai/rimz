@@ -267,6 +267,58 @@ fn held_second_tier_replays_after_the_shell_without_new_spend_or_assist() {
 }
 
 #[test]
+fn shell_decline_clears_held_judge_before_the_next_fire() {
+    use super::super::super::launch_ledger::load_declines;
+    for mode in [LoopRunMode::Scheduled, LoopRunMode::Manual] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("positive"), "").unwrap();
+        let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+        let entry = chain_entry(root.path(), "test -e positive", CheckOn::Success);
+        let mut first = fire(entry.clone(), &catalog);
+        first.check_process = chain_judge;
+        assert!(
+            matches!(first.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::CheckSkipped)
+        );
+        drop(first);
+        let paths = StatePaths::for_project_root(root.path()).unwrap();
+        assert_eq!(
+            load_declines(&paths).unwrap()["headless-guard"][root.path()].tier,
+            1
+        );
+
+        std::fs::remove_file(root.path().join("positive")).unwrap();
+        // A second shell decline also succeeds when no hold remains.
+        for _ in 0..2 {
+            let mut next = fire(entry.clone(), &catalog);
+            next.mode = mode;
+            next.check_process = |_, _, _, _, _| panic!("shell decline must not ask judges");
+            assert!(
+                matches!(next.prepare(&mut |_| Ok(())).unwrap(), TaskFirePlan::Done(done) if done.record.result == LoopRunResult::CheckSkipped && done.record.judge.is_empty())
+            );
+            assert!(
+                !load_declines(&paths)
+                    .unwrap()
+                    .contains_key("headless-guard")
+            );
+        }
+
+        std::fs::write(root.path().join("positive"), "").unwrap();
+        let mut next = fire(entry, &catalog);
+        next.mode = LoopRunMode::Scheduled;
+        next.check_process = chain_judge;
+        let TaskFirePlan::Done(done) = next.prepare(&mut |_| Ok(())).unwrap() else {
+            panic!("fresh judge declines")
+        };
+        assert_eq!(done.record.judge.len(), 2);
+        assert!(done.record.judge.iter().all(|judge| !judge.reused));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("judge-count")).unwrap(),
+            "4"
+        );
+    }
+}
+
+#[test]
 fn judge_budget_refusal_keeps_the_preceding_shell_stage() {
     use crate::harness::budget::{BudgetParkStamp, DailyBudgetLedger, DailyBudgetScope};
     if with_action_hooks("judge_budget_refusal_keeps_the_preceding_shell_stage") {
