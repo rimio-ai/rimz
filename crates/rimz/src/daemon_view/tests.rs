@@ -28,7 +28,6 @@ fn recorded_surplus_pane_is_awake_when_close_runs() {
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 0,
         },

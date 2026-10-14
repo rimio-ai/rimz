@@ -14,7 +14,6 @@ fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 0,
         };
@@ -138,7 +137,6 @@ fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
                     frozen_at: agent.last_activity,
                     anon_at_freeze: 0,
                     step: 0,
-                    last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
                     wake_error: None,
                     reclaimed_bytes: 0,
                 },
@@ -518,7 +516,6 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
             frozen_at: snapshot.now,
             anon_at_freeze: 600,
             step: 0,
-            last_reclaimed_at: snapshot.now,
             wake_error: None,
             reclaimed_bytes: 300,
         },
@@ -557,7 +554,6 @@ fn decision_does_not_refreeze_a_recorded_session() {
             frozen_at: agent.last_activity,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 100,
         },
@@ -622,7 +618,6 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             frozen_at: snapshot.now,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 0,
         },
@@ -669,7 +664,6 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
             frozen_at: agent.last_activity,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 200,
         },
@@ -887,10 +881,7 @@ fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
     assert_eq!(Admission::read(runtime).reason, skipped.reason);
     config.enabled = Some(false);
     assert_eq!(
-        admit_with(&config, &host)
-            .unwrap()
-            .reason
-            .as_deref(),
+        admit_with(&config, &host).unwrap().reason.as_deref(),
         Some("disabled")
     );
     config.after = "bad".into();
