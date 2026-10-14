@@ -423,6 +423,7 @@ Evaluated and rejected, recorded so the next pass does not reopen them:
 4. **Keep single-flight.** A new fetch trigger goes through `FetchDispatcher` in [`app/fetch.rs`](../../crates/rimz/src/sidebar_pane/app/fetch.rs) (`request`, `request_or_defer`, `defer_until`), never a bare send or spawn, so it merges with the rest.
 5. **Measure the idle case.** A change that speeds the busy path by adding idle work is usually a net loss.
 6. **Prove it.** `cargo xtask ci` stays green, the tick budgets and the cost map move with the change, and `cargo xtask perf` refreshes the figures when the change touches a measured path.
+7. **Measure the file you fixed.** For an I/O fix, `strace -f -e trace=openat` filtered on the target path across several ticks shows whether that file is still re-read; `/proc/<pid>/io` `rchar` is the process total, mixing every other read, so report it beside the per-path count, never alone.
 
 ### Perceived response time
 
