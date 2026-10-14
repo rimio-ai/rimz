@@ -50,7 +50,7 @@ case "$os:$arch" in
     ;;
 esac
 mkdir -p "$HOME/.local/bin"
-dir="$(mktemp -d)"
+dir="$(mktemp -d "$HOME/.local/bin/.rimz-setup.XXXXXX")"
 trap 'rm -rf "$dir"' EXIT
 cd "$dir"
 base={base}
@@ -65,7 +65,8 @@ download "${{base}}${{asset}}"
 download "${{base}}SHA256SUMS"
 verify
 tar -xzf "$asset"
-install -m 0755 "${{asset%.tar.gz}}/rimz" "$HOME/.local/bin/rimz"
+chmod 0755 "${{asset%.tar.gz}}/rimz"
+mv -f "${{asset%.tar.gz}}/rimz" "$HOME/.local/bin/rimz"
 installed_version="$("$HOME/.local/bin/rimz" --version)"
 printf '%s %s\n' "$installed_version" {success}
 "#
@@ -93,13 +94,22 @@ mod tests {
             DARWIN_X86_64_ARCHIVE,
             "sha256sum -c --ignore-missing SHA256SUMS",
             "shasum -a 256 -c --ignore-missing SHA256SUMS",
-            "install -m 0755",
+            r#"dir="$(mktemp -d "$HOME/.local/bin/.rimz-setup.XXXXXX")""#,
+            r#"chmod 0755 "${asset%.tar.gz}/rimz""#,
+            r#"mv -f "${asset%.tar.gz}/rimz" "$HOME/.local/bin/rimz""#,
             "$HOME/.local/bin/rimz",
             "installed on dev-box at ~/.local/bin/rimz",
             "rimz: no release v0.4.3 on GitHub (your rimz is ahead of the latest release); rerun with --latest to install the newest release",
         ] {
             assert!(snippet.contains(needle), "missing {needle}: {snippet}");
         }
+        // A copy of a just-written file can wait on a filesystem block clone; the snippet renames.
+        assert!(
+            !snippet.lines().any(|line| ["install ", "cp ", "cat "]
+                .iter()
+                .any(|copy| line.trim_start().starts_with(copy))),
+            "{snippet}"
+        );
         let latest = setup_install_spec("alice@dev-box", "dev-box", None);
         assert!(latest.args.last().unwrap().contains(RELEASE_BASE));
         assert!(!latest.args.last().unwrap().contains("no release v"));
