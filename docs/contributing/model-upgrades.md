@@ -29,6 +29,8 @@ For definitions naming `tier:` or a model listed in a tier, edit the ordered mod
 
 Usually nothing. An unpriced model resolves to no price, never to its predecessor's: `PriceBook::price` rejects a purely numeric version bump ([Resolving a model](../internals/agents/spending.md#resolving-a-model)). Once the spend walk records the model, the unknown-model chase refetches LiteLLM and models.dev on a 30-minute gate, and `cargo xtask dist` refreshes the embedded snapshot before every release build ([The refresh](../internals/agents/spending.md#the-refresh)). Run `cargo xtask pricing-refresh` by hand only to ship a price before the next release.
 
+The snapshot, `crates/rimz/pricing/litellm-pricing.json`, is generated and gitignored, so a fresh worktree has none and its builds embed an empty price book: check a key against the primary checkout's copy, or run `cargo xtask pricing-refresh` first.
+
 Two cases need an edit, both in `crates/rimz/src/agents/pricing/`:
 
 - **Fast mode.** When the model has a fast or priority tier and neither source publishes its multiplier, add the ratio to `fast-multiplier-overrides.json`: `exact` for one id, `normalized_prefix` for a family with dated or namespaced variants. An entry stops applying once upstream publishes the value ([Rates the sources leave unpublished](../internals/agents/spending.md#rates-the-sources-leave-unpublished)).
