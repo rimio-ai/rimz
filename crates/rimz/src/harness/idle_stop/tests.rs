@@ -55,6 +55,7 @@ fn hibernating_agent_is_due_for_idle_stop() {
     let (mut agent, stop) = rested();
     agent.hibernation = Some(crate::agents::state::Hibernation {
         frozen_at: ts(1_100),
+        step: 0,
         reclaimed_bytes: 100,
     });
     assert_eq!(

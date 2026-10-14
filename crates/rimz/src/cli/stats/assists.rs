@@ -316,8 +316,8 @@ impl AssistStats {
                 } => {
                     if *frozen {
                         rollup.hibernations += 1;
-                        rollup.hibernate_reclaimed_bytes += reclaimed_bytes.unwrap_or(0);
                     }
+                    rollup.hibernate_reclaimed_bytes += reclaimed_bytes.unwrap_or(0);
                     if let Some(hold) = hold {
                         rollup
                             .hibernate_holds
@@ -1026,6 +1026,11 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                     "{time} {label} hibernated, {} reclaimed",
                     render::fmt_bytes(reclaimed_bytes.unwrap_or(0))
                 )
+            } else if let Some(bytes) = reclaimed_bytes {
+                format!(
+                    "{time} {label} hibernation deepened, {} reclaimed",
+                    render::fmt_bytes(*bytes)
+                )
             } else {
                 format!(
                     "{time} {label} hibernation held: {}",
@@ -1638,6 +1643,7 @@ mod tests {
     fn hibernation_stats_sum_reclaim_and_keep_the_last_hold_per_agent() {
         let records = [
             (true, None),
+            (false, None),
             (false, Some("NoScope")),
             (false, Some("ForeignProcess")),
         ]
@@ -1651,7 +1657,7 @@ mod tests {
                 label: "@coder".into(),
                 idle_secs: 600,
                 frozen,
-                reclaimed_bytes: frozen.then_some(2048),
+                reclaimed_bytes: hold.is_none().then_some(2048),
                 hold: hold.map(str::to_owned),
                 error: None,
             },
@@ -1660,7 +1666,7 @@ mod tests {
         let stats = AssistStats::from_records("all", records);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["hibernations"], 1);
-        assert_eq!(json["rollup"]["hibernate_reclaimed_bytes"], 2048);
+        assert_eq!(json["rollup"]["hibernate_reclaimed_bytes"], 4096);
         assert_eq!(json["rollup"]["reclaimed_bytes"], 0);
         assert_eq!(
             json["rollup"]["hibernate_holds"]["claude/session"],
@@ -1677,6 +1683,10 @@ mod tests {
             "{lines}"
         );
         assert!(lines.contains("ForeignProcess"), "{lines}");
+        assert!(
+            lines.contains("@coder hibernation deepened, 2 KB reclaimed"),
+            "{lines}"
+        );
         assert!(
             category_rows(&stats.rollup)
                 .iter()

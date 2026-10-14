@@ -12,6 +12,9 @@ fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
             scope: PathBuf::new(),
             provider_pid: 10,
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 0,
         };
         let event = SidebarEvent::FocusChanged {
@@ -132,6 +135,9 @@ fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
                     scope: path.into(),
                     provider_pid: 10,
                     frozen_at: agent.last_activity,
+                    anon_at_freeze: 0,
+                    step: 0,
+                    last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
                     reclaimed_bytes: 0,
                 },
             )
@@ -499,6 +505,35 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     snapshot.now = jiff::Timestamp::from_second(1_240).unwrap();
     assert_eq!(spawned(&snapshot).len(), 1);
     assert!(crate::store::hibernate::read(paths).is_empty());
+    crate::store::hibernate::record(
+        paths,
+        crate::store::hibernate::Entry {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            pane_id: pane,
+            scope: PathBuf::new(),
+            provider_pid: 42,
+            frozen_at: snapshot.now,
+            anon_at_freeze: 600,
+            step: 0,
+            last_reclaimed_at: snapshot.now,
+            reclaimed_bytes: 300,
+        },
+    )
+    .unwrap();
+    std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = crate::agents::AgentStatus::Sleeping;
+    snapshot.now = jiff::Timestamp::from_second(3039).unwrap();
+    assert!(spawned(&snapshot).is_empty());
+    snapshot.now = jiff::Timestamp::from_second(3040).unwrap();
+    assert_eq!(
+        spawned(&snapshot).len(),
+        1,
+        "recorded agents deepen even with a sleeping status"
+    );
+    assert!(
+        spawned(&snapshot).is_empty(),
+        "deepening shares spawn pacing"
+    );
 }
 
 #[test]
@@ -517,6 +552,9 @@ fn decision_does_not_refreeze_a_recorded_session() {
             scope: scope.scope.as_ref().unwrap().as_path().into(),
             provider_pid: 10,
             frozen_at: agent.last_activity,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 100,
         },
     )
@@ -524,6 +562,17 @@ fn decision_does_not_refreeze_a_recorded_session() {
     assert_eq!(
         decision(&store, &agent, &config, &scope, 1_180),
         Verdict::Hold(Hold::AlreadyHibernating)
+    );
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 2_799),
+        Verdict::Hold(Hold::AlreadyHibernating)
+    );
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 2_800),
+        Verdict::Deepen {
+            step: 1,
+            idle_secs: 1800
+        }
     );
     crate::store::hibernate::withdraw(store.paths(), &agent.kind, &agent.agent_id).unwrap();
     assert_eq!(
@@ -567,6 +616,9 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             scope: scope.scope.unwrap().as_path().into(),
             provider_pid: 10,
             frozen_at: snapshot.now,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 0,
         },
     )
@@ -610,6 +662,9 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
             scope: scope.scope.unwrap().as_path().into(),
             provider_pid: 10,
             frozen_at: agent.last_activity,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 200,
         },
     )

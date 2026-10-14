@@ -206,7 +206,7 @@ Assists come from the account-global assist log, which [loops.md](./harness/loop
 | `Auto-resume:` | rebirth restores, with the agents they brought back |
 | `Auto-gc:` | completed automatic gc sweeps, with the bytes they reclaimed |
 
-Hibernation JSON rollups expose `hibernations`, `hibernate_reclaimed_bytes`, and `hibernate_holds` (latest recorded hold reason keyed by `kind/agent_id`). The existing `reclaimed_bytes` remains GC disk recovery, never memory recovery. The assist timeline retains both successful hibernations and held attempts.
+Hibernation JSON rollups expose `hibernations`, `hibernate_reclaimed_bytes`, and `hibernate_holds` (latest recorded hold reason keyed by `kind/agent_id`). Only freeze records count as hibernations; memory bytes sum the per-step deltas from both freezes and deepening. The existing `reclaimed_bytes` remains GC disk recovery, never memory recovery. The assist timeline distinguishes freezes, deepening steps, and held attempts.
 
 ## Where the code lives
 

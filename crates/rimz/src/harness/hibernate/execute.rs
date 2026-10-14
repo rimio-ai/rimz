@@ -39,55 +39,80 @@ pub fn run_request(
         pane_focused(store.runtime_paths(), snapshot, &request.pane_id),
     );
     let verdict = decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?;
+    let frozen = matches!(verdict, Verdict::Hibernate { .. });
     let idle_secs = match verdict {
-        Verdict::Hibernate { idle_secs } => idle_secs,
+        Verdict::Deepen { idle_secs, .. } | Verdict::Hibernate { idle_secs } => idle_secs,
         Verdict::Hold(hold @ (Hold::NoScope | Hold::ForeignProcess { .. })) => {
             report_hold(store.runtime_paths(), request, &format!("{hold:?}"), None);
             return Ok(());
         }
         Verdict::Hold(_) => return Ok(()),
     };
-    // The Hibernate verdict proves that scope resolution and membership succeeded.
-    let path = scope
-        .scope
-        .as_ref()
-        .expect("Hibernate verdict requires a scope");
-    let provider_pid = scope.provider_pid;
-    let entry = Entry {
-        kind: request.kind.clone(),
-        agent_id: request.agent_id.clone(),
-        pane_id: request.pane_id.clone(),
-        scope: path.as_path().to_owned(),
-        provider_pid: scope.provider_pid,
-        frozen_at: jiff::Timestamp::now(),
-        reclaimed_bytes: 0,
+    let result = if frozen {
+        // The Hibernate verdict proves that scope resolution and membership succeeded.
+        let path = scope
+            .scope
+            .as_ref()
+            .expect("Hibernate verdict requires a scope");
+        let provider_pid = scope.provider_pid;
+        let entry = Entry {
+            kind: request.kind.clone(),
+            agent_id: request.agent_id.clone(),
+            pane_id: request.pane_id.clone(),
+            scope: path.as_path().to_owned(),
+            provider_pid: scope.provider_pid,
+            frozen_at: jiff::Timestamp::now(),
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            reclaimed_bytes: 0,
+        };
+        freeze_and_record_with(
+            store.paths(),
+            entry,
+            path,
+            policy.schedule,
+            || {
+                let fresh = refresh().map_err(StoreErr::from)?;
+                let Some(agent) = crate::store::snapshot::find_agent(
+                    &fresh.agents,
+                    &request.kind,
+                    &request.agent_id,
+                ) else {
+                    return Ok(false);
+                };
+                let scope = ScopeView::probe(
+                    &agent.kind,
+                    request.root_pid,
+                    pane_focused(store.runtime_paths(), &fresh, &request.pane_id),
+                );
+                if scope.scope.as_ref() != Some(path) || scope.provider_pid != provider_pid {
+                    return Ok(false);
+                }
+                Ok(matches!(
+                    decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?,
+                    Verdict::Hibernate { .. }
+                ))
+            },
+            |bytes| cgroup::reclaim(path, bytes),
+        )
+    } else {
+        let Some(entry) = crate::store::hibernate::read(store.paths())
+            .into_iter()
+            .find(|entry| entry.kind == request.kind && entry.agent_id == request.agent_id)
+        else {
+            return Ok(());
+        };
+        let path = super::wake::recorded_scope(Path::new("/sys/fs/cgroup"), &entry.scope)?;
+        deepen_and_record_with(
+            store.paths(),
+            &entry,
+            &path,
+            policy.schedule,
+            jiff::Timestamp::now(),
+            |bytes| cgroup::reclaim(&path, bytes),
+        )
     };
-    let result = freeze_and_record_with(
-        store.paths(),
-        entry,
-        path,
-        || {
-            let fresh = refresh().map_err(StoreErr::from)?;
-            let Some(agent) =
-                crate::store::snapshot::find_agent(&fresh.agents, &request.kind, &request.agent_id)
-            else {
-                return Ok(false);
-            };
-            let scope = ScopeView::probe(
-                &agent.kind,
-                request.root_pid,
-                pane_focused(store.runtime_paths(), &fresh, &request.pane_id),
-            );
-            if scope.scope.as_ref() != Some(path) || scope.provider_pid != provider_pid {
-                return Ok(false);
-            }
-            Ok(matches!(
-                decide(store, agent, &policy, jiff::Timestamp::now(), &scope)?,
-                Verdict::Hibernate { .. }
-            ))
-        },
-        || cgroup::reclaim(path),
-    );
     match result {
         Ok(None) => Ok(()),
         Ok(Some(report)) => {
@@ -107,7 +132,7 @@ pub fn run_request(
                     agent_id: request.agent_id.clone(),
                     label: request.label.clone(),
                     idle_secs,
-                    frozen: true,
+                    frozen,
                     reclaimed_bytes: Some(report.before.saturating_sub(report.after)),
                     hold: None,
                     error: None,
@@ -175,8 +200,9 @@ fn freeze_and_record_with(
     paths: &crate::StatePaths,
     mut entry: Entry,
     scope: &ScopePath,
+    schedule: crate::config::Schedule,
     recheck: impl FnOnce() -> Result<bool, HibernateErr>,
-    reclaim: impl FnOnce() -> Result<ReclaimReport, CgroupErr>,
+    reclaim: impl FnOnce(u64) -> Result<ReclaimReport, CgroupErr>,
 ) -> Result<Option<ReclaimReport>, HibernateErr> {
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path("hibernate.lock"))
         .map_err(StoreErr::from)?;
@@ -185,9 +211,15 @@ fn freeze_and_record_with(
     }
     cgroup::freeze(scope)?;
     let result = (|| {
-        let report = reclaim()?;
+        entry.anon_at_freeze = cgroup::memory_stat(scope)?.anon;
+        let report = reclaim(
+            entry
+                .anon_at_freeze
+                .saturating_sub(schedule.target(entry.anon_at_freeze, 0)),
+        )?;
         entry.reclaimed_bytes = report.before.saturating_sub(report.after);
         entry.frozen_at = jiff::Timestamp::now();
+        entry.last_reclaimed_at = entry.frozen_at;
         crate::store::hibernate::record(paths, entry)?;
         Ok(Some(report))
     })();
@@ -197,6 +229,47 @@ fn freeze_and_record_with(
         tracing::warn!(%error, "failed to thaw after unsuccessful hibernation");
     }
     result
+}
+
+fn deepen_and_record_with(
+    paths: &crate::StatePaths,
+    expected: &Entry,
+    scope: &ScopePath,
+    schedule: crate::config::Schedule,
+    now: jiff::Timestamp,
+    reclaim: impl FnOnce(u64) -> Result<ReclaimReport, CgroupErr>,
+) -> Result<Option<ReclaimReport>, HibernateErr> {
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.lock_path("hibernate.lock"))
+        .map_err(StoreErr::from)?;
+    let Some(mut entry) = crate::store::hibernate::read(paths)
+        .into_iter()
+        .find(|entry| entry.kind == expected.kind && entry.agent_id == expected.agent_id)
+    else {
+        return Ok(None);
+    };
+    if entry.scope != expected.scope || entry.frozen_at != expected.frozen_at {
+        return Ok(None);
+    }
+    if !super::wake::is_frozen(scope)? {
+        crate::store::hibernate::withdraw(paths, &entry.kind, &entry.agent_id)?;
+        return Ok(None);
+    }
+    let Some(step) = next_step(&entry, schedule, now) else {
+        return Ok(None);
+    };
+    let anon = cgroup::memory_stat(scope)?.anon;
+    let report = reclaim(anon.saturating_sub(schedule.target(entry.anon_at_freeze, step)))?;
+    if !super::wake::is_frozen(scope)? {
+        crate::store::hibernate::withdraw(paths, &entry.kind, &entry.agent_id)?;
+        return Ok(None);
+    }
+    entry.step = step;
+    entry.last_reclaimed_at = now;
+    entry.reclaimed_bytes = entry
+        .reclaimed_bytes
+        .saturating_add(report.before.saturating_sub(report.after));
+    crate::store::hibernate::record(paths, entry)?;
+    Ok(Some(report))
 }
 
 fn hold_changed(
@@ -277,6 +350,11 @@ mod tests {
         std::fs::create_dir_all(scope.as_path()).unwrap();
         std::fs::write(scope.as_path().join("cgroup.freeze"), "0").unwrap();
         std::fs::write(scope.as_path().join("cgroup.events"), "frozen 1\n").unwrap();
+        std::fs::write(
+            scope.as_path().join("memory.stat"),
+            "anon 600\nfile 20\nworkingset_refault_anon 0\nworkingset_refault_file 0\n",
+        )
+        .unwrap();
         let request = HibernateHelperRequest {
             workspace_id: id,
             kind: AgentKind::new_unchecked("claude"),
@@ -293,6 +371,9 @@ mod tests {
             scope: scope.as_path().into(),
             provider_pid: 10,
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 0,
         };
         (dir, paths, runtime, scope, entry, request)
@@ -309,8 +390,9 @@ mod tests {
                 &paths,
                 entry,
                 &scope,
+                HibernateConfig::default().schedule().unwrap(),
                 || Ok(true),
-                || {
+                |_| {
                     let paths = &paths;
                     let root = dir.path();
                     threads.spawn(move || {
@@ -351,8 +433,10 @@ mod tests {
             &paths,
             entry,
             &scope,
+            HibernateConfig::default().schedule().unwrap(),
             || Ok(true),
-            || {
+            |bytes| {
+                assert_eq!(bytes, 300);
                 assert_eq!(
                     std::fs::read_to_string(scope.as_path().join("cgroup.freeze")).unwrap(),
                     "1"
@@ -369,6 +453,9 @@ mod tests {
         let records = crate::store::hibernate::read(&paths);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].reclaimed_bytes, 300);
+        assert_eq!(records[0].anon_at_freeze, 600);
+        assert_eq!(records[0].step, 0);
+        assert_eq!(records[0].last_reclaimed_at, records[0].frozen_at);
         assert!(records[0].frozen_at > jiff::Timestamp::UNIX_EPOCH);
         assert_eq!(
             report,
@@ -390,8 +477,9 @@ mod tests {
                 &paths,
                 entry,
                 &scope,
+                HibernateConfig::default().schedule().unwrap(),
                 || Ok(true),
-                || {
+                |_| {
                     if publication {
                         Ok(ReclaimReport {
                             before: 400,
@@ -419,5 +507,152 @@ mod tests {
         assert!(hold_changed(&runtime, &request, "ForeignProcess"));
         assert!(!hold_changed(&runtime, &request, "ForeignProcess"));
         assert!(hold_changed(&runtime, &request, "NoScope"));
+    }
+
+    #[test]
+    fn deepen_advances_once_per_due_step_and_preserves_the_stretch() {
+        let (_dir, paths, _runtime, scope, mut entry, _request) = fixture();
+        entry.anon_at_freeze = 600;
+        entry.reclaimed_bytes = 300;
+        crate::store::hibernate::record(&paths, entry.clone()).unwrap();
+        let schedule = HibernateConfig::default().schedule().unwrap();
+        for (step, seconds, bytes) in [(1, 1800, 400), (2, 3600, 500), (3, 5400, 600)] {
+            let now = jiff::Timestamp::from_second(seconds).unwrap();
+            assert!(
+                deepen_and_record_with(&paths, &entry, &scope, schedule, now, |requested| {
+                    assert_eq!(requested, bytes);
+                    Ok(ReclaimReport {
+                        before: 100,
+                        after: 50,
+                    })
+                })
+                .unwrap()
+                .is_some()
+            );
+            let recorded = crate::store::hibernate::read(&paths).remove(0);
+            assert_eq!(recorded.step, step);
+            assert_eq!(recorded.reclaimed_bytes, 300 + 50 * u64::from(step));
+            assert_eq!(recorded.frozen_at, entry.frozen_at);
+            assert_eq!(recorded.last_reclaimed_at, now);
+            assert!(
+                deepen_and_record_with(&paths, &entry, &scope, schedule, now, |_| panic!(
+                    "duplicate step"
+                ))
+                .unwrap()
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn equal_schedule_reclaims_all_at_freeze_and_zero_requests_advance() {
+        let (_dir, paths, _runtime, scope, entry, _request) = fixture();
+        let immediate = HibernateConfig {
+            after: "30m".into(),
+            deep_after: "30m".into(),
+            ..Default::default()
+        }
+        .schedule()
+        .unwrap();
+        freeze_and_record_with(
+            &paths,
+            entry,
+            &scope,
+            immediate,
+            || Ok(true),
+            |bytes| {
+                assert_eq!(bytes, 600);
+                Ok(ReclaimReport {
+                    before: 600,
+                    after: 0,
+                })
+            },
+        )
+        .unwrap();
+        let mut entry = crate::store::hibernate::read(&paths).remove(0);
+        entry.frozen_at = jiff::Timestamp::UNIX_EPOCH;
+        crate::store::hibernate::record(&paths, entry.clone()).unwrap();
+        std::fs::write(
+            scope.as_path().join("memory.stat"),
+            "anon 0\nfile 20\nworkingset_refault_anon 0\nworkingset_refault_file 0\n",
+        )
+        .unwrap();
+        assert!(
+            deepen_and_record_with(
+                &paths,
+                &entry,
+                &scope,
+                HibernateConfig::default().schedule().unwrap(),
+                jiff::Timestamp::from_second(1800).unwrap(),
+                |bytes| {
+                    assert_eq!(bytes, 0);
+                    Ok(ReclaimReport {
+                        before: 20,
+                        after: 20,
+                    })
+                }
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert_eq!(crate::store::hibernate::read(&paths)[0].step, 1);
+    }
+
+    #[test]
+    fn deepen_does_not_republish_after_a_wake_during_reclaim() {
+        let (_dir, paths, _runtime, scope, entry, _request) = fixture();
+        crate::store::hibernate::record(&paths, entry.clone()).unwrap();
+        let result = deepen_and_record_with(
+            &paths,
+            &entry,
+            &scope,
+            HibernateConfig::default().schedule().unwrap(),
+            jiff::Timestamp::from_second(5400).unwrap(),
+            |_| {
+                std::fs::write(scope.as_path().join("cgroup.events"), "frozen 0\n").unwrap();
+                crate::store::hibernate::withdraw(&paths, &entry.kind, &entry.agent_id).unwrap();
+                Ok(ReclaimReport {
+                    before: 600,
+                    after: 0,
+                })
+            },
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "a thawed scope must not complete a deepen"
+        );
+        assert!(crate::store::hibernate::read(&paths).is_empty());
+    }
+
+    #[test]
+    fn deepen_withdraws_stale_entries_and_never_recreates_a_woken_entry() {
+        for state in ["thawed", "missing", "withdrawn"] {
+            let (_dir, paths, _runtime, scope, entry, _request) = fixture();
+            crate::store::hibernate::record(&paths, entry.clone()).unwrap();
+            match state {
+                "thawed" => {
+                    std::fs::write(scope.as_path().join("cgroup.events"), "frozen 0\n").unwrap()
+                }
+                "missing" => std::fs::remove_dir_all(scope.as_path()).unwrap(),
+                _ => {
+                    crate::store::hibernate::withdraw(&paths, &entry.kind, &entry.agent_id)
+                        .unwrap();
+                }
+            }
+            assert!(
+                deepen_and_record_with(
+                    &paths,
+                    &entry,
+                    &scope,
+                    HibernateConfig::default().schedule().unwrap(),
+                    jiff::Timestamp::from_second(1800).unwrap(),
+                    |_| panic!("stale entry reclaimed")
+                )
+                .unwrap()
+                .is_none()
+            );
+            assert!(crate::store::hibernate::read(&paths).is_empty(), "{state}");
+        }
     }
 }

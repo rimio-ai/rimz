@@ -192,7 +192,7 @@ pub fn thaw(scope: &ScopePath) -> Result<()> {
     Ok(std::fs::write(scope.0.join("cgroup.freeze"), "0")?)
 }
 
-pub fn reclaim(scope: &ScopePath) -> Result<ReclaimReport> {
+pub fn reclaim(scope: &ScopePath, bytes: u64) -> Result<ReclaimReport> {
     supported()?;
     let current = || -> io::Result<u64> {
         std::fs::read_to_string(scope.0.join("memory.current"))?
@@ -201,12 +201,48 @@ pub fn reclaim(scope: &ScopePath) -> Result<ReclaimReport> {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     };
     let before = current()?;
-    reclaim_with(before, |value| {
-        std::fs::write(scope.0.join("memory.reclaim"), value)
-    })?;
+    if bytes > 0 {
+        reclaim_with(bytes, |value| {
+            std::fs::write(scope.0.join("memory.reclaim"), value)
+        })?;
+    }
     Ok(ReclaimReport {
         before,
         after: current()?,
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MemoryStat {
+    pub anon: u64,
+    pub file: u64,
+    pub workingset_refault_anon: u64,
+    pub workingset_refault_file: u64,
+}
+
+pub fn memory_stat(scope: &ScopePath) -> Result<MemoryStat> {
+    supported()?;
+    let text = std::fs::read_to_string(scope.0.join("memory.stat"))?;
+    let read = |key: &str| -> Result<u64> {
+        text.lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(' ')?;
+                (name == key).then_some(value)
+            })
+            .and_then(|value| value.trim().parse().ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("missing or invalid {key} in memory.stat"),
+                )
+                .into()
+            })
+    };
+    Ok(MemoryStat {
+        anon: read("anon")?,
+        file: read("file")?,
+        workingset_refault_anon: read("workingset_refault_anon")?,
+        workingset_refault_file: read("workingset_refault_file")?,
     })
 }
 

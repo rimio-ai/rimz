@@ -20,7 +20,7 @@ pub(crate) use wake::wake_pane_in;
 pub use wake::{ReconcileReport, Woken, reconcile, reconcile_at, wake_pane, wake_pane_at};
 
 pub struct Policy {
-    after: std::time::Duration,
+    schedule: crate::config::Schedule,
     remote_control: RemoteControlConfig,
     harness: crate::config::HarnessConfig,
     keep_warm: KeepWarmPolicy,
@@ -30,9 +30,9 @@ impl Policy {
     pub fn new(
         config: &MachineConfig,
         keep_warm: &KeepWarmPolicy,
-    ) -> Result<Self, crate::config::HibernateAfterErr> {
+    ) -> Result<Self, crate::config::HibernateScheduleErr> {
         Ok(Self {
-            after: config.agents.hibernate.schedule()?,
+            schedule: config.agents.hibernate.schedule()?,
             remote_control: config.remote_control.clone(),
             harness: config.harness.clone(),
             keep_warm: keep_warm.clone(),
@@ -162,6 +162,7 @@ pub enum Hold {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
     Hibernate { idle_secs: u64 },
+    Deepen { step: u32, idle_secs: u64 },
     Hold(Hold),
 }
 
@@ -172,11 +173,17 @@ pub fn decide(
     now: jiff::Timestamp,
     scope: &ScopeView,
 ) -> Result<Verdict, StoreErr> {
-    if crate::store::hibernate::read(store.paths())
+    if let Some(entry) = crate::store::hibernate::read(store.paths())
         .iter()
-        .any(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
+        .find(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
     {
-        return Ok(Verdict::Hold(Hold::AlreadyHibernating));
+        return Ok(next_step(entry, config.schedule, now).map_or(
+            Verdict::Hold(Hold::AlreadyHibernating),
+            |step| Verdict::Deepen {
+                step,
+                idle_secs: now.duration_since(rested_at(agent)).as_secs().max(0) as u64,
+            },
+        ));
     }
     if let Some(hold) = cheap_hold(agent, config, now, scope.focused) {
         return Ok(Verdict::Hold(hold));
@@ -191,8 +198,9 @@ pub fn decide(
     .into_iter()
     .flatten()
     .max();
-    if woke_at.is_some_and(|at| now.duration_since(at).as_nanos() < config.after.as_nanos() as i128)
-    {
+    if woke_at.is_some_and(|at| {
+        now.duration_since(at).as_nanos() < config.schedule.after.as_nanos() as i128
+    }) {
         return Ok(Verdict::Hold(Hold::Clock));
     }
     let Some(path) = &scope.scope else {
@@ -245,6 +253,17 @@ pub fn decide(
     })
 }
 
+fn next_step(
+    entry: &crate::store::hibernate::Entry,
+    schedule: crate::config::Schedule,
+    now: jiff::Timestamp,
+) -> Option<u32> {
+    let step = entry.step.checked_add(1)?;
+    (step <= schedule.final_step()
+        && now.duration_since(entry.frozen_at).as_nanos() >= schedule.due(step).as_nanos() as i128)
+        .then_some(step)
+}
+
 fn shared_hold(hold: super::idle_stop::Hold) -> Hold {
     use super::idle_stop::Hold as StopHold;
     match hold {
@@ -278,7 +297,7 @@ fn cheap_hold(
     if let Err(hold) = super::idle_stop::resting(agent) {
         return Some(shared_hold(hold));
     }
-    if now.duration_since(rested_at(agent)).as_nanos() < config.after.as_nanos() as i128 {
+    if now.duration_since(rested_at(agent)).as_nanos() < config.schedule.after.as_nanos() as i128 {
         return Some(Hold::Clock);
     }
     if focused {
@@ -421,10 +440,10 @@ fn hibernate_idle_agents_with(
         }
     };
     for agent in snapshot.agents.iter() {
-        if entries
+        let entry = entries
             .iter()
-            .any(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id)
-        {
+            .find(|entry| entry.kind == agent.kind && entry.agent_id == agent.agent_id);
+        if entry.is_some_and(|entry| next_step(entry, policy.schedule, snapshot.now).is_none()) {
             continue;
         }
         let Some(pane) = snapshot.agent_panes.iter().find(|pane| {
@@ -435,13 +454,14 @@ fn hibernate_idle_agents_with(
         let Some(root_pid) = pane.pane_pid else {
             continue;
         };
-        if cheap_hold(
-            agent,
-            &policy,
-            snapshot.now,
-            snapshot.focused_pane.as_ref() == Some(&pane.pane_id),
-        )
-        .is_some()
+        if entry.is_none()
+            && cheap_hold(
+                agent,
+                &policy,
+                snapshot.now,
+                snapshot.focused_pane.as_ref() == Some(&pane.pane_id),
+            )
+            .is_some()
         {
             continue;
         }
@@ -542,6 +562,7 @@ pub(crate) fn project_hibernation(
             })
             .map(|entry| crate::agents::state::Hibernation {
                 frozen_at: entry.frozen_at,
+                step: entry.step,
                 reclaimed_bytes: entry.reclaimed_bytes,
             })
     };
@@ -568,7 +589,7 @@ pub enum HibernateErr {
     #[error(transparent)]
     Cgroup(#[from] crate::proc::cgroup::CgroupErr),
     #[error(transparent)]
-    After(#[from] crate::config::HibernateAfterErr),
+    Schedule(#[from] crate::config::HibernateScheduleErr),
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -687,7 +708,7 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
     if let Err(error) = config.schedule() {
         report.skipped = Some(error.to_string());
         report.checks.push(Check {
-            name: "after",
+            name: "schedule",
             status: CheckStatus::Error,
             detail: error.to_string(),
         });

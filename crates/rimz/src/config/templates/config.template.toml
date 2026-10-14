@@ -247,7 +247,8 @@ aggressive_resize = true
 
 # [agents.hibernate]
 ## enabled = true                      # default on; skips where systemd, Linux controls or swap are unavailable
-# after = "10m"                        # grace after rest, at most 24h
+# after = "30m"                        # grace before freezing and reclaiming half the anonymous memory
+# deep_after = "120m"                  # zero resident target; >= after, at most 24h
 
 # [agents.commands]
 # Commands are shell-split raw command panes. They are not addressable agents.

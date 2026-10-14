@@ -25,6 +25,16 @@ pub struct Entry {
     pub provider_pid: u32,
     pub frozen_at: Timestamp,
     pub reclaimed_bytes: u64,
+    #[serde(default)]
+    pub anon_at_freeze: u64,
+    #[serde(default)]
+    pub step: u32,
+    #[serde(default = "epoch")]
+    pub last_reclaimed_at: Timestamp,
+}
+
+fn epoch() -> Timestamp {
+    Timestamp::UNIX_EPOCH
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,6 +114,9 @@ mod tests {
             scope: "/sys/fs/cgroup/rimz-agent-test.scope".into(),
             provider_pid: 1234,
             frozen_at: Timestamp::UNIX_EPOCH,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 200,
         }
     }
@@ -142,5 +155,23 @@ mod tests {
         assert!(read(&paths).is_empty());
         std::fs::write(&paths.hibernation, "broken").unwrap();
         assert!(read(&paths).is_empty());
+    }
+
+    #[test]
+    fn version_one_entries_without_steps_keep_their_wake_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths =
+            StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        record(&paths, entry("old")).unwrap();
+        let mut old = serde_json::to_value(entry("old")).unwrap();
+        for key in ["anon_at_freeze", "step", "last_reclaimed_at"] {
+            old.as_object_mut().unwrap().remove(key);
+        }
+        std::fs::write(
+            &paths.hibernation,
+            serde_json::to_vec(&serde_json::json!({"version": 1, "entries": [old]})).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read(&paths), [entry("old")]);
     }
 }

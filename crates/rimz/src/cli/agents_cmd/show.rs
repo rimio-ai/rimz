@@ -453,11 +453,19 @@ pub(super) fn render_activity_section(
         );
     }
     if let Some(hibernation) = &agent.hibernation {
+        let final_step = crate::cli::machine_config()
+            .agents
+            .hibernate
+            .schedule()
+            .map(|schedule| schedule.final_step().to_string())
+            .unwrap_or_else(|_| "?".into());
         kv.push(
             "hibernation",
             render::cell(format!(
-                "hibernating since {}, {} reclaimed",
+                "hibernating since {}, step {} of {}, {} reclaimed",
                 hibernation.frozen_at,
+                hibernation.step,
+                final_step,
                 render::fmt_bytes(hibernation.reclaimed_bytes)
             )),
         );
@@ -1284,10 +1292,12 @@ mod tests {
 
     #[test]
     fn activity_shows_hibernation_time_and_reclaimed_bytes() {
-        let mut state = rimz::testkit::agent_state("claude", "cold", jiff::Timestamp::UNIX_EPOCH);
+        let now = jiff::Timestamp::UNIX_EPOCH;
+        let mut state = rimz::testkit::agent_state("claude", "cold", now);
         state.status = rimz::agents::AgentStatus::Running;
         state.hibernation = Some(rimz::agents::state::Hibernation {
-            frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            frozen_at: now,
+            step: 0,
             reclaimed_bytes: 2048,
         });
         let entry = build_entry(
@@ -1297,16 +1307,14 @@ mod tests {
             None,
             rimz::address::agent_handle(&state, &[&state], false),
             None,
-            jiff::Timestamp::UNIX_EPOCH,
+            now,
             ReportOverrides::default(),
         );
-        let text = strip(|w| {
-            render_activity_section(w, &entry, None, None, false, jiff::Timestamp::UNIX_EPOCH)
-        });
+        let text = strip(|w| render_activity_section(w, &entry, None, None, false, now));
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["hibernation"]["reclaimed_bytes"], 2048);
         assert!(
-            text.contains("hibernating since 1970-01-01T00:00:00Z, 2 KB reclaimed"),
+            text.contains("hibernating since 1970-01-01T00:00:00Z, step 0 of 3, 2 KB reclaimed"),
             "{text}"
         );
     }

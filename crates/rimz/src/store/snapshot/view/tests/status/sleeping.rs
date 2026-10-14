@@ -17,6 +17,7 @@ fn hibernation_preserves_sleeping_in_consumer_tallies_and_ranking() {
     let mut resting = agent("claude", "frozen", AgentStatus::Success, 0).worktree("/repo/main");
     resting.hibernation = Some(crate::agents::state::Hibernation {
         frozen_at: ago(30),
+        step: 0,
         reclaimed_bytes: 200,
     });
     resting.pending_waits = vec![pending_wait()];

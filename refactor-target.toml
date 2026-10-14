@@ -338,7 +338,8 @@ upward-dependencies = [
 # Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
-surface-budget = 196
+# Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
+surface-budget = 200
 
 [[verdict]]
 kind = "item"
@@ -727,7 +728,8 @@ upward-dependencies = [
 # Workspace scope enumeration and thaw share naming with launch and recovery (+3).
 # Timeout wake uses the injected-root workspace thaw entry point (+1).
 # Native Linux boot identity serves provider PID record validation (+1).
-surface-budget = 134
+# MemoryStat and memory_stat share anonymous-memory and refault readings with hibernation (+2).
+surface-budget = 136
 
 [[verdict]]
 kind = "item"
@@ -1480,7 +1482,42 @@ reason = "Only an explicitly enabled unavailable capability warrants a start not
 [[verdict]]
 kind = "item"
 key = "config::agents::HibernateConfig::schedule"
-reason = "One duration validator serves admission and idle policy; replaces the after accessor."
+reason = "One schedule validator serves admission, reclaim policy and show; replaces the after accessor."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::HibernateScheduleErr"
+reason = "Schedule validation identifies either duration field or an inverted reclaim horizon."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::Schedule"
+reason = "Validated hibernation timing is shared by admission, selection, reclaim and show."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::Schedule::final_step"
+reason = "Show renders the same final step used by selection to stop deepening."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::Schedule::target"
+reason = "Freeze and deepen use the same overflow-safe anonymous-memory target."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::Schedule::due"
+reason = "The producer and locked helper use one capped step clock."
+
+[[verdict]]
+kind = "item"
+key = "proc::cgroup::MemoryStat"
+reason = "Hibernation consumes named kernel memory and refault counters."
+
+[[verdict]]
+kind = "item"
+key = "proc::cgroup::memory_stat"
+reason = "One strict cgroup memory reader serves freeze, deepen and wake telemetry."
 
 [[verdict]]
 kind = "item"
