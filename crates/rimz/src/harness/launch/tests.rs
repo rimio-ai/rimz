@@ -1,6 +1,91 @@
 use super::*;
 use crate::harness::launch_reminders::{TempFiles, subagent_reminder, wrap};
 
+#[test]
+fn copilot_ask_refuses_nonmanual_defaults_without_gating_other_modes() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = root.path().join("settings.json");
+    let login_env = BTreeMap::from([
+        (
+            "COPILOT_HOME".to_owned(),
+            root.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "RIMZ_COPILOT_SETTINGS".to_owned(),
+            settings.to_string_lossy().into_owned(),
+        ),
+    ]);
+    for (mode, args, refused) in [
+        ("assisted", vec!["--mode", "interactive"], true),
+        ("allow-all", vec!["--mode", "interactive"], true),
+        ("manual", vec!["--mode", "interactive"], false),
+        ("allow-all", vec![], false),
+        ("allow-all", vec!["--allow-all"], false),
+        ("allow-all", vec!["--autopilot"], false),
+    ] {
+        std::fs::write(
+            &settings,
+            serde_json::json!({"defaultPermissionMode":mode}).to_string(),
+        )
+        .unwrap();
+        let request = ExecRequest::bare_launch(
+            AgentKind::new_unchecked("copilot"),
+            args.iter().map(|arg| (*arg).to_owned()).collect(),
+        );
+        let result = compile_agent_process_with_extra_env(
+            None,
+            root.path(),
+            &request,
+            root.path(),
+            &login_env,
+            &LaunchReminders::default(),
+        );
+        if refused {
+            match result {
+                Err(AgentProcessCompileErr::SettingsConflict { kind, conflict }) => {
+                    assert_eq!(kind, "copilot");
+                    assert_eq!(conflict.path, settings);
+                    assert_eq!(conflict.key, "defaultPermissionMode");
+                    assert_eq!(conflict.value, serde_json::json!(mode));
+                }
+                other => panic!("{mode} {args:?}: expected settings refusal, got {other:?}"),
+            }
+        } else {
+            assert!(result.is_ok(), "{mode} {args:?}: {result:?}");
+        }
+    }
+}
+
+#[test]
+fn copilot_disabled_hooks_refuse_even_a_modeless_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = root.path().join("settings.json");
+    std::fs::write(&settings, r#"{"disableAllHooks":true}"#).unwrap();
+    let login_env = BTreeMap::from([
+        (
+            "COPILOT_HOME".to_owned(),
+            root.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "RIMZ_COPILOT_SETTINGS".to_owned(),
+            settings.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("copilot"), Vec::new());
+    let result = compile_agent_process_with_extra_env(
+        None,
+        root.path(),
+        &request,
+        root.path(),
+        &login_env,
+        &LaunchReminders::default(),
+    );
+    assert!(
+        matches!(result, Err(AgentProcessCompileErr::SettingsConflict { ref conflict, .. }) if conflict.key == "disableAllHooks"),
+        "{result:?}"
+    );
+}
+
 /// The temp unit and shared dir a compiled launch names in Environment.
 fn temp_files(tmp: &str, caller: bool) -> Option<TempFiles> {
     Some(TempFiles {

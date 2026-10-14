@@ -161,6 +161,11 @@ pub enum ProgramLookupErr {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
+    #[error("agent `{kind}` cannot launch: {conflict}")]
+    SettingsConflict {
+        kind: String,
+        conflict: crate::agents::SettingsConflict,
+    },
     #[error("{kind} does not accept {flag} under RimZ: {reason}")]
     RejectedArg {
         kind: String,
@@ -855,6 +860,35 @@ fn compile_agent_process_with_extra_env(
         }
         None => (user_shell, BTreeMap::new()),
     };
+    let trusted_env = trusted_agent_env(project_root, kind)?;
+    let secret_keys = trusted_env.keys().cloned().collect();
+    let mut launch_env = extra_env.clone();
+    launch_env.extend(shell_env);
+    let mut env = compose_agent_env(trusted_env, adapter, request, &launch_env)?;
+    let mut login_env = crate::agents::ambient_env();
+    login_env.extend(env.clone());
+    let ask = adapter
+        .spec()
+        .launch
+        .permission_args(crate::agents::PermissionMode::Ask);
+    let conflict = adapter.hooks_disabled(cwd, &login_env).or_else(|| {
+        if ask.is_empty()
+            || !request
+                .action
+                .extra_args()
+                .windows(ask.len())
+                .any(|args| args == ask.as_slice())
+        {
+            return None;
+        }
+        adapter.ask_unenforced(cwd, &login_env)
+    });
+    if let Some(conflict) = conflict {
+        return Err(AgentProcessCompileErr::SettingsConflict {
+            kind: kind.to_owned(),
+            conflict,
+        });
+    }
     let mut action = request.action.clone();
     if reminders.lsp_configured {
         adapter.disable_native_lsp_args(action.extra_args_mut());
@@ -874,11 +908,6 @@ fn compile_agent_process_with_extra_env(
     if let Some(channel) = &channel {
         merge_appended_system_text(action.extra_args_mut(), channel, &reminder);
     }
-    let trusted_env = trusted_agent_env(project_root, kind)?;
-    let secret_keys = trusted_env.keys().cloned().collect();
-    let mut launch_env = extra_env.clone();
-    launch_env.extend(shell_env);
-    let mut env = compose_agent_env(trusted_env, adapter, request, &launch_env)?;
     let mut skill_env = reminders
         .settings
         .as_ref()
