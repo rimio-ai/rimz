@@ -56,6 +56,8 @@ enum ReasoningQualifier {
     Low,
     Medium,
     High,
+    XHigh,
+    Max,
     Thinking,
 }
 
@@ -67,6 +69,10 @@ impl ReasoningQualifier {
             Some(Self::Medium)
         } else if value.eq_ignore_ascii_case("high") {
             Some(Self::High)
+        } else if value.eq_ignore_ascii_case("xhigh") || value.eq_ignore_ascii_case("extra high") {
+            Some(Self::XHigh)
+        } else if value.eq_ignore_ascii_case("max") {
+            Some(Self::Max)
         } else if value.eq_ignore_ascii_case("thinking") {
             Some(Self::Thinking)
         } else {
@@ -79,6 +85,8 @@ impl ReasoningQualifier {
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
+            Self::XHigh => Some("xhigh"),
+            Self::Max => Some("max"),
             Self::Thinking => None,
         }
     }
@@ -228,5 +236,11 @@ fn selector_price_keys(model_id: &str) -> Option<[String; 2]> {
         .join("-");
     (!dotted.is_empty()).then_some(())?;
     let hyphenated = dotted.replace('.', "-");
+    let hyphenated = match hyphenated.as_str() {
+        // Google's first-party hosting is the closest public rate for its catalog;
+        // Antigravity's actual serving platform has not been captured.
+        "gpt-oss-120b" => "vertex_ai/openai/gpt-oss-120b-maas".to_owned(),
+        _ => hyphenated,
+    };
     Some([dotted, hyphenated])
 }
