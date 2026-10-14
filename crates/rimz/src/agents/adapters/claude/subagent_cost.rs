@@ -6,14 +6,14 @@ use crate::agents::AgentUsageSummary;
 use crate::agents::context::{PricedRequest, SubagentUsageCursor};
 use crate::agents::pricing::{PriceBook, TokenSplit};
 use crate::agents::spending::{SplitPrice, lookup_split_price, should_replace_usage_duplicate};
-use crate::agents::transcript_fs::read_transcript_lines;
+use crate::agents::transcript_fs::read_anchored_transcript;
 
 use super::spend::{ClaudeEntry, ClaudeUsage, priced_entry, request_split};
 use super::subagents::subagents_dir;
 
 /// Advance one child's cumulative cost through complete records appended since
-/// `prior`. An unreadable child transcript returns `None` so the caller can
-/// retain its last published figure.
+/// `prior`, restarting on a content-anchor mismatch. An unreadable child
+/// transcript returns `None` so the caller can retain its last published figure.
 pub(super) fn advance_cursor(
     parent_transcript: &Path,
     child_id: &str,
@@ -30,26 +30,34 @@ pub(super) fn advance_cursor(
     let transcript_path = path.to_string_lossy().into_owned();
     let pricing_changed =
         prior.is_some_and(|cursor| cursor.book_fingerprint.as_deref() != book_fingerprint);
+    let fresh = SubagentUsageCursor {
+        anchor: None,
+        last_call: None,
+        transcript_path,
+        offset: 0,
+        model: None,
+        cost_usd: 0.0,
+        unpriced: false,
+        book_fingerprint: None,
+        last_request: None,
+    };
     let mut cursor = prior
         .filter(|cursor| {
-            cursor.transcript_path == transcript_path && cursor.offset <= len && !pricing_changed
+            cursor.transcript_path == fresh.transcript_path
+                && cursor.offset <= len
+                && !pricing_changed
         })
         .cloned()
-        .unwrap_or(SubagentUsageCursor {
-            last_call: None,
-            transcript_path,
-            offset: 0,
-            model: None,
-            cost_usd: 0.0,
-            unpriced: false,
-            book_fingerprint: None,
-            last_request: None,
-        });
+        .unwrap_or_else(|| fresh.clone());
 
-    let Some((content, next_offset)) = read_transcript_lines(&path, cursor.offset) else {
+    let read = read_anchored_transcript(&path, cursor.offset, cursor.anchor)?;
+    if read.rewritten {
+        cursor = fresh;
+    }
+    if read.content.is_empty() {
         return Some(cursor);
-    };
-    for line in content.split(|byte| *byte == b'\n') {
+    }
+    for line in read.content.split(|byte| *byte == b'\n') {
         let Some(entry) = priced_entry(line) else {
             continue;
         };
@@ -67,7 +75,8 @@ pub(super) fn advance_cursor(
         }
         fold_entry(&mut cursor, &entry, prices);
     }
-    cursor.offset = next_offset;
+    cursor.offset = read.offset;
+    cursor.anchor = read.anchor;
     cursor.book_fingerprint = book_fingerprint.map(str::to_owned);
     Some(cursor)
 }
