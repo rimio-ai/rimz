@@ -130,7 +130,8 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     if status.logged_in != Some(true) && plan.is_none() && auth_method.is_none() {
         return AccountProbe::LoggedOut;
     }
-    let metered = auth_method.map(|method| method != "apiKey");
+    // API-key logins report `apiKey`; a Console sign-in with a stored key reports `api_key` (2.1.286+).
+    let metered = auth_method.map(|method| !matches!(method.as_str(), "apiKey" | "api_key"));
     AccountProbe::Found(AgentAccount {
         plan,
         metered,
@@ -170,6 +171,14 @@ mod tests {
 
         let json = br#"{ "loggedIn": true, "authMethod": "apiKey" }"#;
         let account = found(parse_claude_auth(json), "api-key account");
+        assert_eq!(account.plan, None);
+        assert_eq!(account.metered, Some(false));
+
+        let json = br#"{ "loggedIn": true, "authMethod": "api_key" }"#;
+        let account = found(
+            parse_claude_auth(json),
+            "api-key account (2.1.286 spelling)",
+        );
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
 
