@@ -791,197 +791,103 @@ fn claude_price_book_capacity_does_not_replace_an_established_window() {
 }
 
 #[test]
-fn kimi_subagent_join_surfaces_children_and_suppresses_child_stops() {
+fn kimi_durable_children_surface_and_child_stops_leave_parent_running() {
+    use std::io::Write as _;
     let env = Env::new();
     env.record(&env.project_root);
     let session_id = "session-kimi-parent";
-    let kimi_home = env.home_root.join(".kimi-code");
-    let session = kimi_home.join("sessions/wd_project").join(session_id);
-    let main_home = session.join("agents/main");
-    let first_home = session.join("agents/agent-0");
-    let second_home = session.join("agents/agent-1");
-    std::fs::create_dir_all(&main_home).expect("mkdir Kimi main agent");
-    let main_wire = main_home.join("wire.jsonl");
+    let session = env
+        .home_root
+        .join(".kimi-code/sessions/wd_project")
+        .join(session_id);
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
     std::fs::write(
-        &main_wire,
-        concat!(
-            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"delegate two checks\"}],\"origin\":{\"kind\":\"user\"}}\n",
-            "{\"type\":\"llm.request\",\"time\":1,\"kind\":\"loop\"}\n"
-        ),
+        session.join("state.json"),
+        json!({"cwd":env.project_root}).to_string(),
     )
-    .expect("write Kimi main wire");
-    let write_state = |children: usize| {
-        let mut agents = serde_json::Map::new();
-        agents.insert(
-            "main".to_owned(),
-            json!({"homedir": main_home, "type": "main", "parentAgentId": null}),
-        );
-        if children >= 1 {
-            agents.insert(
-                "agent-0".to_owned(),
-                json!({"homedir": first_home, "type": "sub", "parentAgentId": "main"}),
-            );
-        }
-        if children >= 2 {
-            agents.insert(
-                "agent-1".to_owned(),
-                json!({"homedir": second_home, "type": "sub", "parentAgentId": "main"}),
-            );
-        }
-        std::fs::write(
-            session.join("state.json"),
-            serde_json::to_vec(&json!({
-                "workDir": env.project_root,
-                "agents": agents
-            }))
-            .expect("serialize Kimi state"),
+    .unwrap();
+    let main_wire = session.join("agents/main/wire.jsonl");
+    std::fs::write(&main_wire, "").unwrap();
+    let append = |record: Value| {
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&main_wire)
+                .unwrap(),
+            "{record}"
         )
-        .expect("write Kimi state");
+        .unwrap();
     };
-    write_state(0);
-    std::fs::write(
-        kimi_home.join("session_index.jsonl"),
-        format!(
-            "{{\"sessionId\":{session_id},\"sessionDir\":{session_dir},\"workDir\":{work_dir}}}\n",
-            session_id = serde_json::to_string(session_id).unwrap(),
-            session_dir = serde_json::to_string(&session).unwrap(),
-            work_dir = serde_json::to_string(&env.project_root).unwrap(),
-        ),
-    )
-    .expect("write Kimi session index");
-    let run = |payload: Value| {
-        let output = env.run_hook("kimi", &payload.to_string());
+    let run = |event: &str| {
+        let output = env.run_hook("kimi", &json!({"hook_event_name":event,"session_id":session_id,"cwd":env.project_root,"prompt":"delegate two checks"}).to_string());
         assert_hook_succeeded_neutral("kimi", output);
     };
-    run(json!({
-        "hook_event_name": "SessionStart",
-        "session_id": session_id,
-        "cwd": env.project_root,
-        "source": "startup"
-    }));
-    run(json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": session_id,
-        "cwd": env.project_root,
-        "prompt": [{"type": "text", "text": "delegate two checks"}]
-    }));
-
-    std::fs::create_dir_all(&first_home).expect("mkdir first Kimi child");
-    write_state(1);
-    run(json!({
-        "hook_event_name": "SubagentStart",
-        "session_id": session_id,
-        "cwd": env.project_root,
-        "agent_name": "explore",
-        "prompt": "inspect the parser"
-    }));
-    std::fs::write(
-        first_home.join("wire.jsonl"),
-        concat!(
-            "{\"type\":\"config.update\",\"profileName\":\"explore\"}\n",
-            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"inspect the parser\"}],\"origin\":{\"kind\":\"system_trigger\"}}\n",
-            "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"stepUuid\":\"c0\",\"part\":{\"type\":\"text\",\"text\":\"Parser complete\"}}}\n",
-            "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"step.end\",\"uuid\":\"c0\"}}\n"
-        ),
-    )
-    .expect("write first Kimi child wire");
-
-    std::fs::create_dir_all(&second_home).expect("mkdir second Kimi child");
-    write_state(2);
-    run(json!({
-        "hook_event_name": "SubagentStart",
-        "session_id": session_id,
-        "cwd": env.project_root,
-        "agent_name": "coder",
-        "prompt": "inspect the renderer"
-    }));
-    std::fs::write(
-        second_home.join("wire.jsonl"),
-        concat!(
-            "{\"type\":\"config.update\",\"profileName\":\"coder\"}\n",
-            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"inspect the renderer\"}],\"origin\":{\"kind\":\"system_trigger\"}}\n",
-            "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"stepUuid\":\"c1\",\"part\":{\"type\":\"text\",\"text\":\"Renderer complete\"}}}\n",
-            "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"step.end\",\"uuid\":\"c1\"}}\n"
-        ),
-    )
-    .expect("write second Kimi child wire");
-
+    run("SessionStart");
+    run("UserPromptSubmit");
+    append(json!({"type":"turn.prompt","input":[],"origin":{"kind":"user"}}));
+    append(
+        json!({"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"main-1"}}),
+    );
+    append(json!({"type":"llm.request","kind":"loop"}));
+    for id in ["agent-0", "agent-1"] {
+        append(
+            json!({"type":"subagent.spawned","subagentId":id,"subagentName":"coder","description":"inspect code"}),
+        );
+    }
+    let before_stale_hooks = lifecycle_event_count(&env);
+    run("SubagentStart");
+    run("SubagentStop");
+    assert_eq!(
+        lifecycle_event_count(&env),
+        before_stale_hooks,
+        "stale hooks record nothing"
+    );
+    run("PostToolUse");
     let snapshot = env.snapshot_json();
-    let agents = snapshot["agents"].as_array().expect("agents");
+    let agents = snapshot["agents"].as_array().unwrap();
     assert_eq!(agents.len(), 3, "one parent plus two Kimi children");
     assert_eq!(
         agents
             .iter()
-            .filter(|agent| agent["parent_agent_id"] == session_id)
-            .filter(|agent| agent["status"] == "running")
+            .filter(|a| a["parent_agent_id"] == session_id && a["status"] == "running")
             .count(),
         2
     );
-
     let before_child_stop = lifecycle_event_count(&env);
-    run(json!({
-        "hook_event_name": "Stop",
-        "session_id": session_id,
-        "cwd": env.project_root
-    }));
+    run("Stop");
     assert_eq!(
         lifecycle_event_count(&env),
         before_child_stop,
-        "a child-fired Stop appends no parent lifecycle event"
+        "child Stop leaves parent running"
     );
-    let snapshot = env.snapshot_json();
-    let parent = snapshot["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|agent| agent["agent_id"] == session_id)
-        .expect("Kimi parent");
-    assert_eq!(parent["status"], "running");
-
-    for (profile, response) in [
-        ("explore", "Parser complete"),
-        ("coder", "Renderer complete"),
-    ] {
-        run(json!({
-            "hook_event_name": "SubagentStop",
-            "session_id": session_id,
-            "cwd": env.project_root,
-            "agent_name": profile,
-            "response": response
-        }));
+    for id in ["agent-0", "agent-1"] {
+        append(json!({"type":"subagent.completed","subagentId":id}));
     }
+    run("PostToolUse");
     let snapshot = env.snapshot_json();
-    let children = snapshot["agents"]
-        .as_array()
-        .unwrap()
+    let agents = snapshot["agents"].as_array().unwrap();
+    let children = agents
         .iter()
-        .filter(|agent| agent["parent_agent_id"] == session_id)
+        .filter(|a| a["parent_agent_id"] == session_id)
         .collect::<Vec<_>>();
     assert_eq!(children.len(), 2);
     assert!(children.iter().all(|child| child["status"] == "success"));
-
-    std::fs::write(
-        &main_wire,
-        concat!(
-            "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"delegate two checks\"}],\"origin\":{\"kind\":\"user\"}}\n",
-            "{\"type\":\"llm.request\",\"time\":1,\"kind\":\"loop\"}\n",
-            "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"main-1\"}}\n"
-        ),
-    )
-    .expect("close Kimi main step");
-    run(json!({
-        "hook_event_name": "Stop",
-        "session_id": session_id,
-        "cwd": env.project_root
-    }));
+    assert_eq!(
+        agents.iter().find(|a| a["agent_id"] == session_id).unwrap()["status"],
+        "running"
+    );
+    append(json!({"type":"context.append_loop_event","event":{"type":"step.end","uuid":"main-1"}}));
+    run("Stop");
     let snapshot = env.snapshot_json();
-    let parent = snapshot["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|agent| agent["agent_id"] == session_id)
-        .expect("Kimi parent");
-    assert_eq!(parent["status"], "success");
+    assert_eq!(
+        snapshot["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["agent_id"] == session_id)
+            .unwrap()["status"],
+        "success"
+    );
 }
 
 #[test]
@@ -1399,6 +1305,42 @@ fn cursor_parent_hook_derives_chats_store_children_once() {
     let repeated = env.run_hook("cursor", &stop_payload);
     assert!(repeated.status.success());
     assert_eq!(derived_event_count(&env), 2, "derived facts dedupe");
+}
+
+#[test]
+fn kimi_parent_hook_derives_failed_children_once() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = env.home_root.join(".kimi-code/sessions/bucket/kimi-parent");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(
+        session.join("state.json"),
+        json!({"cwd":"/different/cwd"}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(session.join("agents/main/wire.jsonl"), concat!(
+        "{\"type\":\"subagent.spawned\",\"subagentId\":\"child\",\"subagentName\":\"coder\",\"description\":\"inspect parser\"}\n",
+        "{\"type\":\"subagent.failed\",\"subagentId\":\"child\",\"error\":\"boom\"}\n",
+    )).unwrap();
+    let payload =
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"kimi-parent","prompt":"work"})
+            .to_string();
+    assert!(env.run_hook("kimi", &payload).status.success());
+    let snapshot = env.snapshot_json();
+    let child = snapshot["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["agent_id"] == "kimi-parent:child")
+        .expect("durable child row");
+    assert_eq!(child["parent_agent_id"], "kimi-parent");
+    assert_eq!(child["status"], "failed");
+    let derived_count = || {
+        env.read_events().iter().filter(|event| matches!(event.kind(), rimz::store::event::EventKind::AgentLifecycle(payload) if payload.event_name.as_deref().is_some_and(|name| name.starts_with("chatsStoreSubagent")))).count()
+    };
+    assert_eq!(derived_count(), 2);
+    assert!(env.run_hook("kimi", &payload).status.success());
+    assert_eq!(derived_count(), 2);
 }
 
 #[test]

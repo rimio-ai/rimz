@@ -61,8 +61,6 @@ const KIMI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "StopFailure", r#"{"session_id":"s","error_type":"RuntimeError"}"#),
     HookEventSpec::lifecycle( "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#).progress(),
     HookEventSpec::lifecycle( "SessionEnd", r#"{"session_id":"s"}"#).session_ended(),
-    HookEventSpec::lifecycle( "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#).progress(),
-    HookEventSpec::lifecycle( "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#).progress(),
     HookEventSpec::lifecycle( "PreCompact", r#"{"session_id":"s","trigger":"manual"}"#),
     HookEventSpec::lifecycle( "PostCompact", r#"{"session_id":"s","trigger":"auto"}"#),
     HookEventSpec::lifecycle( "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#).progress(),
@@ -169,8 +167,8 @@ const KIMI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         via: "PreCompact/PostCompact",
     },
     subagents: ConcernCoverage::Partial {
-        via: "SubagentStart/Stop + state.json/wire join",
-        gap: "resumed subagents and ambiguous starts surface only at stop",
+        via: "durable subagent records at root hooks",
+        gap: "starts arrive at the next root hook; resumed children stay closed",
     },
     launch_reminders: ConcernCoverage::Unsupported {
         reason: "no additive system-text launch channel is implemented",
@@ -231,7 +229,7 @@ const KIMI_USER_COVERAGE: UserCoverage = UserCoverage {
     },
     subagents: CapabilityLevel::Partial {
         shows: "children nest under the parent card with their own lifecycle",
-        limit: "resumed and concurrently started children surface only when they stop",
+        limit: "children appear at the next hook; finished children stay closed on resume",
     },
 };
 
@@ -250,12 +248,12 @@ const KIMI_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         event: "PermissionRequest",
     },
     subagent_started: HookCoverage::Derived {
-        via: "native hook + durable state.json/wire join",
-        gap: "resumed subagents and ambiguous starts have no start-time identity",
+        via: "durable subagent.spawned records",
+        gap: "next root hook opens new children; resumed children stay closed",
     },
     subagent_stopped: HookCoverage::Derived {
-        via: "native hook + durable state.json/wire join",
-        gap: "ambiguous response matches are quarantined",
+        via: "durable subagent terminal records",
+        gap: "next root hook closes children; cancelled children show as finished",
     },
     compacting: HookCoverage::Native {
         event: "PreCompact",
@@ -327,15 +325,9 @@ fn kimi_observation(
     ask_detail: Option<String>,
 ) -> Option<AgentLifecycleObservation> {
     if matches!(event_name, "SubagentStart" | "SubagentStop") {
-        return session_dir.and_then(|session_dir| {
-            adapter.observe_subagent_lifecycle(event_name, payload, parsed, session_dir)
-        });
+        return None;
     }
-    if event_name == "Stop"
-        && session_dir.is_some_and(|session_dir| {
-            subagents::has_subagents(session_dir) && subagents::main_turn_mid_step(session_dir)
-        })
-    {
+    if event_name == "Stop" && session_dir.is_some_and(subagents::main_turn_mid_step) {
         debug!(
             target: "rimz::agent::lifecycle",
             kind = adapter.spec().kind,
@@ -477,6 +469,15 @@ impl crate::agents::capabilities::CoreCapability for KimiAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for KimiAdapter {
+    fn derive_subagent_observations(
+        &self,
+        input: crate::agents::SubagentSpawnInput<'_>,
+    ) -> Vec<AgentLifecycleObservation> {
+        wire::session_dir(input.parent_agent_id, None)
+            .map(|session| subagents::derive_at(&session, input.parent_agent_id))
+            .unwrap_or_default()
+    }
+
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let parsed = payloads::parse(payload);
         let ask = kimi_ask_kind(self, event_name, &parsed);
@@ -493,13 +494,8 @@ impl crate::agents::capabilities::HookCapability for KimiAdapter {
         };
         decoded.set_ask(questions, ask_detail.clone());
         decoded.set_turn_error(kimi_turn_error(event_name, &parsed));
-        let session_dir = matches!(event_name, "SubagentStart" | "SubagentStop" | "Stop")
-            .then(|| {
-                wire::session_dir(
-                    parsed.session_id.as_deref()?,
-                    parsed.cwd.as_deref().map(Path::new),
-                )
-            })
+        let session_dir = matches!(event_name, "Stop")
+            .then(|| wire::session_dir(parsed.session_id.as_deref()?, None))
             .flatten();
         let observation = kimi_observation(
             self,
@@ -631,58 +627,6 @@ impl crate::agents::capabilities::SpendingCapability for KimiAdapter {
     }
 }
 
-impl KimiAdapter {
-    fn observe_subagent_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-        parsed: &payloads::KimiHookPayload,
-        session_dir: &Path,
-    ) -> Option<AgentLifecycleObservation> {
-        let matched = match event_name {
-            "SubagentStart" => subagents::resolve_start(session_dir, parsed.prompt.as_deref()),
-            "SubagentStop" => subagents::resolve_stop(session_dir, parsed.response.as_deref()),
-            _ => return None,
-        };
-        let Some(matched) = matched else {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind = self.spec().kind,
-                event = event_name,
-                session_id = parsed.session_id.as_deref().unwrap_or(""),
-                "quarantined Kimi subagent hook without a unique durable child match",
-            );
-            return None;
-        };
-        let session_id = parsed.session_id.as_deref()?.trim();
-        if session_id.is_empty() {
-            return None;
-        }
-        let signal = match event_name {
-            "SubagentStart" => LifecycleSignal::SubagentStarted,
-            "SubagentStop" => LifecycleSignal::SubagentStopped { errored: false },
-            _ => return None,
-        };
-        let mut observation = AgentLifecycleObservation::new(
-            Some(AgentSessionId::from(format!("{session_id}:{}", matched.id))),
-            signal,
-        )
-        .with_worktree_from_payload(payload);
-        observation.parent_agent_id = Some(AgentSessionId::from(session_id));
-        observation.launch.model = matched.model;
-        observation.launch.effort = matched.effort;
-        observation.agent_name = parsed
-            .agent_name
-            .as_deref()
-            .and_then(non_empty_trimmed)
-            .or(matched.profile);
-        observation.task = sanitize_user_prompt(matched.task.as_deref());
-        observation.prompt = SanitizedPrompt::new(observation.task.as_deref());
-        observation.transcript_path = Some(matched.transcript_path.to_string_lossy().into_owned());
-        Some(observation)
-    }
-}
-
 fn parse_questions(input: &Value) -> Option<Vec<AskQuestion>> {
     super::question::questions(input, super::question::PreviewPolicy::None)
 }
@@ -759,7 +703,7 @@ fn refresh_wire_path(
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
-        .and_then(subagents::session_title);
+        .and_then(wire::session_title);
     Some(LocalContextRefresh {
         context: LocalContextPatch {
             session_preview: session_preview.map_or(FieldPatch::Keep, FieldPatch::Set),

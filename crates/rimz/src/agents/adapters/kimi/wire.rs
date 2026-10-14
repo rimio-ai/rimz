@@ -34,6 +34,14 @@ pub(super) enum WireEvent {
     ConfigUpdate(ConfigUpdate),
     LlmRequest(RequestAttribution),
     Usage(UsageRecord),
+    SubagentSpawned(SubagentSpawn),
+    SubagentCompleted(SubagentCompletion),
+    SubagentFailed {
+        id: String,
+    },
+    SubagentCancelled {
+        id: String,
+    },
     AppendMessage(AppendedMessage),
     AppendLoopEvent(LoopEvent),
     ContextClear,
@@ -68,13 +76,30 @@ impl TokenUsage {
             + self.input_cache_creation.unwrap_or(0)
     }
 
-    fn total(&self) -> u64 {
+    pub(super) fn total(&self) -> u64 {
         self.input_total().saturating_add(self.output.unwrap_or(0))
     }
 
     fn is_zero(&self) -> bool {
         self.total() == 0
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SubagentSpawn {
+    pub(super) subagent_id: String,
+    pub(super) subagent_name: String,
+    pub(super) description: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) thinking_effort: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SubagentCompletion {
+    pub(super) subagent_id: String,
+    pub(super) usage: Option<TokenUsage>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -199,8 +224,6 @@ pub(super) struct ConfigUpdate {
     model_alias: Option<String>,
     #[serde(rename = "thinkingEffort")]
     thinking_effort: Option<String>,
-    #[serde(rename = "profileName")]
-    pub(super) profile_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -529,6 +552,23 @@ fn record_from_slice(line: &[u8]) -> Option<WireRecord> {
 
 fn decode_event(kind: &str, mut fields: serde_json::Map<String, Value>) -> WireEvent {
     match kind {
+        "subagent.spawned" => from_fields(fields)
+            .map(WireEvent::SubagentSpawned)
+            .unwrap_or(WireEvent::Unknown),
+        "subagent.completed" => from_fields(fields)
+            .map(WireEvent::SubagentCompleted)
+            .unwrap_or(WireEvent::Unknown),
+        "subagent.failed" | "subagent.cancelled" => fields
+            .remove("subagentId")
+            .and_then(|id| id.as_str().map(str::to_owned))
+            .map(|id| {
+                if kind == "subagent.failed" {
+                    WireEvent::SubagentFailed { id }
+                } else {
+                    WireEvent::SubagentCancelled { id }
+                }
+            })
+            .unwrap_or(WireEvent::Unknown),
         "metadata" => WireEvent::Metadata,
         "turn.prompt" | "turn.steer" => from_fields::<RawPromptRecord>(fields)
             .map(|raw| WireEvent::Prompt {
@@ -642,6 +682,47 @@ fn loop_event(value: Value) -> LoopEvent {
 pub(super) fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
     let (bytes, next) = read_transcript_lines(path, offset)?;
     Some((records_from_bytes(&bytes), next))
+}
+
+pub(super) fn read_subagent_records(path: &Path) -> Option<Vec<WireRecord>> {
+    let (bytes, _) = read_transcript_lines(path, 0)?;
+    Some(
+        bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| {
+                line.windows(b"subagent.".len())
+                    .any(|part| part == b"subagent.")
+            })
+            .filter_map(record_from_slice)
+            .collect(),
+    )
+}
+
+pub(super) fn read_attribution(path: &Path) -> Option<EffectiveAttribution> {
+    let (bytes, _) = read_transcript_lines(path, 0)?;
+    let mut attribution = EffectiveAttribution::default();
+    for record in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| {
+            [b"config.update".as_slice(), b"llm.request".as_slice()]
+                .iter()
+                .any(|kind| line.windows(kind.len()).any(|part| part == *kind))
+        })
+        .filter_map(record_from_slice)
+    {
+        attribution.observe(&record);
+    }
+    Some(attribution)
+}
+
+pub(super) fn session_title(session_dir: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct SessionState {
+        title: Option<String>,
+    }
+    let state: SessionState =
+        serde_json::from_slice(&std::fs::read(session_dir.join("state.json")).ok()?).ok()?;
+    non_empty(state.title).filter(|title| title != "New Session")
 }
 
 #[cfg(test)]

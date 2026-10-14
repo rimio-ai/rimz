@@ -8,7 +8,6 @@ use serde_json::Value;
 pub(super) struct KimiHookPayload {
     pub(super) session_id: Option<String>,
     pub(super) cwd: Option<String>,
-    pub(super) agent_name: Option<String>,
     #[serde(deserialize_with = "deserialize_prompt")]
     pub(super) prompt: Option<String>,
     pub(super) response: Option<String>,
