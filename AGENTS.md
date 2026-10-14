@@ -97,6 +97,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - Search a snake_case field or function name with `rg -w`; a bare substring also matches every longer identifier that starts with it.
 - A scan command always names its path (`rg PATTERN .`): in an agent shell stdin is not a terminal, so a pathless `rg` searches stdin and hangs until the tool timeout.
 - A tree-wide `rg` skips dot-directories: name `.github` as a path (or pass `--hidden`) when the question includes workflows.
+- A tree-wide `rg` also skips the paths the root `.ignore` lists (`docs/externals/`, `examples/`, `CHANGELOG.md`, `Cargo.lock`, `supply-chain/`) without saying so: a removal or rewording grep passes `--no-ignore-dot` or names `docs/externals` as a path.
 - Stop a process you started by its PID (`$!`, `pgrep -x`), never with `pkill -f PATTERN`: the pattern matches the shell running `pkill` and kills it.
 - Brace a shell variable that a colon follows (`git show "${rev}:path"`): zsh reads `$rev:c` as a modifier on the variable and passes git a mangled revision.
 
