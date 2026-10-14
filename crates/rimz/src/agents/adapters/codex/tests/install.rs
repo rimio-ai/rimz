@@ -356,6 +356,10 @@ fn untrusted_hooks_report_by_trust_state() {
         CanonicalHomeTrusted,
         MissingStopAndPermission,
         RimzHooksNotInstalled,
+        OtherSlotTrusted,
+        RealSlotTrusted,
+        Disabled,
+        MissingHash,
     }
 
     for (case, label) in [
@@ -374,10 +378,64 @@ fn untrusted_hooks_report_by_trust_state() {
             "partial trust reports the exact missing subset",
         ),
         (Case::RimzHooksNotInstalled, "user-only config reports none"),
+        (
+            Case::OtherSlotTrusted,
+            "trust for a user group does not count",
+        ),
+        (Case::RealSlotTrusted, "trust for RimZ's actual slot counts"),
+        (Case::Disabled, "disabled handler is untrusted"),
+        (Case::MissingHash, "state without a hash is untrusted"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let mut path = dir.path().join("config.toml");
         let expected = match case {
+            Case::OtherSlotTrusted | Case::RealSlotTrusted | Case::Disabled | Case::MissingHash => {
+                install_into(&path).unwrap();
+                for event in EXPECTED_EVENTS {
+                    trust_event(&path, &snake_event_token(event));
+                }
+                let mut root: toml::Table =
+                    std::fs::read_to_string(&path).unwrap().parse().unwrap();
+                let hooks = root.get_mut("hooks").unwrap().as_table_mut().unwrap();
+                if matches!(case, Case::OtherSlotTrusted | Case::RealSlotTrusted) {
+                    let groups = hooks.get_mut("Stop").unwrap().as_array_mut().unwrap();
+                    let user: toml::Table =
+                        toml::from_str("hooks = [{type = 'command', command = 'echo user'}]")
+                            .unwrap();
+                    groups.insert(0, toml::Value::Table(user));
+                }
+                let state = hooks.get_mut("state").unwrap().as_table_mut().unwrap();
+                let key = format!("{}:stop:0:0", path.display());
+                match case {
+                    Case::RealSlotTrusted => {
+                        let entry = state.remove(&key).unwrap();
+                        state.insert(format!("{}:stop:1:0", path.display()), entry);
+                    }
+                    Case::Disabled => {
+                        state
+                            .get_mut(&key)
+                            .unwrap()
+                            .as_table_mut()
+                            .unwrap()
+                            .insert("enabled".into(), false.into());
+                    }
+                    Case::MissingHash => {
+                        state
+                            .get_mut(&key)
+                            .unwrap()
+                            .as_table_mut()
+                            .unwrap()
+                            .remove("trusted_hash");
+                    }
+                    _ => {}
+                }
+                std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
+                if matches!(case, Case::RealSlotTrusted) {
+                    Vec::new()
+                } else {
+                    vec!["Stop".to_owned()]
+                }
+            }
             Case::StateAbsent => {
                 install_into(&path).unwrap();
                 EXPECTED_EVENTS

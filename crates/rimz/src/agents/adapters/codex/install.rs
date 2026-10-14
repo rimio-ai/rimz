@@ -176,9 +176,10 @@ pub(super) fn managed_artifacts_at(path: &Path) -> bool {
 /// per hook-definition hash under `[hooks.state]`
 /// (`"<config-path>:<event_token>:<i>:<j>"` keys) and **silently skips** an
 /// untrusted hook, so an installed-but-untrusted event is a dead channel only
-/// the user can open (`/hooks` inside Codex). Presence-only by token: a hash
-/// mismatch is Codex's to re-flag, and mirroring its hash algorithm would
-/// couple RimZ to an upstream internal.
+/// the user can open (`/hooks` inside Codex). Trust requires an exact raw
+/// group/handler slot for a current RimZ command, with `trusted_hash` present
+/// and `enabled` not false. A hash mismatch is Codex's to re-flag; mirroring
+/// its hash algorithm would couple RimZ to an upstream internal.
 pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
     untrusted_hook_events(path, |_| true)
 }
@@ -206,12 +207,40 @@ fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) 
         .filter(|hook| has_rimz_hook_command(&root, hook.event))
         .filter(|hook| {
             let token = snake_event_token(hook.event);
-            ![Some(path), canonical.as_deref()]
-                .into_iter()
-                .flatten()
-                .any(|prefix| {
-                    let needle = format!("{}:{token}:", prefix.display());
-                    state.is_some_and(|state| state.keys().any(|key| key.starts_with(&needle)))
+            let is_trusted = |group, handler| {
+                [Some(path), canonical.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|prefix| {
+                        let key = format!("{}:{token}:{group}:{handler}", prefix.display());
+                        state
+                            .and_then(|state| state.get(&key))
+                            .and_then(toml::Value::as_table)
+                            .is_some_and(|entry| {
+                                entry.contains_key("trusted_hash")
+                                    && entry.get("enabled").and_then(toml::Value::as_bool)
+                                        != Some(false)
+                            })
+                    })
+            };
+            !root
+                .get(HOOKS_TABLE)
+                .and_then(toml::Value::as_table)
+                .and_then(|hooks| hooks.get(hook.event))
+                .and_then(toml::Value::as_array)
+                .is_some_and(|groups| {
+                    groups.iter().enumerate().any(|(group_index, group)| {
+                        group
+                            .as_table()
+                            .and_then(|table| table.get("hooks"))
+                            .and_then(toml::Value::as_array)
+                            .is_some_and(|handlers| {
+                                handlers.iter().enumerate().any(|(handler_index, handler)| {
+                                    is_current_rimz_hook_handler(handler)
+                                        && is_trusted(group_index, handler_index)
+                                })
+                            })
+                    })
                 })
         })
         .map(|hook| hook.event.to_owned())
