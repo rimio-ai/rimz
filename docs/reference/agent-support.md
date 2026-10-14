@@ -85,7 +85,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Permission prompts and questions stay in Antigravity's UI, because RimZ installs no permission hook. An open prompt raises Waiting and routes you to the pane.
 - Context and tokens are live from the wrapped statusline. The dollar figure prices the current turn only, so it does not count toward room spend or [budget caps](./cli/budget.md).
 - History replays every past session and adds no dollars to `rimz stats`.
-- Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends.
+- Children come from the parent's `invoke_subagent` transcript records, which the CLI writes late, so a fan-out often appears as the parent's turn ends. A worktree, `branch`, or `share` child stays a root card while its validated siblings nest.
 - Every error stop is terminal: a supervised run does not survive a provider limit, and [auto-continue](../guide/loops.md#auto-continue) never arms.
 
 ### Copilot

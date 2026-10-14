@@ -646,19 +646,34 @@ fn validated_subagents_under(
         let results = parse_invoke_subagent_results(record.content.as_deref()?, specs.len())?;
         for (spec, result) in specs.into_iter().zip(results) {
             let result_id = result.conversation_id.trim();
-            valid_conversation_id(result_id).then_some(())?;
+            if !valid_conversation_id(result_id) {
+                continue;
+            }
             seen_ids.insert(result_id.to_owned()).then_some(())?;
-            let log_path = file_uri_path(&result.log_absolute_uri)?;
-            valid_transcript_under(home, &log_path, result_id).then_some(())?;
+            let Some(log_path) = file_uri_path(&result.log_absolute_uri) else {
+                continue;
+            };
+            if !valid_transcript_under(home, &log_path, result_id) {
+                continue;
+            }
             let expected_workspace = match spec.workspace.as_deref().map(str::trim) {
                 None | Some("inherit") => parent_workspace.clone(),
                 Some(path) => {
                     let path = Path::new(path);
-                    path.is_absolute().then_some(())?;
-                    fs::canonicalize(path).ok()?
+                    if !path.is_absolute() {
+                        continue;
+                    }
+                    let Ok(path) = fs::canonicalize(path) else {
+                        continue;
+                    };
+                    path
                 }
             };
-            validate_result_workspaces(result.workspace_uris.as_deref(), &expected_workspace)?;
+            if validate_result_workspaces(result.workspace_uris.as_deref(), &expected_workspace)
+                .is_none()
+            {
+                continue;
+            }
             validated.push(ValidatedSubagent {
                 spec,
                 result,
