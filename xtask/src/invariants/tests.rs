@@ -245,6 +245,32 @@ fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn provider_homes_reject_process_env_reads_and_allow_ambient_snapshot_and_tests() {
+    let root = temp_repo_root("provider-homes");
+    let agents = root.join("crates/rimz/src/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let caller = agents.join("caller.rs");
+    let ambient = agents.join("login.rs");
+    let tests = agents.join("tests.rs");
+    let home_read = "let home = std::env::var_os(\"QWEN_HOME\");\n";
+    let snapshot = "let env = std::env::vars_os().collect();\n";
+    for source in [home_read, snapshot] {
+        std::fs::write(&caller, source).unwrap();
+        assert!(
+            ensure_provider_homes_resolve_from_login_env(&root, std::slice::from_ref(&caller))
+                .unwrap_err()
+                .to_string()
+                .contains("caller.rs:1"),
+            "{source}"
+        );
+    }
+    std::fs::write(&ambient, snapshot).unwrap();
+    std::fs::write(&tests, format!("{home_read}{snapshot}")).unwrap();
+    ensure_provider_homes_resolve_from_login_env(&root, &[ambient, tests]).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
