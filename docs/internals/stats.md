@@ -96,7 +96,7 @@ Every token total on the panel is `SpendWindow::display_tokens`, which adds cach
 
 ## The heatmap
 
-Each cell is one UTC day, columns are weeks opening on Monday, and the rightmost column is the current week with future days left blank. The week count comes from the terminal width (`weeks_for_terminal`: columns minus the 6-column gutter, halved, clamped to 4 through 52), so a narrow terminal shows as few as four weeks of history. `--dollars` shades by `DaySpend::usd` instead of tokens and retitles the block `Spend activity`.
+Each cell is one local calendar day in the published timezone, columns are weeks opening on Monday, and the rightmost column is the current week with future days left blank. The week count comes from the terminal width (`weeks_for_terminal`: columns minus the 6-column gutter, halved, clamped to 4 through 52), so a narrow terminal shows as few as four weeks of history. `--dollars` shades by `DaySpend::usd` instead of tokens and retitles the block `Spend activity`.
 
 Shading is relative to the visible grid (`Grid::build`, `shade`, `level` in `panel.rs`):
 

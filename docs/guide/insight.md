@@ -119,7 +119,7 @@ How a token becomes a dollar:
 
 Live figures are priced the same way as historical ones, request by request, which is what lets a long-context tier land exactly. Copilot and Qwen are the exception: their statuslines publish only a session-cumulative total, with the request boundaries already summed away, so RimZ estimates those at base rates.
 
-Scope splits in two. The cockpit is the room you are standing in. Everything else, the provider dashboard and all of `rimz stats`, is account-global, summed per provider account across every project on the machine. Windows follow the surface: the cockpit and the dashboard's spend rows share whichever `spend_window` you configured, the dashboard's totals rows are the trailing week and month, `rimz stats` adds year and all-time, and its heatmap buckets by calendar day.
+Scope splits in two. The cockpit is the room you are standing in. Everything else, the provider dashboard and all of `rimz stats`, is account-global, summed per provider account across every project on the machine. Windows follow the surface: the cockpit and the dashboard's spend rows share whichever `spend_window` you configured, the dashboard's totals rows are the trailing week and month, `rimz stats` adds year and all-time, and its heatmap buckets by calendar day in your configured `timezone`.
 
 Per-agent and per-team lifetime figures group every continuation of one agent and deduplicate the API calls a resume replayed, so an agent you have restarted five times reports one history rather than five overlapping ones. `rimz agents show`, `rimz teams show`, a finished group's sidebar receipt, and `rimz agents attribution` all use that same all-in fold across the agent and every subagent it launched.
 

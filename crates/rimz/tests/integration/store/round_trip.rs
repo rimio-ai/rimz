@@ -1,6 +1,72 @@
 //! Synthetic store round-trip checks that do not spawn `rimz`.
 
 #[test]
+fn session_role_spend_survives_run_and_room_removal() {
+    use rimz::agents::spending::session_roles::{self, SessionRole, SessionRoleRecord};
+    use rimz::agents::spending::{
+        HeadlineSpec, SilentWalk, SpendingFile, SpendingWalker, WalkRequest,
+    };
+    let h = crate::common::Harness::new();
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let session = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let mut run = rimz::store::run::RunRecord::new(
+        h.workspace_id.clone(),
+        adapter.spec().kind_id(),
+        rimz::agents::PermissionMode::Auto,
+        "task".into(),
+        "/tmp/project".into(),
+    );
+    run.subagent = true;
+    run.agent_id = Some(session.into());
+    rimz::harness::run::create(h.store.paths(), &run).unwrap();
+    let at: jiff::Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
+    session_roles::record(
+        &h.runtime_paths,
+        &SessionRoleRecord {
+            kind: adapter.spec().kind_id(),
+            session: session.into(),
+            role: SessionRole::Subagent {
+                profile: "fast".into(),
+            },
+            at,
+        },
+    )
+    .unwrap();
+    let cache = h.runtime_paths.shared_spending_cursor_path();
+    let transcript = cache.with_file_name(format!("{session}.jsonl"));
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, "{\"timestamp\":\"2026-06-01T11:00:00Z\",\"costUSD\":2.0,\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n").unwrap();
+    std::fs::remove_dir_all(&h.store.paths().root).unwrap();
+    assert!(rimz::harness::run::load(h.store.paths(), &run.run_id).is_err());
+    let files = [SpendingFile {
+        adapter,
+        login: rimz::ids::LoginKey::default_for(adapter.spec().kind_id()),
+        path: transcript,
+    }];
+    let result = SpendingWalker::new().walk_local(
+        &cache,
+        &WalkRequest {
+            files: &files,
+            prices: &Default::default(),
+            now_secs: at.as_second() as u64,
+            origin_overrides: &Default::default(),
+            user_inputs: &[],
+            scope: None,
+            spec: &HeadlineSpec::default(),
+        },
+        &mut SilentWalk,
+    );
+    assert_eq!(
+        result
+            .roles
+            .subagents
+            .get("fast")
+            .map(|profile| profile.tally.year.usd),
+        Some(2.0)
+    );
+}
+
+#[test]
 fn root_lane_is_stamped_through_every_fold_reader() {
     use rimz::agents::AgentLifecycleObservation;
     use rimz::agents::lifecycle::LifecycleSignal;

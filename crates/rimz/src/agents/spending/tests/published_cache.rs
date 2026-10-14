@@ -34,7 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 16);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 17);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();

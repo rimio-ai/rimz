@@ -1339,6 +1339,10 @@ impl super::account::ResetCreditAction for CodexResetCreditAction {
 }
 
 impl crate::agents::capabilities::SpendingCapability for CodexAdapter {
+    fn spending_session_id(&self, path: &Path) -> Option<String> {
+        local_sessions::session_id_from_filename(path)
+    }
+
     fn spending_sources(
         &self,
         login_env: &BTreeMap<String, String>,

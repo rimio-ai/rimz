@@ -22,6 +22,7 @@ mod engine;
 mod publish;
 mod refresh;
 pub mod service;
+pub mod session_roles;
 mod time;
 pub mod user_input;
 
@@ -52,6 +53,7 @@ use aggregate::{
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
+    local_day_index, local_day_start_secs,
 };
 pub(crate) use aggregate::{NO_BURST_CUTOFF, SESSION_GAP_SECS, live_session_keys, origin_path};
 #[cfg(test)]
@@ -128,8 +130,29 @@ pub struct SpendingWalkResult {
     pub login_day: BTreeMap<LoginKey, SpendWindow>,
     pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
+    pub timezone: String,
     pub models: BTreeMap<String, SpendTally>,
+    pub roles: RoleTallies,
     pub stats: WalkStats,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RoleTallies {
+    pub agents: BTreeMap<String, SpendTally>,
+    pub subagents: BTreeMap<String, SubagentTally>,
+    pub unattributed: UnattributedTally,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UnattributedTally {
+    pub tally: SpendTally,
+    pub by_provider: BTreeMap<String, SpendTally>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SubagentTally {
+    pub tally: SpendTally,
+    pub models: BTreeMap<String, SpendTally>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -413,6 +436,7 @@ impl SpendingWalker {
         self.ensure_memo(req.files, &mut stats);
         let locations = &self.memo.as_ref().expect("memo seeded above").counted;
         let counted = indexed_counted_entries(req.files, &self.cache, locations);
+        let roles = session_roles::load(cache_path, req.now_secs);
         let mut result = aggregate_counted_rollups(
             req.files,
             &self.cache,
@@ -423,7 +447,7 @@ impl SpendingWalker {
                 now_secs: req.now_secs,
                 spec: req.spec,
             },
-            true,
+            Some(&roles),
         );
         result.stats = stats;
         result
@@ -482,7 +506,7 @@ impl SpendingWalker {
                 now_secs,
                 spec,
             },
-            false,
+            None,
         );
         CachedScopedSpending {
             has_discovered_file: files.iter().any(|SpendingFile { path: file, .. }| {
@@ -659,6 +683,7 @@ fn aggregate_walk_publish(
     now_secs: u64,
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
+    roles: &session_roles::RoleMap,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache).into_counted();
     aggregate_counted_rollups(
@@ -671,7 +696,7 @@ fn aggregate_walk_publish(
             now_secs,
             spec,
         },
-        true,
+        Some(roles),
     )
 }
 
@@ -714,7 +739,7 @@ fn compute_scoped_spending(
             now_secs,
             spec,
         },
-        false,
+        None,
     );
     aggregate.workspace
 }

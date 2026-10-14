@@ -1,6 +1,216 @@
 use super::*;
 use jiff::Timestamp;
 
+#[test]
+fn unnamed_history_zone_falls_back_to_published_utc() {
+    let unnamed = jiff::tz::TimeZone::fixed(jiff::tz::offset(8));
+    let (zone, name) = super::super::aggregate::history_zone(unnamed);
+    assert_eq!(zone.to_offset(Timestamp::UNIX_EPOCH).seconds(), 0);
+    assert_eq!(name, "UTC");
+}
+
+#[test]
+fn history_days_follow_published_zone_including_rolled_rows() {
+    let second = |s: &str| s.parse::<Timestamp>().unwrap().as_second() as u64;
+    let file = PathBuf::from("/x/opencode.db");
+    let mut rolled = cached_entry(second("2026-01-01T16:30:00Z"), 4.0, "old");
+    rolled.rolled = true;
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                cached_entry(second("2026-01-12T15:30:00Z"), 1.0, "before"),
+                cached_entry(second("2026-01-12T16:30:00Z"), 2.0, "after"),
+                rolled,
+            ],
+        )]),
+        ..Default::default()
+    };
+    let files = vec![spending_file(opencode_adapter(), file)];
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: second("2026-01-12T17:00:00Z"),
+            spec: &HeadlineSpec {
+                timezone: Some("Asia/Shanghai".into()),
+                ..Default::default()
+            },
+        },
+        Some(&Default::default()),
+    );
+    let day = |s| (second(s) / 86_400) as i64;
+    assert_eq!(result.days[&day("2026-01-12T00:00:00Z")].usd, 1.0);
+    assert_eq!(result.days[&day("2026-01-13T00:00:00Z")].usd, 2.0);
+    assert_eq!(result.days[&day("2026-01-02T00:00:00Z")].usd, 4.0);
+    assert_eq!(
+        result.days[&day("2026-01-13T00:00:00Z")].usd,
+        result.provider_day.values().map(|day| day.usd).sum::<f64>()
+    );
+    let publication = ProviderSpendingCache::from_walk(&result, 0);
+    assert_eq!(
+        serde_json::to_value(publication).unwrap()["timezone"],
+        "Asia/Shanghai"
+    );
+}
+
+#[test]
+fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
+    use super::super::session_roles::SessionRole;
+    let parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let paths = [
+        PathBuf::from(format!("/x/{parent}.jsonl")),
+        PathBuf::from(format!("/x/{parent}/subagents/agent-native.jsonl")),
+        PathBuf::from(format!("/x/rollout-2026-01-01T00-00-00-{child}.jsonl")),
+        PathBuf::from("/x/opencode.db"),
+    ];
+    let mut root = cached_entry(NOW_SECS, 1.0, "");
+    root.thread_id = None;
+    root.model = Some("root-model".into());
+    root.message_id = Some("m".into());
+    root.request_id = Some("r".into());
+    let replay = CachedEntry {
+        is_sidechain: true,
+        ..root.clone()
+    };
+    let native = CachedEntry {
+        message_id: None,
+        request_id: None,
+        cost_usd: 2.0,
+        ..replay.clone()
+    };
+    let codex = CachedEntry {
+        message_id: None,
+        request_id: None,
+        cost_usd: 3.0,
+        model: Some("child-model".into()),
+        ..root.clone()
+    };
+    let files = vec![
+        spending_file(claude_adapter(), paths[0].clone()),
+        spending_file(claude_adapter(), paths[1].clone()),
+        spending_file(codex_adapter(), paths[2].clone()),
+        spending_file(opencode_adapter(), paths[3].clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(&paths[0], vec![root]),
+            cached_file(&paths[1], vec![replay, native]),
+            cached_file(&paths[2], vec![codex]),
+            cached_file(
+                &paths[3],
+                vec![
+                    cached_entry(NOW_SECS - 10 * 86_400, 4.0, "peer"),
+                    cached_entry(NOW_SECS - 40 * 86_400, 5.0, "unseen"),
+                ],
+            ),
+        ]),
+        ..Default::default()
+    };
+    let roles = BTreeMap::from([
+        (
+            crate::ids::AgentKind::new_unchecked("claude"),
+            BTreeMap::from([(parent.into(), SessionRole::Agent { profile: None })]),
+        ),
+        (
+            crate::ids::AgentKind::new_unchecked("codex"),
+            BTreeMap::from([(
+                child.into(),
+                SessionRole::Subagent {
+                    profile: "fast".into(),
+                },
+            )]),
+        ),
+        (
+            crate::ids::AgentKind::new_unchecked("opencode"),
+            BTreeMap::from([(
+                "peer".into(),
+                SessionRole::Agent {
+                    profile: Some("peer-profile".into()),
+                },
+            )]),
+        ),
+    ]);
+    let locations = dedup_cached_entry_locations(&files, &cache);
+    let counted = indexed_counted_entries(&files, &cache, &locations);
+    let result = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: NOW_SECS,
+            spec: &HeadlineSpec {
+                mode: SpendWindowMode::Trailing24h,
+                timezone: Some("UTC".into()),
+            },
+        },
+        Some(&roles),
+    );
+    assert_eq!(
+        result.roles.agents.get("claude").map(|t| t.year.usd),
+        Some(3.0)
+    );
+    assert_eq!(result.roles.agents["opencode"].year.usd, 4.0);
+    assert_eq!(result.roles.subagents["fast"].tally.year.usd, 3.0);
+    assert_eq!(result.roles.subagents["fast"].tally.year.sessions, 1);
+    assert_eq!(
+        result.roles.subagents["fast"].models["child-model"]
+            .year
+            .usd,
+        3.0
+    );
+    assert_eq!(result.roles.unattributed.tally.year.usd, 5.0);
+    let windows: [fn(&SpendTally) -> &SpendWindow; 4] =
+        [|t| &t.headline, |t| &t.week, |t| &t.month, |t| &t.year];
+    for window in windows {
+        let mut sum = SpendWindow::default();
+        for tally in result
+            .roles
+            .agents
+            .values()
+            .chain(result.roles.subagents.values().map(|p| &p.tally))
+            .chain([&result.roles.unattributed.tally])
+        {
+            sum.merge(window(tally));
+        }
+        assert_eq!(sum.usd, window(&result.spending.total).usd);
+        assert_eq!(sum.tokens, window(&result.spending.total).tokens);
+        assert_eq!(sum.cache_read, window(&result.spending.total).cache_read);
+        let mut split = SpendWindow::default();
+        for tally in result.roles.unattributed.by_provider.values() {
+            split.merge(window(tally));
+        }
+        assert_eq!(&split, window(&result.roles.unattributed.tally));
+    }
+    let empty = aggregate_counted_rollups(
+        &files,
+        &cache,
+        &counted,
+        None,
+        HeadlineContext {
+            user_inputs: &[],
+            now_secs: NOW_SECS,
+            spec: &HeadlineSpec {
+                mode: SpendWindowMode::Trailing24h,
+                timezone: Some("UTC".into()),
+            },
+        },
+        Some(&BTreeMap::new()),
+    );
+    assert_eq!(empty.roles.unattributed.tally, empty.spending.total);
+    assert_eq!(
+        empty.roles.unattributed.by_provider,
+        empty.spending.by_provider
+    );
+}
+
 fn user_input(second: u64, kind: &str, origin: Option<&Path>) -> user_input::UserInputRecord {
     user_input::UserInputRecord {
         at: Timestamp::from_second(i64::try_from(second).expect("timestamp fits i64"))
@@ -270,7 +480,7 @@ fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
             now_secs: now.as_second() as u64,
             spec: &spec,
         },
-        false,
+        None,
     );
 
     assert_eq!(

@@ -21,12 +21,14 @@ A conflicting pair exits `2`. Of the [global flags](../cli.md#global-flags), `--
 
 ## What the panel shows
 
+History days use the configured `timezone`, or the system's named timezone. An unnamed system zone falls back to UTC; set `timezone` to an IANA name to select another zone.
+
 The panel prints these blocks top to bottom:
 
 | Block | Shows |
 | --- | --- |
 | Wordmark | The RimZ logo and tagline. Omitted when the terminal is too short to fit it beside the breakdowns. |
-| `Token activity` | One cell per UTC day, one column per week, shaded `· ░ ▒ ▓ █` from no use to heavy use. The terminal width sets the span, from 4 weeks up to 52. |
+| `Token activity` | One cell per local calendar day in the configured `timezone`, one column per week, shaded `· ░ ▒ ▓ █` from no use to heavy use. The terminal width sets the span, from 4 weeks up to 52. |
 | Windows row | Total tokens for `All time`, `Week`, `Month`, and `Year`. |
 | `Models` | Up to six models ranked by dollars, with input, output, cache-read tokens, cache-hit percentage, generation throughput (`tok/s`), and share of the window's dollars. |
 | `Agents` | Up to six agent kinds ranked by sessions, with dollars, tokens, cache-hit percentage, and share of sessions. |
@@ -99,7 +101,7 @@ $ rimz stats --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del
 | `windows` | `week`, `month`, and `year`, each with `tokens`, `usd`, `tool_calls`, and a `tools` map of calls by tool name. |
 | `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
 | `agents` | One object per agent kind with usage, sorted by sessions: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, and `share` of sessions as a fraction. |
-| `days` | One object per UTC day with usage, oldest first: `date`, `tokens`, `usd`. |
+| `days` | One object per local calendar day in the published timezone with usage, oldest first: `date`, `tokens`, `usd`. |
 | `assists` | `window` (`all`), a `rollup` of counts, and `events`, newest first. |
 
 `tokens` is always input plus output plus cache-read tokens, and `input` includes cache writes. `tool_calls` and `tools` are omitted when zero or empty; `cache_hit_pct` is omitted when there is no input to measure.

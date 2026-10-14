@@ -107,7 +107,8 @@ machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
   immutable executable generations, the loop registry, append-only logs, the
   browser daemon pid/port records and token store, the broadcast room allowlist,
   and cache/ for downloaded assets, the presence plugin, and cache/providers/
-  (accounts, rate limits, credits, spend, pricing, and account budget ledgers)
+  (accounts, rate limits, credits, spend, pricing, account budget ledgers,
+  and durable yearly session-role segments)
   ~/.rimz/lsp-history.jsonl holds learned peaks; logs/lsp.log.jsonl holds evidence
 ```
 

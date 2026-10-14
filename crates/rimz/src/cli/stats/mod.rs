@@ -160,7 +160,7 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         return run_refresh(args.dollars, args.hold);
     }
     let loaded = load_stats(!args.json)?;
-    let today_day = unix_secs_now() as i64 / DAY_SECS;
+    let today_day = loaded.stats.today_day(unix_secs_now());
     let assists = AssistStats::load(&logs_dir(), Window::AllTime, Timestamp::now());
     if args.json {
         return emit_json(&loaded.stats, &assists, today_day, args.dollars);
@@ -202,6 +202,7 @@ struct LoadedStats {
 /// The deduplicated account-global history `rimz stats` renders: per-day buckets,
 /// the per-model and per-agent breakdowns, and producer-priced trailing windows.
 struct Stats {
+    timezone: String,
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, SpendTally>,
     by_agent: BTreeMap<String, SpendTally>,
@@ -214,17 +215,23 @@ impl Stats {
             days,
             models,
             spending,
+            timezone,
             ..
         } = cache;
         let Spending {
             total, by_provider, ..
         } = spending;
         Stats {
+            timezone,
             by_day: days,
             by_model: models,
             by_agent: by_provider,
             total,
         }
+    }
+
+    fn today_day(&self, now_secs: u64) -> i64 {
+        rimz::agents::spending::local_day_index(now_secs, Some(&self.timezone)).unwrap_or(0)
     }
 }
 

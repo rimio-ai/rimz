@@ -120,6 +120,25 @@ pub(super) fn handle_lifecycle_frame(
             Ok((released, recorded, derived))
         })?
     };
+    // The role index is read whole on each write, and this runs in a fresh child per frame, so
+    // only a session new to this room or one (re)registering reaches it.
+    let new_sessions = released
+        .iter()
+        .chain(recorded.iter())
+        .chain(&derived)
+        .filter(|record| {
+            record.receipt.side_conversation.is_none()
+                && (record.receipt.prior_status.is_none()
+                    || matches!(
+                        record.observation.signal,
+                        rimz::agents::LifecycleSignal::Registered
+                    ))
+        })
+        .filter_map(|record| record.observation.agent_id.as_ref())
+        .collect::<Vec<_>>();
+    if !new_sessions.is_empty() {
+        record_session_roles(store, agent, &new_sessions);
+    }
     for record in released.iter().chain(recorded.iter()).chain(&derived) {
         if replay {
             rimz::harness::team_stage::replay_lifecycle(
@@ -484,6 +503,42 @@ struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
     receipt: rimz::store::writer::AgentLifecycleReceipt,
+}
+
+/// Index each session's role for spend attribution: a subagent iff this hook runs
+/// under a supervised run launched as one. A failed write only warns.
+fn record_session_roles(
+    store: &Store,
+    agent: &AgentDefinition,
+    sessions: &[&rimz::ids::AgentSessionId],
+) {
+    use rimz::agents::spending::session_roles::{self, SessionRole, SessionRoleRecord};
+    let subagent = env_run_id()
+        .and_then(|run_id| rimz::harness::run::load(store.paths(), &run_id).ok())
+        .is_some_and(|run| run.subagent);
+    let profile = agent_identity_env(
+        None,
+        rimz::harness::launch::ENV_AGENT_PROFILE,
+        validate_non_empty_identity_env,
+    );
+    let role = if subagent {
+        SessionRole::Subagent {
+            profile: profile.unwrap_or_else(|| agent.spec().kind.to_owned()),
+        }
+    } else {
+        SessionRole::Agent { profile }
+    };
+    for session in sessions {
+        let record = SessionRoleRecord {
+            kind: agent.spec().kind_id(),
+            session: (*session).clone(),
+            role: role.clone(),
+            at: jiff::Timestamp::now(),
+        };
+        if let Err(error) = session_roles::record(store.runtime_paths(), &record) {
+            warn!(kind = agent.spec().kind, %session, %error, "lifecycle: failed to record session role");
+        }
+    }
 }
 
 fn spawn_auto_rotation(workspace: &ResolvedWorkspace) {
