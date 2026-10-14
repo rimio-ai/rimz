@@ -10,6 +10,11 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// A provider launch precondition that would leave its managed pane unusable.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct LaunchBlocker(pub(crate) String);
+
 /// Launch-scoped provider channel for additive system or developer text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SystemTextChannel {
@@ -331,6 +336,16 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     fn version_upgrade_fix(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Refuse settings, argv, or environment that disable required integration.
+    fn launch_blocker(
+        &self,
+        _cwd: &Path,
+        _env: &BTreeMap<String, String>,
+        _argv: &[String],
+    ) -> Option<LaunchBlocker> {
         None
     }
 

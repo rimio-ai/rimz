@@ -281,11 +281,21 @@ fn launch_and_supervise(
         .map(enter_worktree)
         .transpose()?;
     let process = plan.process();
-    if let Some(adapter) = rimz::agents::find_definition(request.kind.as_str())
-        && adapter.min_version().is_some()
-        && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
-    {
-        rimz::agents::version::check_launch_version_floor(adapter, &path)?;
+    if let Some(adapter) = rimz::agents::find_definition(request.kind.as_str()) {
+        let mut launch_env = rimz::agents::ambient_env();
+        launch_env.extend(process.env.clone());
+        if let Some(error) = adapter.launch_blocker(
+            entered_worktree.as_deref().unwrap_or(&invocation.cwd),
+            &launch_env,
+            &process.provider_argv,
+        ) {
+            return Err(error.into());
+        }
+        if adapter.min_version().is_some()
+            && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
+        {
+            rimz::agents::version::check_launch_version_floor(adapter, &path)?;
+        }
     }
     if let Err(error) = rimz::lsp::registry::register_lease(
         &invocation.cwd,

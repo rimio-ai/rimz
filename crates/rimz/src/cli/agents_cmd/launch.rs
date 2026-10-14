@@ -978,6 +978,15 @@ fn preflight_cell(
         &rimz::agents::machine_login_catalog()
             .native_ambient(&cell.kind, &rimz::agents::ambient_env()),
     )?;
+    let mut launch_env = rimz::agents::ambient_env();
+    launch_env.extend(process.env.clone());
+    if let Some(error) = adapter.launch_blocker(
+        &workspace.worktree_root,
+        &launch_env,
+        &process.provider_argv,
+    ) {
+        return Err(error.into());
+    }
     if adapter.min_version().is_some()
         && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
     {
