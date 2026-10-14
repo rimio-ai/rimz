@@ -313,6 +313,7 @@ fn hidden_timeout_helper_signals_pre_hook_provider_without_killing_wrapper() {
             workspace.session_name,
             &run.kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: launch_id.clone(),
                 launch_id: Some(launch_id.clone()),
                 agent_name: run.agent_name.clone().expect("run name"),
@@ -696,6 +697,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "parent-session".into(),
                 launch_id: Some("parent-launch".into()),
                 agent_name: "parent".into(),
@@ -1416,6 +1418,7 @@ fn assert_subagent_checkout_with_login(
             &workspace.session_name,
             &parent_kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: parent_id.clone(),
                 launch_id: Some(parent_launch_id.clone()),
                 agent_name: "parent".to_owned(),
@@ -4019,6 +4022,7 @@ fn agents_cli_routes_launch_role_to_successful_same_instance_successor() {
             workspace.session_name.clone(),
             &AgentKind::new_unchecked("codex"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: launch_id.clone(),
                 launch_id: Some(launch_id.clone()),
                 agent_name: "coder-card".to_owned(),
@@ -4871,6 +4875,7 @@ fn create_finished_subagent(
             &workspace.session_name,
             &parent_kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: parent_id.clone(),
                 launch_id: Some(parent_launch_id.clone()),
                 agent_name: "parent".to_owned(),
@@ -4912,6 +4917,7 @@ fn create_finished_subagent(
             &workspace.session_name,
             &child_kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: child_id.clone(),
                 launch_id: Some(child_launch_id),
                 agent_name: "quiet-fox".to_owned(),

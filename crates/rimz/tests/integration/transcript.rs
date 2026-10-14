@@ -1284,6 +1284,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
             "rimz-test",
             &parent_kind,
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: parent_id.clone(),
                 launch_id: None,
                 agent_name: "steady-parent".to_owned(),
@@ -1334,6 +1335,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
             "rimz-test",
             &child_kind,
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: child_id.clone(),
                 launch_id: None,
                 agent_name: "swift-child".to_owned(),

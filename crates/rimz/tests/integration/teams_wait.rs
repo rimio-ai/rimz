@@ -79,6 +79,7 @@ impl Fixture {
                 &workspace.session_name,
                 &AgentKind::new_unchecked("claude"),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: AgentSessionId::from(format!("launch_{name}")),
                     launch_id: Some(AgentSessionId::from(format!("launch_{name}"))),
                     agent_name: name.to_owned(),

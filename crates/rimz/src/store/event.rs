@@ -205,6 +205,9 @@ pub struct AgentLaunchPayload {
     /// it when the provisional `agent_id` is replaced by a provider session id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    /// Lowercase SHA-256 of configured system-prompt inputs at fresh launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_digest: Option<String>,
     pub agent_name: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_name_explicit: bool,
@@ -495,6 +498,10 @@ impl AgentLifecyclePayload {
 }
 
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the optional digest adds one String slot; keep launch payloads inline without another allocation or a public variant change"
+)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
     Signal(SignalEventPayload),

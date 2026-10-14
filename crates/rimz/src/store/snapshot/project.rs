@@ -680,6 +680,9 @@ fn carried_base(
     let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
+        state
+            .system_prompt_digest
+            .clone_from(&prior.system_prompt_digest);
         state.launch_warnings.clone_from(&prior.launch_warnings);
         state.mode = prior.mode;
         state.isolation = prior.isolation;
@@ -989,6 +992,9 @@ fn assemble_launch_state(
     card_identity: CardIdentity,
 ) -> AgentState {
     let mut state = carried_base(kind, &payload.agent_id, prior, event.timestamp);
+    if let Some(digest) = &payload.system_prompt_digest {
+        state.system_prompt_digest = Some(digest.clone());
+    }
     if let Some(launch_id) = &payload.launch_id {
         state.launch_id = Some(launch_id.clone());
     }

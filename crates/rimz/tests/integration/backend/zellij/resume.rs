@@ -78,6 +78,7 @@ fn steer_and_self_wait_reach_the_live_consumer_among_two_sessions() {
                 room.name(),
                 &AgentKind::new_unchecked("claude"),
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: agent_id.clone(),
                     launch_id: Some(launch_id.clone()),
                     agent_name: "planner".to_owned(),

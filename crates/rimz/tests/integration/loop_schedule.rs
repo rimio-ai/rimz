@@ -1020,6 +1020,7 @@ fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
             &workspace.session_name,
             &kind,
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "ghost-session".into(),
                 launch_id: None,
                 agent_name: "ghost-leader".into(),
@@ -3332,6 +3333,7 @@ fn seed_agent_launch(
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from(format!("launch_{session}")),
                 launch_id: Some(AgentSessionId::from(format!("launch_{session}"))),
                 agent_name: session.to_owned(),
@@ -4970,6 +4972,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("sess-signal-live"),
                 launch_id: None,
                 agent_name: "claude".to_owned(),

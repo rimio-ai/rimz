@@ -1119,6 +1119,7 @@ fn rotation_carryover_keeps_live_and_recently_ended_agents() {
             "rimz-test",
             &kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from(agent_id),
                 launch_id: None,
                 agent_name: name.to_owned(),
@@ -1231,6 +1232,7 @@ fn rotation_carryover_drops_consumed_launch_tombstones() {
             "rimz-test",
             &kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: AgentSessionId::from("launch_a"),
                 launch_id: None,
                 agent_name: "lucid-atlas".to_owned(),

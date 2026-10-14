@@ -212,6 +212,7 @@ mod agent_ref {
                     &workspace.session_name,
                     &AgentKind::new_unchecked("claude"),
                     AgentLaunchPayload {
+                        system_prompt_digest: None,
                         agent_id: SESSION.into(),
                         launch_id: Some("saved-launch".into()),
                         agent_name: NAME.into(),

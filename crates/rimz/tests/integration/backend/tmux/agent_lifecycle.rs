@@ -97,6 +97,7 @@ fn parked_wrapper_holds_under_8_mib() {
                         &workspace.session_name,
                         &kind,
                         AgentLaunchPayload {
+                            system_prompt_digest: None,
                             agent_id: id.into(),
                             launch_id: Some(id.into()),
                             agent_name: name.into(),
@@ -1239,6 +1240,7 @@ fn self_wait_steers_to_live_consumer_when_idle_and_working() {
                 &workspace.session_name,
                 &kind,
                 AgentLaunchPayload {
+                    system_prompt_digest: None,
                     agent_id: agent_id.into(),
                     launch_id: Some(launch_id.into()),
                     agent_name: "planner".to_owned(),
@@ -1648,6 +1650,7 @@ fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
             &workspace.session_name,
             &AgentKind::new_unchecked("amp"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "amp-session".into(),
                 launch_id: Some("launch_amp".into()),
                 agent_name: "worker".to_owned(),
@@ -1829,6 +1832,7 @@ fn cohort_resume_selects_closed_profile_parent_over_live_child_and_dead_placehol
             &workspace.session_name,
             &kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: agent_id.into(),
                 launch_id: Some(agent_id.into()),
                 agent_name: if agent_id == placeholder_id {

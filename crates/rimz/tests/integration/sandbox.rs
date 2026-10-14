@@ -144,6 +144,7 @@ fn child_cap_launch(explicit_host: bool) {
             &workspace.session_name,
             &AgentKind::new_unchecked("claude"),
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "parent-session".into(),
                 launch_id: Some("parent-launch".into()),
                 agent_name: "parent".to_owned(),
@@ -1418,6 +1419,7 @@ test ! -e "$RIMZ_TEST_HOST_VAR_TMP_FILE"
             &workspace.session_name,
             &AgentKind::new_unchecked("codex"),
             rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: "scout-session".into(),
                 launch_id: Some("scout-launch".into()),
                 agent_name: "scout".to_owned(),

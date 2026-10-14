@@ -753,6 +753,7 @@ impl Store {
             session_name,
             &identity.kind,
             AgentLaunchPayload {
+                system_prompt_digest: None,
                 agent_id: identity.agent_id.clone(),
                 launch_id: Some(identity.agent_id.clone()),
                 agent_name: identity.name.clone(),
