@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 mod fetch;
 mod focus;
+mod hidden;
 mod maintenance;
 mod paint;
 mod scroll;

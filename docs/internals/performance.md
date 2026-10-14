@@ -205,7 +205,7 @@ Local allocations are flat at about 3.68 KB per subscriber, both at fixed room s
 
 #### Change-driven delivery at 200 agents and 100 subscribers
 
-`crates/rimz/benches/fleet.rs::idle_cycle` measures a real retained worker fold and delivery followed by all 100 subscribers applying through `LoopState::on_snapshot`. Painting is excluded: content and clock-only deliveries both mark the frame dirty. `idle_cycle_worker` retains the worker-only measurement. Both use 5,000 ended sessions and either zero or 3,000 orphan context sidecars; fixture creation and the initial content cycle are outside timing. Each applied cycle asserts that every renderer's snapshot clock advanced.
+`crates/rimz/benches/fleet.rs::idle_cycle` measures a real retained worker fold and delivery followed by all 100 subscribers applying through `LoopState::on_snapshot`. Painting is excluded: content and clock-only deliveries both mark the frame dirty. `idle_cycle_worker` retains the worker-only measurement. Both use 5,000 ended sessions and either zero or 3,000 orphan context sidecars; fixture creation and the initial content cycle are outside timing. The idle-consumer tests assert that every renderer's snapshot clock advances; the shared benchmark fixture permits unchanged clocks when hidden content is deferred.
 
 The earlier keyed-read measurements used `cargo xtask perf --bench fleet -- publish` and `cargo xtask perf --bench fleet -- idle_cycle` (the latter was worker-only then). Ten samples per case, median wall time; requested bytes include allocations and reallocations counted by `crates/rimz/benches/fleet.rs::counted`, not Divan's separate allocation column:
 
@@ -311,7 +311,7 @@ The fetch worker builds snapshots; the render loop blocks in `recv` and folds a 
 
 ### Only the watched tab animates
 
-Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab treats motion as idle and wakes on the data backstop. Every pane requests event-driven folds immediately; the shared worker coalesces their requests. Every delivered projection is still applied per attachment, but a hidden attachment retains its dirty frame without rendering cells, diffing, or writing it. Reveal resumes painting within one base frame. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
+Each renderer knows its own pane and the latest focus view, so it can tell whether a client is looking at its tab. A watched tab keeps the normal grid. An unwatched or detached tab skips the animation roster scan and wakes on the data backstop. Every pane requests event-driven folds immediately; the shared worker coalesces their requests. A settled hidden attachment coalesces content folds to at most once per data tick, plus on reveal, own-view changes, and outward actions. It retains its dirty frame without rendering cells, diffing, or writing it. Reveal resumes painting within one base frame. When ownership is unknown the renderer counts as watched, so tests, demos, and cold starts keep the responsive path. The mailbox exceptions and hidden paint rules are [state.md → The paint clock](./sidebar/state.md#the-paint-clock).
 
 ### One shared fold per room
 

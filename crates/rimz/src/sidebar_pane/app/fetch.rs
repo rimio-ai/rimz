@@ -688,7 +688,10 @@ impl IdleCycleFixture {
         for (renderer, dispatcher) in &mut self.renderers {
             let before = renderer.current.now;
             renderer.on_snapshot(dispatcher);
-            assert!(renderer.current.now > before, "renderer applies the cycle");
+            assert!(
+                renderer.current.now >= before,
+                "renderer clock never regresses"
+            );
         }
         unchanged
     }
@@ -1471,12 +1474,46 @@ impl ResultSender {
 }
 
 impl ResultReceiver {
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn take(&self) -> PendingResults {
+        self.take_unless(|_| false).0
+    }
+
+    pub(super) fn has_pending_snapshot(&self) -> bool {
+        self.0
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot
+            .is_some()
+    }
+
+    pub(super) fn take_unless(
+        &self,
+        defer: impl FnOnce(&SidebarSnapshot) -> bool,
+    ) -> (PendingResults, bool) {
         let mut pending = self
             .0
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Completion is independent of application. Keep deferred content in
+        // the same latest-wins slot, without acknowledging a new baseline.
+        if pending.outcome.is_none()
+            && pending
+                .snapshot
+                .as_mut()
+                .and_then(FetchUpdate::snapshot_mut)
+                .is_some_and(|snapshot| defer(snapshot))
+        {
+            return (
+                PendingResults {
+                    completed: std::mem::take(&mut pending.completed),
+                    ..Default::default()
+                },
+                true,
+            );
+        }
         if pending.snapshot.is_some() || pending.outcome.is_some() {
             self.0
                 .delivery
@@ -1484,7 +1521,7 @@ impl ResultReceiver {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .reusable = false;
         }
-        std::mem::take(&mut *pending)
+        (std::mem::take(&mut *pending), false)
     }
 
     pub(super) fn acknowledge(&self, mut update: FetchUpdate, reusable: bool) {
