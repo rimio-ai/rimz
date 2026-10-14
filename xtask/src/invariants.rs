@@ -74,6 +74,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_integration_fixture_home(root, &files)?;
     ensure_rimz_block_registry(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
+    ensure_pane_writes_wake_first(root, &files)?;
     ensure_managed_tmux_endpoint(root, &files)?;
     ensure_rolling_release_is_single_writer(root)?;
     ensure_stable_release_dispatches_docs(root)?;
@@ -1571,6 +1572,50 @@ fn ensure_include_covers_build_inputs(manifest_toml: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn ensure_pane_writes_wake_first(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let source = root.join("crates/rimz/src");
+    let mux = source.join("mux");
+    let mut violations = Vec::new();
+    for path in files {
+        if !path.starts_with(&source)
+            || path.starts_with(&mux)
+            || path.extension().and_then(OsStr::to_str) != Some("rs")
+            || is_test_source_path(root, path)
+        {
+            continue;
+        }
+        let text = fs::read_to_string(path)?;
+        let production = text.split("\nmod tests {").next().unwrap_or(&text);
+        for block in function_blocks(production) {
+            let Some(open) = block.body.find("PaneWriter::open(") else {
+                continue;
+            };
+            let wakes_first = [
+                "hibernate::wake_pane(",
+                "hibernate::wake_pane_at(",
+                "hibernate::wake_pane_in(",
+            ]
+            .iter()
+            .any(|wake| block.body[..open].contains(wake));
+            if !wakes_first {
+                violations.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    block.line,
+                    block.signature.trim()
+                ));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "pane writers must wake hibernating agents before opening transport in the same function\n{}",
+        violations.join("\n")
+    );
 }
 
 fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
