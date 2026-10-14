@@ -423,6 +423,22 @@ type CachedBookMemo = Option<(PathBuf, Option<(u64, u64)>, Arc<PriceBook>)>;
 
 static CACHED_BOOK_MEMO: LazyLock<Mutex<CachedBookMemo>> = LazyLock::new(|| Mutex::new(None));
 
+#[cfg(feature = "testkit")]
+#[doc(hidden)]
+pub mod testkit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static BOOK_LOADS: AtomicU64 = AtomicU64::new(0);
+
+    pub fn book_loads() -> u64 {
+        BOOK_LOADS.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn count_load() {
+        BOOK_LOADS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Load the current read-only price book from the embedded snapshot and
 /// persistent shared cache, without refreshing or writing. Spending fallbacks,
 /// agent-card costs, and hook reconciliation share this path.
@@ -446,6 +462,8 @@ pub fn cached_book_with_fingerprint(cache_path: &Path) -> (Arc<PriceBook>, Optio
         return (Arc::clone(book), fingerprint);
     }
 
+    #[cfg(feature = "testkit")]
+    testkit::count_load();
     let book = Arc::new(PriceBook::assembled(&read_cache(cache_path)));
     *memo = Some((cache_path.to_owned(), stamp, Arc::clone(&book)));
     (book, fingerprint)

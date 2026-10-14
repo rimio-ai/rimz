@@ -1482,7 +1482,9 @@ fn realtime_cost_from_fixture(adapter: &AgentDefinition, conformance: &AdapterCo
     }
     if let Some(fixture) = conformance.hook_turn_cost.as_ref() {
         return adapter
-            .price_turn_locally(fixture.event_name, &fixture.payload, &prices)
+            .price_turn_locally(fixture.event_name, &fixture.payload, &|| {
+                std::sync::Arc::new(prices.clone())
+            })
             .is_some_and(|cost| cost.cost_usd > 0.0);
     }
     conformance.spend.as_ref().is_some_and(|fixture| {
