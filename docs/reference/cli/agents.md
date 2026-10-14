@@ -220,7 +220,7 @@ Placement decides whether the launch takes over your pane, splits it, or opens a
 | `--new-pane` | Split the current tab. Single agent cell only. |
 | `--new-tab` | Open a new tab (tmux window). |
 | `--bg` | Keep focus where it is: an in-place launch becomes a split, and an already-live cohort or lane does not get a focus jump. Agent callers always get this focus behavior, including fork, resume, and restart, without passing the flag. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
-| `--detach` | Not placement: launch the prompt without a report and without holding the launcher, as described under [Launch a layout](#launch-a-layout). |
+| `--detach` | Not placement: launch the prompt without a report and without holding the launching agent, as described under [Launch a layout](#launch-a-layout). |
 
 The split-versus-tab mechanics are in [fleet.md → Placement](../../internals/harness/fleet.md#placement).
 

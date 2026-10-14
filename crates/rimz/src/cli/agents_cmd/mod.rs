@@ -244,7 +244,7 @@ pub(crate) struct CohortLaunchArgs {
     /// Open the launch in a new tab/window instead of the current view.
     #[arg(long)]
     pub(crate) new_tab: bool,
-    /// Launch without a report and without holding the launcher; the result stays readable with `wait`.
+    /// Launch without a report and without holding the launching agent; the result stays readable with `wait`.
     #[arg(long)]
     pub(crate) detach: bool,
 }

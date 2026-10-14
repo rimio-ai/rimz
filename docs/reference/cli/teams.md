@@ -222,7 +222,7 @@ A checkout holding another team (a live member, or team history with a board sta
 | `--new-tab` | Open the launch in a new tab or tmux window. |
 | `--detach` | Launch the prompt without a [team report](#team-reports) and without holding the launching agent. Refused without a prompt and with `--resume`. |
 
-`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Launch flags without a team name are refused with `team launch options require a team name`.
+`--resume` accepts `--isolation host|sandbox`, replacing each member's recorded isolation while keeping its conversation, and queues `PROMPT` to the leader after reopening. For model, effort, agent-base, tier, or permission overrides, use the `resume` verb below. `--from-pr`, `--channel`, `--description`, and `--budget` still conflict with resume. `--fresh` conflicts with `--resume` and `--from-pr`. Without `--resume` or `--fresh`, a launch into a named worktree whose cohort has closed offers the choice only at a terminal: run unattended (stdin not a terminal), it prints a hint to stderr and exits 0 without launching, so a script cannot read exit 0 as a launch there. Launch flags without a team name are refused with `team launch options require a team name`.
 
 A launch that opens new panes prints a receipt:
 
