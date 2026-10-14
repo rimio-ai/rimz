@@ -2,9 +2,10 @@
 # requires-python = ">=3.14"
 # dependencies = []
 # ///
-"""Select one Dependabot repair batch; supervise Astra in a fresh RimZ worktree per attempt."""
+"""Select one Dependabot repair batch after a quiet period; launch spot in a fresh RimZ worktree."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import fcntl
 import json
 from pathlib import Path
@@ -16,8 +17,7 @@ TASK_DIR = Path(__file__).resolve().parent
 ROOT = TASK_DIR.parents[1]
 PREFIX = "deps/repair-"
 MARKER = "rimz-dependabot-repair:v1 sources="
-# Every Skill(...) prompt.md names; the worker must be able to call each one.
-WORKER_SKILLS = ("pr", "commit", "fix-ci", "rimz-wait")
+SEAT_SKILLS = {"coder": ("commit", "fix-ci"), "reviewer": ("pr",)}
 
 
 def command(*args, root=None):
@@ -96,7 +96,7 @@ def current_checks(pr, rollup):
     return "pending" if "pending" in states else "failed" if "failed" in states else "green"
 
 
-def select(repo, prs, branches, checks):
+def select(repo, prs, branches, checks, now, quiet_period):
     base = repo["defaultBranchRef"]["name"]
     result = dict(action="idle", reason="no uncovered failed Dependabot PRs",
                   repo=repo["nameWithOwner"], default_base=base, branch=None,
@@ -144,6 +144,15 @@ def select(repo, prs, branches, checks):
                          and checks.get(pr["number"]) == "failed")
         if not numbers:
             return result
+        if quiet_period > timedelta(0):
+            newest = max((pr for pr in prs if pr["state"] == "open" and pr["user"]["login"] == "dependabot[bot]"),
+                         key=lambda pr: datetime.fromisoformat(pr["created_at"]))
+            created = datetime.fromisoformat(newest["created_at"])
+            ready = created + quiet_period
+            if now < ready:
+                result["reason"] = (f"Dependabot active: newest open PR #{newest['number']} created {created.isoformat()}; "
+                                    f"a new batch waits until {ready.isoformat()}")
+                return result
         branch, replacement = branch_name(numbers), None
     result.update(branch=branch, existing_replacement_pr=replacement,
                   sources=[dict(number=n, head_sha=source(n)["head"]["sha"], title=source(n)["title"])
@@ -193,7 +202,7 @@ def pull_requests(repo):
     return pages(f"repos/{repo['nameWithOwner']}/pulls?state=all&per_page=100")
 
 
-def query_plan(repo, prs):
+def query_plan(repo, prs, quiet_period=timedelta(hours=6)):
     slug = repo["nameWithOwner"]
     refs = command("git", "for-each-ref", "--format=%(refname)",
                    "refs/heads/deps/repair-*", "refs/remotes/origin/deps/repair-*")
@@ -207,7 +216,7 @@ def query_plan(repo, prs):
             rollup = github("pr", "view", str(pr["number"]), "--repo", slug,
                             "--json", "statusCheckRollup,headRefOid")
             checks[pr["number"]] = current_checks(pr, rollup)
-    return select(repo, prs, branches, checks)
+    return select(repo, prs, branches, checks, datetime.now(timezone.utc), quiet_period)
 
 
 def rimz(*args):
@@ -230,13 +239,14 @@ def branch_worktrees():
 
 
 def open_checkout(plan):
-    """Resume the attempt checkout a previous fire kept, or cut a fresh one from the published branch."""
+    """Cut a fresh checkout from the published branch, never relaunch into a previous cohort's tree."""
     branch = plan["branch"]
     trees = branch_worktrees()
     stale = [dict(branch=other, path=path) for other, path in sorted(trees.items())
              if other.startswith(PREFIX) and other != branch]
     if branch in trees:
-        return dict(attempt_checkout="resumed", branch=branch, path=trees[branch], stale_attempt_checkouts=stale)
+        raise RuntimeError(f"checkout {trees[branch]} on {branch} holds unpushed or uncommitted work with no live agent; "
+                           f"push it, or discard it with rimz worktree remove {branch} --force")
     published = f"origin/{branch}"
     if not git_succeeds("rev-parse", "--verify", "--quiet", f"refs/remotes/{published}"):
         # Publishing first makes an interrupted first attempt recoverable by name.
@@ -252,79 +262,79 @@ def open_checkout(plan):
                 stale_attempt_checkouts=stale)
 
 
-def settle_checkout(branch):
-    """Report whether RimZ reclaimed the attempt checkout; never raises, never forces."""
-    try:
-        if branch not in branch_worktrees():
-            outcome = dict(attempt_checkout="removed", reason="reclaimed by RimZ after the worker exited")
-        elif occupied_repair_lane(json.loads(rimz("agents", "list", "--all", "--json"))):
-            outcome = dict(attempt_checkout="kept", reason="worker still live")
-        else:
+def reclaim_idle_checkouts():
+    """Reclaim old cohort trees before planning, deferring if a stopped lane is still closing."""
+    for branch in sorted(branch_worktrees()):
+        if not branch.startswith(PREFIX):
+            continue
+        try:
             rimz("worktree", "remove", branch)
             outcome = dict(attempt_checkout="removed", reason="clean and pushed")
-    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
-        outcome = dict(attempt_checkout="kept", reason=str(error))
-    print(json.dumps(dict(outcome, branch=branch)), flush=True)
+        except RuntimeError as error:
+            outcome = dict(attempt_checkout="kept", reason=str(error))
+        outcome["branch"] = branch
+        print(json.dumps(outcome), flush=True)
+        if outcome["attempt_checkout"] == "kept" and "is in use by" in outcome["reason"]:
+            return outcome
 
 
-def occupied_repair_lane(report):
+def finished_repair_lanes(trees, open_heads):
+    finished = set()
+    for branch, path in trees.items():
+        if not branch.startswith(PREFIX) or branch in open_heads:
+            continue
+        try:
+            board = (Path(path) / "blackboard.md").read_text()
+        except (OSError, UnicodeError):
+            continue
+        stage = next((line.removeprefix("Stage:").strip() for line in board.splitlines()
+                      if line.startswith("Stage:")), "")
+        # Match scratch::parse_board_stage: strip only a valid terminal owner, not whitespace in the name.
+        if re.sub(r" \(@[^()\s]+\)$", "", stage) == "Done":
+            finished.add(branch)
+    return finished
+
+
+def occupied_repair_lane(report, finished):
     if report["schema"] != 1:
         raise RuntimeError("Unsupported rimz agents JSON schema; update the coordinator")
     return [agent["handle"] for agent in report["agents"]
-            if (agent["placement"]["branch"] or "").startswith(PREFIX) and agent["placement"]["pane"]]
+            if (agent["placement"]["branch"] or "").startswith(PREFIX) and agent["placement"]["pane"]
+            and agent["placement"]["branch"] not in finished]
 
 
-def require_worker_skills(worker_profile):
-    """Refuse a worker profile that cannot call a skill prompt.md requires.
-
-    A worker that finds a skill disabled can only stop, and nobody can fix a profile from
-    inside the run, so the gap fails the fire here with the fix instead.
-    """
-    report = json.loads(rimz("agents", "explain", worker_profile, "--yolo", "--json"))
-    callable_skills = report["skills"]["callable"]
-    if callable_skills is None:  # No list in the profile chain: native discovery, all callable.
-        return
-    missing = sorted(set(WORKER_SKILLS) - set(callable_skills))
-    if missing:
-        raise RuntimeError(
-            f"Worker profile {worker_profile} cannot call required skills {', '.join(missing)}; "
-            f"add them to the profile's `skills` list or pass --worker-profile with one that has them")
+def stop_finished_lanes(report, finished):
+    for agent in report["agents"]:
+        branch, pane = agent["placement"]["branch"], agent["placement"]["pane"]
+        if branch not in finished or not pane:
+            continue
+        rimz("agents", "stop", pane)
+        print(json.dumps(dict(stopped=pane, handle=agent["handle"], branch=branch,
+                              reason="lane finished: board Done, no open PR")), flush=True)
 
 
-def launch(plan, worker_timeout=None, worker_profile="astra"):
+def require_seat_skills():
+    """Refuse before publishing when either spot seat cannot call its required skills."""
+    for role, required in SEAT_SKILLS.items():
+        report = json.loads(rimz("agents", "explain", f"spot.{role}", "--json"))
+        callable_skills = report["skills"]["callable"]
+        if callable_skills is None:  # No list in the profile chain: native discovery, all callable.
+            continue
+        missing = sorted(set(required) - set(callable_skills))
+        if missing:
+            raise RuntimeError(f"spot.{role} cannot call required skills {', '.join(missing)}; "
+                               "add them to the profile's skills list")
+
+
+def launch(plan):
     prompt = (TASK_DIR / "prompt.md").read_text()
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
-    # Unattended repairs need forge access and writable tool caches outside the worktree.
-    # Keep an explicit tab for older installed RimZ versions too: the worker runs
-    # for hours and launches subagents beside it.
-    argv = ["rimz", "agents", worker_profile, prompt, "-w", plan["branch"], "--yolo", "-p", "--new-tab"]
-    # Uncapped by default: a worker blocked on a question waits for the human, and this
-    # coordinator stays alive meanwhile, so the loop's overlap guard admits no second worker.
-    if worker_timeout is not None:
-        argv += ["--timeout", worker_timeout]
+    argv = ["rimz", "teams", "launch", "spot", prompt, "-w", plan["branch"], "--bg"]
     subprocess.run(argv, cwd=ROOT, check=True)
 
 
-def verify_result(plan, rows):
-    if len(rows) != 1:
-        raise RuntimeError("Worker must leave exactly one replacement PR; inspect its report before retrying")
-    pr = rows[0]
-    if marker(branch_sources(plan["branch"])) not in (pr.get("body") or "").splitlines():
-        raise RuntimeError(f"Replacement #{pr['number']} lacks its batch marker")
-    if pr["state"] == "MERGED":
-        return "merged"
-    if pr["state"] != "OPEN":
-        raise RuntimeError(f"Replacement #{pr['number']} was closed without merging")
-    if heads_marker(plan["sources"]) not in (pr.get("body") or "").splitlines():
-        raise RuntimeError(f"Replacement #{pr['number']} lacks the verified source revisions")
-    state = current_checks({"number": pr["number"], "head": {"sha": pr["headRefOid"]}}, pr)
-    if state == "failed":
-        raise RuntimeError(f"Replacement #{pr['number']} still has failed CI; the next fire can retry")
-    return state
-
-
-def run(worker_timeout=None, worker_profile="astra"):
+def run(quiet_period=timedelta(hours=6)):
     common = Path(command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
     with (common / "rimz-dependabot-repair.lock").open("a") as lock:
         try:
@@ -332,53 +342,55 @@ def run(worker_timeout=None, worker_profile="astra"):
         except BlockingIOError:
             print(json.dumps(dict(action="idle", reason="another coordinator holds the repository lock")))
             return
-        # A supervisor can die while its pane survives. Do not spawn a second worker there.
-        occupied = occupied_repair_lane(json.loads(rimz("agents", "list", "--all", "--json")))
+        report = json.loads(rimz("agents", "list", "--all", "--json"))
+        # Re-read under the shared lock; reuse this PR snapshot for occupancy, pruning, and planning.
+        repo = repo_view()
+        prs = pull_requests(repo)
+        open_heads = {pr["head"]["ref"] for pr in prs if pr["state"] == "open"}
+        finished = finished_repair_lanes(branch_worktrees(), open_heads)
+        occupied = occupied_repair_lane(report, finished)
         if occupied:
             print(json.dumps(dict(action="idle", reason="repair lane still occupied", agents=occupied)))
             return
+        stop_finished_lanes(report, finished)
         # A tree directory deleted by hand still pins its branch until its metadata is pruned.
         command("git", "worktree", "prune")
         command("git", "fetch", "--prune", "origin")  # A stale tracking ref would fail the lease delete below.
-        # Re-read after taking the shared lock, never consume a stale plan file.
-        repo = repo_view()
-        prs = pull_requests(repo)
-        prune_empty_batches(repo["defaultBranchRef"]["name"], {pr["head"]["ref"] for pr in prs if pr["state"] == "open"})
-        plan = query_plan(repo, prs)
+        closing = reclaim_idle_checkouts()
+        if closing:
+            print(json.dumps(dict(action="idle", reason="repair lane still closing", branch=closing["branch"],
+                                  holder=closing["reason"])), flush=True)
+            return
+        prune_empty_batches(repo["defaultBranchRef"]["name"], open_heads)
+        plan = query_plan(repo, prs, quiet_period)
         print(json.dumps(plan), flush=True)
         if plan["action"] != "repair":
             return
         # Before open_checkout publishes the batch branch, so a refused fire leaves nothing behind.
-        require_worker_skills(worker_profile)
-        print(json.dumps(open_checkout(plan)), flush=True)
-        try:
-            launch(plan, worker_timeout, worker_profile)
-        finally:
-            settle_checkout(plan["branch"])
-        rows = github("pr", "list", "--repo", plan["repo"], "--head", plan["branch"],
-                      "--state", "all", "--json", "number,state,body,statusCheckRollup,headRefOid")
-        print(json.dumps(dict(replacement_pr=rows[0]["number"] if rows else None,
-                              outcome=verify_result(plan, rows))), flush=True)
+        require_seat_skills()
+        checkout = open_checkout(plan)
+        print(json.dumps(checkout), flush=True)
+        launch(plan)
+        print(json.dumps(dict(launched=f"spot#{plan['branch'].replace('/', '-')}", branch=plan["branch"],
+                              worktree=checkout["path"])), flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, suggest_on_error=True, color=False)
     parser.add_argument("action", choices=("plan", "run"))
-    parser.add_argument("--worker-timeout", metavar="DURATION",
-                        help="cap the repair worker (a rimz duration such as 60m or 3d); "
-                             "default: uncapped, so a worker can wait days on a question")
-    parser.add_argument("--worker-profile", metavar="PROFILE", default="astra",
-                        help="rimz agent profile for the repair worker; a worker that must wait days "
-                             "on a question needs a Claude profile (Codex auto-resolves questions "
-                             "empty after 120s)")
+    parser.add_argument("--quiet-period", metavar="HOURS", type=float, default=6,
+                        help="defer a new batch until every open Dependabot PR is this old; default: 6, 0 disables")
     args = parser.parse_args()
     try:
+        if args.quiet_period < 0:
+            raise ValueError("--quiet-period must be nonnegative")
+        quiet_period = timedelta(hours=args.quiet_period)
         if args.action == "plan":
             repo = repo_view()
-            print(json.dumps(query_plan(repo, pull_requests(repo))))
+            print(json.dumps(query_plan(repo, pull_requests(repo), quiet_period)))
         else:
-            run(args.worker_timeout, args.worker_profile)
-    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            run(quiet_period)
+    except (RuntimeError, OSError, ValueError, OverflowError, KeyError, TypeError, subprocess.SubprocessError) as error:
         print(f"Dependabot coordinator failed: {error}", file=sys.stderr)
         return 1
     return 0
