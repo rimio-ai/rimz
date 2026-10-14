@@ -235,8 +235,7 @@ impl DailyBudgetScope {
                 format!("fleet budget exhausted ({spend}); use `rimz budget` to raise or clear it")
             }
             Self::Account(key) => format!(
-                "{key} account budget exhausted ({spend}); use `rimz budget --account {}` to raise or clear it",
-                key.kind
+                "{key} account budget exhausted ({spend}); use `rimz budget --account {key}` to raise or clear it"
             ),
         }
     }

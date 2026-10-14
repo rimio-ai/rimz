@@ -22,6 +22,8 @@ Named accounts exist for `claude` and `codex` only. Any other kind is refused wi
 
 An account name is 1 to 32 characters of `a-z`, `0-9`, `_`, and `-`, starting with a letter or digit. `default` is reserved for the provider's own home.
 
+Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Account verbs keep their separate `KIND NAME` arguments; `loop add --account` takes a bare name because the task supplies its provider.
+
 Every named account has a home directory, and RimZ checks each home when it reads the machine config:
 
 | Rule | Detail |
@@ -43,7 +45,7 @@ rimz accounts add <KIND> <NAME> [--home <PATH>] [--history shared|standalone]
 | Argument or flag | Effect |
 | --- | --- |
 | `KIND` | `claude` or `codex`. |
-| `NAME` | The account name a room selects with `--account <KIND>=<NAME>`. |
+| `NAME` | The account name a room selects with `--account <KIND>@<NAME>`. |
 | `--home <PATH>` | The account's provider home, such as an existing `~/.claude-work`. Without it, the home is the default location above. |
 | `--history <MODE>` | `shared` or `standalone`: the account's `history` field, which names its history pool. `shared`, also what an absent field means, puts the account in one pool with `default` and every other shared account of its kind; `standalone` makes it a pool of its own. On a new account the flag writes the field, and without the flag no field is written. On an existing account the flag rewrites only that field, and without the flag the field is left alone. Any other value is refused, by the flag and by the config load, naming both. |
 
@@ -81,7 +83,7 @@ linked to /home/me/.claude: settings.json, settings.local.json, CLAUDE.md, skill
 ✓ claude  installed 13 hooks → ~/.rimz/accounts/claude/work/settings.json  (new file)
 claude account `work` lives at ~/.rimz/accounts/claude/work
   log in once   CLAUDE_CONFIG_DIR=/home/me/.rimz/accounts/claude/work claude
-  use at birth  rimz start --account claude=work
+  use at birth  rimz start --account claude@work
   this room     rimz accounts use claude work
   new rooms     rimz accounts use --global claude work
 ```
@@ -277,7 +279,7 @@ cleared the machine selection; new rooms and rooms following the machine default
 removed claude account `work`; its home ~/.rimz/accounts/claude/work and the provider files in it stay on disk; add it back to resume its sessions, or use `rimz accounts use claude default` for future launches
 ```
 
-A room pinned to the removed account keeps that pin, so its next launch of that provider fails with the account's declaration fix. Add the account again, or run `rimz accounts use <KIND> default` inside the room to pin future launches to the provider's own home. `rimz accounts use --reset <KIND>` instead unpins and follows live defaults; it refuses if the project still names the removed account. Old sessions still require their account to be declared to resume, and the room to select an account that shares its history: `default` or any shared account for a shared one, the account itself for a standalone one. `rimz reset --account <KIND>=<NAME>` remains a destructive alternative that rebuilds the room.
+A room pinned to the removed account keeps that pin, so its next launch of that provider fails with the account's declaration fix. Add the account again, or run `rimz accounts use <KIND> default` inside the room to pin future launches to the provider's own home. `rimz accounts use --reset <KIND>` instead unpins and follows live defaults; it refuses if the project still names the removed account. Old sessions still require their account to be declared to resume, and the room to select an account that shares its history: `default` or any shared account for a shared one, the account itself for a standalone one. `rimz reset --account <KIND>@<NAME>` remains a destructive alternative that rebuilds the room.
 
 If a live room pins the account, removal proceeds and warns with the room's name and the add, unpin, or pin-to-`default` fixes. The warning checks pins only; it does not enumerate older account stamps on running agents.
 

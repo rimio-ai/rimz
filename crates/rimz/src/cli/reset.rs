@@ -26,7 +26,7 @@ pub struct ResetArgs {
     #[arg(long)]
     pub hard: bool,
     /// Rebuild the room under this provider account (repeatable); the room comes back with no agents.
-    #[arg(long, value_name = "KIND=NAME", value_parser = super::accounts::parse_account_flag, conflicts_with = "no_start")]
+    #[arg(long, value_name = "KIND@NAME", value_parser = super::accounts::parse_account_flag, conflicts_with = "no_start")]
     pub account: Vec<super::accounts::AccountFlag>,
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
