@@ -57,6 +57,8 @@ A single pi session can switch provider accounts mid-session, so the provider da
 
 ## Launch and resume
 
+Bare RimZ `--resume` uses the native `pi --resume` picker ([upstream](../../externals/agent-adapter/pi-reference.md#cli-and-environment)).
+
 `pi --session <session_id>` restores a rollup-recorded session (a partial UUID suffices); before re-firing `session_start` with `reason: "resume"`, the extension walks `sessionManager.getBranch()` to hydrate cumulative assistant, tool-result, compaction, branch-summary, and standalone usage cost, the latest assistant usage split, and the session name. Older Pi releases without that read surface degrade to sparse enrichment and reconcile at the settled spend pass.
 
 RimZ renders typed prompt replacement through `pi --system-prompt <text>`. The full text is visible in the process argv, so RimZ rejects values over 120 KiB before exec. Pi's replacement is not hermetic: Pi still appends its native `APPEND_SYSTEM.md`, context files, skills, and cwd material after the replacement text.

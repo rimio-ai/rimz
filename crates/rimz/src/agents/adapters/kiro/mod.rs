@@ -89,6 +89,7 @@ static KIRO_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        picker: Some(&["kiro-cli", "chat", "--v3", "--resume-picker"]),
         definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("kiro-cli"),
         fixed_args: &["chat", "--v3"],

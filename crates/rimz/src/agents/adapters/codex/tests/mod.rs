@@ -357,6 +357,19 @@ fn spending_discovery_skips_copied_content_and_keeps_relocated_rollouts() {
 
 #[test]
 fn codex_commands_and_permission_args_match_run_posture() {
+    assert_eq!(
+        CodexAdapter.spec().launch.picker,
+        Some(
+            [
+                "codex",
+                "resume",
+                "--no-daemon",
+                "-c",
+                "tui.question_esc_back=false"
+            ]
+            .as_slice()
+        )
+    );
     let preset = crate::agents::LaunchPreset {
         auto_compact: Some("200000".to_owned()),
         ..Default::default()

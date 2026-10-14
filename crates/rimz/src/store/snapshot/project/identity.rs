@@ -320,15 +320,20 @@ impl CardIdentityAllocator {
         observation: &AgentLifecycleObservation,
         prior: Option<&AgentState>,
     ) -> String {
-        let candidate = observation
+        let prior_name = prior
+            .and_then(|state| state.name.as_deref())
+            .filter(|name| valid_agent_name(name));
+        let stamped = observation
             .agent_name
             .as_deref()
-            .filter(|name| valid_agent_name(name))
-            .or_else(|| {
-                prior
-                    .and_then(|state| state.name.as_deref())
-                    .filter(|name| valid_agent_name(name))
-            });
+            .filter(|name| valid_agent_name(name));
+        // A revived closed row keeps its recorded handle over the picker
+        // launch's stamp; a live row takes a later stamped name.
+        let candidate = if prior.is_some_and(|state| state.ended_at.is_some()) {
+            prior_name.or(stamped)
+        } else {
+            stamped.or(prior_name)
+        };
         self.assign_name_candidate(key, candidate, prior, &key.1)
     }
 

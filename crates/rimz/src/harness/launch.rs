@@ -184,6 +184,8 @@ pub enum AgentProcessCompileErr {
     NoHeadless { kind: String },
     #[error("agent `{kind}` has no resume command")]
     NoResume { kind: String },
+    #[error("agent `{kind}` has no session picker")]
+    NoPicker { kind: String },
     #[error("agent `{kind}` has no fork command")]
     NoFork { kind: String },
     #[error("agent `{kind}` produced an empty launch command")]
@@ -480,6 +482,10 @@ pub enum ExecAction {
         #[serde(default)]
         extra_args: Vec<String>,
     },
+    Pick {
+        #[serde(default)]
+        extra_args: Vec<String>,
+    },
     Resume {
         session_id: String,
         #[serde(default)]
@@ -496,6 +502,7 @@ impl ExecAction {
     pub(super) fn extra_args(&self) -> &[String] {
         match self {
             Self::Launch { extra_args, .. }
+            | Self::Pick { extra_args }
             | Self::Resume { extra_args, .. }
             | Self::Fork { extra_args, .. } => extra_args,
         }
@@ -504,6 +511,7 @@ impl ExecAction {
     pub fn extra_args_mut(&mut self) -> &mut Vec<String> {
         match self {
             Self::Launch { extra_args, .. }
+            | Self::Pick { extra_args }
             | Self::Resume { extra_args, .. }
             | Self::Fork { extra_args, .. } => extra_args,
         }
@@ -769,58 +777,71 @@ fn compile_provider_argv_with_headless(
             kind: kind.to_owned(),
         });
     }
-    let argv = match (headless, action) {
-        (Some(request), ExecAction::Launch { prompt, extra_args }) => adapter
-            .spec()
-            .launch
-            .headless
-            .ok_or_else(|| AgentProcessCompileErr::NoHeadless {
-                kind: kind.to_owned(),
-            })?
-            .render_argv(extra_args, prompt.as_deref(), request, cwd, settings)?,
-        (Some(_), _) => {
-            return Err(AgentProcessCompileErr::NoHeadless {
-                kind: kind.to_owned(),
-            });
-        }
-        (None, ExecAction::Launch { prompt, extra_args }) => adapter
-            .launch_command(extra_args, prompt.as_deref())
-            .ok_or_else(|| AgentProcessCompileErr::NoLaunch {
-                kind: kind.to_owned(),
-            })?,
-        (
-            None,
-            ExecAction::Resume {
-                session_id,
-                extra_args,
-            },
-        ) => {
-            let mut argv = adapter.resume_command(session_id, cwd).ok_or_else(|| {
-                AgentProcessCompileErr::NoResume {
-                    kind: kind.to_owned(),
-                }
-            })?;
-            argv.extend(extra_args.iter().cloned());
-            argv
-        }
-        (
-            None,
-            ExecAction::Fork {
-                session_id,
-                extra_args,
-            },
-        ) => {
-            let mut argv = adapter
+    let argv =
+        match (headless, action) {
+            (Some(request), ExecAction::Launch { prompt, extra_args }) => adapter
                 .spec()
                 .launch
-                .fork_command(session_id)
-                .ok_or_else(|| AgentProcessCompileErr::NoFork {
+                .headless
+                .ok_or_else(|| AgentProcessCompileErr::NoHeadless {
                     kind: kind.to_owned(),
+                })?
+                .render_argv(extra_args, prompt.as_deref(), request, cwd, settings)?,
+            (Some(_), _) => {
+                return Err(AgentProcessCompileErr::NoHeadless {
+                    kind: kind.to_owned(),
+                });
+            }
+            (None, ExecAction::Launch { prompt, extra_args }) => adapter
+                .launch_command(extra_args, prompt.as_deref())
+                .ok_or_else(|| AgentProcessCompileErr::NoLaunch {
+                    kind: kind.to_owned(),
+                })?,
+            (None, ExecAction::Pick { extra_args }) => {
+                let picker = adapter.spec().launch.picker.ok_or_else(|| {
+                    AgentProcessCompileErr::NoPicker {
+                        kind: kind.to_owned(),
+                    }
                 })?;
-            argv.extend(extra_args.iter().cloned());
-            argv
-        }
-    };
+                picker
+                    .iter()
+                    .map(|arg| (*arg).to_owned())
+                    .chain(extra_args.iter().cloned())
+                    .collect()
+            }
+            (
+                None,
+                ExecAction::Resume {
+                    session_id,
+                    extra_args,
+                },
+            ) => {
+                let mut argv = adapter.resume_command(session_id, cwd).ok_or_else(|| {
+                    AgentProcessCompileErr::NoResume {
+                        kind: kind.to_owned(),
+                    }
+                })?;
+                argv.extend(extra_args.iter().cloned());
+                argv
+            }
+            (
+                None,
+                ExecAction::Fork {
+                    session_id,
+                    extra_args,
+                },
+            ) => {
+                let mut argv = adapter
+                    .spec()
+                    .launch
+                    .fork_command(session_id)
+                    .ok_or_else(|| AgentProcessCompileErr::NoFork {
+                        kind: kind.to_owned(),
+                    })?;
+                argv.extend(extra_args.iter().cloned());
+                argv
+            }
+        };
     if argv.is_empty() {
         return Err(AgentProcessCompileErr::EmptyCommand {
             kind: kind.to_owned(),
@@ -1150,7 +1171,12 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
     reminders: &LaunchReminders,
 ) -> Result<AgentProcessStage, AgentProcessStageErr> {
     let bound = !matches!(&request.provider_account, ProviderAccountState::Unbound);
-    if bound && !matches!(&request.action, ExecAction::Launch { .. }) {
+    if bound
+        && !matches!(
+            &request.action,
+            ExecAction::Launch { .. } | ExecAction::Pick { .. }
+        )
+    {
         return Err(AgentProcessStageErr::InvalidProviderBinding);
     }
 
@@ -1328,7 +1354,7 @@ fn plan_exec_argv(
             path: prompt_artifact_path(runtime, "task", &contents),
             contents,
         }),
-        _ => None,
+        ExecAction::Pick { .. } | ExecAction::Resume { .. } | ExecAction::Fork { .. } => None,
     };
     let prompt_file = prompt_artifact
         .as_ref()

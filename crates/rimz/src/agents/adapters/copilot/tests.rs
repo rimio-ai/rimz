@@ -679,6 +679,10 @@ fn room_env_uses_private_defaults_and_preserves_user_exporters() {
 #[test]
 fn launch_resume_permissions_and_presets_are_pinned() {
     assert_eq!(
+        CopilotAdapter.spec().launch.picker,
+        Some(["copilot", "--resume"].as_slice())
+    );
+    assert_eq!(
         CopilotAdapter.launch_command(&["--banner".to_owned()], Some("review this")),
         Some(vec![
             "copilot".to_owned(),

@@ -517,6 +517,7 @@ impl<'a> ExplainReport<'a> {
             kind: &request.kind,
             action: match request.action {
                 ExecAction::Launch { .. } => "launch",
+                ExecAction::Pick { .. } => "pick",
                 ExecAction::Resume { .. } => "resume",
                 ExecAction::Fork { .. } => "fork",
             },

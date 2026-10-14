@@ -10,6 +10,8 @@ Global hooks run in every workspace, so session, turn, and tool lifecycle arrive
 
 ## Launch and resume
 
+Bare RimZ `--resume` uses `kiro-cli chat --v3 --resume-picker`, not native `--resume`, which chooses the newest conversation ([upstream](../../externals/agent-adapter/kiro-reference.md)).
+
 Fresh sessions run `kiro-cli chat --v3`, with a launch prompt as a bare trailing positional: the v3 TUI parser reads `--` as an unknown flag that swallows the next token, so no argv form passes a prompt starting with `-`. Profiles map `model` and `effort` to chat-level flags. Exact resume runs `kiro-cli chat --v3 --resume-id <session_id>`; both split and joined flag forms are recognized on the launcher and `kiro-cli-chat` engine process. `kiro-cli-term` remains excluded because it is the shell-integration daemon.
 
 Yolo adds the boolean `--trust-all-tools` flag before the prompt. Ask, Auto, and Plan add no flags. Resume strips and re-renders the selected permission posture through the shared launch machinery.

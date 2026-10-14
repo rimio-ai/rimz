@@ -60,6 +60,10 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
 
 #[test]
 fn launch_and_permission_argv_match_qwen_cli() {
+    assert_eq!(
+        QwenAdapter.spec().launch.picker,
+        Some(["qwen", "--resume"].as_slice())
+    );
     let adapter = QwenAdapter;
     assert_eq!(adapter.default_launch_model(), None);
     assert_eq!(

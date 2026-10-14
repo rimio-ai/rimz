@@ -144,6 +144,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
     launch: super::LaunchSpec {
+        picker: Some(&["claude", "--resume"]),
         headless: Some(&headless::ClaudeHeadless),
         definitions: DEFINITIONS,
         program: Some("claude"),

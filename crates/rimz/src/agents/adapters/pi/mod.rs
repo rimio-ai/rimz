@@ -124,6 +124,7 @@ static PI_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        picker: Some(&["pi", "--resume"]),
         definitions: DEFINITIONS,
         program: Some("pi"),
         fixed_args: &[],

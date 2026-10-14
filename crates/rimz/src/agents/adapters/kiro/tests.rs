@@ -1206,6 +1206,10 @@ fn launch_resume_and_presets_use_v3_surface() {
     KiroAdapter.spec().launch.strip_permission_args(&mut args);
     assert!(args.is_empty());
     assert_eq!(
+        KiroAdapter.spec().launch.picker,
+        Some(["kiro-cli", "chat", "--v3", "--resume-picker"].as_slice())
+    );
+    assert_eq!(
         KiroAdapter.launch_command(
             &["--agent".to_owned(), "reviewer".to_owned()],
             Some("review")

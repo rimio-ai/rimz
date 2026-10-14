@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+fn picked_session_adopts_new_identity_or_revives_closed_identity() {
+    for (kind, signal) in [("claude", "registered"), ("codex", "turn_started")] {
+        for recorded in [false, true] {
+            let mut events = Vec::new();
+            if recorded {
+                events.push(launch_event(
+                    kind,
+                    AgentLaunchPayload {
+                        description: Some("saved history".into()),
+                        launch_id: Some("launch_old".into()),
+                        ..launch_payload("picked-id", "old-handle")
+                    },
+                ));
+                events.push(raw_lifecycle_at(
+                    kind,
+                    1,
+                    json!({
+                        "agent_id": "picked-id", "signal": {"signal": "ended"}
+                    }),
+                ));
+            }
+            events.push(launch_event(
+                kind,
+                AgentLaunchPayload {
+                    pane_id: Some(PaneId::parse("tmux:%7").unwrap()),
+                    launch_id: Some("launch_picker".into()),
+                    prompt: None,
+                    ..launch_payload("launch_picker", "new-handle")
+                },
+            ));
+            events.push(raw_lifecycle_at(
+                kind,
+                2,
+                json!({
+                    "agent_id": "picked-id", "agent_name": "new-handle",
+                    "pane_id": "tmux:%7", "signal": {"signal": signal}
+                }),
+            ));
+            let agents = reduce_agent_states(&events);
+            assert_eq!(agents.len(), 1, "{kind}, recorded={recorded}");
+            let agent = &agents[0];
+            assert_eq!(agent.agent_id.as_str(), "picked-id");
+            assert_eq!(
+                crate::address::launch_row(
+                    &agents,
+                    &agent.kind,
+                    &AgentSessionId::from("launch_picker"),
+                )
+                .map(|row| row.agent_id.as_str()),
+                Some("picked-id"),
+                "{kind}, recorded={recorded}"
+            );
+            assert_eq!(
+                agent.name.as_deref(),
+                Some(if recorded { "old-handle" } else { "new-handle" })
+            );
+            assert_eq!(agent.pane.as_ref().unwrap().pane_id.as_str(), "tmux:%7");
+            assert!(agent.ended_at.is_none());
+            if recorded {
+                assert_eq!(agent.description.as_deref(), Some("saved history"));
+            }
+        }
+    }
+}
+
+#[test]
 fn lifecycle_reduces_pane_id_and_carries_it_forward() {
     // The hook stamps the mux pane id on every lifecycle event so the
     // reducer can bind each agent to its own pane. A later event that omits

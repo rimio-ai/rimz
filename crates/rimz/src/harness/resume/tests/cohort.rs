@@ -468,6 +468,7 @@ fn check_cohort_alias_replay(override_model: Option<&str>) {
         let panes = compile_layout_panes(
             &layout,
             LayoutPaneParams {
+                pick_session: false,
                 runtime: &runtime,
                 cwd: root.path(),
                 cleanup_worktree: false,
@@ -651,6 +652,7 @@ fn resume_overrides_keep_provider_args_and_record_in_sync() {
                 let panes = compile_layout_panes(
                     &layout,
                     LayoutPaneParams {
+                        pick_session: false,
                         runtime: &runtime,
                         cwd: root.path(),
                         cleanup_worktree: false,
@@ -1404,6 +1406,7 @@ fn team_restore_rebuilds_a_fallen_back_seat_on_its_stamped_render() {
     let panes = compile_layout_panes(
         &tab.layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &RUNTIME,
             cwd: &tab.cwd,
             cleanup_worktree: false,

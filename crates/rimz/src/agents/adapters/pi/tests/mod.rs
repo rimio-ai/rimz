@@ -59,6 +59,10 @@ fn pi_activity_filter_excludes_the_blocking_gate() {
 #[test]
 fn launch_resume_and_fork_argv_match_pi() {
     assert_eq!(
+        PiAdapter.spec().launch.picker,
+        Some(["pi", "--resume"].as_slice())
+    );
+    assert_eq!(
         PiAdapter.launch_command(&[], None),
         Some(vec!["pi".to_owned()])
     );

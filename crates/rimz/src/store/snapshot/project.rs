@@ -522,7 +522,13 @@ impl ReducerState {
         }) else {
             return;
         };
-        let _ = self.retire_provisional(&provisional_key);
+        if let Some(provisional) = self.retire_provisional(&provisional_key)
+            && let Some(launch_id) = provisional.launch_id
+            && let Some(existing) = self.map.get_mut(key)
+        {
+            existing.launch_id = Some(launch_id);
+            self.launch_identity.replace(key, existing);
+        }
     }
 
     fn retire_provisional(&mut self, key: &AgentKey) -> Option<AgentState> {

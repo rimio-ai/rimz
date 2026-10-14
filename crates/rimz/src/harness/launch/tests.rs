@@ -95,6 +95,79 @@ fn copilot_disabled_hooks_refuse_a_modeless_launch_only_when_rimz_hooks_are_inst
     );
 }
 
+#[test]
+fn picker_argv_has_no_session_or_prompt_and_preserves_posture() {
+    let action: Result<ExecAction, _> = serde_json::from_value(serde_json::json!({
+        "action": "pick", "extra_args": ["--model", "chosen"]
+    }));
+    assert!(action.is_ok(), "picker action must decode: {action:?}");
+    let action = action.unwrap();
+    for (kind, expected) in [
+        ("claude", vec!["claude", "--resume", "--model", "chosen"]),
+        (
+            "codex",
+            vec![
+                "codex",
+                "resume",
+                "--no-daemon",
+                "-c",
+                "tui.question_esc_back=false",
+                "--model",
+                "chosen",
+            ],
+        ),
+        ("copilot", vec!["copilot", "--resume", "--model", "chosen"]),
+        ("droid", vec!["droid", "--resume", "--model", "chosen"]),
+        ("kimi", vec!["kimi", "--session", "--model", "chosen"]),
+        (
+            "kiro",
+            vec![
+                "kiro-cli",
+                "chat",
+                "--v3",
+                "--resume-picker",
+                "--model",
+                "chosen",
+            ],
+        ),
+        ("qwen", vec!["qwen", "--resume", "--model", "chosen"]),
+        ("pi", vec!["pi", "--resume", "--model", "chosen"]),
+    ] {
+        let adapter = crate::agents::find_definition(kind).unwrap();
+        assert_eq!(
+            compile_provider_argv(adapter, kind, &action, Path::new("/repo")).unwrap(),
+            expected
+        );
+    }
+    let adapter = crate::agents::find_definition("grok").unwrap();
+    assert!(compile_provider_argv(adapter, "grok", &action, Path::new("/repo")).is_err());
+    let adapter = crate::agents::find_definition("claude").unwrap();
+    let headless = crate::agents::HeadlessRequest {
+        schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
+        schema_file: "/check/schema.json".into(),
+        verdict_file: "/check/verdict.json".into(),
+    };
+    assert!(matches!(
+        compile_provider_argv_with_headless(
+            adapter,
+            "claude",
+            &action,
+            Path::new("/repo"),
+            Some(&headless),
+            (Path::new("/repo"), &mut None),
+        ),
+        Err(AgentProcessCompileErr::NoHeadless { .. })
+    ));
+    let mut request = request("claude", action);
+    request.identity.launch_id = Some("launch_picker".into());
+    assert!(matches!(
+        validate_exec_request(&request),
+        Err(ExecWireErr::OrphanLaunchId)
+    ));
+    request.identity.name = Some("minted-handle".into());
+    assert_eq!(round_trip(&request).1, request);
+}
+
 /// The temp unit and shared dir a compiled launch names in Environment.
 fn temp_files(tmp: &str, caller: bool) -> Option<TempFiles> {
     Some(TempFiles {
