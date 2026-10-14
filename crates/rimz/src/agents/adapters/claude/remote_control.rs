@@ -416,7 +416,13 @@ pub fn readiness(
         launch_endpoint_conflict(),
         remote_consent::read_consent(login_env),
         launch_traffic_switch(),
-        project_root.map(|root| super::folder_trust::folder_trust(root, Some(root), login_env)),
+        project_root.map(|root| {
+            let is_repo = crate::workspace::WorkspaceResolver::resolve(root, Some(root.into()))
+                .map_or(true, |workspace| {
+                    workspace.root_class == crate::workspace::RootClass::Repo
+                });
+            super::folder_trust::folder_trust(root, is_repo.then_some(root), login_env)
+        }),
     ) {
         Ok(host_argv) => RuntimeControlReadiness::Ready {
             host_argv: Some(host_argv_with_login(host_argv, login_env)),

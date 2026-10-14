@@ -81,6 +81,92 @@ fn pane_auto_status_honors_traffic_switches() {
 }
 
 #[test]
+fn readiness_inherits_parent_trust_only_outside_git() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if std::env::var_os("RIMZ_TEST_RC_TRUST").is_none() {
+        let bin = tempfile::tempdir().unwrap();
+        let cli = bin.path().join("claude");
+        std::fs::write(&cli, "#!/bin/sh\nprintf '2.1.296 (Claude Code)\\n'\n").unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let paths = std::iter::once(bin.path().to_path_buf())
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            ))
+            .collect::<Vec<_>>();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "agents::adapters::claude::remote_control::tests::readiness_inherits_parent_trust_only_outside_git",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("HOME", bin.path())
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("RIMZ_TEST_RC_TRUST", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("parent");
+    let root = parent.join("project");
+    let home = dir.path().join("claude");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let env = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), home.display().to_string())]);
+    let config = remote_consent::global_config_path(&env).unwrap();
+    std::fs::write(&config, r#"{"remoteDialogSeen":true}"#).unwrap();
+    assert!(matches!(
+        readiness(true, &env, Some(&root)),
+        RuntimeControlReadiness::Blocked(_)
+    ));
+    let grant = |path: &Path| {
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&json!({
+                "remoteDialogSeen": true,
+                "projects": { (path.to_str().unwrap()): { "hasTrustDialogAccepted": true } }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    };
+    grant(&parent);
+    let inherited = readiness(true, &env, Some(&root));
+    assert!(
+        matches!(inherited, RuntimeControlReadiness::Ready { .. }),
+        "a non-Git room inherits parent trust: {inherited:?}"
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        matches!(
+            readiness(true, &env, Some(&root)),
+            RuntimeControlReadiness::Blocked(_)
+        ),
+        "a Git room requires its exact trust key"
+    );
+    grant(&root);
+    assert!(matches!(
+        readiness(true, &env, Some(&root)),
+        RuntimeControlReadiness::Ready { .. }
+    ));
+}
+
+#[test]
 fn folder_trust_blocks_only_an_undecided_project() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
