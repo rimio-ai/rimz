@@ -6,14 +6,11 @@
 
 mod account;
 mod payloads;
-mod spend;
-mod thread;
-mod transcript;
 
 use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::Value;
 
@@ -26,10 +23,8 @@ use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
-    AgentCurrentUsage, AgentErr, AgentLifecycleObservation, AgentTokenUsage, AskKind, FieldPatch,
-    HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalTokenPatch, RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptStat,
-    non_empty_trimmed, sanitize_user_prompt,
+    AgentErr, AgentLifecycleObservation, AskKind, HookOutput, HookRouting, Result, SanitizedPrompt,
+    SessionOrigin, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -285,10 +280,6 @@ impl crate::agents::capabilities::CoreCapability for AmpAdapter {
 }
 
 impl crate::agents::capabilities::HookCapability for AmpAdapter {
-    fn hook_env_keys(&self) -> &'static [&'static str] {
-        &["AMP_DATA_DIR"]
-    }
-
     fn decode_hook(&self, event_name: &str, payload: &Value) -> Result<HookOutput> {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
         let mut decoded = decode_catalog_hook(AMP_HOOKS, event_name, ask_kind);
@@ -345,7 +336,6 @@ impl crate::agents::capabilities::HookCapability for AmpAdapter {
         observation.prompt = SanitizedPrompt::new(parsed.prompt.as_deref());
         observation.launch.model = parsed.model;
         observation.launch.effort = parsed.effort;
-        stamp_transcript_path(&mut observation, session_id, &spend::data_root());
         if event_name == "session_start" {
             observation.origin = Some(SessionOrigin::Fresh);
         }
@@ -373,121 +363,12 @@ impl crate::agents::capabilities::LaunchCapability for AmpAdapter {
     }
 }
 
-impl crate::agents::capabilities::TranscriptCapability for AmpAdapter {
-    fn read_transcript_messages(
-        &self,
-        path: &Path,
-        session_id: Option<&AgentSessionId>,
-    ) -> std::io::Result<Vec<crate::agents::TranscriptMessage>> {
-        transcript::read_messages(path, session_id)
-    }
-
-    fn transcript_position(
-        &self,
-        path: &Path,
-        session_id: Option<&AgentSessionId>,
-    ) -> Option<crate::agents::TranscriptPosition> {
-        transcript::position(path, session_id)
-    }
-
-    fn read_assistant_transcript_page(
-        &self,
-        path: &Path,
-        session_id: Option<&AgentSessionId>,
-        position: crate::agents::TranscriptPosition,
-    ) -> Option<crate::agents::TranscriptPage> {
-        transcript::read_assistant_page(path, session_id, position)
-    }
-}
-
-impl crate::agents::capabilities::ContextCapability for AmpAdapter {
-    fn local_context_refresh(
-        &self,
-        trigger: RefreshTrigger<'_>,
-        ctx: &LocalContextRefreshCtx<'_>,
-    ) -> Option<LocalContextRefresh> {
-        if let RefreshTrigger::Hook(event_name) = trigger
-            && !matches!(event_name, "session_start" | "agent_end")
-        {
-            return None;
-        }
-        let path =
-            spend::resolve_session_file(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-        let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
-        let parsed = thread::AmpThread::read(&path).ok()?;
-        if parsed.id != ctx.agent_id {
-            return None;
-        }
-        let latest = parsed.usage.iter().max_by_key(|usage| usage.at);
-        let model_id = latest
-            .map(|usage| usage.model.clone())
-            .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
-        let tokens = latest.map(|usage| AgentTokenUsage {
-            context_window_size: None,
-            used_percentage: None,
-            remaining_percentage: None,
-            current_context_tokens: None,
-            current_usage: Some(AgentCurrentUsage {
-                input_tokens: Some(usage.input),
-                output_tokens: Some(usage.output),
-                cache_creation_input_tokens: Some(usage.cache_write),
-                cache_read_input_tokens: Some(usage.cache_read),
-            }),
-            session_usage: None,
-        });
-        let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
-        let (entries, _) = spend::entries_from_thread(&parsed, &prices);
-        Some(LocalContextRefresh {
-            context: LocalContextPatch {
-                model_id: model_id.map_or(FieldPatch::Keep, FieldPatch::Set),
-                tokens: LocalTokenPatch::PreserveEstablished(tokens),
-                cost: crate::agents::spending::session_cost_from_entries(&entries, ctx.agent_id)
-                    .map_or(FieldPatch::Keep, FieldPatch::Set),
-                ..LocalContextPatch::authoritative_current()
-            },
-            transcript_path: Some(path.to_string_lossy().into_owned()),
-            transcript_stat: Some(stat),
-            ..LocalContextRefresh::authoritative_current()
-        })
-    }
-}
-
 impl crate::agents::capabilities::AccountCapability for AmpAdapter {
     fn probe_account(
         &self,
         _login_env: &BTreeMap<String, String>,
     ) -> crate::agents::account::AccountProbe {
         account::probe()
-    }
-}
-
-impl crate::agents::capabilities::SpendingCapability for AmpAdapter {
-    fn spending_sources(
-        &self,
-        _login_env: &BTreeMap<String, String>,
-    ) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSource::tree(
-            spend::data_root().join("threads"),
-            "T-?*.json",
-        )
-    }
-
-    fn session_transcript(
-        &self,
-        session_id: &str,
-        prior_path: Option<&Path>,
-        _login_env: &BTreeMap<String, String>,
-    ) -> Option<PathBuf> {
-        spend::resolve_session_file(session_id, prior_path)
-    }
-
-    fn parse_spend(
-        &self,
-        path: &Path,
-        _resume: Option<&super::spending::SpendCursor>,
-        prices: &super::PriceBook,
-    ) -> super::spending::SpendParse {
-        spend::parse(path, prices)
     }
 }
 
@@ -533,19 +414,13 @@ fn amp_config_home(
         .map(|home| home.join("amp"))
 }
 
-fn stamp_transcript_path(
-    observation: &mut AgentLifecycleObservation,
-    session_id: &str,
-    data_root: &Path,
-) {
-    observation.transcript_path = spend::resolve_session_file_under(data_root, session_id)
-        .map(|path| path.to_string_lossy().into_owned());
-}
-
 // Capabilities this agent has no behavior for; every method keeps its
 // default from `agents::capabilities`.
 impl crate::agents::capabilities::RuntimeControlCapability for AmpAdapter {}
 impl crate::agents::capabilities::SessionCapability for AmpAdapter {}
+impl crate::agents::capabilities::TranscriptCapability for AmpAdapter {}
+impl crate::agents::capabilities::ContextCapability for AmpAdapter {}
+impl crate::agents::capabilities::SpendingCapability for AmpAdapter {}
 
 #[cfg(test)]
 mod tests;

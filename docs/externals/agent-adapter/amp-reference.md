@@ -431,7 +431,7 @@ The file is rewritten whole on each update. Its root carries `id`, `messages`, a
 | `messages[].usage` (assistant, current objects) | `model`, `timestamp`, `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, sometimes `totalTokens` |
 | `usageLedger.events[]` (legacy objects) | `id`, `timestamp`, `model`, `toMessageId`, `tokens.{input,output,total}` |
 
-A legacy ledger event's `toMessageId` references an assistant message's `messageId`, whose `usage` holds the cache creation and cache read counts the ledger omits. RimZ's parsing rules for this file are in [adapter_amp.md](../../internals/agents/adapter_amp.md#context-and-transcript).
+A legacy ledger event's `toMessageId` references an assistant message's `messageId`, whose `usage` holds the cache creation and cache read counts the ledger omits. RimZ no longer reads this file; see [adapter_amp.md](../../internals/agents/adapter_amp.md#context-and-transcript).
 
 ## Permissions
 

@@ -22,6 +22,23 @@ use crate::agents::AgentStatus;
 use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
+#[test]
+fn unsupported_account_spend_exposes_no_spending_sources() {
+    let env = std::collections::BTreeMap::from([("HOME".into(), "/fixture/home".into())]);
+    for adapter in BUILTINS {
+        if matches!(
+            adapter.spec().coverage.account_spend,
+            ConcernCoverage::Unsupported { .. }
+        ) {
+            assert!(
+                adapter.spending_sources(&env).is_empty(),
+                "{}: unsupported account spend exposes spending sources",
+                adapter.spec().kind
+            );
+        }
+    }
+}
+
 /// A declared reply variant must match an event the adapter really decodes: a
 /// wrong variant, or `Some` on an agent without that event, would route stops
 /// to the hook channel and never attach.
@@ -328,7 +345,6 @@ fn builtin_config_homes_honor_provider_overrides() {
 fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
     for (kind, key) in [
         ("qwen", "QWEN_RUNTIME_DIR"),
-        ("amp", "AMP_DATA_DIR"),
         ("antigravity", "RIMZ_ANTIGRAVITY_HOME"),
         ("droid", "RIMZ_DROID_SETTINGS"),
         ("claude", "RIMZ_CLAUDE_SETTINGS"),
