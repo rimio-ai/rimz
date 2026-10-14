@@ -12,6 +12,7 @@ use crate::agents::{
 };
 
 use super::super::install_report::report_files;
+use super::settings::read_jsonc_object;
 use super::{COPILOT_HOOKS, COPILOT_MANAGED_SOURCE, RIMZ_STATUS_LINE_MARKER, STATUS_LINE};
 
 const AGENT: &str = "copilot";
@@ -276,11 +277,6 @@ pub(super) fn wrapped_statusline_command(path: &Path) -> Option<String> {
         .and_then(Value::as_str)?;
     current.contains(RIMZ_STATUS_LINE_MARKER).then_some(())?;
     super::super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
-}
-
-fn read_jsonc_object(path: &Path) -> Option<Map<String, Value>> {
-    let value = super::super::jsonc::from_slice::<Value>(&std::fs::read(path).ok()?).ok()?;
-    value.as_object().cloned()
 }
 
 fn event_names() -> Vec<String> {

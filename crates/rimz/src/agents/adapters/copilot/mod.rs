@@ -13,6 +13,7 @@ mod install;
 mod otel;
 mod paths;
 mod payloads;
+mod settings;
 mod spend;
 mod statusline;
 mod subagent;
@@ -615,12 +616,28 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
 }
 
 impl crate::agents::capabilities::InstallationCapability for CopilotAdapter {
+    fn hooks_disabled(
+        &self,
+        cwd: &Path,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<crate::agents::SettingsConflict> {
+        settings::hooks_disabled(cwd, login_env)
+    }
+
     fn managed_integration(&self) -> Option<&'static dyn super::ManagedIntegration> {
         Some(&install::MANAGED_INTEGRATION)
     }
 }
 
 impl crate::agents::capabilities::LaunchCapability for CopilotAdapter {
+    fn ask_unenforced(
+        &self,
+        cwd: &Path,
+        login_env: &BTreeMap<String, String>,
+    ) -> Option<crate::agents::SettingsConflict> {
+        settings::ask_unenforced(cwd, login_env)
+    }
+
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &["COPILOT_HOME"]
     }

@@ -40,6 +40,8 @@ Hook readiness requires both the marked hook file and the canonical managed stat
 
 ## Launch and resume
 
+Read-only settings probes resolve each key independently: repository `.github/copilot/settings.local.json`, then `.github/copilot/settings.json`, then the user `settings.json`. A repository `false` overrides a user `true`. The repository root is the nearest ancestor of the launch cwd holding a `.git` file or directory, otherwise the cwd itself. User settings resolve through the launch environment's `COPILOT_HOME` and `HOME`, retaining the `RIMZ_COPILOT_SETTINGS` override. JSONC is accepted; missing, unreadable, or malformed files count as unset.
+
 `copilot` launches a fresh interactive session and `copilot --resume <session_id>` restores one. Ask mode uses `--mode interactive`, overriding `defaultMode`; plan uses `--plan`, auto uses `--autopilot`, and yolo uses `--allow-all`. Model and effort profiles map to `--model` and `--reasoning-effort`; the legacy `--effort` spelling is still recognized for replacement.
 
 Copilot CLI 1.0.70 exposes `-i, --interactive <prompt>`, which starts the stock interactive UI and automatically executes the prompt. RimZ appends `--interactive <prompt>` after profile and permission arguments for prompt-seeded panes and supervised `rimz agents copilot -p` runs, preserving native asks and the hook-driven completion path. Copilot's native non-interactive `-p` mode remains deferred because adopting its process output would introduce a second supervised-run backend and remove the pane's interactive answer surface. Fork stays unsupported: Copilot 1.0.70 exposes `/fork` only as an experimental interactive slash command with no launch flag.
@@ -88,12 +90,14 @@ Realtime cost is partial. The statusline's metered AI credits give session dolla
 
 ## Known gaps
 
+Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
+
+- **Settings scope is incomplete.** Organization-targeted Assisted defaults are invisible locally. `allowManagedHooksOnly` has no documented Linux location, and `.claude/settings*.json` are not read for these Copilot-specific keys.
+- **Local-over-shared precedence is a premise.** The scratch `copilot help config` probe names both repository files but does not specify their ordering.
+- **Contradictory profiles remain contradictory.** Raw `--plan`, `--autopilot`, or `--mode` args alongside an ask profile are not reconciled beyond the existing permission-vector stripping.
 - **Elicitation is asynchronous.** Waiting can arrive after the user answers; no elicitation-specific clearing event is documented, so clearing relies on later lifecycle activity. Unverified double-fire: if `ask_user` also emits `elicitation_dialog`, its message may replace the question text and mint a fresh ask ID.
 - **Batched matcher behavior is unverified.** A `toolCalls` batch has no top-level `toolName`; the `ask_user` matcher may miss a batch containing a question.
 - **Copilot's sandbox is unverified.** If it blocks RimZ's home, the guard prevents tool denial but card edges can be lost. A `sandbox.userPolicy` grant is a likely fix, not a verified one.
-
-Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
-
 - **Authoritative dollars are unavailable.** RimZ does not read keychains or browser cookies, write plaintext `copilotTokens`, query billing budgets, or synthesize extra-credit balances. Account dollars, extra credits, completions usage, official billing reports, and `AccountSpend` stay unsupported because no suitable dollar ledger exists. Session and shutdown AI credits enter dollars at $0.01 per credit; an account on the legacy premium-request platform is billed per request, so for it those dollars stay a list-rate figure.
 - **Subagent coverage is partial.** Child prompt, tool, and stop hooks reach the child card, and parent transcript records supply its model and exact total. A child's permission request carries the parent `sessionId`, so it waits on the parent card. An approved shell call clears it at the child's matching `postToolUse`. A denied call, or an approved tool without a `command` argument, holds the parent Waiting until the parent's next hook.
 - **Yolo has no policy preflight.** `--allow-all` can be suppressed by managed `permissions.disableBypassPermissionsMode = "disable"`, so a `copilot-yolo` launch under that policy degrades to a normal permission posture instead of failing fast at the entry point. Resolving the merged policy value at launch and refusing when the requested bypass is unavailable is the fail-fast footprint, deferred until the merged-policy read lands.

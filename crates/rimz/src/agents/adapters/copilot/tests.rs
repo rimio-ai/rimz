@@ -1087,6 +1087,118 @@ fn embedded_hook_file_matches_the_declared_wire() {
     }
 }
 
+#[test]
+fn disabled_hooks_resolve_repo_precedence_and_named_account_jsonc() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let cwd = repo.join("nested");
+    let settings = repo.join(".github/copilot");
+    let home = dir.path().join("named account");
+    for path in [&cwd, &settings, &home] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(repo.join(".git"), "gitdir: elsewhere").unwrap();
+    let env = BTreeMap::from([
+        ("HOME".to_owned(), dir.path().to_string_lossy().into_owned()),
+        (
+            "COPILOT_HOME".to_owned(),
+            home.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let user = home.join("settings.json");
+    std::fs::write(&user, "{ // account override\n\"disableAllHooks\": true, }").unwrap();
+    let conflict = CopilotAdapter
+        .hooks_disabled(&cwd, &env)
+        .expect("user disables hooks");
+    assert_eq!(conflict.path, user);
+    assert_eq!(conflict.key, "disableAllHooks");
+    assert_eq!(conflict.value, json!(true));
+    let display = conflict.to_string();
+    for part in [user.to_str().unwrap(), "disableAllHooks", "true", "false"] {
+        assert!(display.contains(part), "{display}");
+    }
+    let shared = settings.join("settings.json");
+    std::fs::write(&shared, r#"{"disableAllHooks":false}"#).unwrap();
+    assert!(CopilotAdapter.hooks_disabled(&cwd, &env).is_none());
+    let local = settings.join("settings.local.json");
+    std::fs::write(&local, r#"{"disableAllHooks":true}"#).unwrap();
+    assert_eq!(
+        CopilotAdapter.hooks_disabled(&cwd, &env).unwrap().path,
+        local
+    );
+    std::fs::write(&local, "malformed").unwrap();
+    assert!(CopilotAdapter.hooks_disabled(&cwd, &env).is_none());
+    std::fs::remove_file(&shared).unwrap();
+    std::fs::write(&user, "malformed").unwrap();
+    assert!(CopilotAdapter.hooks_disabled(&cwd, &env).is_none());
+    let override_path = dir.path().join("override.json");
+    std::fs::write(&override_path, r#"{"disableAllHooks":true}"#).unwrap();
+    let mut overridden = env.clone();
+    overridden.insert(
+        "RIMZ_COPILOT_SETTINGS".to_owned(),
+        override_path.to_string_lossy().into_owned(),
+    );
+    assert_eq!(
+        CopilotAdapter
+            .hooks_disabled(&cwd, &overridden)
+            .unwrap()
+            .path,
+        override_path
+    );
+}
+
+#[test]
+fn ask_defaults_report_user_and_repository_fixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("settings.json");
+    let env = BTreeMap::from([(
+        "COPILOT_HOME".to_owned(),
+        dir.path().to_string_lossy().into_owned(),
+    )]);
+    for mode in ["assisted", "allow-all"] {
+        std::fs::write(&user, json!({"defaultPermissionMode":mode}).to_string()).unwrap();
+        let conflict = CopilotAdapter
+            .ask_unenforced(dir.path(), &env)
+            .expect("non-manual default");
+        assert_eq!(conflict.path, user);
+        assert_eq!(conflict.key, "defaultPermissionMode");
+        assert_eq!(conflict.value, json!(mode));
+        assert!(conflict.fix.contains("COPILOT_HOME="));
+        assert!(
+            conflict
+                .fix
+                .contains("copilot config defaultPermissionMode manual")
+        );
+    }
+    let repo = dir.path().join(".github/copilot");
+    std::fs::create_dir_all(&repo).unwrap();
+    let shared = repo.join("settings.json");
+    std::fs::write(&shared, r#"{"defaultPermissionMode":"manual"}"#).unwrap();
+    assert!(CopilotAdapter.ask_unenforced(dir.path(), &env).is_none());
+    std::fs::write(&shared, r#"{"defaultPermissionMode":"assisted"}"#).unwrap();
+    let conflict = CopilotAdapter.ask_unenforced(dir.path(), &env).unwrap();
+    assert_eq!(conflict.path, shared);
+    assert!(conflict.fix.contains(shared.to_str().unwrap()));
+    assert!(conflict.fix.contains("manual"));
+    std::fs::remove_file(&shared).unwrap();
+    let default_home = dir.path().join(".copilot");
+    std::fs::create_dir(&default_home).unwrap();
+    std::fs::write(
+        default_home.join("settings.json"),
+        r#"{"defaultPermissionMode":"assisted"}"#,
+    )
+    .unwrap();
+    let default_env =
+        BTreeMap::from([("HOME".to_owned(), dir.path().to_string_lossy().into_owned())]);
+    assert!(
+        !CopilotAdapter
+            .ask_unenforced(dir.path(), &default_env)
+            .unwrap()
+            .fix
+            .contains("COPILOT_HOME=")
+    );
+}
+
 fn observation(event: &str, payload: Value) -> AgentLifecycleObservation {
     hook_lifecycle(&CopilotAdapter, event, &payload)
 }
