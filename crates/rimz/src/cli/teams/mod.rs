@@ -15,6 +15,8 @@ use clap::{Args, Subcommand};
 use super::usage::UsageError;
 use super::{GlobalFlags, agents_cmd};
 
+const TEAM_ADDRESS_HELP: &str = "Team, or team#lane for one cohort. Without a lane: the cohort in your current lane, else the team's only live cohort";
+
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct TeamsArgs {
@@ -22,7 +24,7 @@ pub struct TeamsArgs {
     command: Option<TeamsSubcmd>,
     /// Configured team to launch.
     #[arg(
-        value_name = "NAME",
+        value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     name: Option<String>,
@@ -44,13 +46,13 @@ enum TeamsSubcmd {
     /// Show team definitions and live instances.
     #[command(alias = "inspect")]
     Show {
-        /// Team, team#lane, or #lane for every team live in a lane.
+        /// Team for its definition and cohorts, team#lane for one cohort, or #lane for every team live there.
         #[arg(
-            value_name = "NAME",
+            value_name = "TEAM[#LANE]",
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
         )]
         name: Option<String>,
-        /// Scope live instances to one worktree or lane.
+        /// Same as #LANE.
         #[arg(
             long,
             short = 'w',
@@ -104,7 +106,8 @@ enum TeamsSubcmd {
 )]
 struct TeamLaunchArgs {
     #[arg(
-        value_name = "NAME",
+        help = TEAM_ADDRESS_HELP,
+        value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     name: String,
@@ -121,7 +124,8 @@ struct TeamLaunchArgs {
 #[derive(Debug, Args)]
 struct ResumeArgs {
     #[arg(
-        value_name = "NAME",
+        help = TEAM_ADDRESS_HELP,
+        value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     name: String,
@@ -152,7 +156,7 @@ struct ResumeArgs {
     /// Save permission mode that skips provider permission prompts where supported.
     #[arg(long)]
     yolo: bool,
-    /// Scope resume to one worktree.
+    /// Same as #LANE.
     #[arg(
         long,
         short = 'w',
@@ -201,11 +205,12 @@ impl ResumeArgs {
 #[derive(Debug, Args)]
 struct CohortArgs {
     #[arg(
-        value_name = "NAME",
+        help = TEAM_ADDRESS_HELP,
+        value_name = "TEAM[#LANE]",
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     name: String,
-    /// Select one live cohort by worktree name or lane.
+    /// Same as #LANE.
     #[arg(
         long,
         short = 'w',
@@ -258,15 +263,15 @@ struct RecordArgs {
 
 #[derive(Debug, Args)]
 struct WaitArgs {
-    /// Team or team#lane whose live cohort to wait on; several wait on all.
     #[arg(
-        value_name = "NAME",
+        help = TEAM_ADDRESS_HELP,
+        value_name = "TEAM[#LANE]",
         required = true,
         num_args = 1..,
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::team_names)
     )]
     references: Vec<String>,
-    /// Select the cohort by worktree name or lane (one NAME only).
+    /// Same as #LANE (one team only).
     #[arg(
         long,
         short = 'w',
@@ -298,6 +303,14 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         None => match args.name.filter(|name| !name.trim().is_empty()) {
             Some(name) => {
+                let teams = list::effective_teams(globals)?;
+                let team = name.split_once('#').map_or(name.as_str(), |(team, _)| team);
+                if !teams.0.contains_key(team)
+                    && let Some(detail) = crate::cli::machine_config().definition_failure_for(team)
+                {
+                    bail!("{detail}");
+                }
+                guard_launch(&name, args.prompt.as_deref(), &teams)?;
                 if args.json {
                     bail!(
                         "--json is only supported with `rimz teams list`; use `rimz teams show {name} --json` for one team"
@@ -307,7 +320,12 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
             }
             None => {
                 let flags: &[&str] = if args.json { &["--json"] } else { &[] };
-                Err(UsageError::missing_verb("teams", "a team name", flags).into())
+                Err(UsageError::missing_scene_verb(
+                    crate::cli::help::Scene::Teams,
+                    "a team name",
+                    flags,
+                )
+                .into())
             }
         },
         Some(TeamsSubcmd::Show {
@@ -460,6 +478,36 @@ fn validate_team_name(name: &str, teams: &rimz::config::TeamsConfig) -> Result<(
     )
 }
 
+fn guard_launch(name: &str, prompt: Option<&str>, teams: &rimz::config::TeamsConfig) -> Result<()> {
+    let command = TeamsSubcmd::augment_subcommands(clap::Command::new("teams"));
+    let verbs = command
+        .get_subcommands()
+        .filter(|verb| !verb.is_hide_set())
+        .flat_map(|verb| std::iter::once(verb.get_name()).chain(verb.get_all_aliases()))
+        .collect::<Vec<_>>();
+    let team = name.split_once('#').map_or(name, |(team, _)| team);
+    if teams.role_spec(team).is_some() {
+        return validate_team_name(team, teams);
+    }
+    if !teams.0.contains_key(team) {
+        let configured = teams.0.keys().cloned().collect::<Vec<_>>().join(", ");
+        let message = format!(
+            "`{team}` is neither a teams command nor a configured team\ncommands: {}\nconfigured teams: {configured}",
+            verbs.join(", ")
+        );
+        return Err(UsageError::new(message).into());
+    }
+    if let Some(verb) = prompt.filter(|prompt| verbs.contains(prompt)) {
+        let drive = super::usage::shell_command(["rimz", "teams", verb, name]);
+        let launch = super::usage::shell_command(["rimz", "teams", "launch", name, verb]);
+        let message = format!(
+            "`{verb}` is a teams command; did you mean `{drive}`?\nTo send it as a prompt: `{launch}`"
+        );
+        return Err(UsageError::new(message).into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -483,6 +531,48 @@ mod tests {
         TeamsHarness::try_parse_from(argv)
             .expect("parse teams command")
             .args
+    }
+
+    #[test]
+    fn positional_launch_guards_commands_and_unknown_teams() {
+        let teams = rimz::config::TeamsConfig(BTreeMap::from([(
+            "peer".to_owned(),
+            rimz::config::Team::default(),
+        )]));
+        let error = guard_launch("status", None, &teams).unwrap_err();
+        assert!(error.downcast_ref::<UsageError>().is_some());
+        let text = error.to_string();
+        assert!(
+            text.contains("neither a teams command nor a configured team"),
+            "{text}"
+        );
+        assert!(
+            text.contains("commands:") && text.contains("configured teams:"),
+            "{text}"
+        );
+        for name in ["peer.x", "peer.x#topic"] {
+            let text = guard_launch(name, None, &teams).unwrap_err().to_string();
+            assert!(
+                text.contains("launch it with `rimz agents peer.x`"),
+                "{text}"
+            );
+        }
+        for verb in ["stop", "inspect", "ls"] {
+            let error = guard_launch("peer", Some(verb), &teams).unwrap_err();
+            assert!(error.downcast_ref::<UsageError>().is_some());
+            let text = error.to_string();
+            assert!(text.contains(&format!("rimz teams {verb} peer")), "{text}");
+            assert!(
+                text.contains(&format!("rimz teams launch peer {verb}")),
+                "{text}"
+            );
+        }
+        let Some(TeamsSubcmd::Launch(args)) =
+            parse_teams(&["rimz", "launch", "peer", "stop"]).command
+        else {
+            panic!("launch")
+        };
+        assert_eq!(args.prompt.as_deref(), Some("stop"));
     }
 
     #[test]

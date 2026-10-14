@@ -74,15 +74,56 @@ pub(crate) const AGENTS_GROUPS: [(&str, &[&str]); 4] = [
     ("Define", &["validate", "register", "check"]),
 ];
 
-/// What `rimz agents` does, shown by its `--help` and under its no-verb refusal.
-pub(crate) fn agents_orientation() -> String {
-    let mut lines = vec![
-        "  rimz agents list ['#lane']     agent cards (this lane; --all for the room)".to_owned(),
-        "  rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)".to_owned(),
-        String::new(),
-    ];
+const TEAMS_GROUPS: [(&str, &[&str]); 4] = [
+    ("See", &["list", "show", "wait"]),
+    ("Drive", &["focus", "stop", "restart", "flip", "record"]),
+    ("Start", &["launch", "resume", "profiles"]),
+    ("Define", &["install"]),
+];
+
+/// A scene whose bare form orients instead of launching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scene {
+    Agents,
+    Teams,
+}
+
+impl Scene {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Agents => "agents",
+            Self::Teams => "teams",
+        }
+    }
+
+    fn examples(self) -> [&'static str; 2] {
+        match self {
+            Self::Agents => [
+                "  rimz agents list ['#lane']     agent cards (this lane; --all for the room)",
+                "  rimz agents <SPEC> [PROMPT]    launch (same as `rimz agents launch`)",
+            ],
+            Self::Teams => [
+                "  rimz teams list                 configured teams and live cohorts",
+                "  rimz teams <TEAM[#LANE]> [PROMPT]  launch (same as `rimz teams launch`)",
+            ],
+        }
+    }
+
+    fn groups(self) -> [(&'static str, &'static [&'static str]); 4] {
+        match self {
+            Self::Agents => AGENTS_GROUPS,
+            Self::Teams => TEAMS_GROUPS,
+        }
+    }
+}
+
+/// A scene's orientation, shared by help and its no-verb refusal.
+pub(crate) fn scene_orientation(scene: Scene) -> String {
+    let mut lines = scene.examples().map(str::to_owned).to_vec();
+    lines.push(String::new());
     lines.extend(
-        AGENTS_GROUPS
+        scene
+            .groups()
             .map(|(heading, verbs)| format!("{:<9}{}", format!("{heading}:"), verbs.join("  "))),
     );
     lines.join("\n")
@@ -102,22 +143,34 @@ pub(crate) fn customize(cmd: Command) -> Command {
     cmd.help_template(template)
         .after_help("Run `rimz <command> --help` for full flags and defaults.")
         .override_usage("rimz [OPTIONS] [COMMAND]")
-        .mut_subcommand("agents", customize_agents)
+        .mut_subcommand(Scene::Agents.name(), |cmd| {
+            customize_scene(cmd, Scene::Agents)
+        })
+        .mut_subcommand(Scene::Teams.name(), |cmd| {
+            customize_scene(cmd, Scene::Teams)
+        })
         .mut_subcommands(|subcmd| subcmd.hide(true))
 }
 
-/// `rimz agents --help` is the orientation; the launch flags live one
-/// command away, under `rimz agents launch --help`.
-fn customize_agents(cmd: Command) -> Command {
-    let orientation = agents_orientation();
+/// Scene help is the orientation; launch flags live under `launch --help`.
+fn customize_scene(mut cmd: Command, scene: Scene) -> Command {
+    let orientation = scene_orientation(scene);
     assert_no_braces(&orientation);
+    if scene == Scene::Teams {
+        cmd = cmd.mut_subcommand("launch", |cmd| {
+            cmd.mut_arg("worktree", |arg| {
+                arg.help("Same as #LANE. Bare flag creates a fresh worktree.")
+                    .long_help("Same as #LANE. Bare flag creates a fresh worktree.")
+            })
+        });
+    }
     cmd.help_template(format!(
         "{{about-with-newline}}\n{orientation}{{after-help}}"
     ))
-    .after_help(
-        "Launch flags: rimz agents launch --help\n\
-         One verb:     rimz agents <verb> --help",
-    )
+    .after_help(format!(
+        "Launch flags: rimz {scene} launch --help\nOne verb:     rimz {scene} <verb> --help",
+        scene = scene.name()
+    ))
 }
 
 fn visible_commands(cmd: &Command) -> BTreeMap<&str, &Command> {
@@ -377,7 +430,7 @@ mod tests {
             agents.render_help().to_string(),
             agents.render_long_help().to_string(),
         ] {
-            let orientation = agents_orientation();
+            let orientation = scene_orientation(Scene::Agents);
             assert!(
                 help.starts_with(&format!(
                     "See and drive the room's agents; launch new ones\n\n{orientation}\n"
@@ -420,19 +473,53 @@ mod tests {
         }
         let mut cmd = command();
         cmd.build();
-        let agents = cmd.find_subcommand("agents").expect("agents");
         let mut missing = Vec::new();
-        for verb in agents
-            .get_subcommands()
-            .filter(|verb| verb.get_name() != "help" && !verb.is_hide_set())
-        {
-            undescribed(
-                verb,
-                &format!("rimz agents {}", verb.get_name()),
-                &mut missing,
-            );
+        for scene in ["agents", "teams"] {
+            let agents = cmd.find_subcommand(scene).expect("scene");
+            for verb in agents
+                .get_subcommands()
+                .filter(|verb| verb.get_name() != "help" && !verb.is_hide_set())
+            {
+                undescribed(
+                    verb,
+                    &format!("rimz {scene} {}", verb.get_name()),
+                    &mut missing,
+                );
+            }
         }
         assert!(missing.is_empty(), "undescribed positionals: {missing:#?}");
+    }
+
+    #[test]
+    fn teams_help_is_grouped_without_launch_flags() {
+        let mut cmd = customize(command());
+        cmd.build();
+        let teams = cmd.find_subcommand_mut("teams").unwrap();
+        let groups = [
+            ("See", "list show wait"),
+            ("Drive", "focus stop restart flip record"),
+            ("Start", "launch resume profiles"),
+            ("Define", "install"),
+        ];
+        let mut seen = BTreeSet::new();
+        let help = teams.render_long_help().to_string();
+        for (heading, verbs) in groups {
+            assert!(help.contains(&format!("{heading}:")), "{help}");
+            for verb in verbs.split_whitespace() {
+                assert!(seen.insert(verb.to_owned()));
+            }
+        }
+        assert_eq!(visible_names(teams), seen);
+        assert!(!help.contains("--isolation"), "{help}");
+        assert!(help.contains("rimz teams launch --help"), "{help}");
+        assert!(
+            teams
+                .find_subcommand_mut("launch")
+                .unwrap()
+                .render_long_help()
+                .to_string()
+                .contains("--isolation")
+        );
     }
 
     fn command_line_count(help: &str, name: &str) -> usize {
