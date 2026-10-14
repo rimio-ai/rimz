@@ -30,11 +30,9 @@ pub(super) fn select<'a>(
                 .collect::<Vec<_>>()
                 .join(", ");
             if !lanes.is_empty() {
-                bail!(
-                    "team `{team}` has no live cohort matching `-w {worktree}`; live cohorts are in {lanes}"
-                );
+                bail!("no live cohort matching `{team}#{worktree}`; live cohorts are in {lanes}");
             }
-            bail!("team `{team}` has no live cohort matching `-w {worktree}`");
+            bail!("no live cohort matching `{team}#{worktree}`");
         }
         bail!("no live cohort for team `{team}`; resume one with `rimz teams resume {team}`");
     }
@@ -54,10 +52,10 @@ pub(super) fn select<'a>(
         .join(", ");
     if let Some(worktree) = worktree {
         bail!(
-            "team `{team}` filter `-w {worktree}` matches live cohorts in {lanes}; select an exact lane or worktree"
+            "`{team}#{worktree}` matches live cohorts in {lanes}; select an exact lane with `{team}#<lane>`"
         );
     }
-    bail!("team `{team}` has live cohorts in {lanes}; select one with `-w <worktree>`")
+    bail!("team `{team}` has live cohorts in {lanes}; select one with `{team}#<lane>`")
 }
 
 pub(super) fn matches_worktree(cohort: &TeamCohort<'_>, worktree: &str) -> bool {
@@ -76,6 +74,13 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     let mut tracker = agents_cmd::StopTracker::default();
     let mut failed = false;
     let mut out = render::out();
+    writeln!(
+        out,
+        "stopped {team}#{} ({} member{})",
+        cohort.channel,
+        cohort.members.len(),
+        if cohort.members.len() == 1 { "" } else { "s" }
+    )?;
     for agent in cohort.members.iter().copied() {
         let label = rimz::address::agent_handle(agent, &peers, true);
         failed |= agents_cmd::stop_resolved(&ctx, globals, &snapshot, agent, &mut tracker)?
@@ -83,6 +88,28 @@ pub(super) fn stop(team: &str, worktree: Option<&str>, globals: &GlobalFlags) ->
     }
     if failed {
         std::process::exit(1);
+    }
+    if let Some(checkout) = cohort
+        .members
+        .first()
+        .and_then(|agent| agent.worktree_path.as_deref())
+        && super::board_context::in_worktree(
+            &cohort,
+            &rimz::utils::path::normalize_path_lexical(std::path::Path::new(checkout)),
+        )
+        && let Some(stage) = rimz::harness::scratch::board_stage(std::path::Path::new(checkout))
+        && stage.name != rimz::config::DONE_STAGE
+    {
+        let target = format!("{team}#{}", cohort.channel);
+        let resume = super::super::usage::shell_command(["rimz", "teams", "resume", &target]);
+        let release = super::super::usage::shell_command([
+            "rimz", "teams", "flip", &target, "Done", "<note>",
+        ]);
+        let stage = stage.name;
+        writeln!(
+            out,
+            "board at {stage}; the checkout stays held. Resume: {resume} · release: {release}"
+        )?;
     }
     Ok(())
 }
@@ -157,6 +184,13 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
         .sort_by_key(|agent| agent.launch_ordinal.unwrap_or(u32::MAX));
     let mut failed = false;
     let mut out = render::out();
+    writeln!(
+        out,
+        "restarted {team}#{} ({} member{})",
+        cohort.channel,
+        cohort.members.len(),
+        if cohort.members.len() == 1 { "" } else { "s" }
+    )?;
     for agent in cohort.members.iter().copied() {
         let label = rimz::address::agent_handle(agent, &peers, true);
         match agents_cmd::restart_resolved(
@@ -212,7 +246,7 @@ mod tests {
         let error = select("forge", None, None, &agents).expect_err("ambiguous cohorts");
 
         assert!(error.to_string().contains("#auth, #docs"));
-        assert!(error.to_string().contains("-w <worktree>"));
+        assert!(error.to_string().contains("forge#<lane>"));
     }
 
     #[test]
@@ -224,7 +258,7 @@ mod tests {
 
         let error = select("forge", Some("typo"), None, &agents).expect_err("missing cohort");
 
-        assert!(error.to_string().contains("-w typo"));
+        assert!(error.to_string().contains("forge#typo"));
         assert!(error.to_string().contains("#auth, #docs"));
     }
 

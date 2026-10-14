@@ -50,7 +50,7 @@ pub(super) fn resolve<'a>(
     let cohort = match candidates.as_slice() {
         [cohort] => cohort,
         [first, rest @ ..] if rest.iter().all(|cohort| cohort.team == first.team) => bail!(
-            "team `{}` has multiple live cohorts in worktree {} in channels {}; stop the extra cohorts with `rimz teams stop {} -w <channel>` before flipping",
+            "team `{}` has multiple live cohorts in worktree {} in lanes {}; stop the extra cohorts with `rimz teams stop {}#<lane>` before flipping",
             first.team,
             place,
             candidates

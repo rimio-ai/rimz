@@ -56,7 +56,7 @@ rimz agents history @coder -n 10     # per-turn tokens, cost, and outcome
 rimz agents attribution --md         # credit the lane's agents in a PR footnote
 rimz agents restart @coder           # bounce in place and resume the session
 rimz agents resume '#docs'           # restore every closed place in one lane
-rimz teams list                      # configured teams and their live instances
+rimz teams list                      # configured teams and their live cohorts
 rimz teams show forge#feat-x         # resolved roles, status, and one live cohort
 rimz teams forge -w feat-x           # launch one configured cohort in a worktree
 rimz teams resume forge              # reopen a configured team cohort

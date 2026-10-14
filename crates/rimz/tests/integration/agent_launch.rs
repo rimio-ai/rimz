@@ -480,7 +480,7 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
             );
         } else {
             assert!(
-                stderr.contains("team `duo` is already running in worktree `feature`"),
+                stderr.contains("duo#feature is already running"),
                 "{stderr}"
             );
         }

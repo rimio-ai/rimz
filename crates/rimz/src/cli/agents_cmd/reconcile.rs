@@ -47,6 +47,7 @@ pub(super) fn reconcile_cohort_launch(
             leader,
             members,
         } => {
+            let running = already_running(name, &subject, team);
             if let Some(prompt) = prompt {
                 let peers = projection.agents.iter().collect::<Vec<_>>();
                 let leader = leader
@@ -68,10 +69,7 @@ pub(super) fn reconcile_cohort_launch(
                         })
                         .collect::<Vec<_>>()
                         .join("; ");
-                    bail!(
-                        "{}#{name} is already running, but its leader is not live; message a live member: {hints}",
-                        team.unwrap_or(spec_display)
-                    );
+                    bail!("{running}, but its leader is not live; message a live member: {hints}");
                 };
                 let caller = send::resolve_caller(store)?;
                 let channel = crate::cli::current_channel(workspace, Some(store));
@@ -103,8 +101,7 @@ pub(super) fn reconcile_cohort_launch(
                 )?;
                 writeln!(
                     std::io::stderr().lock(),
-                    "{}#{name} is already running; prompt sent to its leader",
-                    team.unwrap_or(spec_display)
+                    "{running}; prompt sent to its leader"
                 )?;
                 send::report_dispatch(
                     rimz::message::DeliveryKind::Boundary,
@@ -117,30 +114,26 @@ pub(super) fn reconcile_cohort_launch(
             if focus.takes_focus()
                 && let Some(pane_id) = focus_pane
             {
-                let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-                rimz::harness::hibernate::wake_pane(store, &pane_id)?;
-                rimz::mux::focus_anchor::execute_action(
-                    backend,
-                    &runtime,
-                    &workspace.session_name,
-                    pane_id,
-                )?;
+                let focused = focus_existing(workspace, backend, store, pane_id);
                 if prompt.is_some() {
+                    // The prompt is already sent or queued, so a failed focus must
+                    // not exit 1 and invite a retry that sends it twice.
+                    if let Err(error) = focused {
+                        writeln!(
+                            std::io::stderr().lock(),
+                            "warning: could not focus the leader's pane: {error:#}"
+                        )?;
+                    }
                     return Ok(Reconciled::PromptDispatched);
                 }
-                writeln!(
-                    std::io::stderr().lock(),
-                    "{subject} is already running in worktree `{name}`; focused it"
-                )?;
+                focused?;
+                writeln!(std::io::stderr().lock(), "{running}; focused it")?;
                 return Ok(Reconciled::Done);
             }
             if prompt.is_some() {
                 return Ok(Reconciled::PromptDispatched);
             }
-            writeln!(
-                std::io::stderr().lock(),
-                "{subject} is already running in worktree `{name}`"
-            )?;
+            writeln!(std::io::stderr().lock(), "{running}")?;
             Ok(Reconciled::Done)
         }
         rimz::harness::resume::CohortRelaunchState::Closed => {
@@ -194,6 +187,25 @@ pub(super) fn cohort_worktree_path(
     name: &str,
 ) -> rimz::worktree::Result<PathBuf> {
     rimz::worktree::worktree_path(workspace.launch_repo_root(), config, name)
+}
+
+fn already_running(name: &str, subject: &str, team: Option<&str>) -> String {
+    match team {
+        Some(team) => format!("{team}#{name} is already running"),
+        None => format!("{subject} is already running in worktree `{name}`"),
+    }
+}
+
+fn focus_existing(
+    workspace: &rimz::ResolvedWorkspace,
+    backend: &dyn rimz::mux::MuxBackend,
+    store: &rimz::Store,
+    pane_id: rimz::ids::PaneId,
+) -> Result<()> {
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    rimz::harness::hibernate::wake_pane(store, &pane_id)?;
+    rimz::mux::focus_anchor::execute_action(backend, &runtime, &workspace.session_name, pane_id)?;
+    Ok(())
 }
 
 fn cohort_subject(spec_display: &str, team: Option<&str>) -> String {
@@ -395,6 +407,18 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(dir.path().exists());
+    }
+
+    #[test]
+    fn running_cohorts_name_a_team_address_or_an_inline_spec_and_worktree() {
+        assert_eq!(
+            already_running("topic", "`forge`", Some("forge")),
+            "forge#topic is already running"
+        );
+        assert_eq!(
+            already_running("topic", "`claude,codex`", None),
+            "`claude,codex` is already running in worktree `topic`"
+        );
     }
 
     #[test]

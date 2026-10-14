@@ -2251,7 +2251,10 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         "#{pane_id}",
     ]);
     let already_live = run_launch(true, true);
-    assert!(already_live.contains("already running"), "{already_live}");
+    assert!(
+        already_live.contains("is already running in worktree `fresh`"),
+        "{already_live}"
+    );
     assert_eq!(
         server.stdout(&[
             "list-panes",
@@ -2588,7 +2591,12 @@ fn existing_unmanaged_worktree_launch(doorway: &str, spec: &str) {
         .expect("relaunch live unmanaged cohort");
     let stderr = String::from_utf8_lossy(&relaunch.stderr);
     assert!(relaunch.status.success(), "{stderr}");
-    assert!(stderr.contains("already running"), "{stderr}");
+    let running = if doorway == "teams" {
+        format!("{spec}#existing is already running")
+    } else {
+        "is already running in worktree `existing`".to_owned()
+    };
+    assert!(stderr.contains(&running), "{stderr}");
     assert_eq!(
         agents().len(),
         launched.len(),
