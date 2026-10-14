@@ -23,10 +23,10 @@ use super::definition::{
 use super::hook_types::{HookEventSpec, decode_catalog_hook};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::{
-    AgentCurrentUsage, AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch,
-    HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx,
-    LocalTokenPatch, RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptMessage,
-    TurnErrorClass, TurnSettle, TurnSettleOutcome, non_empty_trimmed,
+    AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch, HookOutput,
+    HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
+    RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptMessage, TurnErrorClass,
+    TurnSettle, TurnSettleOutcome, non_empty_trimmed,
 };
 use crate::ids::AgentSessionId;
 
@@ -591,26 +591,11 @@ fn refresh_resolved_context(
             .is_none_or(|summary_id| summary_id == ctx.agent_id)
     });
     let signals = transcript::read_signals(path);
-    let sample = folded.latest_token_sample();
-    let latest_usage = folded
-        .completions()
-        .rev()
-        .find_map(|completion| completion.usage.as_ref());
-    let context_window_size = sample
-        .and_then(|value| value.context_window_tokens)
-        .or_else(|| {
-            signals
-                .map(|value| value.context_window_tokens)
-                .filter(|value| *value > 0)
-        });
-    // A completed turn's input composition is the context Grok displays and
-    // makes the card's split self-consistent. Mid-turn `_meta.totalTokens`
-    // remains the live fallback before that authoritative composition lands.
+    let context_window_size = signals
+        .map(|value| value.context_window_tokens)
+        .filter(|value| *value > 0);
     let current_context_tokens = folded.latest_context_tokens().or_else(|| {
-        (!folded.saw_rewind)
-            .then(|| signals.map(|value| value.context_tokens_used))
-            .flatten()
-            .or_else(|| (!folded.saw_rewind).then_some(0))
+        (!folded.saw_rewind).then(|| signals.map_or(0, |value| value.context_tokens_used))
     });
     let tokens = Some(AgentTokenUsage {
         context_window_size,
@@ -623,12 +608,7 @@ fn refresh_resolved_context(
             }),
         remaining_percentage: None,
         current_context_tokens,
-        current_usage: latest_usage.map(|usage| AgentCurrentUsage {
-            input_tokens: Some(usage.input_tokens.saturating_sub(usage.cached_read_tokens)),
-            output_tokens: Some(usage.output_tokens),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: Some(usage.cached_read_tokens),
-        }),
+        current_usage: None,
         session_usage: None,
     });
     let model_id = summary

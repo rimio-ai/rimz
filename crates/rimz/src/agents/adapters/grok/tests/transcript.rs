@@ -88,13 +88,12 @@ fn assistant_suffix_does_not_require_the_earlier_user_chunk() {
 }
 
 #[test]
-fn context_measurement_follows_completed_and_in_progress_turn_order() {
+fn context_measurement_uses_samples_not_completed_usage() {
     let completion = serde_json::json!({
         "timestamp": 1_700_000_001_u64,
         "method": "_x.ai/session/update",
         "params": {
             "sessionId": "s1",
-            "_meta": {"totalTokens": 9},
             "update": {
                 "sessionUpdate": "turn_completed",
                 "prompt_id": "p1",
@@ -104,8 +103,18 @@ fn context_measurement_follows_completed_and_in_progress_turn_order() {
         }
     })
     .to_string();
-    let completed = [chunk("user_message_chunk", "one", Some(0)), completion].join("\n");
-    assert_eq!(fold(&completed).latest_context_tokens(), Some(100));
+    let sample = serde_json::json!({
+        "method":"session/update",
+        "params":{"sessionId":"s1", "_meta":{"totalTokens":9},
+            "update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking"}}}
+    }).to_string();
+    let completed = [
+        chunk("user_message_chunk", "one", Some(0)),
+        sample,
+        completion,
+    ]
+    .join("\n");
+    assert_eq!(fold(&completed).latest_context_tokens(), Some(9));
 
     let in_progress = serde_json::json!({
         "timestamp": 1_700_000_002_u64,

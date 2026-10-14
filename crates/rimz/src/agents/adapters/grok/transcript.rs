@@ -61,7 +61,6 @@ pub(super) struct TurnCompletion {
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct TokenSample {
     pub total_tokens: u64,
-    pub context_window_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -144,13 +143,7 @@ impl FoldedSession {
     }
 
     pub(super) fn latest_context_tokens(&self) -> Option<u64> {
-        self.events.iter().rev().find_map(|event| match event {
-            BranchEvent::Completion(completion) => {
-                completion.usage.as_ref().map(|usage| usage.input_tokens)
-            }
-            BranchEvent::TokenSample(sample) => Some(sample.total_tokens),
-            BranchEvent::Message(_) => None,
-        })
+        self.latest_token_sample().map(|sample| sample.total_tokens)
     }
 
     pub(super) fn latest_assistant(&self) -> Option<String> {
@@ -399,8 +392,6 @@ fn apply_row(folded: &mut FoldedSession, row: DecodedRow) {
     if folded.active_prompt
         && let Some(completion) = completion
     {
-        // The completed usage is the categorized occupancy for this record, so
-        // keep it after any same-record scalar in the measurement order.
         folded.events.push(BranchEvent::Completion(completion));
     }
 }
@@ -429,10 +420,6 @@ fn token_sample(params: &Value, update: &Value) -> Option<TokenSample> {
     let meta = params.get("_meta").or_else(|| update.get("_meta"))?;
     Some(TokenSample {
         total_tokens: meta.get("totalTokens")?.as_u64()?,
-        context_window_tokens: meta
-            .get("contextWindowTokens")
-            .and_then(Value::as_u64)
-            .filter(|value| *value > 0),
     })
 }
 
