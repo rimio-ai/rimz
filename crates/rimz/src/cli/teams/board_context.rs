@@ -7,7 +7,86 @@ use anyhow::{Context, Result, bail};
 use rimz::address::TeamCohort;
 use rimz::agents::AgentState;
 use rimz::harness::ancestry::{resolve_caller, resolve_launch_caller};
+use rimz::harness::resume::{self, TeamHold, TeamHoldReason};
 use rimz::utils::path::normalize_path_lexical;
+
+pub(super) fn resolve<'a>(
+    ctx: &super::super::Ctx,
+    agents: &'a [AgentState],
+    reference: Option<&str>,
+    team: Option<&str>,
+) -> Result<(TeamHold, Vec<&'a AgentState>)> {
+    let address = reference.and_then(|reference| reference.split_once('#'));
+    let team = address.map(|(team, _)| team).or(team);
+    let checkout = address.is_none().then(worktree).transpose()?;
+    let place = checkout.as_deref().map_or_else(
+        || reference.unwrap_or_default().to_owned(),
+        |path| path.display().to_string(),
+    );
+    let candidates = rimz::address::team_cohorts(agents)
+        .into_iter()
+        .filter(|cohort| team.is_none_or(|team| cohort.team == team))
+        .filter(|cohort| match address {
+            Some((_, lane)) => super::cohort::matches_worktree(cohort, lane),
+            None => checkout
+                .as_deref()
+                .is_some_and(|path| in_worktree(cohort, path)),
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        let audit = ctx.store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        let hold = match address {
+            Some((team, lane)) => resume::inspect_cohort_hold(&audit.agents, team, lane),
+            None => checkout
+                .as_deref()
+                .and_then(|path| resume::inspect_team_hold(&audit.agents, path)),
+        }
+        .filter(|hold| team.is_none_or(|team| hold.team == team));
+        if let Some(hold) = hold {
+            return Ok((hold, Vec::new()));
+        }
+        bail!("no matching live or held team cohort in {place}");
+    }
+    let cohort = match candidates.as_slice() {
+        [cohort] => cohort,
+        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team == first.team) => bail!(
+            "team `{}` has multiple live cohorts in worktree {} in channels {}; stop the extra cohorts with `rimz teams stop {} -w <channel>` before flipping",
+            first.team,
+            place,
+            candidates
+                .iter()
+                .map(|cohort| format!("#{}", cohort.channel))
+                .collect::<Vec<_>>()
+                .join(", "),
+            first.team
+        ),
+        _ => bail!(
+            "multiple live team cohorts in worktree {}; select a team with --team <name>: {}",
+            place,
+            candidates
+                .iter()
+                .map(|cohort| format!("{}#{}", cohort.team, cohort.channel))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let checkout = cohort
+        .members
+        .first()
+        .and_then(|agent| agent.worktree_path.as_deref())
+        .map(PathBuf::from)
+        .filter(|path| in_worktree(cohort, &normalize_path_lexical(path)))
+        .context("selected cohort has no single worktree for its board")?;
+    Ok((
+        TeamHold {
+            team: cohort.team.to_owned(),
+            channel: cohort.channel.clone(),
+            checkout,
+            reason: TeamHoldReason::LiveMember,
+        },
+        cohort.members.clone(),
+    ))
+}
 
 pub(super) fn worktree() -> Result<PathBuf> {
     let worktree = match std::env::var_os(rimz::workspace::ENV_WORKTREE_PATH) {

@@ -212,7 +212,7 @@ rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
-A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); setting that board to `Stage: Done` releases a stopped run. A channel held at a different checkout [also refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-channel), even for the same team, whether the channel is explicit or derived from the checkout.
+A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); `rimz teams flip <team>#<lane> Done "<note>"` releases a stopped run without removing its checkout. A channel held at a different checkout [also refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-channel), even for the same team, whether the channel is explicit or derived from the checkout.
 
 `rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree). A live cohort receives the prompt through its leader, or is just focused when no prompt is supplied; an agent caller or `--bg` preserves focus. A missing leader refuses with exit 1 and commands to message live members. A closed cohort prompts to resume, start fresh, or remove; cancellation and non-terminal refusals exit 1 with prompt-preserving next commands. A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
 
@@ -355,9 +355,9 @@ The seats do not report their own turns, including turns the launcher opens with
 
 ## Record an entry on the board
 
-`rimz teams record <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md` in the current worktree. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines. TEXT may start with `-`; only a value that is itself one of the command's flags (`--file`, `--stdin`, `-h`, `--help`) needs `--` before it, as in `rimz teams record Decisions -- --stdin`.
+`rimz teams record [TEAM#LANE] <SECTION> [TEXT] [--file PATH] [--stdin]` appends one timestamped entry to `blackboard.md`. SECTION is Goal, Decisions, or Result, case-insensitive. Supply exactly one of TEXT, `--file PATH`, or `--stdin`; files and stdin are read to EOF. Text loses carriage returns and surrounding whitespace, but keeps internal blank lines. TEXT may start with `-`; only a value that is itself one of the command's flags (`--file`, `--stdin`, `-h`, `--help`) needs `--` before it, as in `rimz teams record Decisions -- --stdin`.
 
-Run it in the team's worktree. It uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel. No live cohort is required and there is no `--team` flag. A member of a cohort in this worktree records under its role; other callers record as `user`. A member of a cohort in another worktree is refused.
+An address such as `forge#feat-rate-limits` selects the live cohort, or the stopped team holding that lane, just as `flip` does. Without it, the command uses `RIMZ_WORKTREE_PATH` when set, otherwise the current Git toplevel; this form can still create a board before any cohort exists. No live cohort is required and there is no `--team` flag. A member of the selected cohort records under its role; other callers record as `user`. A member of another cohort is refused.
 
 Entries have the following shape (stamp in the configured machine time zone):
 
@@ -389,7 +389,7 @@ There is no Stage line until a flip. Success exits 0 and prints one line naming 
 | Stage, Progress, or Progress log | Exit 1: names `rimz teams flip` as the owning command. |
 | Unknown section | Exit 1: lists Goal, Decisions, Result. |
 | Blank text | Exit 1: `provide nonblank text for the board entry`. |
-| Multiple text sources | clap conflict error. |
+| Missing or multiple text sources | Exit 2: supply exactly one text source. |
 | Caller belongs to a cohort elsewhere | Exit 1: `calling agent belongs to a team cohort in another worktree`. |
 | No worktree, unreadable input or board, lock timeout, write failure | Error with the underlying failure. |
 
@@ -402,17 +402,19 @@ rimz teams flip Review "implementation committed; report in implement-notes.md" 
 rimz teams flip Done "reflection recorded in reflect-notes.md; run complete"
 ```
 
-`rimz teams flip <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner. `NOTE` may start with `-`, as in `rimz teams flip Review "--no-tests: docs only"`; only a note that is itself one of the command's flags (`--team`, `--team=…`, `-h`, `--help`) needs `--` before it.
+`rimz teams flip [TEAM#LANE] <STAGE> <NOTE> [--team NAME]` sets the board's stage, records the note in its progress ledger, and wakes the stage's owner. `NOTE` is required for every stage, `Done` included, and must not be blank. Write it as where the work stands; it is not an instruction to the owner. `NOTE` may start with `-`, as in `rimz teams flip Review "--no-tests: docs only"`; only a note that is itself one of the command's flags (`--team`, `--team=…`, `-h`, `--help`) needs `--` before it.
 
 ### Which cohort a flip acts on
 
-`flip` has no worktree flag: run it inside the team's worktree.
+`flip` has no worktree flag. Give `TEAM#LANE` to select a cohort from elsewhere in the room, or run it inside the team's worktree. The `#` distinguishes an address from a stage.
 
-1. The worktree is `RIMZ_WORKTREE_PATH` when set, else the Git toplevel of the current directory. Outside Git with no `RIMZ_WORKTREE_PATH`, the flip is refused.
-2. The cohort is the live one whose members all run in that worktree, limited to team `NAME` by `--team`. With none, the error names the worktree. With cohorts of several teams, it lists them for `--team`. With several cohorts of one team, it asks you to stop the extras with `rimz teams stop <team> -w <lane>`.
+1. With `TEAM#LANE`, the cohort supplies its recorded worktree. Without it, the worktree is `RIMZ_WORKTREE_PATH` when set, else the Git toplevel of the current directory. Outside Git with neither an address nor `RIMZ_WORKTREE_PATH`, the flip is refused.
+2. Select the live cohort in that lane or checkout, otherwise the team holding it under the launch hold rules. `LANE` matches as it does for `stop`, `focus`, and `restart`: the lane, its worktree name, or `main` for the root checkout. `--team NAME` filters the current checkout and cannot be combined with `TEAM#LANE`. With several live cohorts, the error lists the choices.
 3. A caller in the selected cohort flips as its role. A caller outside any cohort flips as `@user`. An agent in a different cohort is refused.
 
 A project team that is not trusted is refused, as for any command that reads an untrusted project config.
+
+With no live members, a user can still flip the held board. The receipt says `no live members`; a `Done` flip that ends the board's hold adds `checkout released`, and one made while a recorded member still holds the checkout does not. Release ends the board's hold, not the checkout itself: no worktree is removed. Other stages name the absent owner as `not live; woken on resume`.
 
 ### Stage rules
 
@@ -516,7 +518,7 @@ Only a hand-off (the same predicate as the clean-worktree rule) to a stage anoth
 | `no matching live team cohort in worktree <path>` | Run from the team's worktree. |
 | `multiple live team cohorts in worktree <path>; select a team with --team <name>` | Add `--team`. |
 | `calling agent belongs to a different team cohort` | Flip from a member of the selected cohort, or from outside every cohort. |
-| ``completed <steps>; <error>; re-run `rimz teams flip <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand. |
+| ``completed <steps>; <error>; re-run `rimz teams flip <team>#<lane> <stage> "<progress note>"` to repeat the signal and delivery`` | The board changed but appending the signal or delivering the notice failed. Re-run the flip rather than editing the board by hand. |
 
 A failure to fire subscriptions after the signal is appended is logged and does not fail the flip. Launch and flip also reject invalid stage configuration (blank or padded names, control characters, duplicate owners, a declared or owned `Done`, owned names missing from a nonempty `stages`); the rules are in [configuration → teams](../../guide/configuration.md#teams).
 

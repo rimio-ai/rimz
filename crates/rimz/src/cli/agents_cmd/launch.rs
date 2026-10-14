@@ -493,7 +493,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                     rimz::harness::resume::inspect_team_hold(&projection.agents, path)
                 && hold.team != team
             {
-                let (reason, release, resume) = team_hold_guidance(&hold, path, name);
+                let (reason, release, resume) = team_hold_guidance(&hold);
                 let place = match name {
                     Some(name) => format!("worktree `{name}`"),
                     None => format!("checkout `{}`", path.display()),
@@ -518,12 +518,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                         .unwrap_or_else(|_| rimz::utils::path::normalize_path_lexical(path))
                 };
                 if comparable_path(&hold.checkout) != comparable_path(path) {
-                    let marker = rimz::worktree::read_marker_for_worktree(&hold.checkout)?;
-                    let (reason, release, resume) = team_hold_guidance(
-                        &hold,
-                        &hold.checkout,
-                        marker.as_ref().map(|marker| marker.name.as_str()),
-                    );
+                    let (reason, release, resume) = team_hold_guidance(&hold);
                     bail!(
                         "channel `#{channel}` already carries team `{}` at checkout `{}` ({reason}); one team per channel: resume it with {resume}, or launch on another channel{release}",
                         hold.team,
@@ -769,11 +764,8 @@ pub(in crate::cli) fn launch_resolved<'a>(
     }))
 }
 
-fn team_hold_guidance(
-    hold: &rimz::harness::resume::TeamHold,
-    checkout: &Path,
-    name: Option<&str>,
-) -> (String, String, String) {
+fn team_hold_guidance(hold: &rimz::harness::resume::TeamHold) -> (String, String, String) {
+    let target = format!("{}#{}", hold.team, hold.channel);
     let (reason, release) = match &hold.reason {
         rimz::harness::resume::TeamHoldReason::LiveMember => {
             ("a member is live".to_owned(), String::new())
@@ -781,19 +773,12 @@ fn team_hold_guidance(
         rimz::harness::resume::TeamHoldReason::BoardStage(stage) => (
             format!("its board is at `{stage}`"),
             format!(
-                ", or mark `{}` `Stage: Done` to release it",
-                checkout.join(rimz::harness::board::BOARD_FILE).display()
+                ", or release it with `{}`",
+                shell_command(["rimz", "teams", "flip", &target, "Done", "<note>"])
             ),
         ),
     };
-    let resume = match name {
-        Some(name) => format!("`rimz teams resume {} -w {name}`", hold.team),
-        None => format!(
-            "`rimz teams resume {}` from `{}`",
-            hold.team,
-            checkout.display()
-        ),
-    };
+    let resume = format!("`{}`", shell_command(["rimz", "teams", "resume", &target]));
     (reason, release, resume)
 }
 
