@@ -64,7 +64,6 @@ pub fn run_request(
             frozen_at: jiff::Timestamp::now(),
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 0,
         };
@@ -220,7 +219,6 @@ fn freeze_and_record_with(
         )?;
         entry.reclaimed_bytes = report.before.saturating_sub(report.after);
         entry.frozen_at = jiff::Timestamp::now();
-        entry.last_reclaimed_at = entry.frozen_at;
         crate::store::hibernate::record(paths, entry)?;
         Ok(Some(report))
     })();
@@ -265,7 +263,6 @@ fn deepen_and_record_with(
         return Ok(None);
     }
     entry.step = step;
-    entry.last_reclaimed_at = now;
     entry.reclaimed_bytes = entry
         .reclaimed_bytes
         .saturating_add(report.before.saturating_sub(report.after));
@@ -374,7 +371,6 @@ mod tests {
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
             anon_at_freeze: 0,
             step: 0,
-            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             wake_error: None,
             reclaimed_bytes: 0,
         };
@@ -457,7 +453,6 @@ mod tests {
         assert_eq!(records[0].reclaimed_bytes, 300);
         assert_eq!(records[0].anon_at_freeze, 600);
         assert_eq!(records[0].step, 0);
-        assert_eq!(records[0].last_reclaimed_at, records[0].frozen_at);
         assert!(records[0].frozen_at > jiff::Timestamp::UNIX_EPOCH);
         assert_eq!(
             report,
@@ -535,7 +530,6 @@ mod tests {
             assert_eq!(recorded.step, step);
             assert_eq!(recorded.reclaimed_bytes, 300 + 50 * u64::from(step));
             assert_eq!(recorded.frozen_at, entry.frozen_at);
-            assert_eq!(recorded.last_reclaimed_at, now);
             assert!(
                 deepen_and_record_with(&paths, &entry, &scope, schedule, now, |_| panic!(
                     "duplicate step"
