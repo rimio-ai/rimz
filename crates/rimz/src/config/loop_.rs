@@ -237,12 +237,12 @@ pub enum ThrottleSwitch {
 #[serde(transparent)]
 pub struct Tasks(pub BTreeMap<String, TaskEntry>);
 
-/// A loop guard: a shell command or a single-agent judgment.
+/// A shell check, or a judge table in a legacy task file.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum TaskCheck {
     Shell(String),
-    Agent(AgentCheck),
+    Agent(Judge),
 }
 
 impl<'de> Deserialize<'de> for TaskCheck {
@@ -253,7 +253,7 @@ impl<'de> Deserialize<'de> for TaskCheck {
             type Value = TaskCheck;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a shell command or an agent check table")
+                formatter.write_str("a shell command or a judge table")
             }
 
             fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
@@ -268,7 +268,7 @@ impl<'de> Deserialize<'de> for TaskCheck {
                 self,
                 map: M,
             ) -> Result<Self::Value, M::Error> {
-                AgentCheck::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                Judge::deserialize(serde::de::value::MapAccessDeserializer::new(map))
                     .map(TaskCheck::Agent)
             }
         }
@@ -293,7 +293,7 @@ impl std::fmt::Display for TaskCheck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Shell(command) => f.write_str(command),
-            Self::Agent(check) => write!(f, "check by `{}`", check.agent),
+            Self::Agent(judge) => write!(f, "check by `{}`", judge.agent),
         }
     }
 }
@@ -301,7 +301,7 @@ impl std::fmt::Display for TaskCheck {
 /// A headless guard's profile, question, and independent timing options.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub struct AgentCheck {
+pub struct Judge {
     pub agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -313,7 +313,7 @@ pub struct AgentCheck {
     pub timeout: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for AgentCheck {
+impl<'de> Deserialize<'de> for Judge {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -327,7 +327,7 @@ impl<'de> Deserialize<'de> for AgentCheck {
         let fields = Fields::deserialize(deserializer)?;
         if fields.prompt.is_some() == fields.prompt_file.is_some() {
             return Err(D::Error::custom(
-                "agent check requires exactly one of prompt and prompt-file",
+                "judge requires exactly one of prompt and prompt-file",
             ));
         }
         Ok(Self {
@@ -338,6 +338,38 @@ impl<'de> Deserialize<'de> for AgentCheck {
             timeout: fields.timeout,
         })
     }
+}
+
+pub(crate) fn deserialize_judges<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Judge>, D::Error> {
+    struct JudgesVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for JudgesVisitor {
+        type Value = Vec<Judge>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a judge table or an array of judge tables")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+            Judge::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                .map(|judge| vec![judge])
+        }
+
+        fn visit_seq<S: serde::de::SeqAccess<'de>>(
+            self,
+            mut sequence: S,
+        ) -> Result<Self::Value, S::Error> {
+            let mut judges = Vec::new();
+            while let Some(judge) = sequence.next_element()? {
+                judges.push(judge);
+            }
+            Ok(judges)
+        }
+    }
+
+    deserializer.deserialize_any(JudgesVisitor)
 }
 
 /// One triggered loop wake-up. `agent` names a supervised turn or resident
@@ -371,6 +403,17 @@ pub struct TaskEntry {
     pub prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub check: Option<TaskCheck>,
+    #[serde(
+        rename = "check-timeout",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_default_timeout"
+    )]
+    pub check_timeout: Option<String>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_judges"
+    )]
+    pub judge: Vec<Judge>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify: Option<String>,
     #[serde(rename = "max-attempts", skip_serializing_if = "Option::is_none")]
@@ -437,6 +480,28 @@ pub struct TaskEntry {
     /// `off` exempts every fire of the task from the start throttle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub throttle: Option<ThrottleSwitch>,
+}
+
+/// The ordered guard chain, including a judge from a legacy `check` table.
+pub struct Guard<'a> {
+    pub shell: Option<&'a str>,
+    pub shell_timeout: Option<&'a str>,
+    pub judges: Vec<&'a Judge>,
+}
+
+impl TaskEntry {
+    pub fn guard(&self) -> Guard<'_> {
+        let (shell, legacy) = match &self.check {
+            Some(TaskCheck::Shell(command)) => (Some(command.as_str()), None),
+            Some(TaskCheck::Agent(judge)) => (None, Some(judge)),
+            None => (None, None),
+        };
+        Guard {
+            shell,
+            shell_timeout: self.check_timeout.as_deref().or(self.timeout.as_deref()),
+            judges: legacy.into_iter().chain(&self.judge).collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

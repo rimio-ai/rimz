@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn guard_reads_judge_table_array_and_legacy_check_in_order() {
+    for source in [
+        "check = 'cargo test'\ncheck-timeout = '10m'\njudge = { agent = 'haiku', prompt = 'q' }",
+        "check = 'cargo test'\ncheck-timeout = '10m'\njudge = [{ agent = 'haiku', prompt = 'q' }, { agent = 'sonnet', prompt = 'review' }]",
+        "check = { agent = 'haiku', prompt = 'q' }\njudge = { agent = 'sonnet', prompt = 'review' }",
+    ] {
+        let entry: TaskEntry = toml::from_str(source).unwrap();
+        let guard = entry.guard();
+        assert!(!guard.judges.is_empty(), "{source}");
+        assert_eq!(guard.judges[0].agent, "haiku", "{source}");
+        if source.starts_with("check = '") {
+            assert_eq!(guard.shell, Some("cargo test"));
+            assert_eq!(guard.shell_timeout, Some("10m"));
+        } else {
+            assert_eq!(guard.shell, None);
+        }
+        if source.contains("sonnet") {
+            assert_eq!(guard.judges[1].agent, "sonnet");
+        }
+        assert_eq!(
+            serde_json::from_str::<TaskEntry>(&serde_json::to_string(&entry).unwrap()).unwrap(),
+            entry
+        );
+        assert_eq!(
+            toml::from_str::<TaskEntry>(&toml::to_string(&entry).unwrap()).unwrap(),
+            entry
+        );
+    }
+}
+
+#[test]
+fn shell_check_timeout_rejects_zero_and_invalid_durations() {
+    for value in ["0", "0s", "bad"] {
+        let source = format!("check = 'true'\ncheck-timeout = '{value}'");
+        assert!(toml::from_str::<TaskEntry>(&source).is_err(), "{source}");
+    }
+}
+
+#[test]
 fn agent_checks_round_trip_toml_and_json() {
     for prompt in ["prompt = 'Is work needed?'", "prompt-file = 'check.md'"] {
         let source =

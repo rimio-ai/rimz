@@ -567,7 +567,7 @@ fn resolve_add_check(
             resolved.kind()
         );
     }
-    Ok(Some(TaskCheck::Agent(AgentCheck {
+    Ok(Some(TaskCheck::Agent(Judge {
         agent: profile.to_owned(),
         prompt: args.check_prompt.clone(),
         prompt_file: args.check_prompt_file.clone(),
