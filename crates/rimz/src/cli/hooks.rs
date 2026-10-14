@@ -492,6 +492,19 @@ fn process_frame(
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
+    let result = run_feed_inner(source.clone(), event.clone(), globals);
+    if let Err(error) = &result {
+        rimz::diag::hook_feed::append(&rimz::diag::hook_feed::Record {
+            at: jiff::Timestamp::now(),
+            source,
+            event,
+            error: format!("{error:#}"),
+        });
+    }
+    result
+}
+
+fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
     let raw_agent_pid = hook_agent_pid(&source);
     let adapter = definition_by_kind(&source);
     let ingress = adapter

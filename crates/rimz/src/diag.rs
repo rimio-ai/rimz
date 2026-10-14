@@ -21,6 +21,7 @@ pub mod focus_repair;
 pub(crate) mod focus_trace;
 pub(crate) mod hibernate;
 pub(crate) mod hook_drain;
+pub mod hook_feed;
 pub mod lsp;
 pub mod notify;
 pub mod plugin_presence;
