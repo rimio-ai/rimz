@@ -563,7 +563,7 @@ fn local_context_refresh_tracks_events_only_permission_changes() {
 }
 
 #[test]
-fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
+fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session-1");
     let updates = session.join("updates.jsonl");
@@ -591,7 +591,7 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
                     "sessionUpdate": "agent_thought_chunk",
                     "content": {"type": "text", "text": "thinking"}
                 },
-                "_meta": {"totalTokens": 9_171, "contextWindowTokens": 500_000}
+                "_meta": {"totalTokens": 4_000}
             }
         }),
         json!({
@@ -605,6 +605,7 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
                     "stop_reason": "end_turn",
                     "usage": {
                         "inputTokens": 17_869,
+                        "modelCalls": 2,
                         "cachedReadTokens": 0,
                         "outputTokens": 32,
                         "totalTokens": 17_901,
@@ -624,6 +625,11 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
     .map(|row| row.to_string())
     .join("\n");
     std::fs::write(&updates, format!("{lines}\n")).unwrap();
+    std::fs::write(
+        session.join("signals.json"),
+        r#"{"contextTokensUsed":3000,"contextWindowTokens":10000}"#,
+    )
+    .unwrap();
     crate::agents::PriceBook::write_fixture_cache(&pricing);
     let ctx = LocalContextRefreshCtx {
         login_env: &std::collections::BTreeMap::new(),
@@ -639,12 +645,9 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
 
     let refresh = refresh_resolved_context(&updates, None, &ctx).unwrap();
     let tokens = refresh.context.tokens.clone().into_value().unwrap();
-    assert_eq!(tokens.current_context_tokens, Some(17_869));
-    assert_eq!(tokens.used_percentage, Some(4));
-    let usage = tokens.current_usage.unwrap();
-    assert_eq!(usage.input_tokens, Some(17_869));
-    assert_eq!(usage.cache_read_input_tokens, Some(0));
-    assert_eq!(usage.output_tokens, Some(32));
+    assert_eq!(tokens.current_context_tokens, Some(4_000));
+    assert_eq!(tokens.used_percentage, Some(40));
+    assert!(tokens.current_usage.is_none());
     assert!(
         refresh
             .context
@@ -653,6 +656,19 @@ fn completed_usage_replaces_mid_turn_scalar_and_estimates_missing_cost() {
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0)
     );
+
+    let mut context = crate::agents::AgentContext::default();
+    refresh.context.apply(&mut context, GrokAdapter.spec());
+    let rewind = json!({
+        "method":"_x.ai/session/update",
+        "params":{"update":{"sessionUpdate":"rewind_marker", "target_prompt_index":0}}
+    });
+    std::fs::write(&updates, format!("{lines}\n{rewind}\n")).unwrap();
+    let refresh = refresh_resolved_context(&updates, &ctx).unwrap();
+    refresh.context.apply(&mut context, GrokAdapter.spec());
+    let tokens = context.tokens.unwrap();
+    assert_eq!(tokens.current_context_tokens, None);
+    assert_eq!(tokens.used_percentage, None);
 }
 
 #[test]
