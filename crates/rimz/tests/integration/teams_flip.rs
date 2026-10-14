@@ -32,6 +32,144 @@ roles:
 "#;
 
 #[test]
+fn user_can_finish_a_board_without_live_members() {
+    use rimz::harness::team_stage::{self, FlipRequest, Flipper};
+    let fixture = Fixture::new();
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = team_stage::flip(FlipRequest {
+        workspace: &fixture.env.resolve_workspace(&fixture.env.project_root),
+        store: &fixture.env.store(),
+        team_name: "forge",
+        team: &serde_json::from_value(
+            json!({"roles": [{"role": "coder", "profile": "worker", "owns": ["Build"]}]}),
+        )
+        .unwrap(),
+        channel: "feature-team",
+        worktree: &fixture.env.project_root,
+        members: &[],
+        to: "Done",
+        note: "Abandoned.",
+        flip_compact: None,
+        by: Flipper::User,
+        mux: None,
+        now: jiff::Timestamp::now(),
+    })
+    .unwrap();
+    assert_eq!(receipt.to, "Done");
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Stage: Done")
+    );
+}
+
+#[test]
+fn addressed_board_commands_reach_live_and_stopped_cohorts() {
+    let fixture = Fixture::new();
+    fixture.seed("coder", None);
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = success(
+        fixture
+            .command()
+            .current_dir(&fixture.env.home_root)
+            .env_remove(rimz::workspace::ENV_WORKTREE_PATH)
+            .arg("--root")
+            .arg(&fixture.env.project_root)
+            .args([
+                "teams",
+                "flip",
+                "forge#feature-team",
+                "Review",
+                "Review this.",
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert!(receipt.contains("Flipped Build -> Review"), "{receipt}");
+    success(
+        fixture
+            .command()
+            .args([
+                "teams",
+                "record",
+                "forge#feature/team",
+                "Result",
+                "Delivered.",
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        std::fs::read_to_string(fixture.board())
+            .unwrap()
+            .contains("Delivered.")
+    );
+    fixture.ended("claude", "coder");
+    let receipt = success(
+        fixture
+            .command()
+            .args(["teams", "flip", "forge#feature-team", "Done", "Finished."])
+            .output()
+            .unwrap(),
+    );
+    assert!(receipt.contains("no live members"), "{receipt}");
+    assert!(receipt.contains("checkout released"), "{receipt}");
+    let board = std::fs::read_to_string(fixture.board()).unwrap();
+    assert!(
+        board.contains("Stage: Done")
+            && board.contains("@user: Review -> Done")
+            && board.contains("Finished."),
+        "{board}"
+    );
+    assert!(
+        fixture
+            .signals()
+            .iter()
+            .any(|signal| signal.payload.get("to") == Some(&json!("Done")))
+    );
+    let audit = fixture
+        .env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    assert!(
+        rimz::harness::resume::inspect_team_hold(&audit.agents, &fixture.env.project_root)
+            .is_none()
+    );
+}
+
+#[test]
+fn addressed_board_commands_match_lanes_like_the_drive_verbs() {
+    let fixture = Fixture::new();
+    fixture.seed_member(
+        "claude",
+        "coder",
+        "coder",
+        None,
+        "",
+        &fixture.env.project_root,
+    );
+    std::fs::write(fixture.board(), BOARD).unwrap();
+    let receipt = success(
+        fixture
+            .command()
+            .args(["teams", "flip", "forge#main", "Review", "Review this."])
+            .output()
+            .unwrap(),
+    );
+    assert!(receipt.contains("Flipped Build -> Review"), "{receipt}");
+    fixture.ended_in("claude", "coder", "");
+    let receipt = success(
+        fixture
+            .command()
+            .args(["teams", "flip", "forge#main", "Done", "Finished."])
+            .output()
+            .unwrap(),
+    );
+    assert!(receipt.contains("checkout released"), "{receipt}");
+}
+
+#[test]
 fn record_bootstraps_without_a_cohort_or_side_effects_then_flip_uses_the_board() {
     let fixture = Fixture::new();
     let receipt = success(
@@ -471,6 +609,10 @@ impl Fixture {
     /// Seed a `kind` member of `role` whose session `sess-<role>` registered and then ended,
     /// with no hook reactor running, as a crash leaves it.
     fn ended(&self, kind: &str, role: &str) -> AgentSessionId {
+        self.ended_in(kind, role, "feature-team")
+    }
+
+    fn ended_in(&self, kind: &str, role: &str, channel: &str) -> AgentSessionId {
         let workspace = self.env.resolve_workspace(&self.env.project_root);
         let session = AgentSessionId::from(format!("sess-{role}"));
         for signal in [LifecycleSignal::Registered, LifecycleSignal::Ended] {
@@ -479,11 +621,11 @@ impl Fixture {
             observation.launch = rimz::agents::LaunchParams {
                 team: Some("forge".to_owned()),
                 role: Some(role.to_owned()),
-                channel: Some("feature-team".to_owned()),
+                channel: Some(channel.to_owned()),
                 ..Default::default()
             };
             observation.worktree_path = Some(self.env.project_root.display().to_string());
-            observation.worktree_branch = Some("feature-team".to_owned());
+            observation.worktree_branch = Some(channel.to_owned());
             self.env
                 .store()
                 .append_event(&EventEnvelope::agent_lifecycle(
@@ -1595,10 +1737,10 @@ fn failed_owner_delivery_reports_partial_flip_and_same_stage_repairs_it() {
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("completed board, signal"), "{error}");
     assert!(
-        error.contains("re-run `rimz teams flip Review \"<progress note>\"`"),
+        error.contains("re-run `rimz teams flip 'forge#feature-team' Review \"<progress note>\"`"),
         "{error}"
     );
-    insta::assert_snapshot!(error.as_ref(), @r#"error: completed board, signal; queued delivery requires claude hooks so messages can deliver at turn boundaries; run `rimz hooks install claude`; re-run `rimz teams flip Review "<progress note>"` to repeat the signal and delivery"#);
+    insta::assert_snapshot!(error.as_ref(), @r#"error: completed board, signal; queued delivery requires claude hooks so messages can deliver at turn boundaries; run `rimz hooks install claude`; re-run `rimz teams flip 'forge#feature-team' Review "<progress note>"` to repeat the signal and delivery"#);
     assert!(
         std::fs::read_to_string(fixture.board())
             .unwrap()

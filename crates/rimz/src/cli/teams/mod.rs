@@ -221,6 +221,10 @@ struct CohortArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    override_usage = "rimz teams flip [TEAM#LANE] <STAGE> <NOTE> [--team NAME]",
+    after_help = "[TEAM#LANE] selects a live or held cohort. Without it, use the current worktree."
+)]
 struct FlipArgs {
     /// Destination stage owned by the team, or Done to finish the work.
     #[arg(value_name = "STAGE")]
@@ -232,6 +236,9 @@ struct FlipArgs {
         allow_hyphen_values = true
     )]
     note: String,
+    /// Progress note when a TEAM#LANE precedes the stage.
+    #[arg(hide = true, value_name = "NOTE", value_parser = parse_progress_note, allow_hyphen_values = true)]
+    addressed_note: Option<String>,
     /// Select a team when several teams share the worktree.
     #[arg(
         long,
@@ -243,8 +250,8 @@ struct FlipArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    group(clap::ArgGroup::new("input").required(true).args(["text", "file", "stdin"])),
-    override_usage = "rimz teams record <SECTION> <TEXT|--file <PATH>|--stdin>"
+    override_usage = "rimz teams record [TEAM#LANE] <SECTION> <TEXT|--file <PATH>|--stdin>",
+    after_help = "[TEAM#LANE] selects a live or held cohort. Without it, use the current worktree."
 )]
 struct RecordArgs {
     /// Board section: Goal, Decisions, or Result (case-insensitive).
@@ -253,12 +260,78 @@ struct RecordArgs {
     /// Text to append as one stamped entry.
     #[arg(value_name = "TEXT", allow_hyphen_values = true)]
     text: Option<String>,
+    /// Entry text when a TEAM#LANE precedes the section.
+    #[arg(hide = true, value_name = "TEXT", allow_hyphen_values = true)]
+    addressed_text: Option<String>,
     /// Read the entry from a UTF-8 file.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", conflicts_with = "stdin")]
     file: Option<std::path::PathBuf>,
     /// Read the entry from stdin to EOF.
     #[arg(long)]
     stdin: bool,
+}
+
+impl FlipArgs {
+    fn normalize(mut self) -> Result<(Option<String>, Self)> {
+        let mut note = Some(std::mem::take(&mut self.note));
+        let address = board_address(&mut self.stage, &mut note, self.addressed_note.take())?;
+        self.note = note.ok_or_else(|| {
+            UsageError::new("provide a stage and a nonblank progress note".into())
+        })?;
+        if address.is_some() && self.team.is_some() {
+            return Err(UsageError::new(
+                "use TEAM#LANE or --team in the current worktree, not both".into(),
+            )
+            .into());
+        }
+        Ok((address, self))
+    }
+}
+
+impl RecordArgs {
+    fn normalize(mut self) -> Result<(Option<String>, Self)> {
+        let address = board_address(
+            &mut self.section,
+            &mut self.text,
+            self.addressed_text.take(),
+        )?;
+        if usize::from(self.text.is_some())
+            + usize::from(self.file.is_some())
+            + usize::from(self.stdin)
+            != 1
+        {
+            return Err(UsageError::new(
+                "provide exactly one of TEXT, --file PATH, or --stdin".into(),
+            )
+            .into());
+        }
+        Ok((address, self))
+    }
+}
+
+fn board_address(
+    first: &mut String,
+    second: &mut Option<String>,
+    extra: Option<String>,
+) -> Result<Option<String>> {
+    let Some((team, lane)) = first.split_once('#') else {
+        if let Some(extra) = extra {
+            return Err(UsageError::new(format!(
+                "unexpected argument '{extra}'; an optional board address must be TEAM#LANE"
+            ))
+            .into());
+        }
+        return Ok(None);
+    };
+    if team.is_empty() || lane.is_empty() {
+        return Err(UsageError::new("expected TEAM#LANE before the board arguments".into()).into());
+    }
+    let value = second
+        .take()
+        .ok_or_else(|| UsageError::new("provide the board arguments after TEAM#LANE".into()))?;
+    let address = std::mem::replace(first, value);
+    *second = extra;
+    Ok(Some(address))
 }
 
 #[derive(Debug, Args)]
@@ -671,7 +744,15 @@ mod tests {
             vec!["rimz", "record", "Goal", "--stdin", "--file", "entry.md"],
             vec!["rimz", "record", "Goal", "text", "--team", "forge"],
         ] {
-            assert!(TeamsHarness::try_parse_from(args).is_err());
+            assert!(
+                TeamsHarness::try_parse_from(args)
+                    .ok()
+                    .and_then(|parsed| match parsed.args.command {
+                        Some(TeamsSubcmd::Record(args)) => args.normalize().ok(),
+                        _ => None,
+                    })
+                    .is_none()
+            );
         }
         for text in ["--no-tests landed", "-x", "-"] {
             let Some(TeamsSubcmd::Record(args)) =
@@ -703,7 +784,9 @@ mod tests {
         let help = TeamsHarness::try_parse_from(["rimz", "record", "--help"])
             .unwrap_err()
             .to_string();
-        assert!(help.contains("rimz teams record <SECTION> <TEXT|--file <PATH>|--stdin>"));
+        assert!(
+            help.contains("rimz teams record [TEAM#LANE] <SECTION> <TEXT|--file <PATH>|--stdin>")
+        );
         for section in ["Goal", "Decisions", "Result"] {
             assert!(help.contains(section), "{help}");
         }
@@ -783,7 +866,12 @@ mod tests {
             help.to_string()
                 .contains("Destination stage owned by the team, or Done")
         );
-        assert!(TeamsHarness::try_parse_from(["rimz", "flip", "Plan", "note", "--steer"]).is_err());
+        let Some(TeamsSubcmd::Flip(args)) =
+            parse_teams(&["rimz", "flip", "Plan", "note", "--steer"]).command
+        else {
+            panic!("flip")
+        };
+        assert!(args.normalize().is_err());
         for flag in ["-m", "--note", "-w", "--worktree"] {
             assert!(
                 TeamsHarness::try_parse_from(["rimz", "flip", "Plan", "note", flag, "value"])

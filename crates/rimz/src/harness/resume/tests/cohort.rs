@@ -899,13 +899,17 @@ fn unavailable_resume_tier_keeps_the_requested_row() {
 fn team_hold_table() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().to_str().unwrap();
-    let present = team_agent("claude", "present", "lead", path, 10);
+    let present = AgentState {
+        channel: Some("held".into()),
+        ..team_agent("claude", "present", "lead", path, 10)
+    };
     let ended = AgentState {
         ended_at: Some(Timestamp::now()),
         ..present.clone()
     };
     let other = AgentState {
         team: Some("other".into()),
+        channel: Some("held".into()),
         ..team_agent("claude", "other", "lead", path, 0)
     };
     let ended_other = AgentState {
@@ -914,11 +918,13 @@ fn team_hold_table() {
     };
     let live_hold = Some(TeamHold {
         team: "forge".into(),
+        channel: "held".into(),
         checkout: root.path().into(),
         reason: TeamHoldReason::LiveMember,
     });
     let board_hold = Some(TeamHold {
         team: "forge".into(),
+        channel: "held".into(),
         checkout: root.path().into(),
         reason: TeamHoldReason::BoardStage("Plan".into()),
     });
@@ -951,6 +957,7 @@ fn team_hold_table() {
             None,
             Some(TeamHold {
                 team: "forge".into(),
+                channel: "held".into(),
                 checkout: root.path().join("child/.."),
                 reason: TeamHoldReason::LiveMember,
             }),
@@ -960,6 +967,7 @@ fn team_hold_table() {
             None,
             Some(TeamHold {
                 team: "other".into(),
+                channel: "held".into(),
                 checkout: root.path().into(),
                 reason: TeamHoldReason::LiveMember,
             }),
@@ -969,6 +977,7 @@ fn team_hold_table() {
             Some("Stage: Plan"),
             Some(TeamHold {
                 team: "other".into(),
+                channel: "held".into(),
                 checkout: root.path().into(),
                 reason: TeamHoldReason::BoardStage("Plan".into()),
             }),
@@ -1004,6 +1013,7 @@ fn channel_hold_table() {
     };
     let live_hold = TeamHold {
         team: "forge".into(),
+        channel: "X".into(),
         checkout: checkout.clone(),
         reason: TeamHoldReason::LiveMember,
     };
@@ -1091,6 +1101,13 @@ fn channel_hold_table() {
             std::fs::remove_file(&board_path).unwrap();
         }
         assert_eq!(inspect_channel_hold(&agents, "X"), expected, "case {index}");
+        for team in ["forge", "other"] {
+            assert_eq!(
+                inspect_cohort_hold(&agents, team, "X"),
+                expected.clone().filter(|hold| hold.team == team),
+                "named hold case {index}"
+            );
+        }
     }
 }
 

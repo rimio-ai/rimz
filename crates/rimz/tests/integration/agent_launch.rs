@@ -802,24 +802,19 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 stderr.contains(&format!("at checkout `{}`", holder.display())),
                 "{stderr}"
             );
-            if action == "hold-channel-board" {
-                assert!(
-                    stderr.contains(&holder.join("blackboard.md").display().to_string()),
-                    "{stderr}"
-                );
-            }
         }
         if root_hold {
             assert!(stderr.contains("checkout `"), "{stderr}");
-            assert!(stderr.contains("rimz teams resume duo` from"), "{stderr}");
-        } else {
+        }
+        assert!(
+            stderr.contains("rimz teams resume 'duo#review'"),
+            "{stderr}"
+        );
+        if matches!(action, "hold-board" | "hold-channel-board") {
             assert!(
-                stderr.contains("rimz teams resume duo -w review"),
+                stderr.contains("rimz teams flip 'duo#review' Done '<note>'"),
                 "{stderr}"
             );
-        }
-        if matches!(action, "hold-board" | "hold-channel-board") {
-            assert!(stderr.contains("`Stage: Done` to release it"), "{stderr}");
         }
         assert!(
             stderr.contains(if live_hold {

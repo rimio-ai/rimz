@@ -10,6 +10,7 @@ use super::super::{Ctx, GlobalFlags};
 use super::{RecordArgs, board_context};
 
 pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
+    let (reference, args) = args.normalize()?;
     let section: board::BoardSection = args.section.parse()?;
     let text = if let Some(text) = args.text {
         text
@@ -24,16 +25,27 @@ pub(super) fn run(args: RecordArgs, globals: &GlobalFlags) -> Result<()> {
             .context("reading stdin")?;
         text
     };
-    let worktree = board_context::worktree()?;
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
+    let selected = reference
+        .as_deref()
+        .map(|reference| board_context::resolve(&ctx, &snapshot.agents, Some(reference), None))
+        .transpose()?;
+    let worktree = match &selected {
+        Some((target, _)) => target.checkout.clone(),
+        None => board_context::worktree()?,
+    };
     let caller = board_context::caller(&snapshot.agents)?;
     let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
     let member = caller.filter(|caller| cohorts.iter().any(|cohort| cohort.contains(caller)));
     let by = if let Some(member) = member {
-        let local = cohorts
-            .iter()
-            .any(|cohort| board_context::in_worktree(cohort, &worktree) && cohort.contains(member));
+        let local = cohorts.iter().any(|cohort| {
+            board_context::in_worktree(cohort, &worktree)
+                && cohort.contains(member)
+                && selected.as_ref().is_none_or(|(target, _)| {
+                    cohort.team == target.team && cohort.channel == target.channel
+                })
+        });
         if !local {
             bail!("calling agent belongs to a team cohort in another worktree");
         }

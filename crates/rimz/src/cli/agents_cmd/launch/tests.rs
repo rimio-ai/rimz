@@ -2,6 +2,25 @@ use super::*;
 use rimz::store::run::ReportTo;
 
 #[test]
+fn held_checkout_guidance_names_the_board_command() {
+    let hold = rimz::harness::resume::TeamHold {
+        team: "forge".into(),
+        channel: "feature".into(),
+        checkout: "/repo/feature".into(),
+        reason: rimz::harness::resume::TeamHoldReason::BoardStage("Build".into()),
+    };
+    let (_, release, resume) = team_hold_guidance(&hold);
+    assert!(
+        release.contains("rimz teams flip 'forge#feature' Done"),
+        "{release}"
+    );
+    assert!(
+        resume.contains("rimz teams resume 'forge#feature'"),
+        "{resume}"
+    );
+}
+
+#[test]
 fn resume_prompt_is_queued_to_the_leader_before_registration() {
     use rimz::harness::plan::CohortSeed;
     use rimz::store::message::{DeliveryGate, MessageSender};

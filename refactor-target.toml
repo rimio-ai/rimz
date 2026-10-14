@@ -1393,7 +1393,8 @@ allowed-dependencies = [
 # MaterializedRecovery and RecoveryTabAgents also publish that pairing to lane placement.
 # RelaunchLoginErr distinguishes an unavailable kind from a history-pool mismatch (+1).
 # check_lane_scope lets `agents list` tell an unknown lane from an empty one by resume's lane rule (+1).
-surface-budget = 65
+# inspect_cohort_hold shares checkout/channel hold ownership with addressed board commands (+1).
+surface-budget = 66
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -3094,6 +3095,11 @@ reason = "CLI scenes use the sidebar's attention membership, ask age, and rowles
 kind = "item"
 key = "address::role_holders"
 reason = "Teams CLI and harness delivery share the claimed-wins owner-liveness rule."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::inspect_cohort_hold"
+reason = "Addressed board commands resolve stopped cohorts through the launch hold rules, not a second history heuristic."
 
 [[verdict]]
 kind = "item"

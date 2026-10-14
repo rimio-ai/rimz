@@ -2785,6 +2785,7 @@ fn match_cohort<'a>(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeamHold {
     pub team: String,
+    pub channel: String,
     /// The holder's recorded checkout, where its board lives.
     pub checkout: PathBuf,
     pub reason: TeamHoldReason,
@@ -2810,9 +2811,20 @@ pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamH
 
 /// Inspect the team holding a channel before a fresh launch.
 pub fn inspect_channel_hold(agents: &[AgentState], channel: &str) -> Option<TeamHold> {
-    let hold = inspect_hold(agents, None, |agent| {
-        agent.channel().as_deref() == Some(channel)
-    })?;
+    lane_hold(agents, |agent| agent.channel().as_deref() == Some(channel))
+}
+
+/// Find the team holding a named lane, matched as the drive verbs match one
+/// (lane, worktree name, or the root lane's `main`), by the channel hold rules.
+pub fn inspect_cohort_hold(agents: &[AgentState], team: &str, lane: &str) -> Option<TeamHold> {
+    lane_hold(agents, |agent| {
+        crate::address::agent_in_worktree(agent, lane)
+    })
+    .filter(|hold| hold.team == team)
+}
+
+fn lane_hold(agents: &[AgentState], in_lane: impl Fn(&AgentState) -> bool) -> Option<TeamHold> {
+    let hold = inspect_hold(agents, None, in_lane)?;
     if hold.reason == TeamHoldReason::LiveMember {
         return Some(hold);
     }
@@ -2841,6 +2853,7 @@ fn inspect_hold(
     {
         return Some(TeamHold {
             team: member.team.clone()?,
+            channel: member.channel()?,
             checkout: member.worktree_path.as_ref()?.into(),
             reason: TeamHoldReason::LiveMember,
         });
@@ -2851,6 +2864,7 @@ fn inspect_hold(
     let stage = super::scratch::board_stage(board_checkout.unwrap_or(&checkout))?;
     super::fleet::team_stage_pending(Some(&stage.name)).then_some(TeamHold {
         team,
+        channel: member.channel()?,
         checkout,
         reason: TeamHoldReason::BoardStage(stage.name),
     })

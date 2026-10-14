@@ -205,21 +205,25 @@ pub enum FlipErr {
     #[error(transparent)]
     Dispatch(#[from] dispatch::DispatchErr),
     #[error(
-        "completed {done}; {source}; re-run `rimz teams flip {to} \"<progress note>\"` to repeat the signal and delivery"
+        "completed {done}; {source}; re-run `{rerun} \"<progress note>\"` to repeat the signal and delivery"
     )]
     PartialFlip {
         done: &'static str,
-        to: String,
+        rerun: String,
         #[source]
         source: Box<FlipErr>,
     },
 }
 
 impl FlipErr {
-    fn after(self, done: &'static str, to: &str) -> Self {
+    fn after(self, done: &'static str, opening: &StageOpening<'_>) -> Self {
+        let address = format!("{}#{}", opening.team_name, opening.channel);
+        // Team, lane, and stage names come from config and argv, which carry no NUL byte.
+        let rerun = shlex::try_join(["rimz", "teams", "flip", address.as_str(), opening.to])
+            .expect("flip words carry no NUL byte");
         Self::PartialFlip {
             done,
-            to: to.to_owned(),
+            rerun,
             source: Box::new(self),
         }
     }
@@ -766,7 +770,7 @@ fn open_stage(
     let event = opening
         .store
         .append_signal(&opening.workspace.session_name, (&signal).into())
-        .map_err(|err| FlipErr::from(err).after(completed, opening.to))?;
+        .map_err(|err| FlipErr::from(err).after(completed, opening))?;
     if let Err(err) = fire_signal(
         opening.store.runtime_paths(),
         &opening.workspace.project_root,
@@ -849,7 +853,7 @@ fn deliver_stage(opening: &StageOpening<'_>, completed: &'static str) -> Result<
             },
         },
     )
-    .map_err(|err| FlipErr::from(err).after(completed, opening.to))?;
+    .map_err(|err| FlipErr::from(err).after(completed, opening))?;
     // A single durable session target with fanout disabled has exactly one outcome.
     let outcome = result
         .outcomes

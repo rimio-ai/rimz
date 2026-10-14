@@ -1,10 +1,11 @@
-//! Resolve a live team cohort and present the durable stage-flip receipt.
+//! Resolve a live or held team cohort and present the durable stage-flip receipt.
 
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 
+use rimz::harness::resume::TeamHoldReason;
 use rimz::harness::team_stage::{self, Compaction, Delivery, FlipRequest, Flipper};
 
 use super::super::agents_cmd::team_report::TeamReportOutcome;
@@ -12,42 +13,23 @@ use super::super::{Ctx, GlobalFlags, render};
 use super::FlipArgs;
 
 pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
+    let (reference, args) = args.normalize()?;
     let ctx = Ctx::open(globals)?;
     let snapshot = ctx.resolution_snapshot_with_context()?;
-    let worktree = super::board_context::worktree()?;
-    let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
-    let candidates = cohorts
-        .iter()
-        .filter(|cohort| args.team.as_deref().is_none_or(|team| cohort.team == team))
-        .filter(|cohort| super::board_context::in_worktree(cohort, &worktree))
-        .collect::<Vec<_>>();
-    let cohort = match candidates.as_slice() {
-        [cohort] => *cohort,
-        [] => bail!(
-            "no matching live team cohort in worktree {}",
-            worktree.display()
-        ),
-        [first, rest @ ..] if rest.iter().all(|cohort| cohort.team == first.team) => bail!(
-            "team `{}` has multiple live cohorts in worktree {} in channels {}; stop the extra cohorts with `rimz teams stop {} -w <channel>` before flipping",
-            first.team,
-            worktree.display(),
-            candidates
-                .iter()
-                .map(|cohort| format!("#{}", cohort.channel))
-                .collect::<Vec<_>>()
-                .join(", "),
-            first.team
-        ),
-        _ => bail!(
-            "multiple live team cohorts in worktree {}; select a team with --team <name>: {}",
-            worktree.display(),
-            candidates
-                .iter()
-                .map(|cohort| format!("{}#{}", cohort.team, cohort.channel))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+    let (target, members) = super::board_context::resolve(
+        &ctx,
+        &snapshot.agents,
+        reference.as_deref(),
+        args.team.as_deref(),
+    )?;
+    let held_by_board = matches!(target.reason, TeamHoldReason::BoardStage(_));
+    let worktree = target.checkout;
+    let cohort = rimz::address::TeamCohort {
+        team: &target.team,
+        channel: target.channel,
+        members,
     };
+    let cohorts = rimz::address::team_cohorts(snapshot.agents.iter());
     let team_name = cohort.team;
     let caller = super::board_context::caller(&snapshot.agents)?;
     let member = caller.filter(|caller| cohort.contains(caller));
@@ -117,13 +99,21 @@ pub(super) fn run(args: FlipArgs, globals: &GlobalFlags) -> Result<()> {
     }
     writeln!(
         out,
-        " by @{by_name}  ({team_name}#{} · {})",
+        " by @{by_name}  ({team_name}#{} · {}{})",
         cohort.channel,
         worktree
             .file_name()
             .unwrap_or(worktree.as_os_str())
-            .to_string_lossy()
+            .to_string_lossy(),
+        if members.is_empty() {
+            " · no live members"
+        } else {
+            ""
+        }
     )?;
+    if held_by_board && receipt.to == rimz::config::DONE_STAGE {
+        writeln!(out, "  checkout released")?;
+    }
     let pipeline = team.pipeline_stages();
     if !pipeline.is_empty() {
         writeln!(
