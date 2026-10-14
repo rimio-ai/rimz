@@ -582,6 +582,84 @@ impl IdleCycleFixture {
             .collect();
     }
 
+    /// Paint every consumer once and verify the single-view benchmark topology.
+    pub fn paint_fanout(&mut self) {
+        let mut watched = 0;
+        let mut prior = None;
+        for (renderer, _) in &mut self.renderers {
+            assert!(renderer.current.own_view.is_some());
+            if renderer.bench_frame_timing(true) {
+                watched += 1;
+                prior = Some(renderer.current.clone());
+            }
+        }
+        assert_eq!(watched, 1);
+        self.run_content_cycle();
+        let prior = prior.expect("one watched renderer");
+        for (renderer, _) in &mut self.renderers {
+            if renderer.bench_frame_timing(false) {
+                assert_ne!(prior.worktree_groups, renderer.current.worktree_groups);
+                assert_eq!(prior.own_view, renderer.current.own_view);
+            }
+        }
+    }
+
+    /// Route a room event through every consumer before the next cycle.
+    pub fn deliver_event(&mut self, event: SidebarEvent) {
+        let backend = super::backend::PaneBackend::ambient(
+            std::fs::File::options()
+                .write(true)
+                .open("/dev/null")
+                .expect("null output")
+                .into(),
+            || {
+                Ok(ratatui::backend::WindowSize {
+                    columns_rows: ratatui::layout::Size::new(40, 60),
+                    pixels: ratatui::layout::Size::new(400, 1200),
+                })
+            },
+        )
+        .expect("benchmark backend");
+        let mut terminal = ratatui::Terminal::new(backend).expect("benchmark terminal");
+        let envelope = SidebarEventEnvelope::new(
+            self.state.workspace_id.clone(),
+            None,
+            crate::utils::time::unix_now_ms(),
+            event,
+        );
+        for (renderer, dispatcher) in &mut self.renderers {
+            renderer.on_event(dispatcher, &mut terminal, envelope.clone());
+        }
+    }
+
+    /// Change row content without changing any consumer's own view, then fold and time frames.
+    pub fn run_content_cycle(&mut self) {
+        {
+            let mut data = self.sink.host_data.lock().expect("host data");
+            let inputs = data.inputs.as_mut().expect("seeded inputs");
+            let frame = Arc::make_mut(&mut inputs.frame);
+            frame.metrics_stamp_ms = Some(frame.metrics_stamp_ms.unwrap_or_default() + 1);
+            let pane = frame
+                .tabs
+                .iter_mut()
+                .flat_map(|tab| &mut tab.panes)
+                .find(|pane| pane.pane_id.as_str() == "zellij:terminal_56")
+                .expect("fanout fixture's unbound process pane");
+            pane.metrics.cpu_pct = Some(if pane.metrics.cpu_pct == Some(10) {
+                20
+            } else {
+                10
+            });
+            pane.metrics.rss_kb = Some(1024);
+            pane.metrics.io_bps = Some(0);
+        }
+        self.run_cycle();
+        for (renderer, _) in &mut self.renderers {
+            renderer.bench_frame_timing(false);
+            renderer.bench_frame_timing(false);
+        }
+    }
+
     /// Fold once without production; return clock-only mailbox deliveries unless renderer application is enabled.
     pub fn run_cycle(&mut self) -> usize {
         self.worker.producer_cadence.last_attempt = Some(Instant::now());
