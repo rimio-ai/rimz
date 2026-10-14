@@ -693,6 +693,56 @@ fn open_tab_rejects_an_empty_layout() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn new_window_anchors_stay_in_the_target_session() {
+    for (session, anchor_session, missing, anchored) in [
+        ("room", "other-room", false, false),
+        ("room", "room", false, true),
+        ("room with spaces", "room with spaces", false, true),
+        ("room", "", true, false),
+    ] {
+        let (temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$@" >> "$dir/argv"
+if [ "$4" = display-message ]; then
+    if [ '{missing}' = true ]; then exit 1; fi
+    if [ "$8" = '#{{window_id}}' ]; then
+        printf '@17\n'
+    else
+        printf '%s\n' '{anchor_session} @17'
+    fi
+elif [ "$4" = new-window ]; then
+    printf '@23 %%24\n'
+fi
+"#
+        ));
+        let mut backend = TmuxBackend::with_socket(temp.path().join("server"));
+        backend.program = Some(shim);
+        let anchor = crate::PaneId::from_parts(crate::MuxName::Tmux, "%7");
+        let opened = backend
+            .open_named_window(
+                session,
+                "new",
+                Path::new("/project"),
+                &["true".to_owned()],
+                Some(&anchor),
+                &Default::default(),
+            )
+            .expect("an unusable anchor must not fail the launch");
+        assert_eq!(opened.window_id, "@23");
+        assert_eq!(opened.first_pane, "%24");
+        let log = std::fs::read_to_string(temp.path().join("argv")).unwrap();
+        let args = log.lines().collect::<Vec<_>>();
+        let new_window = args.iter().position(|arg| *arg == "new-window").unwrap();
+        let command = &args[new_window..];
+        let target = command.iter().position(|arg| *arg == "-t").unwrap() + 1;
+        assert_eq!(command[target], if anchored { "@17" } else { session });
+        assert_eq!(command.contains(&"-a"), anchored);
+    }
+}
+
 #[test]
 fn version_serves_the_memoized_probe() {
     let backend = TmuxBackend::default();
