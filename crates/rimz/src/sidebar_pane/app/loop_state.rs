@@ -372,8 +372,8 @@ impl LoopState {
         );
         let alert_active = self.alert_active();
         let watched = self.watched();
-        let animating =
-            render::animation_interval(&self.current, &self.ui, clock.phase, alert_active)
+        let animating = watched
+            && render::animation_interval(&self.current, &self.ui, clock.phase, alert_active)
                 .is_some();
         let active = !self.self_close.confirming_empty() && watched && (animating || self.dirty);
         let mut timeout = if active {
