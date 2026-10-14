@@ -676,6 +676,20 @@ fn tool_calls_round_trip_and_default_for_legacy_state() {
 }
 
 #[test]
+fn statusline_context_window_outranks_the_lifecycle_window() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.usage.context_window = Some(200_000);
+    agent.context = Some(AgentContext {
+        tokens: Some(crate::agents::AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            ..Default::default()
+        }),
+        ..AgentContext::new("claude", Timestamp::from_second(1_000).unwrap())
+    });
+    assert_eq!(agent.resolved_context_window(), Some(1_000_000));
+}
+
+#[test]
 fn context_join_withholds_the_window_a_compaction_retired() {
     // One Codex `token_count` (85k input, 80k of it cached) as the sidecar
     // rail writes it; the lifecycle rail's occupancy for the same record is

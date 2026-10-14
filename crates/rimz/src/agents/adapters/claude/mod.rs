@@ -1824,8 +1824,9 @@ impl TranscriptUsage {
 /// marker rides only the hook payload's `model` field (the transcript always
 /// writes the bare id), so a marker-less hook cannot distinguish a true 200k
 /// model from a 1M model whose payload dropped the marker. Returning `None`
-/// keeps the last established window (and the 200k spec default applies
-/// when none was ever seen), so the gauge never downgrades a 1M agent to 200k.
+/// lets the caller resolve the exact price-book row when available. The
+/// statusline window outranks the lifecycle window; the 200k spec default is
+/// the final fallback when neither reports a window.
 fn extended_context_window(model: Option<&str>) -> Option<u64> {
     const EXTENDED: u64 = 1_000_000;
     model
