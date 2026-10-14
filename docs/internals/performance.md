@@ -136,6 +136,7 @@ The choreography and write classes are [store.md → The write path](./store.md#
 | Tick meter | Six relaxed counter loads and two clock reads per metered tick | Healthy ticks do no file IO and spawn nothing |
 | Sidebar heartbeat | Temp file plus atomic rename | Every `HEARTBEAT_WRITE_INTERVAL`, inside the liveness TTL |
 | Room read marks | One stat-keyed parse per thread per record change | Full atomic-file identity of `live/read-marks/marks.json`; pane sweeps read the current record, not an older shared cut |
+| Codex session index | One `stat()` of `session_index.jsonl` per live Codex session per refresh; one full parse per index change per process | Full file identity (length, mtime, device, inode): appends grow the file and thread deletes rewrite it ([adapter_codex.md](./agents/adapter_codex.md)) |
 | Reload poll | One `stat()` of the durable reload record per sidebar per second | Executable hashing runs only after that record's metadata changes; the embedded presence-plugin digest resolves once, lazily ([sidebar.md](./sidebar/sidebar.md#build-promotion)) |
 | Remote link probe | One JSON probe over the existing SSH ControlMaster every 2 s | Supervised remote attach only; `RIMZ_REMOTE_PROBE_MS=0` disables it |
 | `loop watch` repaint | Catalog, pause, run-log, and terminal reads once per second, plus one `locks/` listing per task root that opens and try-locks every `loop-run-*.lock` file there, free ones included | Workspace identity resolves once before the loop; the lock cost grows with stale run-lock files until `rimz gc` removes the free ones |
