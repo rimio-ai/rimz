@@ -4851,13 +4851,16 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     );
 
     let git_trace = std::fs::read_to_string(&git_log).expect("read loop watch git trace");
+    // The fixture repo is unborn, so the combined probe falls back once.
     for probe in [
-        "git\trev-parse\t--show-toplevel",
-        "git\trev-parse\t--git-common-dir",
-        "git\trev-parse\t--abbrev-ref\tHEAD",
+        "\trev-parse\t--show-toplevel\t--git-common-dir\t--abbrev-ref\tHEAD",
+        "\trev-parse\t--show-toplevel\t--git-common-dir",
     ] {
         assert_eq!(
-            git_trace.lines().filter(|line| *line == probe).count(),
+            git_trace
+                .lines()
+                .filter(|line| line.starts_with("git\t-C\t") && line.ends_with(probe))
+                .count(),
             1,
             "workspace probe should run once: {probe}\n{git_trace}"
         );

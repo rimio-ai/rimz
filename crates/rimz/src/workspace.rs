@@ -31,7 +31,6 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -525,12 +524,17 @@ impl WorkspaceResolver {
             .canonicalize()
             .unwrap_or_else(|_| start_in.to_path_buf());
 
-        let (project_root, cwd_project_root, worktree_root, root_class) =
+        let (project_root, cwd_project_root, worktree_root, root_class, worktree_branch) =
             if let Some(root) = root_override {
                 let root = root.canonicalize().unwrap_or(root);
                 let class = classify_root(&root, home)?;
                 let cwd_project_root = (class == RootClass::Repo).then(|| root.clone());
-                (root.clone(), cwd_project_root, root, class)
+                let branch = if class == RootClass::Repo {
+                    current_branch(&root)?
+                } else {
+                    None
+                };
+                (root.clone(), cwd_project_root, root, class, branch)
             } else if mode == ResolveMode::Create && !start.exists() {
                 return Err(WorkspaceErr::Resolve {
                     path: start_in.to_path_buf(),
@@ -546,26 +550,48 @@ impl WorkspaceResolver {
             } {
                 // The pane lives in a session that already chose a root; the cwd
                 // still names the worktree the participant works in, for grouping.
-                let (cwd_project_root, worktree_root) = match resolve_git(&start)? {
-                    Some((project, worktree)) => (Some(project), worktree),
-                    None => (
-                        None,
-                        resolve_marker(&start, home).unwrap_or_else(|| start.clone()),
-                    ),
+                let (cwd_project_root, worktree_root, branch) = match resolve_git(&start)? {
+                    Some((project, worktree, branch)) => (Some(project), worktree, branch),
+                    None => {
+                        let root = resolve_marker(&start, home).unwrap_or_else(|| start.clone());
+                        // Marker discovery can cross a Git discovery ceiling.
+                        let branch = if root != start {
+                            current_branch(&root)?
+                        } else {
+                            None
+                        };
+                        (None, root, branch)
+                    }
                 };
-                let class = classify_root(&pinned, home)?;
-                (pinned, cwd_project_root, worktree_root, class)
-            } else if let Some((project_root, worktree_root)) = resolve_git(&start)? {
+                let class = if cwd_project_root.as_ref() == Some(&pinned) {
+                    RootClass::Repo
+                } else {
+                    classify_root(&pinned, home)?
+                };
+                (pinned, cwd_project_root, worktree_root, class, branch)
+            } else if let Some((project_root, worktree_root, branch)) = resolve_git(&start)? {
                 (
                     project_root.clone(),
                     Some(project_root),
                     worktree_root,
                     RootClass::Repo,
+                    branch,
                 )
             } else if let Some(marker) = resolve_marker(&start, home) {
-                (marker.clone(), None, marker, RootClass::Marker)
+                let branch = if marker != start {
+                    current_branch(&marker)?
+                } else {
+                    None
+                };
+                (marker.clone(), None, marker, RootClass::Marker, branch)
             } else {
-                (start.clone(), None, start.clone(), RootClass::Directory)
+                (
+                    start.clone(),
+                    None,
+                    start.clone(),
+                    RootClass::Directory,
+                    None,
+                )
             };
         let project_root = normalized_root(project_root)?;
         let cwd_project_root = cwd_project_root.map(normalized_root).transpose()?;
@@ -574,7 +600,6 @@ impl WorkspaceResolver {
         let workspace_id = WorkspaceId::from_project_root(&project_root);
         let paths = crate::StatePaths::for_project_root_under(&project_root, home)?;
         let session_name = recorded_session_name(&paths, mode);
-        let worktree_branch = current_branch(&worktree_root)?;
 
         Ok(ResolvedWorkspace {
             workspace_id,
@@ -685,18 +710,55 @@ fn classify_root(root: &Path, home: &Path) -> Result<RootClass> {
     Ok(RootClass::Directory)
 }
 
-fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
-    let Some(worktree) = git_output(start, ["rev-parse", "--show-toplevel"])? else {
+fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf, Option<String>)>> {
+    let with_branch = git_output(
+        start,
+        [
+            "rev-parse",
+            "--show-toplevel",
+            "--git-common-dir",
+            "--abbrev-ref",
+            "HEAD",
+        ],
+    )?;
+    let output = match with_branch.as_ref() {
+        Some(output) => Some(output.clone()),
+        None => git_output(start, ["rev-parse", "--show-toplevel", "--git-common-dir"])?,
+    };
+    let Some(output) = output else {
         return Ok(None);
     };
-    let worktree_root = PathBuf::from(worktree);
-
-    let common_dir = git_output(start, ["rev-parse", "--git-common-dir"])?.ok_or_else(|| {
-        WorkspaceErr::Resolve {
-            path: start.to_path_buf(),
-            reason: "git common dir not found".to_owned(),
+    let lines: Vec<_> = output.lines().collect();
+    let (worktree, common_dir, branch) = match lines.as_slice() {
+        [worktree, common_dir, branch] if with_branch.is_some() => (
+            worktree.trim().to_owned(),
+            common_dir.trim().to_owned(),
+            (*branch != "HEAD")
+                .then(|| branch.trim().to_owned())
+                .filter(|branch| !branch.is_empty()),
+        ),
+        [worktree, common_dir] if with_branch.is_none() => (
+            worktree.trim().to_owned(),
+            common_dir.trim().to_owned(),
+            None,
+        ),
+        _ => {
+            // Newlines in a root make the combined output ambiguous; retain the old probes.
+            let Some(worktree) = git_output(start, ["rev-parse", "--show-toplevel"])? else {
+                return Ok(None);
+            };
+            let common_dir =
+                git_output(start, ["rev-parse", "--git-common-dir"])?.ok_or_else(|| {
+                    WorkspaceErr::Resolve {
+                        path: start.to_path_buf(),
+                        reason: "git common dir not found".to_owned(),
+                    }
+                })?;
+            let branch = current_branch(Path::new(&worktree))?;
+            (worktree, common_dir, branch)
         }
-    })?;
+    };
+    let worktree_root = PathBuf::from(worktree);
     let common_dir_path = PathBuf::from(common_dir);
     let common_dir_abs = if common_dir_path.is_absolute() {
         common_dir_path
@@ -729,11 +791,11 @@ fn resolve_git(start: &Path) -> Result<Option<(PathBuf, PathBuf)>> {
             .unwrap_or_else(|| worktree_root.clone())
     };
 
-    Ok(Some((project_root, worktree_root)))
+    Ok(Some((project_root, worktree_root, branch)))
 }
 
 fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> Result<Option<String>> {
-    let output = match Command::new("git").args(args).current_dir(cwd).output() {
+    let output = match crate::proc::git_command(cwd).args(args).output() {
         Ok(output) => output,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
