@@ -874,6 +874,28 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
 }
 
 #[test]
+fn non_pricing_context_merge_does_not_load_a_price_book() {
+    let (_dir, store) = hooks_test_store();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let payload = serde_json::json!({"session_id": "no-pricing", "cwd": "/tmp/hooks-test"});
+    let mut decoded = agent.decode_hook("SessionStart", &payload).unwrap();
+    decoded.take_lifecycle();
+    assert!(decoded.context_agent_id().is_some());
+    let before = rimz::agents::pricing::testkit::book_loads();
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        &store,
+        agent,
+        &mut decoded,
+        &payload,
+        rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+    assert_eq!(rimz::agents::pricing::testkit::book_loads(), before);
+}
+
+#[test]
 fn context_only_session_end_cleans_up_sidecar() {
     let (_dir, store) = hooks_test_store();
     let agent = rimz::agents::definition_by_kind("claude").unwrap();

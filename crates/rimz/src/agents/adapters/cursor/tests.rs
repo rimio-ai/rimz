@@ -1451,7 +1451,8 @@ fn stop_input_total_subtracts_cache_without_underflow() {
 
 #[test]
 fn turn_cost_leaves_auto_unpriced_and_prices_explicit_fast_models() {
-    let prices = PriceBook::fixture();
+    let prices = std::sync::Arc::new(PriceBook::fixture());
+    let prices = || std::sync::Arc::clone(&prices);
     for event_name in ["stop", "afterAgentResponse"] {
         assert!(
             CursorAdapter

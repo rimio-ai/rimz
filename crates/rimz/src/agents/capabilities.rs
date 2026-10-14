@@ -761,12 +761,13 @@ pub trait ContextCapability: CoreCapability {
 
     /// Price one provider turn from a native lifecycle payload. The hook
     /// handler owns accumulation and deduplication; adapters only normalize the
-    /// turn identity and token-price calculation.
+    /// turn identity and token-price calculation. Request prices only after
+    /// the payload qualifies, so other adapters never load a book.
     fn price_turn_locally(
         &self,
         _event_name: &str,
         _payload: &Value,
-        _prices: &PriceBook,
+        _prices: &dyn Fn() -> std::sync::Arc<PriceBook>,
     ) -> Option<LocallyPricedTurnCost> {
         None
     }

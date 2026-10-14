@@ -595,7 +595,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
         &self,
         event_name: &str,
         payload: &Value,
-        prices: &PriceBook,
+        prices: &dyn Fn() -> std::sync::Arc<PriceBook>,
     ) -> Option<LocallyPricedTurnCost> {
         if !matches!(event_name, "afterAgentResponse" | "stop") {
             return None;
@@ -619,6 +619,7 @@ impl crate::agents::capabilities::ContextCapability for CursorAdapter {
         if model.is_empty() {
             return None;
         }
+        let prices = prices();
         let price = prices.price(model)?;
         // Each generation id identifies one turn, so one-request pricing applies.
         let cost_usd = price.cost_of(

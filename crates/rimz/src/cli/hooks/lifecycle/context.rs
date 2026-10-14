@@ -232,9 +232,11 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
 
     let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
     let locally_priced_cost_updated = {
-        let prices = rimz::agents::pricing::cached_book(&shared_pricing_cache_path);
+        let prices = std::cell::LazyCell::new(|| {
+            rimz::agents::pricing::cached_book(&shared_pricing_cache_path)
+        });
         agent
-            .price_turn_locally(event_name, payload, &prices)
+            .price_turn_locally(event_name, payload, &|| std::sync::Arc::clone(&prices))
             .is_some_and(|priced| {
                 match rimz::store::agent_context::merge_locally_priced_cost(
                     store.runtime_paths(),
