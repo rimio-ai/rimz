@@ -11,6 +11,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::local_session_cache::{
     IncrementalCatalog, StableValueCache, StampedPaths, ValueRefreshKind,
@@ -443,7 +444,7 @@ pub(super) fn discover(
     workspaces: &[&Path],
     login_env: &BTreeMap<String, String>,
 ) -> Vec<LocalSessionObservation> {
-    let Some(home) = super::install::engine_home(login_env) else {
+    let Some(home) = super::KiroAdapter.config_home(login_env) else {
         return Vec::new();
     };
     let key = DiscoveryKey {
@@ -636,7 +637,7 @@ pub(super) fn transcript_for_session(
     session_id: &str,
     login_env: &BTreeMap<String, String>,
 ) -> Option<PathBuf> {
-    transcript_for_session_under(&super::install::engine_home(login_env)?, session_id)
+    transcript_for_session_under(&super::KiroAdapter.config_home(login_env)?, session_id)
 }
 
 /// The reply that closed the latest turn: the last `Say` record, when no user

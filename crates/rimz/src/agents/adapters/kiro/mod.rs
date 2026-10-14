@@ -1,7 +1,7 @@
 //! Kiro CLI v3 native-hook, local-session, transcript, and live-state adapter.
 //!
-//! Since Kiro CLI 2.13.0 the global `~/.kiro/hooks/` files fire in every
-//! workspace, so a managed hook file reports session, turn, and tool
+//! Kiro CLI 2.31.0 shares one configuration, skills, session, and global-hook
+//! home. A managed hook file reports session, turn, and tool
 //! lifecycle. The stock structured session store still supplies the newborn
 //! card before the first prompt, approval waits, cancel and failure outcomes,
 //! context percentage, and history.

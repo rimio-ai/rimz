@@ -115,7 +115,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Kiro
 
-- Turns and tool calls arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.13.0 or later.
+- Turns and tool calls arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
 - Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
 - A cancelled or errored turn fires no hook: the card settles from the store, and a supervised `-p` run on that turn ends at its `--timeout`.
 - A pending tool approval raises Waiting; `rimz asks` and `rimz answer` do not see it.
@@ -155,7 +155,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Droid | `~/.factory` | none | `~/.agents/skills` | accepted | none |
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted | none |
 | Amp | `~/.config/amp` | `XDG_CONFIG_HOME` + `/amp` | `~/.agents/skills` | refused | none |
-| Kiro | `~/.kiro` | `KIRO_HOME` | `<home>/skills` | refused | none |
+| Kiro | `~/.kiro` | absolute `KIRO_HOME`, excluding root and ancestors of `HOME` (including itself) | `<home>/skills` | refused | none |
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |

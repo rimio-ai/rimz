@@ -2,11 +2,11 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. The raw upstream protocol is in [kiro-reference.md](../../externals/agent-adapter/kiro-reference.md).
 
-Kiro support targets the stock v3 engine selected by `kiro-cli chat --v3`, verified on Kiro CLI 2.21.4. RimZ owns launch, exact resume, process identity, the managed global hook file, validated local-session discovery, transcript history, assistant streaming, and transient live state. Provider files are pulled display truth: the adapter and snapshot fold never append them to the RimZ event log.
+Kiro support targets the stock v3 engine selected by `kiro-cli chat --v3`, with a Kiro CLI 2.31.0 minimum. RimZ owns launch, exact resume, process identity, the managed global hook file, validated local-session discovery, transcript history, assistant streaming, and transient live state. Provider files are pulled display truth: the adapter and snapshot fold never append them to the RimZ event log.
 
 Only the registry reaches the concrete adapter. Installation and the local session store stay private to the Kiro adapter; other modules consume the provider-neutral capabilities.
 
-Since Kiro CLI 2.13.0, global hooks run in every workspace, so session, turn, and tool lifecycle arrive as native hooks. The validated local store still supplies what no hook reports: the newborn card before the first prompt, pending tool approvals, cancelled and failed turn outcomes, context percentage, and history.
+Global hooks run in every workspace, so session, turn, and tool lifecycle arrive as native hooks. The validated local store still supplies what no hook reports: the newborn card before the first prompt, pending tool approvals, cancelled and failed turn outcomes, context percentage, and history.
 
 ## Launch and resume
 
@@ -18,9 +18,9 @@ A provider session replacing a provisional launch row inherits launch-owned name
 
 ## Hooks and lifecycle
 
-`rimz hooks install kiro` writes `~/.kiro/hooks/rimz.json` whole, from the embedded [`hooks.json`](../../../crates/rimz/src/agents/adapters/kiro/hooks.json), through the shared managed source. The file carries the first-line `_rimz_managed` marker, which Kiro's non-strict hook schema accepts; an unmarked file is refused unless every command in it is a RimZ feed, which is the file earlier RimZ builds wrote and install reclaims. Kiro reads global hooks and sessions from the OS home (`os.homedir()`), never from `KIRO_HOME`; `RIMZ_KIRO_HOOKS` overrides the path for tests.
+`rimz hooks install kiro` writes `<kiro-home>/hooks/rimz.json` whole, from the embedded [`hooks.json`](../../../crates/rimz/src/agents/adapters/kiro/hooks.json), through the shared managed source. The file carries the first-line `_rimz_managed` marker, which Kiro's non-strict hook schema accepts; an unmarked file is refused unless every command in it is a RimZ feed, which is the file earlier RimZ builds wrote and install reclaims. Configuration, skills, sessions, and hooks share one home: `KIRO_HOME` when non-empty, absolute, non-root, and neither equal to nor an ancestor of `HOME`; otherwise `$HOME/.kiro`. RimZ compares lexically normalized paths without filesystem canonicalization. `RIMZ_KIRO_HOOKS` overrides the hook file path.
 
-Install and preview refuse when `kiro-cli --version` reports a release older than 2.13.0, where `~/.kiro/hooks` ran only in the home workspace; an unprobeable binary installs. Each command is `rimz hooks feed --source kiro || true` with a 10-second timeout, because a `Stop` hook exiting 1 continues the turn. Neutral output is empty stdout and exit 0 on every trigger.
+Install and preview refuse when `kiro-cli --version` reports a release older than 2.31.0, which lacks the shared-home contract; an unprobeable binary installs. Each command is `rimz hooks feed --source kiro || true` with a 10-second timeout, because a `Stop` hook exiting 1 continues the turn. Neutral output is empty stdout and exit 0 on every trigger.
 
 | Native event | `LifecycleSignal` | Notes |
 | --- | --- | --- |
@@ -68,7 +68,7 @@ Kiro usage summaries report credits, not tokens or dollars. RimZ does not infer 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 
 - **Errored and cancelled turns fire no hook.** The card settles once the store records `turn_end`, but a supervised run, `message --wait`, or a scheduled turn waiting on that turn ends at its deadline. A refused turn fires `Stop`, so its hook outcome is a success while the card folds to failed.
-- **Kiro CLI older than 2.13.0 gets no hooks.** `rimz hooks install kiro` refuses there, detected installs skip Kiro, and supervised runs keep refusing because hooks are not installed.
+- **Kiro CLI older than 2.31.0 gets no hooks.** `rimz hooks install kiro` refuses there, detected installs skip Kiro, and supervised runs keep refusing because hooks are not installed.
 - **Pending approvals and questions have no hook.** The waiting card comes from the store and stays out of `rimz asks`.
 - **Credits are not dollars.** Until Kiro publishes token counts or a dollar figure, no spend parser can be honest.
 - **Native Ask/Answer routing, plan and question handling, compaction events, subagents, background parking, remote control, and account probing** have no available surface.

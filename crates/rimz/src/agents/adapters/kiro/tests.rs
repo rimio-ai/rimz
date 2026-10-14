@@ -655,7 +655,7 @@ fn workspace_hash_and_resume_parser_are_exact() {
 fn hook_install_writes_reclaims_and_removes_the_managed_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
-    let current = Some(crate::agents::version::CliVersion::new(2, 21, 4));
+    let current = Some(install::MIN_SUPPORTED_CLI);
 
     let preview = install::preview_at(&path, current).unwrap();
     assert!(!preview.files[0].existed);
@@ -677,21 +677,21 @@ fn hook_install_writes_reclaims_and_removes_the_managed_file() {
 }
 
 #[test]
-fn hook_install_refuses_releases_before_global_hooks() {
+fn hook_install_refuses_releases_before_one_home() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
-    let old = Some(crate::agents::version::CliVersion::new(2, 12, 1));
+    let old = Some(crate::agents::version::CliVersion::new(2, 30, 0));
     for err in [
         install::install_at(&path, old).map(|_| ()).unwrap_err(),
         install::preview_at(&path, old).map(|_| ()).unwrap_err(),
     ] {
         assert!(
-            err.to_string().contains("upgrade to 2.13.0 or later"),
+            err.to_string().contains("upgrade to 2.31.0 or later"),
             "{err}"
         );
     }
     assert!(!path.exists());
-    assert!(install::install_at(&path, Some(install::MIN_GLOBAL_HOOKS)).is_ok());
+    assert!(install::install_at(&path, Some(install::MIN_SUPPORTED_CLI)).is_ok());
 }
 
 #[test]
@@ -739,19 +739,24 @@ fn user_hook_file_is_refused_and_preserved() {
 }
 
 #[test]
-fn hooks_path_prefers_override_then_home_and_ignores_kiro_home() {
+fn hooks_path_prefers_override_then_kiro_home() {
     let override_path = OsStr::new("/tmp/override.json");
     let home = OsStr::new("/home/user");
     assert_eq!(
-        install::resolve_hooks_path(Some(override_path), Some(home)).unwrap(),
+        install::resolve_hooks_path(
+            Some(override_path),
+            Some(OsStr::new("/selected")),
+            Some(home)
+        )
+        .unwrap(),
         std::path::PathBuf::from("/tmp/override.json")
     );
     assert_eq!(
-        install::resolve_hooks_path(None, Some(home)).unwrap(),
+        install::resolve_hooks_path(None, None, Some(home)).unwrap(),
         std::path::PathBuf::from("/home/user/.kiro/hooks/rimz.json")
     );
     assert!(matches!(
-        install::resolve_hooks_path(None, None),
+        install::resolve_hooks_path(None, None, None),
         Err(AgentErr::Install { .. })
     ));
     assert_eq!(
@@ -762,23 +767,86 @@ fn hooks_path_prefers_override_then_home_and_ignores_kiro_home() {
         install::resolve_home(None, Some(home)).unwrap(),
         std::path::PathBuf::from("/home/user/.kiro")
     );
+    assert_eq!(
+        install::resolve_hooks_path(None, Some(OsStr::new("/selected")), Some(home)).unwrap(),
+        PathBuf::from("/selected/hooks/rimz.json")
+    );
 }
 
 #[test]
-fn session_store_follows_home_not_kiro_home() {
+fn session_store_follows_kiro_home() {
     let env = BTreeMap::from([
         ("KIRO_HOME".to_owned(), "/tmp/kiro".to_owned()),
         ("HOME".to_owned(), "/home/user".to_owned()),
     ]);
     assert_eq!(
-        install::engine_home(&env),
-        Some(std::path::PathBuf::from("/home/user/.kiro"))
-    );
-    assert_eq!(
         KiroAdapter.config_home(&env),
         Some(std::path::PathBuf::from("/tmp/kiro"))
     );
-    assert_eq!(install::engine_home(&BTreeMap::new()), None);
+    assert_eq!(
+        KiroAdapter.skills_home(&env),
+        Some(std::path::PathBuf::from("/tmp/kiro/skills"))
+    );
+    assert_eq!(KiroAdapter.config_home(&BTreeMap::new()), None);
+}
+
+#[test]
+fn invalid_kiro_homes_fall_back_to_home() {
+    for value in ["", "relative", "/", "/home", "/home/user", "/home/user/.."] {
+        assert_eq!(
+            install::resolve_home(Some(OsStr::new(value)), Some(OsStr::new("/home/user"))),
+            Some(PathBuf::from("/home/user/.kiro")),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn session_lookups_share_the_selected_home() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home/user");
+    let selected = root.path().join("selected");
+    let workspace = Path::new("/workspace/project");
+    let id = "sess_33333333-3333-4333-8333-333333333333";
+    for kiro_home in [
+        selected.to_str().unwrap(),
+        "relative",
+        "/",
+        home.to_str().unwrap(),
+        root.path().to_str().unwrap(),
+    ] {
+        let expected = if kiro_home == selected.to_str().unwrap() {
+            selected.clone()
+        } else {
+            home.join(".kiro")
+        };
+        let session_dir = expected
+            .join("sessions")
+            .join(session::workspace_bucket(workspace).unwrap())
+            .join(id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("session.json"), json!({"id": id, "schemaVersion": "1.0.0", "dataModelVersion": 1, "workspacePaths": [workspace], "createdAt": "2025-01-03T00:00:00Z"}).to_string()).unwrap();
+        std::fs::write(session_dir.join("messages.jsonl"), "").unwrap();
+        let env = BTreeMap::from([
+            ("HOME".to_owned(), home.to_string_lossy().into_owned()),
+            ("KIRO_HOME".to_owned(), kiro_home.to_owned()),
+        ]);
+        assert_eq!(
+            session::transcript_for_session(id, &env),
+            Some(session_dir.join("messages.jsonl")),
+            "{kiro_home}"
+        );
+        assert_eq!(
+            session::discover(&[workspace], &env).len(),
+            1,
+            "{kiro_home}"
+        );
+        assert_eq!(
+            install::resolve_hooks_path(None, Some(OsStr::new(kiro_home)), Some(home.as_os_str()))
+                .unwrap(),
+            expected.join("hooks/rimz.json")
+        );
+    }
 }
 
 #[test]
