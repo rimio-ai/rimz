@@ -1020,6 +1020,8 @@ impl LoopState {
     ) -> Result<()> {
         self.caps_refresh_deadline = Some(Instant::now() + RESIZE_CAPS_SETTLE);
         self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
+        // A resize may reveal a hidden pane: paint the newest fold, not a deferred one.
+        self.drain_snapshot(fetch, false);
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width

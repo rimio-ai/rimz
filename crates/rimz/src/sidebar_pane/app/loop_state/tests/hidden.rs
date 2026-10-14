@@ -145,6 +145,13 @@ fn input_and_non_nudge_events_flush_hidden_content() {
         assert_eq!(rig.state.current.display_name, "before input");
     }
     let mut rig = hidden_rig();
+    defer_name(&mut rig, "before resize");
+    rig.state
+        .on_resize(&mut rig.fetch, &mut rig.terminal, None)
+        .unwrap();
+    assert_eq!(rig.state.current.display_name, "before resize");
+    assert!(!rig.state.dirty, "the resize paint shows the flushed fold");
+    let mut rig = hidden_rig();
     defer_name(&mut rig, "before filter");
     rig.event(SidebarEvent::BodyFilterChanged);
     assert_eq!(rig.state.current.display_name, "before filter");
