@@ -29,8 +29,7 @@ fn probe_descriptor_version_with_locator(
 /// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
 /// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
 /// leaves the agent off `$PATH` yet present; this finds it. A name another
-/// provider's installer also ships — Cursor's `agent` versus Grok's install
-/// alias — is confirmed by the definition's
+/// provider's installer also ships under the same filename is confirmed by the definition's
 /// [`bin_identity`](AgentSpec::bin_identity) before it is accepted, so a
 /// colliding alias never resolves as this agent. Returns the absolute path, or
 /// `None` when the binary is nowhere RimZ knows to look.
@@ -53,8 +52,7 @@ pub fn locate_binary(definition: &AgentSpec) -> Option<PathBuf> {
 }
 
 /// The first candidate whose `--version` proves it is this provider. `$PATH` can
-/// carry several binaries under an ambiguous name (Cursor's `agent` and Grok's
-/// alias both), so every match is probed in order rather than trusting the
+/// carry several providers' binaries under one ambiguous name, so every match is probed in order rather than trusting the
 /// first-on-`$PATH` hit.
 fn first_matching_identity(
     candidates: impl IntoIterator<Item = PathBuf>,
@@ -195,21 +193,20 @@ mod tests {
             std::fs::set_permissions(&path, permissions).unwrap();
             path
         };
-        let grok_alias = make("grok-agent", "grok 0.2.106 (bde89716f6) [stable]");
-        let cursor_agent = make("cursor-agent-real", "2026.07.17-3e2a980");
+        let other = make("other-agent", "other 0.2.106 (bde89716f6) [stable]");
+        let ours = make("our-agent", "2026.07.17-3e2a980");
 
-        let cursor = spec_by_kind("cursor").unwrap();
-        let identity = cursor
-            .ambiguous_bin_identity("agent")
-            .expect("cursor's `agent` name is ambiguous");
+        let identity = &BinIdentity {
+            ambiguous: &["agent"],
+            verify: |stdout, _| stdout.trim().starts_with("2026."),
+        };
 
-        assert!(!binary_has_identity(&grok_alias, identity));
-        assert!(binary_has_identity(&cursor_agent, identity));
+        assert!(!binary_has_identity(&other, identity));
+        assert!(binary_has_identity(&ours, identity));
         assert_eq!(
-            first_matching_identity([grok_alias.clone(), cursor_agent.clone()], identity),
-            Some(cursor_agent),
+            first_matching_identity([other.clone(), ours.clone()], identity),
+            Some(ours),
         );
-        assert_eq!(first_matching_identity([grok_alias], identity), None);
-        assert!(cursor.ambiguous_bin_identity("cursor-agent").is_none());
+        assert_eq!(first_matching_identity([other], identity), None);
     }
 }

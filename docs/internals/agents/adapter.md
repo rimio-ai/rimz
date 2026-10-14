@@ -47,7 +47,7 @@ Each adapter is a private unit struct under [`adapters/<kind>/`](../../../crates
 | --- | --- |
 | Identity | `kind`, `aliases`, `display_name` |
 | Presentation | `brand` (emblem, 256-color index, RGB), `plan_label`, `expected_windows` |
-| Process | `process_names` (kernel `comm` candidates, including launchers), `bin_names` (`$PATH` probe order), `bin_identity` (the check that keeps an ambiguous binary name, such as Cursor's `agent`, from resolving to another provider's install), `extra_bin_dirs` |
+| Process | `process_names` (kernel `comm` candidates, including launchers), `bin_names` (`$PATH` probe order), `bin_identity` (the check that would keep an ambiguous binary name from resolving to another provider's install; no built-in claims such a name today), `extra_bin_dirs` |
 | Vocabulary | `tools.input_key` (the payload key holding tool arguments), `tools.mutating`, `tools.editing` (a validated subset of mutating), `tools.blocking` (tool name paired with its [`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs)) |
 | Policy | `capabilities` (below) |
 | Claims | `coverage`, `user_coverage`, `lifecycle_hooks` ([declared coverage](#declared-coverage)) |

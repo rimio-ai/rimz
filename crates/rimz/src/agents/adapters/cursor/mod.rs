@@ -25,9 +25,9 @@ use serde_json::json as test_json;
 use serde_json::{Value, json};
 
 use super::definition::{
-    AgentSpec, BinIdentity, Brand, Capabilities, CapabilityLevel, ConcernCoverage,
-    CoverageAnnotations, HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel,
-    RemoteControlCapability, ThreadKey, ToolClassification, UserCoverage,
+    AgentSpec, Brand, Capabilities, CapabilityLevel, ConcernCoverage, CoverageAnnotations,
+    HookContextReply, HookCoverage, LifecycleAnnotations, PlanLabel, RemoteControlCapability,
+    ThreadKey, ToolClassification, UserCoverage,
 };
 use super::hook_types::{HookEventSpec, catalog_contains, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
@@ -40,7 +40,10 @@ use super::{
 use crate::agents::PermissionMode;
 use crate::ids::AgentSessionId;
 
-const UNAMBIGUOUS_FALLBACK_BIN: &str = "cursor-agent";
+/// Cursor's provider-unique executable. The installer also links a generic
+/// `agent` name that collides with other providers' aliases (Grok's installer
+/// symlinks one), so RimZ neither discovers nor launches Cursor under it.
+const CURSOR_BIN: &str = "cursor-agent";
 
 static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
     tool_rules: crate::agents::skills::ToolRules::Unsupported,
@@ -87,20 +90,14 @@ static CURSOR_DESCRIPTOR: AgentSpec = AgentSpec {
     lifecycle_hooks: CURSOR_LIFECYCLE_HOOKS,
     default_context_window: None,
     default_model: None,
-    process_names: &["cursor-agent", "agent"],
-    bin_names: &["cursor-agent", "agent"],
-    // Cursor's generic `agent` name collides with the alias Grok's installer
-    // symlinks onto `$PATH`, so a match on it is confirmed by Cursor's own
-    // version banner before discovery accepts it.
-    bin_identity: Some(BinIdentity {
-        ambiguous: &["agent"],
-        verify: agent_binary_is_cursor,
-    }),
+    process_names: &[CURSOR_BIN],
+    bin_names: &[CURSOR_BIN],
+    bin_identity: None,
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         definitions: crate::agents::definition::DefinitionSpec::EMPTY,
-        program: Some("agent"),
+        program: Some(CURSOR_BIN),
         fixed_args: &[],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
         resume: None,
@@ -540,12 +537,11 @@ fn config_dirs(env: &BTreeMap<String, String>) -> Vec<PathBuf> {
     dirs
 }
 
-/// Select the verified Cursor path when discovery found one. The fallback stays
-/// provider-unique so a colliding `agent` alias can fail to resolve but can
-/// never launch another provider as Cursor.
+/// Select the located Cursor path when discovery found one, else the bare
+/// provider-unique name for `$PATH` lookup at spawn.
 fn cursor_launch_binary(located: Option<PathBuf>) -> String {
     located.map_or_else(
-        || UNAMBIGUOUS_FALLBACK_BIN.to_owned(),
+        || CURSOR_BIN.to_owned(),
         |path| path.to_string_lossy().into_owned(),
     )
 }
@@ -672,16 +668,6 @@ impl crate::agents::capabilities::SpendingCapability for CursorAdapter {
     ) -> Option<PathBuf> {
         transcript::resolve_transcript(session_id, None, prior_path)
     }
-}
-
-/// Whether a binary located under Cursor's ambiguous `agent` name is genuinely
-/// Cursor. Cursor's date-build banner (`YYYY.MM.DD-hash`) is unique to Cursor,
-/// so a candidate whose `--version` parses under it is Cursor and no other CLI
-/// sharing the `agent` filename (Grok's install alias) is.
-fn agent_binary_is_cursor(stdout: &str, stderr: &str) -> bool {
-    parse_cursor_version(stdout)
-        .or_else(|| parse_cursor_version(stderr))
-        .is_some()
 }
 
 fn parse_cursor_version(output: &str) -> Option<String> {

@@ -415,7 +415,7 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
 #[test]
 fn cursor_ask_is_exact_hook_bound_pane_truth_and_clears_transiently() {
     let waiting_since = ago(10);
-    let pane = pane("%1", "agent", "/repo/main");
+    let pane = pane("%1", "cursor-agent", "/repo/main");
     let mut durable = agent("cursor", "cursor-session", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1");

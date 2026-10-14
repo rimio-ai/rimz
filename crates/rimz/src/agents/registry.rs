@@ -333,8 +333,8 @@ mod tests {
             ("claude", Some("claude")),
             ("agy", Some("antigravity")),
             ("antigravity", None),
-            // `agent` is provider-ambiguous. Binary discovery verifies Cursor's
-            // version banner; a process basename alone abstains.
+            // No adapter claims the generic `agent` name Cursor's installer
+            // also links; only `cursor-agent` classifies as Cursor.
             ("agent", None),
             ("cursor-agent", Some("cursor")),
             ("kiro-cli-chat", Some("kiro")),
@@ -360,7 +360,8 @@ mod tests {
             ),
             Some("qwen")
         );
-        assert!(command_may_be_agent_kind("agent", "cursor"));
+        assert!(!command_may_be_agent_kind("agent", "cursor"));
+        assert!(command_may_be_agent_kind("cursor-agent", "cursor"));
         assert!(!command_may_be_agent_kind("agent", "grok"));
         assert!(command_may_be_agent_kind("kiro-cli-chat", "kiro"));
         assert_eq!(command_agent_kind_candidate("kiro-cli-chat"), Some("kiro"));

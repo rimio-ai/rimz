@@ -433,9 +433,9 @@ pub enum StaticPresetMatcher {
 }
 
 /// Provider-identity check for a [`bin_names`](AgentSpec::bin_names) entry that
-/// another provider's installer also ships under the same filename. Cursor's
-/// `agent` collides with the alias Grok's installer symlinks onto `$PATH`, so a
-/// bare filename match cannot prove the located binary is Cursor's.
+/// another provider's installer also ships under the same filename, where a
+/// bare filename match cannot prove the located binary is this provider's. No
+/// built-in claims such a name today; this is the hook for one that must.
 #[derive(Clone, Copy, Debug)]
 pub struct BinIdentity {
     /// The subset of [`bin_names`](AgentSpec::bin_names) that collide with
@@ -508,14 +508,13 @@ pub struct AgentSpec {
     /// `/proc` walk.
     pub process_names: &'static [&'static str],
     /// `$PATH` probe names in preference order. Most agents expose the bare
-    /// kind; Cursor ships its CLI as `cursor-agent`/`agent` while `cursor` is
-    /// the IDE.
+    /// kind; Cursor claims only `cursor-agent`, since `cursor` is the IDE and
+    /// its installer's generic `agent` link collides with other providers'.
     pub bin_names: &'static [&'static str],
     /// Identity check that keeps an ambiguous [`bin_names`](Self::bin_names)
-    /// entry from resolving to a different provider's colliding install alias —
-    /// Cursor's generic `agent` collides with the alias Grok's installer
-    /// symlinks onto `$PATH`. `None` when every `bin_names` entry is
-    /// provider-unique and a filename match settles identity.
+    /// entry from resolving to a different provider's colliding install alias.
+    /// `None` when every `bin_names` entry is provider-unique and a filename
+    /// match settles identity.
     pub bin_identity: Option<BinIdentity>,
     /// Well-known install directories, relative to `$HOME`, where this agent's
     /// binary lives when its installer has not put
@@ -1218,9 +1217,9 @@ impl AgentSpec {
     }
 
     /// Whether a command basename launches this agent. This is distinct from
-    /// [`runs_as`](Self::runs_as): a resolved executable may expose a provider-
-    /// independent name (`agent` for Cursor) while its kernel `comm` names the
-    /// runtime instead. Target-triple suffix matching applies to each declared
+    /// [`runs_as`](Self::runs_as): a resolved executable may expose one name
+    /// (`cursor-agent` for Cursor) while its kernel `comm` names the runtime
+    /// instead. Target-triple suffix matching applies to each declared
     /// name rather than implicitly accepting the kind, so `antigravity` does
     /// not shadow the actual `agy` process.
     pub fn launches_as(&self, name: &str) -> bool {

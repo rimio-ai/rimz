@@ -54,30 +54,20 @@ fn version_parser_preserves_the_cursor_date_build_token() {
 }
 
 #[test]
-fn agent_identity_accepts_cursor_and_rejects_grok_alias() {
-    assert!(agent_binary_is_cursor("2026.07.17-3e2a980\n", ""));
-    assert!(agent_binary_is_cursor("", "2026.07.17-3e2a980\n"));
-    assert!(!agent_binary_is_cursor(
-        "grok 0.2.106 (bde89716f6) [stable]",
-        ""
-    ));
-    assert!(!agent_binary_is_cursor("", ""));
-
-    let identity = CursorAdapter
-        .spec()
-        .ambiguous_bin_identity("agent")
-        .expect("cursor's `agent` name is ambiguous");
-    assert!((identity.verify)("2026.07.17-3e2a980", ""));
-    assert!(
-        CursorAdapter
-            .spec()
-            .ambiguous_bin_identity("cursor-agent")
-            .is_none()
-    );
+fn cursor_claims_only_its_provider_unique_binary() {
+    let spec = CursorAdapter.spec();
+    assert_eq!(spec.bin_names, ["cursor-agent"]);
+    assert_eq!(spec.process_names, ["cursor-agent"]);
+    assert_eq!(spec.launch.program, Some("cursor-agent"));
+    assert!(spec.bin_identity.is_none());
+    for generic in ["agent", "cursor"] {
+        assert!(!spec.launches_as(generic), "{generic}");
+        assert!(!spec.runs_as(generic), "{generic}");
+    }
 }
 
 #[test]
-fn cursor_launch_fallback_never_reuses_the_ambiguous_agent_name() {
+fn cursor_launch_falls_back_to_the_provider_unique_name() {
     assert_eq!(cursor_launch_binary(None), "cursor-agent");
     assert_eq!(
         cursor_launch_binary(Some(PathBuf::from("/opt/cursor/agent"))),
@@ -2353,8 +2343,6 @@ fn incomplete_and_malformed_hook_configs_are_detected() {
 
 #[test]
 fn hook_command_preserves_parent_pid_attribution() {
-    assert_eq!(CursorAdapter.spec().bin_names, ["cursor-agent", "agent"]);
-    assert!(!CursorAdapter.spec().bin_names.contains(&"cursor"));
     assert!(RIMZ_HOOK_COMMAND.starts_with("RIMZ_AGENT_PID=$PPID"));
     assert!(RIMZ_HOOK_COMMAND.contains("--source cursor"));
 }
