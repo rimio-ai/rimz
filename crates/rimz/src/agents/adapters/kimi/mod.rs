@@ -215,7 +215,7 @@ const KIMI_USER_COVERAGE: UserCoverage = UserCoverage {
         note: "the card tracks the session from start through every turn to close",
     },
     live: CapabilityLevel::Partial {
-        shows: "token totals and a priced dollar figure throughout the turn",
+        shows: "token totals and live session dollars, including every child's spend",
         limit: "kimi-code omits the exact context ratio, so the fill gauge is derived",
     },
     history: CapabilityLevel::Partial {
@@ -611,10 +611,18 @@ impl crate::agents::capabilities::SpendingCapability for KimiAdapter {
         &self,
         _login_env: &BTreeMap<String, String>,
     ) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSource::tree(
-            wire::kimi_home().join("sessions"),
-            "*/*/agents/main/wire.jsonl",
-        )
+        spending_sources_at(&wire::kimi_home())
+    }
+
+    fn session_spend_transcripts(
+        &self,
+        session_id: &str,
+        prior_path: Option<&Path>,
+        login_env: &BTreeMap<String, String>,
+    ) -> Vec<PathBuf> {
+        self.session_transcript(session_id, prior_path, login_env)
+            .map(|main| wire::session_wires(&main))
+            .unwrap_or_default()
     }
 
     fn session_transcript(
@@ -649,8 +657,23 @@ fn refresh_wire_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContext
         ctx.prior_transcript_path.map(Path::new),
         ctx.login_env,
     )?;
-    let stat = TranscriptStat::from_path(&path)?;
+    let mut stat = TranscriptStat::from_path(&path)?;
+    stat.companion = wire::session_wires(&path)
+        .into_iter()
+        .filter(|wire| wire != &path)
+        .filter_map(|wire| TranscriptStat::from_path(&wire))
+        .map(crate::agents::TranscriptCompanionStat::from)
+        .reduce(|mut total, next| {
+            total.len = total.len.saturating_add(next.len);
+            (total.mtime_secs, total.mtime_nanos) =
+                (total.mtime_secs, total.mtime_nanos).max((next.mtime_secs, next.mtime_nanos));
+            total
+        });
     refresh_wire_path(&path, ctx.agent_id, stat, ctx)
+}
+
+fn spending_sources_at(home: &Path) -> Vec<crate::agents::spending::SpendingSource> {
+    crate::agents::spending::SpendingSource::tree(home.join("sessions"), "*/*/agents/*/wire.jsonl")
 }
 
 fn refresh_wire_path(
@@ -709,7 +732,15 @@ fn refresh_wire_path(
         })
     };
     let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
-    let spend = spend::parse_snapshot(path, &snapshot, &prices);
+    let mut spend = spend::parse_snapshot(path, &snapshot, &prices);
+    for child in wire::session_wires(path)
+        .into_iter()
+        .filter(|wire| wire != path)
+    {
+        spend
+            .entries
+            .extend(spend::parse(&child, None, &prices).entries);
+    }
     let cost = super::spending::session_cost_from_entries(&spend.entries, session_id);
     let session_preview = path
         .parent()

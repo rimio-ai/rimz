@@ -677,7 +677,7 @@ pub struct TranscriptStat {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub mtime_nanos: u32,
     pub len: u64,
-    /// A second provider-owned file whose bytes participate in the same local
+    /// Provider-owned companion files whose bytes participate in the same local
     /// context reading. Droid pairs its conversation JSONL with the sibling
     /// settings snapshot so either an AskUser record or fresh token telemetry
     /// invalidates one stat gate.
