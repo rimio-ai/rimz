@@ -4,7 +4,8 @@
 # ///
 """Dependabot loop regression tests for duplicate prevention and per-attempt checkouts."""
 
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
 import fcntl
 import io
 import json
@@ -21,13 +22,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dependabot as repair
 
 REPO = {"nameWithOwner": "owner/repo", "defaultBranchRef": {"name": "main"}}
+NOW = datetime(2026, 10, 13, 12, tzinfo=timezone.utc)
+QUIET_PERIOD = timedelta(hours=6)
 
 
-def source(number):
+def source(number, created_at="2026-10-12T00:00:00Z"):
     return dict(number=number, state="open", user={"login": "dependabot[bot]"},
                 head={"ref": f"dependabot/{number}", "sha": f"sha-{number}",
                       "repo": {"full_name": "owner/repo"}},
-                base={"ref": "main"}, title=f"Bump {number}", body=None)
+                base={"ref": "main"}, title=f"Bump {number}", body=None, created_at=created_at)
 
 
 def replacement(number, sources, state="open"):
@@ -39,8 +42,8 @@ def replacement(number, sources, state="open"):
     return pr
 
 
-def select(prs, checks=None, branches=()):
-    return repair.select(REPO, prs, set(branches), checks or {})
+def select(prs, checks=None, branches=(), quiet_period=QUIET_PERIOD):
+    return repair.select(REPO, prs, set(branches), checks or {}, NOW, quiet_period)
 
 
 def git(cwd, *args):
@@ -50,17 +53,23 @@ def git(cwd, *args):
 class FakeRimz:
     """Records rimz argv and performs the Git effect the real CLI would."""
 
-    def __init__(self, root, roster=(), refusal=None, skills=repair.WORKER_SKILLS):
+    def __init__(self, root, roster=(), refusal=None):
         self.root, self.roster, self.refusal, self.calls = root, list(roster), refusal, []
-        self.skills = None if skills is None else list(skills)
+        self.skills = {"coder": ["commit", "fix-ci"], "reviewer": ["pr"]}
+        self.stop_refusal = None
 
     def __call__(self, *args):
         self.calls.append(args)
         match args:
-            case ("agents", "list", *_):
+            case ("agents", "list", "--all", "--json"):
                 return json.dumps(dict(schema=1, agents=self.roster))
-            case ("agents", "explain", _profile, "--yolo", "--json"):
-                return json.dumps(dict(skills=dict(callable=self.skills, applied=True, host=None)))
+            case ("agents", "stop", pane):
+                if self.stop_refusal:
+                    raise RuntimeError(f"rimz failed: {self.stop_refusal}")
+                self.roster = [agent for agent in self.roster if agent["placement"]["pane"] != pane]
+                return ""
+            case ("agents", "explain", seat, "--json") if seat in ("spot.coder", "spot.reviewer"):
+                return json.dumps(dict(skills=dict(callable=self.skills[seat.split(".")[1]], applied=True, host=None)))
             case ("worktree", "new", branch, "--base", base):
                 git(self.root, "worktree", "add", "-b", branch, str(self.root.parent / branch.replace("/", "-")), base)
                 return f"created {branch}"
@@ -69,6 +78,8 @@ class FakeRimz:
                     raise RuntimeError(f"rimz failed: {self.refusal}")
                 git(self.root, "worktree", "remove", str(self.root.parent / branch.replace("/", "-")))
                 git(self.root, "branch", "-d", branch)
+                return ""
+            case ("teams", "launch", "spot", _prompt, "-w", _branch, "--bg"):
                 return ""
         raise AssertionError(f"unexpected rimz call {args}")
 
@@ -87,6 +98,7 @@ class CheckoutFixture(unittest.TestCase):
             git(self.root, "config", key, value)
         self.commit("initial")
         git(self.root, "push", "--quiet", "origin", "main")
+        (self.root / ".git" / "info" / "exclude").write_text("blackboard.md\n")
         self.rimz = FakeRimz(self.root)
         for name, value in (("ROOT", self.root), ("rimz", self.rimz)):
             patcher = patch.object(repair, name, value)
@@ -143,7 +155,8 @@ class CheckoutFixture(unittest.TestCase):
         launch.assert_not_called()
         self.assertEqual(self.remote_branch(), remote)
         self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json"),
-                                           ("agents", "explain", "astra", "--yolo", "--json")])
+                                           ("agents", "explain", "spot.coder", "--json"),
+                                           ("agents", "explain", "spot.reviewer", "--json")])
 
     def test_hand_deleted_checkout_directory_does_not_fail_the_fire(self):
         self.publish_batch()
@@ -154,21 +167,169 @@ class CheckoutFixture(unittest.TestCase):
              self.assertRaises(subprocess.CalledProcessError):
             self.run_quietly(repair.run)
         self.assertIn(dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin"), self.lines)
-        self.assertEqual([line["attempt_checkout"] for line in self.lines if "attempt_checkout" in line], ["created", "removed"])
+        self.assertEqual([line["attempt_checkout"] for line in self.lines if "attempt_checkout" in line], ["created"])
+        self.assertTrue(self.tree().exists())
 
-    def planned(self):
+    def planned(self, prs=()):
         stack = ExitStack()
         stack.enter_context(patch.object(repair, "repo_view", return_value=REPO))
-        stack.enter_context(patch.object(repair, "pull_requests", return_value=[]))
+        stack.enter_context(patch.object(repair, "pull_requests", return_value=list(prs)))
         stack.enter_context(patch.object(repair, "query_plan", return_value=self.plan))
+        stack.enter_context(patch.object(repair, "github", side_effect=AssertionError("run must not query GitHub after planning")))
         return stack
+
+    def occupy_checkout(self, board="Stage: Done (@coder)\n"):
+        repair.open_checkout(self.plan)
+        if board is not None:
+            (self.tree() / "blackboard.md").write_text(board)
+        self.rimz.roster = [dict(handle="coder", team="spot", role="coder",
+                                placement=dict(branch="deps/repair-1", pane="tmux:%1", pr=None))]
+        self.rimz.calls.clear()
+
+    def test_surviving_pane_prevents_duplicate_launch_on_unfinished_lanes(self):
+        self.occupy_checkout()
+        board_path = self.tree() / "blackboard.md"
+        cases = [("Stage: Review (@reviewer)\n", []),
+                 ("Stage: Done (@coder)\n", [replacement(10, [1])]),
+                 (None, []), ("# No stage\n", []),
+                 ("Stage: Review\nStage: Done\n", []),
+                 (" Stage: Done\n", []), ("Stage: Done (@)\n", []),
+                 ("Stage: Done (@bad owner)\n", []), ("Stage: Done (@bad(owner))\n", []),
+                 ("Stage: Done  (@coder)\n", [])]
+        for board, prs in cases:
+            with self.subTest(board=board, open_pr=bool(prs)):
+                if board is None:
+                    board_path.unlink(missing_ok=True)
+                else:
+                    board_path.write_text(board)
+                self.rimz.calls.clear()
+                with self.planned(prs), patch.object(repair, "query_plan") as query, \
+                     patch.object(repair, "launch") as launch:
+                    self.run_quietly(repair.run)
+                self.assertEqual(self.lines, [dict(action="idle", reason="repair lane still occupied", agents=["coder"])])
+                self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+                query.assert_not_called()
+                launch.assert_not_called()
+                self.assertTrue(self.tree().exists())
+        board_path.unlink()
+        board_path.mkdir()
+        with self.planned(), patch.object(repair, "launch") as launch:
+            self.run_quietly(repair.run)
+        self.assertEqual(self.lines[0]["reason"], "repair lane still occupied")
+        launch.assert_not_called()
+
+    def test_repair_pane_without_a_checkout_remains_occupied(self):
+        self.rimz.roster = [dict(handle="coder", placement=dict(branch="deps/repair-1", pane="tmux:%1"))]
+        with self.planned(), patch.object(repair, "launch") as launch:
+            self.run_quietly(repair.run)
+        self.assertEqual(self.lines, [dict(action="idle", reason="repair lane still occupied", agents=["coder"])])
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+        launch.assert_not_called()
+
+    def finished_lane_launches_next_batch(self, prs, sweeper=False, board="Stage: Done (@coder)\n"):
+        self.occupy_checkout(board)
+        if sweeper:
+            self.rimz.roster[0].update(handle="sweeper")
+            del self.rimz.roster[0]["team"]
+            del self.rimz.roster[0]["role"]
+        else:
+            self.rimz.roster.append(dict(handle="reviewer", team="spot", role="reviewer",
+                                        placement=dict(branch="deps/repair-1", pane="tmux:%2", pr=None)))
+        occupants = list(self.rimz.roster)
+        self.plan = select([source(2)], {2: "failed"})
+        events = []
+        command = repair.command
+        rimz = self.rimz
+
+        def record_command(*args, **kwargs):
+            events.append(args[:3])
+            return command(*args, **kwargs)
+
+        def record_rimz(*args):
+            events.append(args)
+            return rimz(*args)
+
+        with self.planned(prs), patch.object(repair, "rimz", side_effect=record_rimz), \
+             patch.object(repair, "command", side_effect=record_command), \
+             patch.object(repair, "pull_requests", return_value=prs) as pulls, \
+             patch.object(repair, "query_plan", return_value=self.plan) as query, \
+             patch.object(repair, "launch") as launch:
+            self.run_quietly(repair.run)
+        launch.assert_called_once_with(self.plan)
+        pulls.assert_called_once_with(REPO)
+        query.assert_called_once_with(REPO, prs, QUIET_PERIOD)
+        stops = [("agents", "stop", agent["placement"]["pane"]) for agent in occupants]
+        self.assertEqual([call for call in self.rimz.calls if call[:2] == ("agents", "stop")], stops)
+        for stop in stops:
+            self.assertLess(events.index(stop), events.index(("git", "worktree", "prune")))
+        self.assertEqual(self.lines[:len(occupants)],
+                         [dict(stopped=agent["placement"]["pane"], handle=agent["handle"], branch="deps/repair-1",
+                               reason="lane finished: board Done, no open PR") for agent in occupants])
+        self.assertIn(dict(attempt_checkout="removed", branch="deps/repair-1", reason="clean and pushed"), self.lines)
+        self.assertEqual(self.lines[-1], dict(launched="spot#deps-repair-2", branch="deps/repair-2", worktree=str(self.tree("deps/repair-2"))))
+        self.assertFalse(self.tree().exists())
+        self.assertTrue(self.tree("deps/repair-2").is_dir())
+
+    def test_done_seats_without_a_pr_launch_the_next_batch_in_the_same_fire(self):
+        self.finished_lane_launches_next_batch([])
+
+    def test_merged_replacement_sweeper_launches_the_next_batch_in_the_same_fire(self):
+        merged = replacement(10, [1], "closed")
+        merged["merged_at"] = "2026-10-13T10:00:00Z"
+        self.finished_lane_launches_next_batch([merged], sweeper=True)
+
+    def test_closed_unmerged_replacement_seats_launch_the_next_batch_in_the_same_fire(self):
+        self.finished_lane_launches_next_batch([replacement(10, [1], "closed")])
+
+    def test_first_stage_line_trimmed_and_without_owner_defines_done(self):
+        self.finished_lane_launches_next_batch([], board="# Board\nStage:\t Done \t\nStage: Review\n")
+
+    def test_unfinished_lane_prevents_stopping_other_finished_lanes(self):
+        self.occupy_checkout()
+        self.rimz.roster.append(dict(handle="other", placement=dict(branch="deps/repair-2", pane="tmux:%2")))
+        with self.planned(), patch.object(repair, "launch") as launch:
+            self.run_quietly(repair.run)
+        self.assertEqual(self.lines, [dict(action="idle", reason="repair lane still occupied", agents=["other"])])
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json")])
+        launch.assert_not_called()
+
+    def test_in_use_removal_is_an_idle_wait_before_plan_publish_or_launch(self):
+        self.occupy_checkout()
+        self.rimz.refusal = "worktree `deps-repair-1` is in use by coder; use --force to remove it"
+        with self.planned(), patch.object(repair, "query_plan") as query, \
+             patch.object(repair, "open_checkout") as checkout, patch.object(repair, "launch") as launch, \
+             patch.object(repair, "prune_empty_batches") as prune, \
+             patch.object(repair.sys, "argv", ["dependabot.py", "run"]), redirect_stderr(io.StringIO()):
+            self.run_quietly(lambda: self.assertEqual(repair.main(), 0))
+        query.assert_not_called()
+        checkout.assert_not_called()
+        launch.assert_not_called()
+        prune.assert_not_called()
+        self.assertEqual(self.lines[-2:],
+                         [dict(attempt_checkout="kept", branch="deps/repair-1", reason=f"rimz failed: {self.rimz.refusal}"),
+                          dict(action="idle", reason="repair lane still closing", branch="deps/repair-1",
+                               holder=f"rimz failed: {self.rimz.refusal}")])
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json"),
+                                          ("agents", "stop", "tmux:%1"), ("worktree", "remove", "deps/repair-1")])
+        self.assertTrue(self.tree().exists())
+
+    def test_failed_stop_fails_before_remove_publish_or_launch(self):
+        self.occupy_checkout()
+        self.rimz.stop_refusal = "mux close failed"
+        with self.planned(), patch.object(repair, "open_checkout") as checkout, \
+             patch.object(repair, "launch") as launch, self.assertRaisesRegex(RuntimeError, "mux close failed"):
+            self.run_quietly(repair.run)
+        checkout.assert_not_called()
+        launch.assert_not_called()
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json"), ("agents", "stop", "tmux:%1")])
+        self.assertEqual(self.lines, [])
+        self.assertTrue(self.tree().exists())
 
     def test_branch_deleted_on_origin_behind_a_stale_tracking_ref_costs_no_strike(self):
         git(self.root, "push", "--quiet", "origin", "main:refs/heads/deps/repair-7")
         git(self.root, "fetch", "--quiet", "origin")
         git(self.origin, "update-ref", "-d", "refs/heads/deps/repair-7")
-        with self.planned(), patch.object(repair, "launch"), \
-             patch.object(repair, "github", return_value=[]), patch.object(repair, "verify_result", return_value="pending"):
+        with self.planned(), patch.object(repair, "launch"):
             self.run_quietly(repair.run)
         self.assertFalse(any(line.get("pruned_batch_branch") for line in self.lines))
         self.assertEqual(git(self.root, "for-each-ref", "refs/remotes/origin/deps/repair-7"), "")
@@ -180,9 +341,10 @@ class CheckoutFixture(unittest.TestCase):
         return (patch.object(repair, "github", side_effect=lambda *args: REPO if args[0] == "repo" else rollups[args[2]]),
                 patch.object(repair, "pages", side_effect=endpoints.__getitem__))
 
-    def test_batch_branch_a_worker_left_empty_is_pruned_before_selection(self):
+    def test_batch_branch_a_team_left_empty_is_pruned_before_selection(self):
         repair.open_checkout(self.plan)
-        self.run_quietly(repair.settle_checkout, "deps/repair-1")
+        self.run_quietly(repair.reclaim_idle_checkouts)
+        self.assertNotIn("deps/repair-1", repair.branch_worktrees())
         closed = source(1)
         closed["state"] = "closed"
         github, pages = self.forge([closed])
@@ -219,11 +381,15 @@ class CheckoutFixture(unittest.TestCase):
         with github, pages, patch.object(repair.sys, "argv", ["dependabot.py", "plan"]), redirect_stdout(io.StringIO()):
             self.assertEqual(repair.main(), 0)
         self.assertNotEqual(self.remote_branch(), "")
+        self.assertEqual(self.rimz.calls, [])
 
-    def test_kept_checkout_is_resumed_without_push_or_create(self):
+    def test_existing_checkout_stops_before_publish_or_create(self):
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
-        report = repair.open_checkout(self.plan)
-        self.assertEqual((report["attempt_checkout"], Path(report["path"]).resolve()), ("resumed", self.tree().resolve()))
+        with self.assertRaisesRegex(RuntimeError, "holds unpushed or uncommitted work with no live agent") as error:
+            repair.open_checkout(self.plan)
+        self.assertEqual(str(error.exception),
+                         f"checkout {self.tree()} on deps/repair-1 holds unpushed or uncommitted work with no live agent; "
+                         "push it, or discard it with rimz worktree remove deps/repair-1 --force")
         self.assertEqual(self.remote_branch(), "")
         self.assertEqual(self.rimz.calls, [])
 
@@ -233,67 +399,165 @@ class CheckoutFixture(unittest.TestCase):
         self.assertEqual([entry["branch"] for entry in report["stale_attempt_checkouts"]], ["deps/repair-2"])
         self.assertTrue(self.tree("deps/repair-2").is_dir())
 
-    def test_settle_trusts_rimz_reclamation_and_liveness_before_one_unforced_remove(self):
-        self.run_quietly(repair.settle_checkout, "deps/repair-1")
-        self.assertEqual((self.lines[0]["attempt_checkout"], self.rimz.calls), ("removed", []))
-
+    def test_reclaim_removes_every_idle_repair_checkout_unforced(self):
         self.publish_batch()
         repair.open_checkout(self.plan)
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-2", str(self.tree("deps/repair-2")))
+        git(self.root, "worktree", "add", "--quiet", "-b", "other", str(self.tree("other")))
         self.rimz.calls.clear()
-        self.rimz.roster = [dict(handle="@worker", placement=dict(branch="deps/repair-1", pane="tmux:%1"))]
-        self.run_quietly(repair.settle_checkout, "deps/repair-1")
-        self.assertEqual(self.lines[0], dict(attempt_checkout="kept", reason="worker still live", branch="deps/repair-1"))
-        self.assertNotIn("remove", [call[1] for call in self.rimz.calls])
-
-        self.rimz.roster, self.rimz.calls = [], []
-        self.run_quietly(repair.settle_checkout, "deps/repair-1")
-        self.assertEqual(self.lines[0]["attempt_checkout"], "removed")
-        self.assertEqual(self.rimz.calls[-1], ("worktree", "remove", "deps/repair-1"))
+        self.run_quietly(repair.reclaim_idle_checkouts)
+        self.assertEqual(self.rimz.calls, [("worktree", "remove", "deps/repair-1"),
+                                          ("worktree", "remove", "deps/repair-2")])
+        self.assertEqual(self.lines, [dict(attempt_checkout="removed", branch=f"deps/repair-{n}", reason="clean and pushed")
+                                     for n in (1, 2)])
         self.assertFalse(self.tree().exists())
+        self.assertFalse(self.tree("deps/repair-2").exists())
+        self.assertTrue(self.tree("other").exists())
 
-    def test_refused_remove_keeps_the_checkout_and_still_verifies_the_pr(self):
+    def test_refused_reclaim_reports_reason_and_stops_before_publish_or_launch(self):
+        git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()))
         self.rimz.refusal = "worktree `deps-repair-1` has local changes or work not proven landed; use --force to remove it"
-        rows = [dict(number=10)]
-        with self.planned(), patch.object(repair, "launch"), \
-             patch.object(repair, "github", return_value=rows) as github, \
-             patch.object(repair, "verify_result", return_value="pending"):
-            self.run_quietly(repair.run)
-        github.assert_called_once()
-        settled = next(line for line in self.lines if line.get("attempt_checkout") in ("kept", "removed"))
-        self.assertEqual(settled["attempt_checkout"], "kept")
-        self.assertIn("not proven landed", settled["reason"])
-        self.assertEqual(self.rimz.calls[-1], ("worktree", "remove", "deps/repair-1"))
-        self.assertTrue((self.root / ".git" / "rimz-dependabot-repair.lock").is_file())
-
-    def test_worker_profile_missing_a_required_skill_refuses_before_publish_or_launch(self):
-        self.rimz.skills = ["commit", "rimz-wait"]
-        with self.planned(), patch.object(repair, "launch") as launch, \
-             self.assertRaisesRegex(RuntimeError, "cannot call required skills fix-ci, pr"):
+        with self.planned(), patch.object(repair, "launch", side_effect=AssertionError("a kept checkout must prevent launch")) as launch, \
+             self.assertRaisesRegex(RuntimeError, "push it, or discard it with rimz worktree remove deps/repair-1 --force"):
             self.run_quietly(repair.run)
         launch.assert_not_called()
         self.assertEqual(self.remote_branch(), "")
-        self.assertFalse(self.tree().exists())
+        self.assertTrue(self.tree().exists())
+        self.assertEqual(self.lines[0], dict(attempt_checkout="kept", branch="deps/repair-1",
+                                           reason=f"rimz failed: {self.rimz.refusal}"))
+        self.assertIn(("worktree", "remove", "deps/repair-1"), self.rimz.calls)
+        self.assertTrue((self.root / ".git" / "rimz-dependabot-repair.lock").is_file())
 
-    def test_worker_profile_without_a_skill_list_is_admitted(self):
-        self.rimz.skills = None
-        with self.planned(), patch.object(repair, "launch") as launch, \
-             patch.object(repair, "github", return_value=[]), \
-             patch.object(repair, "verify_result", return_value="pending"):
+    def test_missing_seat_skills_refuse_before_publish_or_launch(self):
+        for role, available, missing in (("coder", ["commit"], "fix-ci"), ("reviewer", [], "pr")):
+            with self.subTest(role=role):
+                self.rimz.skills = {"coder": ["commit", "fix-ci"], "reviewer": ["pr"]}
+                self.rimz.skills[role] = available
+                with self.planned(), patch.object(repair, "launch") as launch, \
+                     patch.object(repair, "open_checkout", side_effect=AssertionError("missing seat skills must refuse before publishing")), \
+                     self.assertRaises(RuntimeError) as error:
+                    self.run_quietly(repair.run)
+                self.assertEqual(str(error.exception),
+                                 f"spot.{role} cannot call required skills {missing}; add them to the profile's skills list")
+                launch.assert_not_called()
+                self.assertEqual(self.remote_branch(), "")
+                self.assertFalse(self.tree().exists())
+
+    def test_seats_without_skill_lists_are_admitted(self):
+        self.rimz.skills = {"coder": None, "reviewer": None}
+
+        def check_preflight(*args):
+            self.assertEqual([call for call in self.rimz.calls if call[1] == "explain"],
+                             [("agents", "explain", "spot.coder", "--json"),
+                              ("agents", "explain", "spot.reviewer", "--json")])
+
+        with self.planned(), patch.object(repair, "launch", side_effect=check_preflight) as launch:
             self.run_quietly(repair.run)
         launch.assert_called_once()
+        self.assertEqual([call for call in self.rimz.calls if call[1] == "explain"],
+                         [("agents", "explain", "spot.coder", "--json"),
+                          ("agents", "explain", "spot.reviewer", "--json")])
 
-    def test_failed_launch_still_settles_and_fails_the_run(self):
+    def test_failed_launch_fails_the_run_and_leaves_the_checkout(self):
         failure = subprocess.CalledProcessError(124, "rimz")
         with self.planned(), \
              patch.object(repair, "launch", side_effect=failure), \
              patch.object(repair, "github") as github, self.assertRaises(subprocess.CalledProcessError):
             self.run_quietly(repair.run)
         github.assert_not_called()
-        self.assertEqual([line.get("attempt_checkout") for line in self.lines[1:]], ["created", "removed"])
-        self.assertFalse(self.tree().exists())
+        self.assertEqual([line.get("attempt_checkout") for line in self.lines[1:]], ["created"])
+        self.assertTrue(self.tree().exists())
+
+    def test_run_reclaims_before_plan_and_exits_after_one_launch(self):
+        self.publish_batch()
+        repair.open_checkout(self.plan)
+        self.rimz.calls.clear()
+        events = []
+        command = repair.command
+
+        def record_command(*args, **kwargs):
+            events.append(args[:3])
+            return command(*args, **kwargs)
+
+        def query(*args):
+            self.assertFalse(self.tree().exists())
+            events.append(("plan",))
+            return self.plan
+
+        def launch(*args):
+            self.assertTrue(self.tree().is_dir())
+            events.append(("launch",))
+            self.assertEqual(args, (self.plan,))
+            self.rimz.refusal = "no calls allowed after launch"
+            return None
+
+        with self.planned(), patch.object(repair, "command", side_effect=record_command), \
+             patch.object(repair, "query_plan", side_effect=query), \
+             patch.object(repair, "launch", side_effect=launch) as launched, \
+             patch.object(repair.sys, "argv", ["dependabot.py", "run"]), \
+             patch.object(repair, "github", side_effect=AssertionError("no GitHub calls after launch")):
+            self.run_quietly(lambda: self.assertEqual(repair.main(), 0))
+        launched.assert_called_once_with(self.plan)
+        self.assertLess(events.index(("git", "worktree", "prune")), events.index(("git", "fetch", "--prune")))
+        self.assertLess(events.index(("git", "fetch", "--prune")), events.index(("plan",)))
+        self.assertEqual(self.rimz.calls, [("agents", "list", "--all", "--json"),
+                                          ("worktree", "remove", "deps/repair-1"),
+                                          ("agents", "explain", "spot.coder", "--json"),
+                                          ("agents", "explain", "spot.reviewer", "--json"),
+                                          ("worktree", "new", "deps/repair-1", "--base", "origin/deps/repair-1")])
+        self.assertEqual(self.lines[-1], dict(launched="spot#deps-repair-1", branch="deps/repair-1", worktree=str(self.tree())))
+        self.assertTrue(self.tree().exists())
 
 
 class RepairTests(unittest.TestCase):
+    def test_any_young_open_dependabot_pr_defers_a_fresh_batch(self):
+        for state, base, covered in (("failed", "main", False), ("green", "main", False),
+                                     ("failed", "release", False), ("failed", "main", True)):
+            with self.subTest(state=state, base=base, covered=covered):
+                newest = source(2, "2026-10-13T11:59:00Z")
+                newest["base"]["ref"] = base
+                prs = [newest, source(1)] + ([replacement(10, [2], "closed")] if covered else [])
+                plan = select(prs, {1: "failed", 2: state})
+                self.assertEqual(plan["action"], "idle")
+                self.assertEqual(plan["sources"], [])
+                self.assertIsNone(plan["branch"])
+                self.assertEqual(plan["reason"],
+                                 "Dependabot active: newest open PR #2 created 2026-10-13T11:59:00+00:00; "
+                                 "a new batch waits until 2026-10-13T17:59:00+00:00")
+
+    def test_quiet_period_uses_creation_only_and_admits_at_exact_boundary(self):
+        for age, action in ((QUIET_PERIOD - timedelta(seconds=1), "idle"),
+                            (QUIET_PERIOD, "repair"), (QUIET_PERIOD + timedelta(seconds=1), "repair")):
+            with self.subTest(age=age):
+                pr = source(1, (NOW - age).isoformat())
+                pr["updated_at"] = NOW.isoformat()
+                self.assertEqual(select([pr], {1: "failed"})["action"], action)
+
+    def test_closed_or_non_bot_pr_created_a_minute_ago_does_not_defer(self):
+        closed = source(2, "2026-10-13T11:59:00Z")
+        closed["state"] = "closed"
+        human = source(3, closed["created_at"])
+        human["user"]["login"] = "maintainer"
+        self.assertEqual(select([source(1), closed, human], {1: "failed"})["action"], "repair")
+
+    def test_recent_dependabot_activity_does_not_gate_resume_recover_or_reconcile(self):
+        fresh = source(2, "2026-10-13T11:59:00Z")
+        prs = [source(1), fresh, replacement(10, [1])]
+        resumed = select(prs, {1: "failed", 2: "failed", 10: "failed"})
+        self.assertEqual(resumed["reason"], "resume failed replacement on its existing branch")
+        recovered = select(prs[:2], {2: "failed"}, ["deps/repair-1"])
+        self.assertEqual(recovered["reason"], "recover interrupted batch")
+        prs[0]["head"]["sha"] = "changed"
+        reconciled = select(prs, {2: "failed", 10: "green"})
+        self.assertIn("reconcile", reconciled["reason"])
+        for plan in (resumed, recovered, reconciled):
+            self.assertEqual((plan["action"], plan["branch"]), ("repair", "deps/repair-1"))
+
+    def test_zero_quiet_period_admits_a_fresh_batch(self):
+        self.assertEqual(select([source(1, NOW.isoformat())], {1: "failed"})["action"], "idle")
+        self.assertEqual(select([source(1, NOW.isoformat())], {1: "failed"},
+                                quiet_period=timedelta(0))["action"], "repair")
+
     def test_selects_all_failed_bot_updates_in_stable_order(self):
         human = source(311)
         human["user"]["login"] = "dependabot"
@@ -328,17 +592,6 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(plan["action"], "repair")
         self.assertEqual(plan["existing_replacement_pr"], 10)
         self.assertIn("reconcile", plan["reason"])
-
-    def test_worker_cannot_report_success_without_publishing(self):
-        plan = select([source(1)], {1: "failed"})
-        with self.assertRaises(RuntimeError):
-            repair.verify_result(plan, [])
-        result = dict(number=10, state="OPEN", body=replacement(10, [1])["body"],
-                      headRefOid="replacement-head", statusCheckRollup=[])
-        self.assertEqual(repair.verify_result(plan, [result]), "missing")
-        result["statusCheckRollup"] = [dict(__typename="StatusContext", state="FAILURE")]
-        with self.assertRaises(RuntimeError):
-            repair.verify_result(plan, [result])
 
     def test_interrupted_branch_recovers_exact_batch(self):
         plan = select([source(1), source(2)], {1: "pending", 2: "failed"}, ["deps/repair-1"])
@@ -390,48 +643,42 @@ class RepairTests(unittest.TestCase):
                     query.assert_not_called()
                     launch.assert_not_called()
 
-    def test_surviving_worker_prevents_duplicate_launch_after_supervisor_death(self):
-        report = dict(schema=1, agents=[dict(handle="@worker", placement=dict(branch="deps/repair-1", pane="tmux:%1"))])
-        with tempfile.TemporaryDirectory() as directory, \
-             patch.object(repair, "command", return_value=f"{directory}\n"), \
-             patch.object(repair, "rimz", return_value=json.dumps(report)), \
-             patch.object(repair, "query_plan") as query, \
-             patch.object(repair, "launch") as launch, redirect_stdout(io.StringIO()):
-            repair.run()
-            query.assert_not_called()
-            launch.assert_not_called()
-
     def test_launch_passes_prompt_as_data_in_unattended_named_worktree(self):
         plan = select([source(1)], {1: "failed"})
         plan["sources"][0]["title"] = "$(do-not-execute) `neither-this`"
         with patch.object(repair.subprocess, "run") as run:
             repair.launch(plan)
         args, = run.call_args.args
-        self.assertEqual(args[:3], ["rimz", "agents", "astra"])
-        self.assertIn("$(do-not-execute)", args[3])
-        self.assertEqual(args[4:], ["-w", "deps/repair-1", "--yolo", "-p", "--new-tab"])
-        self.assertNotIn("shell", run.call_args.kwargs)
-        self.assertEqual(run.call_args.kwargs["cwd"], repair.ROOT)
+        prompt = (repair.TASK_DIR / "prompt.md").read_text() + "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
+        self.assertEqual(args, ["rimz", "teams", "launch", "spot", prompt, "-w", "deps/repair-1", "--bg"])
+        self.assertEqual(run.call_args.kwargs, dict(cwd=repair.ROOT, check=True))
 
-    def test_worker_timeout_is_opt_in(self):
-        plan = select([source(1)], {1: "failed"})
-        with patch.object(repair.subprocess, "run") as run:
-            repair.launch(plan, "90m")
-        args, = run.call_args.args
-        self.assertEqual(args[-2:], ["--timeout", "90m"])
+    def test_cli_passes_quiet_period_to_run_and_plan(self):
+        for action in ("run", "plan"):
+            for flags, duration in (([], QUIET_PERIOD), (["--quiet-period", "0"], timedelta(0)),
+                                    (["--quiet-period", "0.5"], timedelta(minutes=30))):
+                with self.subTest(action=action, flags=flags), \
+                     patch.object(repair.sys, "argv", ["dependabot.py", action, *flags]), \
+                     patch.object(repair, "run") as run, \
+                     patch.object(repair, "repo_view", return_value=REPO), \
+                     patch.object(repair, "pull_requests", return_value=[]), \
+                     patch.object(repair, "query_plan", return_value={}) as query, redirect_stdout(io.StringIO()):
+                    self.assertEqual(repair.main(), 0)
+                    if action == "run":
+                        run.assert_called_once_with(duration)
+                        query.assert_not_called()
+                    else:
+                        query.assert_called_once_with(REPO, [], duration)
+                        run.assert_not_called()
 
-    def test_run_passes_worker_timeout_through(self):
-        with patch.object(repair.sys, "argv", ["dependabot.py", "run", "--worker-timeout", "3d"]), \
-             patch.object(repair, "run") as run:
-            self.assertEqual(repair.main(), 0)
-        run.assert_called_once_with("3d", "astra")
-
-    def test_worker_profile_is_configurable(self):
-        plan = select([source(1)], {1: "failed"})
-        with patch.object(repair.subprocess, "run") as run:
-            repair.launch(plan, None, "coder")
-        args, = run.call_args.args
-        self.assertEqual(args[:3], ["rimz", "agents", "coder"])
+    def test_query_plan_supplies_current_time_and_quiet_period_to_select(self):
+        clock = unittest.mock.Mock(wraps=datetime)
+        clock.now.return_value = NOW
+        with patch.object(repair, "datetime", clock), patch.object(repair, "pages", return_value=[]), \
+             patch.object(repair, "command", return_value=""), patch.object(repair, "select", return_value={}) as selected:
+            repair.query_plan(REPO, [], timedelta(0))
+        selected.assert_called_once_with(REPO, [], set(), {}, NOW, timedelta(0))
+        clock.now.assert_called_once_with(timezone.utc)
 
 
 if __name__ == "__main__":
