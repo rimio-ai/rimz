@@ -218,7 +218,7 @@ Placement decides whether the launch takes over your pane, splits it, or opens a
 | Flag | Placement |
 | --- | --- |
 | `--new-pane` | Split the current tab. Single agent cell only. |
-| `--new-tab` | Open a new tab (tmux window). |
+| `--new-tab` | Open a new tab (tmux window) right after the caller's tab, or at the end when run from outside the room. Team launches and resumes append. |
 | `--bg` | Keep focus where it is: an in-place launch becomes a split, and an already-live cohort or lane does not get a focus jump. Agent callers always get this focus behavior, including fork, resume, and restart, without passing the flag. With `-p`, `--bg` instead returns from a supervised run at once; see [Supervised runs](#supervised-runs--p). |
 | `--detach` | Not placement: launch the prompt without a report and without holding the launcher, as described under [Launch a layout](#launch-a-layout). |
 
@@ -783,7 +783,7 @@ rimz agents fork @coder --name twin
 
 The fork reuses the source profile's launch posture (system prompt files, model, effort, permission flags, and profile arguments), rendered from current configuration as `restart` does. A profile that no longer resolves forks without it and warns; a profile that now names a different provider refuses. The fork keeps the source's channel but not its team or role, so the role handle stays unique. Prompt caching is up to the provider and may start cold. A fork refuses when the account fails the [account check](#the-account-check-at-launch).
 
-The fork always opens in the source agent's worktree. From a user shell it takes over the current pane by default; `--new-pane` splits the current tab, `--new-tab` opens a new one, and `--bg` splits and keeps focus where it is. Agent callers split by default and preserve focus under the [focus rule](#channel-worktree-and-placement). `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
+The fork always opens in the source agent's worktree. From a user shell it takes over the current pane by default; `--new-pane` splits the current tab, `--new-tab` opens a new one right after the caller's tab (or at the end when run from outside the room), and `--bg` splits and keeps focus where it is. Agent callers split by default and preserve focus under the [focus rule](#channel-worktree-and-placement). `-n, --name <NAME>` sets its handle. It keeps the source's recorded `--isolation`, and `--isolation host|sandbox` replaces it. A fork takes no prompt: send the first instruction with `rimz message` once it opens.
 
 | Agent | Native fork command |
 | --- | --- |

@@ -191,6 +191,7 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
         PlacementRequest {
             placement,
             mux,
+            tab_anchor: None,
             cwd: tab.cwd,
             title: tab.label,
             panes: tab.layout,

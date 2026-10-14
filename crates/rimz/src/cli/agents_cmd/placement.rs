@@ -78,6 +78,19 @@ pub(super) fn resolve_fork_placement(
     Ok(apply_in_place_downgrade(placement, focus, true))
 }
 
+pub(super) fn resolve_tab_anchor(
+    placement: Placement,
+    has_team: bool,
+    caller_pane: Option<PaneId>,
+    caller_room_root: Option<&Path>,
+    project_root: &Path,
+) -> Option<PaneId> {
+    if placement != Placement::NewTab || has_team || caller_room_root != Some(project_root) {
+        return None;
+    }
+    caller_pane
+}
+
 pub(super) fn apply_in_place_downgrade(
     placement: Placement,
     focus: LaunchFocus,
@@ -119,6 +132,7 @@ pub(super) fn resume_outside_launch_dir(
 pub(super) struct PlacementRequest {
     pub placement: Placement,
     pub mux: MuxName,
+    pub tab_anchor: Option<PaneId>,
     pub cwd: PathBuf,
     pub title: String,
     pub panes: LayoutPanes,
@@ -213,6 +227,7 @@ fn prepare_resolved(
         .unwrap_or_default();
     let PlacementRequest {
         placement,
+        tab_anchor,
         cwd,
         title,
         panes,
@@ -228,7 +243,7 @@ fn prepare_resolved(
             panes,
             focus: focus.takes_focus(),
             dock_sidebar: true,
-            after: None,
+            after: tab_anchor,
             sidebar,
         })),
         Placement::NewPane => {
@@ -341,6 +356,7 @@ mod tests {
         PlacementRequest {
             placement,
             mux: MuxName::Tmux,
+            tab_anchor: None,
             cwd: PathBuf::from("/work"),
             title: "#lane".to_owned(),
             panes: LayoutPanes {
@@ -387,23 +403,56 @@ mod tests {
     }
 
     #[test]
+    fn tab_anchor_requires_a_non_team_new_tab_in_the_callers_room() {
+        use Placement::{NewPane, NewTab, SamePane};
+
+        let pane = PaneId::from_parts(MuxName::Tmux, "%7");
+        let project = Path::new("/room");
+        let other_room = Path::new("/other-room");
+        for (placement, has_team, has_pane, caller_room, anchored) in [
+            (NewTab, false, true, Some(project), true),
+            (NewTab, false, false, Some(project), false),
+            (NewTab, true, true, Some(project), false),
+            (NewPane, false, true, Some(project), false),
+            (SamePane, false, true, Some(project), false),
+            (NewTab, false, true, Some(other_room), false),
+            (NewTab, false, true, None, false),
+        ] {
+            assert_eq!(
+                resolve_tab_anchor(
+                    placement,
+                    has_team,
+                    has_pane.then(|| pane.clone()),
+                    caller_room,
+                    project,
+                ),
+                anchored.then(|| pane.clone()),
+            );
+        }
+    }
+
+    #[test]
     fn prepares_new_tab_options() {
         for focus in [LaunchFocus::Keep, LaunchFocus::Take] {
-            let mut request = request(Placement::NewTab);
-            request.focus = focus;
-            let PreparedPlacement::NewTab(options) =
-                prepare_resolved(request, Some((120, 40)), None).unwrap()
-            else {
-                panic!("new tab placement");
-            };
-            assert_eq!(options.sidebar.session_name, "room");
-            assert_eq!(options.title, "#lane");
-            assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
-            assert_eq!(options.sidebar.cwd, Path::new("/work"));
-            assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
-            assert_eq!(options.focus, focus == LaunchFocus::Take);
-            assert!(options.dock_sidebar);
-            assert_eq!(options.sidebar.session_name, "room");
+            for anchor in [Some(PaneId::from_parts(MuxName::Tmux, "%7")), None] {
+                let mut request = request(Placement::NewTab);
+                request.focus = focus;
+                request.tab_anchor = anchor.clone();
+                let PreparedPlacement::NewTab(options) =
+                    prepare_resolved(request, Some((120, 40)), None).unwrap()
+                else {
+                    panic!("new tab placement");
+                };
+                assert_eq!(options.after, anchor);
+                assert_eq!(options.sidebar.session_name, "room");
+                assert_eq!(options.title, "#lane");
+                assert_eq!(options.env["RIMZ_PROJECT_MODE"], "1");
+                assert_eq!(options.sidebar.cwd, Path::new("/work"));
+                assert_eq!(options.panes.columns[0].panes[0].argv, ["rimz", "agents"]);
+                assert_eq!(options.focus, focus == LaunchFocus::Take);
+                assert!(options.dock_sidebar);
+                assert_eq!(options.sidebar.session_name, "room");
+            }
         }
     }
 

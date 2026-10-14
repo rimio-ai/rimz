@@ -211,6 +211,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         PlacementRequest {
             placement,
             mux,
+            tab_anchor: super::placement::resolve_tab_anchor(
+                placement,
+                false,
+                rimz::mux::own_pane_id(mux),
+                crate::cli::pinned_room_root().as_deref(),
+                &workspace.project_root,
+            ),
             cwd: seed.cwd.clone(),
             title,
             panes,
