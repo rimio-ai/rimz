@@ -502,12 +502,12 @@ mod tests {
         );
 
         let droid = agent_cells(&matrix, "droid");
-        assert_eq!(count(&droid, MatrixCellState::Ok), 9);
-        assert_eq!(count(&droid, MatrixCellState::Partial), 3);
+        assert_eq!(count(&droid, MatrixCellState::Ok), 7);
+        assert_eq!(count(&droid, MatrixCellState::Partial), 5);
         assert_eq!(count(&droid, MatrixCellState::Absent), 7);
         assert_eq!(
             agent_labels(&matrix, "droid", MatrixCellState::Partial),
-            ["plan", "live$", "rich"]
+            ["plan", "compact", "idle", "live$", "rich"]
         );
         assert_eq!(
             agent_labels(&matrix, "droid", MatrixCellState::Absent),
