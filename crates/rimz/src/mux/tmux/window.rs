@@ -415,7 +415,7 @@ impl TmuxBackend {
         env: &BTreeMap<String, String>,
     ) -> Result<OpenedWindow> {
         let anchor_window = match after
-            .map(|anchor| self.window_id_for_pane(anchor))
+            .map(|anchor| self.window_id_for_pane(anchor, session))
             .transpose()
         {
             Ok(window) => window,
@@ -484,19 +484,28 @@ impl TmuxBackend {
         })
     }
 
-    fn window_id_for_pane(&self, pane: &PaneId) -> Result<String> {
+    fn window_id_for_pane(&self, pane: &PaneId, session: &str) -> Result<String> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let output = self
             .cmd()
-            .args(["display-message", "-p", "-t", pane.raw(), "#{window_id}"])
+            .args([
+                "display-message",
+                "-p",
+                "-t",
+                pane.raw(),
+                "#{session_name} #{window_id}",
+            ])
             .run()?;
-        let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if window_id.starts_with('@') {
-            return Ok(window_id);
+        let raw = String::from_utf8_lossy(&output.stdout);
+        if let Some((anchor_session, window_id)) = raw.trim_end().rsplit_once(' ')
+            && anchor_session == session
+            && window_id.starts_with('@')
+        {
+            return Ok(window_id.to_owned());
         }
         Err(MuxErr::Output {
             program: "tmux".to_owned(),
-            reason: format!("pane `{pane}` did not resolve to a window id"),
+            reason: format!("pane `{pane}` did not resolve to a window in session `{session}`"),
         })
     }
 
