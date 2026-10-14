@@ -967,7 +967,13 @@ path = "crates/rimz/src/worktree"
 # LaunchBase and TrunkFetchFailure carry team checkout policy and fetch warnings (+2).
 # Typed state, holders, shared inspection and LandedMemo serve all CLI verbs.
 # LandingPlan, landing_plan and land replace merge_to_main (+2).
-surface-budget = 78
+# discover_owned_cached shares host polling enumeration between conditions and timer firing (+1).
+surface-budget = 79
+
+[[verdict]]
+kind = "item"
+key = "worktree::discover_owned_cached"
+reason = "Host condition probes and task firing share stat-gated, 60-second-bounded Git rows while CLI discovery remains fresh."
 
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]

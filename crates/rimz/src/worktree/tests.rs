@@ -1318,6 +1318,59 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
 }
 
 #[test]
+fn host_discovery_reuses_rows_and_reads_markers_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = init_test_repo(dir.path());
+    let now = std::time::Instant::now();
+    let mut counts = Vec::new();
+    let mut discover = |at| {
+        let before = crate::proc::testkit::spawn_count();
+        let entries = discover_owned_cached_at(&repo, at).unwrap();
+        counts.push(crate::proc::testkit::spawn_count() - before);
+        entries
+    };
+    assert!(discover(now).is_empty());
+    assert!(discover(now).is_empty());
+    let created = create(
+        &repo,
+        &test_worktree_config(dir.path()),
+        Some("demo"),
+        None,
+        None,
+        false,
+        LaunchBase::Configured,
+    )
+    .unwrap();
+    let admin = git_admin_dir_from_checkout_metadata(&created.marker.worktree_path)
+        .unwrap()
+        .unwrap();
+    std::fs::remove_file(admin.join(MARKER_FILE)).unwrap();
+    assert!(
+        discover(now).is_empty(),
+        "worktree add invalidates cached rows before its marker arrives"
+    );
+    crate::disk::atomic::write_temp_then_rename(&admin.join(MARKER_FILE), &created.marker).unwrap();
+    assert_eq!(discover(now).len(), 1, "a late marker is read without git");
+    let moved = dir.path().join("moved");
+    git_run(
+        &repo,
+        [
+            "worktree",
+            "move",
+            created.marker.worktree_path.to_str().unwrap(),
+            moved.to_str().unwrap(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(discover(now + Duration::from_secs(60))[0].path, moved);
+    assert_eq!(
+        counts,
+        [2, 0, 2, 0, 2],
+        "cold, warm, added worktree, late marker, expired enumeration"
+    );
+}
+
+#[test]
 fn discovery_returns_owned_identity_before_explicit_inspection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let repo = init_test_repo(dir.path());

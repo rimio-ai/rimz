@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -1535,6 +1536,10 @@ fn git_error_detail(err: WorktreeErr) -> String {
 pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     ensure_repo(repo_root)?;
     let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+    owned_worktrees(&rows)
+}
+
+fn owned_worktrees(rows: &[WorktreeRow]) -> Result<Vec<ManagedWorktree>> {
     let mut entries = Vec::new();
     for row in rows {
         let Some(marker) = read_marker_from_checkout_metadata(&row.path)? else {
@@ -1542,12 +1547,64 @@ pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
         };
         entries.push(ManagedWorktree {
             marker,
-            path: row.path,
-            branch: row.branch,
+            path: row.path.clone(),
+            branch: row.branch.clone(),
         });
     }
     entries.sort_by(|a, b| a.marker.name.cmp(&b.marker.name));
     Ok(entries)
+}
+
+const OWNED_WORKTREE_ROWS_TTL: Duration = Duration::from_secs(60);
+
+struct OwnedWorktreeRows {
+    stamp: Option<crate::disk::parse_cache::FileStamp>,
+    observed_at: Instant,
+    rows: Vec<WorktreeRow>,
+}
+
+static OWNED_WORKTREE_ROWS: LazyLock<Mutex<HashMap<PathBuf, OwnedWorktreeRows>>> =
+    LazyLock::new(Mutex::default);
+
+/// Reuse Git enumeration for host polling, while reading ownership markers fresh.
+pub(crate) fn discover_owned_cached(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
+    discover_owned_cached_at(repo_root, Instant::now())
+}
+
+fn discover_owned_cached_at(repo_root: &Path, now: Instant) -> Result<Vec<ManagedWorktree>> {
+    let Some(git_dir) = git_admin_dir_from_checkout_metadata(repo_root)? else {
+        return discover_owned(repo_root);
+    };
+    let common = std::fs::read_to_string(git_dir.join("commondir"))
+        .map(|text| git_dir.join(text.trim()))
+        .unwrap_or(git_dir);
+    let stamp = std::fs::metadata(common.join("worktrees"))
+        .ok()
+        .map(|meta| crate::disk::parse_cache::FileStamp::from_metadata(&meta));
+    let rows = {
+        let mut cache = OWNED_WORKTREE_ROWS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let fresh = cache.get(repo_root).is_some_and(|cached| {
+            cached.stamp == stamp
+                && now.saturating_duration_since(cached.observed_at) < OWNED_WORKTREE_ROWS_TTL
+        });
+        if !fresh {
+            ensure_repo(repo_root)?;
+            let rows =
+                parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
+            cache.insert(
+                repo_root.to_path_buf(),
+                OwnedWorktreeRows {
+                    stamp,
+                    observed_at: now,
+                    rows,
+                },
+            );
+        }
+        cache[repo_root].rows.clone()
+    };
+    owned_worktrees(&rows)
 }
 
 pub fn status(
