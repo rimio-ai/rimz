@@ -213,7 +213,6 @@ fn done_flip_stops_checkout_server_but_review_does_not() {
         policy: rimz::config::LspConfig {
             reserve_min: "0".into(),
             reserve_percent: 0,
-            kill_floor_percent: 0,
             ..Default::default()
         },
         eager: false,

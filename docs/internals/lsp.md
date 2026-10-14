@@ -32,16 +32,15 @@ Admission for a live key joins it without starting another server. The wrapper r
 
 ### Admission
 
-Admission reads free memory and the machine-wide registry under one lock (`disk::lock`, at a machine-level path under `disk::paths::runtime_rimz_root`), so simultaneous starts cannot both pass on the same free gigabytes. Optional launch skips memory admission; the broker's main thread runs it on the first query and every restart. Required launch admits its first lifetime before spawning the eager broker.
+Admission reads free memory and the machine-wide registry under one lock (`disk::lock`, at a machine-level path under `disk::paths::runtime_rimz_root`), serializing admission decisions. Optional launch skips memory admission; the broker's main thread runs it on the first query and every restart. Required launch admits its first lifetime before spawning the eager broker.
 
 ```text
 available  = MemAvailable, capped by the cgroup's memory.max headroom when RimZ runs under one
-committed  = Σ over running servers of max(0, entry.estimate_bytes − current_tree_rss)
 reserve    = max(reserve-percent × MemTotal / 100, reserve-min)
-admit when available − committed − estimate ≥ reserve
+admit when estimate + reserve ≤ available (checked addition; overflow refuses)
 ```
 
-`committed` is what makes the check honest: a server at 4.4 GB that has reached 6.3 GB before will grow again, and that growth is already spoken for. Dormant entries reserve nothing. `estimate` is re-read for each lifetime: the learned peak for this (project, server, settings) triple, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
+Running servers add no allowance for future memory use. Several indexing servers can each pass admission and later cross the reserve, triggering watchdog stops. The free figure in required-launch waits and timeouts is available memory minus the reserve, saturating at zero; holders list running servers and their tree RSS. `estimate` is re-read for each lifetime: the learned peak for this (project, server, settings) triple, or the configured `memory-estimate` before any history exists ([Learned cost](#learned-cost)).
 
 What happens on a refusal depends on the server's `policy`:
 
@@ -72,7 +71,9 @@ Launch admission waits up to five seconds under the admission lock for the broke
 
 ### The watchdog
 
-Every live broker samples free memory on its five-second housekeeping cadence. Below `kill-floor-percent` of total memory, the machine-lock winner selects victims and re-samples between stops. It first sends a socket stop with reason `memory pressure`, allowing another broker two seconds to shut down after acknowledgment. A server still alive is killed with token-guarded SIGKILL on its process group; when the elected broker selects itself, it kills its server group directly rather than waiting on its own housekeeping loop. Each server starts as a process-group leader, so shutdown also kills its cargo and proc-macro children. The watchdog records free bytes before and after the stop, victim tree RSS in KiB, and peak RSS in the `killed` diagnostic. Servers receive `oom_score_adj = 800` so the kernel favors them over agents if it acts first.
+Every live broker samples free memory on its five-second housekeeping cadence. Below the admission reserve (the larger of `reserve-percent` of total memory and `reserve-min`), the machine-lock winner selects victims and re-samples between stops until available memory reaches the reserve. It first sends a socket stop with reason `memory pressure`, allowing another broker two seconds to shut down after acknowledgment. A server still alive is killed with token-guarded SIGKILL on its process group; when the elected broker selects itself, it kills its server group directly rather than waiting on its own housekeeping loop. Each server starts as a process-group leader, so shutdown also kills its cargo and proc-macro children. The watchdog records the reserve, free bytes before and after the stop, victim tree RSS in KiB, and peak RSS in the `killed` diagnostic. Servers receive `oom_score_adj = 800` so the kernel favors them over agents if it acts first.
+
+The broker keeps the machine policy captured at spawn. Existing broker processes retain their old watchdog policy until replaced; the idle timeout only makes their servers dormant.
 
 ### Who is killed first
 
@@ -185,7 +186,6 @@ A room with no `[lsp.servers.*]` table has the feature off. Server definitions m
 [lsp]                                  # machine config only
 reserve-percent = 10
 reserve-min = "8G"
-kill-floor-percent = 5
 idle-timeout = "10m"
 
 [lsp.servers.rust]
@@ -260,7 +260,7 @@ The external skill's model-invocation switches are ready for a separate release 
 
 ## Visibility
 
-Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus `for: {root, server}` identifying the requester. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers; doctor also shows the last refusal. Both use `cli/render/status.rs::lsp`: dormant is neutral except crashed (alarm) and memory pressure (warn); terminal stopped is neutral. They share state words through `cli/render/mod.rs::lsp_state_label` and row order through `cli/render/status.rs::lsp_order`; doctor shows list's STATE, CHECKOUT, SERVER, RSS, and LEASES columns. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.
+Automation here is an internal repair, not a user assist, so it keeps diagnostic records rather than assist records: every refused admission, queue timeout, kill, and eviction appends one with the numbers behind it. `evicted` carries the watchdog's kill details plus the requester's `estimate_bytes` and `for: {root, server}`; both kill and eviction records include `reserve_bytes`. Idle stops and restarts need no diagnostic; history carries them. `rimz lsp list` and `rimz doctor` surface running and dormant servers; doctor also shows the last refusal. Both use `cli/render/status.rs::lsp`: dormant is neutral except crashed (alarm) and memory pressure (warn); terminal stopped is neutral. They share state words through `cli/render/mod.rs::lsp_state_label` and row order through `cli/render/status.rs::lsp_order`; doctor shows list's STATE, CHECKOUT, SERVER, RSS, and LEASES columns. Query memory-short errors come from the broker's refusal, never an inference from diagnostics.
 
 Doctor also calls `lsp::broker::probe::check_startup` for the resolved checkout's effective configuration, using admission's validation and root-marker selection. Starting, indexing, and ready registry entries whose broker process is still alive report `running` without a second process; a stale entry left by a killed broker is probed. A configuration or checkout-resolution error lands in `checks_error` rather than hiding the machine-wide table. Other selected servers are probed concurrently through the shared spawn and `initialize` parameters, with a ten-second deadline and bounded stderr capture. Probes never send `initialized`, take the registry lock, or publish an entry; they send `shutdown`/`exit` after a successful reply and kill the process group on completion. They skip memory admission because they do not request workspace indexing. They use doctor's environment, which can differ from a broker launched outside a sandbox.
 

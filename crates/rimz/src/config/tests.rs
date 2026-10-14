@@ -2239,13 +2239,42 @@ fn sandbox_settings_fall_back_to_host_with_notices() {
     ]
     "#);
 }
+
+#[test]
+fn retired_lsp_floor_warns_once_without_changing_other_settings() {
+    let dir = tempdir().unwrap();
+    let path = write(
+        &dir,
+        "[lsp]\nkill-floor-percent = 200\nreserve-percent = 17\n",
+    );
+    for config in [
+        load_no_fragments(&path).unwrap(),
+        load_lenient_no_fragments(&path),
+    ] {
+        assert_eq!(config.lsp.reserve_percent, 17);
+        let notices: Vec<_> = config
+            .notices
+            .unknown_keys
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("retired"), "{}", notices[0]);
+        assert!(notices[0].contains("has no effect"));
+        assert!(notices[0].contains("reserve-percent"));
+        assert!(notices[0].contains("reserve-min"));
+        assert!(notices[0].contains("rimz setup"));
+        assert!(!notices[0].contains("unknown config key"));
+    }
+}
+
 #[test]
 fn lsp_configuration_has_documented_defaults() {
     let config: MachineConfig = toml::from_str("[lsp.servers.rust]\ncommand = ['rust-analyzer']\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\ninit-options = { checkOnSave = false }").unwrap();
     let value = serde_json::to_value(config).unwrap();
     assert_eq!(value["lsp"]["reserve-percent"], 10);
     assert_eq!(value["lsp"]["reserve-min"], "8G");
-    assert_eq!(value["lsp"]["kill-floor-percent"], 5);
+    assert!(value["lsp"].get("kill-floor-percent").is_none());
     assert_eq!(value["lsp"]["idle-timeout"], "10m");
     assert_eq!(value["lsp"]["servers"]["rust"]["policy"], "optional");
     assert_eq!(value["lsp"]["servers"]["rust"]["wait-timeout"], "10m");

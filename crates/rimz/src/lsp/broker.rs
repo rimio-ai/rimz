@@ -650,7 +650,7 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
         }
         registry::publish(&model.entry)?;
     }
-    if let Err(error) = watchdog::check(request.policy.kill_floor_percent) {
+    if let Err(error) = watchdog::check(&request.policy) {
         tracing::warn!(%error, "language-server pressure check failed");
     }
     Ok(())
