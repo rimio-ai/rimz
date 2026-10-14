@@ -8,13 +8,15 @@
 //! behavior lives in `common::ssh_trace` for the live mux suites too.
 
 use std::io::{Read as _, Write as _};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use nix::sys::socket::{self, AddressFamily, Backlog, SockFlag, SockType, SockaddrIn};
 use nix::sys::termios::{self, InputFlags, LocalFlags, OutputFlags, Termios};
 use portable_pty::{CommandBuilder, PtyPair};
 
@@ -257,6 +259,7 @@ fn remote_connect_command(env: &Env, log: &Path) -> Command {
     cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", log)
+        .env("RIMZ_REMOTE_INTERNET_PROBE", "0")
         .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("RIMZ_REMOTE_REACHABLE_RETRY_MS", "1")
@@ -704,17 +707,29 @@ fn relay_url(stdout: &str) -> (u16, &str) {
     (port, line)
 }
 
-fn closed_ssh_endpoint(env: &Env) -> (PathBuf, SocketAddr) {
+fn reserved_ssh_endpoint(env: &Env) -> (PathBuf, OwnedFd) {
     let path = env.project_root.join("ssh-config.txt");
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
-    let address = reservation.local_addr().expect("dial address");
-    drop(reservation);
+    let reservation = socket::socket(
+        AddressFamily::Inet,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )
+    .expect("create dial socket");
+    nix::fcntl::fcntl(
+        &reservation,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+    )
+    .expect("keep dial socket out of child processes");
+    socket::bind(reservation.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 1, 0))
+        .expect("reserve dial port without listening");
+    let address: SockaddrIn = socket::getsockname(reservation.as_raw_fd()).expect("dial address");
     std::fs::write(
         &path,
         format!("hostname 127.0.0.1\nport {}\n", address.port()),
     )
     .expect("write ssh config fixture");
-    (path, address)
+    (path, reservation)
 }
 
 fn http_204_probe() -> (String, Arc<AtomicBool>, std::thread::JoinHandle<()>) {
@@ -1446,7 +1461,7 @@ fn tun_route_skips_dead_tcp_checkpoint_and_keeps_ssh_retries_fast() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let master_plan = env.project_root.join("ssh-master.plan");
-    let (ssh_config, _) = closed_ssh_endpoint(&env);
+    let (ssh_config, _endpoint) = reserved_ssh_endpoint(&env);
     std::fs::write(&master_plan, "255\n0\n").expect("write master plan");
 
     let out = remote_connect_command(&env, &log)
@@ -2270,37 +2285,46 @@ fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    let (ssh_config, address) = closed_ssh_endpoint(&env);
+    let master_plan = env.project_root.join("ssh-master.plan");
+    let stderr_path = env.project_root.join("stderr.log");
+    let (ssh_config, endpoint) = reserved_ssh_endpoint(&env);
     std::fs::write(&plan, "255\n0\n").expect("write plan");
+    std::fs::write(&master_plan, "0\n").expect("script initial master before outage");
+    let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
 
     let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_MASTER_PLAN", &master_plan)
+        .env("RIMZ_TEST_SSH_MASTER_DIAL", "1")
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_DIAL_MS", "25")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(stderr)
         .spawn()
         .expect("spawn supervised remote connect");
 
     wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(500));
+    wait_for_notify_log(
+        &stderr_path,
+        &["network to dev-box lost — waiting for network"],
+    );
     assert_eq!(
         main_invocation_count(&log),
         1,
         "an unreachable endpoint must not consume reconnect attempts"
     );
 
-    let _listener = TcpListener::bind(address).expect("restore reachable endpoint");
+    socket::listen(&endpoint, Backlog::MAXCONN).expect("restore reachable endpoint");
     wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(3));
     let out = child.wait_with_output().expect("wait for clean reattach");
+    let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr log");
 
     assert!(
         out.status.success(),
         "restored endpoint reattaches cleanly\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+        stderr
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("network to dev-box lost — waiting for network; Ctrl-C stops"),
         "the unreachable hold is visible: {stderr}"
@@ -2316,7 +2340,7 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    let (ssh_config, _) = closed_ssh_endpoint(&env);
+    let (ssh_config, _endpoint) = reserved_ssh_endpoint(&env);
     std::fs::write(&plan, "255\n0\n").expect("write plan");
 
     let mut child = remote_connect_command(&env, &log)
@@ -2351,8 +2375,8 @@ fn reachable_endpoint_retries_failed_masters_without_stderr_spam() {
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
     let master_plan = env.project_root.join("ssh-master.plan");
-    let (ssh_config, address) = closed_ssh_endpoint(&env);
-    let _listener = TcpListener::bind(address).expect("answer endpoint dials");
+    let (ssh_config, endpoint) = reserved_ssh_endpoint(&env);
+    socket::listen(&endpoint, Backlog::MAXCONN).expect("answer endpoint dials");
     std::fs::write(&plan, "255\n0\n").expect("write plan");
     std::fs::write(&master_plan, "255\n255\n0\n").expect("write master plan");
 

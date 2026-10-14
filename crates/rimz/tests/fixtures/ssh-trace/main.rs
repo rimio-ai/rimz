@@ -20,6 +20,9 @@
 //! an exit plan, the shim propagates that command's status like OpenSSH.
 //! `$RIMZ_TEST_SSH_MASTER_PLAN` scripts background ControlMaster failures and
 //! `$RIMZ_TEST_SSH_MASTER_STDERR` supplies their diagnostic output.
+//! `$RIMZ_TEST_SSH_MASTER_DIAL` makes masters without a remaining scripted
+//! line dial the hostname and port in `$RIMZ_TEST_SSH_G_FILE`, exiting 255
+//! on connection failure instead of publishing readiness.
 //! `$RIMZ_TEST_SSH_MASTER_READY_PLAN` controls whether each successful master
 //! publishes the control socket marker before parking.
 //! `$RIMZ_TEST_SSH_MASTER_EXIT_PLAN` and `$RIMZ_TEST_SSH_MASTER_EXIT_MS`
@@ -299,7 +302,42 @@ fn run_control_master(argv: &[String]) -> ! {
             .expect("write master stderr");
         stream.flush().expect("flush master stderr");
     }
-    let code = pop_exit_plan("RIMZ_TEST_SSH_MASTER_PLAN").unwrap_or(0);
+    let dial = env::var_os("RIMZ_TEST_SSH_MASTER_DIAL").is_some()
+        && !env::var_os("RIMZ_TEST_SSH_MASTER_PLAN").is_some_and(|path| {
+            match std::fs::read_to_string(path) {
+                Ok(plan) => plan.lines().next().is_some(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => panic!("read master plan: {error}"),
+            }
+        });
+    let code = if dial {
+        let path = env::var_os("RIMZ_TEST_SSH_G_FILE").expect("RIMZ_TEST_SSH_G_FILE unset");
+        let config = std::fs::read_to_string(path).expect("read ssh -G fixture");
+        let fields = config
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                Some((words.next()?, words.next()?))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let hostname = fields.get("hostname").expect("ssh -G hostname");
+        let port = fields
+            .get("port")
+            .expect("ssh -G port")
+            .parse::<u16>()
+            .expect("ssh -G numeric port");
+        if std::net::TcpStream::connect((*hostname, port)).is_err() {
+            writeln!(
+                std::io::stderr().lock(),
+                "ssh: connect to host {hostname} port {port}: Connection refused"
+            )
+            .expect("write master connection failure");
+            std::process::exit(255);
+        }
+        0
+    } else {
+        pop_exit_plan("RIMZ_TEST_SSH_MASTER_PLAN").unwrap_or(0)
+    };
     if code != 0 {
         std::process::exit(code);
     }
