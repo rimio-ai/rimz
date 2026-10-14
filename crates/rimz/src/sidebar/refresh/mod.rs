@@ -94,6 +94,7 @@ pub struct RefreshedLanes {
 #[derive(Debug, Default)]
 pub struct ProducerRefreshState {
     git: git_stats::GitRefreshState,
+    pr_origins: BTreeMap<PathBuf, (Option<crate::disk::parse_cache::FileStamp>, Option<String>)>,
     /// This thread's audit cursor, shared by cohort spend and the orphan sweep.
     rollup: crate::store::snapshot::RollupCursor,
     cohort_effort: crate::agents::spending::EffortParseMemo,
@@ -346,7 +347,7 @@ pub(super) fn refresh_heavy_lanes(
         &mut state.cohort_effort,
     );
     pipeline::refresh_pipeline_for(base, runtime, config, teams);
-    let pr_cache = produce_pr_states(base, runtime);
+    let pr_cache = produce_pr_states(base, runtime, state);
     trunk::produce_trunk_state(base, runtime, config.sidebar.trunk.as_deref());
 
     RefreshedLanes {
