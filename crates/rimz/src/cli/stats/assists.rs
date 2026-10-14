@@ -796,13 +796,11 @@ pub(super) fn panel_lines(lines: &mut Vec<String>, stats: &AssistStats, panel_wi
 }
 
 pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bool) -> Result<()> {
-    let (events, older) = stats.timeline(limit, all);
     if json {
-        return render::json_pretty(&serde_json::json!({
-            "as_of": Timestamp::now(), "rollup": stats.rollup,
-            "events": events, "older": older,
-        }));
+        let as_of = Timestamp::now().to_zoned(crate::cli::machine_config().time_zone());
+        return render::json_pretty(&super::json::assists_value(stats, limit, all, &as_of));
     }
+    let (events, older) = stats.timeline(limit, all);
     let mut out = render::out();
     if stats.is_empty() {
         writeln!(out, "no assists recorded")?;

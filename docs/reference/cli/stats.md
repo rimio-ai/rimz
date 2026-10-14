@@ -124,7 +124,7 @@ By default, `rimz stats --assists` prints the latest 50 events that took effect,
 
 The header counts each kind's attempts that did not take effect beside it, for example `Auto-compact: 2 (239 held)`. Delivery-based events count only when delivered, except a stall notice, which counts once queued for its parent and is held only on an error; stops, freezes and relaunches use their recorded success flags. Redemption counts require a window reset; GC requires no error. Model aliases, tier fallbacks, resident launches, judge declines, compact commands and room resumes count as recorded.
 
-`rimz stats --assists --json` emits `{as_of, rollup, events, older}`, respecting `-n` and `--all`. `rimz stats --subagents --json` emits `{as_of, window: "year", subagents, unattributed}`. The default stats JSON carries the assist rollup without events; its `agents` rows are top-level agents and their `share` is a dollar share.
+`rimz stats --assists --json` emits `{as_of, rollup, events, older}`, respecting `-n` and `--all`; its `as_of` is the read time, with the offset of the configured timezone. `rimz stats --subagents --json` emits `{as_of, window: "year", subagents, unattributed}`. The default stats JSON carries the assist rollup without events; its `agents` rows are top-level agents and their `share` is a dollar share.
 
 | Mark | Assist |
 | --- | --- |

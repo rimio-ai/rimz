@@ -374,7 +374,7 @@ pub(super) fn render_spend(
         lines.push(format!(
             "  {:20} {:>12} {:>12} {:>12} {:>12}",
             "dollars",
-            rimz::theme::fmt::dollars2(today.usd),
+            fmt_usd(today.usd),
             fmt_usd(stats.total.week.usd),
             fmt_usd(stats.total.month.usd),
             fmt_usd(stats.total.year.usd)
@@ -453,11 +453,7 @@ pub(super) fn render_spend(
             "SPEND"
         ));
         for (kind, name, usd) in providers {
-            let amount = if usd < 10.0 {
-                rimz::theme::fmt::dollars2(usd)
-            } else {
-                fmt_usd(usd)
-            };
+            let amount = fmt_usd(usd);
             lines.push(format!(
                 "    {} {:>10}",
                 render::paint(render::palette::identity(kind), &pad_to(&name, width)),

@@ -42,8 +42,11 @@ pub(super) fn fmt_tokens_precise(n: u64) -> String {
     }
 }
 
-/// Dollars as `$8,666` — rounded, thousands grouped.
+/// Dollars as `$8,666`, rounded and thousands grouped; under $10 keeps cents (`$0.12`).
 pub(super) fn fmt_usd(v: f64) -> String {
+    if (0.0..10.0).contains(&v) {
+        return rimz::theme::fmt::dollars2(v);
+    }
     let whole = v.round() as i64;
     let sign = if whole < 0 { "-" } else { "" };
     format!(

@@ -59,6 +59,13 @@ fn spend_first_publication_has_compact_json_and_panel() {
         4
     );
     assert!(value["unattributed"]["by_provider"].get("zero").is_none());
+    let envelope = json::subagents_value(&stats);
+    assert_eq!(
+        keys(&envelope),
+        ["as_of", "subagents", "unattributed", "window"]
+    );
+    assert_eq!(envelope["as_of"], "2024-10-15T00:00:00+08:00");
+    assert_eq!(envelope["subagents"], value["subagents"]);
     let mut out = Vec::new();
     render_panel(
         &mut out,
@@ -1567,11 +1574,11 @@ fn agent_cells_rank_by_dollars_and_skip_empty_agents() {
     assert!(codex < claude, "larger trailing-year dollar spend leads");
     let codex = strip_ansi(&lines[codex]);
     let claude = strip_ansi(&lines[claude]);
-    assert!(codex.contains("$9 · ◎ 4 · ◇ 100"), "{codex:?}");
+    assert!(codex.contains("$9.00 · ◎ 4 · ◇ 100"), "{codex:?}");
     assert!(codex.contains("75.0%"));
     assert!(!codex.contains("sess"));
     assert!(!codex.contains("(66.7%)"));
-    assert!(claude.contains("$3 · ◎ 2 · ◇ 350"), "{claude:?}");
+    assert!(claude.contains("$3.00 · ◎ 2 · ◇ 350"), "{claude:?}");
     assert!(claude.contains("◇ 350 · 100%"));
     assert!(claude.contains("25.0%"));
 
@@ -1990,6 +1997,9 @@ fn token_and_dollar_formatting() {
     assert_eq!(fmt_tokens_precise(1_200_000_000), "1.2B");
     assert_eq!(fmt_usd(8_666.0), "$8,666");
     assert_eq!(fmt_usd(1_000_000.0), "$1,000,000");
+    assert_eq!(fmt_usd(0.12), "$0.12");
+    assert_eq!(fmt_usd(9.5), "$9.50");
+    assert_eq!(fmt_usd(10.4), "$10");
     assert_eq!(rimz::theme::fmt::group_thousands(1_741), "1,741");
 }
 
@@ -2224,6 +2234,27 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(json["rollup"]["resumes"], 1);
     assert_eq!(json["rollup"]["sweeps"], 1);
     assert_eq!(json["events"][0]["assist"], "auto_gc");
+    let envelope = json::assists_value(&stats, 1, false, &shanghai(1_728_921_600));
+    assert_eq!(keys(&envelope), ["as_of", "events", "older", "rollup"]);
+    assert_eq!(envelope["as_of"], "2024-10-15T00:00:00+08:00");
+    assert_eq!(envelope["events"].as_array().unwrap().len(), 1);
+}
+
+fn shanghai(second: i64) -> jiff::Zoned {
+    jiff::Timestamp::from_second(second)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::get("Asia/Shanghai").unwrap())
+}
+
+fn keys(value: &serde_json::Value) -> Vec<&str> {
+    let mut keys = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys
 }
 
 #[test]

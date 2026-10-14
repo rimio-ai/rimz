@@ -8,7 +8,7 @@ The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.r
 
 ## What it renders
 
-The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then trailing-year Models, Agents and Subagents, an unfolded Unattributed line, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
+The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then trailing-year Models, Agents and Subagents, an unfolded Unattributed line, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Every dollar figure in the panel shares one format: whole dollars from $10 up, cents below (`$0.12`), so a small fleet never reads `$0`. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
 
 `panel::render_spend` owns one-shot and unfolded subagent text. `panel::render_panel` dispatches to it when no active held tab is supplied. Held frames retain their terminal fitting, wordmark, activity insights and assist counts.
 
@@ -116,7 +116,7 @@ Reload re-execs `reload::current_reexec_target()` with the original arguments. T
 
 `--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, session and streak fields, `windows.today/week/month/year`, unfolded `models`, top-level `agents`, profile `subagents`, `unattributed`, local-date `days`, and the assist rollup only. `windows.week.usd` remains stable. This is a breaking change: agent membership and share semantics change, and assist events move to `--assists --json`. `--subagents --json` emits `{as_of, window: "year", subagents, unattributed}`.
 
-`--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`. The rollup covers all retained records, not just the displayed page.
+`--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`, with `as_of` the read time in the configured zone that spend history uses (`MachineConfig::time_zone`). The rollup covers all retained records, not just the displayed page.
 
 The same predicate gates rollup counts: no error for stall notices, since an undelivered notice waits in the parent's queue; delivered for continues, keepalives, idle and flip compactions; stopped for idle stops; frozen or a deepening step for hibernation; relaunched for launch retries; a window reset for redemption, since a stamp write that fails after it does not undo it; no error for GC. Judge declines, resident launches, model aliases, tier fallbacks, compact commands and room resumes count as recorded. A successful stop may carry a cleanup error and still counts. A partial GC with no top-level error counts, as its record represents a completed sweep.
 

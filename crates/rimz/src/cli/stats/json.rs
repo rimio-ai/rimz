@@ -108,13 +108,37 @@ fn window(spend: &SpendWindow) -> WindowJson {
     }
 }
 
-pub(super) fn emit_subagents(stats: &Stats) -> Result<()> {
-    render::json_pretty(&serde_json::json!({
-        "as_of": stats.as_of().strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+fn stamp(at: &jiff::Zoned) -> String {
+    at.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()
+}
+
+pub(super) fn subagents_value(stats: &Stats) -> serde_json::Value {
+    serde_json::json!({
+        "as_of": stamp(&stats.as_of()),
         "window": "year",
         "subagents": subagents(stats),
         "unattributed": unattributed(stats),
-    }))
+    })
+}
+
+pub(super) fn emit_subagents(stats: &Stats) -> Result<()> {
+    render::json_pretty(&subagents_value(stats))
+}
+
+/// The `--assists --json` envelope, stamped in the zone spend history uses.
+pub(super) fn assists_value(
+    stats: &AssistStats,
+    limit: usize,
+    all: bool,
+    as_of: &jiff::Zoned,
+) -> serde_json::Value {
+    let (events, older) = stats.timeline(limit, all);
+    serde_json::json!({
+        "as_of": stamp(as_of),
+        "rollup": stats.rollup,
+        "events": events,
+        "older": older,
+    })
 }
 
 #[derive(Serialize)]
@@ -247,7 +271,7 @@ fn stats_json<'a>(
         .collect();
 
     StatsJson {
-        as_of: stats.as_of().strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+        as_of: stamp(&stats.as_of()),
         timezone: &stats.timezone,
         unit: if dollars { "usd" } else { "tokens" },
         sessions: stats.total.year.sessions,
