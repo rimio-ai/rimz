@@ -20,15 +20,6 @@ use std::time::Duration;
 
 use crate::disk::paths;
 
-/// Reap grace for the per-session context-refresh throttle stamp. A live
-/// session re-touches its stamp within `crate::sidebar::timing::SESSION_REFRESH_INTERVAL`
-/// plus the producer fold cadence, so a stamp older than this is dead.
-pub const SESSION_PROBE_MARKER_TTL: Duration = Duration::from_secs(5 * 60);
-
-/// Runtime `shared/` filename prefix for per-session context-refresh throttle
-/// stamps.
-pub const SESSION_PROBE_MARKER_PREFIX: &str = "session-context-probe.";
-
 mod classes;
 mod collect;
 mod prune;

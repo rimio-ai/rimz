@@ -605,7 +605,7 @@ pub struct HookUninstallReport {
 pub enum RefreshTrigger<'a> {
     /// Native event name on the hook path.
     Hook(&'a str),
-    /// Sidebar producer periodic pass over live root sessions.
+    /// Local transcript refresh on a producer pass, or an explicit card refresh.
     Tick,
     /// Filesystem watcher response to transcript growth.
     Watch,

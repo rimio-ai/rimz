@@ -75,6 +75,8 @@ Budgets are account-scoped, and every session of a provider in the room shares o
 
 Three or more providers share the panel under a tab rail, which follows the provider of whichever card you have selected; `←`, `→`, or a click picks one by hand. One or two providers stack instead. With [pets enabled](./pets.md), the companion rides the panel's right edge.
 
+Codex budget windows refresh at turn boundaries and every five minutes between turns. Card metadata refreshes at turn boundaries; `rimz agents refresh @handle` requests an update sooner.
+
 Reading these figures, and how every one is calculated, is [Token Insight](./insight.md#per-account-the-provider-dashboard). What a full, spent, ticked, or dim bar is telling you is in the [interface reference](../interface/sidebar.md#budget-bars).
 
 If Claude Code subscription access is refused while you are still logged in, the plan label and bars disappear. One bold alarm row replaces them: `plan lapsed · no Claude access · since …`. The time is when RimZ first saw the refusal, not a renewal date. Restore Claude Code access with the provider, then run `rimz providers claude --refresh`; a successful usage read clears the lapse.

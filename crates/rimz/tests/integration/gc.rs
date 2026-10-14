@@ -8,7 +8,6 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::AgentSessionId;
-use rimz::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 use rimz::store::message::{DeliveryGate, MessageRecord};
 use rimz::wakeup::heartbeat::SidebarHeartbeat;
 use rimz::{MuxName, SidebarInstanceId, StatePaths};
@@ -672,10 +671,10 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
 
     let old_session_marker = rt
         .shared_root
-        .join(format!("{SESSION_PROBE_MARKER_PREFIX}{nonce}"));
-    let recent_session_marker = rt.shared_root.join(format!(
-        "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
-    ));
+        .join(format!("session-context-probe.{nonce}"));
+    let recent_session_marker = rt
+        .shared_root
+        .join("session-context-probe.11111111111111111111111111111111");
     let spending_lock = rt.shared_root.join("spending.lock");
     for path in [&old_session_marker, &recent_session_marker] {
         std::fs::write(path, b"probe").expect("write probe marker");
@@ -695,7 +694,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
             .set_modified(old)
             .unwrap();
     }
-    let recently_dead = SystemTime::now() - (SESSION_PROBE_MARKER_TTL + Duration::from_secs(1));
+    let recently_dead = SystemTime::now() - Duration::from_secs(301);
     std::fs::File::open(&recent_session_marker)
         .unwrap()
         .set_modified(recently_dead)
@@ -713,7 +712,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     assert!(!old_state_rollup.exists());
     assert!(!old_runtime_shared.exists());
     assert!(!old_session_marker.exists());
-    assert!(!recent_session_marker.exists());
+    assert!(recent_session_marker.exists());
     assert!(fresh_temp.exists());
     assert!(spending_lock.exists());
 }

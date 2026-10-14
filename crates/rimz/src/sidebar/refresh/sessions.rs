@@ -1,12 +1,10 @@
 //! Producer-owned live-session context refresh.
 //!
-//! Heavy-lane refresh asks each live root session's adapter for cheap transcript-tail refreshes and optional detached rich-context helpers through the same trigger seams hooks use.
+//! Heavy-lane refresh asks each live root session's adapter for cheap, stat-gated transcript-tail refreshes. Rich-context helpers run only at hook boundaries or on explicit refresh.
 
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use jiff::Timestamp;
-use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::agents::{
@@ -14,8 +12,6 @@ use crate::agents::{
     RefreshSpawn, RefreshTrigger,
 };
 use crate::ids::{LoginKey, LoginName, PaneId};
-use crate::sidebar::timing::SESSION_REFRESH_INTERVAL;
-use crate::store::gc::{SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL};
 
 use super::SidebarSnapshot;
 
@@ -25,9 +21,7 @@ const CODEX_TURN_DEATH_RETRY_WINDOW: Duration = Duration::from_secs(10 * 60);
 type SessionRefreshResult<T> = std::result::Result<T, crate::disk::atomic::AtomicErr>;
 
 /// Refresh every live root session's adapter-owned context sidecar from the
-/// producer. Inline transcript reads run first with their adapter stat gate;
-/// detached helpers run on a coarse per-session cadence for richer realtime
-/// channels.
+/// producer using inline transcript reads with their adapter stat gate.
 pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     for refresh in live_session_refreshes(snapshot) {
         if let Err(err) = refresh_session_transcript_context_core(
@@ -42,19 +36,7 @@ pub(super) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &Runtim
         ) {
             warn_session_transcript_merge(&refresh.kind, &refresh.session_id, &err);
         }
-        let spawn = session_context_refresh_spawn(
-            runtime,
-            &refresh.kind,
-            &refresh.session_id,
-            refresh.model_hint.as_deref(),
-        );
-        if let Some(spawn) = spawn
-            && session_probe_due(runtime, &refresh.kind, &refresh.session_id)
-        {
-            spawn_session_context_refresh(runtime, &refresh.kind, &refresh.session_id, spawn);
-        }
     }
-    reap_stale_session_probe_markers(runtime);
 }
 
 /// Refresh one watched transcript without running adapter full-history work.
@@ -107,7 +89,6 @@ pub fn force_refresh_session_context(
     let spawn = session_context_refresh_spawn(runtime, kind, session_id, model_hint);
     let helper_spawned = spawn.is_some();
     if let Some(spawn) = spawn {
-        let _ = session_probe_due(runtime, kind, session_id);
         spawn_forced_session_context_refresh(runtime, kind, session_id, spawn);
     }
     Ok(ForcedSessionRefresh {
@@ -375,60 +356,6 @@ fn session_model_hint(agent: &AgentState) -> Option<&str> {
             .as_ref()
             .and_then(|context| context.model_id.as_deref())
     })
-}
-
-/// Throttle one session's detached context refresh via a marker file under the
-/// runtime root: skip when the last attempt is younger than the interval, touch
-/// it before spawning.
-fn session_probe_due(runtime: &RuntimePaths, kind: &str, session_id: &str) -> bool {
-    let path = session_probe_marker(runtime, kind, session_id);
-    let due = std::fs::metadata(&path)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_none_or(|age| age >= SESSION_REFRESH_INTERVAL);
-    if due {
-        // Touch first so a fetch that never publishes still backs off this target.
-        let _ = std::fs::write(&path, b"");
-    }
-    due
-}
-
-fn session_probe_marker(runtime: &RuntimePaths, kind: &str, session_id: &str) -> PathBuf {
-    let mut hasher = Sha256::new();
-    hasher.update(b"session-context");
-    hasher.update([0]);
-    hasher.update(kind.as_bytes());
-    hasher.update([0]);
-    hasher.update(session_id.as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    runtime
-        .shared_root
-        .join(format!("{SESSION_PROBE_MARKER_PREFIX}{}", &digest[..32]))
-}
-
-fn reap_stale_session_probe_markers(runtime: &RuntimePaths) {
-    let Ok(entries) = std::fs::read_dir(&runtime.shared_root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
-            continue;
-        };
-        if !name.starts_with(SESSION_PROBE_MARKER_PREFIX) {
-            continue;
-        }
-        let stale = entry
-            .metadata()
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-            .is_some_and(|age| age >= SESSION_PROBE_MARKER_TTL);
-        if stale {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
 }
 
 fn session_context_refresh_spawn(
