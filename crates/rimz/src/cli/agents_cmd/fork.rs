@@ -132,8 +132,18 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &seed.cwd,
         (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
     )?;
-    rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?
-        .health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
+    let login =
+        rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;
+    login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
+    crate::cli::folder_trust::preflight(
+        seed.kind.as_str(),
+        adapter.folder_trust(
+            &seed.cwd,
+            Some(workspace.launch_repo_root()),
+            &login.env(&rimz::agents::ambient_env()),
+        ),
+        None,
+    )?;
     let placement = resolve_fork_placement(
         args.new_tab,
         args.new_pane,

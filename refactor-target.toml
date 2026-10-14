@@ -197,7 +197,28 @@ upward-dependencies = ["address"]
 # SpendUpdate distinguishes authoritative replacement from a counted-spend rewrite merge (+1).
 # LaunchBlocker and LaunchCapability::launch_blocker share provider launch preconditions (+2).
 # SettingsConflict, hooks_disabled, and ask_unenforced share provider settings refusals with launch and doctor (+3).
-surface-budget = 1040
+# LaunchDirMode separates supervised folder-screen refusals from headless judges (+1).
+surface-budget = 1041
+
+[[verdict]]
+kind = "item"
+key = "agents::LaunchDirMode"
+reason = "Supervised CLI launches and headless loop judges require different saved-untrusted verdicts."
+
+[[verdict]]
+kind = "item"
+key = "agents::folder_trust::FolderTrust::RESTRICTED_FIX"
+reason = "One saved-untrusted remediation shared by library refusal errors and CLI trust surfaces."
+
+[[verdict]]
+kind = "item"
+key = "cli::folder_trust::preflight"
+reason = "One warning/refusal presentation for launch, relaunch, resident takeover and room start."
+
+[[verdict]]
+kind = "item"
+key = "cli::folder_trust::Unattended"
+reason = "CLI-private team/loop context types the shared folder-trust refusal without changing its wording."
 
 [[module]]
 path = "crates/rimz/src/agents/park.rs"

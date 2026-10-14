@@ -8,6 +8,51 @@ use serde::Serialize;
 
 use super::render;
 
+#[derive(Clone, Copy)]
+pub(super) enum Unattended {
+    Team,
+    Loop,
+}
+
+impl std::fmt::Display for Unattended {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Team => "team",
+            Self::Loop => "loop",
+        })
+    }
+}
+
+pub(super) fn preflight(
+    kind: &str,
+    trust: Option<FolderTrust>,
+    unattended: Option<Unattended>,
+) -> Result<()> {
+    let message = match trust {
+        Some(FolderTrust::Restricted { key }) => {
+            let message = format!(
+                "{kind} folder `{}` is saved untrusted; it will stop at its Folder access prompt on every launch; {}",
+                key.display(),
+                FolderTrust::RESTRICTED_FIX
+            );
+            if let Some(context) = unattended {
+                anyhow::bail!(
+                    "{context} launch refused: {message}; RimZ leaves the saved decision alone"
+                );
+            }
+            message
+        }
+        Some(FolderTrust::Undecided(gap)) => format!(
+            "{kind} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
+            gap.key.display(),
+            gap.fix(kind)
+        ),
+        Some(FolderTrust::Decided) | None => return Ok(()),
+    };
+    writeln!(render::err(), "rimz: {message}")?;
+    Ok(())
+}
+
 pub(super) fn collect(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<FolderTrustRow>> {
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
     let machine = rimz::config::MachineConfig::load()?;
@@ -41,6 +86,10 @@ pub(super) struct Row {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(super) enum State {
     Decided,
+    Restricted {
+        key: String,
+        fix: String,
+    },
     Undecided {
         key: String,
         path: String,
@@ -55,6 +104,10 @@ impl From<&FolderTrustRow> for Row {
             login: row.login.clone(),
             state: match &row.trust {
                 FolderTrust::Decided => State::Decided,
+                FolderTrust::Restricted { key } => State::Restricted {
+                    key: key.display().to_string(),
+                    fix: FolderTrust::RESTRICTED_FIX.to_owned(),
+                },
                 FolderTrust::Undecided(gap) => State::Undecided {
                     key: gap.key.display().to_string(),
                     path: gap.path.display().to_string(),
@@ -98,6 +151,17 @@ pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str) -> Result<bool> {
     let mut succeeded = true;
     let mut out = render::err();
     for row in rows {
+        if let FolderTrust::Restricted { key } = &row.trust {
+            succeeded = false;
+            writeln!(
+                out,
+                "{prefix}: {}: RimZ does not change a saved untrusted decision for `{}`; {}",
+                row.kind,
+                key.display(),
+                FolderTrust::RESTRICTED_FIX
+            )?;
+            continue;
+        }
         let FolderTrust::Undecided(gap) = &row.trust else {
             writeln!(out, "{prefix}: {} already decided", row.kind)?;
             continue;
@@ -135,6 +199,47 @@ fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn restricted_launch_verdict_depends_on_the_command() {
+        for unattended in [
+            None,
+            Some(super::Unattended::Team),
+            Some(super::Unattended::Loop),
+        ] {
+            let result = super::preflight(
+                "codex",
+                Some(rimz::agents::FolderTrust::Restricted {
+                    key: "/repo".into(),
+                }),
+                unattended,
+            );
+            assert_eq!(result.is_err(), unattended.is_some());
+            if let Err(error) = result {
+                let text = error.to_string();
+                assert!(text.contains(&unattended.unwrap().to_string()));
+                assert!(text.contains("saved untrusted"));
+                assert!(text.contains("Open restricted"));
+                assert!(!text.contains("rimz trust grant"));
+            }
+        }
+    }
+
+    #[test]
+    fn restricted_rows_have_no_grant_and_report_the_saved_decision() {
+        let row = rimz::agents::FolderTrustRow {
+            kind: "codex",
+            login: rimz::ids::LoginName::default_login(),
+            trust: rimz::agents::FolderTrust::Restricted {
+                key: "/repo".into(),
+            },
+        };
+        let json = serde_json::to_value(super::Row::from(&row)).unwrap();
+        assert_eq!(json["state"], "restricted");
+        assert_eq!(json["key"], "/repo");
+        assert!(super::preview(&[&row]).unwrap().is_empty());
+        assert!(!super::grant(&[&row], "trust").unwrap());
+    }
+
     #[test]
     fn stale_folder_trust_preview_names_the_grant_command() {
         let error = rimz::agents::FolderTrustErr::Changed {

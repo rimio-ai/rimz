@@ -83,7 +83,7 @@ pub(super) fn launch_layout(
         machine_config,
         cwd,
         None,
-    )? {
+    )?()? {
         launched.write_receipt(&mut render::out(), &ctx.store, &ctx.workspace.project_root)?;
     }
     Ok(())
@@ -149,17 +149,19 @@ fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -
         .or_else(|| cwd.file_name()?.to_str().map(str::to_owned))
 }
 
-/// Launch into an already-resolved host cwd without changing its lexical identity.
-pub(in crate::cli) fn launch_resolved(
+type LaunchExecution<'a> = Box<dyn FnOnce() -> Result<Option<LaunchedLayout>> + 'a>;
+
+/// Prepare a launch into a resolved host cwd and return its effectful execution.
+pub(in crate::cli) fn launch_resolved<'a>(
     launch: AgentLaunchArgs,
-    globals: &GlobalFlags,
+    globals: &'a GlobalFlags,
     allow_in_place: bool,
-    ctx: &Ctx,
+    ctx: &'a Ctx,
     machine_config: Arc<rimz::config::MachineConfig>,
     cwd: Option<PathBuf>,
     // The resident loop fire's task name and its `### Loop` reminder body.
-    loop_fire: Option<(&str, &str)>,
-) -> Result<Option<LaunchedLayout>> {
+    loop_fire: Option<(&'a str, &'a str)>,
+) -> Result<LaunchExecution<'a>> {
     let loop_task = loop_fire.map(|(task, _)| task);
     let mut args = AgentsArgs {
         launch,
@@ -324,23 +326,25 @@ pub(in crate::cli) fn launch_resolved(
             workspace,
             &machine_config,
         )?;
-        return launch_resume_layout(
-            args,
-            globals,
-            allow_in_place,
-            ctx,
-            &machine_config,
-            &teams,
-            &effective.profiles,
-            layout,
-            team_name,
-            single_cell,
-            worktree_filter.as_deref(),
-            ancestry.as_ref(),
-            focus,
-            checked_folder_trust,
-        )
-        .map(|()| None);
+        return Ok(Box::new(move || {
+            launch_resume_layout(
+                args,
+                globals,
+                allow_in_place,
+                ctx,
+                &machine_config,
+                &teams,
+                &effective.profiles,
+                layout,
+                team_name,
+                single_cell,
+                worktree_filter.as_deref(),
+                ancestry.as_ref(),
+                focus,
+                checked_folder_trust,
+            )
+            .map(|()| None)
+        }));
     }
     let channel_launch = args.launch.cohort.channel.is_some();
     let placement = apply_in_place_downgrade(
@@ -356,9 +360,21 @@ pub(in crate::cli) fn launch_resolved(
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
+    let preflight_workspace = if loop_fire.is_some()
+        && let Some(cwd) = &cwd
+    {
+        let mut launch_workspace = rimz::workspace::WorkspaceResolver::resolve_participant(
+            cwd,
+            Some(workspace.project_root.clone()),
+        )?;
+        launch_workspace.worktree_root = cwd.clone();
+        launch_workspace
+    } else {
+        workspace.clone()
+    };
     for (index, cell) in layout.agent_cells().enumerate() {
         preflighted_logins.push(preflight_cell(
-            workspace,
+            &preflight_workspace,
             store.runtime_paths(),
             cell,
             rimz::config::Isolation::resolve(
@@ -368,359 +384,384 @@ pub(in crate::cli) fn launch_resolved(
             ),
             prompt.filter(|_| Some(index) == prompt_agent_index),
             &mut checked_folder_trust,
+            loop_fire
+                .map(|_| crate::cli::folder_trust::Unattended::Loop)
+                .or_else(|| {
+                    team_name
+                        .as_ref()
+                        .map(|_| crate::cli::folder_trust::Unattended::Team)
+                }),
         )?);
     }
-    let room = RoomContext::live_tab(workspace, machine_config.clone(), globals.mux)?;
-    let mux = room.mux_name();
-    let backend = room.backend();
-    if worktree_launch && !crate::cli::confirm_cross_repo_worktree(workspace)? {
-        return Ok(None);
-    }
-
-    let cells = cohort_cells(&layout);
-    let base = if team_name.is_some() {
-        rimz::worktree::LaunchBase::Team
-    } else {
-        rimz::worktree::LaunchBase::Configured
-    };
-    // A choice-less PR lookup discovers the holder without moving its local tip.
-    let mut checkout = args.launch.cohort.from_pr.as_ref().map(|pr| {
-        rimz::worktree::resolve_launch_checkout(
-            workspace,
-            &machine_config.agents.worktree,
-            args.launch.cohort.worktree.as_deref(),
-            Some(pr),
-            None,
-            cwd.as_deref(),
-            base,
-        )
-    });
-    let cohort_target = if team_name.is_some() || cells.len() >= 2 {
-        match checkout.as_ref() {
-            Some(Ok(launch)) if launch.reused => launch
-                .worktree_name
-                .as_ref()
-                .map(|name| (name.clone(), launch.cwd.clone())),
-            // Agents record the marker's lexical path; Git lists the holder realpath'd.
-            Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
-                holder: Some(path), ..
-            })) => rimz::worktree::read_marker_for_worktree(path)?
-                .map(|marker| (marker.name, marker.worktree_path)),
-            Some(_) => None,
-            None => explicit_worktree_name
-                .as_deref()
-                .map(|name| {
-                    reconcile::cohort_worktree_path(
-                        workspace,
-                        &machine_config.agents.worktree,
-                        name,
-                    )
-                    .map(|path| (name.to_owned(), path))
-                })
-                .transpose()?,
+    Ok(Box::new(move || {
+        let team = team_name.as_deref().and_then(|name| teams.0.get(name));
+        let prompt = args
+            .launch
+            .prompt
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty());
+        let lane = args
+            .launch
+            .cohort
+            .channel
+            .as_deref()
+            .or(default_lane.as_deref());
+        let room = RoomContext::live_tab(workspace, machine_config.clone(), globals.mux)?;
+        let mux = room.mux_name();
+        let backend = room.backend();
+        if worktree_launch && !crate::cli::confirm_cross_repo_worktree(workspace)? {
+            return Ok(None);
         }
-    } else {
-        None
-    };
-    // An inferred lane joins the exact channel it was inferred from, rather than
-    // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
-    // subdirectory would otherwise stamp that subdirectory's basename.
-    let explicit_channel = args
-        .launch
-        .cohort
-        .channel
-        .as_deref()
-        .or(inferred_lane.as_deref().filter(|_| cwd.is_none()));
-    if let Some(team) = team_name.as_deref() {
-        let target = if let Some(path) = cwd.as_deref() {
-            Some((None, path))
-        } else if let Some((name, path)) = cohort_target.as_ref() {
-            Some((Some(name.as_str()), path.as_path()))
+
+        let cells = cohort_cells(&layout);
+        let base = if team_name.is_some() {
+            rimz::worktree::LaunchBase::Team
         } else {
+            rimz::worktree::LaunchBase::Configured
+        };
+        // A choice-less PR lookup discovers the holder without moving its local tip.
+        let mut checkout = args.launch.cohort.from_pr.as_ref().map(|pr| {
+            rimz::worktree::resolve_launch_checkout(
+                workspace,
+                &machine_config.agents.worktree,
+                args.launch.cohort.worktree.as_deref(),
+                Some(pr),
+                None,
+                cwd.as_deref(),
+                base,
+            )
+        });
+        let cohort_target = if team_name.is_some() || cells.len() >= 2 {
             match checkout.as_ref() {
-                Some(Ok(launch)) => Some((launch.worktree_name.as_deref(), launch.cwd.as_path())),
+                Some(Ok(launch)) if launch.reused => launch
+                    .worktree_name
+                    .as_ref()
+                    .map(|name| (name.clone(), launch.cwd.clone())),
+                // Agents record the marker's lexical path; Git lists the holder realpath'd.
                 Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
                     holder: Some(path),
                     ..
-                })) => Some((None, path.as_path())),
-                Some(Err(_)) => None,
-                // A generated worktree has no prior occupants.
-                None if args.launch.cohort.worktree.is_some() => None,
-                None => Some((None, workspace.worktree_root.as_path())),
+                })) => rimz::worktree::read_marker_for_worktree(path)?
+                    .map(|marker| (marker.name, marker.worktree_path)),
+                Some(_) => None,
+                None => explicit_worktree_name
+                    .as_deref()
+                    .map(|name| {
+                        reconcile::cohort_worktree_path(
+                            workspace,
+                            &machine_config.agents.worktree,
+                            name,
+                        )
+                        .map(|path| (name.to_owned(), path))
+                    })
+                    .transpose()?,
+            }
+        } else {
+            None
+        };
+        // An inferred lane joins the exact channel it was inferred from, rather than
+        // one recomputed from the caller's cwd — a shell pane that has `cd`'d into a
+        // subdirectory would otherwise stamp that subdirectory's basename.
+        let explicit_channel = args
+            .launch
+            .cohort
+            .channel
+            .as_deref()
+            .or(inferred_lane.as_deref().filter(|_| cwd.is_none()));
+        if let Some(team) = team_name.as_deref() {
+            let target = if let Some(path) = cwd.as_deref() {
+                Some((None, path))
+            } else if let Some((name, path)) = cohort_target.as_ref() {
+                Some((Some(name.as_str()), path.as_path()))
+            } else {
+                match checkout.as_ref() {
+                    Some(Ok(launch)) => {
+                        Some((launch.worktree_name.as_deref(), launch.cwd.as_path()))
+                    }
+                    Some(Err(rimz::worktree::WorktreeErr::PrBranchDiverged {
+                        holder: Some(path),
+                        ..
+                    })) => Some((None, path.as_path())),
+                    Some(Err(_)) => None,
+                    // A generated worktree has no prior occupants.
+                    None if args.launch.cohort.worktree.is_some() => None,
+                    None => Some((None, workspace.worktree_root.as_path())),
+                }
+            };
+            if let Some((name, path)) = target
+                && let Some(hold) =
+                    rimz::harness::resume::inspect_team_hold(&projection.agents, path)
+                && hold.team != team
+            {
+                let (reason, release, resume) = team_hold_guidance(&hold, path, name);
+                let place = match name {
+                    Some(name) => format!("worktree `{name}`"),
+                    None => format!("checkout `{}`", path.display()),
+                };
+                bail!(
+                    "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree{release}",
+                    hold.team
+                );
+            }
+            if let Some((_, path)) = target
+                && let Some(channel) = rimz::harness::spec::resolve_room_channel(
+                    &workspace.project_root,
+                    path,
+                    Some(team),
+                    explicit_channel,
+                )
+                && let Some(hold) =
+                    rimz::harness::resume::inspect_channel_hold(&projection.agents, &channel)
+            {
+                let comparable_path = |path: &Path| {
+                    std::fs::canonicalize(path)
+                        .unwrap_or_else(|_| rimz::utils::path::normalize_path_lexical(path))
+                };
+                if comparable_path(&hold.checkout) != comparable_path(path) {
+                    let marker = rimz::worktree::read_marker_for_worktree(&hold.checkout)?;
+                    let (reason, release, resume) = team_hold_guidance(
+                        &hold,
+                        &hold.checkout,
+                        marker.as_ref().map(|marker| marker.name.as_str()),
+                    );
+                    bail!(
+                        "channel `#{channel}` already carries team `{}` at checkout `{}` ({reason}); one team per channel: resume it with {resume}, or launch on another channel{release}",
+                        hold.team,
+                        hold.checkout.display()
+                    );
+                }
+            }
+        }
+        if let Some((name, path)) = cohort_target {
+            let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
+            match reconcile::reconcile_cohort_launch(
+                workspace,
+                &machine_config,
+                backend,
+                store,
+                &name,
+                &path,
+                spec_display,
+                team_name.as_deref(),
+                &cells,
+                args.launch.cohort.fresh,
+                focus,
+            )? {
+                reconcile::Reconciled::Done => return Ok(None),
+                reconcile::Reconciled::Resume(path) => {
+                    validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
+                    let layout = resolve_finalized_layout(
+                        snapshot.as_ref(),
+                        &machine_config,
+                        &effective,
+                        args.launch.spec.as_deref(),
+                        None,
+                        &matching_overrides,
+                        args.launch.cohort.budget,
+                        args.launch.max_turns,
+                        lane,
+                        false,
+                        Some((store.runtime_paths(), store.paths())),
+                    )?
+                    .resolved
+                    .layout;
+                    if let Some(checkout) = checkout.take()
+                        && crate::cli::settle_launch_checkout(
+                            workspace,
+                            &machine_config.agents.worktree,
+                            args.launch.cohort.worktree.as_deref(),
+                            args.launch.cohort.from_pr.as_ref(),
+                            cwd.as_deref(),
+                            base,
+                            checkout,
+                        )?
+                        .is_none()
+                    {
+                        return Ok(None);
+                    }
+                    return launch_resume_layout(
+                        args,
+                        globals,
+                        allow_in_place,
+                        ctx,
+                        &machine_config,
+                        &teams,
+                        &effective.profiles,
+                        layout,
+                        team_name,
+                        single_cell,
+                        Some(&path),
+                        ancestry.as_ref(),
+                        focus,
+                        checked_folder_trust,
+                    )
+                    .map(|()| None);
+                }
+                reconcile::Reconciled::Continue => {}
+                reconcile::Reconciled::Removed => checkout = None,
+            }
+        }
+
+        let launch = match checkout {
+            Some(checkout) => crate::cli::settle_launch_checkout(
+                workspace,
+                &machine_config.agents.worktree,
+                args.launch.cohort.worktree.as_deref(),
+                args.launch.cohort.from_pr.as_ref(),
+                cwd.as_deref(),
+                base,
+                checkout,
+            ),
+            None => crate::cli::resolve_launch_checkout(
+                workspace,
+                &machine_config,
+                args.launch.cohort.worktree.as_deref(),
+                args.launch.cohort.from_pr.as_ref(),
+                cwd.as_deref(),
+                base,
+            ),
+        }?;
+        let Some(launch) = launch else {
+            return Ok(None);
+        };
+        if let Some(team) = team {
+            rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
+        }
+        crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
+        if let Some(channel) = args.launch.cohort.channel.as_deref() {
+            rimz::channel::admit_launch(workspace, channel)?;
+        }
+        let room_channel = rimz::harness::spec::resolve_room_channel(
+            &workspace.project_root,
+            &launch.cwd,
+            team_name.as_deref(),
+            explicit_channel,
+        );
+        let mut launch_requests = launch_identity_requests(
+            &layout,
+            args.launch.name.as_deref(),
+            launch.generated_name(),
+            team_name.as_deref(),
+            team.map(|team| team.roles.as_slice()),
+            room_channel.as_deref(),
+            prompt.zip(prompt_agent_index),
+            None,
+            ancestry.as_ref(),
+        )?;
+        for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
+            request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+        }
+        if let Some(index) = prompt_agent_index {
+            launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
+        }
+        let launch_batch = store.begin_agent_launch_batch(
+            &launch_requests,
+            AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: launch.cwd.clone(),
+                branch: launch.branch.clone(),
+                description: args.launch.cohort.description.clone(),
+            },
+        )?;
+        let peer_prompt = prepare_peer_prompt(
+            store,
+            launch_batch.identities(),
+            &launch.cwd,
+            super::report_to(args.launch.cohort.detach),
+        )
+        .inspect_err(|_| {
+            let _ = store.fail_agent_launch_batch(&launch_batch);
+        })?;
+        let fail_peer_prompt = || {
+            if let Some((peer, _)) = &peer_prompt {
+                match rimz::harness::run::fail_peer_run(store, peer, "peer launch failed") {
+                    Ok(Some(_)) => {
+                        if let Some((_, launcher)) = peer.launcher() {
+                            rimz::harness::orphan_sweep::spawn_digest_helper(
+                                store.runtime_paths(),
+                                launcher.clone(),
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(%error, "could not fail peer launch run"),
+                }
             }
         };
-        if let Some((name, path)) = target
-            && let Some(hold) = rimz::harness::resume::inspect_team_hold(&projection.agents, path)
-            && hold.team != team
-        {
-            let (reason, release, resume) = team_hold_guidance(&hold, path, name);
-            let place = match name {
-                Some(name) => format!("worktree `{name}`"),
-                None => format!("checkout `{}`", path.display()),
-            };
-            bail!(
-                "{place} already holds team `{}` ({reason}); one team per checkout: resume it with {resume}, or launch into another worktree{release}",
-                hold.team
-            );
-        }
-        if let Some((_, path)) = target
-            && let Some(channel) = rimz::harness::spec::resolve_room_channel(
-                &workspace.project_root,
-                path,
-                Some(team),
-                explicit_channel,
-            )
-            && let Some(hold) =
-                rimz::harness::resume::inspect_channel_hold(&projection.agents, &channel)
-        {
-            let comparable_path = |path: &Path| {
-                std::fs::canonicalize(path)
-                    .unwrap_or_else(|_| rimz::utils::path::normalize_path_lexical(path))
-            };
-            if comparable_path(&hold.checkout) != comparable_path(path) {
-                let marker = rimz::worktree::read_marker_for_worktree(&hold.checkout)?;
-                let (reason, release, resume) = team_hold_guidance(
-                    &hold,
-                    &hold.checkout,
-                    marker.as_ref().map(|marker| marker.name.as_str()),
-                );
-                bail!(
-                    "channel `#{channel}` already carries team `{}` at checkout `{}` ({reason}); one team per channel: resume it with {resume}, or launch on another channel{release}",
-                    hold.team,
-                    hold.checkout.display()
-                );
-            }
-        }
-    }
-    if let Some((name, path)) = cohort_target {
-        let spec_display = args.launch.spec.as_deref().unwrap_or("<spec>");
-        match reconcile::reconcile_cohort_launch(
-            workspace,
-            &machine_config,
+        let cleanup_worktree = launch.owns_checkout_lifecycle();
+        let worktree_name = launch.worktree_name.clone();
+        let cwd = launch.cwd;
+        let title = room_channel.as_deref().map_or_else(
+            || {
+                rimz::harness::spec::default_tab_title(
+                    &layout,
+                    worktree_name.as_deref(),
+                    team_name.as_deref(),
+                )
+            },
+            |channel| format!("#{channel}"),
+        );
+        let sidebar = room.sidebar_options(&cwd);
+        let mut panes = compile_layout_panes(
+            &layout,
+            LayoutPaneParams {
+                runtime: store.runtime_paths(),
+                cwd: &cwd,
+                cleanup_worktree,
+                in_place,
+                resume_seeds: None,
+                launch_identities: launch_batch.identities(),
+                fallback_channel: None,
+                loop_reminder: loop_fire.map(|(_, reminder)| reminder),
+            },
+        )
+        .inspect_err(|_| {
+            let _ = store.fail_agent_launch_batch(&launch_batch);
+            fail_peer_prompt();
+        })?;
+        panes.focused_pane = team_leader_pane(&layout, team);
+        super::placement::execute(
             backend,
             store,
-            &name,
-            &path,
-            spec_display,
-            team_name.as_deref(),
-            &cells,
-            args.launch.cohort.fresh,
-            focus,
-        )? {
-            reconcile::Reconciled::Done => return Ok(None),
-            reconcile::Reconciled::Resume(path) => {
-                validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
-                let layout = resolve_finalized_layout(
-                    snapshot.as_ref(),
-                    &machine_config,
-                    &effective,
-                    args.launch.spec.as_deref(),
-                    None,
-                    &matching_overrides,
-                    args.launch.cohort.budget,
-                    args.launch.max_turns,
-                    lane,
-                    false,
-                    Some((store.runtime_paths(), store.paths())),
-                )?
-                .resolved
-                .layout;
-                if let Some(checkout) = checkout.take()
-                    && crate::cli::settle_launch_checkout(
-                        workspace,
-                        &machine_config.agents.worktree,
-                        args.launch.cohort.worktree.as_deref(),
-                        args.launch.cohort.from_pr.as_ref(),
-                        cwd.as_deref(),
-                        base,
-                        checkout,
-                    )?
-                    .is_none()
-                {
-                    return Ok(None);
-                }
-                return launch_resume_layout(
-                    args,
-                    globals,
-                    allow_in_place,
-                    ctx,
-                    &machine_config,
-                    &teams,
-                    &effective.profiles,
-                    layout,
-                    team_name,
-                    single_cell,
-                    Some(&path),
-                    ancestry.as_ref(),
-                    focus,
-                    checked_folder_trust,
-                )
-                .map(|()| None);
-            }
-            reconcile::Reconciled::Continue => {}
-            reconcile::Reconciled::Removed => checkout = None,
-        }
-    }
-
-    let launch = match checkout {
-        Some(checkout) => crate::cli::settle_launch_checkout(
-            workspace,
-            &machine_config.agents.worktree,
-            args.launch.cohort.worktree.as_deref(),
-            args.launch.cohort.from_pr.as_ref(),
-            cwd.as_deref(),
-            base,
-            checkout,
-        ),
-        None => crate::cli::resolve_launch_checkout(
-            workspace,
-            &machine_config,
-            args.launch.cohort.worktree.as_deref(),
-            args.launch.cohort.from_pr.as_ref(),
-            cwd.as_deref(),
-            base,
-        ),
-    }?;
-    let Some(launch) = launch else {
-        return Ok(None);
-    };
-    if let Some(team) = team {
-        rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
-    }
-    crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
-    if let Some(channel) = args.launch.cohort.channel.as_deref() {
-        rimz::channel::admit_launch(workspace, channel)?;
-    }
-    let room_channel = rimz::harness::spec::resolve_room_channel(
-        &workspace.project_root,
-        &launch.cwd,
-        team_name.as_deref(),
-        explicit_channel,
-    );
-    let mut launch_requests = launch_identity_requests(
-        &layout,
-        args.launch.name.as_deref(),
-        launch.generated_name(),
-        team_name.as_deref(),
-        team.map(|team| team.roles.as_slice()),
-        room_channel.as_deref(),
-        prompt.zip(prompt_agent_index),
-        None,
-        ancestry.as_ref(),
-    )?;
-    for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
-        request.login = rimz::store::writer::LaunchLogin::Pinned(login);
-    }
-    if let Some(index) = prompt_agent_index {
-        launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
-    }
-    let launch_batch = store.begin_agent_launch_batch(
-        &launch_requests,
-        AgentLaunchScope {
-            session_name: workspace.session_name.clone(),
-            cwd: launch.cwd.clone(),
-            branch: launch.branch.clone(),
-            description: args.launch.cohort.description.clone(),
-        },
-    )?;
-    let peer_prompt = prepare_peer_prompt(
-        store,
-        launch_batch.identities(),
-        &launch.cwd,
-        super::report_to(args.launch.cohort.detach),
-    )
-    .inspect_err(|_| {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-    })?;
-    let fail_peer_prompt = || {
-        if let Some((peer, _)) = &peer_prompt {
-            match rimz::harness::run::fail_peer_run(store, peer, "peer launch failed") {
-                Ok(Some(_)) => {
-                    if let Some((_, launcher)) = peer.launcher() {
-                        rimz::harness::orphan_sweep::spawn_digest_helper(
-                            store.runtime_paths(),
-                            launcher.clone(),
-                        );
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => tracing::warn!(%error, "could not fail peer launch run"),
-            }
-        }
-    };
-    let cleanup_worktree = launch.owns_checkout_lifecycle();
-    let worktree_name = launch.worktree_name.clone();
-    let cwd = launch.cwd;
-    let title = room_channel.as_deref().map_or_else(
-        || {
-            rimz::harness::spec::default_tab_title(
-                &layout,
-                worktree_name.as_deref(),
-                team_name.as_deref(),
-            )
-        },
-        |channel| format!("#{channel}"),
-    );
-    let sidebar = room.sidebar_options(&cwd);
-    let mut panes = compile_layout_panes(
-        &layout,
-        LayoutPaneParams {
-            runtime: store.runtime_paths(),
-            cwd: &cwd,
-            cleanup_worktree,
-            in_place,
-            resume_seeds: None,
-            launch_identities: launch_batch.identities(),
-            fallback_channel: None,
-            loop_reminder: loop_fire.map(|(_, reminder)| reminder),
-        },
-    )
-    .inspect_err(|_| {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-        fail_peer_prompt();
-    })?;
-    panes.focused_pane = team_leader_pane(&layout, team);
-    super::placement::execute(
-        backend,
-        store,
-        &launch_batch,
-        PlacementRequest {
-            placement,
-            mux,
-            tab_anchor: super::placement::resolve_tab_anchor(
+            &launch_batch,
+            PlacementRequest {
                 placement,
-                team_name.is_some(),
-                rimz::mux::own_pane_id(mux),
-                crate::cli::pinned_room_root().as_deref(),
-                &workspace.project_root,
-            ),
-            cwd: cwd.clone(),
-            title,
-            panes,
-            sidebar,
-            identity_env: rimz::room::pane_identity_env(
-                workspace,
-                &cwd,
-                room_channel.as_deref(),
-                !worktree_launch && loop_task.is_none(),
-            ),
-            focus,
-            errors: LAUNCH_PLACEMENT_ERRORS,
-        },
-        || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
-    )
-    .inspect_err(|_| fail_peer_prompt())?;
-    Ok(Some(LaunchedLayout {
-        identities: launch_batch.identities().to_vec(),
-        leader_index: receipt_leader_index,
-        team: team_name
-            .as_deref()
-            .zip(team)
-            .map(|(name, team)| (name.to_owned(), team.clone())),
-        channel: room_channel,
-        cwd,
-        in_place,
-        peer: peer_prompt.map(|(_, run)| run),
+                mux,
+                tab_anchor: super::placement::resolve_tab_anchor(
+                    placement,
+                    team_name.is_some(),
+                    rimz::mux::own_pane_id(mux),
+                    crate::cli::pinned_room_root().as_deref(),
+                    &workspace.project_root,
+                ),
+                cwd: cwd.clone(),
+                title,
+                panes,
+                sidebar,
+                identity_env: rimz::room::pane_identity_env(
+                    workspace,
+                    &cwd,
+                    room_channel.as_deref(),
+                    !worktree_launch && loop_task.is_none(),
+                ),
+                focus,
+                errors: LAUNCH_PLACEMENT_ERRORS,
+            },
+            || rimz::harness::assist_log::record_tier_fallbacks(launch_batch.identities()),
+        )
+        .inspect_err(|_| fail_peer_prompt())?;
+        Ok(Some(LaunchedLayout {
+            identities: launch_batch.identities().to_vec(),
+            leader_index: receipt_leader_index,
+            team: team_name
+                .as_deref()
+                .zip(team)
+                .map(|(name, team)| (name.to_owned(), team.clone())),
+            channel: room_channel,
+            cwd,
+            in_place,
+            peer: peer_prompt.map(|(_, run)| run),
+        }))
     }))
 }
 
@@ -939,6 +980,7 @@ fn preflight_cell(
     isolation: rimz::config::Isolation,
     prompt: Option<&str>,
     checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
+    unattended: Option<crate::cli::folder_trust::Unattended>,
 ) -> Result<rimz::ids::LoginName> {
     let adapter = rimz::agents::find_definition(cell.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
@@ -992,19 +1034,15 @@ fn preflight_cell(
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
-    if checked_folder_trust.insert(login.key())
-        && let Some(rimz::agents::FolderTrust::Undecided(gap)) = adapter.folder_trust(
-            &workspace.worktree_root,
-            Some(workspace.launch_repo_root()),
-            &login.env(&rimz::agents::ambient_env()),
-        )
-    {
-        writeln!(
-            crate::cli::render::err(),
-            "rimz: {} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
-            cell.kind,
-            gap.key.display(),
-            gap.fix(cell.kind.as_str())
+    if checked_folder_trust.insert(login.key()) {
+        crate::cli::folder_trust::preflight(
+            cell.kind.as_str(),
+            adapter.folder_trust(
+                &workspace.worktree_root,
+                Some(workspace.launch_repo_root()),
+                &login.env(&rimz::agents::ambient_env()),
+            ),
+            unattended,
         )?;
     }
     Ok(login.name().clone())
@@ -1110,6 +1148,9 @@ fn launch_resume_layout(
             ),
             None,
             &mut checked_folder_trust,
+            team_name
+                .as_ref()
+                .map(|_| crate::cli::folder_trust::Unattended::Team),
         )?;
         if matches!(seed, rimz::harness::plan::CohortSeed::Fresh) {
             preflighted_logins.push(login);

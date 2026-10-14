@@ -79,6 +79,73 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
 }
 
 #[test]
+fn saved_untrusted_warns_for_agents_and_refuses_teams() {
+    for team in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("codex");
+        crate::common::trust_codex_preflight_hooks(&env);
+        crate::common::trust_codex_project(&env, &env.project_root);
+        let config = env.agent_config_path("codex");
+        let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        table["projects"][env.project_root.to_str().unwrap()]["trust_level"] = "untrusted".into();
+        let original = toml::to_string(&table).unwrap();
+        std::fs::write(&config, &original).unwrap();
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "worker",
+            "description: Worker\nagent: codex\ntools: []",
+            "",
+        );
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "solo",
+            "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
+            "Complete the work.",
+        );
+        let shim = crate::common::write_failing_agent_shim(&env, "codex", 1);
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store().record_workspace(&workspace).unwrap();
+        let trace = env.home_root.join("mux.log");
+        let mut command = env.rimz();
+        command.args(["--mux", "zellij"]);
+        if team {
+            command.args(["teams", "solo", "--bg"]);
+        } else {
+            command.args(["agents", "codex", "--bg", "--new-pane"]);
+        }
+        let output = command
+            .env("PATH", path_with_front(&shim))
+            .env("ZELLIJ_PANE_ID", "1")
+            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("saved untrusted"), "{stderr}");
+        assert!(stderr.contains("Open restricted"), "{stderr}");
+        assert!(!stderr.contains("rimz trust grant"), "{stderr}");
+        assert_eq!(output.status.success(), !team, "{stderr}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        if team {
+            assert!(env.store().snapshot().unwrap().agents.is_empty());
+            assert!(!trace.exists(), "preflight must not invoke the mux");
+        }
+    }
+}
+
+#[test]
 fn agent_launch_tab_keeps_focus() {
     assert_launch_focus(&["agents", "claude", "--new-tab"], true, "new-tab");
 }

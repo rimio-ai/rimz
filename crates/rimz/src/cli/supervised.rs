@@ -118,12 +118,9 @@ fn preflight_agent(
         &launch.cwd,
         launch.repo_root.as_deref(),
         &login_env,
+        rimz::agents::LaunchDirMode::Supervised,
     ) {
-        bail!(
-            "`rimz agents -p` cannot start {kind} in `{}`: {kind} has not recorded a trust decision for that directory and would stop at its trust prompt instead of taking the task; {}",
-            launch.cwd.display(),
-            error.fix
-        );
+        bail!("`rimz agents -p` supervised launch refused: {error}");
     }
     Ok(())
 }

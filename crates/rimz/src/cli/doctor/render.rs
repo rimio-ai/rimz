@@ -1422,15 +1422,18 @@ fn render_folder_trust(
     }
     let mut table = Table::new(["", "AGENT", "LOGIN", "STATUS", "FIX"]);
     for row in &trust.rows {
-        if let State::Undecided { fix, .. } = &row.state {
-            table.row([
-                badge(tally, Health::Warn),
-                cell(row.kind),
-                cell(row.login.as_str()),
-                cell("undecided").fg(style_of(Health::Warn)),
-                cell(fix),
-            ]);
-        }
+        let (status, fix) = match &row.state {
+            State::Decided => continue,
+            State::Undecided { fix, .. } => ("undecided", fix),
+            State::Restricted { fix, .. } => ("restricted (saved untrusted)", fix),
+        };
+        table.row([
+            badge(tally, Health::Warn),
+            cell(row.kind),
+            cell(row.login.as_str()),
+            cell(status).fg(style_of(Health::Warn)),
+            cell(fix),
+        ]);
     }
     table.render(w)
 }

@@ -198,8 +198,53 @@ fn trust_status_json_emits_canonical_fields() {
 
 #[cfg(unix)]
 #[test]
+fn saved_untrusted_folder_is_reported_and_never_granted() {
+    let env = Env::new();
+    let bin = write_env_dump_shim(&env, "codex");
+    let config = env.home_root.join("codex.toml");
+    let original = format!(
+        "# keep this decision\n[projects.{}]\ntrust_level = \"untrusted\"\n",
+        toml::Value::String(env.project_root.display().to_string())
+    );
+    std::fs::write(&config, &original).unwrap();
+    let command = || {
+        let mut cmd = env.rimz();
+        cmd.env("PATH", &bin).env("RIMZ_CODEX_CONFIG", &config);
+        cmd
+    };
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["agents"][0]["state"], "restricted");
+    assert_eq!(
+        report["agents"][0]["key"],
+        env.project_root.display().to_string()
+    );
+    assert!(
+        report["agents"][0]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("Open restricted")
+    );
+    command()
+        .args(["trust", "grant", "--agents", "codex"])
+        .assert()
+        .failure()
+        .stderr(contains("saved untrusted"));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    command()
+        .args(["trust", "grant", "--agents"])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
 fn folder_trust_status_grant_and_revoke_scope() {
     let env = Env::new();
+    std::fs::create_dir(env.project_root.join(".git")).unwrap();
+    std::fs::write(env.project_root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let bin = write_env_dump_shim(&env, "codex");
     let config = env.home_root.join("codex.toml");
     std::fs::write(&config, "# preserved\n").unwrap();

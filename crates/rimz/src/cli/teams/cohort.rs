@@ -159,7 +159,13 @@ pub(super) fn restart(team: &str, worktree: Option<&str>, globals: &GlobalFlags)
     let mut out = render::out();
     for agent in cohort.members.iter().copied() {
         let label = rimz::address::agent_handle(agent, &peers, true);
-        match agents_cmd::restart_resolved(&ctx, agent, &peers, focus) {
+        match agents_cmd::restart_resolved(
+            &ctx,
+            agent,
+            &peers,
+            focus,
+            Some(crate::cli::folder_trust::Unattended::Team),
+        ) {
             Ok(message) => writeln!(out, "{message}")?,
             Err(err) => {
                 failed = true;

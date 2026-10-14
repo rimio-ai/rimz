@@ -124,9 +124,11 @@ All three exit 0 whatever the state, and 1 when configuration or a grant record 
 
 ### Agent folder trust
 
-Every report adds an `agents:` section for detected Codex and Claude binaries, using this room's account for each kind; outside a room it follows the trusted project, then machine, then provider default, as a new room there would. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`.
+Every report adds an `agents:` section for detected Codex and Claude binaries, using this room's account for each kind; outside a room it follows the trusted project, then machine, then provider default, as a new room there would. `decided` means the provider will not ask its folder-trust question; `undecided` includes a fix. `restricted (saved untrusted)` means Codex will show Folder access on every launch: pick Open restricted in the pane, or trust the folder in Codex. JSON adds `agents`, with `kind`, `login`, and `state`; undecided rows also carry `key`, `path`, and `fix`, while restricted rows carry `key` and `fix`. `rimz doctor --json` uses the same folder-trust states.
 
 After the project grant, `rimz trust grant` on a terminal shows proposed provider-file diffs and asks `Also trust this folder for <kinds>?`, default No. Without a terminal it only prints the command to grant; provider files stay untouched. `--agents` explicitly authorizes writes without a question: bare `--agents` selects all undecided kinds, while `--agents codex,claude` or repeated `--agents` selects named kinds. The diffs still print before writes. Already-decided named kinds are left unchanged. Any `rimz trust grant` clears the workspace's remembered folder-trust decline; automatic project re-grants after `rimz loop` edits do not.
+
+Restricted rows are never offered a grant or selected by bare `--agents`. Explicitly naming a Restricted kind writes nothing for it and exits 1: RimZ does not change a saved untrusted decision. `rimz start` prints its fix on every start without adding it to the grant question or remembered declines.
 
 The grant covers the main repository root, including its worktrees, in the room's selected account home for each provider. Codex accounts linked to the same `config.toml` share the grant; Claude's `.claude.json` stays per account. Outside Git, the provider's folder rules apply. An unreadable or malformed file is not overwritten; the fix names what to repair. A provider file changed since the preview causes a refusal to overwrite it. Undo a provider grant in that provider's configuration; `rimz trust revoke` only controls RimZ project config. See [folder trust for agents](../../guide/security.md#folder-trust-for-agents) for what these grants enable.
 
@@ -173,7 +175,7 @@ The hash and grant lines appear only when they have a value. `--json` prints one
 | `current_hash` | `sha256:<hex>` of the live surface, or `null` with no config |
 | `granted_hash`, `granted_at` | The grant's hash and RFC 3339 time, or `null` with no grant |
 | `surface_diff` | `null`, or an array of `{kind, path, granted, current}` where `kind` is `added`, `removed`, or `changed`, `path` is an array of segments, and `granted` or `current` is omitted when that side has no value |
-| `agents` | Folder-trust rows: `kind`, `login`, `state` (`decided` or `undecided`); undecided rows add `key`, `path`, and `fix` |
+| `agents` | Folder-trust rows: `kind`, `login`, `state` (`decided`, `undecided`, or `restricted`); undecided rows add `key`, `path`, and `fix`; restricted rows add `key` and `fix` |
 
 `surface_diff` is set on `status` for a `stale` project, and on `grant` when the grant replaced one with a different hash.
 

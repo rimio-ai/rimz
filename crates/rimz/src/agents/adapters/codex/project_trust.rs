@@ -60,9 +60,8 @@ pub(super) fn trust_gap_at(config: &Path, cwd: &Path, repo_root: Option<&Path>) 
         .project_root_markers
         .as_deref()
         .unwrap_or(&default_markers);
-    let project_root = cwd
-        .ancestors()
-        .find(|ancestor| {
+    let find_root = |markers: &[String]| {
+        cwd.ancestors().find(|ancestor| {
             markers.iter().any(|marker| {
                 let path = ancestor.join(marker);
                 let Ok(metadata) = path.metadata() else {
@@ -71,29 +70,32 @@ pub(super) fn trust_gap_at(config: &Path, cwd: &Path, repo_root: Option<&Path>) 
                 marker != ".git" || !metadata.is_dir() || path.join("HEAD").metadata().is_ok()
             })
         })
-        .unwrap_or(cwd);
+    };
+    let project_root = find_root(markers);
 
-    for candidate in [Some(cwd), Some(project_root), repo_root]
-        .into_iter()
-        .flatten()
-    {
+    for candidate in [Some(cwd), project_root, repo_root].into_iter().flatten() {
         let canonical = candidate.canonicalize().ok();
         for key in canonical
             .as_deref()
             .into_iter()
             .chain(std::iter::once(candidate))
         {
-            if trust
+            match trust
                 .projects
                 .get(key.to_string_lossy().as_ref())
-                .is_some_and(|project| project.trust_level.is_some())
+                .and_then(|project| project.trust_level.as_ref())
             {
-                return FolderTrust::Decided;
+                Some(TrustLevel::Trusted) => return FolderTrust::Decided,
+                Some(TrustLevel::Untrusted) => return FolderTrust::Restricted { key: key.into() },
+                None => {}
             }
         }
     }
 
-    let key = repo_root.unwrap_or(project_root);
+    if project_root.is_none() && find_root(&default_markers).is_none() {
+        return FolderTrust::Decided;
+    }
+    let key = repo_root.unwrap_or(project_root.unwrap_or(cwd));
     let key = key.canonicalize().unwrap_or_else(|_| key.into());
     if !document.contains_key("projects") {
         let mut projects = toml_edit::Table::new();

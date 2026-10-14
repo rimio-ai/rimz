@@ -294,7 +294,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 A supervised run refuses at entry, before it writes a run record or opens a pane, when:
 
 - RimZ's hooks for the agent are not installed and trusted, because hooks are the completion signal;
-- a Codex run's launch directory has no recorded Codex trust decision, because Codex would open its directory-trust screen and never read the prompt (run `rimz trust grant --agents codex` there, or answer that screen once in an interactive `codex` session);
+- a Codex project has no recorded trust decision, because Codex would open its directory-trust screen and never read the prompt (run `rimz trust grant --agents codex` there, or answer that screen once in an interactive `codex` session); a folder saved as untrusted also refuses, since its Folder access prompt recurs on every launch. RimZ leaves that decision alone; trust the folder in Codex before a supervised run. Projectless folders without a saved decision pass;
 - the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
 
@@ -306,7 +306,7 @@ Run records, the completion wakeup, streaming, and pane cleanup are described in
 
 Every launch RimZ performs checks the account it launches under, `default` included. An interactive agent or team launch, a cohort or lane resume, a [`restart`](#restart), a [`fork`](#fork), and a parent's message that [resumes an ended child](./subagents.md#follow-up-messages) refuse when that account's home is not a directory or RimZ's hooks there are not installed and trusted. The refusal comes before any pane opens or closes and before any record is written, and names the fix: `rimz hooks install <agent>` for `default`, `rimz accounts add <agent> <name>` for a named account, and the provider's own `/hooks` screen for hooks it has not trusted. Only the launched provider's account is judged. A plugin kind declares no home for RimZ to check, so it passes. [`rimz start`](./getting-started.md#start-the-room) is the one lenient entry: it refuses a broken named account and lets a room open on a broken `default`.
 
-The same launches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Claude's supervised runs do not require folder trust because its headless mode skips that dialog.
+Attended agent launches and relaunches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Saved-untrusted Codex folders also warn on attended agent commands, but refuse on team commands and supervised launches or resumes; see [agent folder trust](./hooks-trust.md#agent-folder-trust). Claude's supervised runs do not require folder trust because its headless mode skips that dialog.
 
 ## Resume agents
 

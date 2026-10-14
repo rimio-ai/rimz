@@ -93,7 +93,7 @@ pub(super) fn run_one(
         mode,
         keep,
         Timestamp::now(),
-        config,
+        config.clone(),
         signal,
         check_echo,
         started,
@@ -165,14 +165,6 @@ pub(super) fn run_one(
                 let mut launch_globals = globals.clone();
                 launch_globals.root = Some(root.clone());
                 let ctx = crate::cli::ctx::Ctx::open(&launch_globals)?;
-                let stopped = if entry.takeover {
-                    match take_over_checkout(&ctx, &launch_globals, &root, &cwd)? {
-                        ControlFlow::Continue(stopped) => stopped,
-                        ControlFlow::Break(blocked) => return Ok(blocked),
-                    }
-                } else {
-                    Vec::new()
-                };
                 let mut launch = crate::cli::agents_cmd::AgentLaunchArgs {
                     spec: Some(spec),
                     prompt: Some(prompt),
@@ -185,16 +177,24 @@ pub(super) fn run_one(
                 launch.overrides.effort = entry.effort.clone();
                 launch.overrides.fast = entry.fast == Some(true);
                 launch.overrides.no_fast = entry.fast == Some(false);
-                let launched = crate::cli::agents_cmd::launch::launch_resolved(
+                let execute = crate::cli::agents_cmd::launch::launch_resolved(
                     launch,
                     &launch_globals,
                     false,
                     &ctx,
-                    MachineConfig::load_lenient(),
-                    Some(cwd),
+                    config.clone(),
+                    Some(cwd.clone()),
                     Some((name, &loop_reminder)),
-                )?
-                .context("resident launch aborted")?;
+                )?;
+                let stopped = if entry.takeover {
+                    match take_over_checkout(&ctx, &launch_globals, &root, &cwd)? {
+                        ControlFlow::Continue(stopped) => stopped,
+                        ControlFlow::Break(blocked) => return Ok(blocked),
+                    }
+                } else {
+                    Vec::new()
+                };
+                let launched = execute()?.context("resident launch aborted")?;
                 let leader = launched
                     .leader_index
                     .and_then(|index| launched.identities.get(index))
