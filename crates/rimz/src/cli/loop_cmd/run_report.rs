@@ -497,37 +497,6 @@ pub(super) fn render_record_detail(
     Ok(())
 }
 
-pub(super) fn write_failure_pointer(
-    out: &mut impl Write,
-    name: &str,
-    record: &LoopRunRecord,
-    now: Timestamp,
-) -> std::io::Result<()> {
-    write!(
-        out,
-        "{}",
-        ui::paint(ui::palette::muted(), "  last failure — ")
-    )?;
-    let status = render::run_status(record);
-    write!(
-        out,
-        "{}",
-        ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
-    )?;
-    writeln!(
-        out,
-        "{}",
-        ui::paint(
-            ui::palette::muted(),
-            &format!(
-                " · {} · {} · dig in: rimz loop logs {name} --failed",
-                ui::rel_age(record.at, now),
-                record.mode.map_or("legacy", LoopRunMode::label)
-            )
-        )
-    )
-}
-
 pub(super) fn write_record_forensics(
     out: &mut impl Write,
     entry: Option<&TaskEntry>,

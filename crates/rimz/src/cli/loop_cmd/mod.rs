@@ -403,6 +403,9 @@ struct LogsArgs {
     /// Print only runs that failed.
     #[arg(long)]
     failed: bool,
+    /// Include sibling signals heard without firing the task.
+    #[arg(long)]
+    heard: bool,
 }
 
 #[derive(Debug, Args)]

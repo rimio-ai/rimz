@@ -46,14 +46,27 @@ fn acting_history_and_heard_are_not_skips() {
             .map(|name| (name.into(), task(&env.project_root)))
             .into(),
     );
+    let mut acted = record("acted", &env.project_root, LoopRunResult::Completed, 10);
+    acted.check = Some(
+        serde_json::from_value(json!({
+            "code": 0, "timed_out": false, "output": "1\n2\n3\n4\n5\n6\n7\n"
+        }))
+        .unwrap(),
+    );
     write_loop_run_records(
         &env,
         &[
-            record("acted", &env.project_root, LoopRunResult::Completed, 10),
+            acted,
             record("acted", &env.project_root, LoopRunResult::SignalSkipped, 7),
             record("acted", &env.project_root, LoopRunResult::SignalSkipped, 6),
             record("acted", &env.project_root, LoopRunResult::SignalSkipped, 5),
             record("heard", &env.project_root, LoopRunResult::SignalSkipped, 3),
+            record(
+                "retired",
+                &env.project_root,
+                LoopRunResult::SignalSkipped,
+                2,
+            ),
         ],
     );
     let text = loop_ok(&env, &["loop", "list"]);
@@ -62,7 +75,38 @@ fn acting_history_and_heard_are_not_skips() {
         text.contains("heard ci.passed 3m ago") && !text.contains("skipped"),
         "{text}"
     );
-    assert!(loop_ok(&env, &["loop", "show", "acted"]).contains("healthy"));
+    let show = loop_ok(&env, &["loop", "show", "acted"]);
+    assert!(show.contains("healthy"));
+    assert!(show.contains("LAST RUN — ✓ completed"), "{show}");
+    assert!(
+        show.contains("heard 3 other ci.* signals since, latest ci.passed 5m ago"),
+        "{show}"
+    );
+    assert!(
+        show.contains("RECENT RUNS (newest first · 1 of 1)"),
+        "{show}"
+    );
+    assert!(show.contains("rimz loop logs acted -n 1"), "{show}");
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "acted", "--json"])).unwrap();
+    assert_eq!(value["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(value["heard"]["count"], 3);
+    assert_eq!(value["heard"]["latest"], "ci.passed");
+    assert_eq!(value["heard"]["since"], value["runs"][0]["at"]);
+    let logs = loop_ok(&env, &["loop", "logs", "acted"]);
+    assert!(!logs.contains("ci.passed"), "{logs}");
+    let logs = loop_ok(&env, &["loop", "logs", "acted", "--heard", "-n", "2"]);
+    assert_eq!(logs.matches("○ heard").count(), 2, "{logs}");
+    let logs = loop_ok(&env, &["loop", "logs", "retired"]);
+    assert!(
+        logs.contains("rimz loop logs retired --heard") && !logs.contains("loop fire"),
+        "{logs}"
+    );
+    let show = loop_ok(&env, &["loop", "show", "heard"]);
+    assert!(
+        show.contains("heard 1 other ci.* signal, latest ci.passed 3m ago"),
+        "{show}"
+    );
 }
 
 #[test]
@@ -105,12 +149,17 @@ fn show_reused_wait_names_ignore_history_before_arming() {
     );
     let text = loop_ok(&env, &["loop", "show", "wait-reused"]);
     assert!(
-        text.contains("no runs recorded") && !text.contains("LAST RUN"),
+        text.contains("not fired yet") && !text.contains("loop fire") && !text.contains("LAST RUN"),
         "{text}"
     );
     let value: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "wait-reused", "--json"])).unwrap();
     assert!(value["runs"].as_array().unwrap().is_empty(), "{value}");
+    let logs = loop_ok(&env, &["loop", "logs", "wait-reused", "--heard"]);
+    assert!(
+        logs.contains("not fired yet") && !logs.contains("loop fire"),
+        "{logs}"
+    );
     let mut current = record(
         "wait-reused",
         &env.project_root,

@@ -369,7 +369,7 @@ fn write_lane(
         armed.push_lines(
             "signals",
             signals.into_iter().map(|(member, signal)| {
-                let (fire, style) = signal_fire(signal.fired.as_ref(), now);
+                let (fire, style) = signal_fire(signal.fired.as_ref(), signal.heard.as_ref(), now);
                 let lead = format!("{} → {} · ", signal.selector, member.handle);
                 let room =
                     width.saturating_sub(SIGNALS_PREFIX_WIDTH + lead.width() + fire.width() + 3);
@@ -448,13 +448,22 @@ fn write_lane(
     Ok(())
 }
 
-fn signal_fire(fired: Option<&SignalFire>, now: jiff::Timestamp) -> (String, anstyle::Style) {
+fn signal_fire(
+    fired: Option<&SignalFire>,
+    heard: Option<&rimz::harness::schedule::run_log::HeardSignal>,
+    now: jiff::Timestamp,
+) -> (String, anstyle::Style) {
     let Some(fired) = fired else {
+        if let Some(heard) = heard {
+            return (
+                format!("heard {} {}", heard.signal, render::rel_age(heard.at, now)),
+                render::palette::muted(),
+            );
+        }
         return ("never fired".to_owned(), render::palette::muted());
     };
     let (label, style) = match fired.result {
         LoopRunResult::Delivered => ("fired", render::palette::good()),
-        LoopRunResult::SignalSkipped => ("skipped", render::palette::muted()),
         LoopRunResult::TargetGone | LoopRunResult::Errored | LoopRunResult::StartFailed => {
             (fired.result.label(), render::palette::alarm())
         }
@@ -567,6 +576,7 @@ mod tests {
                     name: "team-forge-feat-x-planner-ci-failed".to_owned(),
                     selector: "ci.failed".to_owned(),
                     matches: BTreeMap::from([("path".to_owned(), "/repo/feat-x".to_owned())]),
+                    heard: None,
                     fired: Some(super::super::list::SignalFire {
                         at: jiff::Timestamp::from_second(60).unwrap(),
                         result: LoopRunResult::Delivered,
