@@ -556,10 +556,8 @@ fn runtime_gc_reaps_stale_probe_markers() {
     let shared = temp.path().join("rimz").join("shared");
     fs::create_dir_all(&shared).unwrap();
     let nonce = "00000000000000000000000000000000";
-    let stale_session = shared.join(format!("{SESSION_PROBE_MARKER_PREFIX}{nonce}"));
-    let recent_session = shared.join(format!(
-        "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
-    ));
+    let stale_session = shared.join(format!("session-context-probe.{nonce}"));
+    let recent_session = shared.join("session-context-probe.11111111111111111111111111111111");
     let accounts = shared.join("accounts.json");
     let lock = shared.join("accounts.lock");
     let trace = shared.join("rate_limits_trace.jsonl");
@@ -570,7 +568,7 @@ fn runtime_gc_reaps_stale_probe_markers() {
     for path in [&stale_session, &accounts, &lock, &trace] {
         fs::File::open(path).unwrap().set_modified(old).unwrap();
     }
-    let recently_dead = SystemTime::now() - (SESSION_PROBE_MARKER_TTL + Duration::from_secs(1));
+    let recently_dead = SystemTime::now() - Duration::from_secs(301);
     fs::File::open(&recent_session)
         .unwrap()
         .set_modified(recently_dead)
@@ -586,9 +584,9 @@ fn runtime_gc_reaps_stale_probe_markers() {
     )
     .unwrap();
 
-    assert_eq!(report.probe_markers_removed, 2);
+    assert_eq!(report.probe_markers_removed, 1);
     assert!(!stale_session.exists());
-    assert!(!recent_session.exists());
+    assert!(recent_session.exists());
     assert!(accounts.exists());
     assert!(lock.exists());
     assert!(trace.exists());

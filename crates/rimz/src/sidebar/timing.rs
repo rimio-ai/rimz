@@ -217,11 +217,6 @@ pub(super) const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3
 /// sustained stall rather than that ordinary I/O window.
 pub(super) const PROCESS_D_STATE_STUCK_AFTER: Duration = Duration::from_secs(10);
 
-/// Minimum gap between out-of-band session context refreshes for one target.
-/// The producer checks every data tick, but budget windows move on the scale of
-/// minutes.
-pub(super) const SESSION_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-
 /// Minimum gap between Codex daemon ghost-reap probes. A failed daemon control
 /// socket attempt can burn the full 2s deadline, so success and failure share
 /// one coarse cache stamp and the fetch lane only reads it.

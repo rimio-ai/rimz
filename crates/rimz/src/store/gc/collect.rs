@@ -4,10 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::{
-    GcErr, GcReport, Result, SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL,
-    read_dir_if_exists,
-};
+use super::{GcErr, GcReport, Result, read_dir_if_exists};
 use crate::disk::paths::Class;
 use crate::ids::SidebarInstanceId;
 #[cfg(test)]
@@ -289,12 +286,7 @@ fn collect_stale_probe_markers(
             continue;
         };
         let path = entry.path();
-        let threshold = if name.starts_with(SESSION_PROBE_MARKER_PREFIX) {
-            older_than.min(SESSION_PROBE_MARKER_TTL)
-        } else {
-            older_than
-        };
-        if !is_probe_marker(name) || !is_older_than(&path, threshold)? {
+        if !is_probe_marker(name) || !is_older_than(&path, older_than)? {
             continue;
         }
         sweep.remove_file_if_exists(

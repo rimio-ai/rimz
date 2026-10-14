@@ -1099,6 +1099,7 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
     /// is too frequent. Local transcript usage has its own stat-gated inline
     /// refresh below, where the local session index also supplies the automatic
     /// thread name.
+    /// Explicit card refresh also requests this helper; periodic passes read only local context.
     fn context_refresh_spawn(
         &self,
         trigger: RefreshTrigger<'_>,

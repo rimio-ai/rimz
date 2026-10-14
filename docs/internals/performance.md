@@ -105,6 +105,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
+| Live-session context | Stat-gated local reads, no context-helper subprocess | Every refresher pass; rich session metadata refreshes at hook boundaries or on explicit refresh, account windows through the per-login usage lane |
 | Git diff stats per root | Unchanged HEAD: about 2 `git` forks. Fallback or ancestry change: about 6 | `DIFF_STATS_TTL` hot, `DIFF_STATS_IDLE_TTL` idle, per root; the sweep runs at most `MAX_PARALLEL_GIT` (8) roots at once |
 | Worktree roots | One `git worktree list` fork plus one marker read per root | `WORKTREE_ROOTS_TTL`; no child scans in a directory room |
 | PR state per repo | GitHub batches branch PRs and distinct HEAD rollups, plus one repository open-set alias in the first batch when a non-trunk target exists, within the 100-alias budget. Merge-queue state rides the existing open-facts alias and costs no alias or request, but a queued PR keeps its repository on the hot tier until it leaves the queue. Tea reads base branches from its one open-list call, so stacks cost no extra request; Tea adds a per-branch read only when a PR leaves the open set | `PR_STATE_HOT_TTL` and `PR_STATE_TTL`; failures back off and keep the last known map; Tea closed links, and merged links with a settled CI verdict, are pinned ([state.md](./sidebar/state.md#pr-state)) |

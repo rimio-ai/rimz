@@ -17,6 +17,23 @@ use serde_json::{Value, json};
 use crate::common::{Env, codex_appserver_stub};
 
 #[test]
+fn explicit_card_refresh_still_spawns_context_helper() {
+    let harness = crate::common::Harness::new();
+    let snapshot = harness.store.snapshot().unwrap();
+    let agent =
+        rimz::testkit::agent_state("codex", "explicit-refresh", jiff::Timestamp::UNIX_EPOCH);
+    let before = rimz::testkit::spawn_count();
+    let refreshed = rimz::sidebar::refresh::force_refresh_session_context(
+        &snapshot,
+        &harness.runtime_paths,
+        &agent,
+    )
+    .unwrap();
+    assert!(refreshed.helper_spawned);
+    assert!(rimz::testkit::spawn_count() > before);
+}
+
+#[test]
 fn old_login_context_refresh_does_not_connect_to_room_broker() {
     let env = Env::new();
     assert!(

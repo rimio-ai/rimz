@@ -1,11 +1,25 @@
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::time::{Duration, SystemTime};
 
 use super::*;
 use crate::RuntimePaths;
 use crate::ids::WorkspaceId;
 use crate::sidebar::test_support::{provider_panel, rl_window, root_agent, snapshot_with_panels};
+
+#[test]
+fn live_session_refresh_spawns_no_helpers() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let mut snapshot = snapshot_with_panels(workspace, Vec::new());
+    for session in ["stale-one", "stale-two", "stale-three"] {
+        std::sync::Arc::make_mut(&mut snapshot.agents).push(root_agent("codex", session, None));
+    }
+    let before = crate::proc::testkit::spawn_count();
+    refresh_live_sessions(&snapshot, &runtime);
+    assert_eq!(crate::proc::testkit::spawn_count() - before, 0);
+}
 
 #[test]
 fn live_session_refreshes_target_live_root_sessions() {
@@ -71,74 +85,6 @@ fn live_session_refreshes_target_live_root_sessions() {
         }],
         "a live sidecar refreshes even with no model hint"
     );
-}
-
-/// The per-session throttle marker gates the app-server refresh: the first call
-/// is due (and touches the marker), the immediate next is not.
-#[test]
-fn session_probe_throttles_per_kind_and_session() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    assert!(session_probe_due(&runtime, "codex", "sess/one"));
-    assert!(
-        !session_probe_due(&runtime, "codex", "sess/one"),
-        "a freshly-stamped session backs off"
-    );
-    assert!(
-        session_probe_due(&runtime, "codex", "sess/two"),
-        "a different session has its own marker"
-    );
-    assert!(
-        session_probe_due(&runtime, "claude", "sess/one"),
-        "a different kind has its own marker"
-    );
-
-    let old = SystemTime::now()
-        .checked_sub(SESSION_REFRESH_INTERVAL + Duration::from_secs(1))
-        .unwrap();
-    std::fs::File::open(session_probe_marker(&runtime, "codex", "sess/one"))
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
-    assert!(
-        session_probe_due(&runtime, "codex", "sess/one"),
-        "the session becomes due again after the 60s interval"
-    );
-}
-
-#[test]
-fn reap_removes_stale_session_probe_markers() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let stale_session = runtime.shared_root.join(format!(
-        "{SESSION_PROBE_MARKER_PREFIX}00000000000000000000000000000000"
-    ));
-    let fresh_session = runtime.shared_root.join(format!(
-        "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
-    ));
-    let accounts = runtime.shared_root.join("accounts.json");
-    for path in [&stale_session, &fresh_session, &accounts] {
-        std::fs::write(path, b"").unwrap();
-    }
-    let old = SystemTime::now()
-        .checked_sub(SESSION_PROBE_MARKER_TTL + Duration::from_secs(1))
-        .unwrap();
-    std::fs::File::open(&stale_session)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
-
-    reap_stale_session_probe_markers(&runtime);
-
-    assert!(!stale_session.exists());
-    assert!(fresh_session.exists());
-    assert!(accounts.exists());
 }
 
 #[test]

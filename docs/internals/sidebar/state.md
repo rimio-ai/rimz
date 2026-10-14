@@ -494,7 +494,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 | Agent projection | Every producer data tick, paying metadata checks only while inputs are unchanged; `LOCAL_SESSION_DISCOVERY_BACKSTOP` (30 s) forces full validation | Hookless identity binding and launch admission |
 | Accounts | Per provider: `ACCOUNTS_TTL` (10 min) on success, `ACCOUNTS_RETRY_TTL` (10 s) on failure, keeping last-known-good data | Provider dashboard login, plan, and account state |
 | Account usage and credits | `OAUTH_USAGE_TTL` (5 min) for reads ([providers.md](../agents/providers.md#refresh-cadences)); `CREDITS_DISPLAY_MAX_AGE` (24 h) for display; a recorded entitlement lapse persists until a direct read settles it ([entitlement](../agents/providers.md#entitlement)) | Budget bars, the paid and extra usage row, the Codex reset marker; a lapse suppresses the plan and balances |
-| Live-session context | `SESSION_REFRESH_INTERVAL` (60 s) | Budget windows and session sidecars |
+| Live-session context | Every refresher pass, stat-gated local reads only | Session sidecars; account windows use the per-login usage lane |
 | Finished-cohort effort | `COHORT_SPEND_TTL` (60 s) | Finished group receipts |
 | Team pipeline | Every refresher pass, no TTL; content-identical writes suppressed | Board stage, owner, open-visit stamp, prior visit seconds, visited stages, and run start/stop |
 | Codex daemon reap | `CODEX_DAEMON_REAP_TTL` (30 s), stale after `CODEX_DAEMON_REAP_STALE` (90 s) | Codex daemon session reaping |
