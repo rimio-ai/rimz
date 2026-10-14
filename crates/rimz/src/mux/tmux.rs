@@ -144,7 +144,19 @@ pub fn legacy_session_conflict(session: &str) -> Option<LegacySessionConflict> {
 /// `$TMUX` cleared and the user's `TMPDIR` restored. The one place a managed
 /// tmux argv is built.
 pub(crate) fn tmux_cmd(socket: &Path) -> CommandSpec {
-    CommandSpec::new("tmux")
+    #[cfg(test)]
+    let program = "tmux";
+    #[cfg(not(test))]
+    let program = {
+        static TMUX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        TMUX.get_or_init(|| {
+            which::which("tmux")
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "tmux".to_owned())
+        })
+        .as_str()
+    };
+    CommandSpec::new(program)
         .args(["-S".to_owned(), socket.to_string_lossy().into_owned()])
         .args(["-u"])
         .redact_arg_in_errors(1, "server")

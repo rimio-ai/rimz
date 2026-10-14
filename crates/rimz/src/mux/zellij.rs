@@ -508,7 +508,18 @@ impl ZellijBackend {
             .or_else(|| env::var("RIMZ_ZELLIJ_BIN").ok())
             .unwrap_or_else(|| "zellij".to_owned());
         #[cfg(not(test))]
-        let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
+        let program = {
+            static ZELLIJ: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            ZELLIJ
+                .get_or_init(|| {
+                    let program =
+                        env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
+                    which::which(&program)
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or(program)
+                })
+                .as_str()
+        };
         let mut spec = CommandSpec::new(program)
             .restore_user_tmpdir(
                 env::var(crate::child_process::USER_TMPDIR_ENV)
