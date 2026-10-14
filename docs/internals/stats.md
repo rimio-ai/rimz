@@ -2,62 +2,19 @@
 
 `rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, the spend by model and by agent, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)).
 
-The command has two homes. A one-shot `rimz stats` prints the panel and returns to the shell, so it pipes and scrolls like any report. `rimz stats --refresh` holds the same panel open as a live screen, and that held pane is the default middle-column content of the `rimzd` view ([rimzd.md](./rimzd.md#what-the-view-contains)).
+The command has two homes. A one-shot `rimz stats` prints the spend-first report and returns to the shell. `rimz stats --refresh` holds the compact dashboard open as a live screen, and that held pane is the default middle-column content of the `rimzd` view ([rimzd.md](./rimzd.md#what-the-view-contains)).
 
 The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.rs). The user-facing counterparts are the [Token Insight guide](../guide/insight.md), which explains what every figure means, and the [stats CLI reference](../reference/cli/stats.md).
 
 ## What it renders
 
-A one-shot run on a machine with recorded history, default glyph set:
+The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then trailing-year Models, Agents and Subagents, an unfolded Unattributed line, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
 
-```
-                        ██████╗ ██╗███╗   ███╗  ███████╗
-                        ██╔══██╗██║████╗ ████║  ╚══███╔╝
-                        ██████╔╝██║██╔████╔██║    ███╔╝
-                        ██╔══██╗██║██║╚██╔╝██║   ███╔╝
-                        ██║  ██║██║██║ ╚═╝ ██║  ███████╗
-                        ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚══════╝
-                    The control room for your coding agents
-
-  Token activity
-
-      Nov   Dec       Jan     Feb     Mar       Apr     May     Jun       Jul
-  Mon ▒ ░ · ░ ░ ░ ░ · · · · · · · · · · · · · ░ ░ · · ▒ ▓ ▒ ░ ▒ ▒ ▓ ▓ ▓ ▒ █ █ ▓
-      ░ ░ ░ ▒ ░ ▒ · · ░ · · · · · · · · · · ░ ░ · ▒ ▒ ▓ ▒ ▒ ▒ ▒ ░ ▓ ░ ▓ ▓ █ █
-  Wed ░ ░ ░ ░ ░ ░ · · · · · · · · · · · · · ░ ░ ▒ ▓ ░ · ▒ ░ ░ ▒ ▒ ▓ ░ █ █ ▓ █
-      · ░ ░ ▒ ░ · · · · · · · ░ · · · · · · ░ ░ ▒ ▓ ▒ ▓ ▒ · ▒ ▒ ▒ █ ▒ █ █ █ █
-  Fri ░ · · ▒ ░ · · ░ · · · · · · · · · · · ░ ▒ ▒ ▓ ▒ ▒ ▒ · ▒ · ░ █ ▓ ▓ █ █ █
-      · · · ░ · · · · · · · · · · · · · · ▒ · ▒ ░ ▒ ▒ ▒ ░ ░ ▒ · ▓ ▓ ▓ █ █ ▓ █
-      · · · ▒ · · · · · · · · · · · · · · ░ ░ ▒ · · ▒ ▒ ▓ ░ ▒ ▒ ▓ ▒ █ █ ▓ ▓ █
-
-  Less · ░ ▒ ▓ █ More
-
-  All time 37.6B  ·  Week 13.2B  ·  Month 27.5B  ·  Year 37.6B
-
-  Models
-  ● GPT 5.5     $11,582 · ↘ 629.9m · ↗ 51.0m · ◌ 13.8b · 96%   36.2% ━━━━━━───────────
-  ● GPT 5.6 Sol  $9,266 · ↘ 347.3m · ↗ 34.0m · ◌ 12.9b · 97%   29.0% ━━━━━────────────
-  ● Opus 4.8     $6,411 · ↘ 210.6m · ↗ 66.9m · ◌  5.4b · 96%   20.0% ━━━──────────────
-  ● Fable 5      $3,681 · ↘  70.1m · ↗ 17.6m · ◌  1.4b · 95%   11.5% ━━───────────────
-  ● GPT 5.4        $649 · ↘  84.4m · ↗  6.9m · ◌  1.3b · 94%    2.0% ─────────────────
-  ● Other          $397 · ↘  79.2m · ↗ 11.8m · ◌  1.1b · 93%    1.2% ─────────────────
-
-  Agents
-  ● Codex       $21,808 · ◎ 4003 · ◇ 30.3B · 97%         77.6% ━━━━━━━━━━━━━────
-  ● Claude      $10,149 · ◎ 1025 · ◇  7.3B · 96%         19.9% ━━━──────────────
-  ● Other           $30 · ◎  131 · ◇   36M · 80%          2.5% ─────────────────
-
-  Sessions: 5,159              Spend: $31,986.33
-  Active days: 28/28           Longest streak: 51 days
-  Most active day: Jul 18      Current streak: 51 days
-  Cost/session: $6.20          Daily avg: $191.53
-```
-
-From the top: the wordmark, the heatmap, the windows row, the Models and Agents breakdowns, and the insight rows. An `Assists` block follows the insights when the selected window holds a counted assist; this capture has none. With no recorded days, the panel prints one muted line (`No token usage recorded yet - run an agent and check back.`) in place of everything below the wordmark, plus the assists block when it has rows.
+`panel::render_spend` owns one-shot and unfolded subagent text. `panel::render_panel` dispatches to it when no active held tab is supplied. Held frames retain their terminal fitting, wordmark, activity insights and assist counts.
 
 ## Where the figures come from
 
-Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `by_provider` become `by_day`, `by_model`, and `by_agent`.
+Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `roles.agents` become `by_day`, `by_model`, and `by_agent`; subagent tallies, unattributed spend, timezone and publication time travel with them.
 
 Three load paths in `mod.rs` answer a run:
 
@@ -71,26 +28,15 @@ A one-shot run never refreshes a current-version cache, however old. Its figures
 
 The cold walk's single flight is short. A process that finds the lock held waits up to 15 steps of 20 ms (`SPENDING_WAIT_STEPS`, `SPENDING_WAIT_STEP` in `agents/spending/engine.rs`) for a fresh publication, then walks locally without publishing. Only the lock holder writes the cache, so concurrent cold runs each pay a full walk.
 
-The cold walk shows a progress spinner (`Reading session files [bar] n/total`) only when the run is human-facing and both stdout and stderr are TTYs (`should_animate_cold_stats`); `--json` and pipes get no progress chrome. When the spinner runs, the wordmark prints before the walk and the panel after it skips its own.
+The cold walk shows a progress spinner (`Reading session files [bar] n/total`) only when the run is human-facing and both stdout and stderr are TTYs (`should_animate_cold_stats`); `--json` and pipes get no progress chrome. The spinner does not print a wordmark.
 
 If the service call fails, the held dashboard falls back to any current-version published cache and reports an error only when none exists. Setup on every path creates the shared directories only (`ensure_shared_runtime`); stats never opens a workspace tree.
 
 ## Windows
 
-`Window` has four variants, `AllTime`, `Week`, `Month`, and `Year`, and the selected one scopes everything below the windows row. The heatmap ignores it.
+`Window` has three variants: Week, Month and Year (trailing 7/30/365 days). The held view starts on Year; Tab and Shift-Tab cycle the tabs. The heatmap ignores selection. One-shot and JSON breakdowns use Year, while Today reads the local-day bucket in the publication's timezone.
 
-A one-shot run and `--json` always use `AllTime`: `render_panel` receives `active: None` and falls back to it. Only the held dashboard selects another window, with `Tab` and `Shift-Tab`, and its windows row renders as a tab bar with the active cell highlighted.
-
-`Window::select` maps `AllTime` and `Year` onto the same trailing-365-day tally, because the cache carries no longer span. "All time" is a label, and its figures equal Year's. The insight and assist rules still differ between the two:
-
-| Figure | All time | Week, Month, Year |
-| --- | --- | --- |
-| Models, Agents, Sessions, Spend, Cost/session | the 365-day tally | the 7-, 30-, or 365-day tally |
-| Active days | active days in the trailing 28, shown as `N/28` | active days in the trailing 7, 30, or 365 |
-| Most active day, streaks | every day in the cache | days inside the window |
-| Daily avg | spend over active days in the trailing 365 | spend over active days in the window |
-| Spend trend | none | Week and Month append `(↑n% vs prior week)` against the preceding equal span when that span had spend; Year shows none |
-| Assists | every record | records from the last 7, 30, or 365 days (`assist_since`) |
+Year insights preserve the recent 28-day activity count under the explicit `RECENT_ACTIVITY_DAYS` constant; their streaks use the cached history. Week and Month scope activity and compare spend with the preceding equal span. Year has no spend trend. The held assist counts use the selected trailing window; the standalone assist timeline reads both retained log generations without a date cutoff.
 
 Every token total on the panel is `SpendWindow::display_tokens`, which adds cache-read tokens to input plus output. A day counts as active when its bucket has tokens, priced or not.
 
@@ -108,17 +54,9 @@ The month row labels the column where each month begins, and the `Less · ░ �
 
 ## The breakdowns
 
-The Models and Agents sections share one row shape: a bullet, the name, a left column of figures, the share percentage, and a share bar. They differ in what ranks and divides:
+One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a counted tail (`N other models`, `N other agents`, `N other subagents`); `--subagents` and JSON are unfolded. All shares divide by the window's fleet dollars, unattributed included. Unattributed retains its own total and share, followed by every non-zero provider kind and its dollars, ranked by dollars with provider identity colours. Both JSON views expose `unattributed: {tally, by_provider}`, using trailing-year windows and provider-kind keys, omitting zero-dollar providers. Role semantics and native-child attribution belong to [spending](./agents/spending.md).
 
-| | Models | Agents |
-| --- | --- | --- |
-| Left column | dollars, `↘` input, `↗` output, `◌` cache read, cache hit, `tok/s` | dollars, `◎` sessions, `◇` display tokens, cache hit |
-| Sort | dollars, then tokens | sessions, then tokens |
-| Share | the row's dollars over the window's model dollars | the row's sessions over all sessions in the window |
-| Folds into `Other` | an empty model id, or under 1.0% of the window's model dollars | under 1.0% of the window's sessions |
-| Bullet color | cool | the provider's identity color; `Other` muted |
-
-Entries with zero tokens in the window are dropped. The 1.0% fold (`MIN_BREAKDOWN_SHARE`) applies first and does nothing when its denominator is zero. The row cap (`MAX_MODELS`, `MAX_AGENTS`, 6 each, or fewer when the terminal is short) then folds the tail into the same final `Other` row. Model names go through `model_display::display_model`, agent names through the adapter's display name.
+The held view keeps its compact rows and geometry budget, with dollar shares for both models and agents. Agent names come from provider descriptors; model names use `model_display::display_model`. Token units are uppercase.
 
 The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
 
@@ -142,7 +80,7 @@ The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` wri
 2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
 3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
 
-A run whose wordmark the cold-walk spinner already printed skips `fit` and renders every capped row.
+One-shot text is a scrollable report and does not use the held screen's row budget.
 
 Glyphs come from `resolve_panel_glyphs`, which resolves the token, session, and meter-bar glyph roles through the machine theme, so a Nerd Font glyph set swaps `◎ ◇ ↘ ↗ ◌` and the bar characters while colors stay on the CLI palette ([theme.md](./theme.md#glyphs)).
 
@@ -168,45 +106,21 @@ A resize repaints the current frame, and the first successful refresh replaces t
 | --- | --- |
 | `Tab` / `Shift-Tab` | cycle the window and repaint from the stats in hand, reloading only the assist log |
 | `r` / `R` | reload the binary in place |
-| `Ctrl-C` | quit, unless `--hold` is set |
+| `q`, `Ctrl-C` | quit, unless `--hold` is set |
 
 Reload re-execs `reload::current_reexec_target()` with the original arguments. The `r` key returns the reload outcome directly; `SIGUSR1` sets a flag the cycle reads and clears, which is how `rimz reload` restarts running dashboards. Registering that handler replaces `SIGUSR1`'s default terminate disposition. When no re-exec target resolves, the dashboard keeps running.
 
-`--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: `Ctrl-C` becomes a no-op, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`; how `[daemon]` panes replace it and how a pane-count change reaches a running room are in [rimzd.md](./rimzd.md#the-content-supervisor).
+`--hold` is a hidden flag that requires `--refresh` and exists for the daemon view: `q` and `Ctrl-C` become no-ops, and closing the pane still ends the process. `daemon_content::stats_argv` is exactly `rimz stats --refresh --hold`; how `[daemon]` panes replace it and how a pane-count change reaches a running room are in [rimzd.md](./rimzd.md#the-content-supervisor).
 
 ## Machine-readable surfaces
 
-`--json` (`json.rs`) emits the stats document instead of the panel. It always describes All time and conflicts with `--refresh`; `--dollars` only sets `unit` to `usd`.
+`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, session and streak fields, `windows.today/week/month/year`, unfolded `models`, top-level `agents`, profile `subagents`, `unattributed`, local-date `days`, and the assist rollup only. `windows.week.usd` remains stable. This is a breaking change: agent membership and share semantics change, and assist events move to `--assists --json`. `--subagents --json` emits `{as_of, window: "year", subagents, unattributed}`.
 
-| Field | Contents |
-| --- | --- |
-| `unit` | `tokens`, or `usd` under `--dollars` |
-| `sessions` | the 365-day session count |
-| `active_days_28`, `longest_streak`, `current_streak`, `most_active_day` | the All time insights; `most_active_day` omitted when there is none |
-| `windows` | `week`, `month`, `year`, each with display `tokens` and `usd` |
-| `models` | every model in the cache, unfolded and uncapped, sorted by dollars: id, display name, token split, optional integer `tokens_per_sec` from the trailing-year tally, `usd`, `share` as a fraction |
-| `agents` | every agent with tokens, unfolded and uncapped, sorted by sessions: kind, name, tokens, `usd`, `sessions`, `share` |
-| `days` | per-day `date`, `tokens`, `usd` |
-| `assists` | the window label, the rollup, and every event |
+`--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`. The rollup covers all retained records, not just the displayed page.
 
-Windows, models, and agents carry `tool_calls` and a per-name `tools` map, each omitted when zero or empty. Models and agents carry `cache_hit_pct`, omitted when the denominator is zero.
+The same predicate gates rollup counts: no error for stall notices, since an undelivered notice waits in the parent's queue; delivered for continues, keepalives, idle and flip compactions; stopped for idle stops; frozen or a deepening step for hibernation; relaunched for launch retries; a window reset for redemption, since a stamp write that fails after it does not undo it; no error for GC. Judge declines, resident launches, model aliases, tier fallbacks, compact commands and room resumes count as recorded. A successful stop may carry a cleanup error and still counts. A partial GC with no top-level error counts, as its record represents a completed sweep.
 
-`--assists` (`assists.rs`) prints `assists (all)` with the non-zero category counts, then one forensic line per event, newest first, in the configured time zone; an empty log prints `no assists recorded`. It conflicts with `--json` and `--refresh`.
-
-Assists come from the account-global assist log, which [loops.md](./harness/loops.md#the-assist-log) owns along with what counts as an assist and how its records fold. `AssistStats::from_records` folds them into panel categories, and the panel prints only those with a non-zero count:
-
-| Row | Counts |
-| --- | --- |
-| `Auto-continue:` | delivered continues, with the summed recovered hours |
-| `Auto-compact:` | every `auto_compact` record, plus delivered `idle_compact` and `flip_compact` records |
-| `Idle stop:` | `idle_stop` records whose stop went through |
-| `Hibernate:` | successful freezes, with total reclaimed memory bytes |
-| `Launch retry:` | `launch_retry` records whose relaunch spawned, one per relaunch |
-| `Auto-redeem:` | redeem attempts, with the `reset` outcomes |
-| `Auto-resume:` | rebirth restores, with the agents they brought back |
-| `Auto-gc:` | completed automatic gc sweeps, with the bytes they reclaimed |
-
-Hibernation JSON rollups expose `hibernations`, `hibernate_reclaimed_bytes`, and `hibernate_holds` (latest recorded hold reason keyed by `kind/agent_id`). Only freeze records count as hibernations; memory bytes sum the per-step deltas from both freezes and deepening. The existing `reclaimed_bytes` remains GC disk recovery, never memory recovery. The assist timeline distinguishes freezes, deepening steps, and held attempts.
+Every attempt that did not take effect increments `held` under the count it would have joined (`AssistEvent::count_key`), printed beside that count as `Auto-compact: N (M held)`. Hibernate hold reasons remain diagnostic rollup information regardless of effect. Only freeze records count as hibernations; a deepening step (not frozen, with reclaimed bytes) takes effect without adding one, and memory bytes sum the per-step deltas from both. Hibernation reclaimed bytes remain separate from GC reclaimed bytes. The [assist log](./harness/loops.md#the-assist-log) owns the durable records and rotation.
 
 ## Where the code lives
 

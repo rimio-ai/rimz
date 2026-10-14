@@ -1998,14 +1998,17 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
     let stamped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
     assert!(stamped.stall_noticed_at.is_some());
     assert_eq!(stamped.status, rimz::store::run::RunStatus::Running);
-    let stats = env.rimz().args(["stats", "--json"]).output().unwrap();
+    let stats = env
+        .rimz()
+        .args(["stats", "--assists", "--all", "--json"])
+        .output()
+        .unwrap();
     assert!(
         stats.status.success(),
         "{}",
         String::from_utf8_lossy(&stats.stderr)
     );
     let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
-    let stats = &stats["assists"];
     assert_eq!(stats["rollup"]["stall_notices"], 1, "{stats}");
     let assist: AssistRecord = serde_json::from_value(serde_json::json!({
         "at": stats["events"][0]["at"], "assist": "stall_notice", "kind": "codex",

@@ -1,6 +1,6 @@
-//! `rimz stats` — the wordmark, the token-usage heatmap, per-model and
-//! per-agent breakdowns, and the account-global activity insights as a
-//! standalone command, readable in or out of a room and in or out of a project.
+//! `rimz stats` — account-global spend, local-day activity, and model, agent,
+//! and subagent breakdowns, readable in or out of a room or project.
+//! The wordmark and activity insights remain in the held dashboard.
 //! Internals: `docs/internals/stats.md`.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
@@ -85,10 +85,19 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
-    /// Print the complete system-assist timeline instead of the dashboard.
-    #[arg(long, conflicts_with_all = ["json", "refresh"])]
+    /// Print effective system assists, newest first.
+    #[arg(long, conflicts_with_all = ["subagents", "refresh"])]
     pub assists: bool,
-    /// Hold the panel open, refresh stats every 60s, and re-centre on resize.
+    /// Show every subagent profile's trailing-year spend.
+    #[arg(long, conflicts_with = "refresh")]
+    pub subagents: bool,
+    /// Number of assists to show; 0 shows all retained events.
+    #[arg(short = 'n', default_value_t = 50, requires = "assists")]
+    pub limit: usize,
+    /// Include held and undelivered assist attempts.
+    #[arg(long, requires = "assists")]
+    pub all: bool,
+    /// Open the held view, refreshing every 60s and re-centring on resize.
     #[arg(long, conflicts_with = "json")]
     pub refresh: bool,
     /// Keep the refreshing panel alive through Ctrl-C in the rimzd daemon view.
@@ -99,14 +108,13 @@ pub struct StatsArgs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Window {
-    AllTime,
     Week,
     Month,
     Year,
 }
 
 impl Window {
-    const TABS: [Self; 4] = [Self::AllTime, Self::Week, Self::Month, Self::Year];
+    const TABS: [Self; 3] = [Self::Week, Self::Month, Self::Year];
 
     fn next(self) -> Self {
         let index = Self::TABS
@@ -126,7 +134,6 @@ impl Window {
 
     fn label(self) -> &'static str {
         match self {
-            Self::AllTime => "All time",
             Self::Week => "Week",
             Self::Month => "Month",
             Self::Year => "Year",
@@ -135,7 +142,7 @@ impl Window {
 
     fn select(self, tally: &SpendTally) -> SpendWindow {
         match self {
-            Self::AllTime | Self::Year => tally.year.clone(),
+            Self::Year => tally.year.clone(),
             Self::Week => tally.week.clone(),
             Self::Month => tally.month.clone(),
         }
@@ -143,7 +150,6 @@ impl Window {
 
     fn span_days(self) -> u32 {
         match self {
-            Self::AllTime => 28,
             Self::Week => 7,
             Self::Month => 30,
             Self::Year => 365,
@@ -153,15 +159,31 @@ impl Window {
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.assists {
-        let assists = AssistStats::load(&logs_dir(), Window::AllTime, Timestamp::now());
-        return render_full(&assists);
+        let assists = AssistStats::from_records(
+            "all retained",
+            rimz::harness::assist_log::recent(&logs_dir(), None),
+        );
+        return render_full(&assists, args.limit, args.all, args.json);
     }
     if args.refresh {
         return run_refresh(args.dollars, args.hold);
     }
     let loaded = load_stats(!args.json)?;
     let today_day = loaded.stats.today_day(unix_secs_now());
-    let assists = AssistStats::load(&logs_dir(), Window::AllTime, Timestamp::now());
+    let assists = AssistStats::load(&logs_dir(), Window::Year, Timestamp::now());
+    if args.subagents {
+        if args.json {
+            return json::emit_subagents(&loaded.stats);
+        }
+        return panel::render_spend(
+            &mut render::out(),
+            &loaded.stats,
+            today_day,
+            args.dollars,
+            true,
+            "\n",
+        );
+    }
     if args.json {
         return emit_json(&loaded.stats, &assists, today_day, args.dollars);
     }
@@ -203,6 +225,9 @@ struct LoadedStats {
 /// the per-model and per-agent breakdowns, and producer-priced trailing windows.
 struct Stats {
     timezone: String,
+    refreshed_at_ms: u64,
+    subagents: BTreeMap<String, rimz::agents::spending::SubagentTally>,
+    unattributed: rimz::agents::spending::UnattributedTally,
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, SpendTally>,
     by_agent: BTreeMap<String, SpendTally>,
@@ -216,22 +241,31 @@ impl Stats {
             models,
             spending,
             timezone,
+            refreshed_at_ms,
+            roles,
             ..
         } = cache;
-        let Spending {
-            total, by_provider, ..
-        } = spending;
+        let Spending { total, .. } = spending;
         Stats {
             timezone,
+            refreshed_at_ms,
+            subagents: roles.subagents,
+            unattributed: roles.unattributed,
             by_day: days,
             by_model: models,
-            by_agent: by_provider,
+            by_agent: roles.agents,
             total,
         }
     }
 
     fn today_day(&self, now_secs: u64) -> i64 {
         rimz::agents::spending::local_day_index(now_secs, Some(&self.timezone)).unwrap_or(0)
+    }
+
+    fn as_of(&self) -> jiff::Zoned {
+        Timestamp::from_millisecond(self.refreshed_at_ms as i64)
+            .unwrap_or(Timestamp::UNIX_EPOCH)
+            .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
     }
 }
 

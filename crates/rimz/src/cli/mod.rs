@@ -690,7 +690,7 @@ enum Subcmd {
     List(list::ListArgs),
     /// Show where RimZ keeps this project's files.
     Paths(paths::PathsArgs),
-    /// Token-activity heatmap and usage insights.
+    /// Spend, token activity, and agent and subagent breakdowns.
     ///
     /// Includes model and agent breakdowns.
     Stats(stats::StatsArgs),

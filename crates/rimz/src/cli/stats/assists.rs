@@ -39,6 +39,9 @@ pub(super) struct AssistRollup {
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
     pub(super) reclaimed_bytes: u64,
+    /// Attempts that did not take effect, keyed by the count they would have joined.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) held: BTreeMap<&'static str, usize>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -274,6 +277,22 @@ impl AssistStats {
 
         let mut rollup = AssistRollup::default();
         for event in &events {
+            if let AssistEvent::Hibernate {
+                kind,
+                agent_id,
+                hold: Some(hold),
+                ..
+            } = event
+            {
+                rollup
+                    .hibernate_holds
+                    .entry(format!("{kind}/{agent_id}"))
+                    .or_insert_with(|| hold.clone());
+            }
+            if !event.took_effect() {
+                *rollup.held.entry(event.count_key()).or_default() += 1;
+                continue;
+            }
             match event {
                 AssistEvent::ResidentLaunch { .. } => rollup.resident_launches += 1,
                 AssistEvent::JudgeDecline { .. } => rollup.judge_declines += 1,
@@ -290,61 +309,36 @@ impl AssistStats {
                     }
                 }
                 AssistEvent::Continue {
-                    at,
-                    parked_since,
-                    delivered,
-                    ..
+                    at, parked_since, ..
                 } => {
-                    if *delivered {
-                        rollup.resumes += 1;
-                        rollup.recovered_secs += recovered_secs(*parked_since, *at);
-                    }
+                    rollup.resumes += 1;
+                    rollup.recovered_secs += recovered_secs(*parked_since, *at);
                 }
                 AssistEvent::StallNotice { .. } => rollup.stall_notices += 1,
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
-                AssistEvent::CacheKeepalive { delivered, .. } => {
-                    rollup.keepalives += usize::from(*delivered)
-                }
-                AssistEvent::IdleStop { stopped, .. } => rollup.idle_stops += usize::from(*stopped),
+                AssistEvent::CacheKeepalive { .. } => rollup.keepalives += 1,
+                AssistEvent::IdleStop { .. } => rollup.idle_stops += 1,
                 AssistEvent::Hibernate {
-                    kind,
-                    agent_id,
                     frozen,
                     reclaimed_bytes,
-                    hold,
                     ..
                 } => {
-                    if *frozen {
-                        rollup.hibernations += 1;
-                    }
+                    rollup.hibernations += usize::from(*frozen);
                     rollup.hibernate_reclaimed_bytes += reclaimed_bytes.unwrap_or(0);
-                    if let Some(hold) = hold {
-                        rollup
-                            .hibernate_holds
-                            .entry(format!("{kind}/{agent_id}"))
-                            .or_insert_with(|| hold.clone());
-                    }
                 }
-                AssistEvent::LaunchRetry { relaunched, .. } => {
-                    rollup.launch_retries += usize::from(*relaunched);
-                }
-                AssistEvent::IdleCompact { delivered, .. }
-                | AssistEvent::FlipCompact { delivered, .. } => {
-                    rollup.compacts += usize::from(*delivered);
+                AssistEvent::LaunchRetry { .. } => rollup.launch_retries += 1,
+                AssistEvent::IdleCompact { .. } | AssistEvent::FlipCompact { .. } => {
+                    rollup.compacts += 1
                 }
                 AssistEvent::Resume { recovered, .. } => {
                     rollup.restores += 1;
                     rollup.restored_sessions += recovered;
                 }
                 AssistEvent::Gc {
-                    reclaimed_bytes,
-                    error,
-                    ..
+                    reclaimed_bytes, ..
                 } => {
-                    if error.is_none() {
-                        rollup.sweeps += 1;
-                        rollup.reclaimed_bytes += reclaimed_bytes;
-                    }
+                    rollup.sweeps += 1;
+                    rollup.reclaimed_bytes += reclaimed_bytes;
                 }
             }
         }
@@ -358,9 +352,79 @@ impl AssistStats {
     pub(super) fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
+
+    pub(super) fn timeline(&self, limit: usize, all: bool) -> (Vec<&AssistEvent>, usize) {
+        let mut events: Vec<_> = self
+            .events
+            .iter()
+            .filter(|event| all || event.took_effect())
+            .collect();
+        let shown = if limit == 0 {
+            events.len()
+        } else {
+            limit.min(events.len())
+        };
+        let older = events.len() - shown;
+        events.truncate(shown);
+        (events, older)
+    }
 }
 
 impl AssistEvent {
+    fn took_effect(&self) -> bool {
+        match self {
+            // An undelivered notice is parked in the parent's queue; only an error means it failed.
+            Self::StallNotice { error, .. } => error.is_none(),
+            Self::Continue { delivered, .. }
+            | Self::CacheKeepalive { delivered, .. }
+            | Self::IdleCompact { delivered, .. }
+            | Self::FlipCompact { delivered, .. } => *delivered,
+            Self::IdleStop { stopped, .. } => *stopped,
+            // A deepening step reclaims memory from an agent already frozen.
+            Self::Hibernate {
+                frozen,
+                reclaimed_bytes,
+                ..
+            } => *frozen || reclaimed_bytes.is_some(),
+            Self::LaunchRetry { relaunched, .. } => *relaunched,
+            // A stamp write fails after the reset, so an error does not undo it.
+            Self::Redeem { windows_reset, .. } => *windows_reset,
+            Self::Gc { error, .. } => error.is_none(),
+            Self::JudgeDecline { .. }
+            | Self::ResidentLaunch { .. }
+            | Self::ModelAlias { .. }
+            | Self::TierFallback { .. }
+            | Self::Compact { .. }
+            | Self::Resume { .. } => true,
+        }
+    }
+
+    /// The `AssistRollup` field this event counts toward, named as it serializes.
+    fn count_key(&self) -> &'static str {
+        match self {
+            Self::JudgeDecline { .. } => "judge_declines",
+            Self::StallNotice { .. } => "stall_notices",
+            Self::ResidentLaunch { .. } => "resident_launches",
+            Self::ModelAlias { .. } => "model_aliases",
+            Self::TierFallback { .. } => "tier_fallbacks",
+            Self::Redeem {
+                reason: RedeemReason::Manual,
+                ..
+            } => "manual_redeems",
+            Self::Redeem { .. } => "redeems",
+            Self::Continue { .. } => "resumes",
+            Self::Compact { .. } | Self::IdleCompact { .. } | Self::FlipCompact { .. } => {
+                "compacts"
+            }
+            Self::CacheKeepalive { .. } => "keepalives",
+            Self::IdleStop { .. } => "idle_stops",
+            Self::Hibernate { .. } => "hibernations",
+            Self::LaunchRetry { .. } => "launch_retries",
+            Self::Resume { .. } => "restores",
+            Self::Gc { .. } => "sweeps",
+        }
+    }
+
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
             Assist::JudgeDecline {
@@ -702,7 +766,6 @@ impl AssistEvent {
 impl Window {
     fn assist_since(self, now: Timestamp) -> Option<Timestamp> {
         let days = match self {
-            Self::AllTime => return None,
             Self::Week => 7,
             Self::Month => 30,
             Self::Year => 365,
@@ -712,7 +775,6 @@ impl Window {
 
     fn assist_label(self) -> &'static str {
         match self {
-            Self::AllTime => "all",
             Self::Week => "7d",
             Self::Month => "30d",
             Self::Year => "1y",
@@ -733,7 +795,14 @@ pub(super) fn panel_lines(lines: &mut Vec<String>, stats: &AssistStats, panel_wi
     two_column(lines, &rows[..split], &rows[split..], panel_width);
 }
 
-pub(super) fn render_full(stats: &AssistStats) -> Result<()> {
+pub(super) fn render_full(stats: &AssistStats, limit: usize, all: bool, json: bool) -> Result<()> {
+    let (events, older) = stats.timeline(limit, all);
+    if json {
+        return render::json_pretty(&serde_json::json!({
+            "as_of": Timestamp::now(), "rollup": stats.rollup,
+            "events": events, "older": older,
+        }));
+    }
     let mut out = render::out();
     if stats.is_empty() {
         writeln!(out, "no assists recorded")?;
@@ -750,8 +819,11 @@ pub(super) fn render_full(stats: &AssistStats) -> Result<()> {
     }
     writeln!(out)?;
     let zone = MachineConfig::load_lenient().time_zone();
-    for event in &stats.events {
+    for event in events {
         writeln!(out, "{}", forensic_line(event, &zone))?;
+    }
+    if older > 0 {
+        writeln!(out, "… {older} older; rimz stats --assists -n 0 for all")?;
     }
     Ok(())
 }
@@ -765,75 +837,67 @@ pub(super) fn category_rows(rollup: &AssistRollup) -> Vec<String> {
 
 fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     let mut rows = Vec::with_capacity(5);
-    if rollup.stall_notices > 0 {
-        rows.push(("Stall notice:", rollup.stall_notices.to_string()));
-    }
-    if rollup.resident_launches > 0 {
-        rows.push(("Resident launches:", rollup.resident_launches.to_string()));
-    }
-    if rollup.judge_declines > 0 {
-        rows.push(("Judge declines:", rollup.judge_declines.to_string()));
-    }
-    if rollup.model_aliases > 0 {
-        rows.push(("Model aliases:", rollup.model_aliases.to_string()));
-    }
-    if rollup.tier_fallbacks > 0 {
-        rows.push(("Tier fallback:", rollup.tier_fallbacks.to_string()));
-    }
-    if rollup.resumes > 0 {
-        let mut value = rollup.resumes.to_string();
-        if rollup.recovered_secs > 0 {
-            value.push_str(&format!(" (+{})", format_hours(rollup.recovered_secs)));
+    let mut row = |label: &'static str, key: &str, count: usize, detail: Option<String>| {
+        let held = rollup.held.get(key).copied().unwrap_or(0);
+        if count == 0 && held == 0 {
+            return;
         }
-        rows.push(("Auto-continue:", value));
-    }
-    if rollup.compacts > 0 {
-        rows.push(("Auto-compact:", rollup.compacts.to_string()));
-    }
-    if rollup.keepalives > 0 {
-        rows.push(("Keepalive:", rollup.keepalives.to_string()));
-    }
-    if rollup.idle_stops > 0 {
-        rows.push(("Idle stop:", rollup.idle_stops.to_string()));
-    }
-    if rollup.hibernations > 0 {
-        rows.push((
-            "Hibernate:",
-            format!(
-                "{} ({} reclaimed)",
-                rollup.hibernations,
-                render::fmt_bytes(rollup.hibernate_reclaimed_bytes)
-            ),
-        ));
-    }
-    if rollup.launch_retries > 0 {
-        rows.push(("Launch retry:", rollup.launch_retries.to_string()));
-    }
+        let notes = detail
+            .into_iter()
+            .chain((held > 0).then(|| format!("{held} held")))
+            .collect::<Vec<_>>();
+        let value = if notes.is_empty() {
+            count.to_string()
+        } else {
+            format!("{count} ({})", notes.join(", "))
+        };
+        rows.push((label, value));
+    };
+    row("Stall notice:", "stall_notices", rollup.stall_notices, None);
+    let launches = rollup.resident_launches;
+    row("Resident launches:", "resident_launches", launches, None);
+    let declines = rollup.judge_declines;
+    row("Judge declines:", "judge_declines", declines, None);
+    row(
+        "Model aliases:",
+        "model_aliases",
+        rollup.model_aliases,
+        None,
+    );
+    row(
+        "Tier fallback:",
+        "tier_fallbacks",
+        rollup.tier_fallbacks,
+        None,
+    );
+    let recovered =
+        (rollup.recovered_secs > 0).then(|| format!("+{}", format_hours(rollup.recovered_secs)));
+    row("Auto-continue:", "resumes", rollup.resumes, recovered);
+    row("Auto-compact:", "compacts", rollup.compacts, None);
+    row("Keepalive:", "keepalives", rollup.keepalives, None);
+    row("Idle stop:", "idle_stops", rollup.idle_stops, None);
+    let reclaimed = (rollup.hibernations > 0).then(|| {
+        let bytes = render::fmt_bytes(rollup.hibernate_reclaimed_bytes);
+        format!("{bytes} reclaimed")
+    });
+    row("Hibernate:", "hibernations", rollup.hibernations, reclaimed);
+    row(
+        "Launch retry:",
+        "launch_retries",
+        rollup.launch_retries,
+        None,
+    );
     let auto_redeems = rollup.redeems - rollup.manual_redeems;
     let auto_resets = rollup.resets - rollup.manual_resets;
-    if auto_redeems > 0 {
-        let mut value = auto_redeems.to_string();
-        if auto_resets > 0 {
-            value.push_str(&format!(" ({} reset{})", auto_resets, plural(auto_resets)));
-        }
-        rows.push(("Auto-redeem:", value));
-    }
-    if rollup.restores > 0 {
-        let value = format!(
-            "{} ({} agent{})",
-            rollup.restores,
-            rollup.restored_sessions,
-            plural(rollup.restored_sessions)
-        );
-        rows.push(("Auto-resume:", value));
-    }
-    if rollup.sweeps > 0 {
-        let mut value = rollup.sweeps.to_string();
-        if rollup.reclaimed_bytes > 0 {
-            value.push_str(&format!(" ({})", render::fmt_bytes(rollup.reclaimed_bytes)));
-        }
-        rows.push(("Auto-gc:", value));
-    }
+    let resets = (auto_resets > 0).then(|| format!("{auto_resets} reset{}", plural(auto_resets)));
+    row("Auto-redeem:", "redeems", auto_redeems, resets);
+    let agents = (rollup.restores > 0).then(|| {
+        let restored = rollup.restored_sessions;
+        format!("{restored} agent{}", plural(restored))
+    });
+    row("Auto-resume:", "restores", rollup.restores, agents);
+    let freed = (rollup.reclaimed_bytes > 0).then(|| render::fmt_bytes(rollup.reclaimed_bytes));
+    row("Auto-gc:", "sweeps", rollup.sweeps, freed);
     rows
 }
 
@@ -859,7 +923,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             format!("{time} {agent} silent {silence} — stall notice to {parent}{error}")
         }
         AssistEvent::ResidentLaunch { task, handles, .. } => {
-            format!("{time} loop {task} opened {}", handles.join(", "))
+            format!("{time} ▶ loop {task} opened {}", handles.join(", "))
         }
         AssistEvent::JudgeDecline {
             task,
@@ -889,7 +953,7 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 .first()
                 .map(|skip| format!("{} → {model} ({})", skip.model, skip.reason))
                 .unwrap_or_else(|| model.clone());
-            format!("{time} {profile}: {first}")
+            format!("{time} ↘ {profile}: {first}")
         }
         AssistEvent::Redeem {
             kind,
@@ -1412,6 +1476,46 @@ fn first_line(text: &str) -> &str {
 mod tests {
     use super::*;
 
+    fn deepenings(stats: &AssistStats) -> usize {
+        stats
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    AssistEvent::Hibernate {
+                        frozen: false,
+                        reclaimed_bytes: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Per kind, the effect count plus the held count equals the events of that kind.
+    fn assert_effect_counts(stats: &AssistStats) {
+        let rollup = serde_json::to_value(&stats.rollup).unwrap();
+        let mut events = BTreeMap::<&str, usize>::new();
+        for event in &stats.events {
+            *events.entry(event.count_key()).or_default() += 1;
+        }
+        for (key, total) in events {
+            let mut counted = usize::try_from(rollup[key].as_u64().unwrap()).unwrap();
+            if key == "redeems" {
+                counted -= stats.rollup.manual_redeems;
+            }
+            if key == "hibernations" {
+                counted += deepenings(stats);
+            }
+            let held = stats.rollup.held.get(key).copied().unwrap_or(0);
+            assert_eq!(counted + held, total, "{key}");
+        }
+        let held = stats.rollup.held.values().sum::<usize>();
+        assert_eq!(stats.timeline(0, false).0.len() + held, stats.events.len());
+        assert_eq!(stats.timeline(0, true).0.len(), stats.events.len());
+    }
+
     #[test]
     fn model_alias_moves_fold_and_render() {
         let record: AssistRecord = serde_json::from_value(serde_json::json!({
@@ -1420,6 +1524,7 @@ mod tests {
         }))
         .unwrap();
         let stats = AssistStats::from_records("all", vec![record]);
+        assert_effect_counts(&stats);
         assert!(
             category_rows(&stats.rollup)
                 .iter()
@@ -1439,6 +1544,7 @@ mod tests {
         }))
         .expect("resident launch assist wire format");
         let stats = AssistStats::from_records("all", vec![record]);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["resident_launches"], 1);
         assert_eq!(json["events"][0]["condition"]["readings"]["ci"], "passed");
@@ -1480,6 +1586,7 @@ mod tests {
         wire["assist"] = "judge_decline".into();
         assert_eq!(serde_json::to_value(&record).unwrap(), wire);
         let stats = AssistStats::from_records("all", vec![record]);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["judge_declines"], 1);
         assert_eq!(json["events"][0]["cost_usd"], 0.01);
@@ -1509,6 +1616,7 @@ mod tests {
         }))
         .expect("resident launch assist written with the old field");
         let stats = AssistStats::from_records("all", vec![record]);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert!(json["events"][0].get("stopped").is_none(), "{json}");
         let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
@@ -1531,6 +1639,7 @@ mod tests {
             })
             .collect();
         let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["launch_retries"], 1);
         assert_eq!(json["events"][0]["assist"], "launch_retry");
@@ -1573,6 +1682,7 @@ mod tests {
         }))
         .expect("a launch retry without a run");
         let stats = AssistStats::from_records("all", vec![rootless]);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["launch_retries"], 1);
         assert_eq!(json["events"][0]["attempt"], 2);
@@ -1593,6 +1703,7 @@ mod tests {
         }))
         .expect("a failed launch retry without a run");
         let stats = AssistStats::from_records("all", vec![failed]);
+        assert_effect_counts(&stats);
         let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
         assert!(
             line.ends_with("— relaunch failed, attempt 3 (codex: not found)"),
@@ -1616,6 +1727,7 @@ mod tests {
             })
             .collect();
         let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["idle_stops"], 1);
         assert_eq!(json["events"][0]["assist"], "idle_stop");
@@ -1664,6 +1776,7 @@ mod tests {
         })
         .collect();
         let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["hibernations"], 1);
         assert_eq!(json["rollup"]["hibernate_reclaimed_bytes"], 4096);
@@ -1712,6 +1825,7 @@ mod tests {
             })
             .collect();
         let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(
             json["rollup"]["keepalives"], 2,
@@ -1762,6 +1876,7 @@ mod tests {
                 record(None, 1),
             ],
         );
+        assert_effect_counts(&stats);
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["rollup"]["keepalives"], 3);
         // Newest first; equal stamps reverse the record order.
@@ -1813,7 +1928,15 @@ mod tests {
         }
 
         let stats = AssistStats::from_records("all", records);
+        assert_effect_counts(&stats);
         assert_eq!(stats.rollup.compacts, 1);
+        assert_eq!(stats.rollup.held.get("compacts"), Some(&1));
+        assert_eq!(stats.timeline(0, true).0.len(), 2);
+        assert!(
+            category_rows(&stats.rollup)
+                .join("\n")
+                .contains("1 (1 held)")
+        );
         assert_eq!(stats.events.len(), 2);
         let json = serde_json::to_value(&stats).expect("stats JSON");
         let skipped = &json["events"][0];
@@ -1827,13 +1950,13 @@ mod tests {
         assert_eq!(json["events"][1]["message_id"], "msg_1");
 
         let lines = stats
-            .events
-            .iter()
+            .timeline(0, false)
+            .0
+            .into_iter()
             .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
             .collect::<Vec<_>>()
             .join("\n");
         insta::assert_snapshot!(lines, @"
-        1970-01-01 00:01 ⌁ @coder flip compaction held — (none) → Review, threshold 180k (already compacting) · agent session-1 · delivered false
         1970-01-01 00:00 ⌁ @coder flip compaction — Implement → Review — 180k ctx, threshold 180k · agent session-1 · message msg_1 · delivered true
         ");
     }

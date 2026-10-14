@@ -27,16 +27,16 @@ pub(super) fn fmt_tokens(n: u64) -> String {
     }
 }
 
-/// Tokens at one-decimal precision in lowercase units (`61.0m`, `1.2b`), the
+/// Tokens at one-decimal precision in uppercase units (`61.0M`, `1.2B`), the
 /// finer register the per-model In/Out lines read in.
-pub(super) fn fmt_tokens_lower(n: u64) -> String {
+pub(super) fn fmt_tokens_precise(n: u64) -> String {
     let n = n as f64;
     if n >= 1e9 {
-        format!("{:.1}b", n / 1e9)
+        format!("{:.1}B", n / 1e9)
     } else if n >= 1e6 {
-        format!("{:.1}m", n / 1e6)
+        format!("{:.1}M", n / 1e6)
     } else if n >= 1e3 {
-        format!("{:.1}k", n / 1e3)
+        format!("{:.1}K", n / 1e3)
     } else {
         format!("{n:.0}")
     }
