@@ -39,7 +39,7 @@ Hook readiness requires both the marked hook file and the canonical managed stat
 
 ## Launch and resume
 
-`copilot` launches a fresh interactive session and `copilot --resume <session_id>` restores one. Ask mode adds no flags, plan uses `--plan`, auto uses `--autopilot`, and yolo uses `--allow-all`; model and effort profiles map to `--model` and `--effort`.
+`copilot` launches a fresh interactive session and `copilot --resume <session_id>` restores one. Ask mode uses `--mode interactive`, overriding `defaultMode`; plan uses `--plan`, auto uses `--autopilot`, and yolo uses `--allow-all`. Model and effort profiles map to `--model` and `--reasoning-effort`; the legacy `--effort` spelling is still recognized for replacement.
 
 Copilot CLI 1.0.70 exposes `-i, --interactive <prompt>`, which starts the stock interactive UI and automatically executes the prompt. RimZ appends `--interactive <prompt>` after profile and permission arguments for prompt-seeded panes and supervised `rimz agents copilot -p` runs, preserving native asks and the hook-driven completion path. Copilot's native non-interactive `-p` mode remains deferred because adopting its process output would introduce a second supervised-run backend and remove the pane's interactive answer surface. Fork stays unsupported: Copilot 1.0.70 exposes `/fork` only as an experimental interactive slash command with no launch flag.
 

@@ -185,7 +185,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Pi | none | none | none | none |
 | OpenCode | none | none | none | `--auto` |
 | Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions --mode accept-edits` |
-| Copilot | none | `--autopilot` | `--plan` | `--allow-all` |
+| Copilot | `--mode interactive` | `--autopilot` | `--plan` | `--allow-all` |
 | Droid | none | `--auto medium` | `--use-spec` | none |
 | Cursor | none | `--auto-review` | `--mode=plan` | `--force --sandbox disabled` |
 | Amp | none | none | none | none |
@@ -225,7 +225,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Pi | `--model <model>` | `--thinking <level>` |
 | OpenCode | refused | refused |
 | Antigravity | `--model <model>` | `--effort <level>` |
-| Copilot | `--model <model>` | `--effort <level>` |
+| Copilot | `--model <model>` | `--reasoning-effort <level>` |
 | Droid | refused | refused |
 | Cursor | `--model <model>` | refused |
 | Amp | `--mode <model>` | refused |
