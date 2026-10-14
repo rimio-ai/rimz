@@ -2010,7 +2010,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         .backend
         .ensure_session(&options)
         .expect("ensure room");
-    let run_launch = |fresh: bool| {
+    let run_launch = |fresh: bool, success: bool| {
         let mut command = launch_command();
         if fresh {
             command.arg("--fresh");
@@ -2019,14 +2019,15 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
             .stdin(std::process::Stdio::null())
             .bounded_output()
             .expect("run cohort launch");
-        assert!(
+        assert_eq!(
             output.status.success(),
-            "cohort launch failed: {}",
+            success,
+            "cohort launch status: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stderr).into_owned()
     };
-    let run_prompt = |answer: &str| {
+    let run_prompt = |answer: &str, success: bool| {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 40,
@@ -2073,7 +2074,11 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         drop(pair.master);
         let output =
             String::from_utf8_lossy(&output.join().expect("join prompt reader")).into_owned();
-        assert!(status.is_some_and(|status| status.success()), "{output}");
+        assert_eq!(
+            status.map(|status| status.success()),
+            Some(success),
+            "{output}"
+        );
         output
     };
     let agents = || {
@@ -2128,7 +2133,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         }
     };
 
-    run_launch(false);
+    run_launch(false, true);
     let original = wait_for_launch(2);
     assert_eq!(original.len(), 2);
     let worktree = env.home_root.join("project-worktrees/fresh");
@@ -2162,21 +2167,21 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     assert!(closed.iter().all(|agent| agent.ended_at.is_some()));
     let windows = server.window_names(&workspace.session_name);
 
-    let hint = run_launch(false);
+    let hint = run_launch(false, false);
     assert!(hint.contains("has work in progress"), "{hint}");
     assert!(
-        hint.contains("rimz agents claude,claude -w fresh --resume"),
+        hint.contains("rimz agents 'claude,claude' -w fresh --resume"),
         "{hint}"
     );
     assert!(
-        hint.contains("rimz agents claude,claude -w fresh --fresh"),
+        hint.contains("rimz agents 'claude,claude' -w fresh --fresh"),
         "{hint}"
     );
     assert_eq!(agents().len(), closed.len(), "hint must not launch agents");
     assert_eq!(server.window_names(&workspace.session_name), windows);
 
     for answer in ["c\n", "n\n"] {
-        let canceled = run_prompt(answer);
+        let canceled = run_prompt(answer, false);
         assert!(
             canceled.contains("(resume/fresh/cancel) [resume]"),
             "{canceled}"
@@ -2189,7 +2194,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         assert_eq!(server.window_names(&workspace.session_name), windows);
     }
 
-    let fresh = run_prompt("f\n");
+    let fresh = run_prompt("f\n", true);
     assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
     let relaunched = wait_for_launch(4);
     let live: Vec<_> = relaunched
@@ -2245,7 +2250,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         "-F",
         "#{pane_id}",
     ]);
-    let already_live = run_launch(true);
+    let already_live = run_launch(true, true);
     assert!(already_live.contains("already running"), "{already_live}");
     assert_eq!(
         server.stdout(&[
@@ -2272,7 +2277,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     }
     wait_for_wrapper_cleanup(&spec, &wrappers);
     assert_checkout_preserved();
-    let fresh = run_launch(true);
+    let fresh = run_launch(true, true);
     assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
     let relaunched = wait_for_launch(6);
     assert_eq!(relaunched.len(), 6);
@@ -2290,7 +2295,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
     )
     .expect("restore clean checkout");
     std::fs::remove_file(worktree.join("board.md")).expect("remove test scratch");
-    let canceled = run_prompt("\n");
+    let canceled = run_prompt("\n", false);
     assert!(
         canceled.contains("(remove/fresh/cancel) [cancel]"),
         "{canceled}"
@@ -2300,7 +2305,7 @@ fn fresh_cohort_relaunch_preserves_dirty_checkout_and_does_not_duplicate_live_ag
         "{canceled}"
     );
     assert_eq!(agents().len(), 6);
-    let fresh = run_prompt("f\n");
+    let fresh = run_prompt("f\n", true);
     assert!(fresh.contains("fresh in worktree `fresh`"), "{fresh}");
     assert_eq!(wait_for_launch(8).len(), 8);
     assert_eq!(

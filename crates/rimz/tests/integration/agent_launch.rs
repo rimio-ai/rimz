@@ -461,13 +461,21 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
         .bounded_output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(if matches!(cohort, Some(LifecycleSignal::Ended)) {
+            1
+        } else {
+            0
+        }),
+        "{stderr}"
+    );
     let trace = std::fs::read_to_string(log).unwrap();
     if let Some(signal) = cohort {
         if matches!(signal, LifecycleSignal::Ended) {
             assert!(stderr.contains("rimz worktree remove feature"), "{stderr}");
             assert!(
-                stderr.contains("rimz teams duo -w feature --fresh"),
+                stderr.contains("rimz teams 'duo#feature' --fresh"),
                 "{stderr}"
             );
         } else {

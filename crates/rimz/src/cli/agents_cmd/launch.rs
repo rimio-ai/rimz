@@ -544,10 +544,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 spec_display,
                 team_name.as_deref(),
                 &cells,
+                receipt_leader_index,
+                prompt,
                 args.launch.cohort.fresh,
                 focus,
             )? {
-                reconcile::Reconciled::Done => return Ok(None),
+                reconcile::Reconciled::Done | reconcile::Reconciled::PromptDispatched => {
+                    return Ok(None);
+                }
                 reconcile::Reconciled::Resume(path) => {
                     validate_resume_inputs(&args.launch, ResumeEntrance::Reconcile)?;
                     let layout = resolve_finalized_layout(

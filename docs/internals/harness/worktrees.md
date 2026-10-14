@@ -248,7 +248,7 @@ Unattended reclamation uses `Unproven`, so an agent RimZ cannot prove dead still
 
 The domain owns every refusal: `worktree::remove` returns `WorktreeErr::InUse`, `Dirty`, `Unlanded`, or `Unproven` for the first reason, and `--force` skips refusal. The CLI renders holders from the same protection set. Sweep groups by the first reason and shows additional reasons; `gc` lists all reasons and holders. Both serialize the domain sweep records, with `reasons` arrays rather than a single `reason`.
 
-Cohort relaunch assesses against an empty protection set, because it has already established that the cohort's panes are closed and a live cohort is focused instead. The offers, `--fresh`, and what each choice does are [fleet.md § Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation); only the `remove` choice enters the removal path below.
+Cohort relaunch assesses against an empty protection set, because it has already established that the cohort's panes are closed; a live cohort instead receives its prompt or is focused without one. The offers, `--fresh`, and what each choice does are [fleet.md § Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation); only the `remove` choice enters the removal path below.
 
 ### Branch deletion and retirement
 
