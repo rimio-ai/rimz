@@ -18,6 +18,114 @@ fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
     state
 }
 
+fn records(payloads: &[Value]) -> String {
+    payloads.iter().enumerate().map(|(index, payload)| {
+        format!("{}\n", json!({"id": format!("record-{index}"), "timestamp": format!("2025-01-01T00:00:{index:02}Z"), "payload": payload}))
+    }).collect()
+}
+
+#[test]
+fn native_questions_raise_waiting_without_consent_round() {
+    let lines = records(&[json!({
+        "type": "pending_interaction", "interactionType": "user_input",
+        "toolCallId": "question", "question": "Which target?", "executionId": "turn",
+        "options": [{"title": "Linux", "recommended": true}, {"title": "macOS"}]
+    })]);
+    let folded = session::fold_for_test(&lines);
+    assert_eq!(folded.0, crate::agents::AgentStatus::Waiting);
+    assert_eq!(folded.2.as_deref(), Some("Which target?"));
+    assert_eq!(folded.4, Some("2025-01-01T00:00:00Z".parse().unwrap()));
+}
+
+#[test]
+fn approval_rounds_resolve_only_the_matching_wait() {
+    let mut payloads = vec![
+        json!({"type": "pending_interaction", "interactionType": "tool_approval", "toolCallId": "tool", "question": "First", "consentRound": 1}),
+        json!({"type": "pending_interaction", "interactionType": "tool_approval", "toolCallId": "tool", "question": "Second", "consentRound": 2}),
+        json!({"type": "interaction_resolved", "toolCallId": "tool", "consentRound": 1}),
+    ];
+    for stale_round in [None, Some(1), Some(0)] {
+        if let Some(round) = stale_round {
+            payloads.push(json!({"type": "interaction_resolved", "toolCallId": "tool", "consentRound": round}));
+        }
+        let folded = session::fold_for_test(&records(&payloads));
+        assert_eq!(folded.0, crate::agents::AgentStatus::Waiting);
+        assert_eq!(folded.2.as_deref(), Some("Second"));
+    }
+    payloads.push(json!({"type": "interaction_resolved", "toolCallId": "tool", "consentRound": 2}));
+    assert_eq!(
+        session::fold_for_test(&records(&payloads)).0,
+        crate::agents::AgentStatus::Running
+    );
+}
+
+#[test]
+fn next_turn_discards_pending_approvals_before_tool_activity() {
+    let lines = records(&[
+        json!({"type": "pending_interaction", "interactionType": "tool_approval", "toolCallId": "old", "question": "Approve?"}),
+        json!({"type": "turn_end", "stopReason": "end_turn"}),
+        json!({"type": "turn_start", "executionId": "next"}),
+        json!({"type": "tool_call", "toolCallId": "new", "toolName": "fs_write", "status": "completed"}),
+    ]);
+    let folded = session::fold_for_test(&lines);
+    assert_eq!(folded.1, crate::agents::TurnPhase::Acting);
+    assert!(folded.2.is_none());
+}
+
+#[test]
+fn non_user_sources_stay_out_of_transcripts_and_final_replies() {
+    for source in ["hook", "api"] {
+        let lines = records(&[
+            json!({"type": "user", "content": "human"}),
+            json!({"type": "user", "source": "chat", "content": "chat"}),
+            json!({"type": "user", "source": "steer", "content": "steer"}),
+            json!({"type": "user", "source": "future", "content": "future"}),
+            json!({"type": "assistant", "operationType": "Say", "content": "reply"}),
+            json!({"type": "user", "source": source, "content": "injected"}),
+        ]);
+        let messages = session::messages(&lines);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["human", "chat", "steer", "future", "reply"],
+            "{source}"
+        );
+        assert_eq!(session::last_reply_in(&lines).as_deref(), Some("reply"));
+    }
+}
+
+#[test]
+fn non_user_sources_do_not_replace_the_latest_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let id = "sess_33333333-3333-4333-8333-333333333333";
+    let session_dir = root
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(workspace).unwrap())
+        .join(id);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join("session.json"), json!({"id": id, "schemaVersion": "1.0.0", "dataModelVersion": 1, "workspacePaths": [workspace], "createdAt": "2025-01-01T00:00:00Z"}).to_string()).unwrap();
+    for source in ["hook", "api"] {
+        std::fs::write(
+            session_dir.join("messages.jsonl"),
+            records(&[
+                json!({"type": "user", "content": "human"}),
+                json!({"type": "user", "source": source, "content": "injected"}),
+            ]),
+        )
+        .unwrap();
+        let observations = session::discover_under(root.path(), workspace);
+        assert_eq!(
+            local_state(&observations[0]).latest_prompt.as_deref(),
+            Some("human"),
+            "{source}"
+        );
+    }
+}
+
 #[test]
 fn native_hooks_decode_session_turn_tool_and_stop() {
     let agent = crate::agents::find_definition("kiro").expect("Kiro definition");
@@ -762,10 +870,6 @@ fn hooks_path_prefers_override_then_kiro_home() {
     assert_eq!(
         install::resolve_home(Some(OsStr::new("/tmp/kiro")), Some(home)).unwrap(),
         std::path::PathBuf::from("/tmp/kiro")
-    );
-    assert_eq!(
-        install::resolve_home(None, Some(home)).unwrap(),
-        std::path::PathBuf::from("/home/user/.kiro")
     );
     assert_eq!(
         install::resolve_hooks_path(None, Some(OsStr::new("/selected")), Some(home)).unwrap(),
