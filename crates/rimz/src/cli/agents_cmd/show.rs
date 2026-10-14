@@ -459,16 +459,18 @@ pub(super) fn render_activity_section(
             .schedule()
             .map(|schedule| schedule.final_step().to_string())
             .unwrap_or_else(|_| "?".into());
-        kv.push(
-            "hibernation",
-            render::cell(format!(
-                "hibernating since {}, step {} of {}, {} reclaimed",
-                hibernation.frozen_at,
-                hibernation.step,
-                final_step,
-                render::fmt_bytes(hibernation.reclaimed_bytes)
-            )),
+        let mut detail = format!(
+            "hibernating since {}, step {} of {}, {} reclaimed",
+            hibernation.frozen_at,
+            hibernation.step,
+            final_step,
+            render::fmt_bytes(hibernation.reclaimed_bytes)
         );
+        if let Some(error) = &hibernation.wake_error {
+            detail.push_str(", wake failed: ");
+            detail.push_str(error);
+        }
+        kv.push("hibernation", render::cell(detail));
     }
     kv.render(w)?;
     writeln!(w)
@@ -1295,11 +1297,9 @@ mod tests {
         let now = jiff::Timestamp::UNIX_EPOCH;
         let mut state = rimz::testkit::agent_state("claude", "cold", now);
         state.status = rimz::agents::AgentStatus::Running;
-        state.hibernation = Some(rimz::agents::state::Hibernation {
-            frozen_at: now,
-            step: 0,
-            reclaimed_bytes: 2048,
-        });
+        state.hibernation = serde_json::from_str(
+            r#"{"frozen_at":"1970-01-01T00:00:00Z","step":0,"reclaimed_bytes":2048,"wake_error":"permission denied"}"#,
+        ).unwrap();
         let entry = build_entry(
             &rimz::agents::ParkDemotion::default(),
             &state,
@@ -1313,6 +1313,8 @@ mod tests {
         let text = strip(|w| render_activity_section(w, &entry, None, None, false, now));
         let json = serde_json::to_value(&entry).unwrap();
         assert_eq!(json["hibernation"]["reclaimed_bytes"], 2048);
+        assert_eq!(json["hibernation"]["wake_error"], "permission denied");
+        assert!(text.contains(", wake failed: permission denied"), "{text}");
         assert!(
             text.contains("hibernating since 1970-01-01T00:00:00Z, step 0 of 3, 2 KB reclaimed"),
             "{text}"

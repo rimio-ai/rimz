@@ -17,7 +17,10 @@ pub use execute::run_request;
 mod wake;
 pub use crate::proc::cgroup::scope_prefix;
 pub(crate) use wake::wake_pane_in;
-pub use wake::{ReconcileReport, Woken, reconcile, reconcile_at, wake_pane, wake_pane_at};
+pub use wake::{
+    ReconcileReport, RefaultHelperRequest, Woken, reconcile, reconcile_at, sample_wake_refault,
+    wake_pane, wake_pane_at, wake_request,
+};
 
 pub struct Policy {
     schedule: crate::config::Schedule,
@@ -55,12 +58,14 @@ pub struct HibernateHelperRequest {
 pub struct WakeHelperRequest {
     pub workspace_id: WorkspaceId,
     pub pane_id: PaneId,
+    pub requested_at_ms: Option<u64>,
 }
 
-pub(crate) fn spawn_wake(runtime: &crate::RuntimePaths, pane: &PaneId) {
+pub(crate) fn spawn_wake(runtime: &crate::RuntimePaths, pane: &PaneId, requested_at_ms: u64) {
     let request = WakeHelperRequest {
         workspace_id: runtime.workspace_id.clone(),
         pane_id: pane.clone(),
+        requested_at_ms: Some(requested_at_ms),
     };
     let args = crate::child_process::agent_helper_argv("wake", &request);
     if let Err(error) = crate::child_process::spawn_detached_rimz(runtime, args, "agent-wake") {
@@ -78,13 +83,13 @@ pub(crate) fn wake_focused(
     ) {
         return;
     }
+    let now = crate::utils::time::unix_now_ms();
     let Ok(paths) = crate::StatePaths::for_workspace(runtime.workspace_id.clone()) else {
         return;
     };
     let entries = crate::store::hibernate::read(&paths);
-    let now = crate::utils::time::unix_now_ms();
     wake_focused_with(runtime, event, &entries, now, |pane| {
-        spawn_wake(runtime, pane)
+        spawn_wake(runtime, pane, now)
     });
 }
 
@@ -399,7 +404,7 @@ pub fn hibernate_idle_agents(
                 }
             }
         },
-        |pane| spawn_wake(runtime, pane),
+        |pane| spawn_wake(runtime, pane, crate::utils::time::unix_now_ms()),
     );
 }
 
@@ -564,6 +569,7 @@ pub(crate) fn project_hibernation(
                 frozen_at: entry.frozen_at,
                 step: entry.step,
                 reclaimed_bytes: entry.reclaimed_bytes,
+                wake_error: entry.wake_error.clone(),
             })
     };
     if snapshot

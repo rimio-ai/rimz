@@ -24,6 +24,7 @@ fn hibernation_preserves_real_status_and_armed_waits() {
             frozen_at: Timestamp::from_second(1_200).unwrap(),
             step: 0,
             reclaimed_bytes: 200,
+            wake_error: None,
         });
         assert_eq!(agent.effective_status(), status);
         agent.pending_waits.push(PendingWait {

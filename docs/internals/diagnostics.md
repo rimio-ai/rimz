@@ -20,7 +20,7 @@ Diagnostic logs live in persistent state because an investigation starts after t
 | `focus-repairs.log.jsonl` | account-global `~/.rimz/logs/`, beside the assist history | automatic focus-repair evidence and outcomes | [state.md](./sidebar/state.md) |
 | `audit/binding.log.jsonl` | workspace state dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `audit/hook-drain.log.jsonl` | workspace state dir | ingress repair, failed apply, and drain lag | [below](#hook-drain-evidence) |
-| `audit/hibernate.log.jsonl` | workspace state dir | wake bypass of a timed-out hibernation lock | [hibernate.md](./harness/hibernate.md#wake-and-recovery) |
+| `audit/hibernate.log.jsonl` | workspace state dir | `wake` latency, reclaimed bytes and thaw errors, `wake_refault` samples, and `wake_lock_timeout` recovery | [hibernate.md](./harness/hibernate.md#wake-and-recovery) |
 | `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, evictions, and crashes | [lsp.md](./lsp.md#visibility) |
 | `lanes/topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 

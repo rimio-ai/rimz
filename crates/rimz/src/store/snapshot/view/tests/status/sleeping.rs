@@ -19,6 +19,7 @@ fn hibernation_preserves_sleeping_in_consumer_tallies_and_ranking() {
         frozen_at: ago(30),
         step: 0,
         reclaimed_bytes: 200,
+        wake_error: None,
     });
     resting.pending_waits = vec![pending_wait()];
     let idle = agent("claude", "idle", AgentStatus::Idle, 1).worktree("/repo/main");

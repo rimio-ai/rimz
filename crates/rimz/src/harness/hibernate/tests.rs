@@ -15,6 +15,7 @@ fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 0,
         };
         let event = SidebarEvent::FocusChanged {
@@ -138,6 +139,7 @@ fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
                     anon_at_freeze: 0,
                     step: 0,
                     last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+                    wake_error: None,
                     reclaimed_bytes: 0,
                 },
             )
@@ -517,6 +519,7 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
             anon_at_freeze: 600,
             step: 0,
             last_reclaimed_at: snapshot.now,
+            wake_error: None,
             reclaimed_bytes: 300,
         },
     )
@@ -555,6 +558,7 @@ fn decision_does_not_refreeze_a_recorded_session() {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 100,
         },
     )
@@ -619,6 +623,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 0,
         },
     )
@@ -665,6 +670,7 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 200,
         },
     )

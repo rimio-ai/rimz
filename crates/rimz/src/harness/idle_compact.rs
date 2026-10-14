@@ -521,6 +521,7 @@ mod tests {
             frozen_at: ts(9_000),
             step: 0,
             reclaimed_bytes: 200,
+            wake_error: None,
         });
         assert!(!due(&candidate));
         candidate.hibernation = None;
