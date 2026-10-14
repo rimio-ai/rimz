@@ -6,6 +6,7 @@ fn compile_prompt_request(
     project: &Path,
     request: &ExecRequest,
     baseline: Option<&str>,
+    agent_shell: Option<&Path>,
 ) -> LaunchPlan {
     let id = crate::WorkspaceId::from_project_root(project);
     let runtime = RuntimePaths::under(id.clone(), project).unwrap();
@@ -24,7 +25,7 @@ fn compile_prompt_request(
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
-        agent_shell: None,
+        agent_shell,
         hibernate: false,
         recorded_system_prompt_digest: baseline,
     })
@@ -56,6 +57,7 @@ fn configured_prompt_changes_control_snapshot_reuse() {
                 "--nocapture",
             ])
             .env("RIMZ_TEST_SNAPSHOT_CLI", "1")
+            .env(crate::proc::USER_SHELL_ENV, "/definitely/not/a/shell")
             .env("RIMZ_TEST_SNAPSHOT_PROBES", bin.path().join("probes"))
             .env("PATH", std::env::join_paths(paths).unwrap())
             .output()
@@ -70,7 +72,7 @@ fn configured_prompt_changes_control_snapshot_reuse() {
     }
     let project = tempfile::tempdir().unwrap();
     let fresh = request("claude", action_with_args("launch", vec![]));
-    let baseline = compile_prompt_request(project.path(), &fresh, None).system_prompt_digest;
+    let baseline = compile_prompt_request(project.path(), &fresh, None, None).system_prompt_digest;
     for (action, recorded, expected) in [
         ("launch", None, false),
         ("resume", Some(baseline.as_str()), false),
@@ -80,7 +82,7 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         ("fork", Some(baseline.as_str()), false),
     ] {
         let request = request("claude", action_with_args(action, vec![]));
-        let plan = compile_prompt_request(project.path(), &request, recorded);
+        let plan = compile_prompt_request(project.path(), &request, recorded, None);
         let flags: Vec<_> = plan
             .process()
             .provider_argv
@@ -102,6 +104,41 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         3,
         "only changed resumed prompts probe the CLI"
     );
+
+    for (version, expected) in [("2.1.256", false), ("2.1.257", true), ("unknown", false)] {
+        let bin = tempfile::tempdir().unwrap();
+        let pinned = bin.path().join("claude");
+        std::fs::write(&pinned, format!("#!/bin/sh\nprintf '{version}\\n'\n")).unwrap();
+        std::fs::set_permissions(&pinned, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let shell = bin.path().join("bash");
+        std::fs::write(&shell, format!(
+            "#!/bin/sh\nexport PATH='{}':\"$PATH\"\nwhile [ \"$#\" -gt 0 ]; do\ncase \"$1\" in\n-c) shift; script=$1; shift; exec /bin/sh -c \"$script\" \"$@\" ;;\n*) shift ;;\nesac\ndone\nexit 127\n",
+            bin.path().display()
+        )).unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let request = request("claude", action_with_args("resume", vec![]));
+        let plan = compile_prompt_request(project.path(), &request, None, Some(&shell));
+        assert_eq!(
+            plan.process().resolve_program_after_shell_rc().unwrap(),
+            Some(pinned)
+        );
+        let has_snapshot_flag = plan
+            .process()
+            .provider_argv
+            .windows(2)
+            .any(|args| args == ["--system-prompt-snapshot", "off"]);
+        assert_eq!(
+            has_snapshot_flag, expected,
+            "launch binary {version}, PATH claude 2.1.296"
+        );
+    }
+    let probes =
+        std::fs::read_to_string(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap()).unwrap();
+    assert_eq!(
+        probes.lines().count(),
+        3,
+        "pinned launches must not probe PATH claude"
+    );
 }
 
 #[test]
@@ -117,17 +154,17 @@ fn configured_prompt_fingerprint_ignores_reminders_and_reads_files() {
         ),
     );
     launch.system_prompt_file = Some(base.clone().into());
-    let fresh = compile_prompt_request(project.path(), &launch, None);
+    let fresh = compile_prompt_request(project.path(), &launch, None, None);
     let baseline = fresh.system_prompt_digest.clone();
     let mut resume = launch.clone();
     resume.action = action_with_args("resume", launch.action.extra_args().to_vec());
     resume.loop_reminder = Some("changed runtime reminder".into());
-    let resumed = compile_prompt_request(project.path(), &resume, Some(&baseline));
+    let resumed = compile_prompt_request(project.path(), &resume, Some(&baseline), None);
     assert_ne!(fresh.process().reminder, resumed.process().reminder);
     assert_eq!(resumed.system_prompt_digest, baseline);
     std::fs::write(&base, "edited configured base").unwrap();
     assert_ne!(
-        compile_prompt_request(project.path(), &launch, None).system_prompt_digest,
+        compile_prompt_request(project.path(), &launch, None, None).system_prompt_digest,
         baseline
     );
     assert_eq!(baseline.len(), 64);
@@ -143,10 +180,11 @@ fn configured_prompt_fingerprint_ignores_reminders_and_reads_files() {
             "claude",
             action_with_args("launch", vec![flag.into(), base.display().to_string()]),
         );
-        let before = compile_prompt_request(project.path(), &native, None).system_prompt_digest;
+        let before =
+            compile_prompt_request(project.path(), &native, None, None).system_prompt_digest;
         std::fs::write(&base, "edited raw file").unwrap();
         assert_ne!(
-            compile_prompt_request(project.path(), &native, None).system_prompt_digest,
+            compile_prompt_request(project.path(), &native, None, None).system_prompt_digest,
             before,
             "{flag}"
         );
@@ -156,13 +194,14 @@ fn configured_prompt_fingerprint_ignores_reminders_and_reads_files() {
             "claude",
             action_with_args("launch", vec![format!("{flag}=raw text")]),
         );
-        let before = compile_prompt_request(project.path(), &native, None).system_prompt_digest;
+        let before =
+            compile_prompt_request(project.path(), &native, None, None).system_prompt_digest;
         let native = request(
             "claude",
             action_with_args("launch", vec![flag.into(), "changed raw text".into()]),
         );
         assert_ne!(
-            compile_prompt_request(project.path(), &native, None).system_prompt_digest,
+            compile_prompt_request(project.path(), &native, None, None).system_prompt_digest,
             before,
             "{flag}"
         );

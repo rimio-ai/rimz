@@ -70,7 +70,7 @@ use super::{
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::finished_task_notification_ids;
-use crate::agents::version::CliVersion;
+use crate::agents::version::{CliVersion, probe_cli_version};
 use crate::agents::{PresetArgMatcher, TurnSettle, TurnSettleOutcome};
 use crate::transcript::AskQuestion;
 
@@ -844,8 +844,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         })
     }
 
-    fn changed_system_prompt_args(&self) -> Vec<String> {
-        system_prompt_snapshot_args(remote_control::probed_version())
+    fn changed_system_prompt_args(&self, program: &Path) -> Vec<String> {
+        system_prompt_snapshot_args(
+            probe_cli_version(program).and_then(|version| version.parse().ok()),
+        )
     }
 
     fn system_prompt_arg_matchers(&self) -> Vec<PresetArgMatcher> {
