@@ -1649,7 +1649,7 @@ fn explicit_permission_mode_replaces_profile_and_virtual_modes() {
     .expect("finalize virtual cell");
     let cell = resolved.layout.agent_cells().next().expect("cell");
     assert_eq!(cell.launch.mode, Some(PermissionMode::Ask));
-    assert_eq!(cell.args, ["--verbose"]);
+    assert_eq!(cell.args, ["--verbose", "--permission-mode", "default"]);
 }
 
 #[test]
