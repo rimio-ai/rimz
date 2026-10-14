@@ -20,6 +20,8 @@ pub(super) struct DeclineRecord {
     pub(super) since: Option<Timestamp>,
     pub(super) reason: String,
     pub(super) profile: String,
+    #[serde(default)]
+    pub(super) tier: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) fingerprint: Option<String>,
 }
@@ -29,7 +31,11 @@ pub(super) type Declines = BTreeMap<String, BTreeMap<PathBuf, DeclineRecord>>;
 pub(super) fn check_fingerprint(entry: &crate::config::TaskEntry) -> Option<String> {
     use sha2::{Digest as _, Sha256};
 
-    let definition = serde_json::to_vec(&(entry.check.as_ref()?, entry.on)).ok()?;
+    let guard = entry.guard();
+    if guard.shell.is_none() && guard.judges.is_empty() {
+        return None;
+    }
+    let definition = serde_json::to_vec(&(guard.shell, guard.judges, entry.on)).ok()?;
     Some(hex::encode(Sha256::digest(definition)))
 }
 
@@ -69,17 +75,16 @@ pub(super) fn holding_decline<'a>(
     now: Timestamp,
 ) -> Option<&'a DeclineRecord> {
     use crate::utils::time::{DurationUnit, parse_duration_units};
-    let crate::config::TaskCheck::Agent(check) = entry.check.as_ref()? else {
-        return None;
-    };
     let decline = declines.get(name)?.get(checkout)?;
+    let guard = entry.guard();
+    let judge = guard.judges.get(decline.tier)?;
     if !entry.stay
         || decline.since != since
         || decline.fingerprint.as_ref()? != check_fingerprint(entry).as_ref()?
     {
         return None;
     }
-    if let Some(raw) = &check.recheck {
+    if let Some(raw) = &judge.recheck {
         if raw.trim() == "0" {
             return None;
         }
@@ -137,5 +142,131 @@ pub fn load(paths: &crate::StatePaths) -> Result<Ledger, LedgerErr> {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Ledger::new()),
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CheckOn, Judge, TaskCheck, TaskEntry};
+
+    fn judge(prompt: &str, recheck: Option<&str>) -> Judge {
+        Judge {
+            agent: "codex".into(),
+            prompt: Some(prompt.into()),
+            prompt_file: None,
+            timeout: None,
+            recheck: recheck.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn guard_fingerprint_covers_shell_judges_and_polarity() {
+        let mut entry = TaskEntry {
+            check: Some(TaskCheck::Shell("cargo test".into())),
+            judge: vec![
+                judge("first question", None),
+                judge("second question", None),
+            ],
+            on: Some(CheckOn::Fail),
+            ..Default::default()
+        };
+        let original = check_fingerprint(&entry).unwrap();
+        for tier in 0..2 {
+            let prompt = entry.judge[tier].prompt.replace("edited".into());
+            assert_ne!(
+                check_fingerprint(&entry).as_deref(),
+                Some(original.as_str())
+            );
+            entry.judge[tier].prompt = prompt;
+        }
+        entry.check = Some(TaskCheck::Shell("cargo check".into()));
+        assert_ne!(
+            check_fingerprint(&entry).as_deref(),
+            Some(original.as_str())
+        );
+        entry.check = Some(TaskCheck::Shell("cargo test".into()));
+        entry.on = Some(CheckOn::Success);
+        assert_ne!(
+            check_fingerprint(&entry).as_deref(),
+            Some(original.as_str())
+        );
+        entry.on = Some(CheckOn::Fail);
+        entry.check = None;
+        assert!(
+            check_fingerprint(&entry).is_some(),
+            "judge-only chains have a fingerprint"
+        );
+    }
+
+    #[test]
+    fn legacy_decline_defaults_to_the_first_judge() {
+        let decoded = serde_json::from_value::<DeclineRecord>(serde_json::json!({
+            "at": "2026-06-01T00:00:00Z", "since": null,
+            "profile": "codex", "reason": "nothing to do"
+        }));
+        assert!(
+            decoded.is_ok(),
+            "declines stored without a tier remain readable: {decoded:?}"
+        );
+        assert_eq!(decoded.unwrap().tier, 0);
+    }
+
+    #[test]
+    fn holding_decline_reads_the_recorded_judge_tier() {
+        let entry = TaskEntry {
+            check: Some(TaskCheck::Agent(judge("first question", None))),
+            judge: vec![judge("second question", Some("1m"))],
+            stay: true,
+            on: Some(CheckOn::Success),
+            ..Default::default()
+        };
+        let checkout = PathBuf::from("/checkout");
+        let mut declines = Declines::from([(
+            "guard".into(),
+            BTreeMap::from([(
+                checkout.clone(),
+                DeclineRecord {
+                    at: Timestamp::from_second(1000).unwrap(),
+                    since: None,
+                    reason: "nothing to do".into(),
+                    profile: "codex".into(),
+                    tier: 1,
+                    fingerprint: check_fingerprint(&entry),
+                },
+            )]),
+        )]);
+        for (second, holds) in [(1059, true), (1060, false)] {
+            assert_eq!(
+                holding_decline(
+                    &declines,
+                    "guard",
+                    &entry,
+                    &checkout,
+                    None,
+                    Timestamp::from_second(second).unwrap()
+                )
+                .is_some(),
+                holds
+            );
+        }
+        declines
+            .get_mut("guard")
+            .unwrap()
+            .get_mut(&checkout)
+            .unwrap()
+            .tier = 2;
+        assert!(
+            holding_decline(
+                &declines,
+                "guard",
+                &entry,
+                &checkout,
+                None,
+                Timestamp::from_second(1000).unwrap()
+            )
+            .is_none(),
+            "removed tiers do not hold"
+        );
     }
 }

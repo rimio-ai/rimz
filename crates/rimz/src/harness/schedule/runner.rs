@@ -638,6 +638,7 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::AlreadyLaunched);
         }
         if self.mode == LoopRunMode::Scheduled
+            && self.entry.guard().shell.is_none()
             && super::launch_ledger::holding_decline(
                 &super::launch_ledger::load_declines(&paths)?,
                 &self.name,
@@ -1118,6 +1119,7 @@ impl<'a> TaskFire<'a> {
                         &self.name,
                         &checkout,
                         super::launch_ledger::DeclineRecord {
+                            tier: 0,
                             at: assist.at,
                             since: self
                                 .condition
