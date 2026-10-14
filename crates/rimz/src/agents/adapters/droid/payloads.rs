@@ -13,13 +13,15 @@ use crate::agents::lifecycle::AskKind;
 #[serde(default)]
 pub struct DroidSessionStart {
     pub source: SessionSource,
-    /// Parent session: the compacted session on `source: compact`, a fork
-    /// parent otherwise. Absent before Droid added the field.
+    /// Parent session: the session a `/handoff` successor replaced on
+    /// `source: compact`, a fork parent otherwise. Absent before Droid added
+    /// the field.
     pub previous_session_id: Option<String>,
 }
 
 impl DroidSessionStart {
-    /// The session a compaction close belongs to when Droid rotated the id.
+    /// The session a compaction close belongs to when a `/handoff` successor
+    /// rotated the id; in-place compaction keeps it and fires no close.
     pub fn compacted_session_id(&self) -> Option<&str> {
         if self.source != SessionSource::Compact {
             return None;

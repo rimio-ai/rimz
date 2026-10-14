@@ -587,7 +587,7 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
             .launch
             .compact_command("keep\nthe plan")
             .as_deref(),
-        Some("/compact keep the plan")
+        Some("/compress keep the plan")
     );
     assert_eq!(
         DroidAdapter

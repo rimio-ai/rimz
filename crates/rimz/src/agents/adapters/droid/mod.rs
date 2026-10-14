@@ -113,7 +113,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
         max_turn_flag: None,
         interrupt_key: None,
         compact_command: Some(super::CompactCommand {
-            command: "/compact",
+            command: "/compress",
             instruction: super::CompactInstruction::Trailing,
         }),
         presets: super::PresetMatchers {
@@ -143,8 +143,9 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     answer: ConcernCoverage::Unsupported {
         reason: "Notification carries no request id or options; answer in the Droid pane",
     },
-    compaction: ConcernCoverage::Wired {
-        via: "PreCompact/SessionStart:compact",
+    compaction: ConcernCoverage::Partial {
+        via: "PreCompact opens; the next lifecycle signal closes the bracket",
+        gap: "in-place compaction fires no completion hook; the head lifts on the next signal or after 90 s",
     },
     subagents: ConcernCoverage::Unsupported {
         reason: "SubagentStop carries no child identity",
@@ -159,8 +160,9 @@ const DROID_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "background shells are not mapped",
     },
     session_end: ConcernCoverage::Wired { via: "SessionEnd" },
-    idle_notification: ConcernCoverage::Wired {
-        via: "Notification:idle_prompt",
+    idle_notification: ConcernCoverage::Partial {
+        via: "Notification:idle_prompt after a user interrupt",
+        gap: "no idle-timeout Notification nudge",
     },
     context_usage: ConcernCoverage::Wired {
         via: "v2 session settings lastCallTokenUsage/tokenUsage plus exact configured/model capacity",
@@ -233,8 +235,9 @@ const DROID_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     compacting: HookCoverage::Native {
         event: "PreCompact",
     },
-    compaction_ended: HookCoverage::Native {
-        event: "SessionStart",
+    compaction_ended: HookCoverage::Derived {
+        via: "SessionStart:compact after /handoff; else next lifecycle signal in step + display-window expiry",
+        gap: "in-place compaction fires no end event",
     },
     ended: HookCoverage::Native {
         event: "SessionEnd",
@@ -352,8 +355,9 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             notification.as_ref().and_then(DroidNotification::ask_kind),
         );
         let session_start = parse_session_start(payload);
-        // A compaction starts a replacement session; its close belongs to the
-        // session whose `PreCompact` opened the bracket.
+        // A `/handoff` successor's `SessionStart:compact` names the session it
+        // replaced; its close belongs to the session whose `PreCompact` opened
+        // the bracket.
         let compacted_id = (event_name == "SessionStart")
             .then(|| session_start.compacted_session_id().map(ToOwned::to_owned))
             .flatten();
@@ -394,7 +398,7 @@ impl crate::agents::capabilities::HookCapability for DroidAdapter {
             observation.task = sanitize_user_prompt(prompt.as_deref());
             observation.prompt = SanitizedPrompt::new(prompt.as_deref());
         }
-        // The replacement session's transcript must not repoint the compacted row.
+        // The handoff successor's transcript must not repoint the compacted row.
         observation.transcript_path = compacted_id
             .is_none()
             .then(|| optional_payload_string(payload, &["transcript_path"]))
