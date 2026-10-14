@@ -122,6 +122,57 @@ fn corruption_before_another_frame_is_an_error() {
 }
 
 #[test]
+fn cursor_validation_matches_row_shapes() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = paths(dir.path());
+    let lock = WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+    let first = frame();
+    let first_end = seed(&paths, &first);
+    crate::disk::atomic::append_record_bytes(&paths.hook_ingress_log, b"torn").unwrap();
+    let fused = frame();
+    let fused_end = seed(&paths, &fused);
+    crate::disk::atomic::append_record_bytes(&paths.hook_ingress_log, b"corrupt\n").unwrap();
+    let corrupt_end = log_len(&paths).unwrap();
+    for (end, id, valid) in [
+        (first_end, Some(first.event_id.clone()), true),
+        (fused_end, Some(fused.event_id), true),
+        (corrupt_end, None, true),
+        (first_end - 1, Some(first.event_id.clone()), false),
+        (first_end, Some(EventId::new()), false),
+        (0, Some(first.event_id), false),
+    ] {
+        for claimed in [false, true] {
+            let mut cursor = HookDrainCursor::default();
+            if claimed {
+                cursor.claimed = end;
+                cursor.claimed_event_id = id.clone();
+            } else {
+                cursor.applied = end;
+                cursor.applied_event_id = id.clone();
+            }
+            write_cursor(&paths, &cursor, &lock).unwrap();
+            assert_eq!(
+                read_cursor(&paths).unwrap(),
+                if valid {
+                    cursor
+                } else {
+                    HookDrainCursor::default()
+                }
+            );
+        }
+    }
+    crate::disk::atomic::append_record_bytes(&paths.hook_ingress_log, b"unterminated").unwrap();
+    let end = log_len(&paths).unwrap();
+    let cursor = HookDrainCursor {
+        applied: end,
+        claimed: end,
+        ..HookDrainCursor::default()
+    };
+    write_cursor(&paths, &cursor, &lock).unwrap();
+    assert_eq!(read_cursor(&paths).ok(), Some(HookDrainCursor::default()));
+}
+
+#[test]
 fn cursor_preserves_claim_and_recovers_a_lost_truncation_reset() {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths(dir.path());

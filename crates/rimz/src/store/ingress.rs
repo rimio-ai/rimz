@@ -212,31 +212,30 @@ pub fn read_cursor(paths: &StatePaths) -> Result<HookDrainCursor, EventLogErr> {
     if cursor.applied > len || cursor.claimed > len {
         return Ok(HookDrainCursor::default());
     }
-    let mut applied_matches = cursor.applied == 0 && cursor.applied_event_id.is_none();
-    let mut claimed_matches = cursor.claimed == 0 && cursor.claimed_event_id.is_none();
-    if !applied_matches || !claimed_matches {
-        for (at, terminated, bytes) in event_log::frame::read_rows(&paths.hook_ingress_log, 0)? {
-            let end = at + bytes.len() as u64 + u64::from(terminated);
-            if end > cursor.applied.max(cursor.claimed) {
-                break;
+    for (end, expected_id) in [
+        (cursor.applied, &cursor.applied_event_id),
+        (cursor.claimed, &cursor.claimed_event_id),
+    ] {
+        if end == 0 {
+            if expected_id.is_some() {
+                return Ok(HookDrainCursor::default());
             }
-            let id = match event_log::frame::decode_record::<HookIngress>(at, terminated, &bytes) {
-                Ok(frame) => Some(frame.event_id),
-                Err(error) if error.is_corruption() && terminated => {
-                    fused_frame(at, &bytes).map(|(_, frame)| frame.event_id)
-                }
-                Err(error) => return Err(error),
-            };
-            if end == cursor.applied {
-                applied_matches = cursor.applied_event_id == id;
-            }
-            if end == cursor.claimed {
-                claimed_matches = cursor.claimed_event_id == id;
-            }
+            continue;
         }
-    }
-    if !applied_matches || !claimed_matches {
-        return Ok(HookDrainCursor::default());
+        let Some((at, bytes)) = event_log::frame::read_row_ending_at(&paths.hook_ingress_log, end)?
+        else {
+            return Ok(HookDrainCursor::default());
+        };
+        let id = match event_log::frame::decode_record::<HookIngress>(at, true, &bytes) {
+            Ok(frame) => Some(frame.event_id),
+            Err(error) if error.is_corruption() => {
+                fused_frame(at, &bytes).map(|(_, frame)| frame.event_id)
+            }
+            Err(error) => return Err(error),
+        };
+        if *expected_id != id {
+            return Ok(HookDrainCursor::default());
+        }
     }
     Ok(cursor)
 }
