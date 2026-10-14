@@ -91,6 +91,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Copilot
 
+- Launches refuse when effective `disableAllHooks` is true. Explicit ask launches also refuse a local non-manual `defaultPermissionMode`; the error names the settings file and fix. RimZ takes each key from the first file that sets it: `.github/copilot/settings.local.json`, then `.github/copilot/settings.json`, then your user `settings.json`.
 - The wrapped statusline supplies the resolved model, effort, context tokens, and cumulative session tokens. The live dollar figure comes from the session's AI credits at $0.01 per credit, or is an estimate at that model when credits are absent; when the statusline is missing or replaced, RimZ falls back to OpenTelemetry metadata.
 - That fallback needs a local telemetry file. An OTLP exporter configured in the environment sends the telemetry elsewhere, so RimZ warns `Copilot direct-launch enrichment is unavailable because an OTLP exporter is configured; set COPILOT_OTEL_FILE_EXPORTER_PATH to retain a file source` and the card keeps lifecycle alone. Point `COPILOT_OTEL_FILE_EXPORTER_PATH` at a file to keep both.
 - History adds per-model tokens and credit-metered dollars (local estimates where credits are absent) to `rimz stats` and the provider dashboard. These are not an account billing ledger.
