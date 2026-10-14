@@ -58,7 +58,7 @@ Exact `Notification` classification remains authoritative when Grok emits it: pe
 
 ## Account and balance
 
-The account probe reads `$GROK_AUTH_PATH`, else `${GROK_HOME:-~/.grok}/auth.json`, as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid session login wins over an API-key record, with stable scope order as the final tie-breaker. `XAI_API_KEY` or the legacy `GROK_CODE_XAI_API_KEY` contributes presence only when the file has no usable record. Session/OIDC login is metered, API-key login is unmetered, and malformed auth is unavailable.
+The account probe reads `$GROK_AUTH_PATH`, else `${GROK_HOME:-~/.grok}/auth.json`, as non-secret metadata. It never retains `key` or `refresh_token`; deserialization records only whether each exists. The freshest valid OIDC or external session login wins over an API-key record, with stable scope order as the final tie-breaker. Obsolete `web_login` records do not count as signed in. `XAI_API_KEY` or `GROK_CODE_XAI_API_KEY` contributes presence only when the file has no usable record. A truthy `GROK_DISABLE_API_KEY_AUTH` disables API-key login entirely, as upstream does: stored `api_key` records stop counting and the environment key is ignored. Empty, `0`, `false`, `off`, and `no` (case-insensitive, trimmed) disable that flag; other values enable it. Session login is metered, API-key login is unmetered, and malformed auth is unavailable. Layered config authentication restrictions and team pins are not yet projected.
 
 The adapter makes no network request and reports no billing or quota window.
 

@@ -23,7 +23,7 @@ enum AuthMode {
 
 impl AuthMode {
     const fn is_session(self) -> bool {
-        matches!(self, Self::WebLogin | Self::Oidc | Self::External)
+        matches!(self, Self::Oidc | Self::External)
     }
 
     const fn label(self) -> &'static str {
@@ -74,8 +74,11 @@ impl AuthRecord {
         self.create_time.as_deref()?.parse().ok()
     }
 
-    fn usable(&self, now: Timestamp) -> bool {
-        if !self.has_key || self.auth_mode == AuthMode::Unknown {
+    fn usable(&self, now: Timestamp, api_key_auth_disabled: bool) -> bool {
+        if !self.has_key
+            || matches!(self.auth_mode, AuthMode::Unknown | AuthMode::WebLogin)
+            || (api_key_auth_disabled && self.auth_mode == AuthMode::ApiKey)
+        {
             return false;
         }
         let expired = self
@@ -137,11 +140,23 @@ pub(super) fn probe() -> AccountProbe {
         ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]
             .into_iter()
             .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty())),
+        std::env::var("GROK_DISABLE_API_KEY_AUTH").ok().as_deref(),
         Timestamp::now(),
     )
 }
 
-fn probe_at(path: &std::path::Path, api_key_present: bool, now: Timestamp) -> AccountProbe {
+fn probe_at(
+    path: &std::path::Path,
+    api_key_present: bool,
+    disable_api_key_auth: Option<&str>,
+    now: Timestamp,
+) -> AccountProbe {
+    let api_key_auth_disabled = disable_api_key_auth.is_some_and(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "off" | "no"
+        )
+    });
     let bytes = match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -154,7 +169,7 @@ fn probe_at(path: &std::path::Path, api_key_present: bool, now: Timestamp) -> Ac
         };
         let mut usable = records
             .iter()
-            .filter(|(_, record)| record.usable(now))
+            .filter(|(_, record)| record.usable(now, api_key_auth_disabled))
             .collect::<Vec<_>>();
         usable.sort_by(|(scope_a, a), (scope_b, b)| {
             b.auth_mode
@@ -167,7 +182,7 @@ fn probe_at(path: &std::path::Path, api_key_present: bool, now: Timestamp) -> Ac
             return AccountProbe::Found(record.account(scope, file_mtime_ms(path)));
         }
     }
-    if api_key_present {
+    if api_key_present && !api_key_auth_disabled {
         return AccountProbe::Found(AgentAccount {
             scope: ProviderAccountScope::KindWide,
             plan: Some("API key".to_owned()),
@@ -220,7 +235,7 @@ mod tests {
         )
         .unwrap();
         let now = "2026-07-20T00:00:00Z".parse().unwrap();
-        let AccountProbe::Found(account) = probe_at(&path, false, now) else {
+        let AccountProbe::Found(account) = probe_at(&path, false, None, now) else {
             panic!("session account expected");
         };
         assert_eq!(account.account_id.as_deref(), Some("user-1"));
@@ -228,13 +243,68 @@ mod tests {
 
         std::fs::write(&path, "{").unwrap();
         assert!(matches!(
-            probe_at(&path, true, now),
+            probe_at(&path, true, None, now),
             AccountProbe::Unavailable
         ));
         std::fs::remove_file(&path).unwrap();
-        let AccountProbe::Found(account) = probe_at(&path, true, now) else {
+        let AccountProbe::Found(account) = probe_at(&path, true, None, now) else {
             panic!("environment API key fallback expected");
         };
         assert_eq!(account.metered, Some(false));
+    }
+
+    #[test]
+    fn web_login_is_not_a_usable_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{"web":{"auth_mode":"web_login","key":"obsolete","refresh_token":"obsolete"}}"#,
+        )
+        .unwrap();
+        let now = Timestamp::now();
+        assert!(matches!(
+            probe_at(&path, false, None, now),
+            AccountProbe::LoggedOut
+        ));
+        let AccountProbe::Found(account) = probe_at(&path, true, None, now) else {
+            panic!("API key fallback")
+        };
+        assert_eq!(account.plan.as_deref(), Some("API key"));
+    }
+
+    #[test]
+    fn environment_lockdown_disables_api_key_logins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let now = Timestamp::now();
+        for stored in [false, true] {
+            if stored {
+                std::fs::write(&path, r#"{"k":{"auth_mode":"api_key","key":"x"}}"#).unwrap();
+            }
+            for value in ["1", "true", "YES", "on", "anything", " true "] {
+                assert!(
+                    matches!(
+                        probe_at(&path, !stored, Some(value), now),
+                        AccountProbe::LoggedOut
+                    ),
+                    "{value}"
+                );
+            }
+            for value in ["", "0", "FALSE", "off", "no", " false "] {
+                assert!(
+                    matches!(
+                        probe_at(&path, !stored, Some(value), now),
+                        AccountProbe::Found(_)
+                    ),
+                    "{value}"
+                );
+            }
+        }
+        std::fs::write(&path, r#"{"s":{"auth_mode":"oidc","key":"x"}}"#).unwrap();
+        assert!(matches!(
+            probe_at(&path, false, Some("1"), now),
+            AccountProbe::Found(_)
+        ));
     }
 }
