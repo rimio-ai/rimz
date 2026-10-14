@@ -178,6 +178,7 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, toolchain, quality gates.
+- [cli-scenes.md](./docs/contributing/cli-scenes.md) — the scene grammar `rimz agents` and `rimz teams` share: attention-first lists, one address shape, exit 1 versus exit 2, action receipts, guarded positional launches, one vocabulary.
 - [dependabot-loop.md](./docs/contributing/dependabot-loop.md) — the worktree-isolated dependency repair loop, duplicate prevention, and merge-time closure.
 - [agent-adapters.md](./docs/contributing/agent-adapters.md) — the built-in adapter integration playbook: protocol reference to landed adapter, step by step, with the deliverables checklist.
 - [model-upgrades.md](./docs/contributing/model-upgrades.md) — what a new provider model needs: the Codex alias table, its effort check, and the two pricing cases upstream leaves silent.
