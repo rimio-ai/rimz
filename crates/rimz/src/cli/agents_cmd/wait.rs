@@ -276,7 +276,11 @@ impl WaitStyle {
                     return Ok(());
                 }
                 mark_joined(store, session_name, std::iter::once(outcome));
-                print_single_outcome(outcome, json)
+                if json {
+                    print_wait_json(std::iter::once(outcome))
+                } else {
+                    print_single_outcome(outcome)
+                }
             }
             Self::Any { json } => {
                 let outcome = settled_outcome(waits, selected)?;
@@ -908,9 +912,8 @@ fn write_wait_header(out: &mut impl Write, outcome: &TargetOutcome) -> Result<()
     Ok(())
 }
 
-fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
+fn print_single_outcome(outcome: &TargetOutcome) -> Result<()> {
     match &outcome.payload {
-        TerminalPayload::Run(record) if json => render::json_pretty(record),
         TerminalPayload::Run(record) => {
             let mut stdout = render::out();
             let mut stderr = render::err();
@@ -922,7 +925,6 @@ fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
                 render::prose::prose_width(0),
             )
         }
-        TerminalPayload::Agent { .. } if json => render::json_pretty(&outcome.entry()),
         TerminalPayload::Agent { last_message, .. } => supervised::output::print_final_message(
             supervised::output::FinalMessage {
                 scope: "turn",

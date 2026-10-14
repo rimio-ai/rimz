@@ -5056,7 +5056,7 @@ fn wait_single_run_prints_full_human_output_and_terminal_exit() {
 }
 
 #[test]
-fn wait_single_run_json_prints_full_record() {
+fn wait_single_run_json_prints_keyed_entry() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
@@ -5072,12 +5072,17 @@ fn wait_single_run_json_prints_full_record() {
         .expect("wait for one JSON run");
 
     assert!(out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("full run record");
-    assert_eq!(json["run_id"], record.run_id.as_str());
-    assert_eq!(json["prompt"], "task for swift-otter");
-    assert_eq!(json["last_message"], "done");
-    assert_eq!(json["cost_usd"], 0.42);
-    assert!(json.get("exit").is_none(), "must not use wait summary JSON");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("wait result map");
+    let entries = json.as_object().expect("keyed wait entries");
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[record.run_id.as_str()];
+    assert_eq!(entry["status"], "completed");
+    assert_eq!(entry["exit"], 0);
+    assert_eq!(entry["last_message"], "done");
+    assert_eq!(entry["cost"], 0.42);
+    assert!(entry.get("run_id").is_none());
+    assert!(entry.get("prompt").is_none());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 1);
 }
 
 #[test]
@@ -5228,9 +5233,9 @@ fn completed_subagent_wait_prints_the_durable_result_after_the_child_ends() {
         .expect("wait for completed subagent JSON");
 
     assert!(out.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("subagent run JSON");
-    assert_eq!(json["run_id"], record.run_id.as_str());
-    assert_eq!(json["last_message"], "durable child answer\n");
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("subagent wait map");
+    assert_eq!(json["quiet-fox"]["last_message"], "durable child answer\n");
+    assert_eq!(json["quiet-fox"]["status"], "completed");
 
     for args in [
         vec!["subagents", "wait"],
@@ -5525,10 +5530,11 @@ fn wait_preserves_typed_references_and_deduplicates() {
         .unwrap();
     let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        result["run_id"],
-        run.run_id.as_str(),
+        result.as_object().map(serde_json::Map::len),
+        Some(1),
         "duplicate refs become a single wait"
     );
+    assert_eq!(result[run.run_id.as_str()]["status"], "completed");
 }
 
 #[test]
@@ -5721,7 +5727,7 @@ fn assert_run_wait_ignores_reason_read_error(stream: bool) {
         if !stream {
             let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             if status.is_terminal() {
-                assert_eq!(result["status"], "completed");
+                assert_eq!(result[record.run_id.as_str()]["status"], "completed");
             } else {
                 assert_eq!(result[record.run_id.as_str()]["status"], "timed_out");
                 assert!(result[record.run_id.as_str()].get("reason").is_none());
