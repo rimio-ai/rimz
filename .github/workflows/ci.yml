@@ -235,6 +235,11 @@ jobs:
         with:
           version: "v0.16.0"
 
+      - name: cargo xtask loop-tests
+        run: |
+          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
+          cargo xtask loop-tests
+
       - name: cargo xtask test (compile)
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"

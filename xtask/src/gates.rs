@@ -13,6 +13,7 @@ use crate::atlas::conform_ratchet;
 use crate::build::{build_plugin, verify_vendored_plugin};
 use crate::docs_links::docs_links;
 use crate::invariants::invariants;
+use crate::loop_tests::{loop_tests, run_tests};
 use crate::runner::{Captured, ensure_success, run, run_streamed, run_with_env_and_removed};
 use crate::sandbox::{AllowedSkips, HostSandbox};
 use crate::spinner::Spinner;
@@ -342,11 +343,12 @@ pub(crate) fn gate(root: &Path, args: &[String]) -> Result<()> {
         |root: &Path, progress: &mut dyn FnMut(&str)| gate_lint(root, options.keep_going, progress);
     let test_step =
         |root: &Path, progress: &mut dyn FnMut(&str)| gate_test(root, options.keep_going, progress);
-    let steps: [(&str, CompactGate); 7] = [
+    let steps: [(&str, CompactGate); 8] = [
         ("fmt", &fmt_step),
         ("invariants", &gate_invariants),
         ("conform", &gate_conform),
         ("docs-links", &gate_docs_links),
+        ("loop-tests", &gate_loop_tests),
         ("lint", &lint_step),
         ("doc", &gate_doc),
         ("test", &test_step),
@@ -488,6 +490,10 @@ fn gate_conform(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResu
 
 fn gate_docs_links(root: &Path, _progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
     Ok(in_process_gate(|| docs_links(root)))
+}
+
+fn gate_loop_tests(root: &Path, progress: &mut dyn FnMut(&str)) -> Result<GateResult> {
+    Ok(in_process_gate(|| run_tests(root, "uv", progress)))
 }
 
 /// Under `keep_going`, every lint set runs and cargo's own `--keep-going`
@@ -770,6 +776,7 @@ pub(crate) fn externals(root: &Path) -> Result<()> {
 // workflows, off the PR/push hot path.
 pub(crate) fn ci(root: &Path) -> Result<()> {
     checks(root)?;
+    loop_tests(root)?;
     test(root, &[])
 }
 
@@ -892,7 +899,7 @@ fn report_gate_complete(failed: &[&str]) {
     }
 }
 
-fn failure_detail(output: &str) -> String {
+pub(crate) fn failure_detail(output: &str) -> String {
     let detail = trim_cargo_noise(output);
     if detail.is_empty() {
         "command failed without output".to_owned()
