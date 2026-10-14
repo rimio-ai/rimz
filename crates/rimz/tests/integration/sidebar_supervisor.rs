@@ -478,21 +478,35 @@ fn pane_disappearance_exits_and_records_supervisor_pane_gone() {
 fn pane_watchdog_keeps_absence_strikes_across_host_rounds() {
     let env = Env::new();
     let mut pane = Pane::new(&env);
+    let log = env.home_root.join("strikes.log");
     pane.start(|command| {
         command
             .env("RIMZ_TEST_SIDEBAR_PANE_PROBE", "absent")
-            .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "1500");
+            .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS", "1500")
+            .env("RIMZ_TEST_SIDEBAR_PANE_PROBE_STRIKE_LOG", &log);
     });
-    // Two strikes land before the reload. Retained, the third closes within
-    // one interval of the new round; reset, three fresh probes need 4.5s.
+    // The supervisor logs every change of its strike count. Reload once the
+    // first strike lands, leaving two probe intervals for the reload to take
+    // before a third strike could close the pane; the second hello proves it
+    // did. Retained strikes then log exactly 1,2,3; a reset repeats a count.
     let (stream, _) = pane.accept(None);
-    thread::sleep(Duration::from_millis(3250));
+    let deadline = Instant::now() + WAIT;
+    while std::fs::read_to_string(&log).unwrap_or_default().is_empty() {
+        assert!(
+            Instant::now() < deadline,
+            "first absence strike never landed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
     write_line(&stream, &serde_json::json!({"control": "reload"})).unwrap();
     drop(stream);
     let (_stream, _) = pane.accept(None);
-    assert!(
-        wait_child(pane.child.as_mut().unwrap(), Duration::from_millis(3000)).success(),
-        "retained absence strikes must close before three new probes can run"
+    assert!(pane.finish().success());
+    let strikes = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        strikes.lines().collect::<Vec<_>>(),
+        ["1", "2", "3"],
+        "absence strikes must carry across the host round, log: {strikes:?}"
     );
     assert_eq!(pane.event("supervisor_pane_gone")["pane_id"], "tmux:%11");
 }

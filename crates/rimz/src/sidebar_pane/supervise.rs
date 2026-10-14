@@ -46,6 +46,8 @@ const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ABSENT_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_ABSENT_FILE";
 #[cfg(feature = "testkit")]
+const TEST_PANE_PROBE_STRIKE_LOG_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_STRIKE_LOG";
+#[cfg(feature = "testkit")]
 const TEST_RECORD_POLL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_RECORD_POLL_MS";
 #[cfg(feature = "testkit")]
 const TEST_STABLE_RUN_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_STABLE_RUN_MS";
@@ -625,6 +627,7 @@ impl PaneWatchdog {
     }
 
     fn observe(&mut self, probe: PaneProbe) -> bool {
+        let before = self.strikes;
         match probe {
             PaneProbe::Present(observed_at_ms) => {
                 if self.last_observed_at_ms != Some(observed_at_ms) {
@@ -639,6 +642,9 @@ impl PaneWatchdog {
                 }
             }
             PaneProbe::Unknown => {}
+        }
+        if self.strikes != before {
+            log_test_strike(self.strikes);
         }
         self.strikes >= PANE_GONE_STRIKES
     }
@@ -1104,6 +1110,25 @@ fn forced_pane_probe() -> Option<PaneProbe> {
         _ => None,
     }
 }
+
+#[cfg(feature = "testkit")]
+fn log_test_strike(strikes: u8) {
+    use std::io::Write as _;
+    let Some(path) = env::var_os(TEST_PANE_PROBE_STRIKE_LOG_ENV).filter(|path| !path.is_empty())
+    else {
+        return;
+    };
+    if let Ok(mut log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(log, "{strikes}");
+    }
+}
+
+#[cfg(not(feature = "testkit"))]
+fn log_test_strike(_strikes: u8) {}
 
 #[cfg(not(feature = "testkit"))]
 fn reap_poll_interval() -> Duration {
