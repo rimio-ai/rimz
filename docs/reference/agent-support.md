@@ -123,8 +123,12 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ### Kimi
 
-- Children resumed from an earlier session, and children started at the same moment, appear only when they stop.
-- A child's `Stop` hook does not end the parent's turn: the parent stays running until its own final `Stop`.
+- Kimi Code 2.1.1 or later is required. Installation refuses a detected older version with `kimi upgrade -y`; an unknown version does not block installation.
+- Invalid hook entries block installation and preview without changing the config. Fix or remove the named entry: Kimi Code ignores every hook while one entry is invalid.
+- `TurnStarted` opens main-agent background turns; user turns still open through `UserPromptSubmit` alone.
+- Children appear at the next recorded root hook after their durable spawn record lands. Failed children settle as failed; cancelled and timed-out children show as finished. Finished children stay closed on resume.
+- The main wire distinguishes child-fired turn ends from parent boundaries. A child's compaction still shows on the parent card; cancellation can leave it compacting until the next root signal.
+- Parent live dollars, lifetime spend, and fleet spend include child wires; parent context tokens remain main-only.
 
 ### Qwen
 
@@ -355,7 +359,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
-| Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ `SubagentStart` + child session files | ◐ `SubagentStop` + child session files | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp, Kiro), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
