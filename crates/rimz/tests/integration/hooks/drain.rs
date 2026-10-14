@@ -480,6 +480,52 @@ fn prompt_receipt_does_not_wait_for_a_later_frame() {
 }
 
 #[test]
+fn stop_answers_a_satisfied_reply_client() {
+    use std::io::{BufRead as _, BufReader};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut frame = stop_frame(&env);
+    frame.source = AgentKind::new_unchecked("cursor");
+    frame.event = Some("sessionStart".into());
+    let (frame, through) = append_frame(&env, frame);
+    let (mut drainer, mut release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
+    let mut request = drainer_connection(&store);
+    request
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    writeln!(
+        request,
+        "{}",
+        json!({"through":through, "reply_for":frame.event_id})
+    )
+    .unwrap();
+    let mut stop = drainer_connection(&store);
+    writeln!(stop, "{}", json!({"through":0, "stop":true})).unwrap();
+    release.write_all(&[1]).unwrap();
+    let mut line = String::new();
+    let received = BufReader::new(request).read_line(&mut line);
+    assert!(drainer.wait().unwrap().success());
+    assert!(
+        WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_lock())
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        received.is_ok() && !line.is_empty(),
+        "a stop must answer the satisfied client: {received:?}"
+    );
+    let receipt: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        receipt["reply"],
+        json!({}),
+        "the earned reply must survive stop"
+    );
+    assert!(receipt["applied"].as_u64().unwrap() >= through);
+}
+
+#[test]
 fn late_request_claims_a_cached_reply_once() {
     let env = Env::new();
     env.record(&env.project_root);
