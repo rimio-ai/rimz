@@ -20,7 +20,7 @@ fn remote_control_status_preserves_host_readiness_labels() {
     )]);
     let Uninstalled(issue) = rimz::agents::find_definition("codex")
         .unwrap()
-        .runtime_control_readiness(true, &login_env)
+        .runtime_control_readiness(true, &login_env, None)
     else {
         panic!("empty Codex home has no managed install");
     };

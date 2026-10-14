@@ -309,11 +309,13 @@ A remote session's SDK child inherits the user's Claude hooks, but its events ar
 | install | `claude` is not on `PATH` |
 | settings | `disableRemoteControl: true` in Claude's `settings.json` |
 | consent | `remoteDialogSeen` in `.claude.json` is missing, or set to anything other than `true`; an unreadable file does not block |
+| traffic switches | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` or `DISABLE_GROWTHBOOK` is present in the launch environment or settings `env` |
+| folder trust | the supplied project root has no Claude folder-trust decision under the selected login; machine-wide toggle preflight supplies no root and skips this check |
 | version | `claude --version` reports below 2.1.51; an unreadable version skips the remaining checks with a warning |
 | authentication (2.1.157 and later) | `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN` in the launch environment or settings `env`, or `apiKeyHelper` in settings |
 | endpoint (2.1.196 and later) | an `ANTHROPIC_BASE_URL` other than `https://api.anthropic.com`, or `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, or `CLAUDE_CODE_USE_FOUNDRY`, in the launch environment or settings `env` |
 
-A long-lived `CLAUDE_CODE_OAUTH_TOKEN` blocks because it can make model requests but cannot establish Remote Control; the fix message tells the user to unset it and run `claude auth login`. A ready result carries the host argv, prefixed with `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one. `remote_control_status` separately reads `remoteControlAtStartup: true` to light the provider dashboard's `⇅ rc` flag for ordinary pane sessions, withholding it under `disableRemoteControl` or when the version-gated authentication or endpoint rows above would block.
+A long-lived `CLAUDE_CODE_OAUTH_TOKEN` blocks because it can make model requests but cannot establish Remote Control; the fix message tells the user to unset it and run `claude auth login`. Traffic and trust checks apply even when the version is unknown. An attended `rimz start` offers folder trust before readiness gates the host; a detached start or an unaccepted offer refuses with the trust fix. A ready result carries the host argv, prefixed with `env CLAUDE_CONFIG_DIR=<home>` when the room's login sets one. `remote_control_status` separately reads `remoteControlAtStartup: true` to light the provider dashboard's `⇅ rc` flag for ordinary pane sessions, withholding it under `disableRemoteControl`, either traffic switch, or when the version-gated authentication or endpoint rows above would block. It skips folder trust because the pane's own launch already trusted its folder.
 
 ### Consent
 

@@ -1073,6 +1073,7 @@ pub trait RuntimeControlCapability: CoreCapability {
         &self,
         _enabled: bool,
         _login_env: &BTreeMap<String, String>,
+        _project_root: Option<&Path>,
     ) -> runtime_control::RuntimeControlReadiness {
         runtime_control::RuntimeControlReadiness::Disabled
     }

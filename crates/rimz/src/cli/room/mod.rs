@@ -576,25 +576,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         entry,
         RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
     );
-    let background_view = if let Some(logins) = logins.as_ref().filter(|_| starting) {
-        // Fail-fast precondition for installed agents: fixable host misconfiguration
-        // aborts the launch here with the fix, before session side effects, and
-        // after account resolution so each host is judged in the home it will run
-        // under. An enabled host whose agent is not installed is an inert toggle,
-        // skipped here so the room still starts; `rimz doctor` surfaces it.
-        let envs =
-            rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
-        rimz::remote_control::prepare_hosts(&machine_config.remote_control, &envs);
-        let readiness =
-            rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control, &envs);
-        readiness.start_gate()?;
-        Some(readiness)
-    } else {
-        None
-    };
-
     if let RoomEntry::Start { workspace, .. } = &entry
-        && !was_live
         && let Some(logins) = &logins
     {
         let logins = rimz::agents::RoomLoginSet::new(
@@ -612,6 +594,26 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     {
         writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
     }
+
+    let background_view = if let Some(logins) = logins.as_ref().filter(|_| starting) {
+        // Fail-fast precondition for installed agents: fixable host misconfiguration
+        // aborts the launch here with the fix, before session side effects, and
+        // after account resolution so each host is judged in the home it will run
+        // under. An enabled host whose agent is not installed is an inert toggle,
+        // skipped here so the room still starts; `rimz doctor` surfaces it.
+        let envs =
+            rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
+        rimz::remote_control::prepare_hosts(&machine_config.remote_control, &envs);
+        let readiness = rimz::remote_control::ReadinessSnapshot::probe(
+            &machine_config.remote_control,
+            &envs,
+            birth_root,
+        );
+        readiness.start_gate()?;
+        Some(readiness)
+    } else {
+        None
+    };
 
     let source = match &entry {
         RoomEntry::Start { workspace, .. }

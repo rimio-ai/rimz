@@ -101,10 +101,21 @@ impl ReadinessSnapshot {
     pub(crate) fn probe_with(
         config: &RemoteControlConfig,
         envs: &HostLoginEnvs,
-        mut probe: impl FnMut(&str, bool, &BTreeMap<String, String>) -> RuntimeControlReadiness,
+        project_root: Option<&Path>,
+        mut probe: impl FnMut(
+            &str,
+            bool,
+            &BTreeMap<String, String>,
+            Option<&Path>,
+        ) -> RuntimeControlReadiness,
     ) -> Self {
         let mut readiness = |host: RemoteControlHost| match envs.for_host(host) {
-            Ok(env) => probe(host.kind(), config.enabled_for(host.kind()), env),
+            Ok(env) => probe(
+                host.kind(),
+                config.enabled_for(host.kind()),
+                env,
+                project_root,
+            ),
             Err(error) if config.enabled_for(host.kind()) => RuntimeControlReadiness::Blocked(
                 RuntimeControlIssue::new(host.kind(), "account_unavailable", error),
             ),
@@ -116,8 +127,12 @@ impl ReadinessSnapshot {
         )
     }
 
-    pub fn probe(config: &RemoteControlConfig, envs: &HostLoginEnvs) -> Self {
-        Self::probe_with(config, envs, runtime_control::readiness)
+    pub fn probe(
+        config: &RemoteControlConfig,
+        envs: &HostLoginEnvs,
+        project_root: Option<&Path>,
+    ) -> Self {
+        Self::probe_with(config, envs, project_root, runtime_control::readiness)
     }
 
     pub(crate) fn disabled() -> Self {
@@ -131,12 +146,12 @@ impl ReadinessSnapshot {
         let login_env = crate::agents::ambient_env();
         match host {
             RemoteControlHost::Claude => Self::from_readiness(
-                runtime_control::readiness("claude", true, &login_env),
+                runtime_control::readiness("claude", true, &login_env, None),
                 RuntimeControlReadiness::Disabled,
             ),
             RemoteControlHost::Codex => Self::from_readiness(
                 RuntimeControlReadiness::Disabled,
-                runtime_control::readiness("codex", true, &login_env),
+                runtime_control::readiness("codex", true, &login_env, None),
             ),
         }
     }
@@ -276,7 +291,11 @@ pub fn apply_runtime_toggle(
                 }
             };
             prepare_hosts(&machine.remote_control, &envs);
-            let readiness = ReadinessSnapshot::probe(&machine.remote_control, &envs);
+            let readiness = ReadinessSnapshot::probe(
+                &machine.remote_control,
+                &envs,
+                Some(&record.project_root),
+            );
             let backend = crate::mux::backend_for(mux);
             crate::daemon_view::ensure_daemon_view_with_readiness(
                 backend.as_ref(),

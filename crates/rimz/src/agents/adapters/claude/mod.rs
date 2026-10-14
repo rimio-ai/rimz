@@ -1407,8 +1407,9 @@ impl crate::agents::capabilities::RuntimeControlCapability for ClaudeAdapter {
         &self,
         enabled: bool,
         login_env: &BTreeMap<String, String>,
+        project_root: Option<&Path>,
     ) -> super::runtime_control::RuntimeControlReadiness {
-        remote_control::readiness(enabled, login_env)
+        remote_control::readiness(enabled, login_env, project_root)
     }
 
     fn prepare_runtime_control(&self, enabled: bool, login_env: &BTreeMap<String, String>) {

@@ -897,7 +897,7 @@ pub(super) fn collect_remote_control(
         }
         None => rimz::remote_control::HostLoginEnvs::ambient(),
     };
-    let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs);
+    let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs, project_root);
     let advisories = rimz::remote_control::advisories(config, &envs);
     let mut agents = Vec::new();
     for host in hosts {

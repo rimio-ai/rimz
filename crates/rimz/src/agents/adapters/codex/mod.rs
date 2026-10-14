@@ -1400,6 +1400,7 @@ impl crate::agents::capabilities::RuntimeControlCapability for CodexAdapter {
         &self,
         enabled: bool,
         login_env: &BTreeMap<String, String>,
+        _project_root: Option<&Path>,
     ) -> super::runtime_control::RuntimeControlReadiness {
         app_server::daemon::readiness(enabled, login_env)
     }

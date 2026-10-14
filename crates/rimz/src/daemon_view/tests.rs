@@ -138,7 +138,8 @@ fn effective_view_keeps_a_healthy_host_when_its_sibling_account_fails() {
         Ok(envs) => crate::remote_control::ReadinessSnapshot::probe_with(
             &machine.remote_control,
             &envs,
-            |kind, _, _| {
+            Some(&record.project_root),
+            |kind, _, _, _| {
                 assert_eq!(kind, "claude", "the failed kind must not be probed");
                 RuntimeControlReadiness::Ready {
                     host_argv: Some(vec!["claude".to_owned(), "remote-control".to_owned()]),

@@ -90,9 +90,10 @@ pub(crate) fn readiness(
     kind: &str,
     enabled: bool,
     login_env: &BTreeMap<String, String>,
+    project_root: Option<&std::path::Path>,
 ) -> RuntimeControlReadiness {
     super::find_definition(kind).map_or(RuntimeControlReadiness::Disabled, |definition| {
-        definition.runtime_control_readiness(enabled, login_env)
+        definition.runtime_control_readiness(enabled, login_env, project_root)
     })
 }
 
