@@ -32,8 +32,6 @@ pub(super) struct HookPayload {
     pub subagent_id: Option<String>,
     pub subagent_type: Option<String>,
     pub description: Option<String>,
-    /// Sent only by releases whose parent session fired `SubagentStop`.
-    pub exit_code: Option<i32>,
 }
 
 pub(super) fn parse(payload: &Value) -> HookPayload {

@@ -369,7 +369,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Kiro        | Experimental |   ◐   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
 | Qwen        | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ●     |
 | Kimi        | Experimental |   ●   |  ◐   |    ◐    |    ●    |  ●  |     ◐     |
-| Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
+| Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ◐     |
 
 
 <sub>● full: complete and live · ◐ partial: a working version with a stated limit · ✗ unsupported</sub>

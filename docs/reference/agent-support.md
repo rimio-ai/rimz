@@ -70,7 +70,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
-| Grok | ● | ◐ | ● | ◐ | ● | ● |
+| Grok | ● | ◐ | ● | ◐ | ● | ◐ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -139,7 +139,7 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 - RimZ installs passive global hooks only; every permission decision stays in Grok's TUI.
 - A running Grok session reads its hook registry as a snapshot taken at start, so `rimz hooks install` leaves that session calling whatever was registered before. Press `r` in Grok's Hooks tab, or start a new session, to pick up the installed hooks.
-- Permission, plan, diff-review, and question prompts reach `rimz asks` through Grok's `Notification` hook. When a Grok version logs only an unmatched permission request, the card waits with `rimz asks` empty and the pane as the answer surface.
+- Permission, plan, diff-review, and question prompts reach `rimz asks` through Grok's `Notification` hook.
 - Errored and cancelled turns end through Grok's `StopFailure` and `StopCancelled` hooks, and child agents resolve from their own session hooks.
 - Launch reminders reach Grok through `--rules`.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
@@ -314,7 +314,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
-| Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -360,7 +360,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
-| Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 

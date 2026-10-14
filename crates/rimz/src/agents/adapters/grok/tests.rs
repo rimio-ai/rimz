@@ -145,7 +145,7 @@ fn launch_keeps_streaming_flags_out_of_interactive_sessions() {
 }
 
 #[test]
-fn lifecycle_maps_exact_asks_legacy_stop_reasons_and_parent_fired_subagent_stop() {
+fn lifecycle_maps_exact_asks_and_ignores_shutdown() {
     let adapter = GrokAdapter;
     let ask = hook_lifecycle(
         &adapter,
@@ -163,15 +163,6 @@ fn lifecycle_maps_exact_asks_legacy_stop_reasons_and_parent_fired_subagent_stop(
             ..
         }
     ));
-    let interrupted = hook_lifecycle(
-        &adapter,
-        "Stop",
-        &json!({"sessionId":"s1","reason":"cancelled"}),
-    );
-    assert_eq!(
-        interrupted.signal,
-        LifecycleSignal::TurnInterrupted { turn_id: None }
-    );
     assert!(
         hook_observation(
             &adapter,
@@ -180,35 +171,7 @@ fn lifecycle_maps_exact_asks_legacy_stop_reasons_and_parent_fired_subagent_stop(
         )
         .is_none()
     );
-    let child = hook_lifecycle(
-        &adapter,
-        "SubagentStop",
-        &json!({"sessionId":"s1","subagentId":"child-1","exitCode":-1}),
-    );
-    assert_eq!(child.agent_id.as_deref(), Some("child-1"));
-    assert_eq!(child.parent_agent_id.as_deref(), Some("s1"));
-    assert_eq!(
-        child.signal,
-        LifecycleSignal::SubagentStopped { errored: false }
-    );
-    let failed_child = hook_lifecycle(
-        &adapter,
-        "SubagentStop",
-        &json!({"sessionId":"s1","subagentId":"child-2","exitCode":1}),
-    );
-    assert_eq!(
-        failed_child.signal,
-        LifecycleSignal::SubagentStopped { errored: true }
-    );
     assert!(hook_observation(&adapter, "SubagentStart", &json!({"sessionId":"s1"})).is_none());
-    assert!(matches!(
-        hook_signal(
-            &adapter,
-            "Stop",
-            &json!({"sessionId":"s1","reason":"error"})
-        ),
-        LifecycleSignal::TurnEnded { errored: true, .. }
-    ));
     let decoded = hook_output(&adapter, "permission_denied", &json!({}));
     assert_eq!(decoded.class(), AgentHookClass::Unknown);
     assert_eq!(decoded.ask_kind(), None);
@@ -493,98 +456,6 @@ fn managed_catalog_is_passive_and_excludes_pre_tool_use() {
 }
 
 #[test]
-fn local_context_refresh_tracks_events_only_permission_changes() {
-    let dir = tempfile::tempdir().unwrap();
-    let session = dir.path().join("session-1");
-    let updates = session.join("updates.jsonl");
-    let events = session.join("events.jsonl");
-    let pricing = dir.path().join("pricing-cache.json");
-    std::fs::create_dir(&session).unwrap();
-    std::fs::write(&updates, "{}\n").unwrap();
-    std::fs::write(&events, "").unwrap();
-    let ctx = LocalContextRefreshCtx {
-        login_env: &std::collections::BTreeMap::new(),
-        agent_id: "session-1",
-        model_hint: None,
-        prior_session_name: None,
-        current_transcript_path: None,
-        prior_transcript_path: None,
-        prior_transcript_stat: None,
-        prior_spend_fold: None,
-        shared_pricing_cache_path: &pricing,
-    };
-    let initial = refresh_resolved_context(&updates, Some(&events), &ctx).unwrap();
-    assert_eq!(initial.context.settle, crate::agents::FieldPatch::Clear);
-
-    let requested_at = "2026-07-18T04:21:46.248Z";
-    std::fs::write(
-        &events,
-        json!({
-            "ts": requested_at,
-            "type": "permission_requested",
-            "tool_name": "run_terminal_command",
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let requested_ctx = LocalContextRefreshCtx {
-        login_env: &std::collections::BTreeMap::new(),
-        prior_transcript_stat: initial.transcript_stat.as_ref(),
-        prior_spend_fold: None,
-        ..ctx
-    };
-    let requested = refresh_resolved_context(&updates, Some(&events), &requested_ctx).unwrap();
-    assert_eq!(
-        requested
-            .context
-            .settle
-            .as_set()
-            .map(|settle| (settle.at, settle.outcome)),
-        requested_at
-            .parse()
-            .ok()
-            .map(|at| (at, crate::agents::TurnSettleOutcome::NativeWait))
-    );
-
-    let unchanged_ctx = LocalContextRefreshCtx {
-        login_env: &std::collections::BTreeMap::new(),
-        prior_transcript_stat: requested.transcript_stat.as_ref(),
-        prior_spend_fold: None,
-        ..ctx
-    };
-    assert!(refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).is_none());
-
-    let resolved_at = "2026-07-18T04:22:00Z";
-    std::fs::write(
-        &events,
-        format!(
-            "{}\n{}",
-            json!({
-                "ts": requested_at,
-                "type": "permission_requested",
-                "tool_name": "run_terminal_command",
-            }),
-            json!({
-                "ts": resolved_at,
-                "type": "permission_resolved",
-                "tool_name": "run_terminal_command",
-            })
-        ),
-    )
-    .unwrap();
-    let resolved = refresh_resolved_context(&updates, Some(&events), &unchanged_ctx).unwrap();
-    assert_eq!(resolved.context.settle, crate::agents::FieldPatch::Clear);
-    assert!(
-        hook_observation(
-            &GrokAdapter,
-            "permission_requested",
-            &json!({"sessionId":"session-1","toolName":"run_terminal_command"})
-        )
-        .is_none()
-    );
-}
-
-#[test]
 fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session-1");
@@ -665,7 +536,7 @@ fn completed_usage_preserves_occupancy_and_estimates_missing_cost() {
         shared_pricing_cache_path: &pricing,
     };
 
-    let refresh = refresh_resolved_context(&updates, None, &ctx).unwrap();
+    let refresh = refresh_resolved_context(&updates, &ctx).unwrap();
     let tokens = refresh.context.tokens.clone().into_value().unwrap();
     assert_eq!(tokens.current_context_tokens, Some(4_000));
     assert_eq!(tokens.used_percentage, Some(40));

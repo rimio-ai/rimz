@@ -26,7 +26,7 @@ use super::{
     AgentLifecycleObservation, AgentTokenUsage, AgentTurnError, FieldPatch, HookOutput,
     HookRouting, LocalContextPatch, LocalContextRefresh, LocalContextRefreshCtx, LocalTokenPatch,
     RefreshTrigger, Result, SanitizedPrompt, SessionOrigin, TranscriptMessage, TurnErrorClass,
-    TurnSettle, TurnSettleOutcome, non_empty_trimmed,
+    non_empty_trimmed,
 };
 use crate::ids::AgentSessionId;
 
@@ -138,8 +138,9 @@ const GROK_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     compaction: ConcernCoverage::Wired {
         via: "PreCompact/PostCompact",
     },
-    subagents: ConcernCoverage::Wired {
-        via: "SubagentStart/SubagentStop",
+    subagents: ConcernCoverage::Partial {
+        via: "SubagentStart + correlated child turn reports",
+        gap: "child completion depends on the recorded spawning parent",
     },
     launch_reminders: ConcernCoverage::Wired { via: "--rules" },
     background_parking: ConcernCoverage::Unsupported {
@@ -196,8 +197,9 @@ const GROK_USER_COVERAGE: UserCoverage = UserCoverage {
     ask: CapabilityLevel::Full {
         note: "permission, plan, diff-review, and question prompts all reach rimz asks",
     },
-    subagents: CapabilityLevel::Full {
-        note: "children nest live under the parent card with name, task, and tokens",
+    subagents: CapabilityLevel::Partial {
+        shows: "children nest live under the parent card with name, task, and tokens",
+        limit: "child completion requires correlation with the recorded spawning parent",
     },
 };
 
@@ -218,8 +220,9 @@ const GROK_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     subagent_started: HookCoverage::Native {
         event: "SubagentStart",
     },
-    subagent_stopped: HookCoverage::Native {
-        event: "SubagentStop",
+    subagent_stopped: HookCoverage::Derived {
+        via: "child turn report + shared subagent correlation",
+        gap: "the child envelope carries no parent identity",
     },
     compacting: HookCoverage::Native {
         event: "PreCompact",
@@ -284,7 +287,7 @@ const GROK_HOOKS: &[HookEventSpec] = &[
     .progress(),
     HookEventSpec::lifecycle(
         "SubagentStop",
-        r#"{"sessionId":"s1","subagentId":"child","exitCode":0}"#
+        r#"{"sessionId":"child","subagentId":"child","subagentType":"explore"}"#
     )
     .progress(),
     HookEventSpec::lifecycle(
@@ -395,15 +398,10 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
         );
         let root_id = parsed.session_id.as_deref().and_then(non_empty_trimmed);
         let child_id = parsed.subagent_id.as_deref().and_then(non_empty_trimmed);
-        // Grok 1.0.30 fires `SubagentStop` from inside the child as its turn
-        // gate, so the envelope session is the child itself. Releases that fired
-        // it from the parent sent the parent's session and an exit code.
-        let child_gate = canonical == "SubagentStop" && root_id.is_some() && root_id == child_id;
-        let Some(signal) = lifecycle_signal(self.spec(), &canonical, &parsed, child_gate) else {
+        let Some(signal) = lifecycle_signal(self.spec(), &canonical, &parsed) else {
             return Ok(decoded);
         };
-        let is_subagent =
-            matches!(canonical.as_str(), "SubagentStart" | "SubagentStop") && !child_gate;
+        let is_subagent = canonical == "SubagentStart";
         if is_subagent && (root_id.is_none() || child_id.is_none()) {
             return Ok(decoded);
         }
@@ -495,8 +493,7 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
                         .as_deref()
                         .and_then(non_empty_trimmed)
                         .or_else(|| {
-                            // Releases before `lastAssistantMessage` report only
-                            // a completed `Stop`; its branch fold stays the fallback.
+                            // A teardown `Stop` can omit `lastAssistantMessage`.
                             (canonical == "Stop")
                                 .then_some(observation.transcript_path.as_deref())
                                 .flatten()
@@ -546,8 +543,7 @@ impl crate::agents::capabilities::ContextCapability for GrokAdapter {
             ctx.prior_transcript_path.map(Path::new),
             self.transcript_files(ctx.login_env),
         )?;
-        let events = paths::events_companion(&path, ctx.agent_id);
-        refresh_resolved_context(&path, events.as_deref(), ctx)
+        refresh_resolved_context(&path, ctx)
     }
 }
 
@@ -591,10 +587,9 @@ impl crate::agents::capabilities::SpendingCapability for GrokAdapter {
 
 fn refresh_resolved_context(
     path: &Path,
-    events: Option<&Path>,
     ctx: &LocalContextRefreshCtx<'_>,
 ) -> Option<LocalContextRefresh> {
-    let stat = ctx.changed_transcript(transcript::combined_stat(path, events)?)?;
+    let stat = ctx.changed_transcript(transcript::combined_stat(path)?)?;
     let folded = transcript::read(path).ok()?;
     let summary = transcript::read_summary(path).filter(|summary| {
         summary
@@ -646,11 +641,6 @@ fn refresh_resolved_context(
                 .map_or(FieldPatch::Keep, FieldPatch::Set),
             tokens: LocalTokenPatch::PreserveEstablished(tokens),
             cost: cost.map_or(FieldPatch::Keep, FieldPatch::Set),
-            settle: events
-                .and_then(transcript::native_permission_wait)
-                .map_or(FieldPatch::Clear, |at| {
-                    FieldPatch::Set(TurnSettle::new(at, TurnSettleOutcome::NativeWait))
-                }),
             ..LocalContextPatch::authoritative_current()
         },
         transcript_path: Some(path.to_string_lossy().into_owned()),
@@ -698,7 +688,6 @@ fn lifecycle_signal(
     spec: &AgentSpec,
     event_name: &str,
     payload: &payloads::HookPayload,
-    child_gate: bool,
 ) -> Option<LifecycleSignal> {
     let inside_child = payload.subagent_type.is_some();
     // `promptId` correlates a root turn's report with its start, because a
@@ -737,13 +726,6 @@ fn lifecycle_signal(
                 parked_on_background: false,
                 turn_id: turn_id(),
             },
-            // Releases before `StopCancelled` and `StopFailure` replaced these.
-            Some("cancelled") => LifecycleSignal::TurnInterrupted { turn_id: turn_id() },
-            Some("error") => LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-                turn_id: turn_id(),
-            },
             Some(_) | None => return None,
         },
         "StopFailure" => LifecycleSignal::TurnEnded {
@@ -760,10 +742,7 @@ fn lifecycle_signal(
         },
         "StopCancelled" => LifecycleSignal::TurnInterrupted { turn_id: turn_id() },
         "SubagentStart" => LifecycleSignal::SubagentStarted,
-        "SubagentStop" if child_gate => TURN_COMPLETED,
-        "SubagentStop" => LifecycleSignal::SubagentStopped {
-            errored: payload.exit_code.is_some_and(|code| code > 0),
-        },
+        "SubagentStop" => TURN_COMPLETED,
         "PreCompact" => LifecycleSignal::Compacting,
         "PostCompact" => LifecycleSignal::CompactionEnded {
             auto: match payload.source.as_deref() {
