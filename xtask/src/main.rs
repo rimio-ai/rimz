@@ -91,7 +91,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "prune",
         summary: "Reclaim stale Cargo output from this target directory.",
-        runs: "cargo xtask prune [--dry-run]: remove superseded units and inactive profiles, reporting files and bytes",
+        runs: "cargo xtask prune [--dry-run]: remove superseded units, idle incremental state, and inactive profiles, reporting files and bytes",
     },
     TaskInfo {
         name: "hooks",
