@@ -11,17 +11,12 @@ use serde::Serialize;
 
 use super::{GlobalFlags, require_existing_store};
 use crate::cli::render;
-use rimz::agents::AgentState;
 use rimz::config::{WorktreeBase, WorktreeConfig};
 use rimz::forge::PrTarget;
 use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
+use rimz::worktree::{Holders, InspectedWorktree, KeepReason};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
-
-struct InspectedWorktree {
-    managed: rimz::worktree::ManagedWorktree,
-    status: rimz::worktree::WorktreeStatus,
-}
 
 #[derive(Serialize)]
 struct WorktreeListJson<'a> {
@@ -29,14 +24,17 @@ struct WorktreeListJson<'a> {
     path: &'a Path,
     branch: Option<&'a str>,
     base_ref: &'a str,
+    base_branch: Option<&'a str>,
     dirty: bool,
     landed: Option<bool>,
+    reasons: Vec<KeepReason>,
+    holders: &'a Holders,
 }
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
     #[command(subcommand)]
-    command: WorktreeSubcmd,
+    command: Option<WorktreeSubcmd>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -57,14 +55,18 @@ enum WorktreeSubcmd {
     },
     /// List RimZ-owned worktrees.
     List {
+        /// Print worktree state, keep reasons, and holders as JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Remove every clean, merged, unused RimZ-owned worktree.
+    /// Remove every clean, landed, unused RimZ-owned worktree.
     Sweep {
         /// Report what would be removed without removing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Print the sweep report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Open a shell in a RimZ-owned worktree.
     Cd {
@@ -86,7 +88,7 @@ enum WorktreeSubcmd {
             crate::cli::complete::worktrees
         ))]
         name: String,
-        /// Remove even when the worktree is in use, dirty, or has work not proven landed.
+        /// Remove even when the worktree is in use, dirty, unlanded, or unknown.
         #[arg(long)]
         force: bool,
     },
@@ -105,7 +107,7 @@ struct CleanupArgs {
 }
 
 pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
-    let command = match args.command {
+    let command = match args.command.unwrap_or(WorktreeSubcmd::List { json: false }) {
         WorktreeSubcmd::Cleanup(cleanup) => {
             return cleanup_worktree(&cleanup.path, globals, !cleanup.non_interactive);
         }
@@ -130,8 +132,10 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             from_pr,
             branch,
         } => new_worktree(&workspace, &config, name, base, from_pr, branch),
-        WorktreeSubcmd::List { json } => list_worktrees(&workspace, json),
-        WorktreeSubcmd::Sweep { dry_run } => sweep_worktrees(&workspace, globals, dry_run),
+        WorktreeSubcmd::List { json } => list_worktrees(&workspace, &config, globals, json),
+        WorktreeSubcmd::Sweep { dry_run, json } => {
+            sweep_worktrees(&workspace, &config, globals, dry_run, json)
+        }
         WorktreeSubcmd::Cd { name } => cd_worktree(&workspace, &config, &name),
         WorktreeSubcmd::Merge { name } => merge_worktree(&workspace, &config, globals, &name),
         WorktreeSubcmd::Remove { name, force } => {
@@ -267,19 +271,19 @@ fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: b
     }
 }
 
-fn list_worktrees(workspace: &ResolvedWorkspace, json: bool) -> Result<()> {
-    let entries = rimz::worktree::discover_owned(&workspace.project_root)?
-        .into_iter()
-        .map(|managed| {
-            let status = rimz::worktree::status(&managed.path, &managed.marker)
-                .unwrap_or_else(|_| rimz::worktree::WorktreeStatus::unknown());
-            InspectedWorktree { managed, status }
-        })
-        .collect::<Vec<_>>();
+fn list_worktrees(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    globals: &GlobalFlags,
+    json: bool,
+) -> Result<()> {
+    let guard = super::worktree_protection::for_listing(workspace, globals);
+    let entries = rimz::worktree::inspect_owned(&workspace.project_root, &guard.protections)?;
     if json {
         render_worktree_json(&entries)?;
     } else {
-        render_worktree_table(workspace, &entries)?;
+        let dir = rimz::worktree::worktree_parent(&workspace.project_root, config)?;
+        render_worktree_table(&dir, &entries)?;
     }
     Ok(())
 }
@@ -295,98 +299,93 @@ fn worktree_json_row(entry: &InspectedWorktree) -> WorktreeListJson<'_> {
         path: &entry.managed.path,
         branch: entry.managed.branch.as_deref(),
         base_ref: &entry.managed.marker.base_ref,
-        dirty: entry.status.dirty,
-        landed: match entry.status.landed {
+        base_branch: entry.managed.marker.base_branch.as_deref(),
+        dirty: entry.state.status.dirty(),
+        landed: match entry.state.status.landed {
             rimz::worktree::LandedVerdict::Landed => Some(true),
-            rimz::worktree::LandedVerdict::Pending => Some(false),
+            rimz::worktree::LandedVerdict::Unlanded => Some(false),
             rimz::worktree::LandedVerdict::Unknown => None,
         },
+        reasons: entry.state.keep_reasons(),
+        holders: &entry.state.holders,
     }
 }
 
-fn render_worktree_table(
-    workspace: &ResolvedWorkspace,
-    entries: &[InspectedWorktree],
-) -> Result<()> {
-    let agents = root_agents(workspace);
-    let mut table = render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
-    for entry in entries {
-        append_worktree_row(&mut table, entry, &agents);
+fn render_worktree_table(dir: &Path, entries: &[InspectedWorktree]) -> Result<()> {
+    let mut out = render::out();
+    let dir = render::home_relative_path(&rimz::utils::path::normalize_path_lexical(dir));
+    if entries.is_empty() {
+        writeln!(out, "no worktrees in {dir}")?;
+        return Ok(());
     }
-    table.render(&mut render::out())?;
+    let mut parts = vec![format!("{} worktrees in {dir}", entries.len())];
+    let removable = entries
+        .iter()
+        .filter(|entry| entry.state.removable())
+        .count();
+    let in_use = entries
+        .iter()
+        .filter(|entry| !entry.state.holders.is_empty())
+        .count();
+    let unlanded = entries
+        .iter()
+        .filter(|entry| {
+            entry.state.holders.is_empty()
+                && entry.state.status.landed != rimz::worktree::LandedVerdict::Landed
+        })
+        .count();
+    if removable > 0 {
+        parts.push(format!("{removable} removable (rimz worktree sweep)"));
+    }
+    if in_use > 0 {
+        parts.push(format!("{in_use} in use"));
+    }
+    if unlanded > 0 {
+        parts.push(format!("{unlanded} with unlanded work"));
+    }
+    writeln!(out, "{}\n", parts.join(" · "))?;
+    let mut table = render::Table::new(["WORKTREE", "BRANCH", "STATE", "AGENTS"]);
+    for entry in entries {
+        append_worktree_row(&mut table, entry);
+    }
+    table.render(&mut out)?;
     Ok(())
 }
 
-fn root_agents(workspace: &ResolvedWorkspace) -> Vec<AgentState> {
-    crate::cli::open_existing_store(workspace)
-        .ok()
-        .flatten()
-        .and_then(|store| store.snapshot_cached().ok())
-        .map(|snapshot| {
-            std::sync::Arc::unwrap_or_clone(snapshot.agents)
-                .into_iter()
-                .filter(|agent| !agent.is_provider_subagent())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn append_worktree_row(
-    table: &mut render::Table,
-    entry: &InspectedWorktree,
-    agents: &[AgentState],
-) {
-    let path = entry.managed.path.to_string_lossy().into_owned();
-    let here = agents_in_worktree(agents, &entry.managed.path, entry.managed.branch.as_deref());
-    let chips = if here.is_empty() {
-        "-".to_owned()
-    } else {
-        here.iter()
-            .map(|agent| rimz::address::agent_handle(agent, &here, false))
-            .collect::<Vec<_>>()
-            .join(" ")
+fn append_worktree_row(table: &mut render::Table, entry: &InspectedWorktree) {
+    let state = match entry.state.status.landed {
+        rimz::worktree::LandedVerdict::Landed => "landed",
+        rimz::worktree::LandedVerdict::Unlanded => "unlanded",
+        rimz::worktree::LandedVerdict::Unknown => "unknown",
     };
-    let merged = match entry.status.landed {
-        rimz::worktree::LandedVerdict::Landed => render::cell("yes"),
-        rimz::worktree::LandedVerdict::Pending => {
-            render::cell("pending").fg(render::palette::warn())
-        }
-        rimz::worktree::LandedVerdict::Unknown => render::cell("?"),
-    };
-    let dirty = if entry.status.dirty {
-        render::cell("dirty").fg(render::palette::warn())
-    } else {
-        render::cell("-").dash()
-    };
+    let mut state = render::cell(state).fg(render::status::worktree(entry.state.status.landed));
+    if entry.state.status.dirty() {
+        state = state.suffix("· dirty", render::palette::warn());
+    }
     table.row([
         render::cell(&entry.managed.marker.name).fg(render::palette::accent()),
         render::cell(entry.managed.branch.as_deref().unwrap_or("-")).dash(),
-        render::cell(chips).fg(render::palette::accent()).dash(),
-        dirty,
-        merged,
-        render::cell(render::home_relative(&path)).dash(),
+        state,
+        render::cell(holder_chips(&entry.state.holders, 3))
+            .fg(render::palette::accent())
+            .dash(),
     ]);
 }
 
-/// The agents bound to one checkout, by recorded path or by its branch.
-///
-/// Recorded paths and the configured directory template both reach here
-/// unnormalized, so containment is compared the way `ProtectionSet` compares
-/// it rather than by string equality.
-fn agents_in_worktree<'a>(
-    agents: &'a [AgentState],
-    path: &Path,
-    branch: Option<&str>,
-) -> Vec<&'a AgentState> {
-    let target = rimz::utils::path::normalize_path_lexical(path);
-    agents
+fn holder_chips(holders: &Holders, limit: usize) -> String {
+    if holders.agents.is_empty() {
+        return if holders.panes > 0 { "pane" } else { "-" }.to_owned();
+    }
+    let mut chips = holders
+        .agents
         .iter()
-        .filter(|agent| {
-            agent.worktree_path.as_deref().is_some_and(|recorded| {
-                rimz::utils::path::normalize_path_lexical(Path::new(recorded)) == target
-            }) || branch.is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
-        })
-        .collect()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    if holders.agents.len() > limit {
+        chips.push(format!("+{}", holders.agents.len() - limit));
+    }
+    chips.join(" ")
 }
 
 fn remove_worktree(
@@ -403,21 +402,25 @@ fn remove_worktree(
         writeln!(
             std::io::stderr().lock(),
             "warning: worktree `{name}` is in use by {}; removing it anyway",
-            holder_summary(&guard.agents, &path)
+            guard.protections.holders(&path)
         )?;
     }
     // The domain owns the refusal; this only names who is holding the checkout.
-    let removed = match rimz::worktree::remove(
+    let memo = rimz::worktree::LandedMemo::load(&workspace.project_root);
+    let result = rimz::worktree::remove(
         &workspace.project_root,
         config,
         &name,
         &path,
         force,
         &guard.protections,
-    ) {
+        &memo,
+    );
+    memo.save();
+    let removed = match result {
         Err(rimz::worktree::WorktreeErr::InUse { .. }) => bail!(
             "worktree `{name}` is in use by {}; use --force to remove it",
-            holder_summary(&guard.agents, &path)
+            guard.protections.holders(&path)
         ),
         result => result?,
     };
@@ -434,27 +437,44 @@ fn remove_worktree(
     let message_archival = retirement
         .message_archival
         .context("archiving messages for removed worktree channel");
+    let mut out = render::out();
+    writeln!(out, "removed {name}")?;
+    if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
+        writeln!(
+            out,
+            "  branch kept: its work is not proven landed on {}",
+            removed.target().unwrap_or("its base")
+        )?;
+    } else if force && let Some(tip) = removed.branch_tip() {
+        let branch = removed.branch();
+        writeln!(
+            out,
+            "  branch deleted: {branch} was at {tip}; restore with `git branch {branch} {tip}`"
+        )?;
+    }
     session_retirement?;
     message_archival?;
-    #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-    {
-        println!("removed {name}");
-        if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
-            println!("  branch kept: work not proven merged into its base");
-        }
-    }
     Ok(())
 }
 
 fn sweep_worktrees(
     workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
     globals: &GlobalFlags,
     dry_run: bool,
+    json: bool,
 ) -> Result<()> {
     let store = if dry_run {
         let Some(store) = super::open_existing_store(workspace)? else {
-            let mut out = render::out();
-            writeln!(out, "sweep — skipped · no RimZ store here")?;
+            if json {
+                render::json_pretty(&WorktreeSweepJson {
+                    dry_run,
+                    skipped: Some("no_store"),
+                    sweep: &rimz::worktree::WorktreeSweep::default(),
+                })?;
+            } else {
+                writeln!(render::out(), "sweep — skipped · no RimZ store here")?;
+            }
             return Ok(());
         };
         store
@@ -469,12 +489,21 @@ fn sweep_worktrees(
         &store,
         &workspace.session_name,
         dry_run,
-        &super::machine_config().agents.worktree.hooks,
+        &config.hooks,
     )?;
     if !dry_run {
         rimz::message::deliver::register_message_wake(workspace, &store);
     }
-    report_sweep(&sweep, dry_run)?;
+    if json {
+        render::json_pretty(&WorktreeSweepJson {
+            dry_run,
+            skipped: None,
+            sweep: &sweep,
+        })?;
+    } else {
+        let dir = rimz::worktree::worktree_parent(&workspace.project_root, config)?;
+        report_sweep(&sweep, dry_run, &dir)?;
+    }
     let problems = sweep.failed.len()
         + sweep
             .removed
@@ -487,7 +516,16 @@ fn sweep_worktrees(
     Ok(())
 }
 
-fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool) -> Result<()> {
+#[derive(Serialize)]
+struct WorktreeSweepJson<'a> {
+    dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped: Option<&'static str>,
+    #[serde(flatten)]
+    sweep: &'a rimz::worktree::WorktreeSweep,
+}
+
+fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool, dir: &Path) -> Result<()> {
     let mut out = render::out();
     let action = if dry_run { "would remove" } else { "removed" };
     if sweep.removed.is_empty() {
@@ -501,19 +539,98 @@ fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool) -> Result<
             sweep.kept.len(),
         )?;
     }
-    for removed in &sweep.removed {
+    for reason in [
+        KeepReason::InUse,
+        KeepReason::Unlanded,
+        KeepReason::Dirty,
+        KeepReason::Unknown,
+    ] {
+        let group = sweep
+            .kept
+            .iter()
+            .filter(|kept| kept.reasons.first() == Some(&reason))
+            .collect::<Vec<_>>();
+        if group.is_empty() {
+            continue;
+        }
+        let label = reason.text();
+        writeln!(out, "\nkept, {label} ({})", group.len())?;
+        if reason != KeepReason::InUse && group.iter().all(|kept| kept.reasons.len() == 1) {
+            let names = group
+                .iter()
+                .map(|kept| kept.name.as_str())
+                .collect::<Vec<_>>()
+                .join("  ");
+            for line in render::wrap_words(
+                &names,
+                render::terminal_columns(80).saturating_sub(2).max(1),
+            ) {
+                writeln!(out, "  {line}")?;
+            }
+            continue;
+        }
+        let mut table = render::Table::new(["", ""]).without_headers().indent(2);
+        for kept in group {
+            let mut details = Vec::new();
+            if reason == KeepReason::InUse {
+                if !kept.holders.agents.is_empty() {
+                    details.push(holder_chips(&kept.holders, 4));
+                }
+                if kept.holders.panes > 0 {
+                    details.push(
+                        Holders {
+                            agents: Vec::new(),
+                            panes: kept.holders.panes,
+                        }
+                        .to_string(),
+                    );
+                }
+            }
+            for extra in kept.reasons.iter().skip(1) {
+                details.push(format!(
+                    "also {}",
+                    if *extra == KeepReason::Dirty {
+                        "dirty"
+                    } else {
+                        extra.text()
+                    }
+                ));
+            }
+            table.row([render::cell(&kept.name), render::cell(details.join(" · "))]);
+        }
+        table.render(&mut out)?;
+    }
+    if !sweep.removed.is_empty() {
         writeln!(
             out,
-            "  {action}: {} — {}",
-            removed.name,
-            removed.path.display()
+            "\n{action} ({}) from {}",
+            sweep.removed.len(),
+            render::home_relative_path(&rimz::utils::path::normalize_path_lexical(dir))
         )?;
+        let names = sweep
+            .removed
+            .iter()
+            .map(|removed| removed.name.as_str())
+            .collect::<Vec<_>>()
+            .join("  ");
+        for line in render::wrap_words(
+            &names,
+            render::terminal_columns(80).saturating_sub(2).max(1),
+        ) {
+            writeln!(out, "  {line}")?;
+        }
+    }
+    for removed in &sweep.removed {
         if let Some(err) = removed.archive_error.as_deref() {
             writeln!(out, "    message archive failed: {err}")?;
         }
     }
-    for kept in &sweep.kept {
-        writeln!(out, "  kept: {} — {}", kept.name, kept.reason.text())?;
+    if dry_run && !sweep.removed.is_empty() {
+        writeln!(
+            out,
+            "\nnothing was removed; run `rimz worktree sweep` to remove the {}",
+            sweep.removed.len()
+        )?;
     }
     for failed in &sweep.failed {
         writeln!(
@@ -546,7 +663,7 @@ fn merge_worktree(
     ) {
         Err(rimz::worktree::WorktreeErr::MergeInUse { path, .. }) => bail!(
             "cannot merge worktree `{name}`: it is in use by {}",
-            holder_summary(&guard.agents, &path)
+            guard.protections.holders(&path)
         ),
         result => result?,
     };
@@ -571,50 +688,57 @@ pub(super) fn cleanup_worktree(
         return Ok(());
     };
     let config = super::machine_config();
-    let status = rimz::worktree::status(path, &marker)?;
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let workspace = cleanup_workspace(&marker, globals)?;
     let protections =
         super::worktree_protection::for_wrapper_cleanup(&workspace, globals).protections;
-    match protections.assess(path, status) {
-        rimz::worktree::RemovalAssessment::Removable => {
-            let removed = remove_for_cleanup(
-                path,
-                &marker,
-                &workspace,
-                false,
-                &config.agents.worktree.hooks,
-            )?;
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: removed clean worktree {}",
-                path.display()
-            );
-            report_kept_branch(&removed);
-        }
-        rimz::worktree::RemovalAssessment::Dirty | rimz::worktree::RemovalAssessment::NotLanded => {
-            if interactive {
-                match dirty_choice(path)? {
-                    DirtyChoice::Keep => {}
-                    DirtyChoice::Remove => {
-                        let removed = remove_for_cleanup(
-                            path,
-                            &marker,
-                            &workspace,
-                            true,
-                            &config.agents.worktree.hooks,
-                        )?;
-                        report_kept_branch(&removed);
+    let memo = rimz::worktree::LandedMemo::load(path);
+    let state = rimz::worktree::inspect(path, &marker, &protections, &memo)?;
+    let result = (|| {
+        match state.keep_reasons().first() {
+            None => {
+                let removed = remove_for_cleanup(
+                    path,
+                    &marker,
+                    &workspace,
+                    false,
+                    &config.agents.worktree.hooks,
+                    &memo,
+                )?;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: removed clean worktree {}",
+                    path.display()
+                );
+                report_kept_branch(&removed);
+            }
+            Some(KeepReason::Dirty | KeepReason::Unlanded | KeepReason::Unknown) => {
+                if interactive {
+                    match dirty_choice(path)? {
+                        DirtyChoice::Keep => {}
+                        DirtyChoice::Remove => {
+                            let removed = remove_for_cleanup(
+                                path,
+                                &marker,
+                                &workspace,
+                                true,
+                                &config.agents.worktree.hooks,
+                                &memo,
+                            )?;
+                            report_kept_branch(&removed);
+                        }
+                        DirtyChoice::Shell => exec_shell(path)?,
                     }
-                    DirtyChoice::Shell => exec_shell(path)?,
                 }
             }
+            Some(KeepReason::InUse) => {}
         }
-        rimz::worktree::RemovalAssessment::InUse => {}
-    }
-    Ok(())
+        Ok(())
+    })();
+    memo.save();
+    result
 }
 
 fn cleanup_workspace(
@@ -647,9 +771,16 @@ fn remove_for_cleanup(
     workspace: &ResolvedWorkspace,
     force: bool,
     hooks: &rimz::config::WorktreeHooks,
+    memo: &rimz::worktree::LandedMemo,
 ) -> Result<rimz::worktree::RemovalOutcome> {
-    let removed =
-        rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force, hooks)?;
+    let removed = rimz::worktree::remove_marked_worktree(
+        &marker.repo_root,
+        path,
+        marker,
+        force,
+        hooks,
+        memo,
+    )?;
     let store = require_existing_store(workspace);
     match store {
         Ok(store) => {
@@ -684,25 +815,11 @@ fn remove_for_cleanup(
     Ok(removed)
 }
 
-/// Name what is holding a checkout, for the refusal and the `--force` warning.
-/// Falls back to the pane wording when protection came from a bare shell.
-fn holder_summary(agents: &[AgentState], path: &Path) -> String {
-    let here = agents_in_worktree(agents, path, None);
-    if here.is_empty() {
-        return "an open pane".to_owned();
-    }
-    let handles = here
-        .iter()
-        .map(|agent| rimz::address::agent_handle(agent, &here, false))
-        .collect::<Vec<_>>();
-    handles.join(", ")
-}
-
 fn report_kept_branch(removed: &rimz::worktree::RemovalOutcome) {
     if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
         let _ = writeln!(
             std::io::stderr().lock(),
-            "rimz: kept branch {} because its work was not proven merged into its base",
+            "rimz: kept branch {}: its work is not proven landed on its base",
             removed.branch()
         );
     }
@@ -722,7 +839,7 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
     let mut stderr = std::io::stderr().lock();
     writeln!(
         stderr,
-        "rimz: worktree {} has local changes or work not proven landed.",
+        "rimz: worktree {} has uncommitted changes or unlanded work.",
         path.display()
     )?;
     drop(stderr);
@@ -774,10 +891,18 @@ mod tests {
 
     #[test]
     fn list_json_maps_typed_landing_without_marker_fields() {
-        for (verdict, landed) in [
-            (rimz::worktree::LandedVerdict::Landed, Some(true)),
-            (rimz::worktree::LandedVerdict::Pending, Some(false)),
-            (rimz::worktree::LandedVerdict::Unknown, None),
+        for (verdict, landed, reasons) in [
+            (rimz::worktree::LandedVerdict::Landed, Some(true), vec![]),
+            (
+                rimz::worktree::LandedVerdict::Unlanded,
+                Some(false),
+                vec!["unlanded"],
+            ),
+            (
+                rimz::worktree::LandedVerdict::Unknown,
+                None,
+                vec!["unknown"],
+            ),
         ] {
             let entry = inspected_worktree(verdict);
             let value = serde_json::to_value(worktree_json_row(&entry)).expect("serialize row");
@@ -789,8 +914,11 @@ mod tests {
                     "path": "/repo-worktrees/demo",
                     "branch": "feature/demo",
                     "base_ref": "abc123",
+                    "base_branch": "main",
                     "dirty": false,
                     "landed": landed,
+                    "reasons": reasons,
+                    "holders": {"agents": [], "panes": 0},
                 })
             );
         }
@@ -827,9 +955,13 @@ mod tests {
                 path,
                 branch: Some("feature/demo".to_owned()),
             },
-            status: rimz::worktree::WorktreeStatus {
-                dirty: false,
-                landed,
+            state: rimz::worktree::WorktreeState {
+                status: rimz::worktree::WorktreeStatus {
+                    changed_files: 0,
+                    landed,
+                    ..rimz::worktree::WorktreeStatus::default()
+                },
+                holders: Holders::default(),
             },
         }
     }

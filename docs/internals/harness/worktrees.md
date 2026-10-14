@@ -34,6 +34,7 @@ The marker's `worktree_path` is the tree's identity everywhere a cohort or agent
 | Path | Owns |
 | --- | --- |
 | [`worktree.rs`](../../../crates/rimz/src/worktree.rs) | The marker, creation, launch checkout resolution, dirty and landed status, the protection set and removal assessment, merge, sweep, discovery, and the `git` helpers. |
+| [`worktree/landed_memo.rs`](../../../crates/rimz/src/worktree/landed_memo.rs) | Shared commit-pair proofs and their best-effort cache file. |
 | [`worktree/pr.rs`](../../../crates/rimz/src/worktree/pr.rs) | `--from-pr`: strategy selection, head resolution through the forge CLI, fork push wiring, PR ref fetching. |
 | [`worktree/include.rs`](../../../crates/rimz/src/worktree/include.rs) | `.worktreeinclude` copying and its containment rules. |
 | [`worktree/link.rs`](../../../crates/rimz/src/worktree/link.rs) | `.worktreelink` directory symlinks. |
@@ -147,11 +148,11 @@ The patterns matter to reclamation. Excluded files do not show in `git status --
 
 ## Status: dirty and landed
 
-`status(path, marker)` answers the two questions every removal decision needs.
+`status(path, marker, memo)` answers the two questions every removal decision needs.
 
-A tree is dirty when `git status --porcelain` prints anything, untracked files included.
+A tree is dirty when `git status --porcelain` prints anything, untracked files included. `WorktreeStatus::changed_files` counts those lines; `dirty()` tests whether the count is nonzero. `ahead` is the ancestry commit count when available, and `target` records the selected comparison ref.
 
-A tree is landed when the branch's content already exists on the ref it should return to. Landing is proven, never assumed: `content_landed` answers `Landed`, `Pending`, or `Unknown`, and anything short of `Landed` keeps the tree. `worktree list` shows the verdict in its `MERGED` column (`yes`, `pending`, `?`) and as `landed: true | false | null` in JSON.
+A tree is landed when the branch's content already exists on the ref it should return to. Landing is proven, never assumed: `content_landed` answers `Landed`, `Unlanded`, or `Unknown`, and anything short of `Landed` keeps the tree. `worktree list` shows the verdict in its `STATE` column (`landed`, `unlanded`, `unknown`) and as `landed: true | false | null` in JSON.
 
 ### Choosing the comparison ref
 
@@ -174,13 +175,21 @@ No usable comparison ref means `Unknown`.
 | 1 | `rev-list --count <comparison>..<head>` is zero | Landed: nothing was committed past the comparison. |
 | 2 | Both refs have the same tree object | Landed: identical content, whatever the history. |
 | 3 | `merge-tree --write-tree <comparison> <head>` produces the comparison's own tree | Landed: the branch adds nothing, even when patch context drifted. |
-| 4 | `log --right-only --cherry-pick --no-merges <comparison>...<head>` lists commits | Landed if the head's tree appears in `log <head>..<comparison>`, otherwise Pending. |
+| 4 | `log --right-only --cherry-pick --no-merges <comparison>...<head>` lists commits | Landed if the head's tree appears in `log <head>..<comparison>`, otherwise Unlanded. |
 | 5 | Rung 4 lists nothing and the head side has no merge commits | Landed. |
-| 6 | Rung 4 lists nothing and every head-side merge commit's tree appears in the comparison's last `LANDED_BASE_SCAN_CAP` (500) commits | Landed: a merge-back landing. Otherwise Pending. |
+| 6 | Rung 4 lists nothing and every head-side merge commit's tree appears in the comparison's last `LANDED_BASE_SCAN_CAP` (500) commits | Landed: a merge-back landing. Otherwise Unlanded. |
 
-Rung 4 carries the squash case. Patch residue alone does not mean pending: a squash landing followed by more trunk commits leaves residue while the work is in. Finding the branch tip's exact tree in the comparison's exclusive history proves the destination once held the branch's complete final state. That scan is uncapped, because a landing can be arbitrarily far back.
+Rung 4 carries the squash case. Patch residue alone does not mean unlanded: a squash landing followed by more trunk commits leaves residue while the work is in. Finding the branch tip's exact tree in the comparison's exclusive history proves the destination once held the branch's complete final state. That scan is uncapped, because a landing can be arbitrarily far back.
 
 Together the rungs cover rebased, cherry-picked, squash-landed, and merge-back shapes without trusting ancestry alone or any sidebar state.
+
+### The landed memo
+
+`LandedMemo` resolves the comparison and head refs to commit oids together before proving anything. Moved refs naturally choose a new pair. Shallow boundaries and replace refs can change a proof without changing either oid, so loading disables cache reads and writes when the repository is shallow or has any `refs/replace/` ref; proofs are still computed. `Unknown` is never cached. The same memo serves the base-branch supersession proof.
+
+The cache is `<git common dir>/rimz-landed-memo.json`, outside the checkout and shared by its linked trees: `{ "version": 1, "entries": { "COMPARISON_OID:HEAD_OID": { "landed": true, "ahead": 0, "seen_at_ms": 0 } } }`. Missing, unreadable, or unsupported-version files read as empty. `seen_at_ms` records when the proof was computed, not its last hit: hits do not refresh it, and entries older than 30 days are ignored and recomputed. Saving merges existing entries, drops expired entries, and atomically publishes through the cache writer. It is an acceleration, never a durable record.
+
+`inspect` combines Git status with holders in a `WorktreeState`. `inspect_owned` loads and saves one memo and uses `utils::parallel::bounded_map` with eight workers to inspect the discovered trees in input order. Listing and sweeping share that projection. The sidebar keeps its separate cache and comparison semantics below.
 
 ### What the sidebar asks
 
@@ -218,22 +227,24 @@ Paths are normalized lexically (`.` and `..` folded) before comparison, so `/rep
 | --- | --- | --- | --- |
 | `worktree remove`, `worktree merge` (`for_explicit_removal`) | `ProvenLive` | Yes | Best-effort: an unreadable roster or mux protects nothing. |
 | Wrapper cleanup (`for_wrapper_cleanup`) | `Unproven` | Yes | Best-effort. |
+| `worktree list` (`for_listing`) | `Unproven` | No | Best-effort. |
 | `worktree sweep`, `rimz gc` (`for_automatic_gc`) | `Unproven` | No | The roster is required; failure skips the sweep. |
 
 Unattended reclamation uses `Unproven`, so an agent RimZ cannot prove dead still holds its tree. A person naming one tree has already decided, so `ProvenLive` lets only a running process or an open pane hold it, and a stale session record left by a crash never blocks the command that would retire it.
 
 ### The assessment
 
-`ProtectionSet::assess` returns one `RemovalAssessment` in a fixed precedence: `InUse`, then `Dirty`, then `NotLanded`, then `Removable`. A dirty tree someone is standing in reports as in use. Callers never reorder these checks; they only choose what to do with each verdict.
+`WorktreeState::keep_reasons` returns every `KeepReason` in fixed precedence: `InUse`, `Dirty`, then `Unlanded` or `Unknown`. Empty means removable. `ProtectionSet::holders` names agent handles using the full roster as peers and counts protected panes with no agent; paths use normalized containment, and one holder reached through multiple paths counts once. Listing, sweeping, removal, cleanup, and relaunch use this classifier.
 
 | Verdict | `worktree remove` | Wrapper cleanup | `sweep` and `gc` | Cohort relaunch |
 | --- | --- | --- | --- | --- |
 | `Removable` | Remove the tree and delete the branch | Remove, note it on stderr | Remove, count the bytes | Offer `remove / fresh / cancel`, default cancel |
 | `Dirty` | Refuse; `--force` removes | Prompt `keep / remove / shell` at a terminal, keep otherwise | Keep: "uncommitted changes" | Offer `resume / fresh / cancel`, default resume |
-| `NotLanded` | Refuse; `--force` removes | Same as `Dirty` | Keep: "not merged yet" | Same as `Dirty` |
+| `Unlanded` | Refuse with commit count, target, and merge hint; `--force` removes | Same as `Dirty` | Keep: "unlanded work" | Same as `Dirty` |
+| `Unknown` | Refuse with the unproven-work fix; `--force` removes | Same as `Dirty` | Keep: "unknown" | Same as `Dirty` |
 | `InUse` | Refuse, naming the holder; `--force` warns and removes | Skip silently | Keep: "in use" | Not reached (see below) |
 
-The domain owns every refusal: `worktree::remove` returns `WorktreeErr::InUse` or `WorktreeErr::Dirty` (one error for dirty and not landed), and `--force` skips the assessment entirely. `cli/worktree.rs` only names the holder, by matching `InUse` and asking `agents_in_worktree` which agents are bound to the checkout; with none, the holder is "an open pane".
+The domain owns every refusal: `worktree::remove` returns `WorktreeErr::InUse`, `Dirty`, `Unlanded`, or `Unproven` for the first reason, and `--force` skips refusal. The CLI renders holders from the same protection set. Sweep groups by the first reason and shows additional reasons; `gc` lists all reasons and holders. Both serialize the domain sweep records, with `reasons` arrays rather than a single `reason`.
 
 Cohort relaunch assesses against an empty protection set, because it has already established that the cohort's panes are closed and a live cohort is focused instead. The offers, `--fresh`, and what each choice does are [fleet.md § Cohort relaunch reconciliation](./fleet.md#cohort-relaunch-reconciliation); only the `remove` choice enters the removal path below.
 
@@ -241,7 +252,7 @@ Cohort relaunch assesses against an empty protection set, because it has already
 
 Removal is `git worktree remove`, the optional [`removed` hook](#lifecycle-hooks), then branch deletion, all run from the repository root. `remove_marked_worktree` first moves the process out of the checkout when its cwd is inside it.
 
-Branch deletion re-runs the landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when `content_landed` passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. A forced removal skips the proof and deletes with `-D` directly, so an unlanded branch goes with it and no `KeptUnmerged` notice appears. Three paths force: `worktree remove --force`, the `remove` answer to the wrapper's dirty prompt, and rollback after a failed `created` hook on a tree that created its branch (one that adopted an existing local branch keeps it).
+Branch deletion re-runs the memo-aware landed proof instead of trusting Git's merge check. It tries `git branch -d`; a branch already gone counts as deleted; a "not merged" refusal escalates to `-D` only when the proof passes against the marker's comparison ref, and otherwise returns `BranchDeletion::KeptUnmerged` so the CLI can say the branch survived. `RemovalOutcome::branch_tip` carries the full oid read before deletion. A forced removal skips the proof and deletes with `-D` directly; the CLI prints the saved tip and a restore command when available. Three paths force: `worktree remove --force`, the `remove` answer to the wrapper's dirty prompt, and rollback after a failed `created` hook on a tree that created its branch (one that adopted an existing local branch keeps it).
 
 After Git removal succeeds, `retire_removal` runs two durable effects: it ends the store sessions bound to that path or branch, and archives the worktree channel's messages. Both run even when the first fails, and both results return in a `#[must_use]` `RemovalRetirement`, because the Git removal is already irreversible and one failure must not hide the other. `worktree remove` and cohort reconciliation fail the command on either error; wrapper cleanup logs both at debug level; `sweep` and `gc` warn on session retirement and report archival failures per tree.
 
@@ -253,7 +264,7 @@ Five callers reach the removal path, in addition to failed-creation rollback in 
 
 **`rimz worktree remove <name>`** is the explicit one: it resolves the marked tree under the configured directory, assesses it with explicit-removal facts, and removes it.
 
-**`rimz worktree sweep` and `rimz gc`** call `sweep_owned`, the one sweep implementation. It discovers every marked tree in the room's repository from `git worktree list --porcelain`, assesses each, removes the `Removable` ones, retires their sessions and messages, and runs `git worktree prune` when it removed anything. A per-tree failure is recorded and the sweep continues. `--dry-run` reports the same accounting, including bytes, without acting. Both commands print every marked tree: removed trees with their branch fate, kept trees with their reason, failures with their error. `gc` skips its worktree area with a reason when the directory is not a repository, no store exists, the agent roster cannot be read, or listing fails.
+**`rimz worktree sweep` and `rimz gc`** call `sweep_owned`, the one sweep implementation. It discovers every marked tree in the room's repository from `git worktree list --porcelain`, assesses each, removes the removable ones, retires their sessions and messages, and runs `git worktree prune` when it removed anything. A per-tree failure is recorded and the sweep continues. `--dry-run` reports the same accounting, including bytes, without acting. Sweep groups kept trees under their first reason, showing additional reasons and holders, and flows removed names in one block. `gc` prints each tree with every reason and its holders or branch fate. Failures retain their errors. `gc` skips its worktree area with a reason when the directory is not a repository, no store exists, the agent roster cannot be read, or listing fails.
 
 **The exec wrapper** reclaims a tree an agent was launched into with `--worktree-path`. Before launching, `enter_worktree` refuses to start the agent if the marker has vanished since the launch decision, instead of silently running it in the project root. After the agent exits, the shape of the exit decides; [fleet.md § Reclaiming a pane](./fleet.md#reclaiming-a-pane) owns the deliberate-close probe and the end trace.
 

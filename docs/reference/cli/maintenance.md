@@ -264,7 +264,7 @@ What reset does to the store is in [store internals](../../internals/store.md#ma
 rimz gc [--older-than <DURATION>] [--dry-run] [--json] [--all]
 ```
 
-`gc` removes state that has outlived its use and keeps anything dirty, pending, or unproven. By default it sweeps only the current room: `--root` overrides the running room's identity, which otherwise takes precedence over directory resolution. `--all` adds every room and shared machine state, while store maintenance and worktrees remain current-room only. Resolution failure exits non-zero and asks you to run inside a room or pass `--root`.
+`gc` removes state that has outlived its use and keeps anything dirty, unlanded, or unknown. By default it sweeps only the current room: `--root` overrides the running room's identity, which otherwise takes precedence over directory resolution. `--all` adds every room and shared machine state, while store maintenance and worktrees remain current-room only. Resolution failure exits non-zero and asks you to run inside a room or pass `--root`.
 
 | Area | Room scope (default) | Machine scope (`--all`) |
 | --- | --- | --- |
@@ -299,7 +299,7 @@ One of those helpers is elected for a machine sweep when the last automatic mach
 
 ### The report
 
-`gc` shows progress while it runs, then prints a line per area with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`.
+`gc` shows progress while it runs, then prints a line per area with its verdict: `✓` healthy, `✦` acted, `⚠` warning, `✗` failed, `–` skipped. Each kept, removed, or failed worktree gets its own line under `worktrees`. Kept lines name every reason (`in use`, `uncommitted changes`, `unlanded work`, `unknown`) and the holders when present; removed lines say `landed`, with the branch-deletion outcome.
 
 The header gives total reclaimed bytes and the area count/cutoff, ending in `· room <workspace-dir>` or `· machine`. It then lists the selected rooms with one `class · file count · bytes` row per lifetime class, followed by the eight area verdicts and any kept/removed worktree reasons.
 
@@ -316,7 +316,7 @@ Owned state has a seven-day grace; audit files expire after 30 days or oldest-fi
 | `dry_run` | `true` under `--dry-run`. |
 | `older_than_secs` | The cutoff in seconds. |
 | `reclaimed_bytes` | Bytes removed, or that would be removed, across all areas. |
-| `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reason`: `in_use`, `uncommitted_changes`, `not_merged`), and `skipped` (`null`, `not_a_repo`, `no_store`, `roster_unavailable`, `list_failed`). |
+| `worktrees` | `removed` (`name`, `branch`, `path`, `bytes`, `branch_deleted`, `archive_error`), `failed` (`path`, `error`), `kept` (`name`, `path`, `reasons`: an array of `in_use`, `uncommitted_changes`, `unlanded`, `unknown`; `holders`: `agents` and `panes`), and `skipped` (`null`, `not_a_repo`, `no_store`, `roster_unavailable`, `list_failed`). The domain records match `worktree sweep --json`. |
 | `workspaces` | `removed` (`workspace_id`, `dir_name`, `reason`: `project_root_gone`, `abandoned_scaffold`, or `incompatible_layout`, `project_root`, `bytes`), `retained_unreadable` (`workspace_id`, `error`), `kept` (a count), and `skipped` (`room_scope` for a room sweep, otherwise `null`). Rooms written by an older RimZ are removed as `incompatible_layout`. |
 | `runtime` | `roots_scanned`, `heartbeats_removed`, `sidecars_removed`, `sockets_removed`, `probe_markers_removed`, `dirs_removed`, `bytes_removed`. |
 | `temps` | `files_removed`, `bytes_removed`. |

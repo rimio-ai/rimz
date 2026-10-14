@@ -15,7 +15,20 @@ use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 pub(super) struct RuntimeProtection {
     pub(super) protections: rimz::worktree::ProtectionSet,
-    pub(super) agents: Vec<AgentState>,
+}
+
+/// Best-effort listing facts, with the same occupancy and own-pane policy as gc.
+pub(super) fn for_listing(
+    workspace: &ResolvedWorkspace,
+    globals: &GlobalFlags,
+) -> RuntimeProtection {
+    let (_, panes) = list_panes(Some(workspace), globals);
+    let agents = open_existing_store(workspace)
+        .ok()
+        .flatten()
+        .and_then(|store| alive_agents(workspace, &store).ok())
+        .unwrap_or_default();
+    assemble(&panes, agents, None, rimz::worktree::Occupancy::Unproven)
 }
 
 /// Best-effort facts for a user-requested removal.
@@ -75,7 +88,6 @@ fn best_effort(
     let Some(workspace) = workspace.as_ref() else {
         return RuntimeProtection {
             protections: rimz::worktree::ProtectionSet::default(),
-            agents: Vec::new(),
         };
     };
     best_effort_workspace(workspace, globals, occupancy)
@@ -130,8 +142,5 @@ fn assemble(
 ) -> RuntimeProtection {
     let protections =
         rimz::worktree::protection_set_from_runtime(panes, &agents, own_pane, occupancy);
-    RuntimeProtection {
-        protections,
-        agents,
-    }
+    RuntimeProtection { protections }
 }

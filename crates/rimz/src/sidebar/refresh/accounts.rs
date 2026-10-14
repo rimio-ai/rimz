@@ -365,7 +365,7 @@ fn execute_account_probes(
     let jobs: Vec<_> = logins.to_vec();
     let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
     let results: Vec<_> =
-        super::runner::bounded_map(crate::lane::current(), worker_count, &jobs, |login| {
+        crate::utils::parallel::bounded_map(crate::lane::current(), worker_count, &jobs, |login| {
             probe(login, active_version_kinds.contains(login.kind().as_str()))
         })
         .into_iter()

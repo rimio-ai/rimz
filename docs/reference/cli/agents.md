@@ -236,7 +236,7 @@ Launching a named team, or an inline spec of two or more cells, into a named wor
 | --- | --- |
 | live | Focuses its tab and exits, in any worktree, unless `--bg` or an agent caller keeps focus where it is. |
 | closed, RimZ-owned worktree with work in progress | Prompts `(resume/fresh/cancel)`, default `resume`. |
-| closed, RimZ-owned worktree that is clean and merged | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
+| closed, RimZ-owned worktree that is clean and landed | Prompts `(remove/fresh/cancel)`, default `cancel`. `remove` deletes the worktree and its branch, then launches. |
 | closed, worktree RimZ did not create | Asks to enter the worktree, as above; add `--resume` to resume the cohort. |
 
 The same table applies to `--from-pr` when it reuses the tree holding the PR head branch. If its tips differ, the PR tip choice comes after the reconciliation prompt and before launching or resuming. A live cohort exits without moving the tip. Choosing `remove` resolves a fresh PR checkout instead. `--resume` and `--fresh` are rejected alongside `--from-pr`; to answer in advance, run the printed `-w <holder>` command instead.

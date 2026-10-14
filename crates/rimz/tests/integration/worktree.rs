@@ -336,8 +336,11 @@ fn worktree_new_list_and_remove_round_trip() {
             "path": path,
             "branch": "demo",
             "base_ref": marker.base_ref,
+            "base_branch": "main",
             "dirty": false,
             "landed": true,
+            "reasons": [],
+            "holders": {"agents": [], "panes": 0},
         })
     );
 
@@ -528,19 +531,22 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
         .assert()
         .success();
     env.rimz()
-        .args(["worktree", "new", "pending"])
+        .args(["worktree", "new", "unlanded"])
         .assert()
         .success();
     let landed = env.home_root.join("project-worktrees/landed");
-    let pending = env.home_root.join("project-worktrees/pending");
-    commit_file(&pending, "feature.txt", "pending\n", "pending work");
+    let pending = env.home_root.join("project-worktrees/unlanded");
+    commit_file(&pending, "feature.txt", "unlanded\n", "unlanded work");
 
     env.rimz()
         .args(["worktree", "sweep", "--dry-run"])
         .assert()
         .success()
         .stdout(contains("would remove 1"))
-        .stdout(contains("kept: pending — not merged yet"));
+        .stdout(contains("kept, unlanded work (1)"))
+        .stdout(contains(
+            "nothing was removed; run `rimz worktree sweep` to remove the 1",
+        ));
     assert!(landed.exists(), "dry run keeps landed checkout");
 
     env.rimz()
@@ -548,7 +554,7 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
         .assert()
         .success()
         .stdout(contains("removed 1"))
-        .stdout(contains("kept: pending — not merged yet"));
+        .stdout(contains("kept, unlanded work (1)"));
     assert!(!landed.exists(), "safe checkout is swept");
     assert!(pending.exists(), "unmerged checkout is retained");
     let removed: Vec<Value> = env
@@ -559,6 +565,146 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
         .collect();
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0]["payload"]["name"], "landed");
+}
+
+#[test]
+fn worktree_list_state_summary_and_bare_default() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "list"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "1 worktrees in ~/project-worktrees · 1 removable (rimz worktree sweep)",
+        ))
+        .stdout(contains("STATE"))
+        .stdout(contains("landed"))
+        .stdout(contains("MERGED").not());
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    std::fs::write(path.join("dirty.txt"), "dirty\n").unwrap();
+    env.rimz()
+        .args(["worktree"])
+        .assert()
+        .success()
+        .stdout(contains("1 with unlanded work"))
+        .stdout(contains("unlanded · dirty"));
+}
+
+#[test]
+fn worktree_sweep_json_reports_all_reasons_and_no_store() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let skipped = env
+        .rimz()
+        .args(["worktree", "sweep", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(skipped.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&skipped.stdout).unwrap(),
+        serde_json::json!({
+            "dry_run": true, "skipped": "no_store", "removed": [], "kept": [], "failed": []
+        })
+    );
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let preview = env
+        .rimz()
+        .args(["worktree", "sweep", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success());
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(
+        preview["kept"][0]["reasons"],
+        serde_json::json!(["unlanded"])
+    );
+    std::fs::write(path.join("dirty.txt"), "dirty\n").unwrap();
+    let preview = env
+        .rimz()
+        .args(["worktree", "sweep", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(
+        preview["kept"][0]["reasons"],
+        serde_json::json!(["uncommitted_changes", "unlanded"])
+    );
+}
+
+#[test]
+fn worktree_remove_unlanded_names_count_target_and_restore_tip() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let tip = git_stdout(&path, &["rev-parse", "HEAD"]);
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "has 1 commits not landed on main; run `rimz worktree merge demo`",
+        ));
+    env.rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "branch deleted: demo was at {tip}; restore with `git branch demo {tip}`"
+        )));
+}
+
+#[test]
+fn worktree_remove_unknown_requires_landing_proof() {
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/demo");
+    let mut marker = rimz::worktree::read_marker_for_worktree(&path)
+        .unwrap()
+        .unwrap();
+    marker.base_branch = None;
+    marker.base_ref = "0000000000000000000000000000000000000000".to_owned();
+    let marker_path = path.join(git_stdout(
+        &path,
+        &["rev-parse", "--git-path", "rimz-worktree.json"],
+    ));
+    std::fs::write(marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+    git(&env.project_root, &["checkout", "--detach"]);
+    git(&env.project_root, &["branch", "-D", "main"]);
+    env.rimz().args(["worktree", "remove", "demo"]).assert().failure()
+        .stderr(contains("has work RimZ cannot prove landed; land it yourself, or pass --force to delete its branch"));
+    let listed = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .output()
+        .unwrap();
+    let listed: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert!(listed[0]["landed"].is_null());
+    assert_eq!(listed[0]["reasons"], serde_json::json!(["unknown"]));
 }
 
 #[test]
@@ -1079,6 +1225,28 @@ fn worktree_remove_refuses_while_a_live_agent_works_there() {
         .stderr(contains("use --force to remove it"));
     assert!(path.exists(), "refusal keeps the checkout");
 
+    let listed = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .output()
+        .unwrap();
+    let listed: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(listed[0]["reasons"], serde_json::json!(["in_use"]));
+    assert!(
+        listed[0]["holders"]["agents"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("@claude")
+    );
+    let preview = env
+        .rimz()
+        .args(["worktree", "sweep", "--dry-run", "--json"])
+        .output()
+        .unwrap();
+    let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview["kept"][0]["reasons"], listed[0]["reasons"]);
+    assert_eq!(preview["kept"][0]["holders"], listed[0]["holders"]);
+
     env.rimz()
         .args(["worktree", "remove", "demo", "--force"])
         .assert()
@@ -1129,6 +1297,8 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
         .assert()
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let tip = git_stdout(&path, &["rev-parse", "HEAD"]);
     let message_id = queue_channel_message(&env, "demo", "old work");
     let messages_dir = env.store().paths().messages_dir.clone();
     let permissions = std::fs::metadata(&messages_dir)
@@ -1142,12 +1312,19 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
         crate::common::skip("this user bypasses directory write permissions");
         return;
     }
-    let output = env.rimz().args(["worktree", "remove", "demo"]).output();
+    let output = env
+        .rimz()
+        .args(["worktree", "remove", "demo", "--force"])
+        .output();
     std::fs::set_permissions(&messages_dir, permissions).expect("restore permissions");
     output
         .expect("remove command")
         .assert()
         .code(1)
+        .stdout(contains("removed demo\n"))
+        .stdout(contains(format!(
+            "branch deleted: demo was at {tip}; restore with `git branch demo {tip}`"
+        )))
         .stderr(contains("archiving messages for removed worktree channel"))
         .stderr(contains("messages.jsonl.tmp."));
 
@@ -1155,6 +1332,7 @@ fn worktree_remove_reports_live_queue_write_failure_after_removal() {
         !path.exists(),
         "removal completes before the queue write fails"
     );
+    assert!(!branch_exists(&env.project_root, "demo"));
     assert!(
         env.store()
             .list_messages()
@@ -2103,12 +2281,15 @@ fn worktree_new_symlinks_dirs_from_worktreelink_without_dirtying_checkout() {
     let marker = rimz::worktree::read_marker_for_worktree(&path)
         .expect("read marker")
         .expect("marker");
-    assert_eq!(
-        rimz::worktree::ProtectionSet::default().assess(
+    assert!(
+        rimz::worktree::inspect(
             &path,
-            rimz::worktree::status(&path, &marker).expect("status"),
-        ),
-        rimz::worktree::RemovalAssessment::Removable,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path),
+        )
+        .expect("inspect")
+        .removable(),
         "the linked dir does not block cleanup"
     );
 }
@@ -2132,12 +2313,18 @@ fn worktree_remove_refuses_dirty_without_force() {
         .args(["worktree", "remove", "demo"])
         .assert()
         .failure()
-        .stderr(contains("--force"));
+        .stderr(contains(
+            "has uncommitted changes (1 files); commit or stash them",
+        ));
 
     env.rimz()
         .args(["worktree", "remove", "demo", "--force"])
         .assert()
-        .success();
+        .success()
+        .stdout(contains(format!(
+            "restore with `git branch demo {}`",
+            git_stdout(&env.project_root, &["rev-parse", "HEAD"])
+        )));
     assert!(!path.exists(), "force removes dirty worktree");
 }
 
@@ -2165,10 +2352,16 @@ fn worktree_new_with_at_base_keeps_pending_commits() {
 
     commit_file(&path, "feature.txt", "feature\n", "feature");
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
-        rimz::worktree::LandedVerdict::Pending,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
+        rimz::worktree::LandedVerdict::Unlanded,
         "the clean commit is still pending on main"
     );
 
@@ -2341,10 +2534,16 @@ fn agents_exec_sighup_keeps_dirty_and_pending_worktrees() {
             .expect("marker");
         commit_file(path, "feature.txt", "feature\n", "feature");
         assert_eq!(
-            rimz::worktree::status(path, &marker)
-                .expect("status")
-                .landed,
-            rimz::worktree::LandedVerdict::Pending,
+            rimz::worktree::inspect(
+                path,
+                &marker,
+                &rimz::worktree::ProtectionSet::default(),
+                &rimz::worktree::LandedMemo::load(path)
+            )
+            .expect("status")
+            .status
+            .landed,
+            rimz::worktree::LandedVerdict::Unlanded,
             "clean local commit is pending until it lands on the base"
         );
     });
@@ -2408,9 +2607,15 @@ fn worktree_remove_split_landed_succeeds_without_force() {
         .expect("read marker")
         .expect("marker");
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "identical trees count as landed even when one branch commit landed as multiple base commits"
     );
@@ -2502,9 +2707,15 @@ fn worktree_status_rebase_landed_with_shifted_context_is_landed() {
         "patch-id sees residue after context drift, so merge absorption proves landing"
     );
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "rebase-landed content with shifted patch context is landed"
     );
@@ -2656,9 +2867,15 @@ fn gc_sweeps_rewritten_worktree_whose_tip_tree_landed() {
         "the matching snapshot sits beyond the capped merge-tree scan"
     );
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "the complete branch-tip snapshot proves rewritten work landed"
     );
@@ -2771,10 +2988,16 @@ fn gc_keeps_unlanded_worktree_whose_tip_tree_is_only_shared_history() {
         "the shared historical tree is absent from main's exclusive history"
     );
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
-        rimz::worktree::LandedVerdict::Pending,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
+        rimz::worktree::LandedVerdict::Unlanded,
         "shared pre-divergence history cannot prove branch content landed"
     );
 
@@ -2782,7 +3005,7 @@ fn gc_keeps_unlanded_worktree_whose_tip_tree_is_only_shared_history() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("kept: demo — not merged yet"));
+        .stdout(contains("kept: demo — unlanded"));
 
     assert!(path.exists(), "gc keeps the unlanded worktree");
     assert!(
@@ -2821,9 +3044,15 @@ fn gc_sweeps_merge_landed_worktree() {
         "main advanced after the merge-back, so the fixture reaches the merge-tree scan"
     );
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "leftover merge commits are landed when their tree already exists on main"
     );
@@ -2892,9 +3121,15 @@ fn gc_sweeps_worktree_whose_base_branch_landed_on_trunk() {
         "the fixture remains ahead by ancestry"
     );
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "worktree content is landed on trunk once its stale base branch is superseded"
     );
@@ -2940,9 +3175,15 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
         .expect("marker");
     assert_eq!(marker.base_branch.as_deref(), Some("develop"));
     assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .landed,
+        rimz::worktree::inspect(
+            &path,
+            &marker,
+            &rimz::worktree::ProtectionSet::default(),
+            &rimz::worktree::LandedMemo::load(&path)
+        )
+        .expect("status")
+        .status
+        .landed,
         rimz::worktree::LandedVerdict::Landed,
         "feature is landed on explicit base even though main lacks it"
     );
