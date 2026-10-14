@@ -352,6 +352,19 @@ impl LoopState {
         );
     }
 
+    #[cfg(feature = "testkit")]
+    pub(super) fn bench_frame_timing(&mut self, paint: bool) -> bool {
+        if paint {
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(40, 60))
+                .expect("benchmark terminal");
+            render::draw_to_terminal(&mut terminal, &self.current, None, &mut self.ui)
+                .expect("benchmark paint");
+            assert!(self.ui.theme_cache.is_some());
+        }
+        std::hint::black_box(self.frame_timing());
+        self.watched()
+    }
+
     fn frame_timing(&self) -> (bool, Duration) {
         let clock = frame_clock(
             self.anim_start,
