@@ -620,8 +620,16 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
         "– 50% · 1h00m · 0.5x",
         "failed probe"
     );
-    assert_eq!(cells("default", "codex"), "∞ ∞", "unmetered: {text}");
-    assert_eq!(cells("team", "codex"), "∞ 100% · ready", "lifted: {text}");
+    assert_eq!(
+        cells("default", "codex"),
+        "no limit no limit",
+        "unmetered: {text}"
+    );
+    assert_eq!(
+        cells("team", "codex"),
+        "no limit 100% · ready",
+        "lifted: {text}"
+    );
 
     let default = serde_json::to_value(&rows[0]).unwrap();
     assert_eq!(default["metered"], true);

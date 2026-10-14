@@ -1,0 +1,10 @@
+---
+source: crates/rimz/src/cli/providers/tests.rs
+expression: text
+---
+Claude · v1.2.3 · $123.00 spent in 7d (shared by default, a, b)
+  ACCOUNT         PLAN        SPEND 7d  READING
+  claude@default  Claude Max            never read
+  claude@a        Claude Max            never read
+  claude@b        Claude Max            never read
+  claude@solo     Claude Max  $17.00    never read

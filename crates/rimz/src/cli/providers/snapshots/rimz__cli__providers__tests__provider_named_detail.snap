@@ -1,0 +1,19 @@
+---
+source: crates/rimz/src/cli/providers/tests.rs
+expression: pretty
+---
+  Claude · claude@default — Claude Max · logged in
+  probed:  0s ago
+  version: v1.2.3
+  usage:   never read
+  spend:   –
+  agents:  –
+
+● Claude · claude@work — Claude Max · logged in · new rooms
+  probed:  0s ago
+  version: v1.2.3
+  usage:   never read
+  spend:   7d $12.00 · 30d $0.00
+  budget:  $3.00 of $20.00/day
+  agents:  –
+●  new rooms

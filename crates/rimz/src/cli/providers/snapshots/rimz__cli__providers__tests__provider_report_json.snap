@@ -5,7 +5,8 @@ expression: json
 [
   {
     "kind": "claude",
-    "account": "default",
+    "account": "claude@default",
+    "pool": "claude@default",
     "product_name": "Claude",
     "status": "logged_in",
     "entitlement": "ok",
@@ -49,7 +50,8 @@ expression: json
       "effect": "restarts_window"
     },
     "spending": {
-      "today": {
+      "today": null,
+      "headline": {
         "usd": 0.0,
         "tokens": 0,
         "input": 0,
@@ -58,6 +60,7 @@ expression: json
         "cache_read": 0,
         "sessions": 0
       },
+      "window": "session",
       "week": {
         "usd": 31.2,
         "tokens": 12000,
@@ -91,7 +94,7 @@ expression: json
       "spend_usd": 8.1,
       "parked": false
     },
-    "active_sessions": 2,
+    "agents": null,
     "active": false,
     "default_for": []
   }
