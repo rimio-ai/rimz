@@ -725,7 +725,6 @@ impl LoopState {
         envelope: SidebarEventEnvelope,
     ) {
         let requests_verification = envelope.event.requests_producer_verification();
-        self.result_rx.invalidate();
         let sent_at_ms = envelope.sent_at_ms;
         if matches!(
             &envelope.event,
@@ -739,11 +738,13 @@ impl LoopState {
         }
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {
+                self.result_rx.invalidate();
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.width_control
                     .reload_target(&self.current.theme, measured, &self.diag);
             }
             SidebarEvent::BodyFilterChanged => {
+                self.result_rx.invalidate();
                 self.filter_observed_at = Some(Instant::now());
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
                 if set_make_up_filter(&mut self.ui, &self.current, filter) {
@@ -751,6 +752,7 @@ impl LoopState {
                 }
             }
             event @ SidebarEvent::Notify { .. } => {
+                self.result_rx.invalidate();
                 self.handle_notification(terminal, event);
             }
             SidebarEvent::FocusStranded {
@@ -758,6 +760,7 @@ impl LoopState {
                 generation,
                 clients,
             } => {
+                self.result_rx.invalidate();
                 if self.config.own_pane.as_ref() != Some(&pane_id) {
                     trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
                     return;
@@ -779,9 +782,11 @@ impl LoopState {
                 }
             }
             SidebarEvent::FocusIntent { .. } => {
+                self.result_rx.invalidate();
                 self.fold_fused_now();
             }
             event if event.is_overlay() => {
+                self.result_rx.invalidate();
                 self.handle_overlay_event(fetch, event, sent_at_ms);
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
