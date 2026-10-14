@@ -127,6 +127,7 @@ fn interrupt_keys_are_declared_only_for_verified_builtins() {
     use crate::pane::keys::NamedKey;
 
     assert_eq!(super::LaunchSpec::EMPTY.interrupt_key, None);
+    const { assert!(!super::LaunchSpec::EMPTY.confirm_interrupt) };
     for adapter in BUILTINS {
         let spec = adapter.spec();
         let expected = match spec.kind {
@@ -134,6 +135,12 @@ fn interrupt_keys_are_declared_only_for_verified_builtins() {
             _ => None,
         };
         assert_eq!(spec.launch.interrupt_key, expected, "{}", spec.kind);
+        assert_eq!(
+            spec.launch.confirm_interrupt,
+            spec.kind == "codex",
+            "{}",
+            spec.kind
+        );
     }
 }
 

@@ -692,7 +692,8 @@ upward-dependencies = [
 # ExpiryCheck carries the first ordered delivery check into the CLI (+1).
 # TurnWaitReason and TurnWaitView::reason expose wake-aware blockers to wait presentation (+2).
 # FanoutMatch carries resolved identities and paste-ready addresses into CLI ambiguity rows (+1).
-surface-budget = 81
+# InterruptConfirmation and the public DeliveryReport/deliver_one_report expose stop evidence to both CLI receipts (+3).
+surface-budget = 84
 
 [[module]]
 path = "crates/rimz/src/mux"
@@ -1112,6 +1113,7 @@ allowed-dependencies = [
     "mux",
     "pane::keys",
     "store",
+    "store::follow",
     "store::snapshot",
     "workspace",
 ]
@@ -2151,6 +2153,26 @@ reason = "Pass 12: shared loop template entry stays public; pub(crate) would not
 kind = "item"
 key = "config::load_loop"
 reason = "Pass 12: loop config entry stays public; pub(crate) would not reduce esc and is invisible to the binary CLI."
+
+[[verdict]]
+kind = "item"
+key = "message::InterruptConfirmation"
+reason = "Transient stop evidence shared by live dispatch, queued delivery and CLI receipts; never persisted."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::DeliveryReport"
+reason = "Queued CLI interrupts need stop evidence beside the existing sent/refused/stopped verdict."
+
+[[verdict]]
+kind = "item"
+key = "message::deliver::deliver_one_report"
+reason = "Expose the existing queued-delivery report to the CLI without changing deliver_one's bool contract."
+
+[[verdict]]
+kind = "item"
+key = "cli::send::report_interrupt_confirmation"
+reason = "One warning presentation for direct and queued interrupts, preserving the stdout receipt and exit status."
 
 [[verdict]]
 kind = "item"

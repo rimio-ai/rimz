@@ -272,12 +272,12 @@ Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, c
 
 ### Interrupt key
 
-[`rimz message --interrupt`](./cli/message.md#when-a-message-lands) stops a live turn before delivering a fresh prompt. Only agents with a declared interrupt key support this mode.
+[`rimz message --interrupt`](./cli/message.md#when-a-message-lands) types a prompt, then presses the agent's interrupt key to stop the live turn. The message reference describes when Codex replays the prompt as a fresh turn. Only agents with a declared interrupt key support this mode.
 
 | Agent | Interrupt key | Unsupported behaviour |
 | --- | :--: | --- |
-| Claude Code | Esc | Supported |
-| Codex | Esc | Supported |
+| Claude Code | Esc | Supported, without stop confirmation |
+| Codex | Esc | Supported; the Interrupt hook confirms the stop, otherwise RimZ warns |
 | Every other agent and process plugins | none | `--interrupt` refused; use `--steer` or park |
 
 ### Auto-compaction window

@@ -102,6 +102,7 @@ pub enum DispatchOutcome {
     Sent {
         label: String,
         message_id: MessageId,
+        interrupt: super::InterruptConfirmation,
     },
     Queued {
         label: String,
@@ -1028,6 +1029,7 @@ fn dispatch_one(
     )? {
         deliver::AttemptOutcome::Sent {
             compacted: was_compacted,
+            interrupt,
         } => {
             if was_compacted {
                 compacted.push(handle.clone());
@@ -1035,6 +1037,7 @@ fn dispatch_one(
             Ok(DispatchOutcome::Sent {
                 label: handle,
                 message_id,
+                interrupt,
             })
         }
         deliver::AttemptOutcome::SkippedWaiting => Ok(DispatchOutcome::SkippedWaiting {

@@ -62,7 +62,7 @@ pub struct MessageArgs {
     /// Write into the live turn now instead of parking for a turn boundary.
     #[arg(long, conflicts_with_all = ["schedule", "on"])]
     steer: bool,
-    /// Type the text, then press the agent's interrupt key about 3s later: the turn stops and the text starts a fresh one. Refused for agents without an interrupt key.
+    /// Type the text, then press the agent's interrupt key about 3s later. Codex confirms the stop when possible, but may not replay the text as a fresh turn. Refused for agents without an interrupt key.
     #[arg(long, conflicts_with_all = ["steer", "on", "schedule", "after", "when"])]
     interrupt: bool,
     /// Park the message until at least this duration or configured-zone `HH:MM`.
@@ -117,7 +117,7 @@ enum MessageSubcmd {
         #[arg(long)]
         force: bool,
     },
-    /// Type a queued message, then press the interrupt key about 3s later: the turn stops and the text starts a fresh one.
+    /// Type a queued message, then press the interrupt key about 3s later. Codex confirms the stop when possible, but may not replay the text as a fresh turn.
     Interrupt {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids

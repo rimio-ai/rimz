@@ -8,7 +8,8 @@ use jiff::Timestamp;
 use super::*;
 use rimz::address::TargetErr;
 use rimz::message::dispatch::{
-    ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchRequest, WhenRequest,
+    ConditionErr, ConditionKind, DispatchErr, DispatchMode, DispatchOutcome, DispatchRequest,
+    WhenRequest,
 };
 use rimz::message::reply::{ReplyJoin, ReplyPrepareErr};
 
@@ -133,6 +134,12 @@ pub(super) fn send_message(
         {
             let mut err = render::err();
             for outcome in &result.outcomes {
+                if let DispatchOutcome::Sent {
+                    label, interrupt, ..
+                } = outcome
+                {
+                    send::report_interrupt_confirmation(label, *interrupt);
+                }
                 if let Some(line) = send::render_dispatch_outcome(kind, outcome) {
                     writeln!(err, "{line}")?;
                 }

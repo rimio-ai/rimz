@@ -114,12 +114,14 @@ pub(super) fn push_queued_message(
     }
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let label = message_target_for_record(record, &snapshot);
-    let delivered = deliver::deliver_one(workspace, store, &message_id, globals.mux, policy)?;
-    if delivered {
+    let delivered =
+        deliver::deliver_one_report(workspace, store, &message_id, globals.mux, policy)?;
+    if let deliver::DeliveryReport::Sent { interrupt } = delivered {
         #[expect(clippy::print_stdout, reason = "command result")]
         {
             println!("sent to {label} ({message_id})");
         }
+        send::report_interrupt_confirmation(&label, interrupt);
         return Ok(());
     }
     let messages = store.list_messages()?;

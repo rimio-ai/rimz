@@ -62,6 +62,7 @@ pub struct LaunchSpec {
     pub max_turn_flag: Option<&'static str>,
     pub compact_command: Option<CompactCommand>,
     pub interrupt_key: Option<crate::pane::keys::NamedKey>,
+    pub confirm_interrupt: bool,
     pub presets: PresetMatchers,
     pub headless: Option<&'static dyn super::HeadlessForm>,
 }
@@ -78,6 +79,7 @@ impl LaunchSpec {
         max_turn_flag: None,
         compact_command: None,
         interrupt_key: None,
+        confirm_interrupt: false,
         presets: PresetMatchers::EMPTY,
         headless: None,
     };

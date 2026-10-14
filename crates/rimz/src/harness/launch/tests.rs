@@ -186,7 +186,11 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
         assert_eq!(argv.iter().filter(|arg| *arg == "--no-daemon").count(), 1);
         let flag = if session.is_some() { 3 } else { 1 };
         assert_eq!(argv[flag], "--no-daemon");
-        assert_eq!(&argv[flag + 1..flag + 3], &["--model", "o3"]);
+        assert_eq!(
+            &argv[flag + 1..flag + 3],
+            &["-c", "tui.question_esc_back=false"]
+        );
+        assert_eq!(&argv[flag + 3..flag + 5], &["--model", "o3"]);
     }
 }
 

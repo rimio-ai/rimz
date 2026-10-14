@@ -3,17 +3,18 @@
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
 use crate::message::{
-    DeliveryKind, MessageDraft, Recipient, command_segments, command_submit_delay_from_env,
-    message_interval_from_env,
+    DeliveryKind, InterruptConfirmation, MessageDraft, Recipient, command_segments,
+    command_submit_delay_from_env, message_interval_from_env,
 };
 use crate::mux::PaneWriter;
 use crate::pane::keys::NamedKey;
+use crate::store::follow::{EventFollower, FollowEvent};
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
@@ -48,7 +49,10 @@ pub enum SendErr {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Receipt {
-    Sent { compacted: bool },
+    Sent {
+        compacted: bool,
+        interrupt: InterruptConfirmation,
+    },
     SkippedWaiting,
     CompactionPending,
     ClaimLost,
@@ -129,33 +133,82 @@ pub(super) fn send_batch_to_live_pane(
     )?;
     // Decide under the pane lock: a resting agent gets a plain send, since the
     // key would cancel the very turn this paste starts.
+    // Queued records can retain a provisional launch id; confirm the live card's session.
     let interrupt = if send.kind == DeliveryKind::Interrupt {
         let key = interrupt_key(&head.kind, &format!("@{}", target.label()))?;
         let current = store.snapshot_cached()?;
-        let mid_turn = current
+        current
             .agents
             .iter()
             .find(|agent| head.same_agent_card(agent) && agent.ended_at.is_none())
-            .is_some_and(|agent| {
+            .filter(|agent| {
                 matches!(
                     agent.effective_status(),
                     AgentStatus::Running | AgentStatus::Waiting
                 )
-            });
-        mid_turn.then_some(key)
+            })
+            .map(|agent| (key, agent.agent_id.clone()))
     } else {
         None
     };
     let receipt = write_live(
         workspace, store, snapshot, target, bound, batch, send, &writer,
     )?;
-    if let (Some(key), Receipt::Sent { .. }) = (interrupt, receipt) {
-        // The provider holds the pasted prompt in its queue; the key stops the
-        // live turn and submits the queue as a fresh turn.
-        sleep(super::interrupt_delay_from_env());
-        writer.press(key)?;
+    let (Some((key, agent_id)), Receipt::Sent { compacted, .. }) = (interrupt, receipt) else {
+        return Ok(receipt);
+    };
+    sleep(super::interrupt_delay_from_env());
+    let follower = crate::agents::spec_by_kind(head.kind.as_str())
+        .is_some_and(|spec| spec.launch.confirm_interrupt)
+        .then(|| EventFollower::open(store.paths().clone(), false));
+    writer.press(key)?;
+    drop(writer);
+    let window = super::interrupt_confirmation_window_from_env();
+    let interrupt = match follower {
+        None => InterruptConfirmation::NotChecked,
+        Some(Ok(follower)) => confirm_interrupt(follower, &head.kind, &agent_id, window),
+        Some(Err(error)) => {
+            tracing::debug!(%error, "cannot open interrupt confirmation cursor");
+            InterruptConfirmation::NotConfirmed { window }
+        }
+    };
+    Ok(Receipt::Sent {
+        compacted,
+        interrupt,
+    })
+}
+
+fn confirm_interrupt(
+    mut follower: EventFollower,
+    kind: &crate::ids::AgentKind,
+    agent_id: &crate::ids::AgentSessionId,
+    window: Duration,
+) -> InterruptConfirmation {
+    let started = Instant::now();
+    loop {
+        let batch = match follower.poll() {
+            Ok(batch) => batch,
+            Err(error) => {
+                tracing::debug!(%error, "cannot read interrupt confirmation");
+                break;
+            }
+        };
+        if batch.events.iter().any(|event| {
+            matches!(event,
+                FollowEvent::Lifecycle(event) if event.kind == *kind
+                    && event.agent_id == *agent_id
+                    && matches!(event.signal, LifecycleSignal::TurnInterrupted { .. })
+            )
+        }) {
+            return InterruptConfirmation::Confirmed;
+        }
+        let remaining = window.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        sleep(remaining.min(Duration::from_millis(25)));
     }
-    Ok(receipt)
+    InterruptConfirmation::NotConfirmed { window }
 }
 
 #[expect(
@@ -179,7 +232,10 @@ fn write_live(
         debug_assert_eq!(batch.len(), 1);
         return Ok(
             match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
-                PaneWrite::Sent => Receipt::Sent { compacted: false },
+                PaneWrite::Sent => Receipt::Sent {
+                    compacted: false,
+                    interrupt: InterruptConfirmation::NotChecked,
+                },
                 PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
                 PaneWrite::ClaimLost => Receipt::ClaimLost,
             },
@@ -255,7 +311,10 @@ fn write_live(
     }
     Ok(
         match write_batch(workspace, store, snapshot, writer, bound, batch, send)? {
-            PaneWrite::Sent => Receipt::Sent { compacted },
+            PaneWrite::Sent => Receipt::Sent {
+                compacted,
+                interrupt: InterruptConfirmation::NotChecked,
+            },
             PaneWrite::SkippedWaiting => Receipt::SkippedWaiting,
             PaneWrite::ClaimLost => Receipt::ClaimLost,
         },
@@ -491,6 +550,85 @@ pub fn already_compacted_at(store: &Store, agent: &AgentState, used: u64) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interrupt_confirmation_keeps_superseded_events_and_matches_identity() {
+        use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
+        use crate::disk::paths::{RuntimePaths, StatePaths};
+        use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+        use crate::store::event::EventEnvelope;
+        use crate::store::follow::EventFollower;
+
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        let store = Store::open(paths.clone(), runtime).unwrap();
+        let append = |kind: &str, id: &str, signal| {
+            let observation =
+                AgentLifecycleObservation::new(Some(AgentSessionId::from(id)), signal);
+            store
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.clone(),
+                    "room",
+                    kind,
+                    "test",
+                    &observation,
+                ))
+                .unwrap();
+        };
+        let interrupted = || LifecycleSignal::TurnInterrupted {
+            turn_id: Some("old".into()),
+        };
+        append("codex", "target", LifecycleSignal::Registered);
+        append(
+            "codex",
+            "target",
+            LifecycleSignal::TurnStarted {
+                turn_id: Some("old".into()),
+            },
+        );
+        append("codex", "target", interrupted());
+        let follower = EventFollower::open(paths.clone(), false).unwrap();
+        append("claude", "target", interrupted());
+        append("codex", "other", interrupted());
+        let kind = AgentKind::new_unchecked("codex");
+        let id = AgentSessionId::from("target");
+        assert_eq!(
+            confirm_interrupt(follower, &kind, &id, Duration::ZERO),
+            super::super::InterruptConfirmation::NotConfirmed {
+                window: Duration::ZERO
+            }
+        );
+        append(
+            "codex",
+            "target",
+            LifecycleSignal::TurnStarted {
+                turn_id: Some("old".into()),
+            },
+        );
+        let follower = EventFollower::open(paths, false).unwrap();
+        append("codex", "target", interrupted());
+        append(
+            "codex",
+            "target",
+            LifecycleSignal::TurnStarted {
+                turn_id: Some("new".into()),
+            },
+        );
+        let snapshot = store.snapshot_cached().unwrap();
+        let target = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.kind == kind && agent.agent_id == id)
+            .unwrap();
+        assert_eq!(target.started_turn_id.as_deref(), Some("new"));
+        assert_eq!(target.interrupted_turn_id, None);
+        assert_eq!(
+            confirm_interrupt(follower, &kind, &id, Duration::ZERO),
+            super::super::InterruptConfirmation::Confirmed
+        );
+    }
 
     #[test]
     fn pacer_skips_first_write_and_honors_configured_interval() {

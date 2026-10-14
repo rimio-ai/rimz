@@ -20,6 +20,14 @@ pub enum DeliveryKind {
     Interrupt,
 }
 
+/// Transient stop evidence, independent of the durable message receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptConfirmation {
+    NotChecked,
+    Confirmed,
+    NotConfirmed { window: Duration },
+}
+
 use crate::address::recipient_channel;
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -254,6 +262,10 @@ pub fn settle_duration_from_env() -> Duration {
 /// Gap between an interrupt's paste and its interrupt key.
 fn interrupt_delay_from_env() -> Duration {
     env_ms("RIMZ_MESSAGE_INTERRUPT_DELAY_MS").unwrap_or(Duration::from_secs(3))
+}
+
+fn interrupt_confirmation_window_from_env() -> Duration {
+    env_ms("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS").unwrap_or(Duration::from_secs(5))
 }
 
 /// Spacing between discrete message pane writes.

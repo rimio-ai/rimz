@@ -113,17 +113,59 @@ fn is_escape_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t27"))
 }
 
-fn interrupt_order_case(kind: &str, queued: bool, force: bool) {
+fn interrupt_order_case(kind: &str, queued_agent_id: Option<&str>, force: bool) {
     let (env, panes) = interrupt_fixture(kind);
-    let message_id = queued.then(|| queue_add(&env, &format!("@{kind}"), "new direction"));
+    let message_id = match queued_agent_id {
+        None => None,
+        Some("sess-interrupt") => Some(queue_add(&env, &format!("@{kind}"), "new direction")),
+        Some(agent_id) => {
+            append_lifecycle(
+                &env,
+                kind,
+                "UserPromptSubmit",
+                "sess-interrupt",
+                LifecycleSignal::TurnStarted { turn_id: None },
+                |observation| observation.agent_name = Some("swift-otter".into()),
+            );
+            let message = MessageRecord::new_for_card(
+                env.workspace_id.clone(),
+                AgentKind::new_unchecked(kind),
+                AgentSessionId::from(agent_id),
+                Some("swift-otter".into()),
+                "new direction".into(),
+                true,
+                DeliveryGate::Done,
+            );
+            env.store()
+                .queue_message(
+                    &message,
+                    &env.resolve_workspace(&env.project_root).session_name,
+                )
+                .unwrap();
+            Some(message.message_id.to_string())
+        }
+    };
     if force {
-        push_pending_agent_ask(&env, "sess-interrupt");
+        append_lifecycle(
+            &env,
+            kind,
+            "PermissionRequest",
+            "sess-interrupt",
+            LifecycleSignal::AwaitingInput {
+                kind: AskKind::Permission,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            },
+            |_| {},
+        );
     }
     let trace = env.project_root.join("interrupt-trace.log");
     let mut command = traced_rimz(&env, &trace);
     command
         .env("RIMZ_TEST_PANE_LIST", &panes)
-        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50");
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "50")
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "10000");
     if let Some(id) = &message_id {
         command.args(["message", "interrupt", id]);
     } else {
@@ -137,7 +179,71 @@ fn interrupt_order_case(kind: &str, queued: bool, force: bool) {
     if force {
         command.arg("--force");
     }
-    run_success(&mut command, "interrupt");
+    let started = Instant::now();
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
+        assert!(started.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let key_pressed = Instant::now();
+    if kind == "codex" {
+        let pane = PaneId::from_parts(MuxName::Zellij, TRACE_PANE);
+        // The trace is written inside the mux child, before press() returns.
+        // Wait for the lock handoff, not a guessed subprocess scheduling delay.
+        let lock = loop {
+            let lock = rimz::disk::lock::WorkspaceLock::try_acquire(
+                &env.runtime_paths().pane_write_lock(&pane),
+            )
+            .unwrap();
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "confirmation must release the pane writer while waiting for evidence"
+            );
+            if let Some(lock) = lock {
+                break lock;
+            }
+            assert!(key_pressed.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "must wait for interrupt evidence"
+        );
+        drop(lock);
+        append_lifecycle(
+            &env,
+            kind,
+            "Interrupt",
+            "sess-interrupt",
+            LifecycleSignal::TurnInterrupted { turn_id: None },
+            |_| {},
+        );
+        append_lifecycle(
+            &env,
+            kind,
+            "UserPromptSubmit",
+            "sess-interrupt",
+            LifecycleSignal::TurnStarted { turn_id: None },
+            |_| {},
+        );
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("interrupt not confirmed"),
+        "{output:?}"
+    );
+    if kind == "claude" {
+        assert!(
+            key_pressed.elapsed() < Duration::from_secs(5),
+            "Claude must not wait for confirmation"
+        );
+    }
     let lines = trace_lines(&trace);
     assert_eq!(lines.iter().filter(|line| is_escape_key(line)).count(), 1);
     let paste = lines
@@ -153,23 +259,132 @@ fn interrupt_order_case(kind: &str, queued: bool, force: bool) {
 }
 
 #[test]
+fn interrupt_codex_without_signal_warns_after_window() {
+    interrupt_without_signal(false);
+}
+
+#[test]
+fn interrupt_queued_without_signal_warns_after_window() {
+    interrupt_without_signal(true);
+}
+
+#[test]
+fn interrupt_wait_reports_unconfirmed_before_reply_timeout() {
+    let (env, panes) = interrupt_fixture("codex");
+    let output = traced_rimz(&env, "interrupt-wait-unconfirmed.log")
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "0")
+        .args([
+            "message",
+            "--interrupt",
+            "@codex",
+            "--wait=0s",
+            "--json",
+            "new direction",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(124));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("interrupt not confirmed"), "{stderr}");
+    assert_sent_receipts(&output.stderr, 1);
+    let reply: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reply["@codex#main"]["status"], "timed_out");
+}
+
+fn interrupt_without_signal(queued: bool) {
+    let (env, panes) = interrupt_fixture("codex");
+    let id = queued.then(|| queue_add(&env, "@codex", "new direction"));
+    let trace = env.project_root.join("interrupt-unconfirmed.log");
+    let mut command = traced_rimz(&env, &trace);
+    command
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .env("RIMZ_MESSAGE_INTERRUPT_DELAY_MS", "0")
+        .env("RIMZ_MESSAGE_INTERRUPT_CONFIRM_MS", "200");
+    if let Some(id) = id {
+        command.args(["message", "interrupt", &id]);
+    } else {
+        command.args(["message", "--interrupt", "@codex", "new direction"]);
+    }
+    let started = Instant::now();
+    let child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    while !trace_lines(&trace).iter().any(|line| is_escape_key(line)) {
+        assert!(started.elapsed() < Duration::from_secs(10));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let key_pressed = Instant::now();
+    let output = child.wait_with_output().unwrap();
+    let confirmation_wait = key_pressed.elapsed();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("interrupt not confirmed"), "{stderr}");
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.contains("interrupt not confirmed"))
+            .count(),
+        1
+    );
+    for text in [
+        "@codex",
+        "200",
+        "may still be running",
+        "rimz pane capture @codex",
+        "Interrupt",
+        "trusted",
+        "rimz doctor",
+    ] {
+        assert!(stderr.contains(text), "missing {text}: {stderr}");
+    }
+    assert!(started.elapsed() >= Duration::from_millis(200));
+    assert!(
+        confirmation_wait >= Duration::from_millis(100),
+        "{confirmation_wait:?}"
+    );
+    assert!(
+        confirmation_wait < Duration::from_secs(3),
+        "{confirmation_wait:?}"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("sent to @codex"));
+    assert_eq!(
+        env.store().list_messages().unwrap()[0].status,
+        MessageStatus::Sent
+    );
+}
+
+#[test]
 fn interrupt_codex_pastes_then_presses_escape() {
-    interrupt_order_case("codex", false, false);
+    interrupt_order_case("codex", None, false);
 }
 
 #[test]
 fn interrupt_claude_pastes_then_presses_escape() {
-    interrupt_order_case("claude", false, false);
+    interrupt_order_case("claude", None, false);
 }
 
 #[test]
 fn interrupt_queued_record_pastes_then_presses_escape() {
-    interrupt_order_case("codex", true, false);
+    interrupt_order_case("codex", Some("sess-interrupt"), false);
+}
+
+#[test]
+fn interrupt_queued_provisional_id_confirms_registered_session() {
+    interrupt_order_case("codex", Some("launch_interrupt"), false);
 }
 
 #[test]
 fn interrupt_force_pastes_past_native_ask() {
-    interrupt_order_case("claude", false, true);
+    interrupt_order_case("claude", None, true);
+}
+
+#[test]
+fn interrupt_codex_force_confirms_past_native_ask() {
+    interrupt_order_case("codex", None, true);
 }
 
 #[test]

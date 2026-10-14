@@ -204,15 +204,15 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         headless: Some(&headless::CodexHeadless),
         definitions: DEFINITIONS,
         program: Some("codex"),
-        fixed_args: &["--no-daemon"],
+        fixed_args: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         prompt: super::PromptStyle::PositionalAfterDoubleDash,
         resume: Some(super::SessionCommand {
             before_id: &["codex", "resume"],
-            after_id: &["--no-daemon"],
+            after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         }),
         fork: Some(super::SessionCommand {
             before_id: &["codex", "fork"],
-            after_id: &["--no-daemon"],
+            after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         }),
         permission: super::LaunchPermissionArgs {
             ask: &[],
@@ -227,6 +227,7 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
         },
         max_turn_flag: None,
         interrupt_key: Some(crate::pane::keys::NamedKey::Escape),
+        confirm_interrupt: true,
         compact_command: Some(super::CompactCommand {
             command: "/compact",
             instruction: super::CompactInstruction::Unsupported,
