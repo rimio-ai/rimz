@@ -417,7 +417,7 @@ The members below are outside the lifecycle path. Their full declarations are in
 
 ## Private local thread cache
 
-Amp has at some builds written one JSON object per thread under `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. The file is an implementation detail outside the Plugin API and the docs. The schema evidence is ccusage's Amp adapter at commit [`ba99c0d`](https://github.com/ryoppippi/ccusage/tree/ba99c0d09b6db9fd64a6187751e8b88a019f991a/rust/crates/ccusage/src/adapter/amp) and objects captured into RimZ's adapter fixtures. `AMP_DATA_DIR` is anchored there only.
+Amp has at some builds written one JSON object per thread under `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. The file is an implementation detail outside the Plugin API and the docs. The schema evidence is ccusage's Amp adapter at commit [`ba99c0d`](https://github.com/ryoppippi/ccusage/tree/ba99c0d09b6db9fd64a6187751e8b88a019f991a/rust/crates/ccusage/src/adapter/amp) and objects captured in RimZ's former adapter tests, now in git history. `AMP_DATA_DIR` is anchored there only.
 
 Build `0.0.1791964847-g13f24a` (read 2026-10-14) no longer writes this file: its plain-text Bun bundle contains neither `usageLedger` nor `AMP_DATA_DIR`, and `threads/T-` appears only inside an ampcode.com URL. Earlier, on the host that ran `0.0.1789344113-g6e4515` on 2026-09-14, `~/.local/share/amp/` held `device-id.json`, `history.jsonl`, `secrets.json`, and `session.json` and no `threads/` directory, while `amp threads list` showed two threads.
 
