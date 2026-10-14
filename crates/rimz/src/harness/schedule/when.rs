@@ -71,7 +71,9 @@ pub(crate) fn probe_scopes(
         .iter()
         .find(|(_, task)| task.entry().each_worktree)
         .map(|(_, task)| {
-            crate::worktree::discover_owned(project_root.unwrap_or(&task.entry().resolved_root()))
+            crate::worktree::discover_owned_cached(
+                project_root.unwrap_or(&task.entry().resolved_root()),
+            )
         })
         .transpose()
         .unwrap_or_else(|error| {
