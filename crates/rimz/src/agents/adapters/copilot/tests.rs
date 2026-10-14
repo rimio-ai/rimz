@@ -533,6 +533,52 @@ fn neutral_output_is_empty_for_both_blocking_events() {
         .json_reply()
         .cloned();
     insta::assert_snapshot!(format!("{permission:?}"), @"None");
+    let notification = hook_output(
+        &CopilotAdapter,
+        "notification",
+        &json!({"notification_type":"elicitation_dialog","message":"Please answer"}),
+    )
+    .json_reply()
+    .cloned();
+    insta::assert_snapshot!(format!("{notification:?}"), @"None");
+}
+
+#[test]
+fn elicitation_notifications_raise_questions_only() {
+    let payload = json!({"session_id":"s","notification_type":"elicitation_dialog","message":"Please answer"});
+    let output = hook_output(&CopilotAdapter, "notification", &payload);
+    assert_eq!(output.class(), AgentHookClass::AwaitingUser);
+    assert_eq!(output.ask_kind(), Some(AskKind::Question));
+    assert_eq!(output.ask_detail(), Some("Please answer"));
+    assert_eq!(
+        hook_observation(&CopilotAdapter, "notification", &payload)
+            .unwrap()
+            .signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: Some("Please answer".to_owned()),
+            native_key: None
+        }
+    );
+    for notification in [
+        "permission_prompt",
+        "agent_idle",
+        "agent_completed",
+        "shell_completed",
+        "unknown",
+    ] {
+        let payload = json!({"session_id":"s","notification_type":notification,"message":"Notice"});
+        assert_eq!(
+            hook_output(&CopilotAdapter, "notification", &payload).ask_kind(),
+            None,
+            "{notification}"
+        );
+        assert!(
+            hook_observation(&CopilotAdapter, "notification", &payload).is_none(),
+            "{notification}"
+        );
+    }
 }
 
 #[test]
@@ -734,8 +780,10 @@ fn install_preview_reclaim_and_uninstall_own_only_marked_files() {
     assert!(!report.files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert!(COPILOT_MANAGED_SOURCE.installed_at(&path));
+    assert!(!COPILOT_MANAGED_SOURCE.upgrade_available_at(&path));
 
     std::fs::write(&path, "{\"_rimz_managed\":\"drifted\"}\n").unwrap();
+    assert!(COPILOT_MANAGED_SOURCE.upgrade_available_at(&path));
     assert!(COPILOT_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert_eq!(
@@ -1019,15 +1067,85 @@ fn embedded_hook_file_matches_the_declared_wire() {
         let entries = entries.as_array().expect("entry list");
         assert_eq!(entries.len(), 1, "{event}");
         let command = entries[0]["bash"].as_str().expect("bash command");
-        assert!(
-            command.contains("rimz hooks feed --source copilot"),
-            "{event}"
+        assert_eq!(
+            command,
+            format!(
+                "RIMZ_AGENT_PID=$PPID rimz hooks feed --source copilot --event {event} || true"
+            )
         );
-        assert!(command.ends_with(event), "{event}");
+        let matcher = (event == "preToolUse").then_some("ask_user");
+        assert_eq!(entries[0]["matcher"].as_str(), matcher);
+        assert_eq!(
+            COPILOT_HOOKS
+                .iter()
+                .find(|hook| hook.event == event)
+                .unwrap()
+                .matcher,
+            matcher
+        );
         assert_eq!(entries[0]["timeoutSec"], 30);
     }
 }
 
 fn observation(event: &str, payload: Value) -> AgentLifecycleObservation {
     hook_lifecycle(&CopilotAdapter, event, &payload)
+}
+
+#[test]
+fn installed_commands_fail_open_and_preserve_stdout_and_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    let empty = dir.path().join("empty");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::create_dir(&empty).unwrap();
+    let stub = bin.join("rimz");
+    let capture = dir.path().join("capture");
+    let input = dir.path().join("input.json");
+    std::fs::write(&input, r#"{"sessionId":"session","toolName":"ask_user"}"#).unwrap();
+    std::fs::write(&stub, "#!/bin/sh\nprintf '%s\\n' \"$RIMZ_AGENT_PID\" \"$@\" > \"$RIMZ_TEST_CAPTURE\"\nprintf '%s' \"$RIMZ_TEST_STDOUT\"\nexit \"$RIMZ_TEST_EXIT\"\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let document: Value = serde_json::from_str(HOOK_SOURCE).unwrap();
+    for (shell, program) in ["sh", "bash", "zsh"]
+        .into_iter()
+        .filter_map(|shell| which::which(shell).ok().map(|program| (shell, program)))
+    {
+        for (event, entries) in document["hooks"].as_object().unwrap() {
+            for (path, exit, stdout) in [
+                (&empty, "0", ""),
+                (&bin, "1", ""),
+                (&bin, "2", ""),
+                (&bin, "101", ""),
+                (&bin, "0", "{\"additionalContext\":\"deadline\"}\n"),
+            ] {
+                let output = Command::new(&program)
+                    .args(["-c", entries[0]["bash"].as_str().unwrap()])
+                    .env_clear()
+                    .env("HOME", dir.path())
+                    .env("PATH", path)
+                    .env("RIMZ_TEST_CAPTURE", &capture)
+                    .env("RIMZ_TEST_EXIT", exit)
+                    .env("RIMZ_TEST_STDOUT", stdout)
+                    .stdin(Stdio::from(std::fs::File::open(&input).unwrap()))
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{shell} {event} {exit}: {output:?}"
+                );
+                assert_eq!(output.stdout, stdout.as_bytes(), "{shell} {event} {exit}");
+                if path == &bin {
+                    assert_eq!(
+                        std::fs::read_to_string(&capture).unwrap(),
+                        format!(
+                            "{}\nhooks\nfeed\n--source\ncopilot\n--event\n{event}\n",
+                            std::process::id()
+                        )
+                    );
+                }
+            }
+        }
+    }
 }

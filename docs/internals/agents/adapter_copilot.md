@@ -2,7 +2,7 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [copilot-reference.md](../../externals/agent-adapter/copilot-reference.md).
 
-GitHub Copilot CLI reports through native camelCase command hooks installed as one RimZ-owned user file at `$COPILOT_HOME/hooks/rimz.json`, falling back to `~/.copilot/hooks/rimz.json`. Each command passes its event name to `rimz hooks feed --source copilot --event <event>` because native payloads carry no event-name field. Hook stdout stays empty, preserving Copilot's own permission engine and question UI.
+GitHub Copilot CLI reports through native camelCase command hooks installed as one RimZ-owned user file at `$COPILOT_HOME/hooks/rimz.json`, falling back to `~/.copilot/hooks/rimz.json`. Each command is `RIMZ_AGENT_PID=$PPID rimz hooks feed --source copilot --event <event> || true`: it preserves owner attribution without `exec` and fails open even when RimZ is missing, panics, or rejects its arguments. Decision stdout stays empty, preserving Copilot's permission engine and question UI; `postToolUse` may return deadline `additionalContext`.
 
 ## Hooks and lifecycle
 
@@ -11,7 +11,8 @@ GitHub Copilot CLI reports through native camelCase command hooks installed as o
 | `sessionStart` | lifecycle | `TurnStarted` with non-empty `initialPrompt`, otherwise `Registered` | `sessionId`, `cwd`; `startup`/`new` mark fresh identity while `resume` preserves the existing lineage |
 | `userPromptSubmitted` | lifecycle | `TurnStarted` | sanitized `prompt` labels the row |
 | `preToolUse(ask_user)` | awaiting-user (`Question`) | `AwaitingInput` | best-effort question text from singular `toolArgs` or a batched `toolCalls[].args` object/JSON string |
-| `preToolUse` (other tools) | lifecycle | `ToolUsed { false, false }` | proof-of-work for clearing a prior ask; excluded from activity to avoid the ask race |
+| `preToolUse` (other tools) | lifecycle | `ToolUsed { false, false }` | compatibility with pre-refresh hook files only; the installed matcher is `ask_user` |
+| `notification(elicitation_dialog)` | awaiting-user (`Question`) | `AwaitingInput` | `message` supplies detail; permission, background-agent, and shell notifications produce no signal |
 | `postToolUse` / `postToolUseFailure` | lifecycle | `ToolUsed` | every completed boundary clears Waiting immediately, except a shell call whose command key differs from an open keyed permission ask; known batched calls aggregate mutation/edit flags |
 | `permissionRequest` | awaiting-user (`Permission`) | `AwaitingInput` | Copilot's native UI remains the answer surface; a `toolInput.command` keys the ask |
 | `agentStop` | lifecycle | `TurnEnded` | the native final turn boundary |
@@ -35,7 +36,7 @@ Copilot CLI runs the standard installed prompt, tool, and `agentStop` hooks for 
 
 **Install.** Install owns the whole hook file through its first-line `_rimz_managed` marker and owns one reversible `statusLine` object in `$COPILOT_HOME/settings.json`. Preview validates both candidates and shows both diffs before writing either file. Reinstall reclaims a marked hook file, canonicalizes a managed statusline without nesting, and refuses an unmarked hook file or a non-command statusline value. The statusline preserves the `padding` and `refreshInterval` rendering options, stores the complete prior JSON value under `_rimz_wrapped`, and passes the provider payload byte-for-byte to that prior command while forwarding its stdout and exit status.
 
-Hook readiness requires both the marked hook file and the canonical managed statusline command. Either artifact alone remains detectable as a partial install for repair or uninstall. Uninstall strictly restores or removes only the managed statusline first, then removes only the marked hook file; a hook-removal failure restores the original settings bytes atomically. Read-only readiness and wrapped-command probes accept later JSONC edits, while install and uninstall reject comments or trailing commas instead of discarding them.
+Hook readiness requires both the marked hook file and the canonical managed statusline command. Either artifact alone remains detectable as a partial install for repair or uninstall. The hook file is upgradeable: `rimz start` offers to refresh a stale marked file. Declining preserves the old commands, including their deny-on-error behavior. Uninstall strictly restores or removes only the managed statusline first, then removes only the marked hook file; a hook-removal failure restores the original settings bytes atomically. Read-only readiness and wrapped-command probes accept later JSONC edits, while install and uninstall reject comments or trailing commas instead of discarding them.
 
 ## Launch and resume
 
@@ -86,6 +87,10 @@ The cleaned `copilot_plan` survives a plan-only Business response.
 Realtime cost is partial. The statusline's metered AI credits give session dollars at $0.01 per credit; without them, cumulative disjoint token scopes are priced at the currently resolved model, including cache creation and cache-read rates, and model changes within one accumulated live session are not reconstructed. Historical spend discovers direct `$COPILOT_HOME/session-state/*/events.jsonl` files, carries `session.start.data.context.cwd`, and folds each shutdown's per-model cumulative fresh-input, cache-read, cache-write, and inclusive-output counters into timestamped deltas. Field omissions preserve the prior baseline; a regression resets only that field without replaying or fabricating usage. Detailed `tokenDetails` win, aggregate input subtracts both cache categories, and a concrete top-level model/usage record is the fallback when `modelMetrics` is absent. A per-model `totalNanoAiu` delta prices the entry at $0.01 per credit, even for a model the price book lacks. Without one, known models use the shared price book and unknown models retain zero-dollar token entries for the normal price-refresh healing path. A cursor written before credits were tracked prices its next delta from tokens, because its missing credit baseline would replay the cumulative total. The spending cache version did not change with credit pricing, so a session finalized and cached before it keeps its price-book dollars, and `rimz stats` can mix metered and estimated Copilot rows. Session credits are not an account ledger, so AccountSpend coverage is partial and account budgets remain ineligible.
 
 ## Known gaps
+
+- **Elicitation is asynchronous.** Waiting can arrive after the user answers; no elicitation-specific clearing event is documented, so clearing relies on later lifecycle activity. Unverified double-fire: if `ask_user` also emits `elicitation_dialog`, its message may replace the question text and mint a fresh ask ID.
+- **Batched matcher behavior is unverified.** A `toolCalls` batch has no top-level `toolName`; the `ask_user` matcher may miss a batch containing a question.
+- **Copilot's sandbox is unverified.** If it blocks RimZ's home, the guard prevents tool denial but card edges can be lost. A `sandbox.userPolicy` grant is a likely fix, not a verified one.
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. The gaps below are the ones with a reason worth recording.
 

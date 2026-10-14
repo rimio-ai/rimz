@@ -6,6 +6,15 @@ use sha2::{Digest, Sha256};
 
 use crate::agents::transcript_fs::deserialize_optional_string_lossy;
 
+#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CopilotNotificationType {
+    ElicitationDialog,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CopilotHookPayload {
@@ -17,6 +26,9 @@ pub(super) struct CopilotHookPayload {
     #[serde(alias = "initial_prompt")]
     pub initial_prompt: Option<String>,
     pub prompt: Option<String>,
+    #[serde(default, rename = "notification_type")]
+    pub notification_type: CopilotNotificationType,
+    pub message: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     #[serde(alias = "tool_name")]
     tool_name: Option<String>,

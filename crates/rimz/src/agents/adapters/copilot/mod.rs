@@ -2,9 +2,9 @@
 //!
 //! Copilot's native camelCase command hooks provide lifecycle truth and its
 //! synchronous permission/question gates. RimZ owns one whole hook file at
-//! `$COPILOT_HOME/hooks/rimz.json`; empty hook stdout preserves Copilot's native
-//! decision UI. Per-session events provide conversation history and optional
-//! decision UI. A reversible managed statusline supplies live context, with
+//! `$COPILOT_HOME/hooks/rimz.json`; commands guard feed failures with `|| true`.
+//! Decision stdout stays empty; post-tool replies may carry deadline context.
+//! A reversible managed statusline supplies live context, with
 //! metadata-only OTel chat spans as the fallback when that bridge is unhealthy.
 
 mod account;
@@ -145,7 +145,7 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         reason: "plan mode has no approval hook",
     },
     user_question: ConcernCoverage::Wired {
-        via: "preToolUse(ask_user)",
+        via: "preToolUse(ask_user) + notification(elicitation_dialog)",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "no native answer protocol; answer in the pane",
@@ -170,7 +170,7 @@ const COPILOT_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     session_end: ConcernCoverage::Wired { via: "sessionEnd" },
     idle_notification: ConcernCoverage::Partial {
         via: "agentStop + stall window",
-        gap: "notification(agent_idle) is not wired",
+        gap: "notification(agent_idle) covers background agents only",
     },
     context_usage: ConcernCoverage::Wired {
         via: "statusline window/fill/occupied/current and cumulative token scopes",
@@ -277,6 +277,13 @@ const COPILOT_HOOKS: &[HookEventSpec] = &[
         AskKind::Question,
     )
     .synchronous()
+    .with_matcher("ask_user")
+    .with_lifecycle_fallback(),
+    HookEventSpec::blocking(
+        "notification",
+        r#"{"session_id":"sess-1","notification_type":"elicitation_dialog","message":"Please answer"}"#,
+        AskKind::Question,
+    )
     .with_lifecycle_fallback(),
     HookEventSpec::lifecycle("postToolUse", r#"{"sessionId":"sess-1","toolName":"edit"}"#)
         .progress(),
@@ -318,7 +325,7 @@ const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     COPILOT_HOOKS,
     "hook file",
     paths::hooks_path,
-    false,
+    true,
 );
 
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot";
@@ -351,6 +358,14 @@ impl crate::agents::capabilities::CoreCapability for CopilotAdapter {
             AgentHookClass::Lifecycle,
             None,
         ));
+        for notification in ["agent_idle", "agent_completed"] {
+            samples.push(ClassificationSample::new(
+                "notification",
+                json!({"session_id":"sess-1","notification_type":notification}),
+                AgentHookClass::Lifecycle,
+                None,
+            ));
+        }
         super::AdapterConformance {
             classification: samples,
             context_cost: Some(super::ContextCostFixture {
@@ -378,6 +393,10 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
         } else if event_name == "preToolUse" {
             self.spec()
                 .blocking_tool_kind(tool.and_then(|tool| tool.name))
+        } else if event_name == "notification"
+            && parsed.notification_type == payloads::CopilotNotificationType::ElicitationDialog
+        {
+            Some(AskKind::Question)
         } else {
             None
         };
@@ -412,6 +431,8 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
             tool.and_then(|tool| tool.name)
                 .map(str::to_owned)
                 .filter(|name| !name.is_empty())
+        } else if event_name == "notification" && ask_kind.is_some() {
+            parsed.message.clone()
         } else {
             questions.first().map(|question| question.question.clone())
         };
@@ -454,6 +475,14 @@ impl crate::agents::capabilities::HookCapability for CopilotAdapter {
             }
             "sessionStart" => LifecycleSignal::Registered,
             "userPromptSubmitted" => LifecycleSignal::TurnStarted { turn_id: None },
+            "notification" if ask_kind == Some(AskKind::Question) => {
+                LifecycleSignal::AwaitingInput {
+                    kind: AskKind::Question,
+                    ask_id: None,
+                    detail: parsed.message.clone(),
+                    native_key: None,
+                }
+            }
             "permissionRequest" => LifecycleSignal::AwaitingInput {
                 kind: AskKind::Permission,
                 ask_id: None,
