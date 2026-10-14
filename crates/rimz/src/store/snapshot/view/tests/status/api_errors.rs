@@ -197,6 +197,33 @@ fn named_quota_limit_marker_becomes_actionable_after_its_reset() {
 }
 
 #[test]
+fn gateway_spend_limit_marker_becomes_actionable_after_its_reset() {
+    for (resets_in, expected) in [(3_600, AgentStatus::Paused), (-60, AgentStatus::Failed)] {
+        let quota = RateLimitWindow {
+            scope: Some(crate::agents::RateLimitWindowScope {
+                id: "spend".to_owned(),
+                label: "$".to_owned(),
+            }),
+            ..unprojectable_spent_window(resets_in)
+        };
+        let session = agent("claude", "root", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(60)
+            .turn_error_class(10, "Spend limit reached", TurnErrorClass::PausedSpendLimit);
+        let snapshot = room_with_agent_panes_and_capacities(
+            vec![session],
+            provider_capacity("claude", vec![quota]),
+        );
+        assert_eq!(
+            row(&snapshot, "root").status(),
+            Some(expected),
+            "reset in {resets_in}"
+        );
+    }
+}
+
+#[test]
 fn model_scoped_limit_marker_stays_paused_past_its_window_reset() {
     // A Claude Fable cap arrives as a rate-limit marker whose only spent
     // window is model-scoped; scoped windows never make the park actionable.

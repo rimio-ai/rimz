@@ -49,7 +49,8 @@ fn full_payload_projects_every_field() {
         "thinking": { "enabled": true },
         "rate_limits": {
             "five_hour": { "used_percentage": 23.5, "resets_at": 1738425600i64 },
-            "seven_day": { "used_percentage": 41.2, "resets_at": 1738857600i64 }
+            "seven_day": { "used_percentage": 41.2, "resets_at": 1738857600i64 },
+            "spend_limit": { "used_percentage": 65.2, "resets_at": 1738857600i64 }
         },
         "vim": { "mode": "NORMAL" },
         "version": "2.1.90",
@@ -85,6 +86,23 @@ fn full_payload_projects_every_field() {
     assert_eq!(usage.cache_read_input_tokens, Some(2000));
 
     let rate = ctx.rate_limits.unwrap();
+    assert_eq!(rate.windows.len(), 3);
+    let spend = rate
+        .windows
+        .iter()
+        .find(|window| {
+            window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "spend")
+        })
+        .expect("gateway spend quota");
+    assert_eq!(spend.scope.as_ref().unwrap().label, "$");
+    assert_eq!(spend.duration_mins, None);
+    assert_eq!(spend.used_percentage, Some(65));
+    assert_eq!(spend.resets_at, Timestamp::from_second(1738857600).ok());
+    assert!(spend.source.is_best_effort());
+    assert_eq!(spend.observed_at, Some(ctx.observed_at));
     let five = window_by_mins(&rate, account::FIVE_HOUR_MINS);
     // 23.5 rounds to 24.
     assert_eq!(five.used_percentage, Some(24));
@@ -106,6 +124,51 @@ fn full_payload_projects_every_field() {
     let pr = ctx.pr.unwrap();
     assert_eq!(pr.number, Some(1234));
     assert_eq!(pr.review_state.as_deref(), Some("pending"));
+}
+
+#[test]
+fn gateway_only_spend_limit_normalizes_without_subscription_windows() {
+    for (used, expected) in [(112.4, 100), (99.6, 99)] {
+        let ctx = parse(
+            json!({"rate_limits": {"spend_limit": {"used_percentage": used, "resets_at": 1738857600i64}}}),
+        );
+        assert!(ctx.rate_limits.is_some(), "gateway quota must be projected");
+        let windows = ctx.rate_limits.unwrap().windows;
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].used_percentage, Some(expected));
+        assert_eq!(windows[0].is_spent(), expected == 100);
+        assert_eq!(windows[0].duration_mins, None);
+        assert_eq!(windows[0].scope.as_ref().unwrap().id, "spend");
+        let capacity = crate::agents::ProviderCapacity::from_windows(windows);
+        assert_eq!(capacity.latest_spent_window_reset(ctx.observed_at), None);
+        assert!(!capacity.subscription_exhausted_for_model(ctx.observed_at, Some("opus")));
+    }
+    let ctx = parse(json!({"rate_limits": {"spend_limit": {"resets_at": 1738857600i64}}}));
+    assert!(
+        ctx.rate_limits.is_some(),
+        "reset-only quota must be projected"
+    );
+    let windows = ctx.rate_limits.unwrap().windows;
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].used_percentage, None);
+    assert_eq!(
+        windows[0].resets_at,
+        Timestamp::from_second(1738857600).ok()
+    );
+}
+
+#[test]
+fn empty_or_dollar_only_spend_limit_is_omitted() {
+    for field in [
+        json!({}),
+        json!({"used_usd": 10, "limit_usd": 20, "period": "monthly"}),
+    ] {
+        assert!(
+            parse(json!({"rate_limits": {"spend_limit": field}}))
+                .rate_limits
+                .is_none()
+        );
+    }
 }
 
 #[test]

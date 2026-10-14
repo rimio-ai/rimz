@@ -251,7 +251,7 @@ Direct account-usage HTTP ([`agents/credits.rs`](../../../crates/rimz/src/agents
 
 ## Spent windows and paused rows
 
-A window is spent at `used_percentage == 100` while its reset is still ahead. A spent window paints the budget bars; it does not park every agent of the kind.
+A window is spent when `used_percentage` reaches 100 while its reset is still ahead. A spent window paints the budget bars; it does not park every agent of the kind.
 
 A row becomes `paused` only when that agent stopped mid-turn on a limit or a transient server error. A native turn-error certificate (`rate_limit`, `spend_limit`, or `overloaded`) parks the running agent it names. A stalled running agent with no certificate parks when the fused login window is spent and unreset. `overloaded` covers provider overload and transient 5xx errors, and has no reset clock.
 
@@ -319,7 +319,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 
 | Provider | Account identity → `AgentAccount` | Balance → `AgentRateLimits` / `ExtraCredits` |
 | --- | --- | --- |
-| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered | statusline 5h/7d windows, and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
+| Claude | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan, metered | statusline 5h/7d windows and the gateway spend quota (`$`), and the OAuth usage query for windows and banked limit resets ([adapter_claude.md](./adapter_claude.md#account-and-balance)) |
 | Codex | app-server `planType`, or `$CODEX_HOME/auth.json` | app-server windows and credits, then the OAuth usage query with reset credits ([adapter_codex.md](./adapter_codex.md#account-and-balance)) |
 | Antigravity | statusline, or the running `agy` local service → plan, metered | paired status and quota read on one endpoint → hashed kind-wide owner, authoritative 5h and weekly windows; credits and dollars unknown ([adapter_antigravity.md](./adapter_antigravity.md#account-and-balance)) |
 | Copilot | `$COPILOT_HOME/config.json` non-secret login → metered | internal account query → plan, named monthly `AIC`, `cht`, and `prm` scopes; no paid usage or spend ([adapter_copilot.md](./adapter_copilot.md#account-and-balance)) |
@@ -331,7 +331,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 | Grok | `${GROK_HOME:-~/.grok}/auth.json` metadata → session metered, API key unmetered | none; spend comes from `turn_completed` ([adapter_grok.md](./adapter_grok.md#account-and-balance)) |
 | Amp | `AMP_API_KEY` or `secrets.json` presence → pay-per-use, no identity ([adapter_amp.md](./adapter_amp.md#account-and-balance)) | none |
 
-Claude, Codex, Copilot, Pi, OpenCode, Kimi, and Qwen declare `direct_account_usage` and read provider credentials for it; Antigravity reads no credential and pairs identity and quota through the verified service of an already-running `agy`. Antigravity, Copilot, OpenCode, Kimi, and Qwen have no realtime leg, so the direct query is their only balance source. Pi and OpenCode delegate to the Claude or Codex usage fetcher for their backing token. Copilot's scopes omit a duration on purpose, keeping its monthly allowance out of 5h and 7d policy.
+Claude, Codex, Copilot, Pi, OpenCode, Kimi, and Qwen declare `direct_account_usage` and read provider credentials for it; Antigravity reads no credential and pairs identity and quota through the verified service of an already-running `agy`. Antigravity, Copilot, OpenCode, Kimi, and Qwen have no realtime leg, so the direct query is their only balance source. Pi and OpenCode delegate to the Claude or Codex usage fetcher for their backing token. Copilot's scopes and Claude's gateway `spend` scope omit a duration on purpose, keeping these allowances out of 5h and 7d policy. The gateway reset does not schedule auto-continue; a spend-limit park becomes actionable after reset.
 
 Normalization belongs to the adapter. Claude's owns its fixed named durations and clamping; Codex's and OpenAI's own dynamic durations, plan and credit cleanup, ordering, and the lifted empty 5h row on a cold cache. Sidebar fusion completes only durations already present in same-scope persisted truth.
 
