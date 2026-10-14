@@ -348,7 +348,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Antigravity | ◐ first `PreInvocation` + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ◐ child `PreInvocation` + parent transcript | ◐ child `Stop` + parent transcript | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ◐ child `userPromptSubmitted` + parent transcript | ◐ child `agentStop` + parent transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | ✗ | ✗ | `PreCompact` | ◐ derived | `SessionEnd` | ◐ derived |
-| Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | `subagentStart` | `subagentStop` | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
+| Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ◐ local pending `AskQuestion` or plan proposal | ◐ chat-store child | ◐ child transcript | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |

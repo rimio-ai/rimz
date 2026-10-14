@@ -633,7 +633,7 @@ mod tests {
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
                 MatrixCellState::Partial, // antigravity
-                MatrixCellState::Ok,      // cursor
+                MatrixCellState::Partial, // cursor
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
@@ -653,7 +653,7 @@ mod tests {
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
                 MatrixCellState::Partial, // antigravity
-                MatrixCellState::Ok,      // cursor
+                MatrixCellState::Partial, // cursor
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen

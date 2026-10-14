@@ -230,11 +230,15 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
         via: "validated local pending AskQuestion or open plan-proposal state",
         gap: "no native hook; pane-only wait and answer surface",
     },
-    subagent_started: HookCoverage::Native {
-        event: "subagentStart",
+    // The native `subagentStart`/`subagentStop` mapping stays installed, but the
+    // CLI never issues those requests, so the chats store is the working source.
+    subagent_started: HookCoverage::Derived {
+        via: "chats-store subagentInfo at the next parent hook",
+        gap: "no native start signal; subagentStart is never issued",
     },
-    subagent_stopped: HookCoverage::Native {
-        event: "subagentStop",
+    subagent_stopped: HookCoverage::Derived {
+        via: "child transcript turn_ended row at the next parent hook",
+        gap: "no native stop signal; subagentStop is never issued",
     },
     compacting: HookCoverage::Native {
         event: "preCompact",
@@ -326,7 +330,13 @@ impl crate::agents::capabilities::CoreCapability for CursorAdapter {
     #[cfg(test)]
     fn conformance(&self) -> super::AdapterConformance {
         super::AdapterConformance {
-            classification: super::hook_types::catalog_classification_corpus(CURSOR_HOOKS),
+            // The CLI never issues the installed `subagentStart`/`subagentStop`
+            // requests, so the corpus of what Cursor sends leaves them out; the
+            // adapter tests still pin their native mapping.
+            classification: super::hook_types::catalog_classification_corpus(CURSOR_HOOKS)
+                .into_iter()
+                .filter(|sample| !matches!(sample.event_name, "subagentStart" | "subagentStop"))
+                .collect(),
             hook_turn_cost: Some(super::TurnCostFixture {
                 event_name: "stop",
                 payload: test_json!({
