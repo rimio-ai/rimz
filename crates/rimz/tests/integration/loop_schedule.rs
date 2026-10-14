@@ -56,7 +56,7 @@ done
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'
 "#,
     );
-    // The checker runs through the fixture's login shell, and a system profile
+    // The judge runs through the fixture's login shell, and a system profile
     // that assigns PATH (Debian's does) drops the shim directory before it.
     std::fs::write(
         env.home_root.join(".profile"),
@@ -121,7 +121,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     );
     let stats = loop_ok(&env, &["stats", "--json"]);
     let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
-    assert_eq!(stats["assists"]["rollup"]["check_declines"], 1);
+    assert_eq!(stats["assists"]["rollup"]["judge_declines"], 1);
     assert!(loop_ok(&env, &["stats", "--assists"]).contains("No actionable work."));
     let key = serde_json::to_string(&("guard", checkout.to_string_lossy())).unwrap();
     let fire_path = runtime.lane_path("loop-fire.json");
@@ -9071,7 +9071,7 @@ fn loop_fire_launches_on_the_pinned_account_not_the_rooms() {
 }
 
 #[test]
-fn loop_add_agent_check_names_the_checker_and_rejects_unsupported_kinds() {
+fn loop_add_judge_names_the_profile_and_rejects_unsupported_kinds() {
     let env = Env::new();
     let flags = [
         "loop",
@@ -9084,38 +9084,43 @@ fn loop_add_agent_check_names_the_checker_and_rejects_unsupported_kinds() {
         "1h",
         "--prompt",
         "work",
-        "--check-agent",
+        "--judge",
         "opencode",
-        "--check-prompt",
+        "--judge-prompt",
         "q",
+        "--on",
+        "success",
     ];
     let output = env.rimz().args(flags).output().unwrap();
     assert!(
         !output.status.success(),
-        "unsupported checker must be rejected"
+        "unsupported judge must be rejected"
     );
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(
-        error.contains("opencode") && error.contains("only claude and codex run headless checks"),
+        error.contains("opencode") && error.contains("only claude and codex run headless judges"),
         "{error}"
     );
 
     let mut flags = flags;
     flags[11] = "claude";
     let receipt = loop_ok(&env, &flags);
-    assert!(receipt.contains("check: by `claude`"), "{receipt}");
+    assert!(
+        receipt.contains("guard: asks claude (cap 5m); acts when it passes"),
+        "{receipt}"
+    );
     let show = loop_ok(&env, &["loop", "show", "guarded"]);
     assert!(
-        show.contains("check by `claude`") && !show.contains("check by `claude` ("),
+        show.contains("judge `claude`") && !show.contains("judge `claude` ("),
         "{show}"
     );
     let list = loop_ok(&env, &["loop", "list"]);
-    assert!(list.contains("check by `claude`"), "{list}");
+    assert!(list.contains("judge `claude`"), "{list}");
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let check = serde_json::to_value(&config.tasks.0["guarded"]).unwrap();
-    assert_eq!(check["check"]["agent"], "claude");
-    assert_eq!(check["check"]["prompt"], "q");
+    assert_eq!(check["judge"][0]["agent"], "claude");
+    assert_eq!(check["judge"][0]["prompt"], "q");
 }
 
 #[test]

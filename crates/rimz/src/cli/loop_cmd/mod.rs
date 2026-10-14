@@ -27,7 +27,7 @@ use rimz::config::{CheckOn, Judge, MachineConfig, TaskCheck, TaskEntry, TaskTarg
 use rimz::disk::paths::{RuntimePaths, StatePaths};
 use rimz::harness::plan::{ResolvedSingleAgentLaunch, resolve_single_agent_launch};
 use rimz::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, RunStage,
     RunTransition,
 };
 use rimz::harness::schedule::runner::{
@@ -180,21 +180,24 @@ struct AddArgs {
     /// Shell command to run before any agent action.
     #[arg(long, value_name = "CMD")]
     check: Option<String>,
-    /// Profile to run as a headless guard before the task's action.
-    #[arg(long, value_name = "PROFILE")]
-    check_agent: Option<String>,
-    /// Inline question for the headless guard.
-    #[arg(long, value_name = "TEXT")]
-    check_prompt: Option<String>,
-    /// File containing the headless guard's question.
-    #[arg(long, value_name = "PATH")]
-    check_prompt_file: Option<PathBuf>,
-    /// Ask again this long after a resident guard declines.
-    #[arg(long, value_name = "DUR")]
-    check_recheck: Option<String>,
-    /// Headless guard's timeout; default 5m, independent of --timeout.
+    /// Cap for the shell check; default --timeout, else 5m; a killed check fails.
     #[arg(long, value_name = "DUR")]
     check_timeout: Option<String>,
+    /// Profile to ask as a read-only judge before the task's action.
+    #[arg(long, value_name = "PROFILE")]
+    judge: Option<String>,
+    /// Inline question for the judge.
+    #[arg(long, value_name = "TEXT")]
+    judge_prompt: Option<String>,
+    /// File containing the judge's question.
+    #[arg(long, value_name = "PATH")]
+    judge_prompt_file: Option<PathBuf>,
+    /// Ask again this long after a resident guard declines.
+    #[arg(long, value_name = "DUR")]
+    judge_recheck: Option<String>,
+    /// Cap for the judge; default 5m, independent of --timeout.
+    #[arg(long, value_name = "DUR")]
+    judge_timeout: Option<String>,
     /// Shell command that must pass before a spawned agent task is complete.
     #[arg(long, value_name = "CMD", requires = "agent")]
     verify: Option<String>,
@@ -204,7 +207,7 @@ struct AddArgs {
     /// Auto-disable after N consecutive failed fires; default 3, 0 disables.
     #[arg(long, value_name = "N")]
     max_strikes: Option<u32>,
-    /// Guard polarity for either check: fail, success, or any outcome.
+    /// Outcome every stage must land on for the action to run; required with --judge.
     #[arg(long, value_name = "fail|success|any")]
     on: Option<String>,
     /// Poll-until deadline as a duration such as `30m`; resolves at add time.
@@ -294,7 +297,7 @@ struct AddArgs {
     /// Replace the agent's base system prompt with a file's contents.
     #[arg(long = "system-prompt-file", value_name = "PATH")]
     system_prompt_file: Option<PathBuf>,
-    /// Wait cap for the supervised turn.
+    /// Cap for the agent turn, each verify command, and the check when it has no --check-timeout.
     #[arg(long)]
     timeout: Option<String>,
 }

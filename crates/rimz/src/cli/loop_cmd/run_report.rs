@@ -207,9 +207,9 @@ fn success_result_label(record: &LoopRunRecord) -> String {
 
 fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) -> String {
     if action_kind.is_check_only()
-        && let Some(check) = &summary.record.check
+        && let Some(stage) = summary.record.stages().next()
     {
-        return check_result_label(check, summary.record.watch.as_ref(), false);
+        return check_result_label(&stage, summary.record.watch.as_ref(), false);
     }
     let mut label = success_result_label(summary.record);
     if let Some(exit_label) = outcome_exit_label(summary) {
@@ -219,24 +219,36 @@ fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) ->
     label
 }
 
-fn check_result_label(check: &CheckRecord, watch: Option<&WatchVerdict>, declined: bool) -> String {
+fn check_result_label(
+    stage: &RunStage<'_>,
+    watch: Option<&WatchVerdict>,
+    declined: bool,
+) -> String {
     if let Some(verdict) = watch {
         return verdict.label();
     }
-    if let Some(agent) = &check.agent {
-        return match &agent.verdict {
-            Some(verdict) if verdict.pass => "check passed".to_owned(),
-            Some(_) if declined => "check declined".to_owned(),
-            Some(_) => "check failed".to_owned(),
+    if let RunStage::Judge(judge) = stage {
+        let verdict = match judge.verdict {
+            Some(true) => "passed".to_owned(),
+            Some(_) if declined => "declined".to_owned(),
+            Some(_) => "failed".to_owned(),
             None => format!(
-                "check: no verdict ({})",
-                agent.error.as_deref().unwrap_or("unknown error")
+                "no verdict ({})",
+                judge.error.as_deref().unwrap_or("unknown error")
             ),
         };
+        return format!(
+            "judge `{}` {verdict}{}",
+            judge.profile,
+            if judge.reused { " (reused)" } else { "" }
+        );
     }
+    let RunStage::Check(check) = stage else {
+        unreachable!("judge returned above")
+    };
     if check.timed_out {
         "check timed out".to_owned()
-    } else if check.code == Some(0) {
+    } else if stage.verdict() == Some(true) {
         "check passed (exit 0)".to_owned()
     } else {
         match check.code {
@@ -259,19 +271,12 @@ pub(super) fn write_check_trip_line(
         } else {
             ("✗", ui::palette::alarm())
         };
-        let mut label = match stage {
-            rimz::harness::schedule::run_log::RunStage::Check(check) => {
-                check_result_label(check, watch, false)
-            }
-            rimz::harness::schedule::run_log::RunStage::Judge(judge) => {
-                let verdict = match judge.verdict {
-                    Some(true) => "passed",
-                    Some(false) => "failed",
-                    None => judge.error.as_deref().unwrap_or("no verdict"),
-                };
-                format!("judge `{}` {verdict}", judge.profile)
-            }
-        };
+        let mut label = check_result_label(&stage, watch, false);
+        let duration_ms = match &stage {
+            RunStage::Check(check) => check.duration_ms,
+            RunStage::Judge(judge) => judge.duration_ms,
+        }
+        .unwrap_or(duration_ms);
         if watch.is_none() {
             label.push_str(&format!(" in {}", render::format_duration_ms(duration_ms)));
         }
@@ -299,9 +304,9 @@ fn write_check_skipped_summary(
 ) -> std::io::Result<()> {
     let label = summary
         .record
-        .check
-        .as_ref()
-        .map(|check| check_result_label(check, summary.record.watch.as_ref(), true))
+        .stages()
+        .last()
+        .map(|stage| check_result_label(&stage, summary.record.watch.as_ref(), true))
         .unwrap_or_else(|| "check skipped".to_owned());
     let check_duration_ms = summary
         .presentation
@@ -312,7 +317,7 @@ fn write_check_skipped_summary(
     } else {
         format!(" in {}", render::format_duration_ms(check_duration_ms))
     };
-    let (glyph, style) = render::check_skip_display(summary.record.check.as_ref());
+    let (glyph, style) = render::check_skip_display(summary.record);
     if mode == LoopRunMode::Manual {
         write!(
             out,
@@ -392,15 +397,12 @@ fn outcome_exit_label(summary: &RunSummary<'_>) -> Option<String> {
             return None;
         }
         Some(format!("(exit {exit})"))
-    } else if let Some(exit) = summary.record.check.as_ref().and_then(|check| check.code) {
-        Some(format!("(exit {exit})"))
-    } else if summary
-        .record
-        .check
-        .as_ref()
-        .is_some_and(|check| check.timed_out)
-    {
-        Some("(timeout)".to_owned())
+    } else if let Some(RunStage::Check(check)) = summary.record.stages().next() {
+        if check.timed_out {
+            Some("(timeout)".to_owned())
+        } else {
+            check.code.map(|exit| format!("(exit {exit})"))
+        }
     } else {
         None
     }
@@ -415,11 +417,15 @@ fn outcome_failure_tail(summary: &RunSummary<'_>) -> Option<String> {
     {
         return Some(tail.trim_end().to_owned());
     }
-    let check = summary.record.check.as_ref()?;
-    if !check.timed_out && check.code == Some(0) {
+    if summary.record.last_verdict() == Some(true) {
         return None;
     }
-    let tail = rimz::proc::tail_output(check.output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP);
+    let stage = summary.record.stages().last()?;
+    let output = match &stage {
+        RunStage::Check(check) => check.output.as_str(),
+        RunStage::Judge(judge) => judge.reason.as_deref().or(judge.error.as_deref())?,
+    };
+    let tail = rimz::proc::tail_output(output.as_bytes(), CHECK_SUMMARY_OUTPUT_CAP);
     let tail = tail.trim_end();
     (!tail.trim().is_empty()).then(|| tail.to_owned())
 }
@@ -437,7 +443,7 @@ const SUMMARY_CHECK_LINES: usize = 5;
 /// The tail a summary prints in place of a passing check's output, when that
 /// output is longer. A failed check keeps every line.
 fn summary_check_tail<'a>(record: &LoopRunRecord, check: &'a CheckRecord) -> Option<&'a str> {
-    if render::record_is_failure(record) || check.timed_out || check.code != Some(0) {
+    if render::record_is_failure(record) || RunStage::Check(check).verdict() != Some(true) {
         return None;
     }
     let output = check.output.trim_end();
@@ -482,10 +488,9 @@ pub(super) fn render_record_detail(
     }
     writeln!(out)?;
     write_record_forensics(out, Some(entry), record, prose, Forensics::Summary)?;
-    let is_cut = record
-        .check
-        .as_ref()
-        .is_some_and(|check| summary_check_tail(record, check).is_some());
+    let is_cut = record.stages().next().is_some_and(|stage| {
+        matches!(stage, RunStage::Check(check) if summary_check_tail(record, check).is_some())
+    });
     if is_cut {
         write_detail_link(out, "full output", full_output)?;
     }
@@ -597,32 +602,29 @@ fn write_check_section(
     prose: ui::prose::Prose,
     detail: Forensics,
 ) -> std::io::Result<()> {
-    if let Some(check) = &record.check {
-        if let Some(agent) = &check.agent {
-            let verdict = agent.verdict.as_ref().map_or_else(
+    for stage in record.stages() {
+        if let RunStage::Judge(judge) = stage {
+            let verdict = judge.verdict.map_or_else(
                 || {
                     format!(
                         "no verdict ({})",
-                        agent.error.as_deref().unwrap_or("unknown error")
+                        judge.error.as_deref().unwrap_or("unknown error")
                     )
                 },
-                |verdict| {
-                    if verdict.pass {
-                        "pass".into()
-                    } else {
-                        "fail".into()
-                    }
+                |pass| {
+                    if pass { "pass".into() } else { "fail".into() }
                 },
             );
-            let reason = agent
-                .verdict
-                .as_ref()
-                .map_or(check.output.as_str(), |verdict| verdict.reason.as_str());
-            let spend = agent
+            let reason = judge
+                .reason
+                .as_deref()
+                .or(judge.error.as_deref())
+                .unwrap_or_default();
+            let spend = judge
                 .cost_usd
                 .filter(|cost| cost.is_finite() && *cost >= 0.0)
                 .map_or_else(String::new, |cost| format!(" · {}", render::run_cost(cost)));
-            let tokens = match (agent.input_tokens, agent.output_tokens) {
+            let tokens = match (judge.input_tokens, judge.output_tokens) {
                 (None, None) => String::new(),
                 (input, output) => format!(
                     " · {}/{} tok",
@@ -632,17 +634,24 @@ fn write_check_section(
             };
             writeln!(
                 out,
-                "  check by {}: {verdict} — {reason}{spend}{tokens}",
-                agent.profile
+                "  judge {}: {verdict} — {reason}{spend}{tokens}{}{}",
+                judge.profile,
+                judge
+                    .duration_ms
+                    .map(|duration| format!(" · {}", render::format_duration_ms(duration)))
+                    .unwrap_or_default(),
+                if judge.reused { " · reused" } else { "" }
             )?;
-            if check.output != reason {
-                write_gutter_block(out, None, &check.output)?;
+            if !judge.warnings.is_empty() {
+                write_gutter_block(out, None, &judge.warnings.join("\n"))?;
             }
-        } else {
+            continue;
+        }
+        if let RunStage::Check(check) = stage {
             if let Some(path) = &check.output_path {
                 write_detail_link(out, "output", &path.display().to_string())?;
             }
-            let first_style = if check.timed_out || check.code != Some(0) {
+            let first_style = if RunStage::Check(check).verdict() != Some(true) {
                 Some(ui::palette::alarm())
             } else {
                 None
@@ -744,7 +753,9 @@ pub(super) fn detail_exit_segment(record: &LoopRunRecord) -> Option<String> {
     if let Some(verdict) = &record.watch {
         return Some(verdict.label());
     }
-    let check = record.check.as_ref()?;
+    let RunStage::Check(check) = record.stages().next()? else {
+        return None;
+    };
     if check.timed_out {
         return Some("timeout".to_owned());
     }
@@ -826,6 +837,67 @@ fn run_record_for(entry: &TaskEntry, run_id: &str) -> Option<rimz::store::run::R
 #[cfg(test)]
 mod tests {
     #[test]
+    fn ordered_judge_forensics_and_skip_summary_name_every_tier() {
+        use super::*;
+        let entry: TaskEntry = toml::from_str("agent='codex'\nprompt='fix'\ncheck='false'\non='fail'\n[[judge]]\nagent='claude'\nprompt='q'\n[[judge]]\nagent='codex'\nprompt='q2'\n").unwrap();
+        let mut record = LoopRunRecord::new(
+            "guard",
+            LoopRunResult::CheckSkipped,
+            LoopRunMode::Manual,
+            100,
+        );
+        record.check = Some(CheckRecord {
+            code: Some(1),
+            output: "shell evidence".into(),
+            ..serde_json::from_value(serde_json::json!({"code":1,"timed_out":false,"output":""}))
+                .unwrap()
+        });
+        record.judge = serde_json::from_value(serde_json::json!([
+            {"profile":"claude","kind":"claude","verdict":false,"reason":"tier one","duration_ms":10},
+            {"profile":"codex","kind":"codex","verdict":true,"reason":"tier two","duration_ms":20,"reused":true}
+        ])).unwrap();
+        let mut out = Vec::new();
+        write_record_forensics(
+            &mut out,
+            Some(&entry),
+            &record,
+            ui::prose::Prose::Raw,
+            Forensics::Full,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("judge claude: fail")
+                && text.contains("judge codex: pass")
+                && text.contains("reused"),
+            "{text}"
+        );
+        assert!(
+            text.find("tier one").unwrap() < text.find("tier two").unwrap(),
+            "{text}"
+        );
+        let mut out = Vec::new();
+        write_check_skipped_summary(
+            &mut out,
+            "guard",
+            &entry,
+            &TaskAction::Spawn("codex".into()),
+            100,
+            LoopRunMode::Manual,
+            &RunSummary {
+                record: &record,
+                presentation: &LoopRunPresentation::default(),
+                prose: ui::prose::Prose::Raw,
+            },
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("judge `codex` passed") && text.contains("guard"),
+            "{text}"
+        );
+    }
+    #[test]
     fn agent_check_forensics_names_verdict_reason_and_usage() {
         use super::*;
         for (verdict, expected, error) in [
@@ -848,6 +920,7 @@ mod tests {
                 output_path: None,
                 agent: Some(agent),
             });
+            assert_eq!(detail_exit_segment(&record), None);
             let mut trip = Vec::new();
             write_check_trip_line(
                 &mut trip,
@@ -877,12 +950,9 @@ mod tests {
             )
             .unwrap();
             let text = String::from_utf8(out).unwrap();
+            assert!(text.contains(&format!("judge haiku: {expected}")), "{text}");
             assert!(
-                text.contains(&format!("check by haiku: {expected}")),
-                "{text}"
-            );
-            assert!(
-                text.contains("Read the tree.")
+                text.contains(error.unwrap_or("Read the tree."))
                     && text.contains("$0.02")
                     && text.contains("10/5 tok"),
                 "{text}"

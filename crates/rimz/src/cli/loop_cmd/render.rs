@@ -70,34 +70,71 @@ fn action_words(action: &TaskAction) -> Option<ActionWords> {
 }
 
 fn check_summary(entry: &TaskEntry, action: Option<&TaskAction>) -> Option<String> {
-    let check = entry.check.as_ref()?;
+    let guard = entry.guard();
+    if !guard.judges.is_empty() {
+        return Some(guard_value(entry));
+    }
+    let check = guard.shell?;
     if let Some(action) = action.and_then(action_words) {
         Some(format!(
             "{} ({} {} on {})",
-            check_value(check),
+            check,
             action.third_person,
             action.subject,
             check_on_label(entry.on.unwrap_or_default())
         ))
     } else {
-        Some(check_value(check))
+        Some(check.to_owned())
     }
 }
 
-/// A check as the value beside a `check:` label, which already names it.
-pub(super) fn check_value(check: &TaskCheck) -> String {
-    match check {
-        TaskCheck::Shell(command) => command.clone(),
-        TaskCheck::Agent(check) => format!("by `{}`", check.agent),
-    }
+/// The ordered stages and polarity beside a `guard:` label.
+pub(super) fn guard_value(entry: &TaskEntry) -> String {
+    let guard = entry.guard();
+    let mut stages = guard
+        .shell
+        .map(|command| {
+            format!(
+                "runs {command} (cap {})",
+                guard.shell_timeout.unwrap_or("5m")
+            )
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    stages.extend(guard.judges.iter().map(|judge| {
+        format!(
+            "asks {} (cap {})",
+            judge.agent,
+            judge.timeout.as_deref().unwrap_or("5m")
+        )
+    }));
+    let condition = match (entry.on.unwrap_or_default(), stages.len()) {
+        (CheckOn::Any, _) => "whatever the outcome",
+        (CheckOn::Fail, 1) => "when it fails",
+        (CheckOn::Success, 1) => "when it passes",
+        (CheckOn::Fail, 2) => "when both fail",
+        (CheckOn::Success, 2) => "when both pass",
+        (CheckOn::Fail, _) => "when all fail",
+        (CheckOn::Success, _) => "when all pass",
+    };
+    format!("{}; acts {condition}", stages.join(", then "))
 }
 
 pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> String {
     let action = action_words(task_action).map(|words| format!("{} {}", words.base, words.subject));
-    let check = entry.check.as_ref().map(|check| match check {
-        TaskCheck::Shell(_) => "check".to_owned(),
-        TaskCheck::Agent(_) => check.to_string(),
-    });
+    let guard = entry.guard();
+    let stages = guard
+        .shell
+        .map(|_| "check".to_owned())
+        .into_iter()
+        .chain(
+            guard
+                .judges
+                .iter()
+                .map(|judge| format!("judge `{}`", judge.agent)),
+        )
+        .collect::<Vec<_>>();
+    let check = (!stages.is_empty()).then(|| stages.join(", then "));
     let mut rule = match (check, action) {
         (Some(check), Some(action)) => format!(
             "{check}, then {action} on {}",
@@ -131,8 +168,13 @@ pub(super) fn check_skip_decision(entry: &TaskEntry, task_action: &TaskAction) -
         CheckOn::Success => "passes",
         CheckOn::Any => "finishes",
     };
+    let guard = if entry.guard().judges.is_empty() {
+        "check"
+    } else {
+        "guard"
+    };
     format!(
-        "{} {}; fires when the check {condition}",
+        "{} {}; fires when the {guard} {condition}",
         action.subject, action.untouched
     )
 }
@@ -246,7 +288,9 @@ fn display_path(path: &Path) -> String {
 }
 
 fn has_agent_runs_section(task: &LoadedTask) -> bool {
-    task.entry().check.is_some() && task.action().ok().and_then(action_words).is_some()
+    let guard = task.entry().guard();
+    (guard.shell.is_some() || !guard.judges.is_empty())
+        && task.action().ok().and_then(action_words).is_some()
 }
 
 struct ShowView {
@@ -634,7 +678,7 @@ fn write_worktrees(
             profile, reason, ..
         } = &row.condition.state
         {
-            format!("check by {profile}: {}", first_line(reason))
+            format!("judge {profile}: {}", first_line(reason))
         } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
             row.leader_status.map_or_else(
                 || format!("@{leader} ended"),
@@ -1574,7 +1618,14 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
     if !matches!(action, Some(TaskAction::CheckOnly))
         && let Some(check) = check
     {
-        kv.push("check", ui::cell(check));
+        kv.push(
+            if entry.guard().judges.is_empty() {
+                "check"
+            } else {
+                "guard"
+            },
+            ui::cell(check),
+        );
     }
     if !entry.subscribe.is_empty() {
         let signals = entry
@@ -1995,7 +2046,7 @@ pub(super) fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
     };
     let mark = match record.result {
         LoopRunResult::CheckSkipped => {
-            let (glyph, style) = check_skip_display(record.check.as_ref());
+            let (glyph, style) = check_skip_display(record);
             ResultMark { glyph, style }
         }
         result => loop_result_mark(result),
@@ -2050,19 +2101,20 @@ fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, an
     ))
 }
 
-pub(super) fn check_skip_display(check: Option<&CheckRecord>) -> (&'static str, anstyle::Style) {
-    match check {
-        Some(check) if check.timed_out => ("○", ui::palette::warn()),
-        Some(check) if check.code == Some(0) => ("✓", ui::palette::good()),
+pub(super) fn check_skip_display(record: &LoopRunRecord) -> (&'static str, anstyle::Style) {
+    match record.stages().last() {
+        Some(RunStage::Check(check)) if check.timed_out => ("○", ui::palette::warn()),
+        _ if record.last_verdict() == Some(true) => ("✓", ui::palette::good()),
         _ => ("○", ui::palette::muted()),
     }
 }
 
 fn check_skipped_label(record: &LoopRunRecord) -> &'static str {
-    match record.check.as_ref() {
-        Some(check) if check.timed_out => "check timed out",
-        Some(check) if check.code == Some(0) => "check passed",
-        Some(check) if check.agent.is_some() => "check declined",
+    match record.stages().last() {
+        Some(RunStage::Judge(judge)) if judge.verdict == Some(true) => "judge passed",
+        Some(RunStage::Judge(_)) => "judge declined",
+        Some(RunStage::Check(check)) if check.timed_out => "check timed out",
+        _ if record.last_verdict() == Some(true) => "check passed",
         Some(_) => "check failed",
         None => "check failed",
     }
@@ -2155,7 +2207,7 @@ pub(super) fn record_exit(record: &LoopRunRecord) -> Option<String> {
     if let Some(verdict) = &record.watch {
         return Some(verdict.label());
     }
-    if let Some(check) = &record.check {
+    if let Some(RunStage::Check(check)) = record.stages().next() {
         if check.timed_out {
             return Some("timeout".to_owned());
         }
@@ -2174,11 +2226,12 @@ pub(super) fn record_exit(record: &LoopRunRecord) -> Option<String> {
 }
 
 fn record_note(record: &LoopRunRecord) -> Option<String> {
+    let check_failure = check_failure_line(record);
     let note = record
         .error
         .as_deref()
         .map(first_line)
-        .or_else(|| check_failure_line(record))
+        .or(check_failure.as_deref())
         .or_else(|| record.last_message.as_deref().map(first_line))
         .or_else(|| record.target.as_deref().map(first_line))
         .map(|note| truncate_note(note, NOTE_MAX))
@@ -2202,16 +2255,20 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
     }
 }
 
-fn check_failure_line(record: &LoopRunRecord) -> Option<&str> {
-    let check = record.check.as_ref()?;
-    if !check.timed_out && check.code == Some(0) {
+fn check_failure_line(record: &LoopRunRecord) -> Option<String> {
+    if record.last_verdict() == Some(true) {
         return None;
     }
-    check
-        .output
+    let stage = record.stages().last()?;
+    let output = match &stage {
+        RunStage::Check(check) => check.output.as_str(),
+        RunStage::Judge(judge) => judge.reason.as_deref().or(judge.error.as_deref())?,
+    };
+    output
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())
+        .map(str::to_owned)
 }
 
 fn first_line(text: &str) -> &str {
@@ -2230,6 +2287,7 @@ fn truncate_note(text: &str, max: usize) -> String {
 
 fn record_has_detail(record: &LoopRunRecord) -> bool {
     record.check.is_some()
+        || !record.judge.is_empty()
         || record.error.is_some()
         || record.last_message.is_some()
         || record.signal.is_some()
