@@ -40,6 +40,7 @@ use crate::transcript::AskQuestion;
 const KIMI_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle( "SessionStart", r#"{"session_id":"s"}"#).progress(),
     HookEventSpec::lifecycle( "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#).progress(),
+    HookEventSpec::lifecycle( "TurnStarted", r#"{"session_id":"s","origin_kind":"task"}"#).progress(),
     HookEventSpec::blocking( "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
         .with_matcher(".*")
         .synchronous()
@@ -149,7 +150,7 @@ static KIMI_DESCRIPTOR: AgentSpec = AgentSpec {
 
 const KIMI_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     turn_lifecycle: ConcernCoverage::Wired {
-        via: "SessionStart/UserPromptSubmit/Stop",
+        via: "SessionStart/UserPromptSubmit/TurnStarted/Stop",
     },
     permission: ConcernCoverage::Wired {
         via: "PermissionRequest hook",
@@ -327,12 +328,20 @@ fn kimi_observation(
     if matches!(event_name, "SubagentStart" | "SubagentStop") {
         return None;
     }
-    if event_name == "Stop" && session_dir.is_some_and(subagents::main_turn_mid_step) {
+    if event_name == "TurnStarted"
+        && (matches!(parsed.origin_kind.as_deref(), Some("user" | "retry"))
+            || (parsed.origin_kind.as_deref() == Some("system_trigger")
+                && parsed.origin_name.as_deref() == Some("subagent")))
+    {
+        return None;
+    }
+    if session_dir.is_some_and(|session| subagents::child_fired(session, event_name)) {
         debug!(
             target: "rimz::agent::lifecycle",
             kind = adapter.spec().kind,
             session_id = parsed.session_id.as_deref().unwrap_or(""),
-            "suppressed child-fired Kimi Stop while the main wire was mid-step",
+            event = event_name,
+            "suppressed child-fired Kimi hook from the main wire's boundaries",
         );
         return None;
     }
@@ -368,7 +377,7 @@ fn kimi_root_signal(
     };
     match event_name {
         "SessionStart" => Some(LifecycleSignal::Registered),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
+        "UserPromptSubmit" | "TurnStarted" => Some(LifecycleSignal::TurnStarted { turn_id: None }),
         "PreToolUse"
             if parsed.tool_name.as_deref() == Some("AskUserQuestion")
                 && !parsed.question_background() =>
@@ -493,10 +502,12 @@ impl crate::agents::capabilities::HookCapability for KimiAdapter {
             questions.first().map(|question| question.question.clone())
         };
         decoded.set_ask(questions, ask_detail.clone());
-        decoded.set_turn_error(kimi_turn_error(event_name, &parsed));
-        let session_dir = matches!(event_name, "Stop")
-            .then(|| wire::session_dir(parsed.session_id.as_deref()?, None))
-            .flatten();
+        let session_dir = matches!(
+            event_name,
+            "Stop" | "StopFailure" | "Interrupt" | "TurnStarted"
+        )
+        .then(|| wire::session_dir(parsed.session_id.as_deref()?, None))
+        .flatten();
         let observation = kimi_observation(
             self,
             event_name,
@@ -506,6 +517,7 @@ impl crate::agents::capabilities::HookCapability for KimiAdapter {
             ask_detail,
         );
         if let Some(observation) = observation {
+            decoded.set_turn_error(kimi_turn_error(event_name, &parsed));
             decoded.set_final_message(kimi_final_message(event_name, &parsed));
             decoded.attach_lifecycle(observation);
         }
@@ -573,7 +585,7 @@ impl crate::agents::capabilities::ContextCapability for KimiAdapter {
         trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        if matches!(trigger, RefreshTrigger::Hook(event) if !matches!(event, "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure" | "Interrupt" | "PostToolUse" | "PostToolUseFailure" | "PostCompact" | "Notification"))
+        if matches!(trigger, RefreshTrigger::Hook(event) if !matches!(event, "SessionStart" | "UserPromptSubmit" | "TurnStarted" | "Stop" | "StopFailure" | "Interrupt" | "PostToolUse" | "PostToolUseFailure" | "PostCompact" | "Notification"))
         {
             return None;
         }

@@ -69,27 +69,11 @@ pub(super) fn derive_at(session: &Path, parent: &AgentSessionId) -> Vec<AgentLif
     observations
 }
 
-pub(super) fn main_turn_mid_step(session: &Path) -> bool {
-    let check = || {
-        let Some((records, _)) = wire::read_records(&session.join("agents/main/wire.jsonl"), 0)
-        else {
-            return false;
-        };
-        records
-            .iter()
-            .any(|record| matches!(record.event, wire::WireEvent::SubagentSpawned(_)))
-            && records
-                .iter()
-                .fold(false, |open, record| match record.event {
-                    wire::WireEvent::LlmRequest(_) => true,
-                    wire::WireEvent::Prompt {
-                        kind: wire::PromptKind::Prompt,
-                        ..
-                    } => false,
-                    wire::WireEvent::AppendLoopEvent(wire::LoopEvent::StepEnd { .. }) => false,
-                    _ => open,
-                })
-    };
+pub(super) fn child_fired(session: &Path, event: &str) -> bool {
+    if !matches!(event, "Stop" | "StopFailure" | "Interrupt" | "TurnStarted") {
+        return false;
+    }
+    let check = || child_fired_once(session, event);
     if !check() {
         return false;
     }
@@ -100,6 +84,46 @@ pub(super) fn main_turn_mid_step(session: &Path) -> bool {
         }
     }
     true
+}
+
+fn child_fired_once(session: &Path, event: &str) -> bool {
+    let Some((records, _)) = wire::read_records(&session.join("agents/main/wire.jsonl"), 0) else {
+        return false;
+    };
+    let mut spawned = false;
+    let mut step_open = false;
+    let mut saw_turn = false;
+    let mut ended = None;
+    for record in &records {
+        match &record.event {
+            wire::WireEvent::SubagentSpawned(_) => spawned = true,
+            wire::WireEvent::AppendLoopEvent(wire::LoopEvent::StepBegin { .. }) => step_open = true,
+            wire::WireEvent::AppendLoopEvent(wire::LoopEvent::StepEnd { .. }) => step_open = false,
+            wire::WireEvent::Prompt {
+                kind: wire::PromptKind::Prompt,
+                ..
+            } => {
+                step_open = false;
+                saw_turn = true;
+                ended = None;
+            }
+            wire::WireEvent::TurnEnded { reason } => {
+                step_open = false;
+                if saw_turn {
+                    ended = Some(reason.as_str());
+                }
+            }
+            _ => {}
+        }
+    }
+    spawned
+        && (step_open
+            || ended.is_some_and(|reason| match event {
+                "Stop" => true,
+                "StopFailure" => reason != "failed",
+                "Interrupt" => reason != "cancelled",
+                _ => false,
+            }))
 }
 
 #[cfg(test)]

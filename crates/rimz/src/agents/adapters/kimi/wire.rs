@@ -34,6 +34,9 @@ pub(super) enum WireEvent {
     ConfigUpdate(ConfigUpdate),
     LlmRequest(RequestAttribution),
     Usage(UsageRecord),
+    TurnEnded {
+        reason: String,
+    },
     SubagentSpawned(SubagentSpawn),
     SubagentCompleted(SubagentCompletion),
     SubagentFailed {
@@ -552,6 +555,11 @@ fn record_from_slice(line: &[u8]) -> Option<WireRecord> {
 
 fn decode_event(kind: &str, mut fields: serde_json::Map<String, Value>) -> WireEvent {
     match kind {
+        "turn.ended" => fields
+            .remove("reason")
+            .and_then(|reason| reason.as_str().map(str::to_owned))
+            .map(|reason| WireEvent::TurnEnded { reason })
+            .unwrap_or(WireEvent::Unknown),
         "subagent.spawned" => from_fields(fields)
             .map(WireEvent::SubagentSpawned)
             .unwrap_or(WireEvent::Unknown),

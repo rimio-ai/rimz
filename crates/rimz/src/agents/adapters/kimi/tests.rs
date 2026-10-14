@@ -6,6 +6,157 @@ use super::*;
 use crate::agents::AgentHookClass;
 use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook_signal};
 
+fn main_wire_observation(event: &str, records: &[Value]) -> Option<AgentLifecycleObservation> {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("agents/main")).unwrap();
+    std::fs::write(
+        dir.path().join("agents/main/wire.jsonl"),
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let payload = json!({"session_id":"sid","origin_kind":"task"});
+    kimi_observation(
+        &KimiAdapter,
+        event,
+        &payload,
+        &payloads::parse(&payload),
+        Some(dir.path()),
+        None,
+    )
+}
+
+#[test]
+fn child_turn_hooks_follow_main_step_boundaries() {
+    let spawn = json!({"type":"subagent.spawned","subagentId":"child","subagentName":"coder"});
+    let begin =
+        json!({"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step"}});
+    let end = json!({"type":"context.append_loop_event","event":{"type":"step.end","uuid":"step"}});
+    for (event, signal) in [
+        ("PreCompact", LifecycleSignal::Compacting),
+        (
+            "PostCompact",
+            LifecycleSignal::CompactionEnded {
+                auto: None,
+                failed: false,
+            },
+        ),
+    ] {
+        assert_eq!(
+            main_wire_observation(event, &[spawn.clone(), begin.clone()]).map(|o| o.signal),
+            Some(signal)
+        );
+    }
+    for event in ["Stop", "StopFailure", "Interrupt", "TurnStarted"] {
+        assert!(
+            main_wire_observation(event, &[spawn.clone(), begin.clone()]).is_none(),
+            "{event} while main step open"
+        );
+        assert!(
+            main_wire_observation(event, &[spawn.clone(), begin.clone(), end.clone()]).is_some(),
+            "{event} after main step closes"
+        );
+        assert!(
+            main_wire_observation(event, std::slice::from_ref(&begin)).is_some(),
+            "{event} without a child spawn"
+        );
+    }
+    assert!(
+        main_wire_observation(
+            "Stop",
+            &[
+                spawn,
+                json!({"type":"turn.prompt","input":[]}),
+                begin,
+                end,
+                json!({"type":"llm.request","kind":"compaction"}),
+            ]
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn main_turn_boundaries_clear_an_unclosed_step() {
+    let spawn = json!({"type":"subagent.spawned","subagentId":"child","subagentName":"coder"});
+    let prompt = json!({"type":"turn.prompt","input":[]});
+    let begin =
+        json!({"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step"}});
+    for (event, reason) in [("Interrupt", "cancelled"), ("StopFailure", "failed")] {
+        let mut records = vec![
+            spawn.clone(),
+            prompt.clone(),
+            begin.clone(),
+            json!({"type":"turn.ended","reason":reason}),
+        ];
+        assert!(
+            main_wire_observation(event, &records).is_some(),
+            "{reason} closes the step"
+        );
+        records.push(prompt.clone());
+        assert!(
+            main_wire_observation("Stop", &records).is_some(),
+            "new turn Stop after {reason}"
+        );
+    }
+    assert!(main_wire_observation("Stop", &[spawn, begin, prompt]).is_some());
+}
+
+#[test]
+fn child_turn_ends_respect_the_latest_main_terminal_reason() {
+    let spawn = json!({"type":"subagent.spawned","subagentId":"child","subagentName":"coder"});
+    let prompt = json!({"type":"turn.prompt","input":[]});
+    for (event, allowed) in [("StopFailure", "failed"), ("Interrupt", "cancelled")] {
+        for reason in ["completed", "failed", "cancelled"] {
+            let ended = json!({"type":"turn.ended","reason":reason});
+            assert_eq!(
+                main_wire_observation(event, &[spawn.clone(), prompt.clone(), ended.clone()])
+                    .is_some(),
+                reason == allowed,
+                "{event}: {reason}"
+            );
+            assert!(
+                main_wire_observation(event, &[spawn.clone(), ended, prompt.clone()]).is_some()
+            );
+        }
+    }
+    for reason in ["completed", "failed", "cancelled"] {
+        assert!(
+            main_wire_observation(
+                "Stop",
+                &[
+                    spawn.clone(),
+                    prompt.clone(),
+                    json!({"type":"turn.ended","reason":reason})
+                ]
+            )
+            .is_none()
+        );
+    }
+}
+
+#[test]
+fn turn_started_only_opens_non_user_main_turns() {
+    let task = json!({"session_id":"sid","origin_kind":"task","turn_id":4});
+    assert!(matches!(
+        hook_observation(&KimiAdapter, "TurnStarted", &task).map(|o| o.signal),
+        Some(LifecycleSignal::TurnStarted { turn_id: None })
+    ));
+    assert!(KIMI_HOOKS.iter().any(|hook| hook.event == "TurnStarted"));
+    for (kind, name) in [("user", ""), ("retry", ""), ("system_trigger", "subagent")] {
+        assert!(
+            hook_observation(
+                &KimiAdapter,
+                "TurnStarted",
+                &json!({"session_id":"sid","origin_kind":kind,"origin_name":name})
+            )
+            .is_none()
+        );
+    }
+}
+
 #[test]
 fn native_questions_and_permissions_use_distinct_hooks() {
     let question = json!({
@@ -737,6 +888,11 @@ fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
     let refresh = KimiAdapter
         .local_context_refresh(RefreshTrigger::Hook("SessionStart"), &ctx)
         .unwrap();
+    assert!(
+        KimiAdapter
+            .local_context_refresh(RefreshTrigger::Hook("TurnStarted"), &ctx)
+            .is_some()
+    );
     assert_eq!(refresh.transcript_path.as_deref(), Some(path_text.as_str()));
     let stat = refresh.transcript_stat.unwrap();
     let unchanged = LocalContextRefreshCtx {
