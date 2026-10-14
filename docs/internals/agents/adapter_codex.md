@@ -221,7 +221,7 @@ Hooks never call the app-server inline. `SessionStart`, `UserPromptSubmit`, and 
 
 Enrichment connects to the warmest server available, with a 2 second budget per warm attempt and 6 seconds for cold spawn, including handshake and reads:
 
-1. The per-session [broker](../../../crates/rimz/src/agents/adapters/codex/broker.rs), run as `rimz codex app-server serve` in the `rimzd` tab, holds one handshaked `codex app-server` behind a unix socket. It answers `initialize` from cache only while the child is live. Without a live child it respawns under the resolved login before answering, or returns the spawn error. A live child keeps its cached handshake even when the login changes; the next non-`initialize` request respawns for a changed login or `auth.json` stamp. A closed stream respawns and retries once.
+1. For the room-default login only, the per-session [broker](../../../crates/rimz/src/agents/adapters/codex/broker.rs), run as `rimz codex app-server serve` in the `rimzd` tab, holds one handshaked `codex app-server` behind a unix socket. It answers `initialize` from cache only while the child is live. Without a live child it respawns under the resolved login before answering, or returns the spawn error. A live child keeps its cached handshake even when the login changes; the next non-`initialize` request respawns for a changed login or `auth.json` stamp. A closed stream respawns and retries once.
 2. The per-user remote-control daemon's WebSocket control socket, at `RIMZ_CODEX_APP_SERVER_SOCK` or `$CODEX_HOME/app-server-control/app-server-control.sock`. An empty `RIMZ_CODEX_APP_SERVER_SOCK` skips it.
 3. A cold-spawned `codex app-server`, so headless use still enriches.
 

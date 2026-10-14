@@ -367,7 +367,7 @@ The build id is computed once per process from the linker build identity in the 
 
 ### Codex context stays warm
 
-Codex app-server enrichment connects to the warmest server available, starting with a per-session broker in the `rimzd` tab that holds one handshaked `codex app-server`, and falls back to a cold spawn ([adapter_codex.md → App-server enrichment](./agents/adapter_codex.md#app-server-enrichment)). The host's transcript watcher debounces file events to one flush per 300 ms for the workspace and refreshes each changed session in that flush. Both are latency hints over the unconditional producer tick: a broker or watcher that never starts costs nothing.
+Codex app-server enrichment for the room-default login starts with a broker in the `rimzd` tab that holds one handshaked `codex app-server`, and falls back to a cold spawn. Other logins skip the room broker, and periodic usage refresh uses only their direct probe ([adapter_codex.md → App-server enrichment](./agents/adapter_codex.md#app-server-enrichment)). The host's transcript watcher debounces file events to one flush per 300 ms for the workspace and refreshes each changed session in that flush. Periodic session passes back up the watcher with local reads only; they never spawn app-servers.
 
 ## Anti-patterns
 

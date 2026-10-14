@@ -189,7 +189,6 @@ fn refresh_claimed_account_usage_with(
     let kind = key.kind.as_str();
     let is_key = |login: &ProviderLogin| login.key() == *key;
     let in_use = set.in_use(kind).into_iter().find(is_key);
-    let idle = in_use.is_none();
     let Some(login) = in_use.or_else(|| {
         crate::harness::auto_redeem::idle_logins(set)
             .into_iter()
@@ -224,11 +223,11 @@ fn refresh_claimed_account_usage_with(
     };
     let realtime_started = Instant::now();
     // The realtime leg asks this room's app server, which speaks for the
-    // room's own login; an idle account is read by the direct probe alone.
-    let realtime = if idle {
-        None
-    } else {
+    // room's own login; other accounts are read by the direct probe alone.
+    let realtime = if set.default_key(kind).as_ref() == Some(key) {
         probe_realtime(adapter, runtime, &login_env)
+    } else {
+        None
     };
     let realtime_ms = duration_ms(realtime_started.elapsed());
     if !account_usage_claim_matches(runtime, key, claim_id) {

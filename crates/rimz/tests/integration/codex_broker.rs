@@ -33,8 +33,7 @@ fn explicit_card_refresh_still_spawns_context_helper() {
     assert!(rimz::testkit::spawn_count() > before);
 }
 
-#[test]
-fn old_login_context_refresh_does_not_connect_to_room_broker() {
+fn old_login_room() -> Env {
     let env = Env::new();
     assert!(
         env.rimz()
@@ -70,6 +69,74 @@ fn old_login_context_refresh_does_not_connect_to_room_broker() {
     store
         .switch_room_login(&workspace, &kind, &"default".parse().unwrap())
         .unwrap();
+    env
+}
+
+#[test]
+fn old_login_usage_refresh_does_not_connect_to_room_broker() {
+    let env = old_login_room();
+    let runtime = env.runtime_paths();
+    let socket = runtime.codex_app_server_socket_path();
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let claim_id = uuid::Uuid::now_v7();
+    let now = rimz::utils::time::unix_now_ms();
+    std::fs::write(
+        runtime.shared_credits_path(),
+        serde_json::to_vec(&json!({
+            "refreshed_at_ms": now,
+            "logins": { "codex@work": {
+                "observed_at_ms": 0, "ok": false,
+                "direct_query_claim": {
+                    "nonce": claim_id, "claimed_at_ms": now,
+                    "requested_scope": rimz::agents::ProviderAccountScope::default()
+                }
+            }}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let request = rimz::sidebar::refresh::usage::AccountUsageRefreshRequest {
+        workspace_id: runtime.workspace_id.clone(),
+        login: "codex@work".parse().unwrap(),
+        claim_id,
+    };
+    let output = env
+        .rimz()
+        .args(rimz::child_process::agent_helper_argv(
+            "refresh-usage",
+            &request,
+        ))
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "0")
+        .env("RIMZ_CODEX_BIN", codex_appserver_stub())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let credits: Value =
+        serde_json::from_slice(&std::fs::read(runtime.shared_credits_path()).unwrap()).unwrap();
+    assert!(
+        credits["logins"]["codex@work"]["oauth_read_at_ms"]
+            .as_u64()
+            .unwrap()
+            >= now,
+        "the claimed direct probe must still run for the old login"
+    );
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "old-login usage must never touch the current-login broker"
+    );
+}
+
+#[test]
+fn old_login_context_refresh_does_not_connect_to_room_broker() {
+    let env = old_login_room();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = rimz::ids::AgentKind::new_unchecked("codex");
     let socket = env.runtime_paths().codex_app_server_socket_path();
     std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
     let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
