@@ -22,6 +22,148 @@ const HISTORY_EVENTS: usize = 2_000;
 const ROUNDS: u32 = 20;
 
 #[test]
+fn warm_fleet_refresh_forks_zero_subprocesses() {
+    use rimz::sidebar::produce::{HostInputs, refresh_producer_caches};
+    use rimz::sidebar::refresh::ProducerRefreshState;
+    use rimz::utils::time::unix_now_ms;
+
+    const CHILD_ROOT: &str = "RIMZ_TEST_REFRESH_BUDGET_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let home = std::path::PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
+        let state =
+            rimz::StatePaths::for_project_root_under(std::path::Path::new(&root), &home).unwrap();
+        let mut runtime = rimz::RuntimePaths::for_state_under(
+            &state,
+            &std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap()),
+        );
+        runtime.persistent_shared_root = home.join("cache/providers");
+        let frame =
+            serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
+        let inputs = HostInputs::from_frame(frame);
+        let mut cursor = RollupCursor::new();
+        let mut refresh_state = ProducerRefreshState::default();
+        let store = rimz::Store::open(state.clone(), runtime.clone()).unwrap();
+        let snapshot = store.snapshot().unwrap();
+        assert_eq!(snapshot.agents.len(), FLEET);
+        for kind in ["codex", "claude"] {
+            assert_eq!(
+                snapshot
+                    .agents
+                    .iter()
+                    .filter(|agent| agent.kind.as_str() == kind)
+                    .count(),
+                FLEET / 2
+            );
+        }
+        let log = std::path::PathBuf::from(std::env::var_os("RIMZ_TEST_GIT_LOG").unwrap());
+        std::fs::write(&log, "").unwrap();
+        refresh_producer_caches(
+            &mut cursor,
+            &state,
+            &runtime,
+            Some(&inputs),
+            None,
+            &mut refresh_state,
+        )
+        .unwrap();
+        let cold_git = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            cold_git.matches("remote\tget-url\torigin").count(),
+            1,
+            "cold PR assembly lane:\n{cold_git}"
+        );
+        assert!(
+            !cold_git.contains("rev-parse\t--abbrev-ref"),
+            "PR branch lane must read HEAD in process:\n{cold_git}"
+        );
+        std::fs::write(&log, "").unwrap();
+        let before = spawn_count();
+        refresh_producer_caches(
+            &mut cursor,
+            &state,
+            &runtime,
+            Some(&inputs),
+            None,
+            &mut refresh_state,
+        )
+        .unwrap();
+        let warm_git = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            spawn_count() - before,
+            0,
+            "warm refresh lane (session/provider helpers and Git/forge): expected no spawns; Git lane trace:\n{warm_git}"
+        );
+        return;
+    }
+
+    let Some(fixture) = super::sidebar_diff_stats::Fixture::with_linked_worktrees(3) else {
+        return;
+    };
+    fixture.publish_pane_frame();
+    let runtime = fixture.env.runtime_paths();
+    let frame: rimz::sidebar::frame::PaneFrame =
+        serde_json::from_slice(&std::fs::read(runtime.pane_frame_path()).unwrap()).unwrap();
+    let roots: Vec<_> = frame
+        .to_pane_refs()
+        .into_iter()
+        .map(|pane| pane.cwd.unwrap())
+        .collect();
+    let mut panes = synthetic_panes(FLEET);
+    for (index, pane) in panes.iter_mut().enumerate() {
+        pane.cwd = Some(roots[index % roots.len()].clone());
+    }
+    let store = fixture.env.store();
+    for index in 0..FLEET {
+        let mut event = registered_lifecycle(&fixture.env.workspace_id, index);
+        if index % 2 == 0 {
+            event.source = "codex".to_owned();
+        }
+        event_log::append(&store.paths().events_log, &event).unwrap();
+    }
+    std::fs::write(
+        runtime.pane_frame_path(),
+        serde_json::to_vec(&rimz::sidebar::frame::assemble_frame(
+            panes,
+            unix_now_ms(),
+            SESSION_NAME.to_owned(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &rimz::agents::spending::ProviderSpendingCache {
+            refreshed_at_ms: unix_now_ms(),
+            ..Default::default()
+        },
+    );
+    crate::common::write_path_shim(&fixture.env.project_root.join("bin"), "gh", "exit 1");
+    let mut child = fixture.env.rimz_at(&std::env::current_exe().unwrap());
+    let traced = fixture.snapshot_command();
+    child.envs(
+        traced
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value))),
+    );
+    let output = child
+        .args([
+            "--exact",
+            "performance::produce_budget::warm_fleet_refresh_forks_zero_subprocesses",
+            "--nocapture",
+        ])
+        .env(CHILD_ROOT, &fixture.env.project_root)
+        .env("RIMZ_OAUTH_USAGE_OFFLINE", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn scale_room_preserves_agent_pane_and_fence_dimensions() {
     for (agents, panes, ended_sessions) in [(51, 24, 4_600), (200, 100, 5_000)] {
         let h = Harness::new();
