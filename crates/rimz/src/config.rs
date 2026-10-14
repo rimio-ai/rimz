@@ -62,9 +62,9 @@ pub(crate) use accounts::UsageLimitUsd;
 pub use accounts::{AccountBudgetConfigError, AccountHistory, AccountsConfig, NamedAccount};
 use agents::{AgentsConfig, SubagentProfilesConfig};
 pub use agents::{
-    CommandsConfig, DONE_STAGE, HibernateAfterErr, HibernateConfig, Isolation, LaunchPlacement,
-    Profile, ProfilesConfig, PromptSource, RoleBinding, SubagentsConfig, Team, TeamSignalBinding,
-    TeamsConfig,
+    CommandsConfig, DONE_STAGE, HibernateConfig, HibernateScheduleErr, Isolation, LaunchPlacement,
+    Profile, ProfilesConfig, PromptSource, RoleBinding, Schedule, SubagentsConfig, Team,
+    TeamSignalBinding, TeamsConfig,
 };
 pub(crate) use agents::{FlipCompact, retired_agents_key};
 use animation::validate_glyph_cells;

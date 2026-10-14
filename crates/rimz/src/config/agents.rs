@@ -182,13 +182,15 @@ const fn default_max_chain_length() -> u8 {
 pub struct HibernateConfig {
     pub enabled: Option<bool>,
     pub after: String,
+    pub deep_after: String,
 }
 
 impl Default for HibernateConfig {
     fn default() -> Self {
         Self {
             enabled: None,
-            after: "10m".into(),
+            after: "30m".into(),
+            deep_after: "120m".into(),
         }
     }
 }
@@ -202,32 +204,76 @@ impl HibernateConfig {
         self.enabled == Some(true)
     }
 
-    pub fn schedule(&self) -> Result<Duration, HibernateAfterErr> {
+    pub fn schedule(&self) -> Result<Schedule, HibernateScheduleErr> {
         use crate::utils::time::{DurationUnit, parse_duration_units};
-        let refuse = |reason: String| HibernateAfterErr {
-            value: self.after.clone(),
-            reason,
+        let parse = |key, value: &str| {
+            let refuse = |reason: String| HibernateScheduleErr {
+                key,
+                value: value.into(),
+                reason,
+            };
+            let duration = parse_duration_units(
+                value,
+                &[
+                    DurationUnit::Second,
+                    DurationUnit::Minute,
+                    DurationUnit::Hour,
+                    DurationUnit::Day,
+                ],
+            )
+            .map_err(|error| refuse(error.to_string()))?;
+            if duration > Duration::from_secs(24 * 60 * 60) {
+                return Err(refuse("longer than 24h".into()));
+            }
+            Ok(duration)
         };
-        let duration = parse_duration_units(
-            &self.after,
-            &[
-                DurationUnit::Second,
-                DurationUnit::Minute,
-                DurationUnit::Hour,
-                DurationUnit::Day,
-            ],
-        )
-        .map_err(|error| refuse(error.to_string()))?;
-        if duration > Duration::from_secs(24 * 60 * 60) {
-            return Err(refuse("longer than 24h".into()));
+        let after = parse("after", &self.after)?;
+        let deep_after = parse("deep_after", &self.deep_after)?;
+        if deep_after < after {
+            return Err(HibernateScheduleErr {
+                key: "deep_after",
+                value: self.deep_after.clone(),
+                reason: "must be at least agents.hibernate.after".into(),
+            });
         }
-        Ok(duration)
+        Ok(Schedule { after, deep_after })
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Schedule {
+    pub(crate) after: Duration,
+    deep_after: Duration,
+}
+
+impl Schedule {
+    pub fn final_step(self) -> u32 {
+        (self.deep_after - self.after)
+            .as_secs()
+            .div_ceil(STEP.as_secs()) as u32
+    }
+
+    pub(crate) fn target(self, anon: u64, step: u32) -> u64 {
+        let span = (self.deep_after - self.after).as_secs();
+        if span == 0 {
+            return 0;
+        }
+        (u128::from(anon) * u128::from(span - self.due(step).as_secs()) * FLOOR_FRACTION.0
+            / (u128::from(span) * FLOOR_FRACTION.1)) as u64
+    }
+
+    pub(crate) fn due(self, step: u32) -> Duration {
+        (STEP * step).min(self.deep_after - self.after)
+    }
+}
+
+const STEP: Duration = Duration::from_secs(30 * 60);
+const FLOOR_FRACTION: (u128, u128) = (1, 2);
+
 #[derive(Debug, thiserror::Error)]
-#[error("invalid agents.hibernate.after `{value}`: {reason}; use a duration from 0s through 24h")]
-pub struct HibernateAfterErr {
+#[error("invalid agents.hibernate.{key} `{value}`: {reason}; use a duration from 0s through 24h")]
+pub struct HibernateScheduleErr {
+    key: &'static str,
     value: String,
     reason: String,
 }

@@ -575,7 +575,7 @@ Under each row, the sidebar's description rule chooses the error reason, first a
 | `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
 | `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
 
-The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, <bytes> reclaimed`.
+The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, step <k> of <n>, <bytes> reclaimed` (cumulative bytes for this frozen stretch).
 
 `--json` emits `{"schema":1,"agents":[...]}`. Each entry is the card the table renders, not the store's provider-shaped record. Except for `login`, `idle_stop`, and `hibernation`, every key is always present: an unknown scalar or object is `null`, a count is `0`, and a collection is empty.
 
@@ -587,7 +587,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. `turn_error` describes the agent's own turn; it remains `null` when only a child's park pauses or fails the parent card. |
 | `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
 | `idle_stop` | The pending [`stop --when-idle`](#stop) request: `after_secs`, `requested_at`, `requested_by` (the asking agent's handle, omitted from a user shell), and `due_at` while the agent is resting and its clock runs. Omitted when none is pending. |
-| `hibernation` | `frozen_at` and `reclaimed_bytes`; present whenever a hibernation record exists, regardless of displayed status. |
+| `hibernation` | `frozen_at`, `step`, and cumulative `reclaimed_bytes`; present whenever a hibernation record exists, regardless of displayed status. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
 | `background_shells` | Background shells the session is running, each with its `id`, optional `command` and `description`, and `started_at`, when RimZ first saw it. Only Claude reports them; other agents leave the list empty. |
 | `model` | `id`, `effort`, and the rendered `label`. |

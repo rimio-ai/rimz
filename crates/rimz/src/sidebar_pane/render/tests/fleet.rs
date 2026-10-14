@@ -12,6 +12,7 @@ fn frozen_fleet_keeps_its_real_status_bucket() {
     );
     sleeper.hibernation = Some(crate::agents::state::Hibernation {
         frozen_at: fixed_now(),
+        step: 0,
         reclaimed_bytes: 300,
     });
     let screen = snapshot_to_screen(&snapshot_with(vec![sleeper]), 50, 20);

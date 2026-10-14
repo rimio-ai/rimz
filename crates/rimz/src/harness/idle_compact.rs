@@ -519,6 +519,7 @@ mod tests {
         assert!(due(&candidate));
         candidate.hibernation = Some(crate::agents::state::Hibernation {
             frozen_at: ts(9_000),
+            step: 0,
             reclaimed_bytes: 200,
         });
         assert!(!due(&candidate));

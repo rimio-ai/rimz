@@ -27,6 +27,7 @@ fn frozen_agents_never_receive_cache_pings() {
     assert!(should_keepalive(&agent, &config, None, ts(3540)));
     agent.hibernation = Some(crate::agents::state::Hibernation {
         frozen_at: ts(100),
+        step: 0,
         reclaimed_bytes: 200,
     });
     assert!(!should_keepalive(&agent, &config, None, ts(3540)));

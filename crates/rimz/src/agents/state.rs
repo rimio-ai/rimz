@@ -335,6 +335,8 @@ pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
 pub struct Hibernation {
     pub frozen_at: Timestamp,
     pub reclaimed_bytes: u64,
+    #[serde(default)]
+    pub step: u32,
 }
 
 /// Agent status as the sidebar reads it. The first five are the lifecycle

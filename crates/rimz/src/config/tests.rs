@@ -2401,8 +2401,8 @@ fn hibernate_defaults_on() {
 fn hibernate_duration_is_validated_at_use() {
     let mut config = HibernateConfig::default();
     assert_eq!(
-        config.schedule().unwrap(),
-        std::time::Duration::from_secs(600)
+        config.schedule().unwrap().after,
+        std::time::Duration::from_secs(1800)
     );
     for value in ["oops", "25h"] {
         config.after = value.into();
@@ -2415,10 +2415,54 @@ fn hibernate_duration_is_validated_at_use() {
         );
     }
     config.after = "24h".into();
+    config.deep_after = "24h".into();
     assert_eq!(
-        config.schedule().unwrap(),
+        config.schedule().unwrap().after,
         std::time::Duration::from_secs(86400)
     );
+}
+
+#[test]
+fn hibernate_schedule_rejects_invalid_deep_after() {
+    for value in ["oops", "25h", "29m"] {
+        let config = HibernateConfig {
+            after: "30m".into(),
+            deep_after: value.into(),
+            ..Default::default()
+        };
+        assert!(config.schedule().is_err(), "{value}");
+    }
+}
+
+#[test]
+fn hibernate_schedule_interpolates_and_caps_the_last_step() {
+    for (after, deep, targets, due) in [
+        (
+            "30m",
+            "120m",
+            vec![300, 200, 100, 0],
+            vec![0, 1800, 3600, 5400],
+        ),
+        ("30m", "75m", vec![300, 100, 0], vec![0, 1800, 2700]),
+        ("30m", "30m", vec![0], vec![0]),
+    ] {
+        let schedule = HibernateConfig {
+            after: after.into(),
+            deep_after: deep.into(),
+            ..Default::default()
+        }
+        .schedule()
+        .unwrap();
+        assert_eq!(schedule.final_step() as usize, targets.len() - 1);
+        for (step, target) in targets.into_iter().enumerate() {
+            assert_eq!(schedule.target(600, step as u32), target);
+            assert_eq!(schedule.due(step as u32).as_secs(), due[step]);
+        }
+        assert_eq!(
+            schedule.target(u64::MAX, 0),
+            if after == deep { 0 } else { u64::MAX / 2 }
+        );
+    }
 }
 
 #[test]

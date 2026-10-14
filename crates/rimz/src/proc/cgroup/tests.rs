@@ -124,7 +124,7 @@ fn reclaim_measures_memory_and_reads_scope_processes() {
     std::fs::write(root.path().join("memory.current"), "4096\n").unwrap();
     std::fs::write(root.path().join("memory.reclaim"), "").unwrap();
     std::fs::write(root.path().join("cgroup.procs"), "123\n456\n").unwrap();
-    let result = reclaim(&scope);
+    let result = reclaim(&scope, 1024);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(
         result.unwrap(),
@@ -135,7 +135,39 @@ fn reclaim_measures_memory_and_reads_scope_processes() {
     );
     assert_eq!(
         std::fs::read_to_string(root.path().join("memory.reclaim")).unwrap(),
-        "4096 swappiness=200"
+        "1024 swappiness=200"
     );
     assert_eq!(procs(&scope), [123, 456]);
+    reclaim(&scope, 0).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("memory.reclaim")).unwrap(),
+        "1024 swappiness=200"
+    );
+}
+
+#[test]
+fn memory_stat_reads_named_counters_and_rejects_missing_or_invalid_values() {
+    let root = tempfile::tempdir().unwrap();
+    let scope = ScopePath(root.path().to_owned());
+    std::fs::write(
+        root.path().join("memory.stat"),
+        "file 20\nanon 60\nworkingset_refault_file 3\nworkingset_refault_anon 2\nunknown 9\n",
+    )
+    .unwrap();
+    assert_eq!(
+        memory_stat(&scope).unwrap(),
+        MemoryStat {
+            anon: 60,
+            file: 20,
+            workingset_refault_anon: 2,
+            workingset_refault_file: 3
+        }
+    );
+    for text in [
+        "file 20\n",
+        "anon nope\nfile 20\nworkingset_refault_anon 0\nworkingset_refault_file 0\n",
+    ] {
+        std::fs::write(root.path().join("memory.stat"), text).unwrap();
+        assert!(memory_stat(&scope).is_err());
+    }
 }

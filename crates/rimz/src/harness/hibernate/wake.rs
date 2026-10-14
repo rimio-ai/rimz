@@ -119,7 +119,7 @@ fn wake_workspace_unlocked(
     Ok(result)
 }
 
-fn recorded_scope(root: &Path, path: &Path) -> Result<ScopePath, HibernateErr> {
+pub(super) fn recorded_scope(root: &Path, path: &Path) -> Result<ScopePath, HibernateErr> {
     let invalid = || crate::proc::cgroup::CgroupErr::InvalidScope(path.to_owned());
     let relative = path.strip_prefix(root).map_err(|_| invalid())?;
     ScopePath::from_cgroup(root, &format!("0::/{}", relative.display()))
@@ -190,7 +190,7 @@ fn freeze_requested(scope: &ScopePath) -> Result<bool, HibernateErr> {
     }
 }
 
-fn is_frozen(scope: &ScopePath) -> Result<bool, HibernateErr> {
+pub(super) fn is_frozen(scope: &ScopePath) -> Result<bool, HibernateErr> {
     match std::fs::read_to_string(scope.as_path().join("cgroup.events")) {
         Ok(events) => Ok(events.lines().any(|line| line == "frozen 1")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && !scope.as_path().exists() => {
@@ -224,6 +224,9 @@ mod tests {
             scope,
             provider_pid: 10,
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 100,
         };
         hibernate::record(&paths, entry.clone()).unwrap();

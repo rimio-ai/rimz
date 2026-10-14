@@ -321,6 +321,9 @@ mod tests {
                     scope: "/scope".into(),
                     provider_pid: 1234,
                     frozen_at: Timestamp::UNIX_EPOCH,
+                    anon_at_freeze: 0,
+                    step: 0,
+                    last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
                     reclaimed_bytes: 200,
                 },
             )

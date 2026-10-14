@@ -22,6 +22,7 @@ fn hibernation_preserves_real_status_and_armed_waits() {
         let mut agent = test_agent(status, 1_000);
         agent.hibernation = Some(Hibernation {
             frozen_at: Timestamp::from_second(1_200).unwrap(),
+            step: 0,
             reclaimed_bytes: 200,
         });
         assert_eq!(agent.effective_status(), status);

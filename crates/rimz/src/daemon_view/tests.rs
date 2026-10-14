@@ -26,6 +26,9 @@ fn recorded_surplus_pane_is_awake_when_close_runs() {
             scope: scope.clone(),
             provider_pid: 10,
             frozen_at: jiff::Timestamp::UNIX_EPOCH,
+            anon_at_freeze: 0,
+            step: 0,
+            last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
             reclaimed_bytes: 0,
         },
     )
