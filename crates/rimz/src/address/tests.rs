@@ -2555,7 +2555,7 @@ fn the_yield_never_crosses_lanes() {
 }
 
 #[test]
-fn launch_word_names_live_agents_by_role_name_profile_or_pet_name() {
+fn launch_word_names_live_agents_by_role_name_or_pet_name_never_profile() {
     let mut role = agent("claude", "sess-role", Some("a"), "terminal_1");
     role.role = Some("planner".to_owned());
     let mut explicit = agent("codex", "sess-explicit", Some("b"), "terminal_2");
@@ -2576,12 +2576,15 @@ fn launch_word_names_live_agents_by_role_name_profile_or_pet_name() {
 
     assert_eq!(ids("planner"), ["sess-role"]);
     assert_eq!(ids("scribe"), ["sess-explicit"]);
-    assert_eq!(ids("coder"), ["sess-profile", "sess-profile-2"]);
+    assert!(
+        ids("coder").is_empty(),
+        "a profile is a launch recipe its live agents share, not one agent's name"
+    );
     assert_eq!(ids("round-binder"), ["sess-profile"]);
     assert!(ids("sess-pro").is_empty(), "a session prefix never counts");
     assert!(
         ids("claude").is_empty(),
-        "the kind is not one of the four tiers"
+        "the kind is not one of the three tiers"
     );
     assert!(ids("nobody").is_empty());
 
@@ -2596,5 +2599,6 @@ fn launch_word_names_live_agents_by_role_name_profile_or_pet_name() {
         "a scoped caller does not see another lane's live role"
     );
     assert_eq!(in_lane("planner", "a"), ["sess-role"]);
-    assert_eq!(in_lane("coder", "d"), ["sess-profile-2"]);
+    assert!(in_lane("coder", "d").is_empty());
+    assert_eq!(in_lane("round-binder", "c"), ["sess-profile"]);
 }

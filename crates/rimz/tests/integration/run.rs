@@ -4246,13 +4246,14 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
     env.record(&env.project_root);
     let workspace = env.resolve_workspace(&env.project_root);
     let mut observation = rimz::agents::AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("sess-coder")),
+        Some(AgentSessionId::from("sess-planner")),
         LifecycleSignal::Registered,
     );
     observation.worktree_path = Some(env.home_root.join("auth").display().to_string());
     observation.worktree_branch = Some("auth".to_owned());
     observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
     observation.launch.profile = Some("coder".to_owned());
+    observation.launch.role = Some("planner".to_owned());
     env.store()
         .append_event(&rimz::EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
@@ -4289,38 +4290,43 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
         }
         command.output().expect("bare agents word")
     };
-    let bare_coder = |channel: Option<&str>| run_in(&["agents", "coder"], channel);
+    let bare_planner = |channel: Option<&str>| run_in(&["agents", "planner"], channel);
 
-    let out = bare_coder(Some("billing"));
+    let out = bare_planner(Some("billing"));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("names a live agent"),
         "a live agent in another lane leaves the word a launch: {stderr}"
     );
 
-    let out = bare_coder(None);
+    let out = run_in(&["agents", "coder"], None);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let shown = run_in(&["agents", "show", "@coder", "--json"], None);
+    assert!(
+        !stderr.contains("names a live agent"),
+        "the profile a live agent was launched from stays a launch: {stderr}"
+    );
+
+    let out = bare_planner(None);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let shown = run_in(&["agents", "show", "@planner", "--json"], None);
     assert!(
         shown.status.success(),
         "{}",
         String::from_utf8_lossy(&shown.stderr)
     );
     let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
-    assert_eq!(shown["agent"]["id"], "sess-coder");
-    assert_eq!(shown["agent"]["handle"], "@coder");
+    assert_eq!(shown["agent"]["id"], "sess-planner");
+    assert_eq!(shown["agent"]["handle"], "@planner");
     assert_eq!(out.status.code(), Some(2), "stderr:\n{stderr}");
     assert!(
         out.stdout.is_empty(),
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
-    assert!(
-        stderr.starts_with("error: `coder` names a live agent (@coder)"),
-        "{stderr}"
+    assert_eq!(
+        stderr,
+        "error: `planner` names a live agent (@planner) as well as a launch spec\n    inspect: rimz agents show @planner\n    launch:  rimz agents launch planner\n"
     );
-    assert!(stderr.contains("rimz agents show @coder"), "{stderr}");
-    assert!(stderr.contains("rimz agents launch coder"), "{stderr}");
 
     crate::common::write_definition(
         &env,
@@ -4332,11 +4338,11 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
     crate::common::write_definition(
         &env,
         "teams",
-        "coder",
+        "planner",
         "leader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
         "Complete the work.",
     );
-    let out = run_in(&["teams", "coder"], None);
+    let out = run_in(&["teams", "planner"], None);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("names a live agent") && !stderr.contains("unknown team"),
