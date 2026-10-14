@@ -450,7 +450,7 @@ fn install_merge_includes_native_permission_hooks() {
         "default_model = \"custom\"\n\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"my-hook\"\n",
     )
     .unwrap();
-    install::install(&path).unwrap();
+    install::install(&path, None).unwrap();
     assert!(install::installed(&path));
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("PermissionRequest"));
