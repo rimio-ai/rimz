@@ -142,17 +142,19 @@ impl DailyBudgetScope {
         ledger: &DailyBudgetLedger,
         config: &MachineConfig,
     ) -> Option<f64> {
-        let configured = self.configured_cap_usd(config)?;
         if ledger.disabled {
             return None;
         }
-        ledger.raised_cap_usd.or(match self {
-            Self::Fleet => ledger
-                .override_spec
-                .map(|spec| spec.cap_usd)
-                .or(Some(configured)),
-            Self::Account(_) => Some(configured),
-        })
+        if let Self::Account(key) = self {
+            crate::agents::spec_by_kind(key.kind.as_str())?
+                .has_authoritative_account_spend()
+                .then_some(())?;
+        }
+        let base = ledger
+            .override_spec
+            .map(|spec| spec.cap_usd)
+            .or_else(|| self.configured_cap_usd(config))?;
+        Some(ledger.raised_cap_usd.unwrap_or(base))
     }
 
     pub fn cap_source(
@@ -160,13 +162,13 @@ impl DailyBudgetScope {
         ledger: &DailyBudgetLedger,
         config: &MachineConfig,
     ) -> BudgetCapSource {
-        if self.configured_cap_usd(config).is_none() {
-            BudgetCapSource::None
-        } else if ledger.disabled {
+        if ledger.disabled {
             BudgetCapSource::Cleared
+        } else if self.effective_cap_usd(ledger, config).is_none() {
+            BudgetCapSource::None
         } else if ledger.raised_cap_usd.is_some() {
             BudgetCapSource::Raised
-        } else if matches!(self, Self::Fleet) && ledger.override_spec.is_some() {
+        } else if ledger.override_spec.is_some() {
             BudgetCapSource::Override
         } else {
             BudgetCapSource::Config
@@ -178,9 +180,6 @@ impl DailyBudgetScope {
             Self::Fleet => config.harness.budget.map(|cap| cap.as_usd()),
             Self::Account(key) => {
                 let kind = &key.kind;
-                crate::agents::spec_by_kind(kind.as_str())?
-                    .has_authoritative_account_spend()
-                    .then_some(())?;
                 config
                     .accounts
                     .budget(kind.as_str())
@@ -190,16 +189,8 @@ impl DailyBudgetScope {
     }
 
     pub fn apply_absolute(&self, ledger: &mut DailyBudgetLedger, cap: BudgetSpec) {
-        match self {
-            Self::Fleet => {
-                ledger.override_spec = Some(cap);
-                ledger.raised_cap_usd = None;
-            }
-            Self::Account(_) => {
-                ledger.override_spec = None;
-                ledger.raised_cap_usd = Some(cap.cap_usd);
-            }
-        }
+        ledger.override_spec = Some(cap);
+        ledger.raised_cap_usd = None;
         ledger.disabled = false;
     }
 
@@ -222,21 +213,6 @@ impl DailyBudgetScope {
             Self::Fleet => "fleet budget ledger",
             Self::Account(_) => "account budget ledger",
         }
-    }
-
-    pub fn require_configured(&self, config: &MachineConfig) -> Result<(), String> {
-        if self.configured_cap_usd(config).is_some() {
-            return Ok(());
-        }
-        Err(match self {
-            Self::Fleet => {
-                "no fleet budget is configured; turn it on with `rimz config set harness.budget 50/day`"
-                    .to_owned()
-            }
-            Self::Account(key) => format!(
-                "no {key} account budget is configured; turn it on with `rimz config set accounts.budget.{} 100/day`", key.kind
-            ),
-        })
     }
 
     pub fn raise_unavailable_message(&self) -> String {
@@ -297,9 +273,7 @@ impl DailyBudgetScope {
                 .unwrap_or_default(),
             Self::Account(key) => account_ledger_file(runtime, key).read(),
         };
-        if matches!(self, Self::Account(_)) {
-            ledger.override_spec = None;
-        } else {
+        if matches!(self, Self::Fleet) {
             ledger.parked =
                 crate::disk::atomic::read_json_cache(&runtime.lane_path("budget.fleet-park.json"));
         }
@@ -323,11 +297,7 @@ impl DailyBudgetScope {
                 crate::disk::atomic::write_temp_then_rename(&file.path, &choices)?;
                 self.merge_park(runtime, None)
             }
-            Self::Account(_) => {
-                let mut account = ledger.clone();
-                account.override_spec = None;
-                file.write(&account)
-            }
+            Self::Account(_) => file.write(ledger),
         }
     }
 
@@ -344,7 +314,7 @@ impl DailyBudgetScope {
                 )?;
                 Ok(())
             }
-            Self::Account(key) => account_ledger_file(runtime, key).merge_park(self, parked),
+            Self::Account(key) => account_ledger_file(runtime, key).merge_park(parked),
         }
     }
 
@@ -1625,16 +1595,9 @@ impl ScopeLedgerFile {
         Ok(())
     }
 
-    fn merge_park(
-        &self,
-        scope: &DailyBudgetScope,
-        parked: Option<BudgetParkStamp>,
-    ) -> Result<(), ScopeLedgerWriteError> {
+    fn merge_park(&self, parked: Option<BudgetParkStamp>) -> Result<(), ScopeLedgerWriteError> {
         let _guard = crate::disk::lock::WorkspaceLock::acquire(&self.lock_path)?;
         let mut current: DailyBudgetLedger = self.read();
-        if matches!(scope, DailyBudgetScope::Account(_)) {
-            current.override_spec = None;
-        }
         current.parked = parked;
         self.write_unlocked(&current)?;
         Ok(())

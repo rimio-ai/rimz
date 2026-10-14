@@ -190,9 +190,6 @@ fn mutate_scope(
             ledger.disabled = false;
         }
         raw => {
-            scope
-                .require_configured(config)
-                .map_err(anyhow::Error::msg)?;
             scope.apply_absolute(&mut ledger, parse_day_cap(raw)?.as_spec());
         }
     }

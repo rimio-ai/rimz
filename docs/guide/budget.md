@@ -64,7 +64,7 @@ A scheduled `--agent` task takes the same `--budget` to cap each fired run, and 
 
 ### Cap the room and the account
 
-The two daily scopes switch on in config, and only in config:
+Set standing daily defaults in config:
 
 ```sh
 rimz config set harness.budget 50/day              # this project's whole fleet
@@ -75,7 +75,7 @@ Both keys live in your per-machine `config.toml`, require the `/day` form, run n
 
 An account cap also needs a complete dollar history for that provider on disk, which only some agents publish: Claude, Codex, Grok, Pi, and OpenCode do today. For any other agent, config edits and room start refuse the key outright rather than enforce against incomplete dollars. `rimz budget --account KIND` refuses only if the targeted kind is ineligible, ignoring other keys. Fleet reports omit ineligible kinds and print a warning on stderr for each key to remove; fleet adjustments still proceed.
 
-`rimz budget` reads and adjusts what config armed:
+`rimz budget` reads, sets, and adjusts a cap for this room or one account pool, even without a configured default:
 
 ```sh
 rimz budget                        # room cap, source, today's spend, park state, and every account cap
@@ -98,9 +98,9 @@ ACCOUNT         CAP          SOURCE  SPEND  PARKED
 claude@default  $100.00/day  config  $0.00  no
 ```
 
-`source` says where the cap in force came from: `config` for the key you set, `override` or `raised` once `rimz budget` changed it, `cleared` after `off`, and `none` when config never armed the scope at all.
+`source` says where the cap in force came from: `config` for the key you set, `override` for an absolute cap set through `rimz budget`, `raised` for a raise on a base cap, `cleared` after `off`, and `none` when no base cap is set.
 
-An adjustment is runtime state RimZ keeps with the room's own files, never an edit to yours: `config.toml` keeps the number you committed to, and `rimz budget` refuses to arm a cap that config never switched on. To change the standing promise, change the key.
+These commands never edit `config.toml`: the room cap stays with the room's records, and account caps stay in a shared pool ledger that survives reboot. Removing a configured default disarms a raise based on it, but an absolute cap set through `rimz budget` remains until you lift it with `off`. To change the standing default instead, change the config key.
 
 ## What crossing a cap does
 

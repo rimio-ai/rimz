@@ -836,7 +836,7 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             .as_object()
             .expect("account object")
             .contains_key("override_spec"),
-        "account ledgers do not invent a fleet override"
+        "legacy account ledgers omit an absent absolute override"
     );
     let account_scope = DailyBudgetScope::Account(LoginKey::default_for(kind.clone()));
     assert_eq!(
@@ -933,48 +933,64 @@ fn fleet_choices_use_explicit_state_without_opening_a_store() {
 }
 
 #[test]
-fn scope_ledgers_require_config_to_arm_runtime_caps() {
-    let kind = AgentKind::new_unchecked("claude");
-    let fleet = DailyBudgetLedger {
-        override_spec: Some("20/day".parse().expect("spec")),
-        raised_cap_usd: Some(25.0),
-        ..Default::default()
-    };
-    let account = DailyBudgetLedger {
-        raised_cap_usd: Some(100.0),
-        ..Default::default()
-    };
-    let unarmed = MachineConfig::default();
-
-    let fleet_scope = DailyBudgetScope::Fleet;
-    let account_scope = DailyBudgetScope::Account(LoginKey::default_for(kind.clone()));
-    assert_eq!(fleet_scope.effective_cap_usd(&fleet, &unarmed), None);
-    assert_eq!(
-        fleet_scope.cap_source(&fleet, &unarmed),
-        BudgetCapSource::None
-    );
-    assert_eq!(account_scope.effective_cap_usd(&account, &unarmed), None);
-    assert_eq!(
-        account_scope.cap_source(&account, &unarmed),
-        BudgetCapSource::None
-    );
-
-    let armed: MachineConfig =
-        toml::from_str("[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"50/day\"\n")
-            .expect("config");
-    assert_eq!(fleet_scope.effective_cap_usd(&fleet, &armed), Some(25.0));
-    assert_eq!(
-        fleet_scope.cap_source(&fleet, &armed),
-        BudgetCapSource::Raised
-    );
-    assert_eq!(
-        account_scope.effective_cap_usd(&account, &armed),
-        Some(100.0)
-    );
-    assert_eq!(
-        account_scope.cap_source(&account, &armed),
-        BudgetCapSource::Raised
-    );
+fn scope_ledgers_allow_runtime_absolute_caps_but_raises_need_a_base() {
+    use BudgetCapSource::{Cleared, Config, None as Unset, Override, Raised};
+    let configured: MachineConfig =
+        toml::from_str("[harness]\nbudget = \"10/day\"\n[accounts.budget]\nclaude = \"10/day\"\n")
+            .unwrap();
+    let unconfigured = MachineConfig::default();
+    for scope in [
+        DailyBudgetScope::Fleet,
+        DailyBudgetScope::Account(LoginKey::default_for(AgentKind::new_unchecked("claude"))),
+    ] {
+        for (config, absolute, raise, disabled, expected, source) in [
+            (&unconfigured, None, None, false, None, Unset),
+            (&unconfigured, Some(20.0), None, false, Some(20.0), Override),
+            (
+                &unconfigured,
+                Some(20.0),
+                Some(25.0),
+                false,
+                Some(25.0),
+                Raised,
+            ),
+            (&unconfigured, None, Some(25.0), false, None, Unset),
+            (&configured, None, None, false, Some(10.0), Config),
+            (&configured, None, Some(25.0), false, Some(25.0), Raised),
+            (&configured, Some(20.0), None, false, Some(20.0), Override),
+            (
+                &configured,
+                Some(20.0),
+                Some(25.0),
+                false,
+                Some(25.0),
+                Raised,
+            ),
+            (&unconfigured, None, None, true, None, Cleared),
+            (&unconfigured, Some(20.0), Some(25.0), true, None, Cleared),
+            (&configured, Some(20.0), Some(25.0), true, None, Cleared),
+        ] {
+            let ledger = DailyBudgetLedger {
+                override_spec: absolute.map(|cap_usd| BudgetSpec {
+                    cap_usd,
+                    window: BudgetWindow::Day,
+                }),
+                raised_cap_usd: raise,
+                disabled,
+                ..Default::default()
+            };
+            assert_eq!(
+                scope.effective_cap_usd(&ledger, config),
+                expected,
+                "{scope:?}: {ledger:?}"
+            );
+            assert_eq!(
+                scope.cap_source(&ledger, config),
+                source,
+                "{scope:?}: {ledger:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -983,6 +999,7 @@ fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
     let config: MachineConfig =
         toml::from_str("[accounts.budget]\nantigravity = \"50/day\"\n").expect("config");
     let ledger = DailyBudgetLedger {
+        override_spec: Some("75/day".parse().unwrap()),
         raised_cap_usd: Some(100.0),
         parked: Some(BudgetParkStamp {
             at_cost: 150.0,
