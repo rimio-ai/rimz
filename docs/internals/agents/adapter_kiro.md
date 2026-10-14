@@ -38,7 +38,7 @@ Every payload carries `session_id` (the `sess_<uuid>` store directory name), `ho
 
 ## Context and transcript
 
-Local refresh keeps the transcript-stat gate and uses the same bounded-tail fold as discovery. It reads model, effort, and title from validated `session.json`, clearing absent fields and retaining established values when metadata cannot be read or validated. A previously recorded transcript can still supply turn settlement while metadata is unavailable. Metadata-only edits become visible on the next transcript change; token gauges stay preserved and credits never become dollars.
+Local refresh resolves its transcript through the same session validation as discovery, keeps the transcript-stat gate, and uses the same bounded-tail fold. It reads model, effort, and title from the validated `session.json` and clears absent fields. A session that fails validation yields no refresh, so every established value stays and the next tick retries. Metadata-only edits become visible on the next transcript change; token gauges stay preserved and credits never become dollars.
 
 ### Local store validation
 
