@@ -99,11 +99,11 @@ Permission and plan asks carry one question whose options are only the actions `
 
 ### Questions while Codex works
 
-Codex async questions appear individually, with `delivery: "async"` and `kind: "question"`. The human list marks them `question (async)`. An agent address selects its blocking ask first, otherwise its oldest async question; an ask id selects that exact question. Async questions do not pause work or park messages. An answer removes only its question; any unanswered questions disappear when the turn closes. A question skipped locally with Ctrl+] may remain listed until then.
+Codex async questions appear individually, with `delivery: "async"` and `kind: "question"`. The human list marks them `question (async)`. An agent address selects its blocking ask first, otherwise its oldest async question; an ask id selects that exact question. Async questions do not pause work or park messages. An answer removes only its question; an ordinary or steered prompt clears every listed question, as does closing the turn. A question skipped locally with Ctrl+] may remain listed until then.
 
 `rimz answer` refuses async questions with exit `3`, sends no keys, and records no answer. Focus the Codex pane and press Shift+Left to answer in its question editor.
 
-Codex may hold an answer given in the pane until a later tool boundary. The question stays listed until RimZ observes that answer or the turn closes.
+Codex may hold an answer given in the pane until a later tool boundary. The question stays listed until RimZ observes that answer, an ordinary prompt, or the turn closes. On Codex 0.156 through 0.158, an ordinary prompt clears RimZ's list even though Codex may still show the questions. A question queued between Codex accepting a prompt and reporting it to RimZ can also disappear from the list while remaining in the pane. In both cases, answer in the pane.
 
 ## Answer an ask
 

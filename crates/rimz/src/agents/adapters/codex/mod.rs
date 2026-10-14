@@ -1755,10 +1755,23 @@ fn build_codex_observation(
     observation.prompt = SanitizedPrompt::new(user_prompt.and_then(|p| p.prompt.as_deref()));
     observation.ask_queue = match hook {
         CodexHook::PostToolUse(tool) => ask::queued_questions(tool),
-        CodexHook::UserPromptSubmit(p) => p.prompt.as_deref().and_then(ask::answered_questions),
+        CodexHook::UserPromptSubmit(p) => Some(
+            p.prompt
+                .as_deref()
+                .and_then(ask::answered_questions)
+                .unwrap_or_else(|| crate::agents::AskQueueEdit {
+                    clear_all: true,
+                    ..Default::default()
+                }),
+        ),
         _ => None,
     };
-    if user_prompt.is_some() && observation.ask_queue.is_some() {
+    if user_prompt.is_some()
+        && observation
+            .ask_queue
+            .as_ref()
+            .is_some_and(|edit| !edit.clear_all)
+    {
         observation.prompt = None;
         observation.task = None;
     }

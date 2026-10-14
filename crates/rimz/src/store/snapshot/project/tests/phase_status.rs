@@ -41,6 +41,15 @@ fn queued_asks_stay_running_and_close_individually_or_with_the_turn() {
             .len(),
         2
     );
+    let mut cleared = events.clone();
+    cleared.push(raw_lifecycle_at(
+        "codex",
+        30,
+        json!({"agent_id":"s1", "signal":{"signal":"turn_started"},"ask_queue":{"clear_all":true}}),
+    ));
+    let states = reduce_agent_states(&cleared);
+    assert_eq!(states[0].status, AgentStatus::Running);
+    assert!(states[0].queued_asks.is_empty());
     events.push(raw_lifecycle_at("codex", 30, json!({"agent_id":"s1", "signal":{"signal":"turn_started"},"ask_queue":{"answered":[{"native_key":"first","answer":"Yes"}]}})));
     let states = reduce_agent_states(&events);
     assert_eq!(states[0].status, AgentStatus::Running);

@@ -29,6 +29,7 @@ fn async_reply_envelopes_keep_known_ids_and_suppress_legacy_prompts() {
             "reply envelope became the card prompt"
         );
         let edit = observation.ask_queue.unwrap();
+        assert!(!edit.clear_all);
         assert_eq!(edit.answered.len(), ids.len() - 1);
         if let Some(answer) = edit.answered.first() {
             assert_eq!(answer.native_key, native_key);
@@ -39,6 +40,10 @@ fn async_reply_envelopes_keep_known_ids_and_suppress_legacy_prompts() {
 #[test]
 fn async_hook_queues_each_accepted_question_and_decodes_replies() {
     use crate::agents::testkit::hook_observation;
+    let legacy = json!({"answered":[{"native_key":"first","answer":"Yes"}]});
+    let edit: crate::agents::AskQueueEdit = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(!edit.clear_all);
+    assert_eq!(serde_json::to_value(edit).unwrap(), legacy);
     let payload = json!({"session_id":"01a0ebeb-6ef5-7fe1-ae29-b1dd960bf58e","turn_id":"01a0ebec-0d08-7412-9982-6e0b75039794","hook_event_name":"PostToolUse","tool_name":"request_user_input_async","tool_input":{"questions":[{"title":"Which format do you prefer for brief updates?","options":["Bullet points","Short paragraph"]},{"title":"How much detail should I include in routine replies?","options":["Minimal","Moderate","Detailed"]}]},"tool_response":"{\"accepted\":true}","tool_use_id":"call_f5WQLmsqAVg8rlqr4fedugbj"});
     let observation =
         hook_observation(&super::super::CodexAdapter, "PostToolUse", &payload).unwrap();
@@ -114,7 +119,9 @@ fn async_hook_queues_each_accepted_question_and_decodes_replies() {
         .unwrap(),
     )
     .unwrap();
-    assert!(value["ask_queue"].is_null());
+    assert_eq!(value["ask_queue"]["clear_all"], true);
+    assert!(!value["prompt"].is_null());
+    assert!(!value["task"].is_null());
 }
 
 #[test]
