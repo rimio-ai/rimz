@@ -129,6 +129,19 @@ fn entries_for_completion(
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> Vec<CachedEntry> {
+    if let Some(event_id) = completion.event_id.as_deref() {
+        let own_event = completion
+            .session_id
+            .as_deref()
+            .and_then(|session_id| event_id.strip_prefix(session_id))
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .is_some_and(|sequence| {
+                !sequence.is_empty() && sequence.bytes().all(|byte| byte.is_ascii_digit())
+            });
+        if !own_event {
+            return Vec::new();
+        }
+    }
     let Some(usage) = completion
         .usage
         .as_ref()
@@ -463,6 +476,62 @@ mod tests {
                 }
             })
         )
+    }
+
+    #[test]
+    fn fork_spend_excludes_ancestor_completions_on_every_parse_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = dir.path().join("s1");
+        std::fs::create_dir(&session).unwrap();
+        let path = session.join("updates.jsonl");
+        let completion = |prompt: &str, event: Option<&str>| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&row(prompt, 2_500_000_000)).unwrap();
+            if let Some(event) = event {
+                value["params"]["_meta"] = serde_json::json!({"eventId": event});
+            }
+            value.to_string()
+        };
+        let inherited = [
+            completion("p1", Some("parent-1")),
+            completion("p2", Some("parent-2")),
+            completion("p3", Some("grandparent-3")),
+        ]
+        .join("\n");
+        std::fs::write(&path, with_prompt(&inherited)).unwrap();
+        let prices = PriceBook::fixture();
+        let copied = parse(&path, None, &prices);
+        assert!(copied.entries.is_empty());
+        let body = format!(
+            "{}{}\n",
+            with_prompt(&inherited),
+            completion("p4", Some("s1-4"))
+        );
+        std::fs::write(&path, &body).unwrap();
+        for parsed in [
+            parse(&path, None, &prices),
+            parse(&path, Some(&copied.cursor), &prices),
+        ] {
+            assert_eq!(parsed.entries.len(), 1);
+            assert_eq!(parsed.entries[0].cost_usd, 0.25);
+        }
+        assert_eq!(
+            cost_from_folded(&path, &transcript::fold(&body), "s1", &prices)
+                .unwrap()
+                .total_cost_usd,
+            Some(0.25)
+        );
+        let before = parse(&path, None, &prices);
+        let rewind = serde_json::json!({"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"rewind_marker","target_prompt_index":0}}});
+        let body = format!(
+            "{body}{rewind}\n{}",
+            with_prompt(&format!("{inherited}\n{}", completion("p5", None)))
+        );
+        std::fs::write(&path, &body).unwrap();
+        let rewound = parse(&path, Some(&before.cursor), &prices);
+        assert_eq!(rewound.update, SpendUpdate::Replace);
+        assert_eq!(rewound.entries.len(), 1);
+        assert_eq!(rewound.entries[0].cost_usd, 0.25);
     }
 
     #[test]

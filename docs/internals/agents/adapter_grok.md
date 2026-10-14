@@ -70,6 +70,8 @@ Native dollars take precedence on active-branch `_x.ai/session/update` `turn_com
 
 Ordinary refreshes resume at the file byte cursor. A rewind in the suffix triggers a cold branch fold returning `SpendUpdate::Replace`, removing abandoned prompts from the spending cache. The stable dedup identity is the Grok session, prompt, and attributed model.
 
+Fork copies retain the ancestor's `_meta.eventId` while rewriting `params.sessionId`. Every spend path ignores a completion unless its event ID is absent or is exactly its own session ID followed by a hyphen and ASCII digits. This excludes inherited turns, including forks of forks, without opening an ancestor transcript.
+
 A child session keeps its own top-level `updates.jsonl`, but the parent's `turn_completed` usage already folds the child in. Spend therefore skips any transcript whose `summary.json` `session_kind` starts with `subagent`; a transcript without that field is priced as before.
 
 ## Known gaps
