@@ -17,7 +17,7 @@ enum LaunchSession {
 impl From<&ExecAction> for LaunchSession {
     fn from(action: &ExecAction) -> Self {
         match action {
-            ExecAction::Launch { .. } => Self::Fresh,
+            ExecAction::Launch { .. } | ExecAction::Pick { .. } => Self::Fresh,
             ExecAction::Resume { .. } => Self::Resumed,
             ExecAction::Fork { .. } => Self::Forked,
         }

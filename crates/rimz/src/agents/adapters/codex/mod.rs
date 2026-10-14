@@ -201,6 +201,13 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        picker: Some(&[
+            "codex",
+            "resume",
+            "--no-daemon",
+            "-c",
+            "tui.question_esc_back=false",
+        ]),
         headless: Some(&headless::CodexHeadless),
         definitions: DEFINITIONS,
         program: Some("codex"),

@@ -1440,6 +1440,7 @@ pub struct LayoutPaneParams<'a> {
     pub cwd: &'a Path,
     pub cleanup_worktree: bool,
     pub in_place: bool,
+    pub pick_session: bool,
     pub resume_seeds: Option<&'a [CohortSeed]>,
     pub launch_identities: &'a [AgentLaunchIdentity],
     pub fallback_channel: Option<&'a str>,
@@ -1560,6 +1561,11 @@ fn fresh_agent_argv(
     );
     if let crate::harness::launch::ExecAction::Launch { prompt, .. } = &mut request.action {
         *prompt = launch.prompt.clone();
+    }
+    if params.pick_session {
+        request.action = crate::harness::launch::ExecAction::Pick {
+            extra_args: std::mem::take(request.action.extra_args_mut()),
+        };
     }
     if launch.prompt.is_some() {
         request.loop_reminder = params.loop_reminder.map(str::to_owned);

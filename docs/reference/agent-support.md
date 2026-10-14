@@ -180,6 +180,27 @@ OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch an
 
 Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `npm install -g @qwen-code/qwen-code@latest`; an unreadable version passes without a verdict. It also refuses disabled hooks, naming the source and fix: `disableAllHooks`, `tools.executionSandbox`, `--safe-mode`, `--bare`, or truthy `QWEN_CODE_SAFE_MODE` or `QWEN_CODE_SIMPLE`. Execution-sandbox policy must be removed by its operator, or Qwen must run outside RimZ. Refresh existing Qwen hooks with `rimz hooks install` to adopt the seconds-based timeout before launching.
 
+### Provider-session resume
+
+`rimz agents <kind-or-profile> --resume` opens a native picker. `--resume=<id>` first checks exact ids recorded in this room; importing an unrecorded id requires a locator, which reads only the room account's home. See [provider-session resume](./cli/agents.md#resume-a-provider-session) for conflicts and refusals.
+
+| Agent | Bare `--resume` picker | Resume by id (adopt unrecorded) |
+| --- | --- | --- |
+| Claude Code | `claude --resume` | Yes |
+| Codex | Partial: `codex resume --no-daemon`; card binds at the first prompt | Yes, active and archived sessions |
+| Pi | `pi --resume` | Unsupported |
+| OpenCode | Unsupported | Unsupported |
+| Antigravity | Unsupported | Unsupported |
+| Copilot | `copilot --resume` | Unsupported |
+| Droid | `droid --resume` | Unsupported |
+| Cursor | Unsupported | Unsupported |
+| Amp | Unsupported | Unsupported |
+| Kiro | Partial: `kiro-cli chat --v3 --resume-picker`; card binds at the first prompt | Unsupported |
+| Qwen | `qwen --resume` | Unsupported |
+| Kimi | `kimi --session` | Unsupported |
+| Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
+| Process plugin | Unsupported | Unsupported |
+
 ### Permission modes
 
 A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` flags, or a `<kind>-<mode>` cell such as `claude-plan`. RimZ appends the arguments below. `none` means the mode adds no arguments, so the agent keeps its own default; for Auto and Yolo, the `<kind>-auto` and `<kind>-yolo` cells do not exist ([permission-mode cells](./cli/agents.md#permission-mode-cells)).

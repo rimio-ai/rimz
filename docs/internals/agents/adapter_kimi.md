@@ -48,6 +48,8 @@ Background task state lives under each agent's `agents/<agent-id>/tasks/` tree, 
 
 ## Launch and resume
 
+Bare RimZ `--resume` uses the native `kimi --session` picker ([upstream](../../externals/agent-adapter/kimi-reference.md)).
+
 Permission launch cells map to the current CLI:
 
 | RimZ mode | Kimi argv |

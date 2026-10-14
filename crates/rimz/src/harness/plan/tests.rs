@@ -1118,6 +1118,7 @@ fn pane_compilation_checks_support_across_layout_before_prompt_files() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
@@ -2386,6 +2387,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
@@ -2493,6 +2495,7 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
         let panes = compile_layout_panes(
             &layout,
             LayoutPaneParams {
+                pick_session: false,
                 runtime: &runtime,
                 cwd: dir.path(),
                 cleanup_worktree: false,
@@ -2559,6 +2562,7 @@ fn in_place_resume_layout_returns_to_the_existing_shell() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: root,
             cleanup_worktree: false,
@@ -2620,6 +2624,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
@@ -2650,6 +2655,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
@@ -2669,6 +2675,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
@@ -2686,6 +2693,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     let err = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/repo"),
             cleanup_worktree: false,
@@ -2748,6 +2756,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,
@@ -2788,6 +2797,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         let panes = compile_layout_panes(
             &layout,
             LayoutPaneParams {
+                pick_session: false,
                 runtime: &runtime,
                 cwd: Path::new("/tmp/project"),
                 cleanup_worktree,
@@ -2854,6 +2864,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     let panes = compile_layout_panes(
         &layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: &runtime,
             cwd: Path::new("/tmp/project"),
             cleanup_worktree: false,

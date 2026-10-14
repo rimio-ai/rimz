@@ -21,6 +21,22 @@ fn held_checkout_guidance_names_the_board_command() {
 }
 
 #[test]
+fn picker_receipt_names_lane_and_binding_boundary() {
+    for (kind, boundary) in [
+        ("claude", "once a session is picked"),
+        ("codex", "at the first prompt"),
+        ("kiro", "at the first prompt"),
+    ] {
+        let mut output = Vec::new();
+        write_picker_receipt(&mut output, kind, Some("docs")).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("opened {kind} session picker in #docs; the card binds {boundary}\n")
+        );
+    }
+}
+
+#[test]
 fn resume_prompt_is_queued_to_the_leader_before_registration() {
     use rimz::harness::plan::CohortSeed;
     use rimz::store::message::{DeliveryGate, MessageSender};
@@ -313,6 +329,7 @@ fn launch_receipt_carries_either_the_hints_or_the_peer_lines() {
             channel: Some("auth".into()),
             cwd: dir.path().to_owned(),
             in_place: false,
+            pick_session: false,
             peer,
         };
         let mut output = anstream::StripStream::new(Vec::new());

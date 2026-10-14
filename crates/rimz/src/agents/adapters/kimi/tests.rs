@@ -376,6 +376,10 @@ fn failed_tools_clear_waits_and_background_questions_do_not_open_them() {
 
 #[test]
 fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
+    assert_eq!(
+        KimiAdapter.spec().launch.picker,
+        Some(["kimi", "--session"].as_slice())
+    );
     let prompt = json!({
         "session_id":"s1",
         "cwd":"/tmp/project",

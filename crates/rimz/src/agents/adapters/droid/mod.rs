@@ -92,6 +92,7 @@ static DROID_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        picker: Some(&["droid", "--resume"]),
         definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("droid"),
         fixed_args: &[],

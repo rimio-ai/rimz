@@ -100,6 +100,7 @@ static COPILOT_DESCRIPTOR: AgentSpec = AgentSpec {
     extra_bin_dirs: &[],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
+        picker: Some(&["copilot", "--resume"]),
         definitions: crate::agents::definition::DefinitionSpec::EMPTY,
         program: Some("copilot"),
         fixed_args: &[],

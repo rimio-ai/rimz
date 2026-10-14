@@ -1830,6 +1830,7 @@ fn materialize_team_restore_tab(
     let layout = compile_layout_panes(
         &planned.layout,
         LayoutPaneParams {
+            pick_session: false,
             runtime: store.runtime_paths(),
             cwd: &planned.cwd,
             cleanup_worktree: false,

@@ -170,7 +170,7 @@ These flags select a resume path or override the launch's agent cells. Each adap
 | Flag | Effect |
 | --- | --- |
 | `--continue` | Reopen the newest matching RimZ cohort. |
-| `--resume[=<ID>]` | Resume one exact provider session. Only a kind or solo profile; bare `--resume` is not yet supported. |
+| `--resume[=<ID>]` | Resume one exact provider session, or open its native picker without an id. Only a kind or solo profile; [picker support](../agent-support.md#provider-session-resume) varies by provider. |
 | `--model <MODEL>` | Model for every agent cell, replacing the profile's. Droid refuses it; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
 | `--tier <TIER>` | Select `intern`, `junior`, `senior`, or `principal` for the launched Markdown profile. Conflicts with `--model`. |
 | `--effort <LEVEL>` | Reasoning effort, passed to the provider's effort flag without validation, so levels are whatever the provider accepts. Kinds with no effort flag refuse the launch; the per-agent flags are in [agent support](../agent-support.md#model-and-effort). |
@@ -368,7 +368,9 @@ Resume refuses `--system-prompt-file`, `--append-system-prompt-file` (update the
 
 ### Resume a provider session
 
-`rimz agents claude --resume=<ID>` and `rimz agents launch claude --resume <ID>` reopen that exact provider session, not the newest matching cohort. Put the kind or solo profile before the flag. The optional value consumes the next word: `rimz agents claude --resume "fix it"` looks up the id `fix it`, and `rimz agents --resume claude` consumes `claude` as the id rather than the spec. Bare `--resume` is reserved for provider pickers; currently every kind refuses it and names the supported alternatives.
+`rimz agents claude --resume=<ID>` and `rimz agents launch claude --resume <ID>` reopen that exact provider session, not the newest matching cohort. Put the kind or solo profile before the flag. The optional value consumes the next word: `rimz agents claude --resume "fix it"` looks up the id `fix it`, and `rimz agents --resume claude` consumes `claude` as the id rather than the spec.
+
+Bare `--resume` opens the provider's own session picker under the room's account, with the solo profile's launch settings and no prompt. [Picker support](../agent-support.md#provider-session-resume) varies by provider. The card binds once you pick a session; lazily-registering providers (Codex and Kiro) bind at the first prompt instead. Picking a closed session already recorded in this room restores its old handle and history; an unknown session keeps the newly minted handle. The receipt names the provider and lane, not a session id. Unsupported providers refuse and name the supported alternatives.
 
 An exact id already recorded in this room keeps its handle and history, with the same account and lifecycle checks as `rimz agents resume @<handle>`. A kind name does not constrain the saved profile; a separately named solo profile must match it. A kind or profile mismatch refuses and names that handle. Prefix matching is available only through the `agents resume @<ref>` subcommand.
 
@@ -383,7 +385,7 @@ This flag conflicts with the positional prompt, `--continue`, `--channel`, `--fr
 | Recorded session is live | Use the printed `rimz agents focus @<handle>` command. |
 | Recorded team member or child | Use its team-role `--continue` command or `rimz subagents`. |
 | Id not found | Check the kind, exact id, and account home named in the error. |
-| Provider has no by-id locator | Resume a session already recorded by RimZ, or use `--continue`. |
+| Provider has no by-id locator | Resume a session already recorded by RimZ, use bare `--resume` when it supports a picker, or use `--continue`. |
 
 ### Resume a lane by place
 

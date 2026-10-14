@@ -251,7 +251,7 @@ pub(super) fn minimal_exec_request(kind: &str, action: ExecAction) -> ExecReques
 }
 
 fn resume_or_fork_contract(action: &ExecAction) -> (&str, &str, &[String]) {
-    use ExecAction::{Fork, Launch, Resume};
+    use ExecAction::{Fork, Launch, Pick, Resume};
 
     match action {
         Resume {
@@ -262,8 +262,25 @@ fn resume_or_fork_contract(action: &ExecAction) -> (&str, &str, &[String]) {
             session_id,
             extra_args,
         } => ("fork", session_id, extra_args),
-        Launch { .. } => panic!("expected resume or fork"),
+        Launch { .. } | Pick { .. } => panic!("expected resume or fork"),
     }
+}
+
+#[test]
+fn picker_consumes_launch_identity_without_attaching_a_session() {
+    let action = serde_json::from_value::<ExecAction>(
+        serde_json::json!({"action": "pick", "extra_args": []}),
+    );
+    assert!(action.is_ok(), "picker action must decode: {action:?}");
+    let mut request = minimal_exec_request("claude", action.unwrap());
+    request.identity.launch_id = Some("launch_picker".into());
+    assert!(exec_launch_identity(&request).is_err());
+    request.identity.name = Some("minted-handle".into());
+    let identity = exec_launch_identity(&request).unwrap().unwrap();
+    assert_eq!(identity.agent_id.as_str(), "launch_picker");
+    assert_eq!(identity.name, "minted-handle");
+    assert_eq!(identity.prompt, None);
+    assert_eq!(exec_attach_target(&request), None);
 }
 
 fn bare_exec_args() -> ExecRequest {

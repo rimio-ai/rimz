@@ -534,6 +534,10 @@ fn transcript_positions_abstain_for_missing_or_unknown_headers() {
 #[test]
 fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
     assert_eq!(
+        DroidAdapter.spec().launch.picker,
+        Some(["droid", "--resume"].as_slice())
+    );
+    assert_eq!(
         hook_output(&DroidAdapter, "Notification", &json!({})).class(),
         AgentHookClass::Lifecycle
     );

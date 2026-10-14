@@ -96,6 +96,7 @@ pub(in crate::cli) struct LaunchedLayout {
     channel: Option<String>,
     cwd: PathBuf,
     in_place: bool,
+    pick_session: bool,
     peer: Option<rimz::store::run::RunRecord>,
 }
 
@@ -111,6 +112,13 @@ impl LaunchedLayout {
         }
         let paths = store.paths();
         let lane_label = launched_lane_label(self.channel.as_deref(), &self.cwd, project_root);
+        if self.pick_session {
+            return write_picker_receipt(
+                w,
+                self.identities[0].kind.as_str(),
+                lane_label.as_deref(),
+            );
+        }
         // The agents are already launched, so an unreadable snapshot only
         // costs the receipt its list handles.
         let snapshot = store.snapshot_cached().ok();
@@ -149,6 +157,22 @@ fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -
         .or_else(|| cwd.file_name()?.to_str().map(str::to_owned))
 }
 
+fn write_picker_receipt(w: &mut impl Write, kind: &str, lane: Option<&str>) -> Result<()> {
+    let boundary = if rimz::agents::spec_by_kind(kind)
+        .is_some_and(|spec| spec.capabilities.registers_lazily)
+    {
+        "at the first prompt"
+    } else {
+        "once a session is picked"
+    };
+    writeln!(
+        w,
+        "opened {kind} session picker in #{}; the card binds {boundary}",
+        lane.unwrap_or("main")
+    )?;
+    Ok(())
+}
+
 type LaunchExecution<'a> = Box<dyn FnOnce() -> Result<Option<LaunchedLayout>> + 'a>;
 
 /// Prepare a launch into a resolved host cwd and return its effectful execution.
@@ -182,7 +206,9 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let store = &ctx.store;
     report_unknown_config_keys(&machine_config)?;
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
-    if !args.launch.cohort.continue_cohort && args.launch.resume.is_none() {
+    if !args.launch.cohort.continue_cohort
+        && args.launch.resume.as_ref().is_none_or(Option::is_none)
+    {
         machine_config.agents.startup_relaunch_wait()?;
     }
     let default_lane = if loop_task.is_some() {
@@ -252,7 +278,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
         layout,
         team_name,
     } = resolved;
-    if args.launch.resume.is_some() {
+    if matches!(args.launch.resume, Some(Some(_))) {
         // An exact id resumes or refuses; the resume is the launch's execution.
         return Ok(Box::new(move || {
             super::resume::resume_provider(
@@ -262,9 +288,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 ctx,
                 globals,
             )
-            .map(|()| None)
+            .map(|_| None)
         }));
     }
+    if args.launch.resume.is_some() {
+        // Bare `--resume` only checks the picker here; the picker launch follows.
+        super::resume::resume_provider(&args.launch, &layout, team_name.as_deref(), ctx, globals)?;
+    }
+    let pick_session = args.launch.resume.is_some();
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
     if !args.launch.cohort.continue_cohort
         && args.launch.cohort.from_pr.is_none()
@@ -395,7 +426,11 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 cell.isolation_default,
                 machine_config.agents.isolation,
             ),
-            prompt.filter(|_| Some(index) == prompt_agent_index),
+            if pick_session {
+                CellStart::Pick
+            } else {
+                CellStart::Launch(prompt.filter(|_| Some(index) == prompt_agent_index))
+            },
             &mut checked_folder_trust,
             loop_fire
                 .map(|_| crate::cli::folder_trust::Unattended::Loop)
@@ -721,6 +756,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 cwd: &cwd,
                 cleanup_worktree,
                 in_place,
+                pick_session,
                 resume_seeds: None,
                 launch_identities: launch_batch.identities(),
                 fallback_channel: None,
@@ -732,6 +768,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
             fail_peer_prompt();
         })?;
         panes.focused_pane = team_leader_pane(&layout, team);
+        if pick_session && in_place {
+            write_picker_receipt(
+                &mut render::out(),
+                launch_batch.identities()[0].kind.as_str(),
+                launched_lane_label(room_channel.as_deref(), &cwd, &workspace.project_root)
+                    .as_deref(),
+            )?;
+        }
         super::placement::execute(
             backend,
             store,
@@ -772,6 +816,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
             channel: room_channel,
             cwd,
             in_place,
+            pick_session,
             peer: peer_prompt.map(|(_, run)| run),
         }))
     }))
@@ -975,12 +1020,19 @@ fn queue_resume_prompt(
     Ok(())
 }
 
+/// What a preflighted cell starts: a launch with its optional prompt, or the provider's session picker.
+#[derive(Clone, Copy)]
+enum CellStart<'a> {
+    Launch(Option<&'a str>),
+    Pick,
+}
+
 fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
     cell: &rimz::harness::spec::AgentCell,
     isolation: rimz::config::Isolation,
-    prompt: Option<&str>,
+    start: CellStart<'_>,
     checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
     unattended: Option<crate::cli::folder_trust::Unattended>,
 ) -> Result<rimz::ids::LoginName> {
@@ -1008,9 +1060,14 @@ fn preflight_cell(
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
     request.isolation_default = cell.isolation_default;
-    request.action = rimz::harness::launch::ExecAction::Launch {
-        prompt: prompt.map(str::to_owned),
-        extra_args: cell.args.clone(),
+    request.action = match start {
+        CellStart::Pick => rimz::harness::launch::ExecAction::Pick {
+            extra_args: cell.args.clone(),
+        },
+        CellStart::Launch(prompt) => rimz::harness::launch::ExecAction::Launch {
+            prompt: prompt.map(str::to_owned),
+            extra_args: cell.args.clone(),
+        },
     };
     let process = rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
@@ -1148,7 +1205,7 @@ fn launch_resume_layout(
                 cell.isolation_default,
                 machine_config.agents.isolation,
             ),
-            None,
+            CellStart::Launch(None),
             &mut checked_folder_trust,
             team_name
                 .as_ref()
@@ -1241,6 +1298,7 @@ fn launch_resume_layout(
             cleanup_worktree: false,
             in_place,
             resume_seeds: Some(&plan.seeds),
+            pick_session: false,
             launch_identities: launch_batch.identities(),
             fallback_channel: channel.as_deref(),
             loop_reminder: None,

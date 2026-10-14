@@ -478,11 +478,55 @@ mod agent_ref {
     }
 
     #[test]
+    fn provider_picker_launches_a_fresh_identity_with_profile_posture() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let output = fixture
+            .command_args(&["worker", "--resume", "--new-tab"])
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            receipt.contains("claude") && receipt.contains("picker") && receipt.contains("main"),
+            "{receipt}"
+        );
+        assert!(!receipt.contains(SESSION), "{receipt}");
+        let trace = fixture.trace();
+        let layout: String = serde_json::from_str(
+            trace
+                .lines()
+                .find_map(|line| line.strip_prefix("layout-json\t"))
+                .unwrap(),
+        )
+        .unwrap();
+        let layout: kdl::KdlDocument = layout.parse().unwrap();
+        let (_, argv) = resumed_pane(&layout).unwrap();
+        let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
+        let request =
+            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+        assert_eq!(
+            serde_json::to_value(&request.action).unwrap()["action"],
+            "pick"
+        );
+        assert!(request.identity.name.is_some());
+        assert!(request.identity.launch_id.is_some());
+        assert_ne!(request.identity.name.as_deref(), Some(NAME));
+        assert_eq!(request.identity.params.profile.as_deref(), Some("worker"));
+        assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
+        assert_eq!(request.identity.params.mode, Some(PermissionMode::Ask));
+    }
+
+    #[test]
     fn provider_resume_refusals_explain_scope_picker_and_search_home() {
         let fixture = Fixture::new(LaunchParams::default(), false, None);
         for (args, hint) in [
             (vec!["claude,codex", "--resume"], "--continue"),
-            (vec!["claude", "--resume"], "--resume=<id>"),
+            (vec!["grok", "--resume"], "--resume=<id>"),
+            (vec!["pi", "--resume=unrecorded-id"], "--resume to choose"),
             (vec!["claude", "--resume=absent-id"], "absent-id"),
         ] {
             let output = fixture.command_args(&args).bounded_output().unwrap();

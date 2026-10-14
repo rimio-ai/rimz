@@ -548,6 +548,7 @@ fn run_loop(
             let signal = None;
             let action = match &request.action {
                 rimz::harness::launch::ExecAction::Launch { .. } => "launch",
+                rimz::harness::launch::ExecAction::Pick { .. } => "pick",
                 rimz::harness::launch::ExecAction::Resume { .. } => "resume",
                 rimz::harness::launch::ExecAction::Fork { .. } => "fork",
             };

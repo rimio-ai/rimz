@@ -148,6 +148,7 @@ fn launch_and_supervise(
     let fresh_launch = matches!(
         envelope.request().action,
         rimz::harness::launch::ExecAction::Launch { .. }
+            | rimz::harness::launch::ExecAction::Pick { .. }
     );
     let relaunch_cap = machine_config.agents.startup_relaunches;
     let relaunch_wait = if fresh_launch {
@@ -1273,6 +1274,7 @@ fn exec_launch_identity(
                 prompt: match &request.action {
                     rimz::harness::launch::ExecAction::Launch { prompt, .. } => prompt.clone(),
                     rimz::harness::launch::ExecAction::Resume { .. }
+                    | rimz::harness::launch::ExecAction::Pick { .. }
                     | rimz::harness::launch::ExecAction::Fork { .. } => None,
                 },
             }))
@@ -1291,6 +1293,7 @@ fn exec_attach_target(
             AgentSessionId::from(session_id.as_str()),
         )),
         rimz::harness::launch::ExecAction::Launch { .. }
+        | rimz::harness::launch::ExecAction::Pick { .. }
         | rimz::harness::launch::ExecAction::Fork { .. } => None,
     }
 }

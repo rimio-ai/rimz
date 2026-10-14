@@ -72,7 +72,7 @@ pub(super) fn resume_provider(
     team: Option<&str>,
     ctx: &crate::cli::ctx::Ctx,
     globals: &GlobalFlags,
-) -> Result<()> {
+) -> Result<bool> {
     let cell = layout.agent_cells().next().filter(|cell| {
         team.is_none()
             && cell.launch.team.is_none()
@@ -87,6 +87,9 @@ pub(super) fn resume_provider(
         .as_deref()
         .filter(|profile| *profile != cell.kind.as_str());
     let Some(session_id) = args.resume.as_ref().and_then(|id| id.as_deref()) else {
+        if adapter.spec().launch.picker.is_some() {
+            return Ok(false);
+        }
         let alternative = if adapter.spec().launch.resume.is_some() {
             "use --resume=<id> for an exact session, or --continue for a cohort"
         } else {
@@ -101,7 +104,7 @@ pub(super) fn resume_provider(
         .find(|agent| agent.agent_id.as_str() == session_id)
     {
         validate_recorded_resume(agent, &cell.kind, profile)?;
-        return resume_selected(ResumeSource::Recorded(agent), args, globals, ctx);
+        return resume_selected(ResumeSource::Recorded(agent), args, globals, ctx).map(|()| true);
     }
     let machine = crate::cli::machine_config();
     let logins = rimz::agents::room_accounts(
@@ -131,12 +134,17 @@ pub(super) fn resume_provider(
             );
         }
         rimz::agents::session::LocalSessionLookup::Unsupported => {
+            let alternative = if adapter.spec().launch.picker.is_some() {
+                "--resume to choose in its session picker"
+            } else {
+                "--continue for a cohort"
+            };
             bail!(
-                "{} cannot look up unrecorded session ids; use `rimz agents resume @<handle>` for a recorded session, or --continue for a cohort",
+                "{} cannot look up unrecorded session ids; use `rimz agents resume @<handle>` for a recorded session, or {alternative}",
                 cell.kind
             );
         }
-    }
+    }.map(|()| true)
 }
 
 pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> Result<()> {

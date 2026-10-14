@@ -30,6 +30,8 @@ Droid's stock TUI (verified through 0.218.2) starts an internal `droid exec --in
 
 ## Launch and resume
 
+Bare RimZ `--resume` uses the native `droid --resume` picker ([upstream](../../externals/agent-adapter/droid-reference.md#sessions)).
+
 Fresh launch uses `droid -- <prompt>`, resume uses `droid --resume <id>`, fork uses `droid --fork <id>`, and `/compress <instructions>` is the smart-compaction command: it compacts in place with trailing instructions. Droid 0.239.1 dropped the former `/compact` alias from its command registry, while `/compress` was already the primary name on 0.218.2. Typed `system-prompt-file` requires provider-neutral replacement semantics, which Droid's append-only CLI cannot express, so it fails at profile validation. A user deliberately choosing Droid's native behavior can put `--append-system-prompt-file <path>` in raw profile `args`. Interactive Droid through 0.218.2 carries no `--model` or `--reasoning-effort` flag: both are `droid exec`-only, and its parser accepts unknown options, so an emitted `--model <id>` would be silently ignored and leak the id into the positional prompt. Model and effort are chosen in-session (`/model`, Tab) or through `droid exec`.
 
 Current interactive Droid accepts launch-scoped `--auto <level>` and `--use-spec`. `droid-auto` selects `--auto medium`, the closest fit for normal local development; `droid-plan` starts with `--use-spec`; and `droid`/`droid-ask` retain the user's configured autonomy and native permission UI. `droid-yolo` remains unavailable because `--skip-permissions-unsafe` belongs to `droid exec`; RimZ does not rewrite persistent autonomy settings.

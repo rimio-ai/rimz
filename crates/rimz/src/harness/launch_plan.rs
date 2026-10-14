@@ -254,7 +254,7 @@ pub fn prepare_exec(
         )?;
         link_warnings = link_account(&request, &login)?;
         let recorded_session = match &request.action {
-            launch::ExecAction::Launch { .. } => None,
+            launch::ExecAction::Launch { .. } | launch::ExecAction::Pick { .. } => None,
             launch::ExecAction::Resume { session_id, .. }
             | launch::ExecAction::Fork { session_id, .. } => {
                 let session = crate::ids::AgentSessionId::from(session_id.as_str());
@@ -323,7 +323,10 @@ fn definition_failure(
     machine: &crate::config::MachineConfig,
     effective: Option<&LaunchAgents>,
 ) -> Option<String> {
-    if !matches!(request.action, launch::ExecAction::Launch { .. }) {
+    if !matches!(
+        request.action,
+        launch::ExecAction::Launch { .. } | launch::ExecAction::Pick { .. }
+    ) {
         return None;
     }
     let profile = request.identity.params.profile.as_deref()?;
@@ -367,8 +370,10 @@ pub(super) fn resolve_model(
     if !is_alias {
         return Ok((warnings, movement, refresh_failure));
     }
-    let replay = if matches!(request.action, launch::ExecAction::Launch { .. })
-        || request.identity.resume_model_override
+    let replay = if matches!(
+        request.action,
+        launch::ExecAction::Launch { .. } | launch::ExecAction::Pick { .. }
+    ) || request.identity.resume_model_override
         || recorded_session.is_some_and(|agent| agent.record.is_some())
         || request
             .identity
