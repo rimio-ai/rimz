@@ -1,4 +1,4 @@
-//! Antigravity CLI 1.2.2 launch, hook, statusline, local-session, and transcript adapter.
+//! Antigravity CLI 1.3.3 launch, hook, statusline, local-session, and transcript adapter.
 //!
 //! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
@@ -287,7 +287,7 @@ const ANTIGRAVITY_COVERAGE: CoverageAnnotations = CoverageAnnotations {
         gap: "releases that omit toolCall send no name, and transcript history is not counted",
     },
     remote_control: ConcernCoverage::Unsupported {
-        reason: "agy remote-control serves a browser daemon, not a pane session RimZ can drive",
+        reason: "agy offers daemon and session remote control, but RimZ wires neither",
     },
 };
 
@@ -319,7 +319,7 @@ const ANTIGRAVITY_USER_COVERAGE: UserCoverage = UserCoverage {
 const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleAnnotations = LifecycleAnnotations {
     registered: HookCoverage::Derived {
         via: "first PreInvocation create-on-miss + validated local conversation discovery",
-        gap: "Antigravity publishes no session-only registration event",
+        gap: "upstream documents SessionStart, but registration stays unwired until a live capture",
     },
     turn_started: HookCoverage::Native {
         event: "PreInvocation",

@@ -221,7 +221,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Codex | `--model <model>` | `-c model_reasoning_effort=<level>` |
 | Pi | `--model <model>` | `--thinking <level>` |
 | OpenCode | refused | refused |
-| Antigravity | `--model <model>` | refused |
+| Antigravity | `--model <model>` | `--effort <level>` |
 | Copilot | `--model <model>` | `--effort <level>` |
 | Droid | refused | refused |
 | Cursor | `--model <model>` | refused |
