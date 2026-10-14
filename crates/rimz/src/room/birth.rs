@@ -232,8 +232,7 @@ impl RoomContext {
             }
         }
         clear_birth_publications(&self.runtime, pre_existed)?;
-        let hibernation =
-            crate::harness::hibernate::admit(&self.machine_config.agents.hibernate, &self.runtime)?;
+        let hibernation = crate::harness::hibernate::admit(&self.machine_config.agents.hibernate)?;
         self.publish_hibernation_admission(&hibernation)?;
 
         #[cfg(unix)]
