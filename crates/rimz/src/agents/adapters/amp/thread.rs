@@ -1,4 +1,8 @@
 //! Tolerant decoder for Amp's private rewritten thread cache.
+//!
+//! Current Amp builds no longer write this cache, so the decoder, and the
+//! spend, transcript, and context reads built on it, stay as a dormant
+//! fallback that finds nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::io;

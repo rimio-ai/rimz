@@ -365,7 +365,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Copilot     | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ◐     |
 | Droid       | Experimental |   ●   |  ◐   |    ◐    |    ✗    |  ●  |     ✗     |
 | Cursor      | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ◐  |     ◐     |
-| Amp         | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ✗     |
+| Amp         | Experimental |   ●   |  ✗   |    ✗    |    ◐    |  ◐  |     ✗     |
 | Kiro        | Experimental |   ◐   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
 | Qwen        | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ●     |
 | Kimi        | Experimental |   ●   |  ◐   |    ◐    |    ●    |  ●  |     ◐     |

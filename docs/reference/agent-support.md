@@ -66,7 +66,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Copilot | ● | ◐ | ◐ | ◐ | ● | ◐ |
 | Droid | ● | ◐ | ◐ | ✗ | ● | ✗ |
 | Cursor | ● | ◐ | ◐ | ◐ | ◐ | ◐ |
-| Amp | ● | ◐ | ◐ | ◐ | ● | ✗ |
+| Amp | ● | ✗ | ✗ | ◐ | ◐ | ✗ |
 | Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
@@ -247,7 +247,7 @@ The `fast` profile and role field asks the provider for its fast mode (priority 
 | Droid | refused: toggle `/fast` inside the session |
 | Every other built-in and process plugin | refused |
 
-A definition that sets `fast: true` on a kind without a switch fails at load with the fix. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created, and RimZ prices Amp fast turns at the standard rate because Amp's thread file carries no fast marker.
+A definition that sets `fast: true` on a kind without a switch fails at load with the fix. Claude merges `fastMode` into the same settings value as RimZ's other settings, since only the last `--settings` takes effect. Codex also turns on its `fast_mode` feature, since a user-level `fast_mode = false` otherwise drops the tier silently; a managed feature pin still wins without an error. Amp fixes fast when a thread is created. Current Amp builds leave RimZ no local token record, so no Amp turn is priced.
 
 ### Launch-prompt replacement
 
@@ -301,7 +301,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
-| Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ | ✗ |
+| Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Kiro | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
