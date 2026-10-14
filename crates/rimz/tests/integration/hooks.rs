@@ -854,11 +854,20 @@ fn kimi_durable_children_surface_and_child_stops_leave_parent_running() {
         2
     );
     let before_child_stop = lifecycle_event_count(&env);
-    run("Stop");
+    for event in ["Stop", "StopFailure", "Interrupt"] {
+        run(event);
+    }
     assert_eq!(
         lifecycle_event_count(&env),
         before_child_stop,
         "child Stop leaves parent running"
+    );
+    assert!(
+        env.agent_contexts()
+            .iter()
+            .filter(|record| record.agent_id == session_id)
+            .all(|record| record.context.turn_error.is_none()),
+        "child failure must not mark the parent context"
     );
     for id in ["agent-0", "agent-1"] {
         append(json!({"type":"subagent.completed","subagentId":id}));
