@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::provider_file;
+use crate::agents::version::{CliVersion, probe_cli_version};
 use crate::agents::{
     AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, ManagedIntegration,
     Result, read_optional_file,
@@ -21,11 +22,11 @@ pub(super) struct KimiManagedIntegration;
 
 impl ManagedIntegration for KimiManagedIntegration {
     fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
-        install(&config_path()?)
+        install(&config_path()?, installed_cli_version())
     }
 
     fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
-        preview(&config_path()?)
+        preview(&config_path()?, installed_cli_version())
     }
 
     fn uninstall(&self, _login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
@@ -38,6 +39,10 @@ impl ManagedIntegration for KimiManagedIntegration {
 
     fn managed_artifacts_present(&self, _login_env: &BTreeMap<String, String>) -> bool {
         config_path().is_ok_and(|path| managed(&path))
+    }
+
+    fn install_blocker(&self) -> Option<String> {
+        version_blocker(installed_cli_version())
     }
 
     fn wiring_input_paths(
@@ -75,6 +80,7 @@ fn read_table(path: &Path) -> Result<toml::Table> {
 
 fn candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
     let mut root = read_table(path)?;
+    validate_hooks(path, &root)?;
     strip_managed(&mut root);
     let hooks = root
         .entry("hooks")
@@ -160,7 +166,8 @@ fn write(path: &Path, table: &toml::Table) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn install(path: &Path) -> Result<HookInstallReport> {
+pub(super) fn install(path: &Path, version: Option<CliVersion>) -> Result<HookInstallReport> {
+    refuse_old_cli(version)?;
     let existed = path.exists();
     let (table, installed_events) = candidate(path)?;
     write(path, &table)?;
@@ -174,7 +181,8 @@ pub(super) fn install(path: &Path) -> Result<HookInstallReport> {
     })
 }
 
-pub(super) fn preview(path: &Path) -> Result<HookInstallPreview> {
+pub(super) fn preview(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPreview> {
+    refuse_old_cli(version)?;
     let existed = path.exists();
     let original_config = read_optional_file("kimi", path)?;
     let (table, planned_events) = candidate(path)?;
@@ -222,6 +230,9 @@ pub(super) fn installed(path: &Path) -> bool {
     let Ok(table) = read_table(path) else {
         return false;
     };
+    if validate_hooks(path, &table).is_err() {
+        return false;
+    }
     let Some(hooks) = table.get("hooks").and_then(toml::Value::as_array) else {
         return false;
     };
@@ -254,4 +265,238 @@ pub(super) fn managed(path: &Path) -> bool {
                 })
             })
     })
+}
+
+fn installed_cli_version() -> Option<CliVersion> {
+    probe_cli_version("kimi")?.parse().ok()
+}
+
+fn version_blocker(version: Option<CliVersion>) -> Option<String> {
+    let found = version?;
+    (found < CliVersion::new(2, 1, 1)).then(|| {
+        format!(
+            "Kimi Code {found} is unsupported; upgrade to 2.1.1 or later with `kimi upgrade -y`"
+        )
+    })
+}
+
+fn refuse_old_cli(version: Option<CliVersion>) -> Result<()> {
+    match version_blocker(version) {
+        Some(reason) => Err(AgentErr::Install {
+            agent: "kimi",
+            reason,
+        }),
+        None => Ok(()),
+    }
+}
+
+fn validate_hooks(path: &Path, root: &toml::Table) -> Result<()> {
+    let Some(value) = root.get("hooks") else {
+        return Ok(());
+    };
+    let invalid = |entry: String, problem: String| AgentErr::Install {
+        agent: "kimi",
+        reason: format!(
+            "{}: {entry}: {problem}; Kimi Code ignores every hook while one entry is invalid; fix or remove that entry",
+            path.display()
+        ),
+    };
+    let hooks = value
+        .as_array()
+        .ok_or_else(|| invalid("hooks".to_owned(), "must be an array of tables".to_owned()))?;
+    for (index, value) in hooks.iter().enumerate() {
+        let mut entry = format!("hooks entry {}", index + 1);
+        let hook = value
+            .as_table()
+            .ok_or_else(|| invalid(entry.clone(), "must be a table".to_owned()))?;
+        if let Some(event) = hook.get("event") {
+            entry.push_str(&format!(" (event {event})"));
+        }
+        if let Some(key) = hook
+            .keys()
+            .find(|key| !matches!(key.as_str(), "event" | "matcher" | "command" | "timeout"))
+        {
+            return Err(invalid(entry, format!("unknown key `{key}`")));
+        }
+        if !matches!(
+            hook.get("event").and_then(toml::Value::as_str),
+            Some(
+                "SessionStart"
+                    | "SessionEnd"
+                    | "SessionHeartbeat"
+                    | "UserPromptSubmit"
+                    | "UserPromptQueued"
+                    | "TurnStarted"
+                    | "PreToolUse"
+                    | "PostToolUse"
+                    | "PostToolUseFailure"
+                    | "PermissionRequest"
+                    | "PermissionResult"
+                    | "Stop"
+                    | "StopFailure"
+                    | "Interrupt"
+                    | "SubagentStart"
+                    | "SubagentStop"
+                    | "TaskStarted"
+                    | "PreCompact"
+                    | "PostCompact"
+                    | "Notification"
+            )
+        ) {
+            return Err(invalid(entry, "missing or unknown event".to_owned()));
+        }
+        if hook.get("matcher").is_some_and(|value| !value.is_str()) {
+            return Err(invalid(entry, "matcher must be a string".to_owned()));
+        }
+        if !hook
+            .get("command")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|command| !command.is_empty())
+        {
+            return Err(invalid(
+                entry,
+                "command must be a nonempty string".to_owned(),
+            ));
+        }
+        // Kimi's TOML parser yields a JS number, so `10.0` passes its `.int()` check.
+        if hook.get("timeout").is_some_and(|value| {
+            !value
+                .as_integer()
+                .map(|timeout| timeout as f64)
+                .or_else(|| value.as_float())
+                .is_some_and(|timeout| timeout.fract() == 0.0 && (1.0..=600.0).contains(&timeout))
+        }) {
+            return Err(invalid(
+                entry,
+                "timeout must be an integer in 1..=600".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_floor_refuses_old_but_allows_current_and_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "default_model = 'keep'\n";
+        std::fs::write(&path, original).unwrap();
+        let old = Some(CliVersion::new(2, 1, 0));
+        for result in [
+            install(&path, old).map(|_| ()),
+            preview(&path, old).map(|_| ()),
+        ] {
+            assert!(
+                result.is_err(),
+                "Kimi 2.1.0 must refuse installation and preview"
+            );
+            let error = result.unwrap_err().to_string();
+            for expected in ["2.1.0", "2.1.1", "kimi upgrade -y"] {
+                assert!(error.contains(expected), "{error}");
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+        assert!(version_blocker(old).unwrap().contains("kimi upgrade -y"));
+        for version in [Some(CliVersion::new(2, 1, 1)), None] {
+            assert!(version_blocker(version).is_none());
+            preview(&path, version).unwrap();
+            install(&path, version).unwrap();
+            assert!(installed(&path));
+        }
+    }
+
+    #[test]
+    fn invalid_hook_entries_refuse_without_rewriting_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for (entry, problem) in [
+            (
+                "event='TaskStarted'\ncommand='foreign'\nextra=true",
+                "unknown key",
+            ),
+            ("event='FutureEvent'\ncommand='foreign'", "event"),
+            (
+                "event='TaskStarted'\ncommand='foreign'\nmatcher=42",
+                "matcher",
+            ),
+            ("event='TaskStarted'", "command"),
+            ("event='TaskStarted'\ncommand=''", "command"),
+            ("event='TaskStarted'\ncommand=42", "command"),
+            (
+                "event='TaskStarted'\ncommand='foreign'\ntimeout=0",
+                "timeout",
+            ),
+            (
+                "event='TaskStarted'\ncommand='foreign'\ntimeout=601",
+                "timeout",
+            ),
+            (
+                "event='TaskStarted'\ncommand='foreign'\ntimeout=1.5",
+                "timeout",
+            ),
+            (
+                "event='TaskStarted'\ncommand='foreign'\ntimeout='10'",
+                "timeout",
+            ),
+        ] {
+            let original = format!("[[hooks]]\n{entry}\n");
+            std::fs::write(&path, &original).unwrap();
+            for result in [
+                install(&path, None).map(|_| ()),
+                preview(&path, None).map(|_| ()),
+            ] {
+                assert!(result.is_err(), "invalid {problem} must refuse: {entry}");
+                let error = result.unwrap_err().to_string();
+                for expected in [
+                    problem,
+                    "entry 1",
+                    path.to_str().unwrap(),
+                    "fix or remove",
+                    "ignores every hook",
+                ] {
+                    assert!(error.contains(expected), "{error}");
+                }
+                assert!(error.contains(if entry.contains("FutureEvent") {
+                    "FutureEvent"
+                } else {
+                    "TaskStarted"
+                }));
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn installed_rejects_invalid_foreign_entries_and_preserves_valid_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        install(&path, None).unwrap();
+        let broken = format!(
+            "{}\n[[hooks]]\nevent='TaskStarted'\ncommand='foreign'\nextra=true\n",
+            std::fs::read_to_string(&path).unwrap()
+        );
+        std::fs::write(&path, broken).unwrap();
+        assert!(
+            !installed(&path),
+            "one invalid foreign entry disables all hooks"
+        );
+        std::fs::write(&path, "[[hooks]]\nevent='TaskStarted'\ncommand='foreign'\ntimeout=600\n[[hooks]]\nevent='SessionHeartbeat'\ncommand='heartbeat'\ntimeout=10.0\n").unwrap();
+        install(&path, None).unwrap();
+        install(&path, None).unwrap();
+        assert!(installed(&path));
+        let table = read_table(&path).unwrap();
+        let hooks = table["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), KIMI_HOOKS.len() + 2);
+        for command in ["foreign", "heartbeat"] {
+            assert!(
+                hooks
+                    .iter()
+                    .any(|hook| hook["command"].as_str() == Some(command))
+            );
+        }
+    }
 }
