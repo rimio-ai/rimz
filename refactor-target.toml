@@ -3061,7 +3061,7 @@ reason = "Registry registration is the only outside-provider interface; the glob
 [[verdict]]
 kind = "item"
 key = "agents::adapters::amp::AmpAdapter"
-reason = "Registry registration is the only outside-provider interface; the plugin wire payloads, thread parsing, transcript paging and spend stay adapter-local (pass 21c)."
+reason = "Registry registration is the only outside-provider interface; the plugin wire payloads and account probe stay adapter-local (pass 21c)."
 
 [[verdict]]
 kind = "item"

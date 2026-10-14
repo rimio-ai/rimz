@@ -4,7 +4,7 @@
 
 Amp exposes no command-hook, statusline, or interactive RPC protocol, so RimZ owns the wire: [`plugin.ts`](../../../crates/rimz/src/agents/adapters/amp/plugin.ts) is installed at `~/.config/amp/plugins/rimz.ts` and forwards observation-only envelopes to `rimz hooks feed --source amp`. Upstream drift in that envelope is a RimZ adapter bug.
 
-Only the registry reaches the concrete adapter. The account probe, payloads, thread parsing, transcript paging, and spend stay private to the Amp adapter; other modules consume the provider-neutral capabilities.
+Only the registry reaches the concrete adapter. The account probe and payloads stay private to the Amp adapter; other modules consume the provider-neutral capabilities.
 
 ## Hooks and lifecycle
 
@@ -50,13 +50,7 @@ Amp's default permission posture runs without approval. RimZ passes no permissio
 
 The plugin carries the current built-in mode, or a custom agent's model and declared reasoning effort, from `thread.agent()`; a built-in definition carries no effort. Amp's public plugin transcript messages carry no token usage, cost, timestamps, or stable local path, so the plugin remains the sole lifecycle and final-answer authority.
 
-Older Amp builds rewrote one private cache object per thread at `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. Current builds no longer write it: the build 0.0.1791964847 bundle contains neither `usageLedger` nor `AMP_DATA_DIR`, `threads/T-` appears in it only inside an ampcode.com URL, and a host running that build has no `threads/` directory. RimZ therefore declares live, history, context usage, realtime cost, and account spend unsupported, and keeps the decoder below as a dormant fallback: with the file absent, live tokens, estimated cost, and history stay empty while lifecycle is unaffected. `AMP_DATA_DIR` names one Amp data root; session binding validates a single `T-…` filename component and checks the exact file instead of walking the fleet. A valid hook observation records that path so supervised runs and later history reads retain the same source.
-
-[`amp/thread.rs`](../../../crates/rimz/src/agents/adapters/amp/thread.rs) is the only cache decoder. It emits visible user and assistant text, accepts string content and text blocks, sanitizes user prompts, and omits info, thinking, tool-use, and tool-result content. Full history includes visible assistant messages still in progress; incremental reply streaming advances by the logical count of completion-certified assistant messages, where current messages need usable `usage` and legacy messages need a usable ledger row that references their normalized numeric/string message ID. A rewritten or replaced file whose count shrinks resets that logical cursor to the start.
-
-Current caches carry token counts, model, and timestamp on assistant `messages[].usage`. Legacy caches carry fresh input, output, model, and timestamp in `usageLedger.events[]`, with cache creation/read recovered by correlating `toMessageId` to assistant message usage. A usable ledger takes precedence; an empty or wholly malformed ledger falls back to current message usage. Records without a model, timestamp, or nonzero token total are skipped, while a total-only record keeps its approximate total in the output slot. Malformed child records do not hide valid siblings; malformed root JSON and missing or mismatched thread identity leave the previous good enrichment in place.
-
-The local context path reparses only on `session_start`, `agent_end`, and the producer's 60-second tick, stat-gated by `(mtime seconds, mtime nanos, length)`. It publishes the latest token composition without a context percentage because the cache has no stable window divisor, and sums the session's priced entries into an estimated cumulative dollar figure. The 300 ms transcript watcher stays disabled for Amp, so a rewritten unbounded object is not repeatedly cold-parsed.
+RimZ reads no Amp token, cost, transcript, or history source on any Amp build. Older builds wrote a private thread cache; git history holds the removed reader. Live tokens, context usage, estimated cost, and history stay empty while lifecycle and plugin-provided final answers are unaffected.
 
 ## Account and balance
 
@@ -64,16 +58,14 @@ The account probe checks whether `AMP_API_KEY` is non-empty or `~/.local/share/a
 
 ## Cost
 
-Amp has no current cost source RimZ reads. `amp usage` and thread usage are human-readable text with no documented machine schema, and the thread cache the spend fold read is gone on current builds (see [Context and transcript](#context-and-transcript)).
-
-The dormant fold still cold-folds any thread file it finds and replaces that file's cached entries only after a valid parse, pricing known models from the shared price book. Its figures would be estimates: model pricing does not reconcile Amp credits, workspace billing, or subscription entitlements, and no included-balance or OAuth usage window is available.
+Amp has no cost source RimZ reads. `amp usage` and thread usage are human-readable text with no documented machine schema. No included-balance or OAuth usage window is available.
 
 ## Known gaps
 
 Run `rimz coverage` for the current wired/partial/unsupported matrix. Every item below is a signal Amp does not yet expose in a stable machine-readable form, or a RimZ abstraction that would need a new seam to carry one that it does. They are ordered roughly by user-visible value.
 
 - **The private thread cache is gone on current builds.** See [Context and transcript](#context-and-transcript). Live, history, and spend read unsupported until a new source lands; the plugin-forwarded transcript and supervised stream JSON `usage` are the paths back.
-- **The supervised stream remains unused.** `amp -x --stream-json` carries per-response `usage` and `max_tokens` ([amp-reference.md → Supervised runs](../../externals/agent-adapter/amp-reference.md#supervised-runs-and-stream-json)), but RimZ continues to take lifecycle and final-answer truth from the plugin. The cache path stamped on the observation supplied terminal run tokens and estimated cost on builds that wrote it; on current builds the cache is absent, so supervised runs carry no tokens or cost.
+- **The supervised stream remains unused.** `amp -x --stream-json` carries per-response `usage` and `max_tokens` ([amp-reference.md → Supervised runs](../../externals/agent-adapter/amp-reference.md#supervised-runs-and-stream-json)), but RimZ continues to take lifecycle and final-answer truth from the plugin. Supervised runs carry no tokens or cost.
 - **The plugin keeps unbounded per-thread state.** `plugin.ts` tracks `gauges`, `states`, `subscribedThreads`, and `registeredThreads` keyed by thread id, and Amp fires no `session.end`, so a long-lived `amp --no-tui` runner accumulates entries for every thread it ever hosts. The maps are tiny, but a future cleanup would need either a thread-closed event Amp does not publish or a periodic prune against `amp.threads`.
 - **Permission coverage reads wired but is conditional** on another Amp policy surface opening `awaiting-approval`. RimZ maps that native state end to end and therefore declares the concern wired, while the coverage abstraction cannot also express that the default Amp posture creates no prompt and that legacy/custom approval dialogs still need live verification.
 - **Permission presets render only provider argv.** Amp needs an installed policy handler for `ask` and prompt-level guidance for `plan`, so representing those postures faithfully would require an adapter-owned prompt transform or conditional managed-plugin policy rather than a fake CLI flag.
