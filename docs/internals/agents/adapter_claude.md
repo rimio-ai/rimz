@@ -118,7 +118,7 @@ The spec's `LaunchSpec` and `LaunchCapability` render every Claude launch:
 | initial prompt | positional, after `--` |
 | resume | `claude --resume <session_id>` |
 | fork | `claude --resume <session_id> --fork-session` |
-| permission modes | ask adds nothing; auto `--permission-mode auto`; yolo `--dangerously-skip-permissions`; plan `--permission-mode plan` |
+| permission modes | ask `--permission-mode default`; auto `--permission-mode auto`; yolo `--dangerously-skip-permissions`; plan `--permission-mode plan` |
 | turn limit | `--max-turns` |
 | model and effort presets | `--model`, `--effort` |
 | `auto-compact` preset | `--autocompact <tokens>`, a session-only window of 100k to 1M tokens ([upstream](../../externals/agent-adapter/claude-reference.md#auto-compaction-window)) |

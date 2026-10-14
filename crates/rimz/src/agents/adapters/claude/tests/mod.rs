@@ -905,12 +905,12 @@ fn claude_commands_and_permission_args_match_run_posture() {
             .permission_args(PermissionMode::Auto),
         vec!["--permission-mode", "auto"]
     );
-    assert!(
+    assert_eq!(
         ClaudeAdapter
             .spec()
             .launch
-            .permission_args(PermissionMode::Ask)
-            .is_empty()
+            .permission_args(PermissionMode::Ask),
+        vec!["--permission-mode", "default"]
     );
     assert_eq!(
         ClaudeAdapter

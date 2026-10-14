@@ -157,7 +157,7 @@ static CLAUDE_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &["--fork-session"],
         }),
         permission: super::LaunchPermissionArgs {
-            ask: &[],
+            ask: &["--permission-mode", "default"],
             auto: &["--permission-mode", "auto"],
             yolo: &["--dangerously-skip-permissions"],
             plan: &["--permission-mode", "plan"],

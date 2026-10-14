@@ -181,7 +181,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 
 | Agent | Ask | Auto | Plan | Yolo |
 | --- | --- | --- | --- | --- |
-| Claude Code | none | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
+| Claude Code | `--permission-mode default` | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
 | Codex | none | `--ask-for-approval never --sandbox workspace-write` | none | `--dangerously-bypass-approvals-and-sandbox` |
 | Pi | none | none | none | none |
 | OpenCode | none | none | none | `--auto` |
