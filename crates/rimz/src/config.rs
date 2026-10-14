@@ -411,6 +411,25 @@ pub struct UnknownConfigKey {
     pub key: String,
 }
 
+impl std::fmt::Display for UnknownConfigKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.key == "lsp.kill-floor-percent" {
+            return write!(
+                formatter,
+                "config key `{}` in {} is retired and has no effect; the watchdog now stops servers at the reserve (`reserve-percent`, `reserve-min`); run `rimz setup` to remove it",
+                self.key,
+                self.path.display()
+            );
+        }
+        write!(
+            formatter,
+            "unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
+            self.key,
+            self.path.display()
+        )
+    }
+}
+
 /// Definition files for the effective configured agent-spec catalog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentSpecSources {

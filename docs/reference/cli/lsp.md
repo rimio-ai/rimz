@@ -205,7 +205,6 @@ No servers are configured by default. Put server entries in `~/.rimz/config.toml
 [lsp] # machine config only
 reserve-percent = 10
 reserve-min = "8G"
-kill-floor-percent = 5
 idle-timeout = "10m"
 
 [lsp.servers.rust]
@@ -222,9 +221,8 @@ The Rust options disable checking that would contend with agent builds, include 
 
 | Machine `[lsp]` field | Default | Meaning |
 | --- | --- | --- |
-| `reserve-percent` | `10` | Percentage of total memory reserved at admission. |
+| `reserve-percent` | `10` | Percentage of total memory reserved at admission and maintained by the watchdog. |
 | `reserve-min` | `"8G"` | Minimum reserve; the larger of this and the percentage wins. |
-| `kill-floor-percent` | `5` | Below this percentage of available memory relative to total, the watchdog stops shared servers. |
 | `idle-timeout` | `"10m"` | Stop a ready server after this long since readiness or the last query, whichever is later, with no query in flight. Units: `s`, `m`, `h`; checked every five seconds. |
 
 | `[lsp.servers.<name>]` field | Default | Meaning |
@@ -245,7 +243,7 @@ Configuration requests walk the requested dotted section from this object; only 
 
 With `editor-check-on-save` enabled, status also shows `check on save` as `on (editor attached)` or `off (no editor attached)`. JSON includes `editor_check_on_save`, the live override state, or `null` when the option is disabled or the entry predates it. Attachment counts from the successful handshake, not from opening a file. Dormant servers apply the current override on their next initialization.
 
-Server names use ASCII letters, digits, `-`, or `_`; percentages range from 0 to 100. Sizes use decimal units (`8G` is 8 GB); `8GiB` is binary. Invalid machine-wide policy (`idle-timeout`, percentages, or `reserve-min`) refuses launch only when a required server's root markers match the checkout; otherwise it warns once and skips all servers. Memory admission accounts for running servers' committed growth and cgroup headroom; dormant entries reserve nothing. Query-time admission can evict older idle servers ([admission rules](../../internals/lsp.md#admission)). Required waits print position and remaining time in the launcher's terminal, not the sidebar. Joining an existing broker, even dormant, skips eager admission; later stops and restarts treat required and optional alike.
+Server names use ASCII letters, digits, `-`, or `_`; `reserve-percent` ranges from 0 to 100. Sizes use decimal units (`8G` is 8 GB); `8GiB` is binary. Invalid machine-wide policy (`idle-timeout`, `reserve-percent`, or `reserve-min`) refuses launch only when a required server's root markers match the checkout; otherwise it warns once and skips all servers. Memory admission requires available memory to cover the server estimate plus the reserve, accounting for cgroup headroom but not running servers' future memory use. Query-time admission can evict older idle servers ([admission rules](../../internals/lsp.md#admission)). Required waits print position and remaining time in the launcher's terminal, not the sidebar. Joining an existing broker, even dormant, skips eager admission; later stops and restarts treat required and optional alike.
 
 Project server names, commands, and initialization options join the [trust hash](../../internals/harness/trust.md). Untrusted project declarations warn and stay inert regardless of policy; same-named machine entries stay in effect. An optional server's configuration error, including a missing executable, warns with the fix and skips that server; a required server's configuration error refuses launch. Each warning prints and appends a diagnostic refusal once per launch. Editor attach still refuses on an optional server's configuration error, with exit 3. `rimz doctor` shows servers and the last refusal or queue timeout.
 

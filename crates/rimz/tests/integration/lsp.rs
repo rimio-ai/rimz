@@ -37,7 +37,6 @@ fn editor_broker_modes(
         config: machine.lsp.servers.remove("rust").unwrap(),
         policy: rimz::config::LspConfig {
             idle_timeout: idle.into(),
-            kill_floor_percent: 0,
             reserve_percent: 0,
             reserve_min: "0".into(),
             ..Default::default()
@@ -82,7 +81,6 @@ fn lsp_status_and_stop_select_one_lazy_server() {
                 "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
             })).unwrap(),
             policy: rimz::config::LspConfig {
-                kill_floor_percent: 0,
                 reserve_percent: 0,
                 reserve_min: "0".into(),
                 ..Default::default()
@@ -173,7 +171,7 @@ fn lsp_server_arms_deliver_settings_capabilities_and_status() {
         let request = rimz::lsp::admission::ServeRequest {
             root: env.project_root.canonicalize().unwrap(), project: env.project_root.clone(), server: "python".into(), settings_hash: "arms-test".into(),
             config: serde_json::from_value(json!({"kind":kind,"command":command,"extensions":["py"],"root-markers":["pyproject.toml"],"init-options":options,"memory-estimate":"1M"})).unwrap(),
-            policy: rimz::config::LspConfig { kill_floor_percent: 0, reserve_percent: 0, reserve_min: "0".into(), ..Default::default() }, eager: false,
+            policy: rimz::config::LspConfig { reserve_percent: 0, reserve_min: "0".into(), ..Default::default() }, eager: false,
         };
         let (mut broker, directory) = spawn_test_broker(&env, &request);
         let _editor = Editor::attach(&directory, "arms-test");
@@ -248,7 +246,7 @@ fn lsp_editor_check_on_save_tracks_first_attach_last_detach_and_restart() {
         server: "rust".into(),
         settings_hash: "editor-checks".into(),
         config: serde_json::from_value(json!({"kind":"rust-analyzer","command":[stub,"--reload-configuration"],"extensions":["rs"],"root-markers":["Cargo.toml"],"init-options":{"checkOnSave":false,"cargo":{"targetDir":true}},"editor-check-on-save":true,"memory-estimate":"1M"})).unwrap(),
-        policy: rimz::config::LspConfig { kill_floor_percent: 0, reserve_percent: 0, reserve_min: "0".into(), ..Default::default() },
+        policy: rimz::config::LspConfig { reserve_percent: 0, reserve_min: "0".into(), ..Default::default() },
         eager: false,
     };
     let (mut broker, directory) = spawn_test_broker(&env, &request);
@@ -1410,7 +1408,7 @@ fn lsp_attach_bridge_resolves_admits_and_versions() {
     );
     let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
     std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
-    std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\nkill-floor-percent = 0\n[lsp.servers.rust]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&stub).unwrap())).unwrap();
+    std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\n[lsp.servers.rust]\ncommand = [{}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&stub).unwrap())).unwrap();
     let first = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap().to_string()}});
     let mut child = env
         .rimz()
@@ -1584,7 +1582,7 @@ fn lsp_broker_started_from_an_agent_gives_its_server_the_user_tmpdir() {
             shlex::try_quote(stub.to_str().unwrap()).unwrap()
         );
         std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
-        std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\nkill-floor-percent = 0\n[lsp.servers.rust]\ncommand = ['sh', '-c', {}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&wrapper).unwrap())).unwrap();
+        std::fs::write(env.rimz_home().join("config.toml"), format!("[lsp]\nreserve-percent = 0\nreserve-min = '0'\n[lsp.servers.rust]\ncommand = ['sh', '-c', {}]\nextensions = ['rs']\nroot-markers = ['Cargo.toml']\nmemory-estimate = '1M'\n", serde_json::to_string(&wrapper).unwrap())).unwrap();
         let mut child = env
             .rimz()
             .args(["lsp", "attach", "--server", "rust"])
@@ -2247,7 +2245,6 @@ fn start_stub_broker(
         settings_hash: rimz::lsp::history::settings_hash(&config),
         config,
         policy: rimz::config::LspConfig {
-            kill_floor_percent: 0,
             reserve_percent: 0,
             reserve_min: "0".into(),
             ..Default::default()
@@ -2298,7 +2295,6 @@ fn lsp_crash_preserves_exit_and_stderr_in_status_and_diagnostics() {
         }))
         .unwrap(),
         policy: rimz::config::LspConfig {
-            kill_floor_percent: 0,
             reserve_percent: 0,
             reserve_min: "0".into(),
             ..Default::default()

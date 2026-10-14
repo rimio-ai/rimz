@@ -5,9 +5,9 @@ use crate::lsp::Result;
 use registry::StopReason;
 use std::time::Duration;
 
-pub(super) fn check(percent: u8) -> Result<()> {
+pub(super) fn check(policy: &crate::config::LspConfig) -> Result<()> {
     let sample = memory::sample()?;
-    let floor = crate::lsp::admission::reserve_bytes(sample.total_bytes, percent, 0);
+    let floor = crate::lsp::admission::reserve_bytes(policy, sample.total_bytes)?;
     if sample.available_bytes >= floor {
         return Ok(());
     }
@@ -38,6 +38,7 @@ pub(super) fn check(percent: u8) -> Result<()> {
             free_before,
             memory::sample()?.available_bytes,
             victim_rss_kb,
+            floor,
         ));
     }
     Ok(())
@@ -90,13 +91,14 @@ fn kill_record(
     free_before: u64,
     free_after: u64,
     victim_rss_kb: u64,
+    reserve_bytes: u64,
 ) -> crate::diag::lsp::Record {
     crate::diag::lsp::Record {
         at: jiff::Timestamp::now(),
         root: entry.root.clone(),
         server: entry.server.clone(),
         event: "killed".into(),
-        details: serde_json::json!({"reason": StopReason::MemoryPressure, "peak_rss_kb": entry.peak_rss_kb, "free_before_bytes": free_before, "free_after_bytes": free_after, "victim_rss_kb": victim_rss_kb}),
+        details: serde_json::json!({"reason": StopReason::MemoryPressure, "peak_rss_kb": entry.peak_rss_kb, "free_before_bytes": free_before, "free_after_bytes": free_after, "victim_rss_kb": victim_rss_kb, "reserve_bytes": reserve_bytes}),
     }
 }
 
@@ -107,11 +109,11 @@ mod tests {
     #[test]
     fn killed_record_carries_pressure_samples_and_victim_rss() {
         let entry = serde_json::from_value(serde_json::json!({"root": "/checkout", "server": "rust", "nonce": "n", "broker_pid": 1, "broker_start_token": "t", "server_pid": null, "server_start_token": null, "state": "ready", "started_at_ms": 0, "ready_at_ms": null, "estimate_bytes": 0, "settings_hash": "s", "request_count": 0, "last_request_at_ms": null, "peak_rss_kb": 500, "leases": []})).unwrap();
-        let record = kill_record(&entry, 100, 200, 400);
+        let record = kill_record(&entry, 100, 200, 400, 150);
         assert_eq!(record.event, "killed");
         assert_eq!(
             record.details,
-            serde_json::json!({"reason": "memory pressure", "peak_rss_kb": 500, "free_before_bytes": 100, "free_after_bytes": 200, "victim_rss_kb": 400})
+            serde_json::json!({"reason": "memory pressure", "peak_rss_kb": 500, "free_before_bytes": 100, "free_after_bytes": 200, "victim_rss_kb": 400, "reserve_bytes": 150})
         );
     }
 }

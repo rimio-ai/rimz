@@ -564,7 +564,6 @@ mod tests {
                 server: "rust".into(),
                 estimate_bytes: 100,
                 available_bytes: 0,
-                committed_bytes: 0,
                 reserve_bytes: 0,
                 holders: vec![],
             });

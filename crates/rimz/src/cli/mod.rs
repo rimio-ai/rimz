@@ -1329,12 +1329,7 @@ pub(crate) fn report_unknown_config_keys(config: &rimz::config::MachineConfig) -
         )?;
     }
     for notice in &config.notices.unknown_keys {
-        writeln!(
-            stderr,
-            "rimz: unknown config key `{}` in {} — ignored; run `rimz setup` to remove it",
-            notice.key,
-            notice.path.display(),
-        )?;
+        writeln!(stderr, "rimz: {notice}")?;
     }
     for warning in config
         .notices
