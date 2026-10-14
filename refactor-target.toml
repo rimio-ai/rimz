@@ -386,7 +386,8 @@ path = "crates/rimz/src/diag"
 # Store repair and the drainer share typed hook repair/drop evidence and its sink (+3).
 # SidebarHostUnavailableCause is the public payload vocabulary of the new diagnostic (+1).
 # Hibernation timeout repair exposes its diagnostic module and append sink (+2).
-surface-budget = 95
+# WakeEvent, RefaultSample and record share wake telemetry with the harness (+6).
+surface-budget = 101
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -592,8 +593,9 @@ path = "crates/rimz/src/harness"
 # TaskHistory, HeardSummary, and task_history share the fire/heard view with the CLI (+3).
 # Signal selector matching, shared signal subjects, and fan-out receipts serve events CLI (+3).
 # Cached Admission/read and the doctor skipped reason share the start verdict (+5).
+# RefaultHelperRequest, its runner, wake_request and the focus timestamp cross the CLI seam (+4).
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
-surface-budget = 840 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+surface-budget = 844 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
 
 [[verdict]]
 kind = "item"
@@ -1538,6 +1540,36 @@ reason = "CLI explain and library launch preparation must use the cached verdict
 kind = "item"
 key = "harness::hibernate::admit"
 reason = "Start validates policy for notices; shared room birth uses the same capability verdict without refusing missing capabilities."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::wake::RefaultHelperRequest"
+reason = "The detached sampler carries the thaw identity and baseline through the hidden CLI."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::wake::wake_request"
+reason = "The focus helper preserves its trigger and handling timestamp while synchronous callers keep wake_pane."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::wake::sample_wake_refault"
+reason = "The hidden sampler delegates timing, scope reads and diagnostic emission to the wake domain."
+
+[[verdict]]
+kind = "item"
+key = "diag::hibernate::WakeEvent"
+reason = "Wake and refault evidence use distinct diagnostic tags without changing lock-timeout records."
+
+[[verdict]]
+kind = "item"
+key = "diag::hibernate::RefaultSample"
+reason = "The sampler supplies measured counter deltas to the diagnostic sink."
+
+[[verdict]]
+kind = "item"
+key = "diag::hibernate::record"
+reason = "Wake paths append diagnostic evidence through the owning best-effort sink."
 
 [[verdict]]
 kind = "shape"

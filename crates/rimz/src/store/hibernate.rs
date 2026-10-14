@@ -31,6 +31,8 @@ pub struct Entry {
     pub step: u32,
     #[serde(default = "epoch")]
     pub last_reclaimed_at: Timestamp,
+    #[serde(default)]
+    pub wake_error: Option<String>,
 }
 
 fn epoch() -> Timestamp {
@@ -117,6 +119,7 @@ mod tests {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 200,
         }
     }
@@ -164,7 +167,7 @@ mod tests {
             StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
         record(&paths, entry("old")).unwrap();
         let mut old = serde_json::to_value(entry("old")).unwrap();
-        for key in ["anon_at_freeze", "step", "last_reclaimed_at"] {
+        for key in ["anon_at_freeze", "step", "last_reclaimed_at", "wake_error"] {
             old.as_object_mut().unwrap().remove(key);
         }
         std::fs::write(

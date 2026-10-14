@@ -674,6 +674,9 @@ enum AgentsSubcmd {
     /// Hidden helper that thaws a hibernating pane.
     #[command(hide = true)]
     Wake(HelperRequestArgs<rimz::harness::hibernate::WakeHelperRequest>),
+    /// Hidden helper that samples refault counters after a thaw.
+    #[command(hide = true)]
+    WakeRefault(HelperRequestArgs<rimz::harness::hibernate::RefaultHelperRequest>),
     /// Hidden helper that refreshes a sleeping agent's prompt cache.
     #[command(hide = true)]
     CacheKeepalive(HelperRequestArgs<rimz::harness::cache_keepalive::CacheKeepaliveRequest>),
@@ -811,6 +814,10 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::IdleStop(args)) => return run_idle_stop(args.request, globals),
         Some(AgentsSubcmd::Hibernate(args)) => return hibernate::run(args.request),
         Some(AgentsSubcmd::Wake(args)) => return hibernate::wake(args.request),
+        Some(AgentsSubcmd::WakeRefault(args)) => {
+            rimz::harness::hibernate::sample_wake_refault(args.request);
+            return Ok(());
+        }
         Some(AgentsSubcmd::CacheKeepalive(args)) => return cache_keepalive::run(args.request),
         Some(AgentsSubcmd::AutoRedeem(args)) => return run_auto_redeem(args.request),
         Some(AgentsSubcmd::BudgetPark(args)) => return run_budget_park(args.request),

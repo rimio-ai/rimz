@@ -324,6 +324,7 @@ mod tests {
                     anon_at_freeze: 0,
                     step: 0,
                     last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+                    wake_error: None,
                     reclaimed_bytes: 200,
                 },
             )

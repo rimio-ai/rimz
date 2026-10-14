@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use rimz::harness::hibernate::{self, HibernateHelperRequest};
 
 pub(super) fn wake(request: hibernate::WakeHelperRequest) -> Result<()> {
-    let ctx = super::Ctx::for_workspace(request.workspace_id, Some(request.pane_id.mux()))?;
-    hibernate::wake_pane(&ctx.store, &request.pane_id).context("waking hibernating agent")?;
+    let ctx = super::Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
+    hibernate::wake_request(&ctx.store, &request).context("waking hibernating agent")?;
     Ok(())
 }
 

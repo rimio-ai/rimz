@@ -14,6 +14,7 @@ fn frozen_fleet_keeps_its_real_status_bucket() {
         frozen_at: fixed_now(),
         step: 0,
         reclaimed_bytes: 300,
+        wake_error: None,
     });
     let screen = snapshot_to_screen(&snapshot_with(vec![sleeper]), 50, 20);
     assert!(screen.lines().nth(5).unwrap().contains("✓ 1"), "{screen}");

@@ -2250,8 +2250,9 @@ fn spawn_pane_focus(
     repair: Option<FocusRepairDispatch>,
 ) {
     let session_name = session_name.to_owned();
+    let requested_at_ms = crate::utils::time::unix_now_ms();
     std::thread::spawn(move || {
-        crate::harness::hibernate::spawn_wake(&runtime, &pane_id);
+        crate::harness::hibernate::spawn_wake(&runtime, &pane_id, requested_at_ms);
         let backend = crate::mux::backend_for(pane_id.mux());
         let repair_generation = repair.as_ref().map(|repair| repair.generation);
         let FocusRequestOutcome {

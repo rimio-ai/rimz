@@ -57,6 +57,7 @@ fn hibernating_agent_is_due_for_idle_stop() {
         frozen_at: ts(1_100),
         step: 0,
         reclaimed_bytes: 100,
+        wake_error: None,
     });
     assert_eq!(
         verdict(&store, &agent, &stop, DUE),

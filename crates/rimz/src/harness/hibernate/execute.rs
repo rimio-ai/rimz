@@ -65,6 +65,7 @@ pub fn run_request(
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 0,
         };
         freeze_and_record_with(
@@ -374,6 +375,7 @@ mod tests {
             anon_at_freeze: 0,
             step: 0,
             last_reclaimed_at: jiff::Timestamp::UNIX_EPOCH,
+            wake_error: None,
             reclaimed_bytes: 0,
         };
         (dir, paths, runtime, scope, entry, request)
