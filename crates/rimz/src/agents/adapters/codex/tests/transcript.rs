@@ -310,6 +310,41 @@ fn turn_error_detector_maps_known_error_shapes() {
     };
     for (class, camel, snake) in [
         (
+            crate::agents::TurnErrorClass::PausedOverloaded,
+            "flexUnavailable",
+            "flex_unavailable",
+        ),
+        (
+            crate::agents::TurnErrorClass::PausedRateLimit,
+            "rateLimitExceeded",
+            "rate_limit_exceeded",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "bioPolicy",
+            "bio_policy",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "invalidPrompt",
+            "invalid_prompt",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "tooManyDenials",
+            "too_many_denials",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "misalignmentPolicyViolation",
+            "misalignment_policy_violation",
+        ),
+        (
+            crate::agents::TurnErrorClass::Failed,
+            "sessionBudgetExceeded",
+            "session_budget_exceeded",
+        ),
+        (
             crate::agents::TurnErrorClass::PausedRateLimit,
             "usageLimitExceeded",
             "usage_limit_exceeded",

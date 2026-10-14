@@ -254,9 +254,9 @@ Codex writes most provider errors to the rollout. An error record is a `turn_err
 
 | Codex error kind | Class |
 | --- | --- |
-| `usage_limit_exceeded` | `PausedRateLimit` |
-| `server_overloaded`, `internal_server_error` | `PausedOverloaded` |
-| `context_window_exceeded`, `unauthorized`, `bad_request`, `sandbox_error`, `cyber_policy`, `thread_rollback_failed` | `Failed` |
+| `usage_limit_exceeded`, `rate_limit_exceeded` | `PausedRateLimit` |
+| `server_overloaded`, `internal_server_error`, `flex_unavailable` | `PausedOverloaded` |
+| `context_window_exceeded`, `unauthorized`, `bad_request`, `sandbox_error`, `cyber_policy`, `thread_rollback_failed`, `bio_policy`, `invalid_prompt`, `too_many_denials`, `misalignment_policy_violation`, `session_budget_exceeded` | `Failed` |
 | `other`, unknown, or absent | the label, through [`TurnErrorClass::classify_label`](../../../crates/rimz/src/agents/context.rs) |
 
 `classify_label` maps spend-limit text to `PausedSpendLimit`, rate-limit and quota text or HTTP 429 to `PausedRateLimit`, overload, server-error, timeout, and connection text or HTTP 5xx to `PausedOverloaded`, and everything else to `Failed`. On `Stop` the same record marks the turn errored; the projection shows the row paused or failed by class.
