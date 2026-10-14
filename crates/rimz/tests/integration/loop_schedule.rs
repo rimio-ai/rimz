@@ -4659,8 +4659,11 @@ fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
     assert_eq!(signal.name.as_str(), "deploy.finished");
     assert_eq!(&signal.payload, payload.as_object().unwrap());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("fired 0 tasks"), "{stdout}");
-    assert!(!stdout.contains("missing-runner"), "{stdout}");
+    assert!(stdout.contains("fired no task"), "{stdout}");
+    assert!(
+        stdout.contains("  missing-runner: did not start"),
+        "{stdout}"
+    );
 }
 
 #[cfg(unix)]

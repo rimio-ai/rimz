@@ -6,6 +6,7 @@
 
 mod agent_check;
 mod prompt;
+pub use prompt::signal_subject;
 mod reminder;
 
 use std::cell::OnceCell;

@@ -2,7 +2,7 @@
 
 `rimz loop` runs work on a clock, on a signal, or while state conditions hold. A task is a name, one trigger, and one action: start a fresh supervised agent (`--agent`), deliver a prompt to a live agent session (`--wait`), or run a shell command (`--check`). A shell check and model judges can guard an agent action, in that order. The [loops guide](../../guide/loops.md) teaches when to use each; an alarm an agent sets for itself, after a delay or a watched command, is [`rimz wait`](./wait.md).
 
-A clock task fires while a room for its project is open, from that room's sidebar, or from the optional machine-wide [timer](#timer) when no room is open. A signal task fires from whichever process emits the signal, so it needs no room.
+A clock task fires while a room for its project is open, from that room's sidebar, or from the optional machine-wide [timer](#timer) when no room is open. A signal task fires from whichever process emits the signal, without the timer or sidebar. [`rimz events emit`](./events.md#emit-a-signal) still requires an existing room.
 
 ```sh
 rimz loop add morning --agent claude --prompt "summarize what landed on main overnight" --every weekday --at 07:00

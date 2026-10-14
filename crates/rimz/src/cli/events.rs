@@ -1,4 +1,4 @@
-//! `rimz events` — streaming lifecycle transitions from durable history.
+//! `rimz events` — recent signals and streaming transitions from durable history.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use rimz::harness::schedule::signal::SignalSelector;
+use rimz::store::follow::{FollowEvent, SignalEvent};
 use serde_json::{Map, Value};
 
 use super::{GlobalFlags, render};
@@ -22,7 +24,22 @@ pub struct EventsArgs {
 
 #[derive(Debug, Subcommand)]
 enum EventsSubcmd {
-    /// Follow agent lifecycle transitions as JSON Lines.
+    /// List recent signals from the active event log, newest first.
+    List {
+        /// Keep an exact signal name or a family such as ci.*.
+        #[arg(long)]
+        signal: Option<SignalSelector>,
+        /// Keep signals within this duration, such as 2h.
+        #[arg(long, value_parser = rimz::harness::schedule::runner::parse_task_timeout)]
+        since: Option<Duration>,
+        /// Maximum signals after filtering.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+        /// Print signal JSON Lines, as in events follow.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Follow agent lifecycle transitions and signals as JSON Lines.
     Follow {
         /// Replay the current active log generation before following new events.
         #[arg(long)]
@@ -30,6 +47,9 @@ enum EventsSubcmd {
         /// Emit JSON Lines (implied for this streaming command).
         #[arg(long)]
         json: bool,
+        /// Print only signals matching an exact name or a family such as ci.*.
+        #[arg(long)]
+        signal: Option<SignalSelector>,
     },
     /// Emit a durable signal and fire matching loop tasks.
     Emit {
@@ -46,15 +66,98 @@ enum EventsSubcmd {
 
 pub fn run(args: EventsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        EventsSubcmd::Follow { replay, json } => {
+        EventsSubcmd::List {
+            signal,
+            since,
+            limit,
+            json,
+        } => list(signal.as_ref(), since, limit, json, globals),
+        EventsSubcmd::Follow {
+            replay,
+            json,
+            signal,
+        } => {
             let _ = json;
-            follow(replay, globals)
+            follow(replay, signal.as_ref(), globals)
         }
         EventsSubcmd::Emit { name, json, source } => emit(&name, json.as_deref(), &source, globals),
     }
 }
 
-fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
+fn list(
+    selector: Option<&SignalSelector>,
+    since: Option<Duration>,
+    limit: usize,
+    json: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let now = jiff::Timestamp::now();
+    let since = since
+        .map(|duration| now.checked_sub(duration))
+        .transpose()
+        .context("--since extends beyond the supported timestamp range")?;
+    let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let store = super::require_existing_store(&workspace)?;
+    let events = store.read_events().context("reading active event log")?;
+    let signals: Vec<_> = events
+        .iter()
+        .rev()
+        .filter(|event| since.is_none_or(|since| event.timestamp >= since))
+        .filter_map(SignalEvent::from_envelope)
+        .filter(|event| selector.is_none_or(|selector| selector.matches(&event.name)))
+        .take(limit)
+        .collect();
+    let mut out = render::out();
+    if json {
+        for signal in signals {
+            if !write_json_line(&mut out, &FollowEvent::Signal(signal))? {
+                break;
+            }
+        }
+        return Ok(());
+    }
+    if signals.is_empty() {
+        match events.first() {
+            Some(first) => writeln!(
+                out,
+                "no signal matched; active log reaches back {}",
+                render::age_short(first.timestamp, now)
+            )?,
+            None => writeln!(out, "no signal matched; active log is empty")?,
+        }
+        return Ok(());
+    }
+    let mut table = render::Table::new(["WHEN", "SIGNAL", "SOURCE", "SUBJECT"]);
+    for signal in signals {
+        use rimz::store::event::SignalSource;
+        let source = match signal.source {
+            SignalSource::Cli => "cli",
+            SignalSource::Watch => "watch",
+            SignalSource::Lifecycle => "lifecycle",
+            SignalSource::Forge => "forge",
+            SignalSource::Git => "git",
+            SignalSource::Worktree => "worktree",
+            SignalSource::Team => "team",
+        };
+        let subject =
+            rimz::harness::schedule::runner::signal_subject(&signal.name, &signal.payload);
+        table.row([
+            render::cell(render::age_short(signal.at, now)),
+            render::cell(signal.name.to_string()),
+            render::cell(source),
+            render::cell(if subject.is_empty() {
+                "-".to_owned()
+            } else {
+                subject
+            }),
+        ]);
+    }
+    table.render(&mut out)?;
+    Ok(())
+}
+
+fn follow(replay: bool, selector: Option<&SignalSelector>, globals: &GlobalFlags) -> Result<()> {
     let workspace = rimz::WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     super::require_existing_store(&workspace)?;
@@ -72,6 +175,11 @@ fn follow(replay: bool, globals: &GlobalFlags) -> Result<()> {
             let _ = writeln!(render::err(), "rimz: warning: {warning}");
         }
         for event in batch.events {
+            if let Some(selector) = selector
+                && !matches!(&event, FollowEvent::Signal(signal) if selector.matches(&signal.name))
+            {
+                continue;
+            }
             if !write_json_line(&mut stdout, &event)? {
                 return Ok(());
             }
@@ -125,13 +233,18 @@ fn emit(name: &str, raw_payload: Option<&str>, source: &str, globals: &GlobalFla
     )
     .context("firing signal tasks")?;
     let mut out = render::out();
-    writeln!(
-        out,
-        "emitted {name} ({event_id}) · fired {} tasks",
-        fired.len()
-    )?;
-    for task in fired {
+    let receipt = match fired.started.len() {
+        0 if fired.not_started.is_empty() => "no task is subscribed to it".to_owned(),
+        0 => "fired no task".to_owned(),
+        1 => "fired 1 task".to_owned(),
+        count => format!("fired {count} tasks"),
+    };
+    writeln!(out, "emitted {name} ({event_id}) · {receipt}")?;
+    for task in fired.started {
         writeln!(out, "  {task}")?;
+    }
+    for task in fired.not_started {
+        writeln!(out, "  {task}: did not start")?;
     }
     Ok(())
 }

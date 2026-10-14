@@ -472,9 +472,10 @@ impl Trigger {
                 {
                     return Ignore;
                 }
-                match selector {
-                    signal::SignalSelector::Exact(name) if name != &signal.name => Skip,
-                    _ => Deliver,
+                if selector.matches(&signal.name) {
+                    Deliver
+                } else {
+                    Skip
                 }
             }
             Self::Watch { .. } if signal.name.as_str() == format!("wait.{task_name}") => Deliver,

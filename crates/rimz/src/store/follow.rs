@@ -264,16 +264,8 @@ impl EventFollower {
     fn fold(&mut self, envelopes: Vec<crate::store::event::EventEnvelope>) -> Vec<FollowEvent> {
         let mut events = Vec::new();
         for envelope in envelopes {
-            if let EventKind::Signal(payload) = envelope.kind() {
-                events.push(FollowEvent::Signal(SignalEvent {
-                    v: 1,
-                    event_id: envelope.event_id.clone(),
-                    at: envelope.timestamp,
-                    workspace_id: envelope.workspace_id.clone(),
-                    name: payload.name,
-                    payload: payload.payload,
-                    source: payload.source,
-                }));
+            if let Some(signal) = SignalEvent::from_envelope(&envelope) {
+                events.push(FollowEvent::Signal(signal));
                 continue;
             }
             let EventKind::AgentLifecycle(payload) = envelope.kind() else {
@@ -367,6 +359,23 @@ pub struct SignalEvent {
     pub name: SignalName,
     pub payload: Map<String, Value>,
     pub source: SignalSource,
+}
+
+impl SignalEvent {
+    pub fn from_envelope(envelope: &crate::store::event::EventEnvelope) -> Option<Self> {
+        let EventKind::Signal(payload) = envelope.kind() else {
+            return None;
+        };
+        Some(Self {
+            v: 1,
+            event_id: envelope.event_id.clone(),
+            at: envelope.timestamp,
+            workspace_id: envelope.workspace_id.clone(),
+            name: payload.name,
+            payload: payload.payload,
+            source: payload.source,
+        })
+    }
 }
 
 fn file_len(path: &std::path::Path) -> Result<u64, EventFollowErr> {

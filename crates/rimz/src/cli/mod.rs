@@ -781,7 +781,7 @@ enum Subcmd {
     Trust(trust::TrustArgs),
     /// Inspect agent or channel conversation transcripts.
     Transcript(transcript::TranscriptArgs),
-    /// Follow durable events or emit a signal.
+    /// List signals, follow durable events, or emit a signal.
     Events(events::EventsArgs),
     /// Environment and backend report.
     Doctor(doctor::DoctorArgs),
