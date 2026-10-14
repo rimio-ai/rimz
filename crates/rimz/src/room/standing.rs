@@ -196,10 +196,21 @@ impl AccountStanding {
 /// [`other_live_agents_on`] answers with nothing launching.
 pub fn live_agents_by_login() -> Result<BTreeMap<LoginKey, usize>, super::LiveRoomErr> {
     let mut counts = BTreeMap::new();
-    for agents in live_room_agents()? {
+    for agents in live_room_agents(None)? {
         count_live_logins(&mut counts, &agents);
     }
     Ok(counts)
+}
+
+/// Running agents on an account in rooms that follow its machine default.
+pub fn live_agents_on_machine_default(
+    account: &LoginKey,
+    machine: &MachineConfig,
+) -> Result<usize, super::LiveRoomErr> {
+    Ok(live_room_agents(Some((&account.kind, machine)))?
+        .iter()
+        .map(|agents| count_others_on(agents, account, &[]))
+        .sum())
 }
 
 /// Agents on `account` whose provider can be writing, across every live room,
@@ -218,31 +229,41 @@ pub fn other_live_agents_on(
     account: &LoginKey,
     launching: &[crate::ids::AgentSessionId],
 ) -> Result<usize, super::LiveRoomErr> {
-    Ok(live_room_agents()?
+    Ok(live_room_agents(None)?
         .iter()
         .map(|agents| count_others_on(agents, account, launching))
         .sum())
 }
 
-fn live_room_agents() -> Result<Vec<Vec<crate::agents::AgentState>>, super::LiveRoomErr> {
-    super::session::room_inventory()?
-        .live
-        .into_iter()
-        .map(|room| {
-            // A live room whose agents cannot be read could hold any account, so
-            // every count is unknown rather than short by that room.
-            StatePaths::for_workspace(room.workspace_id.clone())
-                .ok()
-                .zip(RuntimePaths::for_workspace(room.workspace_id.clone()).ok())
-                .and_then(|(paths, runtime)| Store::open_existing(paths, runtime))
-                .and_then(|store| store.snapshot_cached().ok())
-                .map(|snapshot| std::sync::Arc::unwrap_or_clone(snapshot.agents))
-                .ok_or(super::LiveRoomErr::RoomAgents {
-                    session_name: room.session_name,
-                    project_root: room.project_root,
-                })
-        })
-        .collect()
+fn live_room_agents(
+    machine_default: Option<(&AgentKind, &MachineConfig)>,
+) -> Result<Vec<Vec<crate::agents::AgentState>>, super::LiveRoomErr> {
+    let mut rooms = Vec::new();
+    for room in super::session::room_inventory()?.live {
+        let unreadable = || super::LiveRoomErr::RoomAgents {
+            session_name: room.session_name.clone(),
+            project_root: room.project_root.clone(),
+        };
+        let paths =
+            StatePaths::for_workspace(room.workspace_id.clone()).map_err(|_| unreadable())?;
+        if let Some((kind, machine)) = machine_default {
+            let accounts = crate::agents::room_accounts(&paths.workspace_record, None, machine)
+                .map_err(|_| unreadable())?;
+            if !matches!(
+                accounts.source(kind).map_err(|_| unreadable())?,
+                crate::agents::LoginSource::Machine | crate::agents::LoginSource::Provider
+            ) {
+                continue;
+            }
+        }
+        // An unreadable live room could hold any account: do not undercount it.
+        let runtime = RuntimePaths::for_workspace(room.workspace_id).map_err(|_| unreadable())?;
+        let snapshot = Store::open_existing(paths, runtime)
+            .and_then(|store| store.snapshot_cached().ok())
+            .ok_or_else(unreadable)?;
+        rooms.push(std::sync::Arc::unwrap_or_clone(snapshot.agents));
+    }
+    Ok(rooms)
 }
 
 fn count_live_logins(counts: &mut BTreeMap<LoginKey, usize>, agents: &[crate::agents::AgentState]) {

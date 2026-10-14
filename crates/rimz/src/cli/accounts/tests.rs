@@ -8,6 +8,75 @@ struct AccountsHarness {
 }
 
 #[test]
+fn bare_accounts_lists_and_help_orders_the_workflow() {
+    assert!(AccountsHarness::try_parse_from(["accounts"]).is_ok());
+    use clap::CommandFactory;
+    let help = AccountsHarness::command().render_help().to_string();
+    let positions = ["list", "use", "add", "redeem", "remove"]
+        .map(|verb| help.find(&format!("  {verb} ")).unwrap());
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{help}");
+}
+
+#[test]
+fn healthy_setup_requires_a_confident_login_to_say_ready() {
+    for (reading, login, status) in [
+        (None, serde_json::Value::Null, "login_unknown"),
+        (
+            Some(ProviderStatus::Unavailable),
+            serde_json::json!("unavailable"),
+            "login_unknown",
+        ),
+        (
+            Some(ProviderStatus::LoggedOut),
+            serde_json::json!("logged_out"),
+            "logged_out",
+        ),
+        (
+            Some(ProviderStatus::LoggedIn),
+            serde_json::json!("logged_in"),
+            "ready",
+        ),
+    ] {
+        let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
+        row.status = AccountStatus::Ready;
+        row.problem = None;
+        let reading = reading.map(|status| LoginReading {
+            status,
+            ..logged_in(Vec::new())
+        });
+        row.read(reading.as_ref(), String::new);
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["login"], login);
+        assert_eq!(json["status"], status);
+        assert_eq!(json["account"], "claude@alpha");
+        assert!(json.get("name").is_none());
+        if status == "login_unknown" {
+            assert!(text(&[row], &[], None).contains("login unknown"));
+        }
+    }
+}
+
+#[test]
+fn pace_legend_appears_only_with_a_visible_multiplier() {
+    for (windows, expected) in [
+        (Vec::new(), false),
+        (vec![window(FIVE_HOURS, Some(10), Some(7200))], true),
+        (vec![window(FIVE_HOURS, Some(100), Some(7200))], false),
+    ] {
+        let (_, output) = listed(
+            ACCOUNTS,
+            None,
+            &BTreeMap::from([(key("claude", "alpha"), logged_in(windows))]),
+        );
+        assert_eq!(
+            output.contains("pace: used share ÷ elapsed share; 1.0x lasts exactly to reset"),
+            expected,
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn use_reset_takes_only_a_kind() {
     let parsed = AccountsHarness::try_parse_from(["accounts", "use", "--reset", "codex"]);
     assert!(parsed.is_ok(), "{parsed:?}");
@@ -124,7 +193,7 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
     assert_eq!(credit_cell("claude", "default"), "–");
     let team = rows
         .iter()
-        .find(|row| row.kind.as_str() == "codex" && row.name.as_str() == "team")
+        .find(|row| row.kind.as_str() == "codex" && row.account.name.as_str() == "team")
         .unwrap();
     assert_eq!(
         serde_json::to_value(team).unwrap()["reset_credits"],
@@ -145,7 +214,7 @@ fn use_targets_the_room_unless_global() {
         (vec!["accounts", "use", "--global", "codex", "work"], false),
     ] {
         let parsed = AccountsHarness::try_parse_from(&argv).expect("parse use");
-        let AccountsSubcmd::Use { global, .. } = parsed.args.command else {
+        let Some(AccountsSubcmd::Use { global, .. }) = parsed.args.command else {
             panic!("{argv:?} parsed as another subcommand");
         };
         assert_eq!(!global, room, "{argv:?}");
@@ -158,7 +227,7 @@ fn use_targets_the_room_unless_global() {
 fn add_takes_a_history_mode_and_refuses_an_unknown_one() {
     let history = |argv: &[&str]| {
         AccountsHarness::try_parse_from(argv).map(|parsed| match parsed.args.command {
-            AccountsSubcmd::Add { history, .. } => history,
+            Some(AccountsSubcmd::Add { history, .. }) => history,
             other => panic!("{other:?} parsed as another subcommand"),
         })
     };
@@ -275,7 +344,7 @@ fn lapsed_account_reports_subscription_access_instead_of_login_or_setup() {
     let (rows, text) = listed(ACCOUNTS, None, &readings);
     let row = rows
         .iter()
-        .find(|row| row.kind.as_str() == "claude" && row.name.as_str() == "alpha")
+        .find(|row| row.kind.as_str() == "claude" && row.account.name.as_str() == "alpha")
         .unwrap();
     assert_eq!(
         row.problem.as_deref(),
@@ -374,7 +443,7 @@ fn list_marks_unknown_agent_counts_and_undeclared_selections() {
     let (rows, text) = listed("[use]\ncodex = \"gone\"\n", None, &BTreeMap::new());
     let gone = rows
         .iter()
-        .find(|row| row.name.as_str() == "gone")
+        .find(|row| row.account.name.as_str() == "gone")
         .expect("an undeclared selection keeps a row");
     assert_eq!(gone.status, AccountStatus::Unavailable);
     assert!(!gone.active, "birth refuses an undeclared selection");
@@ -417,7 +486,7 @@ fn markers_and_legend_name_the_layer_that_decides() {
     let mut rows = rows_at(&machine, &standing, None, &BTreeMap::new());
     // A room at the position that launches claude on `default`.
     for row in &mut rows {
-        row.active = row.name.is_default();
+        row.active = row.account.name.is_default();
     }
     let room = text(
         &rows,
@@ -559,7 +628,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
     assert_eq!(default["windows"][0]["used_percentage"], 2);
     assert!(default["windows"][0]["resets_at"].is_string(), "{default}");
     assert_eq!(default["windows"][1]["used_percentage"], 69);
-    assert!(default.get("login").is_none(), "{default}");
+    assert_eq!(default["login"], "logged_in", "{default}");
 }
 
 #[test]
@@ -642,15 +711,23 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
         let mut row = rows().remove(1);
         (row.status, row.problem) = (AccountStatus::Ready, None);
         row.read(Some(&reading(status)), || unreachable!("{status:?}"));
-        assert_eq!(row.status, AccountStatus::Ready, "{status:?}");
+        assert_eq!(
+            row.status,
+            if status == ProviderStatus::LoggedIn {
+                AccountStatus::Ready
+            } else {
+                AccountStatus::LoginUnknown
+            },
+            "{status:?}"
+        );
         assert_eq!(row.problem, None);
         assert_eq!(row.windows.len(), 1);
     }
     let mut row = rows().remove(1);
     (row.status, row.problem) = (AccountStatus::Ready, None);
     row.read(None, || unreachable!("no record"));
-    assert_eq!(row.status, AccountStatus::Ready, "a missing record");
-    assert_eq!(row.login, Some(ProviderStatus::Unavailable));
+    assert_eq!(row.status, AccountStatus::LoginUnknown, "a missing record");
+    assert_eq!(row.login, None);
 }
 
 #[test]

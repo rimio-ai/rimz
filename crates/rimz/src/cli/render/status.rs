@@ -135,7 +135,8 @@ pub(crate) fn trust(state: TrustState) -> anstyle::Style {
 pub(crate) fn account(status: AccountStatus) -> anstyle::Style {
     match status {
         AccountStatus::Ready => role(StateRole::Success),
-        AccountStatus::HomeMissing
+        AccountStatus::LoginUnknown
+        | AccountStatus::HomeMissing
         | AccountStatus::HooksMissing
         | AccountStatus::HooksUntrusted
         | AccountStatus::HooksDisabled

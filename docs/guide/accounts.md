@@ -58,7 +58,7 @@ Moving a directory out from under an agent that is writing into it would split i
 
 The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. When that variable points at any declared named account's home, `add` refuses before writing anything, including on a rerun inside a room. Unset it for the command, for example `env -u CODEX_HOME rimz accounts add codex work`. Do not export one that points at a named account's home in your login shell: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses to declare the provider's own home, including a `--home` symlink to it, and `rimz doctor` flags an exported-home conflict.
 
-`rimz accounts list` answers whose quota a launch from here will burn, how much of it each account has left, and whether a room can use each account:
+`rimz accounts` (or `rimz accounts list`) answers whose quota a launch from here will burn, how much of it each account has left, and whether a room can use each account. `ready` means setup is healthy and the provider reports a logged-in account; `login unknown` means setup is healthy but no confident login reading is available:
 
 ```console
 $ rimz accounts list
@@ -68,6 +68,7 @@ $ rimz accounts list
 
 ●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -        -       -        ~/.codex
 ●  this room (claude)   ●  new rooms (codex)   ○  new rooms
+pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
 
@@ -85,7 +86,7 @@ To keep a room on one account per provider across restarts and changes to your d
 rimz start --account claude@work --account codex@personal
 ```
 
-To set the machine default without repeating the flag, run `rimz accounts use --global codex personal` once. It checks the account's home and hooks, then writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. New rooms and existing rooms following that default use it on their next launch; pinned rooms keep their account, and running agents stay where they are. Reverse it with `rimz accounts use --global codex default`.
+To set the machine default without repeating the flag, run `rimz accounts use --global codex personal` once. It checks the account's home and hooks, then writes the machine's `[accounts.use]` selection while keeping the account declarations and comments. New rooms and existing rooms following that default use it on their next launch; pinned rooms keep their account, and running agents stay where they are. The receipt says `new launches only` and counts the running agents staying on the prior account in rooms following that default. Reverse it with `rimz accounts use --global codex default`.
 
 A room keeps its pins across starts. Without a pin, each launch follows the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`. Without `--account`, start writes no pin. Older rooms keep recorded named accounts as pins; their recorded `default` accounts follow live defaults unless you explicitly pin `default` now. On re-entry from outside the room, `--account` can pin a provider that was following defaults, or repeat its existing pin; a different pin refuses and names `rimz accounts use` as the fix. The project selection lives in `<repo>/.rimz/config.toml`:
 

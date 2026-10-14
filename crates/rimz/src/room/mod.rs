@@ -29,7 +29,8 @@ pub use birth::{
 };
 pub use recovery::ParkedRecoveryOutcome;
 pub use standing::{
-    AccountStanding, Deciding, Scope, Scopes, live_agents_by_login, other_live_agents_on,
+    AccountStanding, Deciding, Scope, Scopes, live_agents_by_login, live_agents_on_machine_default,
+    other_live_agents_on,
 };
 
 #[derive(Debug, thiserror::Error)]

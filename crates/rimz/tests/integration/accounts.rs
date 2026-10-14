@@ -15,6 +15,113 @@ fn accounts(env: &Env, args: &[&str]) -> Output {
         .expect("run rimz accounts")
 }
 
+#[test]
+fn bare_accounts_runs_list() {
+    let env = Env::new();
+    let bare = succeeded(&accounts(&env, &[]));
+    assert!(bare.contains("KIND") && bare.contains("STATUS"), "{bare}");
+}
+
+#[test]
+fn global_receipt_reports_unknown_when_the_previous_selection_cannot_resolve() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    succeeded(
+        &env.rimz()
+            .args(["config", "set", "accounts.use.grok", "work"])
+            .output()
+            .unwrap(),
+    );
+    let used = succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("use.trace"))
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1m ago]\n", workspace.session_name),
+            )
+            .args(["accounts", "use", "--global", "grok", "default"])
+            .output()
+            .unwrap(),
+    );
+    assert!(used.contains("count unknown"), "{used}");
+}
+
+#[test]
+fn global_receipt_counts_only_agents_in_rooms_following_the_machine() {
+    use rimz::ids::{AgentKind, AgentSessionId, PaneId};
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    let env = Env::new();
+    succeeded(&accounts(&env, &["add", "claude", "work"]));
+    let mut sessions = String::new();
+    for (index, selection) in ["machine", "pin", "project"].into_iter().enumerate() {
+        let root = env.home_root.join(selection);
+        env.record(&root);
+        let workspace = env.resolve_workspace(&root);
+        let store = env.store_for(&root);
+        if selection == "pin" {
+            store
+                .switch_room_login(
+                    &workspace,
+                    &AgentKind::new_unchecked("claude"),
+                    &rimz::ids::LoginName::default_login(),
+                )
+                .unwrap();
+        } else if selection == "project" {
+            env.write_config(&root, "[accounts]\nclaude = 'default'\n");
+            succeeded(
+                &env.rimz()
+                    .current_dir(&root)
+                    .args(["trust", "grant"])
+                    .output()
+                    .unwrap(),
+            );
+        }
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id,
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: AgentSessionId::from(selection),
+                    launch_id: None,
+                    agent_name: selection.to_owned(),
+                    agent_name_explicit: true,
+                    launch: Default::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(
+                        rimz::MuxName::Zellij,
+                        format!("terminal_{index}"),
+                    )),
+                    runtime_owner: None,
+                    worktree_path: Some(root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        sessions.push_str(&format!("{} [Created 1m ago]\n", workspace.session_name));
+    }
+    let used = succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("use.trace"))
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", sessions)
+            .args(["accounts", "use", "--global", "claude", "work"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        used.contains("new launches only; 1 running claude agent(s) stay on claude@default"),
+        "{used}"
+    );
+}
+
 fn succeeded(output: &Output) -> String {
     assert!(
         output.status.success(),
@@ -95,7 +202,7 @@ fn room_account_reset_unpins_and_follows_the_machine_selection() {
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert_eq!(
         reset.trim(),
-        "this room now follows the machine default for codex (`work`); 1 running codex agent(s) keep `default` until they end"
+        "this room now follows the machine default for codex (`codex@work`); new launches only; 1 running codex agent(s) stay on codex@default"
     );
     let record = rimz::workspace::record::read(&env.store().paths().workspace_record).unwrap();
     assert_eq!(
@@ -104,7 +211,7 @@ fn room_account_reset_unpins_and_follows_the_machine_selection() {
     );
     assert_eq!(
         succeeded(&room_accounts(&env, &["use", "--reset", "codex"])).trim(),
-        "this room already follows the machine default for codex (`work`)"
+        "this room already follows the machine default for codex (`codex@work`)"
     );
     assert_eq!(std::fs::read(&config).unwrap(), before);
     succeeded(&accounts(&env, &["use", "--global", "codex", "default"]));
@@ -114,7 +221,7 @@ fn room_account_reset_unpins_and_follows_the_machine_selection() {
         rows.as_array()
             .unwrap()
             .iter()
-            .any(|row| row["kind"] == "codex" && row["name"] == "default" && row["active"] == true)
+            .any(|row| row["account"] == "codex@default" && row["active"] == true)
     );
     let workspace = env.resolve_workspace(&env.project_root);
     let output = hermetic(&env, &mut env.rimz())
@@ -155,7 +262,7 @@ fn room_account_reset_unpins_and_follows_the_machine_selection() {
     );
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert!(
-        reset.contains("follows the provider default for codex (`default`)"),
+        reset.contains("follows the provider default for codex (`codex@default`)"),
         "{reset}"
     );
 }
@@ -241,13 +348,22 @@ fn invalid_kind_report(doctor: bool) {
     };
     let rows = rows.as_array().unwrap();
     assert!(
-        rows.iter()
-            .any(|row| row["kind"] == "claude" && row["name"] == "work"),
+        rows.iter().any(|row| if doctor {
+            row["kind"] == "claude" && row["name"] == "work"
+        } else {
+            row["account"] == "claude@work"
+        }),
         "{rows:?}"
     );
     let default = rows
         .iter()
-        .find(|row| row["kind"] == "codex" && row["name"] == "default")
+        .find(|row| {
+            if doctor {
+                row["kind"] == "codex" && row["name"] == "default"
+            } else {
+                row["account"] == "codex@default"
+            }
+        })
         .expect("failed kind retains its default row");
     assert!(
         default["problem"]
@@ -295,7 +411,7 @@ fn room_account_reset_uses_project_trust_and_never_writes_on_refusal() {
     succeeded(&env.rimz().args(["trust", "grant"]).output().unwrap());
     let reset = succeeded(&room_accounts(&env, &["use", "--reset", "codex"]));
     assert!(
-        reset.contains("follows the project default for codex (`work`)"),
+        reset.contains("follows the project default for codex (`codex@work`)"),
         "{reset}"
     );
     let before = std::fs::read(&path).unwrap();
@@ -376,7 +492,7 @@ fn room_account_switch_changes_only_the_room_default() {
     let global = succeeded(&switch_with(&["--global"]));
     assert!(
         global.contains(
-            "new rooms and rooms following the machine default now use claude account `work`"
+            "new rooms and rooms following the machine default now use claude account `claude@work`"
         ),
         "{global}"
     );
@@ -389,7 +505,7 @@ fn room_account_switch_changes_only_the_room_default() {
     let before = std::fs::read(&config).unwrap();
     let switch = || switch_with(&[]);
     let output = succeeded(&switch());
-    assert!(output.contains("this room now launches claude on account `work` (pinned, was machine default); no running claude agent is on `work`"), "{output}");
+    assert!(output.contains("this room now launches claude on account `claude@work` (pinned, was machine default); new launches only; 0 running claude agent(s) stay on claude@work"), "{output}");
     assert_eq!(std::fs::read(&config).unwrap(), before);
     let record = rimz::workspace::record::read(&store.paths().workspace_record).unwrap();
     assert_eq!(
@@ -402,7 +518,7 @@ fn room_account_switch_changes_only_the_room_default() {
     );
     assert_eq!(
         succeeded(&switch()).trim(),
-        "this room already launches claude on `work` (pinned)"
+        "this room already launches claude on `claude@work` (pinned)"
     );
 
     let claude_rows = |command: &mut std::process::Command| -> Vec<Value> {
@@ -428,7 +544,7 @@ fn room_account_switch_changes_only_the_room_default() {
     };
     let row = |rows: &[Value], name: &str| {
         rows.iter()
-            .find(|row| row["name"] == name)
+            .find(|row| row["account"] == format!("claude@{name}"))
             .cloned()
             .unwrap()
     };
@@ -510,7 +626,7 @@ fn accounts_add_rejects_default_home_alias_without_declaring_it() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["name"] == "al")
+            .any(|row| row["account"] == "claude@al")
     );
     assert_eq!(std::fs::read_dir(&native).unwrap().count(), 0);
 }
@@ -614,17 +730,18 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
         .as_array()
         .expect("rows")
         .iter()
-        .find(|row| row["kind"] == "claude" && row["name"] == "work")
+        .find(|row| row["kind"] == "claude" && row["account"] == "claude@work")
         .expect("work row");
     assert_eq!(
         work,
         &json!({
             "kind": "claude",
-            "name": "work",
+            "account": "claude@work",
             "home": home_arg,
             "history": "shared",
             "machine_default": false,
-            "status": "ready",
+            "status": "login_unknown",
+            "login": "unavailable",
             "entitlement": "ok",
             "active": false,
             "default_for": [],
@@ -745,7 +862,7 @@ fn accounts_add_history_writes_only_that_field() {
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
         rows.into_iter()
-            .find(|row| row["kind"] == "claude" && row["name"] == name)
+            .find(|row| row["kind"] == "claude" && row["account"] == format!("claude@{name}"))
             .unwrap_or_else(|| panic!("no claude row `{name}`"))["history"]
             .clone()
     };
@@ -865,7 +982,7 @@ fn accounts_remove_warns_only_for_rooms_pinning_the_account() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["kind"] == "claude" && row["name"] == "work")
+        .find(|row| row["kind"] == "claude" && row["account"] == "claude@work")
         .unwrap();
     assert_eq!(work["active"], true);
     assert_eq!(work["default_for"], json!(["this_project"]));
@@ -905,6 +1022,10 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
     succeeded(&accounts(&env, &["add", "claude", "work"]));
     let used = succeeded(&accounts(&env, &["use", "--global", "claude", "work"]));
     assert!(
+        used.contains("new launches only; 0 running claude agent(s) stay on claude@default"),
+        "{used}"
+    );
+    assert!(
         used.contains("new rooms and rooms following the machine default")
             && used.contains("no live room follows it for claude")
             && used.contains("`rimz accounts use --reset claude`"),
@@ -916,7 +1037,7 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["name"] == "work")
+        .find(|row| row["account"] == "claude@work")
         .unwrap();
     assert_eq!(work["machine_default"], true);
     let removed = succeeded(&accounts(&env, &["remove", "claude", "work"]));
@@ -930,7 +1051,7 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["kind"] == "claude" && row["name"] == "default")
+        .find(|row| row["kind"] == "claude" && row["account"] == "claude@default")
         .unwrap();
     assert_eq!(native["machine_default"], true);
     succeeded(&accounts(&env, &["use", "--global", "claude", "default"]));
@@ -982,7 +1103,8 @@ fn a_broken_project_config_warns_and_marks_no_account() {
         let claude_default = rows
             .iter()
             .find(|row| {
-                row["kind"] == "claude" && (row["name"] == "default" || row["account"] == "default")
+                row["kind"] == "claude"
+                    && (row["account"] == "claude@default" || row["account"] == "default")
             })
             .unwrap_or_else(|| panic!("{args:?}: no claude default row in {rows:?}"));
         assert_eq!(
@@ -1029,7 +1151,7 @@ fn list_probes_a_logged_out_account_again_on_every_run() {
         rows.as_array()
             .unwrap()
             .iter()
-            .find(|row| row["kind"] == "claude" && row["name"] == "work")
+            .find(|row| row["kind"] == "claude" && row["account"] == "claude@work")
             .cloned()
             .expect("work row")
     };
@@ -1125,7 +1247,7 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
         rows.as_array()
             .unwrap()
             .iter()
-            .find(|row| row["kind"] == "claude" && row["name"] == name)
+            .find(|row| row["kind"] == "claude" && row["account"] == format!("claude@{name}"))
             .unwrap_or_else(|| panic!("no claude {name} row: {rows}"))["status"]
             .clone()
     };

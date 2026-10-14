@@ -710,6 +710,61 @@ pub(crate) fn percent_left_cell(left: u8) -> Cell {
     cell(format!("{left}%")).fg(palette::budget(left))
 }
 
+/// Name every deciding layer present among the displayed kinds.
+pub(crate) fn account_marker_legend(
+    displayed: &std::collections::BTreeSet<&str>,
+    deciding: &std::collections::BTreeMap<rimz::ids::AgentKind, rimz::room::Deciding>,
+    machine_marker: bool,
+) -> Option<String> {
+    use rimz::room::Deciding;
+    let layers: Vec<_> = [Deciding::Room, Deciding::Project, Deciding::Machine]
+        .into_iter()
+        .filter_map(|layer| {
+            let kinds: std::collections::BTreeSet<_> = deciding
+                .iter()
+                .filter(|(kind, source)| **source == layer && displayed.contains(kind.as_str()))
+                .map(|(kind, _)| kind.as_str())
+                .collect();
+            (!kinds.is_empty()).then_some((layer, kinds))
+        })
+        .collect();
+    let active = layers.iter().map(|(layer, kinds)| {
+        let words = match layer {
+            Deciding::Room => "this room",
+            Deciding::Project => "this project",
+            Deciding::Machine => "new rooms",
+        };
+        let kinds = if layers.len() > 1 {
+            format!(
+                " ({})",
+                kinds.iter().copied().collect::<Vec<_>>().join(", ")
+            )
+        } else {
+            String::new()
+        };
+        format!("{}  {words}{kinds}", paint(palette::accent(), "●"))
+    });
+    let new_rooms = (layers.iter().any(|(layer, _)| *layer != Deciding::Machine) || machine_marker)
+        .then(|| format!("{}  new rooms", paint(palette::muted(), "○")));
+    let halves: Vec<_> = active.chain(new_rooms).collect();
+    (!halves.is_empty()).then(|| halves.join("   "))
+}
+
+/// Explain the multiplier only when a displayed window has one.
+pub(crate) fn pace_legend<'a>(
+    mut windows: impl Iterator<Item = &'a rimz::agents::RateLimitWindow>,
+    now: Timestamp,
+) -> Option<&'static str> {
+    windows
+        .any(|window| {
+            !window.lifted
+                && !window.not_started(now)
+                && !window.is_spent()
+                && window.pace(now).is_some_and(|pace| pace.past_floor())
+        })
+        .then_some("pace: used share ÷ elapsed share; 1.0x lasts exactly to reset")
+}
+
 fn pace_text(ratio: f64) -> String {
     let rounded = (ratio * 10.0).round() / 10.0;
     if rounded >= 10.0 {

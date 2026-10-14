@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` declares, selects, lists, and removes the named provider accounts a room can launch into, and redeems Claude or Codex reset credits by hand. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` lists provider accounts; it is the same as `rimz accounts list` and exits 0. Its subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use` and `use --reset`, which require running inside one. Bare `use` pins only the current room's account for that provider, leaving running agents and machine and project configuration unchanged. `--reset` removes that pin. An unpinned provider follows the trusted project's selection, then the machine's, then `default`, live on each launch ([Accounts at start](./getting-started.md#accounts)). `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A machine selection reaches new rooms and existing rooms following that default, not pinned providers. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -129,18 +129,18 @@ With machine selection `codex = "work"`, a room pin to `default`, and one runnin
 
 ```console
 $ rimz accounts use --reset codex
-this room now follows the machine default for codex (`work`); 1 running codex agent(s) keep `default` until they end
+this room now follows the machine default for codex (`codex@work`); new launches only; 1 running codex agent(s) stay on codex@default
 $ rimz accounts use --reset codex
-this room already follows the machine default for codex (`work`)
+this room already follows the machine default for codex (`codex@work`)
 ```
 
 `use --global` writes `[accounts.use] <KIND> = "<NAME>"` in the machine `config.toml`, preserving comments and sibling tables, and leaves every room record alone. The name must be declared for that kind; an unknown name refuses with the configured names and `rimz accounts add <kind> <name>`. A named account's missing home or missing or untrusted hooks refuses with the preflight fix and writes nothing, just as bare `use` does. `default` skips that named-account preflight.
 
-The machine selection reaches new rooms and existing inheriting rooms, whether running or stopped, whose provider follows the machine default. Output counts and names live following rooms, and names `rimz accounts use --reset <kind>` inside a pinned room as the way to make it follow again. Room pins and trusted project selections take precedence ([Accounts at start](./getting-started.md#accounts)); running agents keep their accounts. `use --global <kind> default` removes that provider's machine entry and says new and following rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
+The machine selection reaches new rooms and existing inheriting rooms, whether running or stopped, whose provider follows the machine default. The receipt says `new launches only` and counts running agents on the prior account in live following rooms, excluding pinned and project-selected rooms. If those rooms cannot be inventoried, the count is unknown rather than zero. Output also counts and names live following rooms, and names `rimz accounts use --reset <kind>` inside a pinned room as the way to make it follow again. Room pins and trusted project selections take precedence ([Accounts at start](./getting-started.md#accounts)); running agents keep their accounts. `use --global <kind> default` removes that provider's machine entry and says new and following rooms use the provider's own home. It accepts any provider, so it also clears a hand-set entry for one without named accounts; an empty `[accounts.use]` table is removed, and clearing an absent entry succeeds without a write.
 
 ```console
 $ rimz accounts use --global claude work
-new rooms and rooms following the machine default now use claude account `work`; no live room follows it for claude; a pinned room keeps its account until `rimz accounts use --reset claude` runs inside it
+new rooms and rooms following the machine default now use claude account `claude@work`; new launches only; 0 running claude agent(s) stay on claude@default; no live room follows it for claude; a pinned room keeps its account until `rimz accounts use --reset claude` runs inside it
 ```
 
 A global change can move an inheriting room outside a session's history pool; it does not block the change. A later resume names the current deciding layer and refuses with `rimz accounts use <kind> <session-account>` to pin the room and resume, then `rimz accounts use --reset <kind>` to follow that default again.
@@ -161,6 +161,7 @@ $ rimz accounts list
 
 ●  codex   default  hooks untrusted  ∞                    64% · 5d11h · 1.6x   -        -       -        ~/.codex
 ●  this room (claude)   ●  new rooms (codex)   ○  new rooms
+pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
 
@@ -201,7 +202,8 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 
 | Status | Meaning | Fix the problem line names |
 | --- | --- | --- |
-| `ready` | A room can launch into the account. | none |
+| `ready` | Setup is healthy and the provider reports a logged-in account. | none |
+| `login unknown` | Setup is healthy but no confident login reading is available. | Check the provider login, then refresh its reading. |
 | `logged out` | The home and its hooks are in order, but the provider reports no login under it. A setup problem below wins over it. | The provider's login command under the home (`CLAUDE_CONFIG_DIR=<home> claude`, `CODEX_HOME=<home> codex`, or the bare command for `default`) |
 | `lapsed` | Subscription access was rejected, independently of login and setup status. The status and problem use the failure tone. | `plan lapsed: no <product> access` (`no Claude access` for Claude); restore access with the provider, then `rimz providers claude --refresh` |
 | `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
@@ -216,12 +218,13 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | Field | Value |
 | --- | --- |
 | `kind` | `claude` or `codex`. |
-| `name` | The account name, `default` included. |
+| `account` | The full account key, such as `claude@default`. |
+| `login` | `logged_in`, `logged_out`, `unavailable`, or `null` when there is no probe record. |
 | `home` | Absolute path of the home, or `null` when the provider's home cannot be resolved. |
 | `history` | `shared` or `standalone`; `null` for `default` and for a selected account nothing declares. |
 | `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
 | `problem` | The problem line with its fix. Present only when the account has a problem. |
-| `status` | Launch setup/login status in snake case: `ready`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. A lapse changes the displayed `STATUS`, not this launch-health value. |
+| `status` | Launch setup/login status in snake case: `ready`, `login_unknown`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. A lapse changes the displayed `STATUS`, not this launch-health value. |
 | `entitlement` | Always present: `"ok"`, or `{"lapsed":{"since_ms":N}}` with the first-seen Unix-millisecond timestamp. While lapsed, `problem` is `plan lapsed: no <product> access`, using the same product name as the sidebar, and quota readings are suppressed. |
 | `active` | `true` on the account marked `●`. |
 | `default_for` | Always present: every layer that selects the account, of `this_room` (a room pin only), `this_project`, and `new_rooms`, or `[]`. |

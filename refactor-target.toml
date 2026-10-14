@@ -882,7 +882,13 @@ upward-dependencies = [
 # A single-kind fresh-room selection and its deciding layer serve account reset (+2).
 # Admission before CLI recovery inspection carries the room claim through birth (+1).
 # Birth and reset share listed-session heartbeat-or-claim admission (+1).
-surface-budget = 67
+# Account-switch receipts count only rooms following the machine default (+1).
+surface-budget = 68
+
+[[verdict]]
+kind = "item"
+key = "room::standing::live_agents_on_machine_default"
+reason = "Global account-switch receipts exclude project-selected and pinned rooms while sharing the live-agent counting predicate."
 
 [[module]]
 path = "crates/rimz/src/sidebar"
