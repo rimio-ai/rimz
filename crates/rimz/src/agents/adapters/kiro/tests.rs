@@ -24,6 +24,226 @@ fn records(payloads: &[Value]) -> String {
     }).collect()
 }
 
+fn refresh_fixture(root: &Path, fields: Value, payloads: &[Value]) -> PathBuf {
+    let workspace = Path::new("/workspace/project");
+    let id = "sess_33333333-3333-4333-8333-333333333333";
+    let directory = root
+        .join("sessions")
+        .join(session::workspace_bucket(workspace).unwrap())
+        .join(id);
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut metadata = json!({"id": id, "schemaVersion": "1.0.0", "dataModelVersion": 1, "workspacePaths": [workspace], "createdAt": "2025-01-01T00:00:00Z"});
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    std::fs::write(directory.join("session.json"), metadata.to_string()).unwrap();
+    let transcript = directory.join("messages.jsonl");
+    std::fs::write(&transcript, records(payloads)).unwrap();
+    transcript
+}
+
+fn refresh_at(transcript: &Path) -> Option<LocalContextRefresh> {
+    KiroAdapter.local_context_refresh(
+        RefreshTrigger::Tick,
+        &LocalContextRefreshCtx {
+            login_env: &BTreeMap::new(),
+            agent_id: transcript
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: None,
+            prior_transcript_path: transcript.to_str(),
+            prior_transcript_stat: None,
+            prior_spend_fold: None,
+            shared_pricing_cache_path: Path::new("/unused-pricing"),
+        },
+    )
+}
+
+#[test]
+fn local_refresh_ignores_a_recorded_transcript_of_another_session() {
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(root.path(), json!({}), &[]);
+    let refresh = KiroAdapter.local_context_refresh(
+        RefreshTrigger::Tick,
+        &LocalContextRefreshCtx {
+            login_env: &BTreeMap::new(),
+            agent_id: "sess_99999999-9999-4999-8999-999999999999",
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: None,
+            prior_transcript_path: path.to_str(),
+            prior_transcript_stat: None,
+            prior_spend_fold: None,
+            shared_pricing_cache_path: Path::new("/unused-pricing"),
+        },
+    );
+    assert!(refresh.is_none());
+}
+
+#[test]
+fn local_refresh_reads_model_effort_and_title() {
+    use crate::agents::{FieldPatch, LocalTokenPatch};
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(
+        root.path(),
+        json!({"modelId": "claude-sonnet-4.5", "effortLevel": "high", "title": "New Session"}),
+        &[],
+    );
+    let patch = refresh_at(&path).unwrap().context;
+    assert_eq!(
+        patch.model_id,
+        FieldPatch::Set("claude-sonnet-4.5".to_owned())
+    );
+    assert_eq!(patch.effort, FieldPatch::Set("high".to_owned()));
+    assert_eq!(
+        patch.session_name,
+        FieldPatch::Set("New Session".to_owned())
+    );
+    assert_eq!(patch.tokens, LocalTokenPatch::PreserveEstablished(None));
+    assert_eq!(patch.cost, FieldPatch::Keep);
+}
+
+#[test]
+fn local_refresh_clears_absent_metadata_fields() {
+    use crate::agents::FieldPatch;
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(root.path(), json!({}), &[]);
+    let patch = refresh_at(&path).unwrap().context;
+    assert_eq!(patch.model_id, FieldPatch::Clear);
+    assert_eq!(patch.effort, FieldPatch::Clear);
+    assert_eq!(patch.session_name, FieldPatch::Clear);
+}
+
+#[test]
+fn local_refresh_keeps_metadata_when_it_cannot_be_validated() {
+    use crate::agents::FieldPatch;
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(root.path(), json!({}), &[]);
+    for metadata in [None, Some("not json"), Some(r#"{"id":"wrong"}"#)] {
+        let metadata_path = path.parent().unwrap().join("session.json");
+        if let Some(metadata) = metadata {
+            std::fs::write(&metadata_path, metadata).unwrap();
+        } else {
+            std::fs::remove_file(&metadata_path).unwrap();
+        }
+        let refresh = refresh_at(&path);
+        assert!(
+            refresh.is_some(),
+            "a recorded transcript still refreshes without readable metadata"
+        );
+        let patch = refresh.unwrap().context;
+        assert_eq!(patch.model_id, FieldPatch::Keep);
+        assert_eq!(patch.effort, FieldPatch::Keep);
+        assert_eq!(patch.session_name, FieldPatch::Keep);
+    }
+}
+
+fn refreshed_running_agent(path: &Path) -> crate::agents::AgentState {
+    let at = "2025-01-01T00:00:00Z".parse().unwrap();
+    let mut agent = crate::testkit::agent_state("kiro", "sess", at);
+    agent.status = crate::agents::AgentStatus::Running;
+    agent.turn_started_at = Some(at);
+    let mut context = crate::agents::AgentContext::new("kiro", at);
+    refresh_at(path)
+        .unwrap()
+        .context
+        .apply(&mut context, KiroAdapter.spec());
+    agent.context = Some(context);
+    agent
+}
+
+#[test]
+fn cancelled_refresh_releases_the_turn_waiter() {
+    use crate::agents::{AgentStatus, FieldPatch, TurnCompletion, TurnSettleOutcome};
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(
+        root.path(),
+        json!({}),
+        &[
+            json!({"type": "turn_start", "executionId": "turn"}),
+            json!({"type": "turn_end", "stopReason": "cancelled"}),
+            json!({"type": "session_metadata", "key": "contextUsage", "value": {"usagePercentage": 10}}),
+        ],
+    );
+    let agent = refreshed_running_agent(&path);
+    assert_eq!(agent.effective_status(), AgentStatus::Idle);
+    assert_eq!(
+        TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+        TurnCompletion::Completed
+    );
+    let settle = agent.context.unwrap().settle.unwrap();
+    assert_eq!(settle.outcome, TurnSettleOutcome::Interrupted);
+    assert_eq!(settle.at, "2025-01-01T00:00:01Z".parse().unwrap());
+    std::fs::write(
+        &path,
+        records(&[json!({"type": "turn_start", "executionId": "next"})]),
+    )
+    .unwrap();
+    let patch = refresh_at(&path).unwrap().context;
+    assert_eq!(patch.settle, FieldPatch::Clear);
+    assert_eq!(patch.turn_error, FieldPatch::Clear);
+}
+
+#[test]
+fn question_refresh_keeps_the_turn_waiter_open() {
+    use crate::agents::{AgentStatus, TurnCompletion, TurnSettleOutcome};
+    let root = tempfile::tempdir().unwrap();
+    let path = refresh_fixture(
+        root.path(),
+        json!({}),
+        &[
+            json!({"type": "turn_start", "executionId": "turn"}),
+            json!({"type": "pending_interaction", "interactionType": "user_input", "toolCallId": "ask", "question": "Which target?"}),
+        ],
+    );
+    let agent = refreshed_running_agent(&path);
+    assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+    assert_eq!(
+        TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+        TurnCompletion::Open
+    );
+    let settle = agent.context.unwrap().settle.unwrap();
+    assert_eq!(settle.outcome, TurnSettleOutcome::NativeWait);
+    assert_eq!(settle.at, "2025-01-01T00:00:01Z".parse().unwrap());
+}
+
+#[test]
+fn failed_refresh_records_error_without_releasing_the_turn_waiter() {
+    use crate::agents::{AgentStatus, TurnCompletion, TurnErrorClass};
+    let root = tempfile::tempdir().unwrap();
+    for reason in ["error", "refusal"] {
+        let path = refresh_fixture(
+            root.path(),
+            json!({}),
+            &[
+                json!({"type": "turn_start", "executionId": "turn"}),
+                json!({"type": "turn_end", "stopReason": reason}),
+                json!({"type": "session_metadata", "key": "contextUsage", "value": {"usagePercentage": 10}}),
+            ],
+        );
+        let agent = refreshed_running_agent(&path);
+        assert!(agent.context.as_ref().unwrap().turn_error.is_some());
+        assert_eq!(agent.effective_status(), AgentStatus::Running);
+        assert_eq!(
+            TurnCompletion::of(agent.effective_status(), agent.turn_started_at),
+            TurnCompletion::Open
+        );
+        let context = agent.context.unwrap();
+        assert!(context.settle.is_none());
+        let error = context.turn_error.unwrap();
+        assert_eq!(error.class, TurnErrorClass::Failed);
+        assert_eq!(error.at, "2025-01-01T00:00:01Z".parse().unwrap());
+        assert!(error.label.is_none());
+    }
+}
+
 #[test]
 fn native_questions_raise_waiting_without_consent_round() {
     let lines = records(&[json!({

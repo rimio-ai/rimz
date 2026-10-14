@@ -117,9 +117,9 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 - Turns, tool calls, and session exits arrive through the global hook file `rimz hooks install kiro` manages, which needs Kiro CLI 2.31.0 or later.
 - Kiro's local session store still supplies the card before the first prompt, pending approvals, context, and history.
-- A cancelled or errored turn fires no hook: the card settles from the store, and a supervised `-p` run on that turn ends at its `--timeout`.
+- A cancelled turn releases `message --wait` and `agents wait` while a sidebar runs. Errored turns still wait out the deadline; supervised `-p` runs do so on both cancel and error.
 - A pending tool approval or native question raises Waiting; answer it in Kiro's pane, not through `rimz asks` or `rimz answer`.
-- Context is a percentage only.
+- Live details show the model, effort, and session title; context usage is a percentage only.
 
 ### Kimi
 
@@ -307,7 +307,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Droid | ✓ | ✓ | ◐ | ✓ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ◐ | ◐ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
-| Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |

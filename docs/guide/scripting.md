@@ -57,7 +57,7 @@ else
 fi
 ```
 
-**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle. Kiro needs one: it fires no hook for a cancelled or errored turn, so a `rimz agents kiro -p` run that goes wrong waits out its deadline instead of failing at `1`.
+**Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle. Kiro needs one: it fires no hook for a cancelled or errored turn, so a `rimz agents kiro -p` run waits out its deadline on either outcome instead of failing at `1`. While a sidebar runs, cancellation does release `message --wait` and `agents wait`; an errored turn still waits out the deadline.
 
 ```sh
 rimz agents codex -p --timeout 30m "Update dependencies and run the test suite."

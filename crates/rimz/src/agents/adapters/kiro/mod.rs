@@ -30,7 +30,7 @@ use super::hook_types::{HookEventSpec, SessionSource, decode_catalog_hook};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
-    AgentLifecycleObservation, HookOutput, HookRouting, LocalContextPatch, LocalContextRefresh,
+    AgentLifecycleObservation, HookOutput, HookRouting, LocalContextRefresh,
     LocalContextRefreshCtx, LocalSessionObservation, RefreshTrigger, Result, SanitizedPrompt,
     TranscriptMessage, TranscriptStat, optional_payload_string, sanitize_user_prompt,
 };
@@ -166,8 +166,9 @@ const KIRO_COVERAGE: CoverageAnnotations = CoverageAnnotations {
     realtime_cost: ConcernCoverage::Unsupported {
         reason: "credit-metered usage has no dollar price",
     },
-    rich_context: ConcernCoverage::Unsupported {
-        reason: "hooks publish no model, effort, context, or transcript contract",
+    rich_context: ConcernCoverage::Partial {
+        via: "model, effort, and session title from session.json",
+        gap: "no token counts or context-window size",
     },
     hook_install: ConcernCoverage::Wired {
         via: "~/.kiro/hooks/rimz.json",
@@ -189,7 +190,7 @@ const KIRO_USER_COVERAGE: UserCoverage = UserCoverage {
         limit: "cancels and failures show only once Kiro's session store records them",
     },
     live: CapabilityLevel::Partial {
-        shows: "a context-fill percentage",
+        shows: "model, effort, session title, and a context-fill percentage",
         limit: "no token counts, no context-window size, and no dollar figure",
     },
     history: CapabilityLevel::Partial {
@@ -397,14 +398,18 @@ impl crate::agents::capabilities::ContextCapability for KiroAdapter {
         _trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        let path = self.session_transcript(
-            ctx.agent_id,
-            ctx.prior_transcript_path.map(Path::new),
-            ctx.login_env,
-        )?;
+        let path = ctx
+            .prior_transcript_path
+            .map(PathBuf::from)
+            .filter(|path| {
+                path.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new(ctx.agent_id))
+                    && std::fs::symlink_metadata(path)
+                        .is_ok_and(|metadata| metadata.file_type().is_file())
+            })
+            .or_else(|| self.session_transcript(ctx.agent_id, None, ctx.login_env))?;
         let stat = ctx.changed_transcript(TranscriptStat::from_path(&path)?)?;
         Some(LocalContextRefresh {
-            context: LocalContextPatch::authoritative_current(),
+            context: session::refresh_context(&path),
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
             ..LocalContextRefresh::authoritative_current()

@@ -516,11 +516,11 @@ mod tests {
 
         let kiro = agent_cells(&matrix, "kiro");
         assert_eq!(count(&kiro, MatrixCellState::Ok), 3);
-        assert_eq!(count(&kiro, MatrixCellState::Partial), 4);
-        assert_eq!(count(&kiro, MatrixCellState::Absent), 12);
+        assert_eq!(count(&kiro, MatrixCellState::Partial), 5);
+        assert_eq!(count(&kiro, MatrixCellState::Absent), 11);
         assert_eq!(
             agent_labels(&matrix, "kiro", MatrixCellState::Partial),
-            ["perm", "ask", "idle", "usage"]
+            ["perm", "ask", "idle", "usage", "rich"]
         );
 
         let qwen = agent_cells(&matrix, "qwen");
