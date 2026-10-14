@@ -94,7 +94,7 @@ pub(super) fn collect_runtime_classes(
     Ok(())
 }
 
-/// The live class expires by mtime. Its one retention exception is agent-telemetry: preserve the exporter file and directory while the room is live, since the external exporter holds the inode open and has no verified reopen contract. With no class TTL, only dead renderer claims expire at the heartbeat protocol TTL.
+/// The live class expires by mtime, except birth-published hibernation admission and live-room agent telemetry. The exporter holds its inode open and has no verified reopen contract. With no class TTL, only dead renderer claims expire at the heartbeat protocol TTL.
 fn collect_live(
     workspace_root: &Path,
     class_ttl: Option<Duration>,
@@ -104,11 +104,12 @@ fn collect_live(
     let dir = Class::Live.path_under(workspace_root);
     let heartbeat = dir.join("heartbeat");
     let telemetry = dir.join("agent-telemetry");
+    let admission = dir.join("hibernate/admission.json");
     let protocol_ttl = crate::wakeup::heartbeat::SIDEBAR_HEARTBEAT_TTL;
     let live = fresh_sidebar_instance_ids(&heartbeat, class_ttl.unwrap_or(protocol_ttl))?;
     let keep_telemetry = !live.is_empty();
     for (path, _, _) in sweep.files_under(&dir)? {
-        if keep_telemetry && path.starts_with(&telemetry) {
+        if path == admission || (keep_telemetry && path.starts_with(&telemetry)) {
             continue;
         }
         let threshold = match class_ttl {

@@ -294,7 +294,8 @@ pub fn prepare_exec(
             agents: agents.as_deref().map_err(String::as_str),
             ambient_env: &ambient_env,
             agent_shell: machine.agents.shell.as_deref(),
-            hibernate: machine.agents.hibernate.enabled,
+            hibernate: machine.agents.hibernate.enabled()
+                && super::hibernate::Admission::read(&runtime).available,
         })?;
         Ok((plan, isolation))
     };

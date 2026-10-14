@@ -12,7 +12,10 @@ pub fn run_request(
     config: &MachineConfig,
     mut refresh: impl FnMut() -> crate::store::snapshot::Result<crate::store::snapshot::SidebarSnapshot>,
 ) -> Result<(), HibernateErr> {
-    if !cfg!(target_os = "linux") || !config.agents.hibernate.enabled {
+    if !cfg!(target_os = "linux")
+        || !config.agents.hibernate.enabled()
+        || !Admission::read(store.runtime_paths()).available
+    {
         return Ok(());
     }
     let keep_warm = KeepWarmPolicy::load(config, snapshot.project_root.as_deref());

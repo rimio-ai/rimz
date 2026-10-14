@@ -217,7 +217,6 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation)?;
-    rimz::harness::hibernate::preflight(&machine.agents.hibernate)?;
     rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
     if let Some(shell) = &machine.agents.shell {
         rimz::harness::launch::validate_agent_shell(shell)?;
@@ -231,6 +230,8 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
+    let runtime = rimz::RuntimePaths::for_state(&paths)?;
+    let admission = rimz::harness::hibernate::admit(&machine.agents.hibernate, &runtime)?;
     rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
@@ -262,7 +263,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         report_already_inside(mux, &workspace.session_name, situation)?;
         return Ok(());
     }
-    report_start_notices(&workspace)?;
+    report_start_notices(&workspace, &admission)?;
     let first_run = ensure_default_config_for_start()?;
     enter_room(
         RoomEntry::Start {
@@ -810,7 +811,6 @@ fn preflight_recovery(
     if !disposition.recovers() {
         return Ok(());
     }
-    rimz::harness::hibernate::preflight(&machine_config().agents.hibernate)?;
     if plan.preview().requires_sandbox() {
         rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
     }

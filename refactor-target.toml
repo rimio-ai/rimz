@@ -337,7 +337,8 @@ upward-dependencies = [
 # TaskCheck and Judge share legacy shell-or-agent guards across config, trust, delivery, and CLI (+2).
 # Guard, TaskEntry::guard and deserialize_judges share ordered loop guards and their serde projection (+3).
 # Machine hibernation policy and its duration validation serve admission (+1 net).
-surface-budget = 194
+# Hibernation enabled/explicit accessors preserve default-on provenance (+2).
+surface-budget = 196
 
 [[verdict]]
 kind = "item"
@@ -589,7 +590,9 @@ path = "crates/rimz/src/harness"
 # HeldStats and its constructor/stats retain per-root summaries for the CLI (+3).
 # TaskHistory, HeardSummary, and task_history share the fire/heard view with the CLI (+3).
 # Signal selector matching, shared signal subjects, and fan-out receipts serve events CLI (+3).
-surface-budget = 834 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+# Cached Admission/read and the doctor skipped reason share the start verdict (+5).
+# Admission::publish lets every room birth publish the shared capability verdict (+1).
+surface-budget = 840 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
 
 [[verdict]]
 kind = "item"
@@ -1463,6 +1466,41 @@ baseline = 0
 kind = "item"
 key = "store::event::for_terminal_status"
 reason = "Mirrors MessageStatus::is_terminal on purpose: the event method names the wire event per terminal status, and a derived mapping would hide the audit vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::HibernateConfig::enabled"
+reason = "Launch, admission and producers resolve the default-on setting without losing explicit provenance."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::HibernateConfig::explicit"
+reason = "Only an explicitly enabled unavailable capability warrants a start notice."
+
+[[verdict]]
+kind = "item"
+key = "config::agents::HibernateConfig::schedule"
+reason = "One duration validator serves admission and idle policy; replaces the after accessor."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::Admission"
+reason = "Room birth publishes the capability verdict; launch planning and the detached helper consume the same cache."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::Admission::publish"
+reason = "Shared room birth publishes admission before launches and after recovery resets."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::Admission::read"
+reason = "CLI explain and library launch preparation must use the cached verdict without probing the host."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::admit"
+reason = "Start validates policy for notices; shared room birth uses the same capability verdict without refusing missing capabilities."
 
 [[verdict]]
 kind = "shape"

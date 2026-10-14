@@ -776,6 +776,13 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
         String::from_utf8_lossy(&birth_output.stderr)
     );
     let birth_stderr = String::from_utf8_lossy(&birth_output.stderr);
+    assert!(
+        birth
+            .runtime_paths()
+            .root
+            .join("live/hibernate/admission.json")
+            .exists()
+    );
     assert!(birth_stderr.contains("RimZ found 2 coding agents: codex, antigravity."));
     assert!(
         birth_stderr.contains("codex has no trust decision"),

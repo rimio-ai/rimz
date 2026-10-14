@@ -84,33 +84,51 @@ fn socket_stderr_classification_does_not_offer_reset_or_dump_argv() {
 
 #[test]
 fn terminal_stuck_room_resets_without_second_prompt() {
-    let env = Env::new();
-    let setup = env
-        .rimz()
-        .args(["setup", "--yes"])
-        .bounded_output()
-        .expect("run setup");
-    assert!(
-        setup.status.success(),
-        "setup should seed config: {}",
-        String::from_utf8_lossy(&setup.stderr)
-    );
-    let workspace = env.resolve_workspace(&env.project_root);
-    let shim = FakeZellij::new(FakeZellijMode::BirthFails);
+    for mode in [
+        FakeZellijMode::BirthFails,
+        FakeZellijMode::RecoversAfterReset,
+    ] {
+        let env = Env::new();
+        let setup = env
+            .rimz()
+            .args(["setup", "--yes"])
+            .bounded_output()
+            .expect("run setup");
+        assert!(
+            setup.status.success(),
+            "setup should seed config: {}",
+            String::from_utf8_lossy(&setup.stderr)
+        );
+        let workspace = env.resolve_workspace(&env.project_root);
+        let shim = FakeZellij::new(mode);
 
-    let output = rimz_start_pty_output(&env, &shim, &workspace.session_name);
+        let output = rimz_start_pty_output(&env, &shim, &workspace.session_name);
 
-    assert!(
-        output.contains(&format!(
-            "rimz: resetting the '{}' room to clear a wedged mux session...",
-            workspace.session_name
-        )),
-        "terminal start should auto-reset a stuck room: {output}"
-    );
-    assert!(
-        !output.contains("Reset now?"),
-        "terminal start should not show a second reset prompt: {output}"
-    );
+        assert!(
+            output.contains(&format!(
+                "rimz: resetting the '{}' room to clear a wedged mux session...",
+                workspace.session_name
+            )),
+            "terminal start should auto-reset a stuck room: {output}"
+        );
+        assert!(
+            !output.contains("Reset now?"),
+            "terminal start should not show a second reset prompt: {output}"
+        );
+        if matches!(mode, FakeZellijMode::RecoversAfterReset) {
+            assert!(
+                !output.contains("error: "),
+                "reset fixture must recover: {output}"
+            );
+            assert!(
+                env.runtime_paths()
+                    .root
+                    .join("live/hibernate/admission.json")
+                    .exists(),
+                "successful reset must republish admission: {output}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -154,6 +172,7 @@ enum FakeZellijMode {
     Normal,
     SocketOverflowOnBirth,
     BirthFails,
+    RecoversAfterReset,
 }
 
 impl FakeZellijMode {
@@ -161,7 +180,7 @@ impl FakeZellijMode {
         match self {
             Self::Normal => "",
             Self::SocketOverflowOnBirth => "socket-overflow-on-birth",
-            Self::BirthFails => "birth-fails",
+            Self::BirthFails | Self::RecoversAfterReset => "birth-fails",
         }
     }
 }
@@ -180,7 +199,9 @@ impl FakeZellij {
         let log_name = match mode {
             FakeZellijMode::Normal => "zellij.normal.log",
             FakeZellijMode::SocketOverflowOnBirth => "zellij.socket-overflow-on-birth.log",
-            FakeZellijMode::BirthFails => "zellij.birth-fails.log",
+            FakeZellijMode::BirthFails | FakeZellijMode::RecoversAfterReset => {
+                "zellij.birth-fails.log"
+            }
         };
         let log = home.path().join(log_name);
         fs::write(&log, "").expect("create fake zellij log");
@@ -218,6 +239,10 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
     cmd.env("RIMZ_ZELLIJ_BIN", &shim.bin);
     cmd.env("RIMZ_TEST_ZELLIJ_LOG", &shim.log);
     cmd.env("RIMZ_TEST_ZELLIJ_MODE", shim.mode.env_value());
+    if matches!(shim.mode, FakeZellijMode::RecoversAfterReset) {
+        cmd.env("RIMZ_TEST_ZELLIJ_RECOVER_AFTER_RESET", "1");
+        cmd.env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#);
+    }
     cmd.env(
         "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
         format!("{session_name} [Created 1m ago] (EXITED - attach to resurrect)\n"),

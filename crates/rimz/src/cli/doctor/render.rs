@@ -216,6 +216,15 @@ fn render_hibernate(
     section(w, tally, "HIBERNATE")?;
     let mut kv = KeyVals::new().indent(2);
     kv.push("enabled", cell(report.enabled.to_string()));
+    kv.push(
+        "active",
+        cell(
+            report
+                .skipped
+                .as_ref()
+                .map_or_else(|| "yes".into(), |reason| format!("skipped: {reason}")),
+        ),
+    );
     for check in &report.checks {
         let health = match check.status {
             CheckStatus::Ok => Health::Ok,

@@ -57,7 +57,7 @@ fn decision_fixture() -> (tempfile::TempDir, Store, AgentState, Policy, ScopeVie
     );
     agent.turn_ended_at = Some(agent.last_activity);
     let mut config = MachineConfig::default();
-    config.agents.hibernate.enabled = true;
+    config.agents.hibernate.enabled = Some(true);
     config.agents.hibernate.after = "3m".into();
     let uid = nix::unistd::Uid::current().as_raw();
     let scope = ScopeView {
@@ -421,12 +421,13 @@ fn open_runs_hold_only_until_terminal() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     let (_dir, store, agent, _policy, _scope) = decision_fixture();
     let paths = store.paths();
     let runtime = store.runtime_paths();
     let mut config = MachineConfig::default();
-    config.agents.hibernate.enabled = true;
+    config.agents.hibernate.enabled = Some(true);
     config.agents.hibernate.after = "3m".into();
     let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
         paths.workspace_id.clone(),
@@ -465,6 +466,25 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
         );
         requests
     };
+    assert!(
+        spawned(&snapshot).is_empty(),
+        "missing admission must not spawn a freezer"
+    );
+    let path = runtime.live_path("hibernate").join("admission.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "invalid").unwrap();
+    assert!(
+        spawned(&snapshot).is_empty(),
+        "unreadable admission must not spawn a freezer"
+    );
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &path,
+        &Admission {
+            available: true,
+            reason: None,
+        },
+    )
+    .unwrap();
     assert_eq!(spawned(&snapshot).len(), 1);
     snapshot.now = jiff::Timestamp::from_second(1_210).unwrap();
     snapshot.focused_pane = Some(pane.clone());
@@ -513,10 +533,11 @@ fn decision_does_not_refreeze_a_recorded_session() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
     let (_dir, store, agent, _policy, scope) = decision_fixture();
     let mut config = MachineConfig::default();
-    config.agents.hibernate.enabled = true;
+    config.agents.hibernate.enabled = Some(true);
     let pane: PaneId = "tmux:%3".parse().unwrap();
     let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
         store.paths().workspace_id.clone(),
@@ -554,7 +575,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
     produce(&snapshot);
     snapshot.now = jiff::Timestamp::from_second(1_185).unwrap();
     produce(&snapshot);
-    config.agents.hibernate.enabled = false;
+    config.agents.hibernate.enabled = Some(false);
     snapshot.now = jiff::Timestamp::from_second(1_190).unwrap();
     hibernate_idle_agents_with(
         &snapshot,
@@ -617,11 +638,13 @@ fn record_projection_clears_stale_state_and_preserves_real_status() {
     assert!(snapshot.agents[0].hibernation.is_none());
 }
 
+#[cfg(target_os = "linux")]
 struct FakeHost {
     root: tempfile::TempDir,
     missing: Option<&'static str>,
 }
 
+#[cfg(target_os = "linux")]
 impl FakeHost {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
@@ -639,6 +662,7 @@ impl FakeHost {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Host for FakeHost {
     fn systemd_run(&self) -> bool {
         self.missing != Some("systemd-run")
@@ -669,9 +693,10 @@ impl Host for FakeHost {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn preflight_checks_each_precondition_and_ends_errors_with_fixes() {
     let config = HibernateConfig {
-        enabled: true,
+        enabled: Some(true),
         ..Default::default()
     };
     for (name, fix) in [
@@ -710,7 +735,7 @@ fn preflight_checks_each_precondition_and_ends_errors_with_fixes() {
         let failures: Vec<_> = report
             .checks
             .iter()
-            .filter(|check| matches!(check.status, CheckStatus::Error))
+            .filter(|check| matches!(check.status, CheckStatus::Warning))
             .collect();
         assert_eq!(failures.len(), 1, "{name}: {report:?}");
         assert_eq!(failures[0].name, name);
@@ -750,11 +775,67 @@ fn disabled_preflight_does_not_probe() {
             panic!("disabled probe")
         }
     }
-    assert!(
-        inspect_with(&HibernateConfig::default(), &NoHost)
-            .checks
-            .is_empty()
+    let report = inspect_with(
+        &HibernateConfig {
+            enabled: Some(false),
+            ..Default::default()
+        },
+        &NoHost,
     );
+    assert!(report.checks.is_empty());
+    assert_eq!(
+        report.skipped.as_deref(),
+        Some(if cfg!(target_os = "linux") {
+            "disabled"
+        } else {
+            "Linux cgroup freezing is unavailable"
+        })
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
+    let (_dir, store, _, _, _) = decision_fixture();
+    let runtime = store.runtime_paths();
+    let mut host = FakeHost::new();
+    let mut config = HibernateConfig::default();
+    assert!(!Admission::read(runtime).available);
+    let admitted = admit_with(&config, runtime, &host).unwrap();
+    assert!(admitted.available);
+    assert!(
+        !runtime
+            .live_path("hibernate")
+            .join("admission.json")
+            .exists(),
+        "probing must not publish before birth"
+    );
+    admitted.publish(runtime).unwrap();
+    assert!(Admission::read(runtime).available);
+    host.missing = Some("swap");
+    let skipped = admit_with(&config, runtime, &host).unwrap();
+    skipped.publish(runtime).unwrap();
+    assert!(!skipped.available);
+    assert!(
+        skipped
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("swap is absent")
+    );
+    assert_eq!(Admission::read(runtime).reason, skipped.reason);
+    config.enabled = Some(false);
+    assert_eq!(
+        admit_with(&config, runtime, &host)
+            .unwrap()
+            .reason
+            .as_deref(),
+        Some("disabled")
+    );
+    config.after = "bad".into();
+    assert!(admit_with(&config, runtime, &host).is_err());
+    let report = inspect_with(&config, &host);
+    assert!(matches!(report.checks[0].status, CheckStatus::Error));
 }
 
 #[test]

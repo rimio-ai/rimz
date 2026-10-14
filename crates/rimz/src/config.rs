@@ -802,13 +802,15 @@ impl MachineConfig {
     }
 
     fn disable_unavailable_hibernation(&mut self, linux: bool, notices: &mut ConfigNotices) {
-        if linux || !self.agents.hibernate.enabled {
+        if linux || !self.agents.hibernate.enabled() {
             return;
         }
-        self.agents.hibernate.enabled = false;
-        notices.hibernate_unavailable.push(
-            "warning: agents.hibernate.enabled requires Linux cgroup freezing; hibernation is disabled".into(),
-        );
+        if self.agents.hibernate.explicit() {
+            notices.hibernate_unavailable.push(
+                "agents.hibernate.enabled is set but hibernation is skipped: Linux cgroup freezing is unavailable".into(),
+            );
+        }
+        self.agents.hibernate.enabled = Some(false);
     }
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {

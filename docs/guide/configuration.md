@@ -600,17 +600,16 @@ Every launched agent carries three variables, so a script or skill inside the pa
 
 ### Agent hibernation
 
-Many idle agents can fill a small machine's RAM. On Linux, opt-in hibernation trades wake latency for memory: RimZ freezes an eligible provider's systemd user scope and asks the kernel to reclaim its memory to swap. Edit `~/.rimz/config.toml`:
+Many idle agents can fill a small machine's RAM. On Linux, RimZ hibernates eligible idle agents by default: it freezes the provider's systemd user scope and asks the kernel to reclaim its memory to swap. To change the idle grace, edit `~/.rimz/config.toml`:
 
 ```toml
 [agents.hibernate]
-enabled = true
 after = "10m"
 ```
 
-The defaults are `enabled = false` and `after = "10m"`; `after` accepts CLI duration syntax up to 24 hours. Newly launched providers receive scopes in both host and sandbox isolation. Already-open providers without a scope do not hibernate. Turn `enabled` back off to stop new hibernations; focus a hibernating pane to wake it.
+The defaults are `enabled = true` and `after = "10m"`; `after` accepts CLI duration syntax up to 24 hours. When hibernation is available, newly launched providers receive scopes in both host and sandbox isolation. Already-open providers without a scope do not hibernate. Set `enabled = false` to stop new hibernations; focus a hibernating pane to wake it.
 
-Linux needs systemd's user manager, delegated memory controls, and swap visible in `/proc/meminfo`. In LXC, give the container a swap allowance too: an unlimited visible cgroup setting alone does not prove swap is available. `rimz start` refuses an enabled capability that cannot work; `rimz doctor` lists the checks and fixes. Off Linux, enabling it warns and does nothing. See [the sidebar lifecycle](./sidebar.md#the-agent-lifecycle) for eligibility and waking.
+Linux needs systemd's user manager, delegated memory controls, and swap visible in `/proc/meminfo`. In LXC, give the container a swap allowance too: an unlimited visible cgroup setting alone does not prove swap is available. Where hibernation cannot work, including off Linux, RimZ silently skips it; `rimz doctor` says why and lists fixes. An explicit `enabled = true` adds one warning at `rimz start`, but never prevents startup for a missing capability. An invalid duration still refuses start. After fixing a capability, run `rimz start` again to activate hibernation. See [the sidebar lifecycle](./sidebar.md#the-agent-lifecycle) for eligibility and waking.
 
 ### Agent profiles, commands, and teams
 
