@@ -2,6 +2,11 @@ use super::*;
 use std::collections::BTreeMap;
 
 fn gap(kind: &str, config: &Path, cwd: &Path, root: Option<&Path>) -> FolderTrustGap {
+    if kind == "codex" {
+        let root = root.unwrap_or(cwd);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    }
     let env = BTreeMap::from([
         ("RIMZ_CODEX_CONFIG".into(), config.display().to_string()),
         (
@@ -199,6 +204,8 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
     use crate::agents::login::LoginCatalog;
     use crate::ids::{AgentKind, RoomLogins};
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let home = dir.path().join("work");
     let accounts = toml::from_str(&format!(
         "[claude.work]\nhome = {}\n[codex.work]\nhome = {}\n",

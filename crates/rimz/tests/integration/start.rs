@@ -748,8 +748,55 @@ fn start_opens_the_room_when_the_invalid_notifications_table_is_switched_off() {
 }
 
 #[test]
+fn start_warns_about_saved_untrusted_on_birth_and_reattach() {
+    for live in [false, true] {
+        let env = Env::new();
+        let bin = seed_actionable_agent(&env);
+        std::fs::copy(bin.join("agy"), bin.join("codex")).unwrap();
+        let config = env.home_root.join("codex.toml");
+        let original = format!(
+            "[projects.{}]\ntrust_level = \"untrusted\"\n",
+            toml::Value::String(env.project_root.display().to_string())
+        );
+        std::fs::write(&config, &original).unwrap();
+        let workspace = env.resolve_workspace(&env.project_root);
+        let sessions = if live {
+            seed_sidebar_heartbeat(
+                &env.runtime_paths(),
+                rimz::MuxName::Zellij,
+                &workspace.session_name,
+                "live",
+            );
+            format!("{} [Created 1m ago]\n", workspace.session_name)
+        } else {
+            String::new()
+        };
+        let trace = env.project_root.join("restricted-start.log");
+        let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+        let mut command = env.rimz();
+        configure_actionable_hooks(&mut command, &env, &bin, &trace, &sessions);
+        let output = command
+            .env("RIMZ_CODEX_CONFIG", &config)
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert!(stderr.contains("saved untrusted"), "{stderr}");
+        assert!(stderr.contains("Open restricted"), "{stderr}");
+        assert!(!stderr.contains("rimz trust grant --agents"), "{stderr}");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    }
+}
+
+#[test]
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
+    std::fs::create_dir(birth.project_root.join(".git")).unwrap();
+    std::fs::write(
+        birth.project_root.join(".git/HEAD"),
+        "ref: refs/heads/main\n",
+    )
+    .unwrap();
     let birth_bin = seed_actionable_agent(&birth);
     let codex = birth_bin.join("codex");
     std::fs::copy(birth_bin.join("agy"), &codex).unwrap();

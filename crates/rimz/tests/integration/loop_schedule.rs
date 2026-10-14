@@ -1914,6 +1914,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Takeover {
+    Restricted,
     IdleOccupants,
     WorkingOccupant,
     SymlinkedCheckout,
@@ -1921,6 +1922,11 @@ enum Takeover {
     OpenRunPane,
     EmptyCheckout,
     TeamLayout,
+}
+
+#[test]
+fn resident_saved_untrusted_refuses_before_takeover() {
+    resident_takeover_case(Takeover::Restricted);
 }
 
 #[test]
@@ -1982,6 +1988,12 @@ fn resident_takeover_case(case: Takeover) {
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, &launch_cwd);
+    if case == Takeover::Restricted {
+        let config = env.agent_config_path("codex");
+        let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        table["projects"][launch_cwd.to_str().unwrap()]["trust_level"] = "untrusted".into();
+        std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
+    }
     let sibling = env.home_root.join("sibling");
     assert!(git_ok(
         &env.project_root,
@@ -2182,7 +2194,23 @@ fn resident_takeover_case(case: Takeover) {
     let assists = || rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
     let checkout = rimz::utils::path::normalize_path_lexical(&launch_cwd);
 
+    let before_agents = serde_json::to_value(store.snapshot().unwrap().agents).unwrap();
     let output = fire();
+    if case == Takeover::Restricted {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("saved untrusted"), "{stderr}");
+        assert!(stderr.contains("Open restricted"), "{stderr}");
+        assert!(!output.status.success());
+        assert!(!trace_text().contains("close-pane"), "{}", trace_text());
+        assert!(!trace_text().contains("new-tab"), "{}", trace_text());
+        assert!(ledger().is_empty());
+        assert_eq!(last_loop_record(&env).result, LoopRunResult::Errored);
+        assert_eq!(
+            serde_json::to_value(store.snapshot().unwrap().agents).unwrap(),
+            before_agents
+        );
+        return;
+    }
     if case == Takeover::FailedStop || open_run_pane {
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);

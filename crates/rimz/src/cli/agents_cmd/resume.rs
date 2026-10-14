@@ -165,9 +165,19 @@ pub(super) fn resume_agent(reference: &str, bg: bool, globals: &GlobalFlags) -> 
         agent.kind.as_str(),
         &tab.cwd,
     )?;
-    logins
-        .login(&agent.kind, &machine.accounts)?
-        .health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
+    let login = logins.login(&agent.kind, &machine.accounts)?;
+    login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
+    let adapter = rimz::agents::find_definition(agent.kind.as_str())
+        .with_context(|| format!("unknown agent kind `{}`", agent.kind))?;
+    crate::cli::folder_trust::preflight(
+        agent.kind.as_str(),
+        adapter.folder_trust(
+            &tab.cwd,
+            Some(workspace.launch_repo_root()),
+            &login.env(&rimz::agents::ambient_env()),
+        ),
+        None,
+    )?;
     let receipt = format!("resumed {}:{name} ({})", agent.kind, agent.agent_id);
     if placement == Placement::NewTab {
         room.open_resume_tab(tab, focus.takes_focus())?;
@@ -292,9 +302,19 @@ pub(super) fn resume_lane(
     };
     for kind in action.agent_kinds_needing_preflight() {
         rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), cwd)?;
-        logins
-            .login(kind, &machine_config.accounts)?
-            .health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+        let login = logins.login(kind, &machine_config.accounts)?;
+        login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+        let adapter = rimz::agents::find_definition(kind.as_str())
+            .with_context(|| format!("unknown agent kind `{kind}`"))?;
+        crate::cli::folder_trust::preflight(
+            kind.as_str(),
+            adapter.folder_trust(
+                cwd,
+                Some(workspace.launch_repo_root()),
+                &login.env(&rimz::agents::ambient_env()),
+            ),
+            None,
+        )?;
     }
 
     match action {

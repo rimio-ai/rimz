@@ -605,6 +605,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         if let Err(error) = prompt_folder_trust(workspace, &logins) {
             writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
         }
+    } else if let RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } =
+        &entry
+        && let Err(error) = crate::cli::folder_trust::collect(workspace)
+            .and_then(|rows| warn_restricted_folder_trust(&rows))
+    {
+        writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
     }
 
     let source = match &entry {
@@ -907,6 +913,19 @@ fn folder_trust_offer<'a>(
     }
 }
 
+fn warn_restricted_folder_trust(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
+    for row in rows {
+        if let rimz::agents::FolderTrust::Restricted { key } = &row.trust {
+            crate::cli::folder_trust::preflight(
+                row.kind,
+                Some(rimz::agents::FolderTrust::Restricted { key: key.clone() }),
+                None,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn prompt_folder_trust(
     workspace: &rimz::ResolvedWorkspace,
     logins: &rimz::agents::RoomLoginSet,
@@ -918,6 +937,7 @@ fn prompt_folder_trust(
         &workspace.worktree_root,
         workspace.launch_repo_root(),
     );
+    warn_restricted_folder_trust(&rows)?;
     let FolderTrustOffer {
         rows,
         decline: declined_kinds,

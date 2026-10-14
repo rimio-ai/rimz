@@ -344,6 +344,7 @@ pub(super) fn execute(
             .get(crate::workspace::ENV_PROJECT_ROOT)
             .map(Path::new),
         &plan.login.env(&ambient_env()),
+        crate::agents::LaunchDirMode::Headless,
     )?;
     let (program, args) = process
         .argv

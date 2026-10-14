@@ -42,8 +42,43 @@ fn doctor_reports_installed_but_disabled_copilot_hooks() {
 }
 
 #[test]
+fn doctor_reports_saved_untrusted_without_a_grant_fix() {
+    let env = Env::new();
+    let bin = crate::common::write_env_dump_shim(&env, "codex");
+    let config = env.home_root.join("codex.toml");
+    let original = format!(
+        "[projects.{}]\ntrust_level = \"untrusted\"\n",
+        toml::Value::String(env.project_root.display().to_string())
+    );
+    std::fs::write(&config, &original).unwrap();
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .env("PATH", &bin)
+        .env("RIMZ_CODEX_CONFIG", &config)
+        .output()
+        .unwrap();
+    let report = doctor_json(&output);
+    let row = &report["folder_trust"]["ready"]["rows"][0];
+    assert_eq!(row["state"], "restricted");
+    assert!(row["fix"].as_str().unwrap().contains("Open restricted"));
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", &bin)
+        .env("RIMZ_CODEX_CONFIG", &config)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("restricted (saved untrusted)"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(config).unwrap(), original);
+}
+
+#[test]
 fn doctor_reports_folder_trust_without_writing() {
     let env = Env::new();
+    std::fs::create_dir(env.project_root.join(".git")).unwrap();
+    std::fs::write(env.project_root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let bin = crate::common::write_env_dump_shim(&env, "codex");
     let config = env.home_root.join("codex.toml");
     std::fs::write(&config, "").unwrap();

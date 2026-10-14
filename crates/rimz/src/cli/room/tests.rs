@@ -40,6 +40,21 @@ fn folder_trust_row(kind: &'static str, grantable: bool) -> rimz::agents::Folder
 }
 
 #[test]
+fn folder_trust_offer_never_asks_or_declines_restricted() {
+    let rows = [rimz::agents::FolderTrustRow {
+        kind: "codex",
+        login: rimz::ids::LoginName::default_login(),
+        trust: rimz::agents::FolderTrust::Restricted {
+            key: "/repo".into(),
+        },
+    }];
+    let offer = super::folder_trust_offer(&rows, &[]);
+    assert!(offer.rows.is_empty());
+    assert!(offer.decline.is_empty());
+    assert!(!offer.asks);
+}
+
+#[test]
 fn folder_trust_offer_filters_decided_and_dismissed_kinds() {
     let mut decided = folder_trust_row("decided", true);
     decided.trust = rimz::agents::FolderTrust::Decided;

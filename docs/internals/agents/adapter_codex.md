@@ -122,9 +122,10 @@ An undecided launch directory stops Codex at its trust screen before the first p
 
 [`trust_gap_at`](../../../crates/rimz/src/agents/adapters/codex/project_trust.rs) returns a `FolderTrust` decision without writing. An undecided result includes the target path, canonical grant key, and exact original/candidate text, or a repair instruction when a preview cannot be made. It follows [upstream's rules](../../externals/agent-adapter/codex-reference.md#project-directory-trust), which stay the authority:
 
-- The launch is decided when any `trust_level`, `trusted` or `untrusted`, is recorded for the launch cwd, the nearest `project_root_markers` ancestor (default `.git`), or the main repository root. Each key matches both canonicalized and as written.
+- The first saved level wins, checking the launch cwd, nearest `project_root_markers` ancestor (default `.git`), then main repository root, canonicalized before as written. `trusted` is Decided; `untrusted` is Restricted with the matching key. Restricted has no grant preview: Codex shows Folder access on every interactive launch, and RimZ never changes that saved decision.
+- Without a saved level, a folder is Decided when neither configured markers nor the default `.git` identify a project ancestor. A `.git` directory needs `HEAD`; a `.git` file counts. Otherwise it is Undecided.
 - The main repository root is `LaunchCheckout.repo_root`, which the workspace resolver already walked up from a linked worktree, so the check runs no git probe. An explicit `--root` replaces it, and a peer launch may then need its own trust entry.
-- A refusal names both fixes: `rimz trust grant --agents codex`, or answer Codex's folder-trust prompt once at the grant key.
+- An Undecided refusal names both fixes: `rimz trust grant --agents codex`, or answer Codex's folder-trust prompt once at the grant key. Restricted instead says to pick Open restricted in the pane or trust the folder in Codex. Supervised launches, team commands, and resident loops refuse Restricted; attended agent commands warn. The headless loop judge passes Restricted because `codex exec` has no folder screen.
 - Valid TOML with malformed trust values refuses with a repair instruction even when another key would match. A missing or unreadable file normally fails the hook preflight first; this check still reports it if the file changes between the reads.
 
 RimZ reads the one resolved config file, not Codex's merged layer stack. Provider passthrough `--cd`/`-C`, `-c` overrides, and launch-specific environment changes are not modeled.

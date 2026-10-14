@@ -1619,8 +1619,51 @@ fn assert_subagent_checkout_with_login(
 
 #[cfg(unix)]
 #[test]
+fn supervised_codex_saved_untrusted_refuses_before_launch() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let config = env.agent_config_path("codex");
+    let mut table: toml::Table = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+    table["projects"][env.project_root.to_str().unwrap()]["trust_level"] = "untrusted".into();
+    let original = toml::to_string(&table).unwrap();
+    std::fs::write(&config, &original).unwrap();
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let trace_path = env.project_root.join("restricted-supervised.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_CODEX_CONFIG", &config)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .bounded_output();
+    assert!(
+        !trace_path.exists(),
+        "preflight must refuse before any mux action"
+    );
+    let output = output.unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("saved untrusted"), "{stderr}");
+    assert!(stderr.contains("Open restricted"), "{stderr}");
+    assert!(!stderr.contains("rimz trust grant"), "{stderr}");
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(env.store().snapshot().unwrap().agents.is_empty());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
 fn supervised_codex_without_project_trust_refuses_before_launch() {
     let env = Env::new();
+    std::fs::create_dir(env.project_root.join(".git")).unwrap();
+    std::fs::write(env.project_root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
@@ -1716,6 +1759,7 @@ fn supervised_claude_without_folder_trust_passes_preflight() {
             &env.project_root,
             Some(&env.project_root),
             &login_env,
+            rimz::agents::LaunchDirMode::Supervised,
         )
         .is_ok(),
         "Claude headless launches do not show the folder-trust dialog"

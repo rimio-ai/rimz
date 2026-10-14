@@ -229,6 +229,10 @@ fn print_agent_report(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
     for row in rows {
         let state = match &row.trust {
             FolderTrust::Decided => "decided".to_owned(),
+            FolderTrust::Restricted { .. } => format!(
+                "restricted (saved untrusted) → {}",
+                FolderTrust::RESTRICTED_FIX
+            ),
             FolderTrust::Undecided(gap) => format!("undecided → {}", gap.fix(row.kind)),
         };
         writeln!(

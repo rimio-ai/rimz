@@ -8,7 +8,13 @@ use crate::ids::LoginName;
 #[derive(Debug, PartialEq, Eq)]
 pub enum FolderTrust {
     Decided,
+    Restricted { key: PathBuf },
     Undecided(FolderTrustGap),
+}
+
+impl FolderTrust {
+    pub const RESTRICTED_FIX: &'static str =
+        "pick Open restricted in the pane, or trust the folder in Codex";
 }
 
 #[derive(Debug, PartialEq, Eq)]

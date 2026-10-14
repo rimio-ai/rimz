@@ -1091,31 +1091,51 @@ pub fn preflight_hooks(
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("{kind} has no trust decision for `{}`: {fix}", dir.display())]
+#[error("{kind} {reason} for `{}`: {fix}", dir.display())]
 pub struct LaunchDirUntrusted {
     pub kind: &'static str,
     pub dir: PathBuf,
     pub fix: String,
+    reason: &'static str,
 }
 
-/// Check whether a supervised launch would stop at directory-trust onboarding.
+/// Check folder trust for supervised panes or headless execution.
 pub fn preflight_launch_dir(
     adapter: &AgentDefinition,
     cwd: &Path,
     repo_root: Option<&Path>,
     login_env: &BTreeMap<String, String>,
+    mode: LaunchDirMode,
 ) -> std::result::Result<(), LaunchDirUntrusted> {
     if !adapter.headless_requires_folder_trust() {
         return Ok(());
     }
-    if let Some(FolderTrust::Undecided(gap)) = adapter.folder_trust(cwd, repo_root, login_env) {
-        return Err(LaunchDirUntrusted {
+    match adapter.folder_trust(cwd, repo_root, login_env) {
+        Some(FolderTrust::Undecided(gap)) => Err(LaunchDirUntrusted {
             kind: adapter.spec().kind,
             dir: cwd.to_path_buf(),
             fix: gap.fix(adapter.spec().kind),
-        });
+            reason: "has no trust decision and would stop at its trust prompt",
+        }),
+        Some(FolderTrust::Restricted { key }) if mode == LaunchDirMode::Supervised => {
+            Err(LaunchDirUntrusted {
+                kind: adapter.spec().kind,
+                dir: key,
+                fix: format!(
+                    "{}; RimZ leaves the saved decision alone",
+                    FolderTrust::RESTRICTED_FIX
+                ),
+                reason: "is saved untrusted and will stop at its Folder access prompt on every launch",
+            })
+        }
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchDirMode {
+    Supervised,
+    Headless,
 }
 
 fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Option<&'static str> {

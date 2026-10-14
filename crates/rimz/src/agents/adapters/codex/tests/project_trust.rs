@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use crate::agents::{FolderTrust, FolderTrustGap};
+use crate::agents::{FolderTrust, FolderTrustGap, LaunchDirMode};
 
 fn trust_gap_at(config: &Path, cwd: &Path, repo_root: Option<&Path>) -> Option<FolderTrustGap> {
     match super::super::project_trust::trust_gap_at(config, cwd, repo_root) {
         FolderTrust::Decided => None,
+        FolderTrust::Restricted { key } => panic!("restricted: {}", key.display()),
         FolderTrust::Undecided(gap) => Some(gap),
     }
 }
@@ -28,13 +29,34 @@ fn write_trust(config: &Path, entries: &[(&Path, &str)], markers: Option<&[&str]
 }
 
 #[test]
-fn exact_cwd_accepts_either_recorded_trust_level() {
+fn projectless_without_a_saved_level_skips_consent() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.toml");
-    for level in ["trusted", "untrusted"] {
-        write_trust(&config, &[(dir.path(), level)], None);
-        assert_eq!(trust_gap_at(&config, dir.path(), None), None);
-    }
+    assert_eq!(trust_gap_at(&config, dir.path(), None), None);
+}
+
+#[test]
+fn configured_marker_without_git_still_requires_consent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(dir.path().join("project.marker"), "").unwrap();
+    write_trust(&config, &[], Some(&["project.marker"]));
+    assert!(trust_gap_at(&config, dir.path(), None).is_some());
+}
+
+#[test]
+fn exact_cwd_distinguishes_trusted_and_saved_untrusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write_trust(&config, &[(dir.path(), "trusted")], None);
+    assert_eq!(trust_gap_at(&config, dir.path(), None), None);
+    write_trust(&config, &[(dir.path(), "untrusted")], None);
+    assert_eq!(
+        super::super::project_trust::trust_gap_at(&config, dir.path(), None),
+        FolderTrust::Restricted {
+            key: dir.path().to_owned()
+        }
+    );
 }
 
 #[test]
@@ -59,7 +81,12 @@ fn project_trust_checks_nearest_root_and_configured_markers() {
         &[(&nested, "untrusted")],
         Some(&["project.marker"]),
     );
-    assert_eq!(trust_gap_at(&config, &cwd, None), None);
+    assert_eq!(
+        super::super::project_trust::trust_gap_at(&config, &cwd, None),
+        FolderTrust::Restricted {
+            key: nested.clone()
+        }
+    );
     write_trust(&config, &[(&nested, "trusted")], Some(&[]));
     assert!(trust_gap_at(&config, &cwd, None).is_some());
 }
@@ -72,7 +99,7 @@ fn project_trust_skips_incomplete_git_markers() {
     std::fs::create_dir(&cwd).unwrap();
     let config = dir.path().join("config.toml");
     write_trust(&config, &[(dir.path(), "trusted")], None);
-    assert!(trust_gap_at(&config, &cwd, None).is_some());
+    assert_eq!(trust_gap_at(&config, &cwd, None), None);
 }
 
 #[test]
@@ -90,12 +117,20 @@ fn linked_worktree_trust_checks_checkout_then_supplied_main_root() {
     .unwrap();
     let config = dir.path().join("config.toml");
     write_trust(&config, &[(&checkout, "untrusted")], None);
-    assert_eq!(trust_gap_at(&config, &cwd, Some(&main)), None);
+    assert_eq!(
+        super::super::project_trust::trust_gap_at(&config, &cwd, Some(&main)),
+        FolderTrust::Restricted {
+            key: checkout.clone()
+        }
+    );
     write_trust(&config, &[(&main, "trusted")], None);
     assert_eq!(trust_gap_at(&config, &cwd, Some(&main)), None);
     assert!(trust_gap_at(&config, &cwd, None).is_some());
     write_trust(&config, &[(&cwd, "untrusted"), (&main, "trusted")], None);
-    assert_eq!(trust_gap_at(&config, &cwd, Some(&main)), None);
+    assert_eq!(
+        super::super::project_trust::trust_gap_at(&config, &cwd, Some(&main)),
+        FolderTrust::Restricted { key: cwd.clone() }
+    );
 }
 
 #[test]
@@ -103,6 +138,8 @@ fn missing_project_trust_names_manual_fixes_without_writing_config() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().join("src");
     std::fs::create_dir(&cwd).unwrap();
+    std::fs::create_dir(cwd.join(".git")).unwrap();
+    std::fs::write(cwd.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let config = dir.path().join("config.toml");
     for repo in [None, Some(dir.path())] {
         let gap = trust_gap_at(&config, &cwd, repo).unwrap();
@@ -130,6 +167,8 @@ fn missing_project_trust_names_manual_fixes_without_writing_config() {
 #[test]
 fn inline_projects_keep_trailing_comments_in_the_preview() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let config = dir.path().join("config.toml");
     let original = "projects = {}\n# trailing comment\n";
     std::fs::write(&config, original).unwrap();
@@ -180,6 +219,8 @@ fn project_trust_accepts_canonical_and_symlink_keys() {
 #[test]
 fn codex_config_path_honors_codex_home_and_override() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     for override_name in [None, Some("override.toml")] {
         let expected = dir.path().join(override_name.unwrap_or("config.toml"));
         let mut login_env = std::collections::BTreeMap::from([(
@@ -196,12 +237,37 @@ fn codex_config_path_honors_codex_home_and_override() {
         assert_eq!(path, expected);
         let adapter = crate::agents::definition_by_kind("codex").unwrap();
         let cwd = path.parent().unwrap();
-        let error =
-            crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).unwrap_err();
+        let error = crate::agents::preflight_launch_dir(
+            adapter,
+            cwd,
+            None,
+            &login_env,
+            LaunchDirMode::Supervised,
+        )
+        .unwrap_err();
         assert_eq!(error.kind, "codex");
         assert_eq!(error.dir, cwd);
         assert!(error.fix.contains("rimz trust grant --agents codex"));
         write_trust(&path, &[(cwd, "untrusted")], None);
-        assert!(crate::agents::preflight_launch_dir(adapter, cwd, None, &login_env).is_ok());
+        assert!(
+            crate::agents::preflight_launch_dir(
+                adapter,
+                cwd,
+                None,
+                &login_env,
+                LaunchDirMode::Headless
+            )
+            .is_ok()
+        );
+        let error = crate::agents::preflight_launch_dir(
+            adapter,
+            cwd,
+            None,
+            &login_env,
+            LaunchDirMode::Supervised,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("saved untrusted"));
+        assert!(error.fix.contains("Open restricted"));
     }
 }

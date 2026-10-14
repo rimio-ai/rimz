@@ -64,7 +64,7 @@ A launch refuses before it writes a run record or opens a pane when:
 
 - the caller is not an identifiable agent, or is itself a subagent;
 - the profile or `--agent` re-base is outside the caller's [allowlist](#discover-profiles), or names a direct profile from `agents/` (the error names both namespaces);
-- the [supervised-run requirements](./agents.md#supervised-runs--p) fail: RimZ's hooks for the agent are not installed and trusted, or a Codex child's checkout has no recorded Codex trust decision;
+- the [supervised-run requirements](./agents.md#supervised-runs--p) fail: RimZ's hooks for the agent are not installed and trusted, or a Codex child's checkout would show a folder-trust screen (an undecided project or a folder saved as untrusted);
 - the room or provider-account daily cap has no headroom, or a fresh Qwen run's account has an exhausted quota window. This refusal exits `125` ([What a cap blocks](./budget.md#what-a-cap-blocks)).
 
 | Exit | Meaning |
