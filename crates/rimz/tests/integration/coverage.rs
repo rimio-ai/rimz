@@ -161,19 +161,43 @@ fn published_matrices_match_the_declared_capabilities() {
     }
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for doc in ["README.md", "docs/reference/agent-support.md"] {
+    for (doc, heading) in [
+        ("README.md", "## Agent compatibility matrix"),
+        (
+            "docs/reference/agent-support.md",
+            "## The compatibility matrix",
+        ),
+    ] {
         let text = std::fs::read_to_string(root.join(doc)).expect("read published doc");
+        // Scope to the matrix section, so a later table whose rows start with
+        // an agent label cannot stand in for the matrix.
+        let section: Vec<&str> = text
+            .lines()
+            .skip_while(|line| *line != heading)
+            .skip(1)
+            .take_while(|line| !line.starts_with("## "))
+            .collect();
+        assert!(!section.is_empty(), "{doc} has no `{heading}` section");
         for (display, kind) in AGENTS {
-            let row = text
-                .lines()
-                .find(|line| {
+            let rows: Vec<&str> = section
+                .iter()
+                .copied()
+                .filter(|line| {
                     line.starts_with('|')
                         && line
                             .split('|')
                             .nth(1)
                             .is_some_and(|cell| cell.trim() == display)
                 })
-                .unwrap_or_else(|| panic!("{doc} has no matrix row for {display}"));
+                .collect();
+            // A rebase conflict resolved by keeping both sides leaves two rows;
+            // checking only the first would let the second pass unread.
+            let [row] = rows.as_slice() else {
+                panic!(
+                    "{doc} `{heading}` must carry exactly one row for {display}, found {}",
+                    rows.len()
+                );
+            };
             let marks: Vec<char> = row
                 .split('|')
                 .filter_map(|cell| {
