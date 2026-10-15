@@ -43,7 +43,7 @@ The heading is the provider and CLI version: the active account's version, else 
 | `ACCOUNT` | Canonical `kind@name`; the default account is muted. |
 | `PLAN` | The plan label, `–` when unknown, `lapsed` in the failure tone when subscription access was rejected, or the status (`logged out`, `not installed`, `not probed`, `no login check`, or `probe failed: <cause>`) when the account is not logged in. A lapse suppresses the cached plan and balances until a successful usage read clears it. |
 | One column per window | Every window any account of the provider reports, labelled as in the block and suffixed `LEFT`. The cell is `N% · 1h23m · 0.9x` (what is left, time to reset, then pace), `100% · ready` before the window's clock starts, `N%` with no known reset, `no limit` for a lifted limit or an account without subscription windows, or `–` when unknown. |
-| `EXTRA LEFT` | Only when some account reports paid usage: `off` when disabled, `∞` when the provider reports unlimited credit, a dollar amount when the balance left is known, else `$ used`, else `–`. |
+| `EXTRA LEFT` | Only when some account reports paid usage: `off` when disabled, `∞` when the provider reports unlimited credit, a dollar amount when the balance left is known, else `$ used`, else `–`. ` · paying` follows it while the account's subscription windows are spent and this paid credit is what it draws on next; the block's `extra:` line carries the same suffix. |
 | `RESET CREDITS` | Only when some account reports reset credits: the count, then `exp` and the time to the soonest expiry (`2 · exp 3d00h`, or `2 · due` once it has passed), the bare count with no known expiry, `-` with none banked, `–` when unknown. |
 | `SPEND 7d` | Only when the kind has a standalone account. Standalone rows show their own 7-day spend, `-` when unrecorded. Default-pool members leave this cell blank. |
 | `READING` | Appears when a declared or previously observed usage window has no reading: `no reading since <date>` from its newest window observation, or `never read`. Omitted when no usage window is expected. |
@@ -145,6 +145,7 @@ This command never computes spend itself. On a machine where nothing has publish
 | `windows` | Array of rate-limit windows; empty when none are known. |
 | `extra_credits` | The string `"disabled"`, or `{"known": {…}}` with any of `used_usd`, `remaining_usd`, `limit_usd`. Reported unlimited credit is `{"known":{"unlimited":true}}`. |
 | `reset_credits` | `{"count": N, "effect": …}` plus `soonest_expiry` and the sorted `expiries` array when known. `effect` says what redeeming a credit does to the window's reset: `"restarts_window"` (Codex: the reset moves a full window from the redemption) or `"keeps_schedule"` (Claude: the reset stays where it was). |
+| `spend_step` | Where the account's spend ladder stands: `subscription`, `paid_credit`, `reset_credit`, or `spent`, as [`rimz accounts list --json`](./accounts.md#list) defines them. |
 | `spending` | The history pool's spend projection; `null` when no tally is recorded. |
 | `day_budget` | `{"cap_usd", "spend_usd", "parked"}` for the account's daily cap, where `spend_usd` is spend since local midnight. |
 | `agents` | Cross-room count for this account, or `null` when rooms cannot be inventoried. Replaces the former session-count field. |

@@ -155,11 +155,11 @@ rimz accounts list [--json]
 
 ```console
 $ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              CREDITS  AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -        -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT              7d LEFT              EXTRA  CREDITS  AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   –      -        -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  –      -        -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   -        -       -        ~/.codex
+●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   –      -        -       -        ~/.codex
 ●  this room (claude)   ●  machine default (codex)   ○  new rooms
 pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
@@ -179,7 +179,7 @@ The legend line under the table names every layer that decides `●` among the k
 | `●  this room (codex)   ●  machine default (claude)   ○  new rooms` | Codex is pinned; Claude follows the machine default or its own home. |
 | `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
 
-`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md). `CREDITS` is the banked reset-credit count: `-` at zero, or the faint unknown cell without a login or a reading.
+`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md). `EXTRA` is the account's paid usage beyond the subscription, the same text as the `EXTRA LEFT` cell of [`rimz providers`](./providers.md#provider-tables): the dollars left, else `$x used`, `off` when disabled, `∞` for unlimited credit, or `–` without a login or a reading. ` · paying` follows it when the account's subscription windows are spent and the provider reports usable paid credit, the step a launch on it draws from next (`$2,413.92 · paying`); with `resume.spend_order = "resets_first"`, an account that has a banked reset auto-redeem would spend reads without it. `CREDITS` is the banked reset-credit count: `-` at zero, or the faint unknown cell without a login or a reading.
 
 | Cell | Meaning |
 | --- | --- |
@@ -230,7 +230,9 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | `default_for` | Always present: every layer that selects the account, of `this_room` (a room pin only), `this_project`, and `new_rooms`, or `[]`. |
 | `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
 | `windows` | Always present: the account's 5h and 7d windows in used terms, each with `duration_mins` (`300` or `10080`) and, when known, `used_percentage`, `resets_at`, and `lifted`, the fields [`rimz providers --json`](./providers.md) uses; `[]` when there is no reading. |
+| `extra_credits` | Present when read: `"disabled"`, or `{"known":{...}}` with `used_usd`, `remaining_usd`, and `limit_usd` when known, the same shape as [`rimz providers --json`](./providers.md). |
 | `reset_credits` | Present when read: `count`, `soonest_expiry`, `expiries`, and `effect`, the same shape as [`rimz providers --json`](./providers.md). |
+| `spend_step` | Where the account's spend ladder stands: `subscription` (a window has room, or capacity is unknown), `paid_credit` (a window is spent and usable paid credit is next), `reset_credit` (a window is spent and auto-redeem would spend a banked reset), or `spent` (neither). `null` without a reading. |
 | `metered` | `true` for a subscription account, `false` for one without usage windows, `null` when unknown. |
 
 `rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, unless it is the current launch account for that provider at the position. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with a `DEFAULT FOR` column (`this room`, `this project`, `new rooms`); its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).

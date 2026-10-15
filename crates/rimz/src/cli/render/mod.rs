@@ -838,6 +838,32 @@ pub(crate) fn window_pace_cell(
     Some(cell(" · pace").suffix(text, style))
 }
 
+/// Paid usage beyond the subscription as one table cell: what is left, else
+/// what was used, `∞` for unlimited credit, `off`, or a faint `–` without a figure. `paying` marks an
+/// account whose spend ladder is drawing on it now.
+pub(crate) fn extra_credits_cell(extra: Option<&rimz::agents::ExtraCredits>, paying: bool) -> Cell {
+    use rimz::agents::ExtraCredits;
+    let money = |usd: f64| cell(rimz::theme::fmt::dollars2(usd)).fg(palette::money());
+    let value = match extra {
+        Some(ExtraCredits::Unlimited) => cell("∞"),
+        Some(ExtraCredits::Disabled) => cell("off"),
+        Some(ExtraCredits::Known {
+            remaining_usd: Some(remaining),
+            ..
+        }) => money(*remaining),
+        Some(ExtraCredits::Known {
+            used_usd: Some(used),
+            ..
+        }) => money(*used).suffix("used", palette::body()),
+        Some(ExtraCredits::Known { .. }) | None => cell("–").fg(palette::faint()),
+    };
+    if paying {
+        value.suffix("· paying", palette::body())
+    } else {
+        value
+    }
+}
+
 /// A rate-limit window's table cell in what is left: `no limit` when lifted,
 /// `N% · ready` before its clock starts, else the percentage with its reset
 /// countdown and pace when known. `None` without a reading.

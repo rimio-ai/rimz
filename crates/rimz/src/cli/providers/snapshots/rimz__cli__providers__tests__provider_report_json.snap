@@ -49,6 +49,7 @@ expression: json
       ],
       "effect": "restarts_window"
     },
+    "spend_step": "subscription",
     "spending": {
       "today": null,
       "headline": {

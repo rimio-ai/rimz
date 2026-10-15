@@ -62,17 +62,17 @@ The account named `default` is the provider's own home and is never declared. It
 
 ```console
 $ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              CREDITS  AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   -        -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
+   KIND    NAME     STATUS           5h LEFT              7d LEFT              EXTRA  CREDITS  AGENTS  HISTORY  HOME
+○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   –      -        -       -        ~/.claude
+●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  –      -        -       shared   ~/.rimz/accounts/claude/work
 
-●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   -        -       -        ~/.codex
+●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   –      -        -       -        ~/.codex
 ●  this room (claude)   ●  machine default (codex)   ○  new rooms
 pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
 
-`●` marks the account a launch from where you stand uses: a room's pin, else the trusted project's selection, else the machine's, else the provider's own home. `○` marks the machine default when that is a different account. The line under the table names every deciding layer (`this room`, `this project`, `machine default`), with provider kinds when they differ. `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
+`●` marks the account a launch from where you stand uses: a room's pin, else the trusted project's selection, else the machine's, else the provider's own home. `○` marks the machine default when that is a different account. The line under the table names every deciding layer (`this room`, `this project`, `machine default`), with provider kinds when they differ. `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets. `EXTRA` is the paid usage the provider allows beyond the subscription; once the windows are spent and RimZ keeps launching on that paid credit, the cell reads `$2,413.92 · paying`, so you can see which account is now billing you. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
 
 Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
 
