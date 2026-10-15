@@ -185,7 +185,7 @@ A request carries a mode, an optional pane-cache floor, and two flags:
 | `min_pane_cache_ms` | A floor that rejects any pane cache older than the signal that asked for it, which is how birth and death beat the pane TTL. |
 | `force_fold` | A renderer-local timer wants a fold from current caches even when nothing on disk changed. |
 
-The dispatcher merges queued requests (strongest mode, latest floor, forced-fold flag OR'd), so a storm of deltas collapses to one run plus at most one deferred follow-up.
+The dispatcher merges queued requests (strongest mode, latest pane-cache floor, forced-fold flag OR'd), so a storm of deltas collapses to one run plus at most one deferred follow-up. The worker rests for `FOLD_FLOOR` (250 ms) after each cycle returns, merging requests that arrive during the gap into the next batch and dropping requests the last answered cycle covers. No mode or flag bypasses this gap; a request after at least 250 ms idle starts immediately. Coverage is stamped only when the next cycle actually starts, so a request observed during the gap is answered by that cycle, not the preceding one. Disconnecting all senders still lets a batch in hand finish.
 
 One cycle first folds the event-fresh rollup over retained panes and agent projection, plus sidecars and heavy-lane files. The fast fold reads neither `snapshot.json` nor `agent-projection.json`. It projects one snapshot per subscribed pane and retains the delivered workspace fold and its frame for new-attachment seeds. Accepted producer inputs reach the shared memory slot before projection or delivery, including when a later fold fails.
 
@@ -504,7 +504,7 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 
 ### The paint clock
 
-Data cadence and paint cadence are separate clocks, which is why the sidebar stays responsive while the data layer runs slow.
+Data cadence and paint cadence are separate clocks, which is why the sidebar stays responsive while the data layer runs slow. The fetch worker's 250 ms post-cycle rest bounds data folds even under continuous requests and adds up to 250 ms of card-state latency; the production data-tick gate remains separate. Input, resize, and overlay paints do not wait for the worker.
 
 `[theme.display] refresh_ms` sets the base render grid, `DEFAULT_REFRESH_MS` (100 ms) by default, clamped to 16 through 1000 ms. It rides `snapshot.theme.display`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself. Money rolls sample every `refresh_ms * CLICK_PHASES` (two base frames), matching the odometer's phase counter, and row animations sample on `BREATH_ANIMATION_FRAME` (120 ms), never faster than the base grid.
 
