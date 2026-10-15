@@ -330,6 +330,7 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 | Cursor | CLI `status --format json` and `about --format json` → email, tier, version | none ([adapter_cursor.md](./adapter_cursor.md#account-and-balance)) |
 | Grok | `${GROK_HOME:-~/.grok}/auth.json` metadata → session metered, API key unmetered | none; spend comes from `turn_completed` ([adapter_grok.md](./adapter_grok.md#account-and-balance)) |
 | Amp | `AMP_API_KEY` or `secrets.json` presence → pay-per-use, no identity ([adapter_amp.md](./adapter_amp.md#account-and-balance)) | none |
+| Muse | none integrated ([adapter_muse.md](./adapter_muse.md#account-and-balance)) | none |
 
 Claude, Codex, Copilot, Pi, OpenCode, Kimi, and Qwen declare `direct_account_usage` and read provider credentials for it; Antigravity reads no credential and pairs identity and quota through the verified service of an already-running `agy`. Antigravity, Copilot, OpenCode, Kimi, and Qwen have no realtime leg, so the direct query is their only balance source. Pi and OpenCode delegate to the Claude or Codex usage fetcher for their backing token. Copilot's scopes and Claude's gateway `spend` scope omit a duration on purpose, keeping these allowances out of 5h and 7d policy. The gateway reset does not schedule auto-continue; a spend-limit park becomes actionable after reset.
 
