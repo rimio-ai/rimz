@@ -315,7 +315,7 @@ fn event_context_and_shared_input_changes_reach_every_idle_consumer() {
                 issued_at_ms: crate::utils::time::unix_now_ms(),
                 applied_at_ms: None,
                 state: crate::mux::focus_anchor::FocusIntentState::Requested,
-                pre_action: Vec::new(), offset: 0, order: None,
+                    pre_action: Vec::new(), placement: None, order: None,
             }).unwrap(),
             "filter" => crate::sidebar::body_filter::write(&fixture.runtime, &crate::sidebar::body_filter::BodyLens { query: Some("claude".into()), ..Default::default() }).unwrap(),
             _ => unreachable!(),

@@ -340,7 +340,7 @@ Unless marked, these live in the workspace runtime directory.
 | --- | --- |
 | `live/heartbeat/sidebar.<instance>.json` | Liveness for launch gating and wakeup fanout, named by the full instance id, plus the pane size that `rimz sidebar frame` draws at. |
 | `sock/host.<digest>.wake.sock` | The host's room datagram socket, named by a digest of mux and session to fit the AF_UNIX path limit; every attachment's heartbeat names this same address. |
-| `lanes/focus-anchor.json` | The durable jump intent, viewport offset, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
+| `lanes/focus-anchor.json` | The durable jump intent, optional card placement, and frozen order every renderer reads on fusion ([focus intent](#focus-intent)). |
 | `lanes/unread.json`, `live/read-marks/marks.json` | Open unread episodes and the room's locked, max-updated read marks. |
 | `lanes/loop-fire.json` | The host's loop-task arm and fire stamps for this room. |
 | `lanes/authoritative-pane-probe.json` | One single-flight winner's authoritative mux pane observation, shared by every sidebar's liveness watchdog. |
@@ -453,7 +453,7 @@ Fusion is pure over pulled truth, the event store, and `now_ms`. It runs on the 
 
 ## Focus intent
 
-Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped. It carries a nonce, the session, the target pane, the origin, the exact pre-action client map, the viewport offset, and the frozen row order from the source frame.
+Every RimZ-initiated focus action, a user jump or an automatic repair, is a durable two-phase intent in `lanes/focus-anchor.json` ([`mux/focus_anchor.rs`](../../../crates/rimz/src/mux/focus_anchor.rs)). The file is workspace-wide and client-scoped. It carries a nonce, the session, the target pane, the origin, the exact pre-action client map, an optional card placement, and the frozen row order from the source frame. Version `rimz.focus-anchor.v4` replaces the line offset with optional `placement {row_id, viewport_row}`: the card's own first line relative to the source scroll-zone top, signed when clipped above. Readers also accept v3, ignoring its old offset and yielding no placement; other versions are ignored. This v3 compatibility arm can go after the next release.
 
 The fetch worker reads the anchor once for a fold cycle and shares that observation with every projection, alongside the room body filter. Each attachment still resolves focus against its own pulled observation and events, applies scroll and order only to its own selection, and owns confirmation and read intent. Read sweeps load the current room mark record through the stat-keyed parse cache. Explicit actions and event-only folds read live state. Retiring an observed intent always compares its nonce with the live file, so a newer intent written after the shared read cannot be cleared by an older fold. Gate and health reduction remain pane-local.
 
@@ -461,7 +461,7 @@ The shared input cut is stamped before its reads. A pane's later focus-anchor ob
 
 The intent has two states:
 
-- **`Requested`** is written, and wakes every renderer with `FocusIntent`, before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, viewport offset, and frozen order while the destination is still hidden.
+- **`Requested`** is written, and wakes every renderer with `FocusIntent`, before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, optional card placement, and frozen order while the destination is still hidden.
 - **`Applied`** records that the mux accepted the command, without reseeding presentation. Native confirmation and fencing read this phase.
 
 Native client observations resolve the intent, with the pre-action client map as the fence. [`observation_outcome`](../../../crates/rimz/src/mux/focus_anchor.rs) returns one of five verdicts:

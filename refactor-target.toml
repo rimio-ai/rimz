@@ -802,7 +802,8 @@ path = "crates/rimz/src/mux"
 # Ambient mux identity and its scrub builder are shared by the birth specs and the web helpers (+2).
 # Captured hook pane values use the existing mux-owned normalization (+1).
 # Six remote channel constants move below remote, with the shared REMOTE_CLIENT_ENV birth scrub list (+7).
-surface-budget = 283
+# FocusPlacement carries the optional card-relative presentation shared between renderers (+1).
+surface-budget = 284
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -3313,6 +3314,11 @@ reason = "Integration tests build CommandSpec argv through it (tests/integration
 kind = "item"
 key = "mux::focus_anchor::load"
 reason = "Integration tests read the persisted focus intent through load and FocusAnchor fields (tests/integration/backend/zellij/tabs.rs); FocusAnchor and FocusIntentState stay pub with it (pass 18c)."
+
+[[verdict]]
+kind = "item"
+key = "mux::focus_anchor::FocusPlacement"
+reason = "The focus intent shares card identity and scroll-zone-relative placement between renderer attachments."
 
 [[verdict]]
 kind = "item"

@@ -2008,11 +2008,6 @@ impl LoopState {
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
             && crate::mux::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {
-            self.ui.scroll_offset = anchor.offset;
-            self.ui.manual_scroll = None;
-            // A sidebar jump freezes the clicked row; suppress the group reveal
-            // armed for the same selection change.
-            self.ui.focus_group_reveal = false;
             if let Some(order) = anchor.order {
                 order_hold::adopt_shared_hold(
                     &mut self.ui,
@@ -2308,7 +2303,7 @@ fn spawn_pane_focus(
                         origin,
                         repair_generation,
                         expected_pre_action: expected_pre_action.as_deref(),
-                        offset: presentation.0,
+                        placement: None,
                         order: presentation.1.clone(),
                     },
                 )

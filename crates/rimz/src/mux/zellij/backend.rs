@@ -2265,7 +2265,7 @@ pub(super) fn execute_focus_restoration(
             origin: crate::mux::focus_anchor::FocusOrigin::User,
             repair_generation: None,
             expected_pre_action: None,
-            offset: 0,
+            placement: None,
             order: None,
         },
     )?;

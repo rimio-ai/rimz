@@ -316,7 +316,7 @@ mod tests {
             applied_at_ms: None,
             state: FocusIntentState::Requested,
             pre_action: vec![],
-            offset: 0,
+            placement: None,
             order: None,
         };
         crate::mux::focus_anchor::store(&runtime, &anchor).unwrap();
