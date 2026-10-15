@@ -30,6 +30,8 @@ const RECEIPT_POLL: Duration = Duration::from_secs(1);
 const TEST_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
 const TEST_WATCH_ENV: &str = "RIMZ_TEST_SUBAGENT_PARENT_WATCH";
+#[cfg(feature = "testkit")]
+const TEST_PARENT_ENDED_MARKER_ENV: &str = "RIMZ_TEST_PARENT_ENDED_MARKER";
 
 /// The parent launch's members and cursor, captured before startup projection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -210,6 +212,15 @@ impl ParentWatchdog {
                 was_waiting = waiting;
                 if self.probe_if_due(now) {
                     signal.store(true, Ordering::Release);
+                    #[cfg(feature = "testkit")]
+                    if let Some(path) = std::env::var_os(TEST_PARENT_ENDED_MARKER_ENV)
+                        && let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                    {
+                        let _ = std::io::Write::write_all(&mut file, b"ended\n");
+                    }
                     break;
                 }
                 let deadline = self.next_probe.min(self.next_tail);

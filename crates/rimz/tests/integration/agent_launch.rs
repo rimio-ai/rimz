@@ -4757,6 +4757,8 @@ async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
 /// past `RIMZ_TEST_STARTUP_DEATHS`, when set, exit 0 instead. Each launch
 /// leaves its environment in `<log>.env`, and with `RIMZ_TEST_STARTUP_STTY`
 /// set a death first leaves the terminal raw, as a TUI killed mid-setup does.
+/// With `RIMZ_TEST_PARENT_ENDED_MARKER` set, a launch first waits up to 30 s
+/// for the wrapper's parent watchdog to mark the parent ended.
 #[cfg(unix)]
 fn write_counting_dead_agent(env: &Env, log: &std::path::Path) -> std::path::PathBuf {
     let dir = env.home_root.join("agent-bin");
@@ -4764,7 +4766,7 @@ fn write_counting_dead_agent(env: &Env, log: &std::path::Path) -> std::path::Pat
         &dir,
         "codex",
         &format!(
-            "if [ \"${{1:-}}\" = --version ]; then echo 0.159.2; exit 0; fi\nprintf 'launch\\n' >> '{log}'\nenv > '{log}.env'\nif [ \"$(($(wc -l < '{log}')))\" -gt \"${{RIMZ_TEST_STARTUP_DEATHS:-99}}\" ]; then exit 0; fi\nif [ -n \"${{RIMZ_TEST_STARTUP_STTY:-}}\" ]; then stty raw -echo; fi\nexit 7",
+            "if [ \"${{1:-}}\" = --version ]; then echo 0.159.2; exit 0; fi\nprintf 'launch\\n' >> '{log}'\nenv > '{log}.env'\nif [ -n \"${{RIMZ_TEST_PARENT_ENDED_MARKER:-}}\" ]; then i=0; while [ ! -e \"$RIMZ_TEST_PARENT_ENDED_MARKER\" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done; fi\nif [ \"$(($(wc -l < '{log}')))\" -gt \"${{RIMZ_TEST_STARTUP_DEATHS:-99}}\" ]; then exit 0; fi\nif [ -n \"${{RIMZ_TEST_STARTUP_STTY:-}}\" ]; then stty raw -echo; fi\nexit 7",
             log = log.display()
         ),
     );
@@ -5202,10 +5204,12 @@ fn a_session_registered_during_the_startup_relaunch_wait_is_not_relaunched() {
     );
 }
 
-/// A subagent whose parent ends after a startup death is settled as a parent
-/// end. Ended before launch, the watchdog cannot probe in time, so only the
-/// wrapper's confirmation at the grace's end cancels; ended in the wait, the
-/// watchdog sees it and cancels before the respawn.
+/// A subagent whose parent ends around a startup death is settled as a parent
+/// end. With `parent_ended_before_launch` the seed already shows the end, so
+/// the watchdog probes at once and the provider dies only once the watchdog
+/// has stored it; the wrapper's confirmation at the grace's end is the
+/// fallback, so no relaunch is announced. Otherwise the parent ends during the
+/// announced relaunch wait and the watchdog cancels before the respawn.
 #[cfg(unix)]
 fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
     let env = Env::new();
@@ -5261,15 +5265,19 @@ fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
         parent("SessionEnd", LifecycleSignal::Ended);
     }
     let mux_log = env.home_root.join("mux.log");
+    let ended_marker = env.home_root.join("parent-ended.marker");
     let wrapper_env = |wrapper: &mut std::process::Command| {
+        if parent_ended_before_launch {
+            wrapper.env("RIMZ_TEST_PARENT_ENDED_MARKER", &ended_marker);
+        }
         wrapper
             .args(["--mux", "zellij"])
             .env("PATH", path_with_front(&shim_dir))
             .env("ZELLIJ_PANE_ID", "4")
             .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
             .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
-            // Before launch, no probe lands within the test; in the wait,
-            // probes land well before its five minutes end.
+            // Before launch, only the seed's immediate probe lands within the
+            // test; in the wait, probes land well before its five minutes end.
             .env(
                 "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS",
                 if parent_ended_before_launch {
@@ -5303,7 +5311,7 @@ fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
 
 #[cfg(unix)]
 #[test]
-fn a_parent_ended_in_the_first_hook_grace_cancels_the_startup_relaunch() {
+fn a_parent_ended_before_a_startup_death_cancels_the_startup_relaunch() {
     parent_end_after_a_startup_death(true);
 }
 
