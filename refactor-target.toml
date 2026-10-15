@@ -1397,6 +1397,8 @@ allowed-dependencies = [
     "harness::prompt_compose",
     "harness::run",
     "harness::spec",
+    # Launch availability reads each login's step from the shared spend ladder.
+    "harness::spend_ladder",
     "harness::team_prompt",
     "ids",
     "mux",
