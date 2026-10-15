@@ -144,11 +144,13 @@ Successful exit with empty stdout contributes no directive. This remains neutral
 
 At this pin, `_BLOCKING_EVENTS` contains `pre_tool_call` only. `fail_closed` does not make an observation event into a veto. Tool matchers use a full regex match. See [shell hook validation and execution][shell].
 
-Consent is per `(event, command)`, recorded in `$HERMES_HOME/shell-hooks-allowlist.json`. `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true` can accept unseen commands. Those switches change command-execution consent. This reference installs nothing. See [consent handling][shell] and [the parser][parser].
+Consent is per `(event, command)`, recorded in `$HERMES_HOME/shell-hooks-allowlist.json`. Editing a script's contents does not change that consent key. `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true` can accept unseen commands. Those switches change command-execution consent. This reference installs nothing. See [consent handling][shell] and [the parser][parser].
 
 ## Native prompts and permissions
 
 The [human-input helper][human] emits a request immediately before entering a native wait and emits resolution in `finally`. Fields include `kind`, `request_id`, `session_id`, `session_key`, `platform`, and a force-redacted `prompt`. The resolution adds `outcome`, defaulting to `error` when the wait supplies none. The helper does not include the typed password or answer.
+
+That redaction applies to this helper's payload. Other hook families can carry user messages, tool arguments, commands, or results. An integration must treat them as sensitive data.
 
 Source brackets cover [`clarify`][clarify], [sudo][sudo], and [approval waits][approval-prompt]. The helper carries no turn or tool ID by default. Approval observers use another correlation shape and do not share the generic human-input UUID. Source-level brackets must be checked before claiming coverage of other panels. A `pre_tool_call` for `clarify` establishes an attempted call, not a rendered question.
 
@@ -286,7 +288,7 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 
 [integration-doc]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/website/docs/developer-guide/programmatic-integration.md
 
-[finalizer]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/turn_finalizer.py#L453-L817
+[finalizer]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/turn_finalizer.py#L453-L811
 
 [human]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/human_input_hooks.py#L1-L72
 
@@ -336,3 +338,5 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 [in-place]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression.py#L3738-L3801
 [export]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_state_portability.py#L287-L317
 [env]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/env_loader.py#L454-L590
+
+[tui-launch]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/main_tui_launch.py#L350-L483
