@@ -51,7 +51,7 @@ pub use shim::{hermetic_providers, provider_bin};
 #[cfg(unix)]
 pub use shim::{
     path_with_front, write_env_dump_shim, write_failing_agent_shim, write_fake_bash_shell,
-    write_fake_login_shell, write_hook_firing_agent, write_path_shim,
+    write_fake_login_shell, write_hook_firing_agent, write_long_lived_agent_shim, write_path_shim,
 };
 pub use skip::{AF_UNIX_SANDBOXED, skip};
 pub use zellij::ZellijNamespace;

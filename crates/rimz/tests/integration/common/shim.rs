@@ -136,6 +136,27 @@ pub fn write_env_dump_shim(env: &Env, agent: &str) -> PathBuf {
     dir
 }
 
+/// Write a provider stand-in that stays alive without firing a hook, so the
+/// row it backs keeps a live runtime owner and never registers.
+///
+/// It answers `--version` at once with no readable version: a launch plan
+/// probes `<agent> --version` under a 3 s budget before it spawns the
+/// provider, and a stand-in that hangs there delays the pane bind by the
+/// whole budget.
+#[cfg(unix)]
+pub fn write_long_lived_agent_shim(env: &Env, agent: &str) -> PathBuf {
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let shim = dir.join(agent);
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\n[ \"$1\" = --version ] && exit 1\nexec sleep 300\n",
+    )
+    .expect("write agent shim");
+    chmod_executable(&shim);
+    dir
+}
+
 #[cfg(unix)]
 pub fn write_failing_agent_shim(env: &Env, agent: &str, code: u8) -> PathBuf {
     let dir = env.home_root.join("agent-bin");

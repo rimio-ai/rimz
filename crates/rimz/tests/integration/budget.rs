@@ -454,7 +454,7 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
     use rimz::ids::{AgentSessionId, MuxName, PaneId};
     use rimz::store::event::{EventEnvelope, EventKind};
 
-    use crate::common::{exec_args, path_with_front, write_env_dump_shim};
+    use crate::common::{exec_args, path_with_front, write_long_lived_agent_shim};
 
     const SESSION: &str = "sess-pool";
     const PANE: &str = "terminal_3";
@@ -500,8 +500,7 @@ fn a_cross_account_resume_is_stopped_and_hook_checked_under_its_new_account() {
     lifecycle("SessionStart", LifecycleSignal::Registered);
     lifecycle("SessionEnd", LifecycleSignal::Ended);
     // The resumed provider stays alive, so the row keeps a live runtime owner.
-    let shim_dir = write_env_dump_shim(&env, "claude");
-    std::fs::write(shim_dir.join("claude"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    let shim_dir = write_long_lived_agent_shim(&env, "claude");
     let resume_under = |login_name: &str| -> std::process::Child {
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
         request.action = ExecAction::Resume {
