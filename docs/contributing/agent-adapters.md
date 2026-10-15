@@ -171,6 +171,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed` · machine and login-home refusals through `install_blocker` · provider paths checked under the tmux-pinned and inherited pane env
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support · launch prompt style proven live
 - [ ] Spend changes to existing transcripts bump `SPENDING_CACHE_VERSION` · shared pins (conformance preset snapshot, coverage matrix, integration hook counts) moved in the same commit
+- [ ] Each provider-home env key from `config_home_env_keys` listed in `ensure_provider_homes_resolve_from_login_env` ([`xtask/src/invariants.rs`](../../xtask/src/invariants.rs)) and in `PROVIDER_HOME_ENV` ([`xtask/src/sandbox.rs`](../../xtask/src/sandbox.rs)), which the sandbox scrub test pins
 - [ ] `launch_reminders` coverage declared from `append_system_text_channel`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
