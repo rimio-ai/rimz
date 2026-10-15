@@ -76,13 +76,8 @@ struct FetchApplication {
     source: Option<SnapshotSource>,
 }
 
-fn own_tab_viewed(
-    snapshot: &SidebarSnapshot,
-    own_view: &SidebarOwnView,
-    own_pane: &PaneId,
-) -> bool {
-    snapshot
-        .viewed_panes
+fn own_tab_viewed(viewed_panes: &[PaneId], own_view: &SidebarOwnView, own_pane: &PaneId) -> bool {
+    viewed_panes
         .iter()
         .any(|pane| pane == own_pane || own_view.working_pane_ids.contains(pane))
 }
@@ -98,6 +93,8 @@ struct PendingFocusRepair {
 pub(super) struct LoopState {
     #[cfg(test)]
     pub(super) content_applications: u64,
+    #[cfg(test)]
+    pub(super) projections: u64,
     pub(super) current: SidebarSnapshot,
     /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
     nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
@@ -244,6 +241,8 @@ impl LoopState {
         Self {
             #[cfg(test)]
             content_applications: 0,
+            #[cfg(test)]
+            projections: 0,
             nav_keys: (
                 current.sidebar.keys.clone(),
                 super::NavKeymap::from_config(&current.sidebar.keys),
@@ -335,14 +334,15 @@ impl LoopState {
         }
     }
 
-    pub(super) fn seed(&mut self, fold: WorkspaceFold) {
-        let mut snapshot = project_local(
-            fold.workspace,
-            fold.frame.as_deref(),
+    pub(super) fn seed(&mut self, fold: &WorkspaceFold) {
+        let snapshot = Self::project_fold(
+            fold,
             self.config.own_pane.as_ref(),
+            self.config.refresh_ms_override,
         );
-        if let Some(refresh_ms) = self.config.refresh_ms_override {
-            snapshot.theme.display.refresh_ms = refresh_ms;
+        #[cfg(test)]
+        {
+            self.projections += 1;
         }
         self.apply_latest_snapshot_with_seed(
             FetchUpdate::Snapshot {
@@ -352,6 +352,18 @@ impl LoopState {
             },
             true,
         );
+    }
+
+    pub(super) fn project_fold(
+        fold: &WorkspaceFold,
+        own_pane: Option<&PaneId>,
+        refresh_override: Option<u16>,
+    ) -> SidebarSnapshot {
+        let mut snapshot = project_local(fold.workspace.clone(), fold.frame.as_deref(), own_pane);
+        if let Some(refresh_ms) = refresh_override {
+            snapshot.theme.display.refresh_ms = refresh_ms;
+        }
+        snapshot
     }
 
     #[cfg(feature = "testkit")]
@@ -446,6 +458,10 @@ impl LoopState {
     }
 
     fn watches_snapshot(&self, snapshot: &SidebarSnapshot) -> bool {
+        self.watches_view(snapshot.own_view.as_ref(), &snapshot.viewed_panes)
+    }
+
+    fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
         if self
             .optimistic_watch_until
             .is_some_and(|until| Instant::now() < until)
@@ -455,10 +471,10 @@ impl LoopState {
         let Some(own_pane) = self.config.own_pane.as_ref() else {
             return true;
         };
-        let Some(view) = snapshot.own_view.as_ref() else {
+        let Some(view) = own_view else {
             return true;
         };
-        own_tab_viewed(snapshot, view, own_pane)
+        own_tab_viewed(viewed_panes, view, own_pane)
     }
 
     pub(super) fn on_snapshot(&mut self, fetch: &mut FetchDispatcher) {
@@ -466,14 +482,29 @@ impl LoopState {
     }
 
     fn drain_snapshot(&mut self, fetch: &mut FetchDispatcher, allow_defer: bool) {
-        let (pending, deferred) = self.result_rx.take_unless(|snapshot| {
-            allow_defer
-                && !self.watched()
-                && !self.watches_snapshot(snapshot)
-                && snapshot.own_view == self.current.own_view
-                && self.admits_clock_only(false)
-                && self.last_content_fold.elapsed() < tick_for(self.config.tick_seconds)
-        });
+        #[cfg(test)]
+        let mut projections = 0;
+        let (pending, deferred) = self.result_rx.take_unless(
+            |own_view, viewed_panes| {
+                allow_defer
+                    && !self.watched()
+                    && !self.watches_view(own_view, viewed_panes)
+                    && own_view == self.current.own_view.as_ref()
+                    && self.admits_clock_only(false)
+                    && self.last_content_fold.elapsed() < tick_for(self.config.tick_seconds)
+            },
+            |fold, own_pane, refresh_override| {
+                #[cfg(test)]
+                {
+                    projections += 1;
+                }
+                Self::project_fold(fold, own_pane, refresh_override)
+            },
+        );
+        #[cfg(test)]
+        {
+            self.projections += projections;
+        }
         if deferred {
             self.fetched_at = Instant::now();
             self.last_self_close_check = self.fetched_at;
@@ -522,6 +553,8 @@ impl LoopState {
             current: _,
             #[cfg(test)]
                 content_applications: _,
+            #[cfg(test)]
+                projections: _,
             // Derived from `current`, which equal content leaves unchanged.
             nav_keys: _,
             last_focus_observation: _,
@@ -641,6 +674,7 @@ impl LoopState {
             clock.apply(&mut self.current);
             self.last_focus_observation.panes_observed_at_ms = self.current.panes_observed_at_ms;
             self.fetched_at = Instant::now();
+            self.last_content_fold = self.fetched_at;
             self.last_self_close_check = Instant::now();
             self.dirty = true;
             self.fold_inputs = None;
@@ -682,6 +716,7 @@ impl LoopState {
             failed @ FetchUpdate::Failed { .. } => failed,
             FetchUpdate::Unchanged { .. } => unreachable!("clock-only delivery handled above"),
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
+            FetchUpdate::Fold { .. } => unreachable!("projected at take"),
         };
         self.fetched_at = Instant::now();
         let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
@@ -833,8 +868,8 @@ impl LoopState {
     }
 
     fn prepare_action(&mut self, fetch: &mut FetchDispatcher) {
-        // Restore a queued clock before flushing, then fence the baseline
-        // again: the action can change renderer state after acknowledgement.
+        // Require content before flushing, then invalidate reuse again:
+        // the action can change renderer state after acknowledgement.
         self.result_rx.invalidate();
         self.drain_snapshot(fetch, false);
         self.result_rx.invalidate();
@@ -1582,6 +1617,7 @@ impl LoopState {
                 source: None,
             },
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
+            FetchUpdate::Fold { .. } => unreachable!("projected at take"),
             FetchUpdate::Unchanged { .. } => {
                 unreachable!("clock-only delivery bypasses the content path")
             }
@@ -1763,7 +1799,7 @@ impl LoopState {
         ) else {
             return;
         };
-        let now_viewing = own_tab_viewed(&self.current, view, own_pane);
+        let now_viewing = own_tab_viewed(&self.current.viewed_panes, view, own_pane);
         let switched_in = self.ui.viewing_own_tab == Some(false) && now_viewing;
         self.ui.viewing_own_tab = Some(now_viewing);
         if !now_viewing {

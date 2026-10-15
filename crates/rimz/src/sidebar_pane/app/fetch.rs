@@ -19,7 +19,7 @@ use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, Not
 use crate::sidebar::produce::{HostInputs, PaneProducer};
 use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
 use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
 
@@ -69,10 +69,16 @@ pub(super) enum FetchUpdate {
         phase: FetchPhase,
         source: SnapshotSource,
     },
+    Fold {
+        fold: Arc<WorkspaceFold>,
+        own_pane: Option<PaneId>,
+        refresh_override: Option<u16>,
+        phase: FetchPhase,
+        source: SnapshotSource,
+    },
     Unchanged {
         clock: SnapshotClock,
         phase: FetchPhase,
-        source: SnapshotSource,
     },
     Failed {
         error: String,
@@ -126,7 +132,7 @@ pub(super) struct WorkspaceFold {
 
 #[derive(Default)]
 pub(super) struct HostData {
-    pub(super) last_fold: Option<WorkspaceFold>,
+    pub(super) last_fold: Option<Arc<WorkspaceFold>>,
     pub(super) inputs: Option<HostInputs>,
 }
 
@@ -172,6 +178,9 @@ impl FetchUpdate {
             Self::Snapshot {
                 phase: FetchPhase::Interim,
                 ..
+            } | Self::Fold {
+                phase: FetchPhase::Interim,
+                ..
             } | Self::Unchanged {
                 phase: FetchPhase::Interim,
                 ..
@@ -183,7 +192,7 @@ impl FetchUpdate {
         match self {
             Self::Shared { update, .. } => update.snapshot_mut(),
             Self::Snapshot { snapshot, .. } => Some(snapshot),
-            Self::Unchanged { .. } | Self::Failed { .. } => None,
+            Self::Fold { .. } | Self::Unchanged { .. } | Self::Failed { .. } => None,
         }
     }
 
@@ -233,41 +242,53 @@ impl FetchUpdate {
                 context,
             },
             Self::Snapshot {
-                snapshot,
-                phase,
-                source,
+                snapshot, phase, ..
             } => Self::Unchanged {
                 clock: SnapshotClock::of(&snapshot),
                 phase,
-                source,
             },
             update => update,
         }
     }
 
-    fn restore_content(&mut self, previous: &Self) {
-        match (self, previous) {
-            (Self::Shared { update, .. }, Self::Shared { update: prior, .. }) => {
-                update.restore_content(prior)
+    fn preview(&self) -> Option<(Option<SidebarOwnView>, &[PaneId])> {
+        match self {
+            Self::Shared { update, .. } => update.preview(),
+            Self::Snapshot { snapshot, .. } => {
+                Some((snapshot.own_view.clone(), &snapshot.viewed_panes))
             }
-            (update @ Self::Unchanged { .. }, Self::Snapshot { snapshot, .. }) => {
-                let Self::Unchanged {
-                    clock,
-                    phase,
-                    source,
-                } = *update
-                else {
-                    unreachable!()
-                };
-                let mut snapshot = snapshot.clone();
-                clock.apply(&mut snapshot);
-                *update = Self::Snapshot {
-                    snapshot,
-                    phase,
-                    source,
-                };
-            }
-            _ => {}
+            Self::Fold { fold, own_pane, .. } => Some((
+                own_pane
+                    .as_ref()
+                    .zip(fold.frame.as_deref())
+                    .and_then(|(own, frame)| SidebarOwnView::from_frame(own, frame)),
+                &fold.workspace.0.viewed_panes,
+            )),
+            _ => None,
+        }
+    }
+
+    fn project(
+        self,
+        project: &mut impl FnMut(&WorkspaceFold, Option<&PaneId>, Option<u16>) -> SidebarSnapshot,
+    ) -> Self {
+        match self {
+            Self::Shared { update, context } => Self::Shared {
+                update: Box::new(update.project(project)),
+                context,
+            },
+            Self::Fold {
+                fold,
+                own_pane,
+                refresh_override,
+                phase,
+                source,
+            } => Self::Snapshot {
+                snapshot: Box::new(project(&fold, own_pane.as_ref(), refresh_override)),
+                phase,
+                source,
+            },
+            update => update,
         }
     }
 
@@ -668,7 +689,7 @@ impl IdleCycleFixture {
         }
     }
 
-    /// Fold once without production; return clock-only mailbox deliveries unless renderer application is enabled.
+    /// Fold once without production; count clock-only results after consumer take unless renderer application is enabled.
     pub fn run_cycle(&mut self) -> usize {
         // A stamp ahead of the clock keeps production not-due however long the fold takes.
         self.worker.producer_cadence.last_attempt =
@@ -803,8 +824,8 @@ impl FetchWorker {
     }
 
     /// Project one fold for the eldest renderer, which stands for the worker
-    /// in every decision made once per fold, and stage it so the publication
-    /// projects it again for each other renderer.
+    /// in every decision made once per fold, and stage it for lazy projection
+    /// by each other renderer on take.
     fn project_fold(&mut self, fold: WorkspaceFold, sink: &mut ResultSink) -> SidebarSnapshot {
         sink.context = Some(Arc::new(FoldShared {
             observation: self.observer.as_mut().map(|observer| {
@@ -1427,28 +1448,15 @@ impl ResultSender {
         self.send_tracked(update, None)
     }
 
+    /// Queue content without comparing the consumer's acknowledged baseline.
     fn send_tracked(
         &self,
-        mut update: FetchUpdate,
+        update: FetchUpdate,
         counts: Option<Arc<Mutex<DeliveryCounts>>>,
     ) -> Result<(), std::sync::mpsc::SendError<FetchUpdate>> {
         let Some(mailbox) = self.0.upgrade() else {
             return Err(std::sync::mpsc::SendError(update));
         };
-        let prior = {
-            let delivery = mailbox
-                .delivery
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            delivery
-                .accepted
-                .as_ref()
-                .filter(|_| delivery.reusable)
-                .cloned()
-        };
-        let unchanged = prior
-            .as_ref()
-            .is_some_and(|prior| update.same_content(prior));
         let mut pending = mailbox
             .pending
             .lock()
@@ -1458,16 +1466,6 @@ impl ResultSender {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         delivery.counts = counts;
-        // Fence the off-lock comparison against acknowledgement or invalidation.
-        if unchanged
-            && delivery.reusable
-            && prior
-                .as_ref()
-                .zip(delivery.accepted.as_ref())
-                .is_some_and(|(prior, accepted)| Arc::ptr_eq(prior, accepted))
-        {
-            update = update.into_unchanged();
-        }
         pending.push(update);
         #[cfg(test)]
         mailbox.ready.notify_one();
@@ -1478,7 +1476,8 @@ impl ResultSender {
 impl ResultReceiver {
     #[cfg(any(test, feature = "testkit"))]
     pub(super) fn take(&self) -> PendingResults {
-        self.take_unless(|_| false).0
+        self.take_unless(|_, _| false, super::loop_state::LoopState::project_fold)
+            .0
     }
 
     pub(super) fn has_pending_snapshot(&self) -> bool {
@@ -1490,9 +1489,12 @@ impl ResultReceiver {
             .is_some()
     }
 
+    /// Preview before projecting; deferred content still releases completion.
+    /// Projection and equal-content comparison happen only on a consumer take.
     pub(super) fn take_unless(
         &self,
-        defer: impl FnOnce(&SidebarSnapshot) -> bool,
+        defer: impl FnOnce(Option<&SidebarOwnView>, &[PaneId]) -> bool,
+        mut project: impl FnMut(&WorkspaceFold, Option<&PaneId>, Option<u16>) -> SidebarSnapshot,
     ) -> (PendingResults, bool) {
         let mut pending = self
             .0
@@ -1504,9 +1506,9 @@ impl ResultReceiver {
         if pending.outcome.is_none()
             && pending
                 .snapshot
-                .as_mut()
-                .and_then(FetchUpdate::snapshot_mut)
-                .is_some_and(|snapshot| defer(snapshot))
+                .as_ref()
+                .and_then(FetchUpdate::preview)
+                .is_some_and(|(own_view, viewed)| defer(own_view.as_ref(), viewed))
         {
             return (
                 PendingResults {
@@ -1516,14 +1518,36 @@ impl ResultReceiver {
                 true,
             );
         }
-        if pending.snapshot.is_some() || pending.outcome.is_some() {
-            self.0
+        let mut taken = std::mem::take(&mut *pending);
+        drop(pending);
+        if let Some(update) = taken.snapshot.take() {
+            taken.snapshot = Some(self.compare(update.project(&mut project)));
+        }
+        if taken.outcome.is_some() {
+            self.allow_unchanged(false);
+        }
+        (taken, false)
+    }
+
+    fn compare(&self, update: FetchUpdate) -> FetchUpdate {
+        let prior = {
+            let mut delivery = self
+                .0
                 .delivery
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .reusable = false;
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let prior = delivery
+                .accepted
+                .as_ref()
+                .filter(|_| delivery.reusable)
+                .cloned();
+            delivery.reusable = false;
+            prior
+        };
+        if prior.is_some_and(|prior| update.same_content(&prior)) {
+            return update.into_unchanged();
         }
-        (std::mem::take(&mut *pending), false)
+        update
     }
 
     pub(super) fn acknowledge(&self, mut update: FetchUpdate, reusable: bool) {
@@ -1558,33 +1582,21 @@ impl ResultReceiver {
             .reusable = reusable;
     }
 
+    /// Local reconciliation requires content at the next take; queued folds stay intact.
     pub(super) fn invalidate(&self) {
-        let mut pending = self
-            .0
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut delivery = self
-            .0
-            .delivery
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        delivery.reusable = false;
-        // Local input or fusion may have changed the consumer after this send.
-        // Keep the queued clock, but give it content to reconcile again.
-        if let (Some(update), Some(prior)) = (&mut pending.snapshot, &delivery.accepted) {
-            update.restore_content(prior);
-        }
+        self.allow_unchanged(false);
     }
 
     #[cfg(test)]
     fn try_recv(&self) -> Result<FetchUpdate, std::sync::mpsc::TryRecvError> {
-        self.0
+        let update = self
+            .0
             .pending
             .lock()
             .unwrap()
             .pop()
-            .ok_or(std::sync::mpsc::TryRecvError::Empty)
+            .ok_or(std::sync::mpsc::TryRecvError::Empty)?;
+        Ok(self.compare(update.project(&mut super::loop_state::LoopState::project_fold)))
     }
 
     #[cfg(test)]
@@ -1595,14 +1607,15 @@ impl ResultReceiver {
     #[cfg(test)]
     fn recv(&self) -> Result<FetchUpdate, std::sync::mpsc::RecvError> {
         let pending = self.0.pending.lock().unwrap();
-        self.0
+        let pending = self
+            .0
             .ready
             .wait_while(pending, |pending| {
                 pending.snapshot.is_none() && pending.outcome.is_none()
             })
-            .unwrap()
-            .pop()
-            .ok_or(std::sync::mpsc::RecvError)
+            .unwrap();
+        drop(pending);
+        self.try_recv().map_err(|_| std::sync::mpsc::RecvError)
     }
 }
 
@@ -1713,7 +1726,7 @@ impl ResultSink {
     }
 
     /// Deliver one update: to the eldest renderer as given, and to every
-    /// other renderer as its own projection of the staged fold (a snapshot)
+    /// other renderer as the shared staged fold for projection at take,
     /// or as a copy (anything else).
     fn publish(&mut self, mut update: FetchUpdate) {
         let mut staged = self.staged.take();
@@ -1765,21 +1778,19 @@ impl ResultSink {
         {
             self.covered.record(cycle);
         }
+        let staged = staged.map(|(fold, pane)| (Arc::new(fold), pane));
         let Some((eldest, others)) = self.cycle.split_first() else {
             return;
         };
         for subscriber in others {
             match (&update, &staged) {
                 (FetchUpdate::Snapshot { phase, source, .. }, Some((fold, default_pane))) => {
-                    let snapshot = project_local(
-                        fold.workspace.clone(),
-                        fold.frame.as_deref(),
-                        subscriber.own_pane.as_ref().or(default_pane.as_ref()),
-                    );
                     self.send(
                         subscriber,
-                        FetchUpdate::Snapshot {
-                            snapshot: Box::new(snapshot),
+                        FetchUpdate::Fold {
+                            fold: fold.clone(),
+                            own_pane: subscriber.own_pane.clone().or_else(|| default_pane.clone()),
+                            refresh_override: subscriber.refresh_override,
                             phase: *phase,
                             source: *source,
                         },

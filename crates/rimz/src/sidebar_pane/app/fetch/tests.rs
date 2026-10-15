@@ -151,7 +151,7 @@ fn idle_scale_cycles_advance_renderer_clocks_without_content_application() {
         IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 100);
     let mut renderers = consumers(&mut cycles);
     assert_eq!(renderers.len(), 100);
-    let mut previous: Option<WorkspaceFold> = None;
+    let mut previous: Option<Arc<WorkspaceFold>> = None;
     for cycle in 0..3 {
         cycles.run_cycle();
         let fold = cycles
@@ -689,6 +689,7 @@ fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
     match update {
         FetchUpdate::Shared { update, .. } => snapshot(update),
         FetchUpdate::Snapshot { snapshot, .. } => snapshot,
+        FetchUpdate::Fold { .. } => panic!("expected a projected snapshot"),
         FetchUpdate::Unchanged { .. } => panic!("expected content, got clock-only delivery"),
         FetchUpdate::Failed { error, .. } => panic!("expected snapshot, got: {error}"),
     }
@@ -1773,7 +1774,7 @@ fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
 }
 
 #[test]
-fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
+fn one_cycle_projects_only_the_eldest_on_the_worker() {
     let fixture = FetchFixture::new();
     let panes = ["terminal_7", "terminal_8", "terminal_9"];
     let frame = crate::sidebar::frame::assemble_frame(
@@ -1806,10 +1807,23 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
     let mut sink = ResultSink::shared(subscribers, Covered::default(), fixture.host_data.clone());
     worker.run_cycle(&fixture.state, FetchRequest::force_fold(), &mut sink);
 
-    for (own, rx) in updates {
-        let received: Vec<FetchUpdate> = rx.try_iter().collect();
-        assert_eq!(received.len(), 1, "one fold reaches the renderer of {own}");
-        let shown: Vec<String> = snapshot(&received[0])
+    for (index, (own, rx)) in updates.into_iter().enumerate() {
+        let mut pending = rx.0.pending.lock().unwrap();
+        let update = pending.snapshot.as_mut().expect("one publication per pane");
+        assert_eq!(
+            update.snapshot_mut().is_some(),
+            index == 0,
+            "only the eldest gets a worker-built projection"
+        );
+        drop(pending);
+        let mut config = worker.config.clone();
+        config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, own));
+        let (mut renderer, mut dispatcher) = consumer(config, fixture.runtime.clone(), rx);
+        renderer.on_snapshot(&mut dispatcher);
+        assert_eq!(renderer.projections, u64::from(index != 0));
+        assert_eq!(renderer.current.own_view.as_ref().unwrap().sibling_count, 2);
+        let shown: Vec<String> = renderer
+            .current
             .rows()
             .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.raw().to_owned()))
             .collect();
@@ -1819,6 +1833,138 @@ fn one_cycle_projects_the_shared_fold_once_for_each_renderer() {
             "the renderer of {own} excludes only itself"
         );
     }
+}
+
+#[test]
+fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
+    let fixture = FetchFixture::new();
+    let frame = crate::testkit::fleet::seed_scale_room(
+        &fixture.state,
+        &fixture.runtime,
+        crate::testkit::fleet::ScaleRoom {
+            agents: 2,
+            panes: 3,
+            ended_sessions: 0,
+            orphan_contexts: 0,
+        },
+    )
+    .unwrap();
+    let mut panes = frame.to_pane_refs();
+    let mut sidebars = Vec::new();
+    for (index, pane) in panes.iter_mut().enumerate() {
+        pane.view_id = Some(format!("tab_{index}"));
+        let mut sidebar = pane.clone();
+        sidebar.pane_id = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
+        sidebar.command = Some("rimz-sidebar".into());
+        sidebars.push(sidebar);
+    }
+    panes.extend(sidebars);
+    let mut frame = crate::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, "rimz-test");
+    frame.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_0")];
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 3);
+    cycles.enable_renderer_apply();
+    cycles.run_cycle();
+    let hidden = cycles
+        .renderers
+        .iter()
+        .enumerate()
+        .find_map(|(index, (r, _))| {
+            (cycles.sink.cycle[0].own_pane
+                != Some(PaneId::from_parts(
+                    MuxName::Zellij,
+                    format!("sidebar_{index}"),
+                ))
+                && r.current.own_view.as_ref().is_some_and(|view| {
+                    !view
+                        .working_pane_ids
+                        .iter()
+                        .any(|pane| r.current.viewed_panes.contains(pane))
+                }))
+            .then_some(index)
+        })
+        .expect("a hidden pane");
+    assert_eq!(
+        cycles.renderers[hidden].0.projections, 1,
+        "a younger hidden pane projects at its first take"
+    );
+    let before = {
+        let counts = cycles.sink.deliveries.lock().unwrap();
+        (counts.content, counts.unchanged)
+    };
+    for _ in 0..3 {
+        cycles.run_cycle();
+    }
+    assert_eq!(
+        cycles.renderers[hidden].0.projections, 1,
+        "hidden equal folds never project"
+    );
+    let counts = cycles.sink.deliveries.lock().unwrap();
+    assert_eq!(
+        (counts.content - before.0) + (counts.unchanged - before.1),
+        3,
+        "only the watched renderer consumes each cycle"
+    );
+    drop(counts);
+    let own = cycles.renderers[hidden]
+        .0
+        .current
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    {
+        let mut data = cycles.sink.host_data.lock().unwrap();
+        Arc::make_mut(&mut data.inputs.as_mut().unwrap().frame).viewed_panes = vec![own.clone()];
+    }
+    cycles.run_cycle();
+    assert_eq!(
+        cycles.renderers[hidden].0.projections, 2,
+        "reveal projects immediately"
+    );
+    assert!(
+        cycles.renderers[hidden]
+            .0
+            .current
+            .viewed_panes
+            .contains(&own)
+    );
+}
+
+#[test]
+fn equal_content_is_compared_at_take_not_send_and_invalidation_reconciles() {
+    let (tx, rx) = result_channel();
+    let update = FetchUpdate::Snapshot {
+        snapshot: Box::new(crate::sidebar_pane::app::fixtures::snapshot(&workspace())),
+        phase: FetchPhase::Final,
+        source: SnapshotSource::Produced,
+    };
+    tx.send(update.clone()).unwrap();
+    rx.acknowledge(rx.take().pop().unwrap(), true);
+    tx.send(update.clone()).unwrap();
+    assert!(
+        !rx.0
+            .pending
+            .lock()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .is_unchanged(),
+        "send retains content until the consumer decides"
+    );
+    assert!(
+        rx.take().pop().unwrap().is_unchanged(),
+        "equal take applies clocks"
+    );
+    rx.allow_unchanged(true);
+    tx.send(update).unwrap();
+    rx.invalidate();
+    assert!(
+        !rx.take().pop().unwrap().is_unchanged(),
+        "local changes demand content"
+    );
 }
 
 #[test]

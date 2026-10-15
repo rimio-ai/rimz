@@ -1,12 +1,85 @@
 use super::*;
 
+impl Rig {
+    fn lazy_fold(&mut self, snapshot: SidebarSnapshot, source: SnapshotSource) {
+        self.deliver(self.lazy_update(snapshot, source));
+    }
+
+    fn lazy_update(&self, snapshot: SidebarSnapshot, source: SnapshotSource) -> FetchUpdate {
+        let own = self.state.config.own_pane.clone().unwrap();
+        let view = snapshot.own_view.as_ref().unwrap();
+        let mut panes = vec![pane(own.raw(), "tab_0", false)];
+        panes.extend(
+            view.working_pane_ids
+                .iter()
+                .map(|id| pane(id.raw(), "tab_0", false)),
+        );
+        let frame = crate::sidebar::frame::assemble_frame(panes, 1, "rimz-test");
+        FetchUpdate::Fold {
+            fold: Arc::new(WorkspaceFold {
+                workspace: crate::sidebar::enrich::WorkspaceSnapshot(snapshot),
+                frame: Some(Arc::new(frame)),
+            }),
+            own_pane: Some(own),
+            refresh_override: self.state.config.refresh_ms_override,
+            phase: FetchPhase::Final,
+            source,
+        }
+    }
+}
+
+#[test]
+fn equal_hidden_tick_restarts_the_projection_bound() {
+    let mut rig = hidden_rig();
+    let before = rig.state.projections;
+    rig.state.last_content_fold -= Duration::from_secs(60);
+    rig.lazy_fold(rig.state.current.clone(), SnapshotSource::Produced);
+    assert_eq!(rig.state.projections, before + 1);
+    assert_eq!(
+        rig.state.content_applications, 1,
+        "the tick applies clocks only"
+    );
+    for _ in 0..3 {
+        rig.lazy_fold(rig.state.current.clone(), SnapshotSource::Produced);
+    }
+    assert_eq!(
+        rig.state.projections,
+        before + 1,
+        "equal ticks restart the deferral bound"
+    );
+}
+
+#[test]
+fn hidden_projection_waits_for_tick_and_completes_deferred_final() {
+    let mut rig = hidden_rig();
+    assert_eq!(
+        rig.state.projections, 1,
+        "the initial fold projects on take"
+    );
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some());
+    for name in ["first", "latest"] {
+        defer_name(&mut rig, name);
+    }
+    assert_eq!(rig.state.projections, 1, "deferred folds never project");
+    rig.fetch.request(FetchRequest::default(), false);
+    assert!(rig.next_request().is_some(), "deferred final completes");
+    rig.state.last_content_fold -= Duration::from_secs(60);
+    rig.state.on_snapshot(&mut rig.fetch);
+    assert_eq!(
+        rig.state.projections, 2,
+        "the tick projects only the latest"
+    );
+    assert_eq!(rig.state.current.display_name, "latest");
+}
+
 fn hidden_rig() -> Rig {
     let mut rig = Rig::with_own_pane(pane("terminal_1", "tab_0", false).pane_id);
     let mut snapshot = agent_snapshot(&rig.ws);
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
     snapshot.focused_pane = None;
-    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.lazy_fold(snapshot, SnapshotSource::Produced);
     assert!(!rig.state.watched());
     assert!(rig.state.admits_clock_only(false));
     rig
@@ -16,7 +89,7 @@ fn defer_name(rig: &mut Rig, name: &str) {
     let mut snapshot = rig.state.current.clone();
     snapshot.display_name = name.into();
     let before = rig.state.content_applications;
-    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.lazy_fold(snapshot, SnapshotSource::Produced);
     assert_eq!(
         rig.state.content_applications, before,
         "hidden content stays in the mailbox"
@@ -39,7 +112,7 @@ fn one_watched_of_fifty_seven_folds_each_cycle_while_hidden_panes_coalesce() {
             });
             snapshot.viewed_panes = vec![pane("sidebar_0", "tab_0", false).pane_id];
             snapshot.focused_pane = None;
-            rig.fold(snapshot, SnapshotSource::Produced);
+            rig.lazy_fold(snapshot, SnapshotSource::Produced);
             // A viewed tab's read dwell is a deliberate blocker, not hidden work.
             assert_eq!(rig.state.watched(), index == 0);
             rig
@@ -49,7 +122,7 @@ fn one_watched_of_fifty_seven_folds_each_cycle_while_hidden_panes_coalesce() {
         for (index, rig) in rigs.iter_mut().enumerate() {
             let mut snapshot = rig.state.current.clone();
             snapshot.display_name = format!("cycle-{cycle}");
-            rig.fold(snapshot, SnapshotSource::Produced);
+            rig.lazy_fold(snapshot, SnapshotSource::Produced);
             assert_eq!(
                 rig.state.content_applications,
                 if index == 0 { 1 + cycle } else { 1 }
@@ -95,7 +168,7 @@ fn reveal_and_changed_own_view_never_defer() {
         } else {
             snapshot.own_view = Some(empty_own_view());
         }
-        rig.fold(snapshot, SnapshotSource::Produced);
+        rig.lazy_fold(snapshot, SnapshotSource::Produced);
         assert_eq!(rig.state.current.display_name, "immediate");
         assert_eq!(
             rig.state.should_exit, !reveal,
@@ -118,7 +191,7 @@ fn unsettled_hidden_panes_and_failed_deliveries_never_defer() {
         }
         let mut snapshot = rig.state.current.clone();
         snapshot.display_name = "unsettled".into();
-        rig.fold(snapshot, SnapshotSource::Produced);
+        rig.lazy_fold(snapshot, SnapshotSource::Produced);
         assert_eq!(rig.state.current.display_name, "unsettled");
     }
     let mut rig = hidden_rig();
@@ -188,11 +261,7 @@ fn notification_rings_against_the_deferred_unread_fold() {
         let snapshot = unread_snapshot(&rig, true);
         let panes = snapshot.own_view.as_ref().unwrap().working_pane_ids.clone();
         rig.result_tx
-            .send(FetchUpdate::Snapshot {
-                snapshot: Box::new(snapshot),
-                phase: FetchPhase::Final,
-                source: SnapshotSource::Produced,
-            })
+            .send(rig.lazy_update(snapshot, SnapshotSource::Produced))
             .unwrap();
         if drain {
             rig.state.on_snapshot(&mut rig.fetch);
@@ -216,13 +285,13 @@ fn notification_rings_against_the_deferred_unread_fold() {
 fn due_reminder_flushes_a_deferred_unread_clear_before_ringing() {
     let mut rig = hidden_rig();
     rig.state.last_content_fold -= Duration::from_secs(60);
-    rig.fold(unread_snapshot(&rig, true), SnapshotSource::Produced);
+    rig.lazy_fold(unread_snapshot(&rig, true), SnapshotSource::Produced);
     assert!(rig.state.current.rows().next().unwrap().unread);
     let output = capture_bells(&mut rig);
     rig.state
         .remind
         .note_ring(crate::utils::time::unix_now_ms() - 61_000);
-    rig.fold(unread_snapshot(&rig, false), SnapshotSource::Produced);
+    rig.lazy_fold(unread_snapshot(&rig, false), SnapshotSource::Produced);
     assert!(
         rig.state.current.rows().next().unwrap().unread,
         "clear deferred"

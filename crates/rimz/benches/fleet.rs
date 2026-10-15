@@ -354,8 +354,8 @@ fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
 
 #[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
 fn idle_cycle_hidden_fanout(bencher: Bencher) {
-    // About 3x the coalesced 23,776 requests, below the uncoalesced 116,624.
-    const MAX_ALLOCATIONS: usize = 72_000;
+    // About 3x the lazy coalesced 22,319 requests, below the uncoalesced 116,624.
+    const MAX_ALLOCATIONS: usize = 67_000;
     let mut counts = (0, 0);
     bencher
         .with_inputs(|| {

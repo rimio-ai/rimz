@@ -170,7 +170,7 @@ impl Attachment {
         state.baseline_changed = baseline_changed;
         state.set_probed_aspect(terminal.backend().cell_aspect());
         if let Some(seed) = subscription.seed {
-            state.seed(seed);
+            state.seed(&seed);
         }
         // Zellij's percentage template needs a startup trim on capped wide views.
         // tmux births through its live absolute-column hook; its resize wakeups

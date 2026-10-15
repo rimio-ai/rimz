@@ -159,7 +159,7 @@ impl DataPlane {
 
     #[cfg(test)]
     pub(super) fn remember(&self, fold: WorkspaceFold) {
-        lock(&self.host_data).last_fold = Some(fold);
+        lock(&self.host_data).last_fold = Some(Arc::new(fold));
     }
 
     #[cfg(test)]
@@ -196,7 +196,7 @@ pub(in crate::sidebar_pane) struct Subscription {
     pub(super) covered: Covered,
     pub(super) results: ResultReceiver,
     pub(super) observe: SyncSender<ObserveMsg>,
-    pub(super) seed: Option<WorkspaceFold>,
+    pub(super) seed: Option<Arc<WorkspaceFold>>,
     _membership: Membership,
 }
 
