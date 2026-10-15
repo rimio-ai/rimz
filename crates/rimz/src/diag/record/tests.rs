@@ -873,6 +873,38 @@ fn identity_keys_partition_episodes_and_subjects() {
 
 #[test]
 fn representative_events_keep_json_wire_shape() {
+    for cause in [
+        "no_room_clamp",
+        "hold_expired",
+        "banner_toggled",
+        "selection_changed",
+        "height_above_changed",
+    ] {
+        let wire = serde_json::json!({
+            "kind": "frame_anomaly",
+            "anomaly": {"detector": "clicked_row_displaced", "row_id": "a", "from_y": -1, "to_y": null, "dt_ms": 120, "cause": cause},
+            "window_ms": 5000,
+            "frame": frame_stamp(13_000),
+            "events_recent": {"pane_closed": [], "pane_opened": []},
+            "gate_reject_streak": 0, "health_failure_streak": 0, "dropped_msgs": 0
+        });
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(
+            decoded.is_ok(),
+            "clicked-row diagnostic must decode: {decoded:?}"
+        );
+        let decoded = decoded.unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), wire);
+        let DiagEvent::FrameAnomaly { anomaly, .. } = &decoded else {
+            unreachable!()
+        };
+        assert_eq!(anomaly.key(), "clicked_row_displaced");
+        assert_eq!(
+            anomaly.subject().as_deref(),
+            Some(format!("a:{cause}").as_str())
+        );
+        assert!(decoded.summary().contains(&format!("a:{cause}")));
+    }
     let rows = [
         (
             r#"{"kind":"frame_rejected","reason":{"reason":"empty"},"prior_pane_count":2,"fresh_pane_count":0,"frames_ref":"frame.1.0.frame_rejected.json"}"#,

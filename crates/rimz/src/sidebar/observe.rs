@@ -104,6 +104,23 @@ pub(crate) struct AnomalyDraft {
 }
 
 impl AnomalyDraft {
+    pub(crate) fn from_own_sig(
+        sig: &OwnFrameSig,
+        kind: AnomalyKind,
+        window_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            at_ms: sig.at_ms,
+            kind,
+            window_ms,
+            frame: sig.frame.clone(),
+            events_recent: sig.events.clone(),
+            gate_reject_streak: sig.gate_reject_streak,
+            health_failure_streak: sig.health_failure_streak,
+            dropped_msgs: 0,
+        }
+    }
+
     fn from_sig(sig: &FrameSig, kind: AnomalyKind, window_ms: Option<u64>) -> Self {
         Self::from_sig_at_frame(sig, kind, window_ms, frame_stamp_from_sig(sig))
     }

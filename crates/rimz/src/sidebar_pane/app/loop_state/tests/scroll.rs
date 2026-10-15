@@ -76,6 +76,53 @@ fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
 }
 
 #[test]
+fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
+    let (mut rig, _) = scroll_rig();
+    let (row_id, from_y) = rig.state.ui.painted_rows[1].clone();
+    let target = rig
+        .state
+        .current
+        .rows()
+        .find(|row| row.id == row_id)
+        .unwrap()
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    rig.state.observe_tx = tx;
+    let effect = rig
+        .state
+        .apply_input(
+            [Wakeup::MouseClick {
+                column: 2,
+                row: from_y as u16,
+            }],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert!(effect.effects.contains(&InputEffect::Focus(target)));
+    // Deliberately bypass anchoring to exercise the detector at an actual paint.
+    rig.state.ui.offset_authoritative = true;
+    rig.state.ui.scroll_offset += 1;
+    rig.state.dirty = true;
+    paint_at(&mut rig, 0);
+    let message = rx.try_recv();
+    assert!(
+        message.is_ok(),
+        "the paint consumer must detect the clicked card moving: {message:?}"
+    );
+    let ObserveMsg::OwnAnomaly { draft, .. } = message.unwrap() else {
+        panic!("expected own anomaly")
+    };
+    let wire = serde_json::to_value(draft.kind).unwrap();
+    assert_eq!(wire["row_id"], row_id);
+    assert_eq!(wire["from_y"], from_y);
+    assert_eq!(wire["to_y"], from_y - 1);
+}
+
+#[test]
 fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
     use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
     for (viewport_row, banner) in [(-1, false), (2, false), (2, true)] {
@@ -178,6 +225,38 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
             "selected card {selected} must be painted after placing row {placed} at {viewport_row}"
         );
     }
+}
+
+#[test]
+fn focus_click_mid_glide_does_not_report_the_glide_as_displacement() {
+    let (mut rig, _) = scroll_rig();
+    let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    let started = rig.state.ui.frame_ms;
+    paint_at(&mut rig, started + 40);
+    assert!(rig.state.ui.scroll_ease.in_flight());
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    rig.state.observe_tx = tx;
+    let (_, y) = rig.state.ui.painted_rows.last().unwrap().clone();
+    rig.state
+        .apply_input(
+            [Wakeup::MouseClick {
+                column: 2,
+                row: y as u16,
+            }],
+            &mut rig.terminal,
+        )
+        .unwrap();
+    assert!(rig.state.clicked_row.is_some());
+    for elapsed in [60, 80, 100, 140] {
+        paint_at(&mut rig, started + elapsed);
+    }
+    assert!(!rig.state.ui.scroll_ease.in_flight());
+    assert!(rx.try_recv().is_err(), "wheel glide is not a displacement");
+    assert!(
+        rig.state.clicked_row.is_some(),
+        "the watch survives the glide"
+    );
 }
 
 #[test]

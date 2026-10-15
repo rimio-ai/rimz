@@ -28,18 +28,27 @@ impl OwnObserver {
         tx: &SyncSender<ObserveMsg>,
         renderer: &crate::ids::SidebarInstanceId,
     ) {
-        for mut draft in self.observe(sig) {
-            draft.dropped_msgs = std::mem::take(&mut self.dropped_msgs);
-            let carried = draft.dropped_msgs;
-            if tx
-                .try_send(ObserveMsg::OwnAnomaly {
-                    draft: Box::new(draft),
-                    renderer: renderer.clone(),
-                })
-                .is_err()
-            {
-                self.dropped_msgs = carried.saturating_add(1);
-            }
+        for draft in self.observe(sig) {
+            self.send_draft(draft, tx, renderer);
+        }
+    }
+
+    pub(crate) fn send_draft(
+        &mut self,
+        mut draft: AnomalyDraft,
+        tx: &SyncSender<ObserveMsg>,
+        renderer: &crate::ids::SidebarInstanceId,
+    ) {
+        draft.dropped_msgs = std::mem::take(&mut self.dropped_msgs);
+        let carried = draft.dropped_msgs;
+        if tx
+            .try_send(ObserveMsg::OwnAnomaly {
+                draft: Box::new(draft),
+                renderer: renderer.clone(),
+            })
+            .is_err()
+        {
+            self.dropped_msgs = carried.saturating_add(1);
         }
     }
 
@@ -72,16 +81,11 @@ impl OwnObserver {
                 sig.own_view.as_ref().map_or(0, |view| view.sibling_count),
                 closed,
             ) {
-                drafts.push(AnomalyDraft {
-                    at_ms: sig.at_ms,
+                drafts.push(AnomalyDraft::from_own_sig(
+                    &sig,
                     kind,
-                    window_ms: Some(millis(OBSERVE_ROSTER_FLAP_WINDOW)),
-                    frame: sig.frame.clone(),
-                    events_recent: sig.events.clone(),
-                    gate_reject_streak: sig.gate_reject_streak,
-                    health_failure_streak: sig.health_failure_streak,
-                    dropped_msgs: 0,
-                });
+                    Some(millis(OBSERVE_ROSTER_FLAP_WINDOW)),
+                ));
             }
         } else {
             self.roster_empty = None;

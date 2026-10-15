@@ -1790,11 +1790,41 @@ fn mana_identity(
     format!("provider_mana:{login}:{duration}")
 }
 
-/// What the frame-stream observer judged anomalous; the detectors live in
-/// [`crate::sidebar::observe`].
+/// Why a clicked card moved between paints, in detector priority order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClickedRowDisplacementCause {
+    NoRoomClamp,
+    HoldExpired,
+    BannerToggled,
+    SelectionChanged,
+    HeightAboveChanged,
+}
+
+impl ClickedRowDisplacementCause {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NoRoomClamp => "no_room_clamp",
+            Self::HoldExpired => "hold_expired",
+            Self::BannerToggled => "banner_toggled",
+            Self::SelectionChanged => "selection_changed",
+            Self::HeightAboveChanged => "height_above_changed",
+        }
+    }
+}
+
+/// What the stream or painted-geometry observer judged anomalous; stream
+/// detectors live in [`crate::sidebar::observe`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "detector", rename_all = "snake_case")]
 pub enum AnomalyKind {
+    ClickedRowDisplaced {
+        row_id: String,
+        from_y: isize,
+        to_y: Option<isize>,
+        dt_ms: u64,
+        cause: ClickedRowDisplacementCause,
+    },
     RosterFlap {
         rows_before: usize,
         empty_at_ms: u64,
@@ -1903,6 +1933,7 @@ pub enum AnomalyKind {
 impl AnomalyKind {
     pub(crate) fn key(&self) -> &'static str {
         match self {
+            Self::ClickedRowDisplaced { .. } => "clicked_row_displaced",
             Self::RosterFlap { .. } => "roster_flap",
             Self::RowPresenceFlap { .. } => "row_presence_flap",
             Self::ShortLivedRow { .. } => "short_lived_row",
@@ -1931,6 +1962,9 @@ impl AnomalyKind {
     /// subject.
     fn subject(&self) -> Option<Cow<'_, str>> {
         match self {
+            Self::ClickedRowDisplaced { row_id, cause, .. } => {
+                Some(Cow::Owned(format!("{row_id}:{}", cause.as_str())))
+            }
             Self::RowPresenceFlap { row_id, .. }
             | Self::ShortLivedRow { row_id, .. }
             | Self::ValueOscillation { row_id, .. }

@@ -4026,6 +4026,21 @@ reason = "Payload of pub(crate) ObserveMsg::Anomaly, which the renderer loop sen
 
 [[verdict]]
 kind = "item"
+key = "sidebar::observe::from_own_sig"
+reason = "Paint-only displacement and committed-roster detectors stamp drafts from the same own-frame evidence; the app-layer caller requires crate reach."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::observe::detect::send_draft"
+reason = "The app's paint detector shares OwnObserver's nonblocking channel and dropped-message carry with committed-roster detection."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::ClickedRowDisplacementCause"
+reason = "Public field type of the clicked-row diagnostic wire variant; the CLI doctor matches its expected clamp cause."
+
+[[verdict]]
+kind = "item"
 key = "sidebar::presence::ZellijWakeError"
 reason = "Error type of pub ingest_zellij_wake, which the CLI binary calls (pass 20b)."
 
