@@ -151,7 +151,9 @@ pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<Cli
     pane_auto_enabled_from(
         settings,
         version,
-        launch_env_auth_conflict(),
+        env_value_present(ANTHROPIC_API_KEY),
+        env_value_present(ANTHROPIC_AUTH_TOKEN),
+        env_value_present(CLAUDE_CODE_OAUTH_TOKEN),
         launch_endpoint_conflict(),
         launch_traffic_switch(),
     )
@@ -160,32 +162,70 @@ pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<Cli
 fn pane_auto_enabled_from(
     settings: &ClaudeRcSettings,
     version: Option<CliVersion>,
-    env_auth_conflict: bool,
+    env_api_key: bool,
+    env_auth_token: bool,
+    env_oauth_token: bool,
     env_endpoint_conflict: bool,
     env_traffic_switch: Option<&str>,
 ) -> bool {
-    if !settings.remote_control_at_startup
-        || settings.disable_remote_control
-        || settings.env_traffic_switch.is_some()
-        || env_traffic_switch.is_some()
-    {
-        return false;
-    }
-    let auth_conflict = settings.api_key_helper
-        || settings.env_auth_conflict
-        || settings.oauth_token_env
-        || env_auth_conflict;
-    if auth_conflict && version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE) {
-        return false;
-    }
-    let endpoint_conflict = settings.env_endpoint_conflict || env_endpoint_conflict;
-    !(endpoint_conflict && version.is_some_and(|found| found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE))
+    settings.remote_control_at_startup
+        && !settings.disable_remote_control
+        && settings.env_traffic_switch.is_none()
+        && env_traffic_switch.is_none()
+        && auth_conflict_sources(
+            version,
+            settings,
+            env_api_key,
+            env_auth_token,
+            env_oauth_token,
+            env_endpoint_conflict,
+        )
+        .is_empty()
 }
 
-fn launch_env_auth_conflict() -> bool {
-    env_value_present(ANTHROPIC_API_KEY)
-        || env_value_present(ANTHROPIC_AUTH_TOKEN)
-        || env_value_present(CLAUDE_CODE_OAUTH_TOKEN)
+/// The authentication and endpoint sources Claude refuses Remote Control for
+/// at `version`. A long-lived OAuth token is refused on every version; the
+/// other rows apply only from their cutoff, so an unknown version skips them.
+fn auth_conflict_sources(
+    version: Option<CliVersion>,
+    settings: &ClaudeRcSettings,
+    env_api_key: bool,
+    env_auth_token: bool,
+    env_oauth_token: bool,
+    env_endpoint_conflict: bool,
+) -> Vec<AuthConflictSource> {
+    let auth_gated = version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE);
+    let endpoint_gated = version.is_some_and(|found| found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE);
+    [
+        (auth_gated && env_api_key, AuthConflictSource::ApiKeyEnv),
+        (
+            auth_gated && env_auth_token,
+            AuthConflictSource::AuthTokenEnv,
+        ),
+        (
+            env_oauth_token || settings.oauth_token_env,
+            AuthConflictSource::OAuthTokenEnv,
+        ),
+        (
+            auth_gated && settings.api_key_helper,
+            AuthConflictSource::ApiKeyHelperSetting,
+        ),
+        (
+            auth_gated && settings.env_auth_conflict,
+            AuthConflictSource::SettingsEnv,
+        ),
+        (
+            endpoint_gated && env_endpoint_conflict,
+            AuthConflictSource::EndpointEnv,
+        ),
+        (
+            endpoint_gated && settings.env_endpoint_conflict,
+            AuthConflictSource::SettingsEndpoint,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(applies, source)| applies.then_some(source))
+    .collect()
 }
 
 fn env_value_present(key: &str) -> bool {
@@ -533,43 +573,21 @@ fn readiness_from(
             fix: gap.fix("claude"),
         });
     }
-    let Some(found) = version else {
-        tracing::warn!(
+    match version {
+        Some(found) if found < MIN_REMOTE_CONTROL => return Err(Issue::TooOld { found }),
+        Some(_) => {}
+        None => tracing::warn!(
             "Claude remote-control preflight could not determine `claude --version`; applying version-independent gates only"
-        );
-        return Ok(host_argv());
-    };
-    if found < MIN_REMOTE_CONTROL {
-        return Err(Issue::TooOld { found });
+        ),
     }
-
-    let mut sources = Vec::new();
-    if env_api_key {
-        sources.push(AuthConflictSource::ApiKeyEnv);
-    }
-    if env_auth_token {
-        sources.push(AuthConflictSource::AuthTokenEnv);
-    }
-    if env_oauth_token || settings.oauth_token_env {
-        sources.push(AuthConflictSource::OAuthTokenEnv);
-    }
-    if settings.api_key_helper {
-        sources.push(AuthConflictSource::ApiKeyHelperSetting);
-    }
-    if settings.env_auth_conflict {
-        sources.push(AuthConflictSource::SettingsEnv);
-    }
-    if found < AUTH_ENV_BLOCKS_RC_SINCE {
-        sources.clear();
-    }
-    if found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE {
-        if env_endpoint_conflict {
-            sources.push(AuthConflictSource::EndpointEnv);
-        }
-        if settings.env_endpoint_conflict {
-            sources.push(AuthConflictSource::SettingsEndpoint);
-        }
-    }
+    let sources = auth_conflict_sources(
+        version,
+        &settings,
+        env_api_key,
+        env_auth_token,
+        env_oauth_token,
+        env_endpoint_conflict,
+    );
     if sources.is_empty() {
         Ok(host_argv())
     } else {

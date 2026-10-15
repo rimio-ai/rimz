@@ -66,13 +66,19 @@ fn pane_auto_status_honors_traffic_switches() {
             None,
             false,
             false,
+            false,
+            false,
             None
         ));
         let enabled = settings(json!({ "remoteControlAtStartup": true }));
-        assert!(pane_auto_enabled_from(&enabled, None, false, false, None));
+        assert!(pane_auto_enabled_from(
+            &enabled, None, false, false, false, false, None
+        ));
         assert!(!pane_auto_enabled_from(
             &enabled,
             None,
+            false,
+            false,
             false,
             false,
             Some(variable)
@@ -284,13 +290,17 @@ fn pane_auto_status_suppresses_settings_disabled_cases() {
         disable_remote_control: true,
         ..ClaudeRcSettings::default()
     };
-    assert!(!pane_auto_enabled_from(&disabled, None, false, false, None));
+    assert!(!pane_auto_enabled_from(
+        &disabled, None, false, false, false, false, None
+    ));
 
     let off = ClaudeRcSettings {
         remote_control_at_startup: false,
         ..ClaudeRcSettings::default()
     };
-    assert!(!pane_auto_enabled_from(&off, None, false, false, None));
+    assert!(!pane_auto_enabled_from(
+        &off, None, false, false, false, false, None
+    ));
 }
 
 #[test]
@@ -302,12 +312,14 @@ fn pane_auto_status_uses_account_version_for_auth_gate() {
     };
 
     assert!(
-        pane_auto_enabled_from(&conflict, None, false, false, None),
+        pane_auto_enabled_from(&conflict, None, false, false, false, false, None),
         "unknown versions apply only version-independent gates"
     );
     assert!(pane_auto_enabled_from(
         &conflict,
         Some(CliVersion::new(2, 1, 138)),
+        false,
+        false,
         false,
         false,
         None,
@@ -317,8 +329,39 @@ fn pane_auto_status_uses_account_version_for_auth_gate() {
         Some(CliVersion::new(2, 1, 139)),
         false,
         false,
+        false,
+        false,
         None,
     ));
+}
+
+#[test]
+fn pane_auto_status_refuses_long_lived_oauth_tokens_on_every_version() {
+    let enabled = ClaudeRcSettings {
+        remote_control_at_startup: true,
+        ..ClaudeRcSettings::default()
+    };
+    let in_settings = ClaudeRcSettings {
+        oauth_token_env: true,
+        ..enabled.clone()
+    };
+    for version in [None, v(100)] {
+        assert!(pane_auto_enabled_from(
+            &enabled, version, false, false, false, false, None
+        ));
+        assert!(!pane_auto_enabled_from(
+            &enabled, version, false, false, true, false, None
+        ));
+        assert!(!pane_auto_enabled_from(
+            &in_settings,
+            version,
+            false,
+            false,
+            false,
+            false,
+            None
+        ));
+    }
 }
 
 #[test]
@@ -329,10 +372,14 @@ fn pane_auto_status_applies_the_custom_endpoint_gate_readiness_applies() {
         ..ClaudeRcSettings::default()
     };
 
-    assert!(pane_auto_enabled_from(&endpoint, None, false, false, None));
+    assert!(pane_auto_enabled_from(
+        &endpoint, None, false, false, false, false, None
+    ));
     assert!(pane_auto_enabled_from(
         &endpoint,
         Some(CliVersion::new(2, 1, 195)),
+        false,
+        false,
         false,
         false,
         None,
@@ -340,6 +387,8 @@ fn pane_auto_status_applies_the_custom_endpoint_gate_readiness_applies() {
     assert!(!pane_auto_enabled_from(
         &endpoint,
         Some(CUSTOM_ENDPOINT_BLOCKS_RC_SINCE),
+        false,
+        false,
         false,
         false,
         None,
@@ -552,7 +601,13 @@ fn readiness_auth_conflict_gate_starts_at_2_1_139() {
         env_auth_conflict: true,
         ..readiness_settings()
     };
-    assert!(decision(v(138), settings.clone(), true, true, true).is_ok());
+    assert!(decision(v(138), settings.clone(), true, true, false).is_ok());
+    assert_eq!(
+        decision(v(138), settings.clone(), true, true, true),
+        Err(Issue::AuthConflict {
+            sources: vec![AuthConflictSource::OAuthTokenEnv],
+        })
+    );
     assert_eq!(
         decision(v(139), settings, true, true, true),
         Err(Issue::AuthConflict {
@@ -568,22 +623,28 @@ fn readiness_auth_conflict_gate_starts_at_2_1_139() {
 }
 
 #[test]
-fn readiness_blocks_long_lived_oauth_tokens_from_env_or_settings() {
-    assert_eq!(
-        decision(v(247), readiness_settings(), false, false, true),
-        Err(Issue::AuthConflict {
-            sources: vec![AuthConflictSource::OAuthTokenEnv],
-        })
-    );
-
-    let settings = ClaudeRcSettings {
+fn readiness_blocks_long_lived_oauth_tokens_on_every_version() {
+    let in_settings = ClaudeRcSettings {
         oauth_token_env: true,
         ..readiness_settings()
     };
+    for version in [v(51), v(100), v(138), v(247), None] {
+        for (settings, env_oauth_token) in
+            [(readiness_settings(), true), (in_settings.clone(), false)]
+        {
+            assert_eq!(
+                decision(version, settings, false, false, env_oauth_token),
+                Err(Issue::AuthConflict {
+                    sources: vec![AuthConflictSource::OAuthTokenEnv],
+                }),
+                "{version:?}"
+            );
+        }
+    }
     assert_eq!(
-        decision(v(247), settings, false, false, false),
-        Err(Issue::AuthConflict {
-            sources: vec![AuthConflictSource::OAuthTokenEnv],
+        decision(v(50), in_settings, false, false, true),
+        Err(Issue::TooOld {
+            found: CliVersion::new(2, 1, 50)
         })
     );
 
@@ -639,12 +700,19 @@ fn readiness_custom_endpoint_gate_starts_at_2_1_196() {
 }
 
 #[test]
-fn unknown_version_applies_only_settings_independent_gate() {
+fn unknown_version_applies_only_version_independent_gates() {
     let settings = ClaudeRcSettings {
         api_key_helper: true,
+        env_auth_conflict: true,
         ..readiness_settings()
     };
-    assert!(decision(None, settings, true, false, true).is_ok());
+    assert!(decision(None, settings.clone(), true, true, false).is_ok());
+    assert_eq!(
+        decision(None, settings, true, true, true),
+        Err(Issue::AuthConflict {
+            sources: vec![AuthConflictSource::OAuthTokenEnv],
+        })
+    );
 
     let settings = ClaudeRcSettings {
         disable_remote_control: true,
