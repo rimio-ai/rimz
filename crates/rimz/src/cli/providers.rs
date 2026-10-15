@@ -22,6 +22,7 @@ use rimz::agents::{
 };
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet};
 use rimz::config::MachineConfig;
+use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
 use rimz::ids::{AgentKind, LoginKey};
 use rimz::room::{AccountStanding, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
@@ -182,6 +183,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
             config: &config,
             agents: agents.as_ref(),
             installed: &installed,
+            spend_step: &|key| SpendFacts::read(&runtime, key, now).step(&config.resume, None, now),
         },
     );
     mark_standing(&mut reports, &standing);
@@ -252,6 +254,7 @@ struct ProviderReport {
     windows: Vec<RateLimitWindow>,
     extra_credits: Option<ExtraCredits>,
     reset_credits: Option<ResetCredits>,
+    spend_step: SpendStep,
     spending: Option<ProviderSpend>,
     day_budget: Option<DailyBudgetView>,
     agents: Option<usize>,
@@ -274,6 +277,7 @@ struct ReportContext<'a> {
     config: &'a MachineConfig,
     agents: Option<&'a BTreeMap<LoginKey, usize>>,
     installed: &'a BTreeSet<String>,
+    spend_step: &'a dyn Fn(&LoginKey) -> SpendStep,
 }
 
 fn assemble_reports(
@@ -360,6 +364,7 @@ fn build_report(
         windows: panel.map_or_else(Vec::new, |panel| panel.windows.clone()),
         extra_credits: panel.and_then(|panel| panel.extra_credits.clone()),
         reset_credits: panel.and_then(|panel| panel.reset_credits.clone()),
+        spend_step: (context.spend_step)(&login.key()),
         spending: panel
             .and_then(|panel| panel.spending.as_deref())
             .or_else(|| provider_spending.spending.by_login.get(&login.pool()))
@@ -594,7 +599,10 @@ fn write_comparison(
                 .unwrap_or_else(unknown_cell)
         }));
         if extra {
-            cells.push(extra_cell(report.extra_credits.as_ref()));
+            cells.push(render::extra_credits_cell(
+                report.extra_credits.as_ref(),
+                report.spend_step == SpendStep::PaidCredit,
+            ));
         }
         if credits {
             cells.push(credits_cell(report.reset_credits.as_ref(), now));
@@ -630,22 +638,6 @@ fn write_comparison(
         writeln!(out, "{legend}")?;
     }
     Ok(())
-}
-
-fn extra_cell(extra: Option<&ExtraCredits>) -> render::Cell {
-    match extra {
-        Some(ExtraCredits::Unlimited) => cell("∞"),
-        Some(ExtraCredits::Disabled) => cell("off"),
-        Some(ExtraCredits::Known {
-            remaining_usd: Some(remaining),
-            ..
-        }) => money_cell(*remaining),
-        Some(ExtraCredits::Known {
-            used_usd: Some(used),
-            ..
-        }) => money_cell(*used).suffix("used", render::palette::body()),
-        Some(ExtraCredits::Known { .. }) | None => unknown_cell(),
-    }
 }
 
 fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
@@ -778,10 +770,11 @@ fn write_pretty(
             rows.push("usage", cell("no limit"));
         }
         if let Some(extra) = &report.extra_credits {
-            match extra_credit_spans(extra) {
-                Some(spans) => rows.push_spans("extra", spans),
-                None => rows.push("extra", unknown_cell()),
+            let mut spans = extra_credit_spans(extra).unwrap_or_else(|| vec![unknown_cell()]);
+            if report.spend_step == SpendStep::PaidCredit {
+                spans.push(cell(" · paying"));
             }
+            rows.push_spans("extra", spans);
         }
         if let Some(reset) = &report.reset_credits
             && reset.count > 0

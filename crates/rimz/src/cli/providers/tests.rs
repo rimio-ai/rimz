@@ -35,6 +35,7 @@ fn assemble_reports(
             config: &MachineConfig::default(),
             agents: None,
             installed: &rimz::agents::known_kinds().map(str::to_owned).collect(),
+            spend_step: &|_| SpendStep::Subscription,
         },
     )
 }
@@ -1011,6 +1012,7 @@ fn local_day_spend_uses_the_configured_timezone_and_agents_use_login_not_pool() 
         config: &config,
         agents: Some(&agents),
         installed: &rimz::agents::known_kinds().map(str::to_owned).collect(),
+        spend_step: &|_| SpendStep::Subscription,
     };
     let render = |spending: &ProviderSpendingCache| {
         serde_json::to_value(super::assemble_reports(
@@ -1058,6 +1060,7 @@ fn absent_binary_folds_and_all_expands_it_without_claiming_logout_for_kiro() {
         config: &config,
         agents: None,
         installed: &installed,
+        spend_step: &|_| SpendStep::Subscription,
     };
     let reports = super::assemble_reports(
         &logins,
@@ -1229,6 +1232,45 @@ fn pretty_and_json_reports_are_stable() {
     assert!(!json.contains("account_key"));
     assert!(!json.contains("must-not-leak"));
     insta::assert_snapshot!("provider_report_json", json);
+}
+
+#[test]
+fn paid_credit_step_marks_the_extra_cell_and_line_as_paying() {
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let (accounts, panel, spending) = protocol_fixture(now);
+    let mut reports = assemble_reports(
+        &default_logins(),
+        &accounts,
+        default_panels(vec![panel]),
+        &spending,
+        Some("claude"),
+        false,
+    );
+    let render = |reports: &[ProviderReport]| {
+        let mut out = anstream::StripStream::new(Vec::new());
+        write_pretty(&mut out, reports, now, &TimeZone::UTC).unwrap();
+        let pretty = String::from_utf8(out.into_inner()).unwrap();
+        (overview(reports, now, &BTreeMap::new(), false), pretty)
+    };
+    let (table, pretty) = render(&reports);
+    assert!(!table.contains("paying") && !pretty.contains("paying"));
+    assert_eq!(
+        serde_json::to_value(&reports[0]).unwrap()["spend_step"],
+        "subscription"
+    );
+
+    reports[0].spend_step = SpendStep::PaidCredit;
+    let (table, pretty) = render(&reports);
+    assert!(table.contains("  $12.40 used · paying"), "{table}");
+    let extra = pretty
+        .lines()
+        .find(|line| line.trim_start().starts_with("extra"))
+        .unwrap_or_else(|| panic!("no extra line: {pretty}"));
+    assert!(extra.ends_with(" · paying"), "{pretty}");
+    assert_eq!(
+        serde_json::to_value(&reports[0]).unwrap()["spend_step"],
+        "paid_credit"
+    );
 }
 
 #[test]

@@ -172,7 +172,7 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
     assert!(
         header
             .windows(4)
-            .any(|cols| cols == ["7d", "LEFT", "CREDITS", "AGENTS"]),
+            .any(|cols| cols == ["LEFT", "EXTRA", "CREDITS", "AGENTS"]),
         "{text}"
     );
     let credit_cell = |kind: &str, name: &str| {
@@ -329,7 +329,9 @@ const SEVEN_DAYS: u32 = 10_080;
 fn logged_in(windows: Vec<RateLimitWindow>) -> LoginReading {
     LoginReading {
         entitlement: Default::default(),
+        extra_credits: None,
         reset_credits: None,
+        spend_step: SpendStep::Subscription,
         status: ProviderStatus::LoggedIn,
         metered: Some(true),
         windows,
@@ -401,8 +403,9 @@ fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
         "{text}"
     );
     assert!(
-        lines[0]
-            .starts_with("   KIND    NAME     STATUS        5h LEFT  7d LEFT  CREDITS  AGENTS  "),
+        lines[0].starts_with(
+            "   KIND    NAME     STATUS        5h LEFT  7d LEFT  EXTRA  CREDITS  AGENTS  "
+        ),
         "{text}"
     );
     assert!(lines[1].starts_with("●  claude  default"), "{text}");
@@ -436,6 +439,77 @@ fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
     assert_eq!(team["active"], true);
     assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
     assert_eq!(team["agents"], 2);
+}
+
+#[test]
+fn extra_column_reads_like_providers_and_marks_paid_credit() {
+    let paying = ExtraCredits::known(None, Some(2_413.92), None);
+    let readings = BTreeMap::from([
+        (
+            key("codex", "default"),
+            LoginReading {
+                extra_credits: Some(paying.clone()),
+                spend_step: SpendStep::PaidCredit,
+                ..logged_in(vec![window(SEVEN_DAYS, Some(100), Some(86_400))])
+            },
+        ),
+        (
+            key("codex", "team"),
+            LoginReading {
+                extra_credits: Some(ExtraCredits::Disabled),
+                spend_step: SpendStep::Spent,
+                ..logged_in(Vec::new())
+            },
+        ),
+        (
+            key("claude", "alpha"),
+            LoginReading {
+                extra_credits: Some(ExtraCredits::known(None, Some(0.0), None)),
+                ..logged_in(Vec::new())
+            },
+        ),
+    ]);
+    let (rows, text) = listed(ACCOUNTS, None, &readings);
+    let header: Vec<&str> = text
+        .lines()
+        .next()
+        .unwrap()
+        .split("  ")
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty())
+        .collect();
+    assert_eq!(header[4..7], ["7d LEFT", "EXTRA", "CREDITS"], "{text}");
+    let line = |kind: &str, name: &str| {
+        table(&text)
+            .into_iter()
+            .find(|line| line.contains(&format!("{kind}  ")) && line.contains(name))
+            .unwrap_or_else(|| panic!("no {kind} {name} row in {text}"))
+    };
+    assert!(
+        line("codex", "default").contains("  $2,413.92 · paying  "),
+        "{text}"
+    );
+    assert!(line("codex", "team").contains("  off  "), "{text}");
+    assert!(line("claude", "alpha").contains("  $0.00  "), "{text}");
+    assert_eq!(text.matches("paying").count(), 1, "{text}");
+
+    let json = |account: &str| {
+        let row = rows
+            .iter()
+            .find(|row| row.account.to_string() == account)
+            .unwrap();
+        serde_json::to_value(row).unwrap()
+    };
+    let codex = json("codex@default");
+    assert_eq!(codex["spend_step"], "paid_credit");
+    assert_eq!(
+        codex["extra_credits"],
+        serde_json::to_value(&paying).unwrap()
+    );
+    assert_eq!(json("codex@team")["spend_step"], "spent");
+    let unread = json("claude@default");
+    assert!(unread.get("extra_credits").is_none(), "{unread}");
+    assert_eq!(unread["spend_step"], serde_json::Value::Null);
 }
 
 #[test]
@@ -557,7 +631,9 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             LoginReading {
                 status: ProviderStatus::LoggedOut,
                 entitlement: Default::default(),
+                extra_credits: None,
                 reset_credits: None,
+                spend_step: SpendStep::Subscription,
                 metered: Some(true),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
             },
@@ -571,7 +647,9 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             LoginReading {
                 status: ProviderStatus::Unavailable,
                 entitlement: Default::default(),
+                extra_credits: None,
                 reset_credits: None,
+                spend_step: SpendStep::Subscription,
                 metered: None,
                 windows: vec![window(SEVEN_DAYS, Some(50), Some(3_600))],
             },
@@ -581,7 +659,9 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             LoginReading {
                 status: ProviderStatus::LoggedIn,
                 entitlement: Default::default(),
+                extra_credits: None,
                 reset_credits: None,
+                spend_step: SpendStep::Subscription,
                 metered: Some(false),
                 windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
             },
@@ -598,7 +678,7 @@ fn window_cells_read_what_is_left_and_when_it_resets() {
             .find(|line| line.contains(&format!("{kind}  ")) && line.contains(name))
             .unwrap_or_else(|| panic!("no {kind} {name} row in {text}"));
         let from = text.lines().next().unwrap().find("5h LEFT").unwrap();
-        let to = text.lines().next().unwrap().find("CREDITS").unwrap();
+        let to = text.lines().next().unwrap().find("EXTRA").unwrap();
         line.chars()
             .skip(from)
             .take(to - from)
@@ -683,7 +763,9 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
     let reading = |status| LoginReading {
         status,
         entitlement: Default::default(),
+        extra_credits: None,
         reset_credits: None,
+        spend_step: SpendStep::Subscription,
         metered: None,
         windows: vec![window(FIVE_HOURS, Some(10), None)],
     };

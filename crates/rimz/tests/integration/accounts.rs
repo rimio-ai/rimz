@@ -747,7 +747,8 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "default_for": [],
             "agents": 0,
             "windows": [],
-            "metered": null
+            "metered": null,
+            "spend_step": "subscription"
         })
     );
 

@@ -2,12 +2,12 @@
 source: crates/rimz/src/cli/accounts/tests.rs
 expression: text
 ---
-   KIND    NAME     STATUS        5h LEFT  7d LEFT  CREDITS  AGENTS  HISTORY     HOME
-●  claude  default  home missing  –        –        –        –       -           /nonexistent/u/.claude
-   claude  alpha    lapsed        –        –        –        –       shared      /srv/alpha
+   KIND    NAME     STATUS        5h LEFT  7d LEFT  EXTRA  CREDITS  AGENTS  HISTORY     HOME
+●  claude  default  home missing  –        –        –      –        –       -           /nonexistent/u/.claude
+   claude  alpha    lapsed        –        –        –      –        –       shared      /srv/alpha
 
-   codex   default  home missing  –        –        –        –       -           /nonexistent/u/.codex
-●  codex   team     home missing  –        –        –        –       standalone  /srv/team
+   codex   default  home missing  –        –        –      –        –       -           /nonexistent/u/.codex
+●  codex   team     home missing  –        –        –      –        –       standalone  /srv/team
 ●  machine default
 claude account `default` home `/nonexistent/u/.claude` is not a directory; run `rimz hooks install claude`
 plan lapsed: no Claude access

@@ -14,12 +14,13 @@ use rimz::RuntimePaths;
 use rimz::agents::account::{ProviderStatus, RedemptionCode, WindowSpan};
 use rimz::agents::spending::read_provider_spending_cache;
 use rimz::agents::{
-    AccountStatus, BirthLoginErr, Entitlement, LoginCatalog, ProviderLogin, RateLimitWindow,
-    RedeemEffect, ResetCredits,
+    AccountStatus, BirthLoginErr, Entitlement, ExtraCredits, LoginCatalog, ProviderLogin,
+    RateLimitWindow, RedeemEffect, ResetCredits,
 };
 use rimz::config::{AccountHistory, AccountsConfig, ConfigEditor, MachineConfig, NamedAccount};
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::auto_redeem::{RedeemReport, prepare_manual_redeem, supports_kind};
+use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
 use rimz::ids::{AgentKind, LoginKey, LoginName, RoomLogins};
 use rimz::room::{AccountStanding, Deciding, Scopes};
 use rimz::sidebar::enrich::provider_panel_for_login;
@@ -738,8 +739,14 @@ struct AccountRow {
     /// The unscoped 5h then 7d window the provider projection holds, in used
     /// terms as `rimz providers --json` reports them.
     windows: Vec<RateLimitWindow>,
+    /// Paid usage beyond the subscription, as `rimz providers --json`
+    /// reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_credits: Option<ExtraCredits>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reset_credits: Option<ResetCredits>,
+    /// Where the account's spend ladder stands; `None` without a reading.
+    spend_step: Option<SpendStep>,
     /// `false` for an account without subscription windows.
     metered: Option<bool>,
     /// This run's probe outcome; `None` when no record is available.
@@ -765,7 +772,9 @@ impl AccountRow {
         self.entitlement = reading.entitlement;
         self.metered = reading.metered;
         self.windows.clone_from(&reading.windows);
+        self.extra_credits.clone_from(&reading.extra_credits);
         self.reset_credits.clone_from(&reading.reset_credits);
+        self.spend_step = Some(reading.spend_step);
         if matches!(self.entitlement, Entitlement::Lapsed { .. }) {
             self.problem = Some(format!(
                 "plan lapsed: no {} access",
@@ -797,7 +806,9 @@ struct LoginReading {
     entitlement: Entitlement,
     metered: Option<bool>,
     windows: Vec<RateLimitWindow>,
+    extra_credits: Option<ExtraCredits>,
     reset_credits: Option<ResetCredits>,
+    spend_step: SpendStep,
 }
 
 /// The windows the list shows: the unscoped 5h and 7d ones, in that order.
@@ -922,6 +933,7 @@ fn login_readings(
     }
     drop(spinner);
     let spending = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    let now = Timestamp::now();
     Ok(logins
         .iter()
         .filter_map(|login| {
@@ -940,7 +952,13 @@ fn login_readings(
                 entitlement: panel
                     .as_ref()
                     .map_or(Entitlement::Ok, |panel| panel.entitlement),
+                extra_credits: panel.as_ref().and_then(|panel| panel.extra_credits.clone()),
                 reset_credits: panel.as_ref().and_then(|panel| panel.reset_credits.clone()),
+                spend_step: SpendFacts::read(&runtime, &login.key(), now).step(
+                    &machine.resume,
+                    None,
+                    now,
+                ),
                 status: ProviderStatus::from_record(Some(record)),
                 metered: panel.as_ref().map(|panel| panel.metered).or(probed_metered),
                 windows: panel
@@ -991,7 +1009,9 @@ fn account_rows(
                     .unwrap_or_default()
             }),
             windows: Vec::new(),
+            extra_credits: None,
             reset_credits: None,
+            spend_step: None,
             metered: None,
             login: None,
         };
@@ -1061,7 +1081,8 @@ fn write_accounts(
     width: Option<usize>,
 ) -> std::io::Result<()> {
     let mut table = render::Table::new([
-        "", "KIND", "NAME", "STATUS", "5h LEFT", "7d LEFT", "CREDITS", "AGENTS", "HISTORY", "HOME",
+        "", "KIND", "NAME", "STATUS", "5h LEFT", "7d LEFT", "EXTRA", "CREDITS", "AGENTS",
+        "HISTORY", "HOME",
     ]);
     if let Some(width) = width {
         table = table.max_width(width);
@@ -1097,6 +1118,14 @@ fn write_accounts(
             },
             five_hour,
             seven_day,
+            if row.without_login() {
+                unknown_cell()
+            } else {
+                render::extra_credits_cell(
+                    row.extra_credits.as_ref(),
+                    row.spend_step == Some(SpendStep::PaidCredit),
+                )
+            },
             if row.without_login() {
                 unknown_cell()
             } else {
