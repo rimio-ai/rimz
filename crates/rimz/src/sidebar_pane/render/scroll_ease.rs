@@ -8,8 +8,8 @@ pub(in crate::sidebar_pane) const SCROLL_EASE_FRAME: Duration = Duration::from_m
 #[derive(Clone, Copy, Debug, Default)]
 pub(in crate::sidebar_pane) struct ScrollEase {
     armed: bool,
-    from: usize,
-    to: usize,
+    from: isize,
+    to: isize,
     started_ms: u64,
 }
 
@@ -20,7 +20,7 @@ impl ScrollEase {
 
     /// Resolve a draw's target without mutating the flight; an unarmed change snaps.
     pub(in crate::sidebar_pane) fn visible(&self, target: usize, now_ms: u64) -> usize {
-        if target != self.to && !self.armed {
+        if target as isize != self.to && !self.armed {
             return target;
         }
         self.position(now_ms)
@@ -29,11 +29,11 @@ impl ScrollEase {
     /// Commit the draw's resolved target and consume its one-shot wheel arm.
     pub(in crate::sidebar_pane) fn observe(&mut self, target: usize, now_ms: u64) {
         let visible = self.visible(target, now_ms);
-        if target != self.to {
-            self.from = visible;
-            self.to = target;
+        if target as isize != self.to {
+            self.from = visible as isize;
+            self.to = target as isize;
             self.started_ms = now_ms;
-        } else if visible == self.to {
+        } else if visible as isize == self.to {
             self.from = self.to;
         }
         self.armed = false;
@@ -43,6 +43,12 @@ impl ScrollEase {
     pub(in crate::sidebar_pane) fn cancel(&mut self) {
         self.from = self.to;
         self.armed = false;
+    }
+
+    /// Translate a correction without changing the flight's distance or clock.
+    pub(super) fn shift(&mut self, correction: isize) {
+        self.from = self.from.saturating_add(correction);
+        self.to = self.to.saturating_add(correction);
     }
 
     pub(in crate::sidebar_pane) fn in_flight(&self) -> bool {
@@ -55,12 +61,13 @@ impl ScrollEase {
         let denominator = duration * duration;
         let distance = self.from.abs_diff(self.to) as u128;
         let moved = ((distance * elapsed * (2 * duration - elapsed) + denominator / 2)
-            / denominator) as usize;
-        if self.from <= self.to {
+            / denominator) as isize;
+        let position = if self.from <= self.to {
             self.from + moved
         } else {
             self.from - moved
-        }
+        };
+        position.max(0) as usize
     }
 }
 

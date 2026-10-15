@@ -23,8 +23,21 @@ use super::sections::{
 use super::theme::Theme;
 use super::{
     Alert, BodyFilter, DashboardMode, FrameInteractions, HitRegion, HitTarget, RenderedBlock,
-    UiState, active_dashboard_tab, cockpit_spend_target, dashboard_mode, dashboard_present, labels,
+    ScrollEase, UiState, active_dashboard_tab, cockpit_spend_target, dashboard_mode,
+    dashboard_present, labels,
 };
+
+#[cfg(test)]
+pub(in crate::sidebar_pane) fn compose_lines(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+    theme: &Theme,
+    width: u16,
+    height: u16,
+) -> ComposedFrame {
+    compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None)
+}
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
 /// summary, make-up line, the conditional unread banner, and fixed separator),
@@ -38,10 +51,10 @@ use super::{
 /// beneath any committed search.
 ///
 /// The viewport target is `UiState::scroll_offset`, resolved here each frame:
-/// clamped to the zone, then minimally auto-scrolled so the selected card — its
-/// expanded subagent lines included — sits fully in view, unless a manual wheel
-/// pin ([`ManualScroll`]) holds the window. A one-shot external-focus reveal can
-/// widen that span to include the selected row's worktree header. The unread
+/// anchored to the selected or topmost surviving card from the previous target
+/// window, then clamped to the zone. A changed selection reveals only when no
+/// card line is visible; an external-focus reveal includes its group header.
+/// Wheel, banner, and toggle inputs make the offset authoritative once. The unread
 /// banner decides from the target; the cards, scrollbar, and hit geometry use
 /// the visible row from `UiState::scroll_ease`, clamped to that viewport. Both
 /// offsets are returned for the caller to write back, a draw byproduct like the
@@ -59,18 +72,6 @@ use super::{
 /// are the single authority on hit geometry — built from the same final line
 /// vector that is rendered, so they stay 1:1 with what the user sees through
 /// every clip and every scroll position.
-#[cfg(test)]
-pub(in crate::sidebar_pane) fn compose_lines(
-    snapshot: &SidebarSnapshot,
-    alert: Option<&Alert>,
-    ui: &UiState,
-    theme: &Theme,
-    width: u16,
-    height: u16,
-) -> ComposedFrame {
-    compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None)
-}
-
 pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -121,11 +122,37 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         ui,
         roster: &roster,
         scroll_map: scroll.interactions.row_map(),
+        card_starts: &scroll.card_starts,
         scroll_len,
         top_len: top.lines.len(),
         height,
         bottom_height,
     });
+    let placements = |offset| {
+        scroll
+            .card_starts
+            .iter()
+            .filter_map(|&(ordinal, first)| {
+                if !card_visible(
+                    scroll.interactions.row_map(),
+                    ordinal,
+                    first,
+                    offset,
+                    layout.viewport,
+                ) {
+                    return None;
+                }
+                roster.row(ordinal).map(|row| {
+                    (
+                        row.id.clone(),
+                        layout.top_shown as isize + first as isize - offset as isize,
+                    )
+                })
+            })
+            .collect()
+    };
+    let painted_rows = placements(layout.offset);
+    let anchored_rows = placements(layout.resolution.offset);
     insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
     let scroll_block = visible_scroll_block(scroll, snapshot, ui, theme, cells, layout);
 
@@ -143,12 +170,22 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     ComposedFrame {
         lines: frame.lines,
         interactions: frame.interactions,
-        scroll_offset: layout.target_offset,
+        scroll_offset: layout.resolution.offset,
         visible_scroll_offset: layout.offset,
         scroll_max: scroll_len.saturating_sub(layout.viewport),
         top_height: layout.top_shown,
         bottom_height,
         content_height,
+        painted_rows,
+        anchored_rows,
+        drawn_selection: ui
+            .selected_index
+            .and_then(|index| roster.row(index))
+            .map(|row| row.id.clone()),
+        banner_shown: layout.show_banner,
+        anchor_clamped: layout.resolution.clamped,
+        correction: layout.resolution.correction,
+        scroll_ease: layout.scroll_ease,
     }
 }
 
@@ -157,8 +194,17 @@ struct ZoneLayout {
     show_banner: bool,
     top_shown: usize,
     viewport: usize,
-    target_offset: usize,
     offset: usize,
+    resolution: ScrollResolution,
+    scroll_ease: ScrollEase,
+}
+
+#[derive(Clone, Copy)]
+struct ScrollResolution {
+    offset: usize,
+    correction: isize,
+    clamped: bool,
+    snap: bool,
 }
 
 struct ZoneInputs<'a, 'snapshot> {
@@ -166,6 +212,7 @@ struct ZoneInputs<'a, 'snapshot> {
     ui: &'a UiState,
     roster: &'a VisibleRoster<'snapshot>,
     scroll_map: &'a [Option<usize>],
+    card_starts: &'a [(usize, usize)],
     scroll_len: usize,
     top_len: usize,
     height: usize,
@@ -173,49 +220,45 @@ struct ZoneInputs<'a, 'snapshot> {
 }
 
 fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
-    let ZoneInputs {
-        snapshot,
-        ui,
-        roster,
-        scroll_map,
-        scroll_len,
-        top_len,
-        height,
-        bottom_height,
-    } = input;
-    let after_bottom = height.saturating_sub(bottom_height);
-    let top_without_banner = top_len.min(after_bottom);
+    let after_bottom = input.height.saturating_sub(input.bottom_height);
+    let top_without_banner = input.top_len.min(after_bottom);
     let viewport_without_banner = after_bottom - top_without_banner;
     let offset_without_banner =
-        resolve_scroll_offset(roster, ui, scroll_map, scroll_len, viewport_without_banner);
-    let show_banner = lead_unread_row(&snapshot.worktree_groups).is_some_and(|lead| {
+        resolve_scroll_offset(&input, top_without_banner, viewport_without_banner);
+    let show_banner = lead_unread_row(&input.snapshot.worktree_groups).is_some_and(|lead| {
         viewport_without_banner > 0
             && !lead_unread_visible(
-                roster,
+                input.roster,
                 &lead.id,
-                scroll_map,
-                offset_without_banner,
+                input.scroll_map,
+                offset_without_banner.offset,
                 viewport_without_banner,
             )
     });
-    let top_shown = top_len
+    let top_shown = input
+        .top_len
         .saturating_add(usize::from(show_banner))
         .min(after_bottom);
     let viewport = after_bottom - top_shown;
-    let target_offset = if show_banner {
-        resolve_scroll_offset(roster, ui, scroll_map, scroll_len, viewport)
+    let resolution = if show_banner {
+        resolve_scroll_offset(&input, top_shown, viewport)
     } else {
         offset_without_banner
     };
+    let mut scroll_ease = input.ui.scroll_ease;
+    scroll_ease.shift(resolution.correction);
+    if resolution.snap {
+        scroll_ease.cancel();
+    }
     ZoneLayout {
         show_banner,
         top_shown,
         viewport,
-        target_offset,
-        offset: ui
-            .scroll_ease
-            .visible(target_offset, ui.frame_ms)
-            .min(scroll_len.saturating_sub(viewport)),
+        offset: scroll_ease
+            .visible(resolution.offset, input.ui.frame_ms)
+            .min(input.scroll_len.saturating_sub(viewport)),
+        resolution,
+        scroll_ease,
     }
 }
 
@@ -259,11 +302,13 @@ fn visible_scroll_block(
         .min(scroll_len);
     let mut block = scroll.window(layout.offset, end.saturating_sub(layout.offset));
     let overflow = scroll_len > layout.viewport && layout.viewport > 0;
+    let mut scrollbar = ui.scrollbar;
+    scrollbar.shift(layout.resolution.correction);
     let show_bar = match snapshot.theme.display.scrollbar {
         ScrollbarMode::Always => true,
         ScrollbarMode::Never => false,
         ScrollbarMode::Auto => {
-            ui.scrollbar.moved_from(layout.offset) || ui.scrollbar.visible(ui.animation_phase)
+            scrollbar.moved_from(layout.offset) || scrollbar.visible(ui.animation_phase)
         }
     };
     if overflow && show_bar {
@@ -473,6 +518,13 @@ fn bottom_corner_chrome(
 
 /// One draw's lines, typed interactions, and resolved zone positions.
 pub(in crate::sidebar_pane) struct ComposedFrame {
+    pub(super) painted_rows: Vec<(String, isize)>,
+    pub(super) anchored_rows: Vec<(String, isize)>,
+    pub(super) drawn_selection: Option<String>,
+    pub(super) banner_shown: bool,
+    pub(super) anchor_clamped: bool,
+    pub(super) correction: isize,
+    pub(super) scroll_ease: ScrollEase,
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
     pub(in crate::sidebar_pane) scroll_offset: usize,
@@ -484,29 +536,111 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(in crate::sidebar_pane) content_height: usize,
 }
 
-fn resolve_scroll_offset(
-    roster: &VisibleRoster<'_>,
-    ui: &UiState,
-    scroll_map: &[Option<usize>],
-    scroll_len: usize,
+fn card_visible(
+    map: &[Option<usize>],
+    ordinal: usize,
+    first: usize,
+    offset: usize,
     viewport: usize,
-) -> usize {
-    let max_offset = scroll_len.saturating_sub(viewport);
-    let offset = ui.scroll_offset.min(max_offset);
-    if ui.manual_scroll.is_some() {
-        return offset;
+) -> bool {
+    map.get(offset.max(first)..offset.saturating_add(viewport).min(map.len()))
+        .is_some_and(|lines| lines.contains(&Some(ordinal)))
+}
+
+fn resolve_scroll_offset(
+    input: &ZoneInputs<'_, '_>,
+    zone_top: usize,
+    viewport: usize,
+) -> ScrollResolution {
+    let ui = input.ui;
+    let max_offset = input.scroll_len.saturating_sub(viewport);
+    let mut resolved = ScrollResolution {
+        offset: ui.scroll_offset.min(max_offset),
+        correction: 0,
+        clamped: false,
+        snap: false,
+    };
+    if ui.offset_authoritative {
+        return resolved;
     }
-    let Some(selected_index) = ui.selected_index else {
-        return offset;
+    let selected = ui.selected_index.and_then(|index| input.roster.row(index));
+    let changed = selected.map(|row| row.id.as_str()) != ui.drawn_selection.as_deref();
+    resolved.snap = changed
+        || ui.focus_group_reveal
+        || ui.focus_placement.is_some()
+        || ui.drawn_scroll_max.is_none();
+    let first_line = |id: &str| {
+        let ordinal = input.roster.ordinal_of_id(id)?;
+        input
+            .card_starts
+            .iter()
+            .find_map(|&(row, first)| (row == ordinal).then_some(first))
     };
-    let resolved = if ui.focus_group_reveal
-        && let Some(group_first) = selected_group_first_ordinal(roster, selected_index)
+    let anchor = selected
+        .and_then(|row| ui.anchored_rows.iter().find(|(id, _)| id == &row.id))
+        .or_else(|| {
+            ui.anchored_rows
+                .iter()
+                .find(|(id, _)| first_line(id).is_some())
+        });
+    let shared = ui
+        .focus_placement
+        .as_ref()
+        .filter(|placement| selected.is_some_and(|row| row.id == placement.row_id))
+        .and_then(|placement| {
+            first_line(&placement.row_id)
+                .map(|first| (first as isize).saturating_sub(placement.viewport_row))
+        });
+    let target = shared.or_else(|| {
+        let (id, y) = anchor?;
+        first_line(id).map(|first| {
+            (zone_top as isize)
+                .saturating_add(first as isize)
+                .saturating_sub(*y)
+        })
+    });
+    if let Some(target) = target {
+        resolved.offset = target.clamp(0, max_offset as isize) as usize;
+        resolved.clamped = resolved.offset as isize != target;
+        if shared.is_none() {
+            resolved.correction = resolved.offset as isize - ui.scroll_offset as isize;
+        }
+    }
+    let Some(selected_index) = ui.selected_index.filter(|_| selected.is_some()) else {
+        return resolved;
+    };
+    let visible = input
+        .card_starts
+        .iter()
+        .find(|&&(ordinal, _)| ordinal == selected_index)
+        .is_some_and(|&(_, first)| {
+            card_visible(
+                input.scroll_map,
+                selected_index,
+                first,
+                resolved.offset,
+                viewport,
+            )
+        });
+    // A placement from a taller source zone can land below this one: reveal it.
+    if visible || (!changed && !ui.focus_group_reveal && shared.is_none()) {
+        return resolved;
+    }
+    resolved.offset = if ui.focus_group_reveal
+        && let Some(group_first) = selected_group_first_ordinal(input.roster, selected_index)
     {
-        auto_scroll_reveal_group(scroll_map, group_first, selected_index, offset, viewport)
+        auto_scroll_reveal_group(
+            input.scroll_map,
+            group_first,
+            selected_index,
+            resolved.offset,
+            viewport,
+        )
     } else {
-        auto_scroll_to_selection(scroll_map, selected_index, offset, viewport)
-    };
-    resolved.min(max_offset)
+        auto_scroll_to_selection(input.scroll_map, selected_index, resolved.offset, viewport)
+    }
+    .min(max_offset);
+    resolved
 }
 
 /// True when the lead-unread row selected by the triage key has a line inside

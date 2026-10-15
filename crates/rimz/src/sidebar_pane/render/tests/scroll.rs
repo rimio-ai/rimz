@@ -1,5 +1,201 @@
 use super::*;
 
+fn paint_card_row(snapshot: &SidebarSnapshot, ui: &mut UiState, task: &str, height: u16) -> usize {
+    let mut terminal = Terminal::new(TestBackend::new(54, height)).unwrap();
+    draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
+    (0..height)
+        .find(|&y| {
+            let text: String = (0..54)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect();
+            text.contains(task)
+        })
+        .expect("card is painted") as usize
+        - 1
+}
+
+#[test]
+fn accordion_selection_keeps_the_clicked_card_row_with_room_above() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let mut ui = UiState {
+        selected_index: Some(0),
+        scroll_offset: 2,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    ui.selected_index = Some(2);
+    let after = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    assert_eq!(after, before, "collapse above is absorbed by the offset");
+}
+
+#[test]
+fn growth_above_an_unchanged_selection_keeps_its_row() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let mut ui = UiState {
+        selected_index: Some(2),
+        scroll_offset: 2,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    let after = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    assert_eq!(
+        after, before,
+        "live height changes above do not move the selection"
+    );
+    assert!(!ui.scrollbar.visible(ui.animation_phase));
+}
+
+#[test]
+fn shrinking_above_at_the_top_records_the_unavoidable_clamp() {
+    let mut snapshot = overflowing_fleet();
+    let mut ui = UiState {
+        selected_index: Some(2),
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 35);
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let frame = compose_lines(&snapshot, None, &ui, &Theme::fixed(false), 54, 35);
+    assert!(
+        frame.anchor_clamped,
+        "shrinking above needs a negative offset"
+    );
+    assert!(paint_card_row(&snapshot, &mut ui, "task-2", 35) < before);
+}
+
+#[test]
+fn banner_appearance_and_disappearance_keep_the_card_row() {
+    let mut snapshot = overflowing_fleet_with_unread_lead();
+    let mut ui = UiState {
+        selected_index: Some(4),
+        scroll_offset: 8,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-3", 35);
+    let lead = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    lead.unread = false;
+    let after = paint_card_row(&snapshot, &mut ui, "task-3", 35);
+    assert_eq!(
+        after, before,
+        "removing the banner preserves absolute pane placement"
+    );
+    std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0]
+    .unread = true;
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-3", 35), before);
+}
+
+#[test]
+fn selecting_a_partially_visible_card_does_not_reveal_it() {
+    let snapshot = overflowing_fleet();
+    let mut ui = UiState::default();
+    let _ = paint_card_row(&snapshot, &mut ui, "task-0", 20);
+    let offset = ui.scroll_offset;
+    ui.selected_index = ui.interactions.visible_row_span().map(|(_, last)| last);
+    let mut terminal = Terminal::new(TestBackend::new(54, 20)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert_eq!(
+        ui.scroll_offset, offset,
+        "even one visible card line prevents reveal"
+    );
+}
+
+#[test]
+fn wheel_peek_anchors_the_top_visible_card_not_the_offscreen_selection() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let mut ui = UiState {
+        selected_index: Some(0),
+        scroll_offset: 12,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-3", 20);
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-3", 20), before);
+}
+
+#[test]
+fn a_departed_anchor_falls_through_to_the_next_placed_card() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows,
+    );
+    for index in 0..3 {
+        let mut row = rows.last().unwrap().clone();
+        row.id = format!("tail-{index}");
+        rows.push(row);
+    }
+    let mut ui = UiState {
+        scroll_offset: 12,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-4", 26);
+    let survivor = snapshot.worktree_groups[1].rows[1].id.clone();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1].rows)
+        .remove(0);
+    let mut terminal = Terminal::new(TestBackend::new(54, 26)).unwrap();
+    draw_to_terminal(&mut terminal, &snapshot, None, &mut ui).unwrap();
+    assert_eq!(
+        ui.painted_rows
+            .iter()
+            .find(|(id, _)| id == &survivor)
+            .unwrap()
+            .1,
+        before as isize
+    );
+}
+
+#[test]
+fn resort_anchors_the_cards_own_line_not_its_new_group_header() {
+    let mut snapshot = overflowing_fleet();
+    let mut ui = UiState {
+        selected_index: Some(2),
+        scroll_offset: 9,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 24);
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    let selected = rows.remove(2);
+    rows.insert(0, selected);
+    ui.selected_index = Some(0);
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 24), before);
+}
+
+#[test]
+fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let mut ui = UiState {
+        selected_index: Some(2),
+        scroll_offset: 6,
+        frame_ms: 40,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    ui.scroll_ease.observe(2, 0);
+    ui.scroll_ease.arm();
+    ui.scroll_ease.observe(6, 0);
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 28);
+    let remaining = ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms);
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 28), before);
+    assert!(ui.scroll_ease.in_flight());
+    assert_eq!(
+        ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms),
+        remaining
+    );
+}
+
 #[test]
 fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let snapshot = overflowing_fleet();
@@ -7,9 +203,7 @@ fn wheel_ease_positions_cards_scrollbar_and_hits_by_the_visible_row() {
     let mut ui = UiState {
         scroll_offset: 9,
         frame_ms: 40,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..Default::default()
     };
     ui.scrollbar.observe(0, 0);
@@ -41,9 +235,7 @@ fn wheel_banner_height_uses_the_target_throughout_the_glide() {
     let theme = Theme::fixed(false);
     let mut ui = UiState {
         scroll_offset: 99,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..Default::default()
     };
     let target_frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
@@ -412,19 +604,15 @@ fn render_scroll_pins_tall_expanded_card_top() {
 }
 #[test]
 fn render_scroll_manual_offset_holds() {
-    // A wheel pin holds the user's window even though the selection (row 0)
-    // sits above the fold — the peek wins until the selection changes. The
-    // bar follows movement, not the pin: a held window past the settle delay
-    // is bar-less even while pinned.
+    // A wheel frame takes the offset even with the selection above the fold.
+    // A settled window has no scrollbar activity.
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
         &UiState {
             selected_index: Some(0),
             scroll_offset: 6,
-            manual_scroll: Some(ManualScroll {
-                selection_at_start: None,
-            }),
+            offset_authoritative: true,
             ..Default::default()
         },
         38,
@@ -432,7 +620,7 @@ fn render_scroll_manual_offset_holds() {
     );
     assert!(
         !rendered.contains("task-0"),
-        "the selected card stays beyond the fold while pinned:\n{rendered}"
+        "the selected card stays beyond the fold during the peek:\n{rendered}"
     );
     assert_snapshot("scroll_manual_offset_holds", rendered);
 }
@@ -470,9 +658,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         &UiState {
             selected_index: Some(0),
             scroll_offset: 10,
-            manual_scroll: Some(ManualScroll {
-                selection_at_start: None,
-            }),
+            offset_authoritative: true,
             scrollbar: scrolled_fade(10, 0),
             ..Default::default()
         },

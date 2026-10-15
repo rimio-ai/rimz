@@ -5916,11 +5916,6 @@ reason = "Field type of UiState::order_hold, so it follows the field to pane rea
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::render::ui_state::ManualScroll"
-reason = "Field type of UiState::manual_scroll, so it follows the field to pane reach rather than going private (pass 24c)."
-
-[[verdict]]
-kind = "item"
 key = "sidebar_pane::render::ui_state::DashboardTab"
 reason = "Field type of UiState::dashboard_tab, so it follows the field to pane reach rather than going private (pass 24c)."
 

@@ -10,7 +10,7 @@ use super::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 #[serde(rename_all = "lowercase")]
 pub enum ScrollbarMode {
     /// Show the bar only while the viewport is moving - a wheel scroll or the
-    /// selection-driven auto-follow - then hide it about a second after the view
+    /// selection reveal - then hide it about a second after the view
     /// settles.
     #[default]
     Auto,

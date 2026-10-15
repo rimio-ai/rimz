@@ -76,6 +76,111 @@ fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
 }
 
 #[test]
+fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
+    use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
+    for (viewport_row, banner) in [(-1, false), (2, false), (2, true)] {
+        let (mut rig, _) = scroll_rig();
+        if banner {
+            let lead = &mut Arc::make_mut(
+                &mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows,
+            )[0];
+            lead.unread = true;
+            lead.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+        }
+        let target = rig.state.current.worktree_groups[0].rows[4].clone();
+        rig.state.ui.selected_index = Some(4);
+        rig.state.ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.state.ui.scroll_offset = 30;
+        let stamp = crate::utils::time::unix_now_ms();
+        crate::mux::focus_anchor::store(
+            &rig.runtime,
+            &FocusAnchor {
+                nonce: crate::ids::FocusNonce::new(),
+                session_name: "rimz-test".to_owned(),
+                pane_id: rig.state.ui.selected_pane.clone().unwrap(),
+                origin: FocusOrigin::User,
+                repair_generation: None,
+                issued_at_ms: stamp,
+                applied_at_ms: Some(stamp),
+                state: FocusIntentState::Applied,
+                pre_action: Vec::new(),
+                placement: Some(FocusPlacement {
+                    row_id: target.id.clone(),
+                    viewport_row,
+                }),
+                order: None,
+            },
+        )
+        .unwrap();
+        rig.state.apply_focus_anchor();
+        assert!(rig.state.ui.focus_placement.is_some());
+        rig.state.dirty = true;
+        paint_at(&mut rig, 0);
+        let theme = rig.state.ui.theme(&rig.state.current.theme);
+        let frame = render::compose_lines(&rig.state.current, None, &rig.state.ui, &theme, 80, 24);
+        let (_, first_line) = rig
+            .state
+            .ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &target.id)
+            .unwrap();
+        assert_eq!(*first_line, frame.top_height as isize + viewport_row);
+        assert_eq!(
+            rig.state
+                .focus_placement(&target.pane.as_ref().unwrap().pane_id),
+            Some(FocusPlacement {
+                row_id: target.id.clone(),
+                viewport_row
+            })
+        );
+        let offscreen = rig.state.current.worktree_groups[0].rows.last().unwrap();
+        assert!(
+            rig.state
+                .focus_placement(&offscreen.pane.as_ref().unwrap().pane_id)
+                .is_none()
+        );
+        assert_eq!(
+            frame
+                .interactions
+                .line_for_target(&render::HitTarget::UnreadBanner)
+                .is_some(),
+            banner
+        );
+    }
+}
+
+#[test]
+fn shared_placement_never_leaves_the_selected_card_off_screen() {
+    use crate::mux::focus_anchor::FocusPlacement;
+    // A placement below a shorter destination zone, and a placement for a row the
+    // selection has since left: either way the selected card must end up visible.
+    for (placed, selected, viewport_row) in [(19, 19, 30), (4, 18, 2)] {
+        let (mut rig, _) = scroll_rig();
+        let rows = &rig.state.current.worktree_groups[0].rows;
+        let placed_id = rows[placed].id.clone();
+        let target = rows[selected].clone();
+        rig.state.ui.selected_index = Some(selected);
+        rig.state.ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
+        rig.state.ui.scroll_offset = 0;
+        rig.state.ui.focus_placement = Some(FocusPlacement {
+            row_id: placed_id,
+            viewport_row,
+        });
+        rig.state.dirty = true;
+        paint_at(&mut rig, 0);
+        assert!(
+            rig.state
+                .ui
+                .painted_rows
+                .iter()
+                .any(|(id, _)| id == &target.id),
+            "selected card {selected} must be painted after placing row {placed} at {viewport_row}"
+        );
+    }
+}
+
+#[test]
 fn wheel_run_eases_then_releases_the_animation_grid() {
     let (mut rig, output) = scroll_rig();
     let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
@@ -161,7 +266,10 @@ fn queued_wheel_ticks_paint_once_at_the_final_offset() {
         assert_eq!(rig.state.ui.scroll_offset, (count * 3).min(max));
         assert_eq!(paints(&output), 1);
         assert_eq!(rig.state.ui.selected_pane, selected);
-        assert!(rig.state.ui.manual_scroll.is_some());
+        assert!(
+            !rig.state.ui.offset_authoritative,
+            "paint consumed the wheel intent"
+        );
         assert!(rig.state.ui.order_hold.is_some());
         assert!(!rig.state.dirty);
     }

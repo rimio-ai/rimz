@@ -911,9 +911,7 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
     let ui = UiState {
         selected_index: Some(0),
         scroll_offset: 99,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..UiState::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);

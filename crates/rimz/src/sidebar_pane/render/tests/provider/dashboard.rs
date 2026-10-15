@@ -879,9 +879,7 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
     let ui = UiState {
         selected_index: Some(0),
         scroll_offset: 6,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..Default::default()
     };
     let frame = compose_lines(&snapshot, None, &ui, &theme, 54, 23);

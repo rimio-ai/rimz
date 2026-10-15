@@ -182,7 +182,7 @@ On Zellij the held room's attached client follows no focus sent from outside a p
 
 ### 5. Wheel glide
 
-On each backend, use an attached room with more cards than viewport rows (expand groups or shorten the terminal if needed). Focus the sidebar and wheel down, then up: the cards should glide over about a tenth of a second, and the scrollbar should follow the visible cards rather than jump ahead. Wheel again during a glide to check that it continues from the visible row without jumping back. Press a selection key during a glide: the view should snap to the selected card in one frame. Click a visible card mid-glide and confirm that the pane it opens matches the card under the pointer.
+On each backend, use an attached room with more cards than viewport rows (expand groups or shorten the terminal if needed). Focus the sidebar and wheel down, then up: the cards should glide over about a tenth of a second, and the scrollbar should follow the visible cards rather than jump ahead. Wheel again during a glide to check that it continues from the visible row without jumping back. Press a selection key during a glide: the glide should stop in one frame, revealing the new card only if none of it is visible. Click a visible card mid-glide and confirm that the pane it opens matches the card under the pointer.
 
 The recorded run glided from an idle sidebar on 16 ms paints on both backends: three tmux ticks went `off=8 → 6 → 4 → 2 → 1` over 20–99 ms, and three Zellij ticks went `off=7 → 5 → 3 → 1 → 0` over 30–96 ms. A selection key 35 ms into a glide snapped in one paint on both, and a click mid-glide focused the card under the pointer (tmux `cmd=more`, Zellij `terminal_28`).
 
