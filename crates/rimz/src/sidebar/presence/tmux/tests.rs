@@ -254,6 +254,82 @@ fn window_switch_onto_sidebar_with_work_sibling_strands() {
 }
 
 #[test]
+fn pane_before_window_focus_avoids_transient_sidebar_strand() {
+    let mut state = hidden_window_fixture();
+    project_apply(&mut state, sidebar_sub("%2", "@2", true), true);
+    let events: Vec<_> = [
+        wpane("@2", "%3"),
+        swin("$1", "@2"),
+        sidebar_sub("%2", "@2", false),
+        sub("%3", "@2", Some("zsh"), true),
+    ]
+    .into_iter()
+    .flat_map(|line| project_apply(&mut state, line, false))
+    .collect();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SidebarEvent::FocusStranded { .. })),
+        "pane-before-window must not strand on the stale sidebar: {events:?}",
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            SidebarEvent::FocusChanged { focused, .. } if focused == &[pane_id("%3")]
+        )),
+        "the switch must focus the target work pane: {events:?}"
+    );
+}
+
+#[test]
+fn former_window_before_pane_focus_sequence_strands_on_sidebar() {
+    let mut state = hidden_window_fixture();
+    project_apply(&mut state, sidebar_sub("%2", "@2", true), true);
+    // The old focus_pane batch exposed the destination's stale active sidebar.
+    let events: Vec<_> = [
+        swin("$1", "@2"),
+        wpane("@2", "%3"),
+        sidebar_sub("%2", "@2", false),
+        sub("%3", "@2", Some("zsh"), true),
+    ]
+    .into_iter()
+    .flat_map(|line| project_apply(&mut state, line, false))
+    .collect();
+    assert!(
+        events.iter().any(|event| matches!(event,
+            SidebarEvent::FocusStranded { pane_id: pane, .. } if pane == &pane_id("%2")
+        )),
+        "window-before-pane must expose the false strand: {events:?}"
+    );
+}
+
+#[test]
+fn pane_before_window_focus_without_current_window_seed_does_not_strand() {
+    let mut state = TmuxPresenceState::default();
+    for line in [
+        sub("%1", "@1", Some("zsh"), true),
+        sidebar_sub("%2", "@2", true),
+        sub("%3", "@2", Some("zsh"), false),
+    ] {
+        project_apply(&mut state, line, true);
+    }
+    let events: Vec<_> = [
+        wpane("@2", "%3"),
+        swin("$1", "@2"),
+        sidebar_sub("%2", "@2", false),
+        sub("%3", "@2", Some("zsh"), true),
+    ]
+    .into_iter()
+    .flat_map(|line| project_apply(&mut state, line, false))
+    .collect();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SidebarEvent::FocusStranded { .. })),
+        "an unseeded current window must not cause a sidebar strand: {events:?}",
+    );
+}
+
+#[test]
 fn window_switch_with_unknown_active_pane_falls_back_to_panes_changed() {
     let mut roster = TmuxPresenceState::default();
     project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);

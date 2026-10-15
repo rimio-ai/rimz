@@ -225,7 +225,7 @@ In 3.8, `move-pane` and `resize-pane` support floating panes. `break-pane` float
 
 **`respawn-pane [-Ek] [-c dir] [-e VAR=val]… [-t pane] [shell-command…]`** restarts a pane's command in place, keeping its `%id` and geometry. Without `-k` it fails on a pane whose command is still running. `-k` kills the running command first. With no command it reruns the pane's start command. `respawn-window` is the window-level form. Both accept `-E` to create an empty pane in 3.8.
 
-**`select-pane [-DdeLlMmRUZ] [-T title] [-t pane]`** makes a pane active within its window only. It does not change the session's current window (probed on 3.5a, and [cmd-select-pane.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-select-pane.c) writes no current window). A cross-window jump is `select-window -t @win ';' select-pane -t %pane`, and only `switch-client` crosses sessions. `-L`/`-R`/`-U`/`-D` move by direction, `-l` goes to the last pane, `-e`/`-d` enable or disable input, `-T` sets the title, and `-m`/`-M` set or clear the marked pane.
+**`select-pane [-DdeLlMmRUZ] [-T title] [-t pane]`** makes a pane active within its window only. It does not change the session's current window (probed on 3.5a, and [cmd-select-pane.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/cmd-select-pane.c) writes no current window). A cross-window jump is `select-pane -t %pane ';' select-window -t @win`, and only `switch-client` crosses sessions. `-L`/`-R`/`-U`/`-D` move by direction, `-l` goes to the last pane, `-e`/`-d` enable or disable input, `-T` sets the title, and `-m`/`-M` set or clear the marked pane.
 
 **`select-window [-lnpT] [-t window]`** accepts `@id` targets. `-l`, `-n`, and `-p` pick the last, next, and previous window, and `-T` acts like `last-window` when the target is already current.
 
@@ -541,6 +541,8 @@ The server copies the environment it starts with into the **global environment**
 ### Notification catalog
 
 Wire shapes are from [control-notify.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/control-notify.c) and [control.c](https://github.com/tmux/tmux/blob/7f2a35ad3321f9ba57a1062ca73b1f3ff26aca53/control.c) at 3.8. How the backend classifies each line is in [state.md → what triggers a mux-derived event](../../internals/sidebar/state.md#what-triggers-a-mux-derived-event).
+
+Notifications from a batched command list arrive in command order (probed on 3.7c). A `select-pane` on a hidden window reports `%window-pane-changed` without `%session-window-changed`; selecting the window afterward reports `%session-window-changed` with the target pane already active. The `pane_active` subscription changes follow these notifications.
 
 | Notification | Wire shape | Sent when |
 | --- | --- | --- |
