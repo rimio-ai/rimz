@@ -35,7 +35,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 // under its kind's `default` key.
 // v16: response timing counters in per-model windows for the stats tok/s figure.
 // v17: local-date history with its timezone and durable session-role attribution.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 17;
+// v18: calendar-day windows on every tally, independent of the headline.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 18;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -47,7 +48,8 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 17;
 /// added back from live cards. v6: a local-day window supports room daily caps
 /// independently of the configured headline. v7: walked per-session baselines
 /// replace live-session exclusion for exact flush-lag overlays.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 7;
+/// v8: the scoped tally carries an independent calendar-day window.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 8;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's `SPENDING_TTL` gate reads. A wrapper rather than a

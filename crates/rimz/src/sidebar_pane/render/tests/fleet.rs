@@ -133,6 +133,7 @@ fn cockpit_reads_workspace_tally_while_store_reads_global_tally() {
             week: headline.clone(),
             month: headline.clone(),
             year: headline,
+            ..Default::default()
         }
         .into(),
     );

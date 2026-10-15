@@ -1322,7 +1322,10 @@ pub(super) fn insights_lines(
     } else {
         "—".to_owned()
     };
-    let average_span = active.span_days();
+    let (average_span, average_usd) = match active {
+        Window::Today => (Window::Year.span_days(), stats.total.year.usd),
+        _ => (active.span_days(), selected.usd),
+    };
     let average_cutoff = today_day - i64::from(average_span - 1);
     let average_active_days = stats
         .by_day
@@ -1330,7 +1333,7 @@ pub(super) fn insights_lines(
         .filter(|(day, spend)| **day >= average_cutoff && **day <= today_day && spend.tokens > 0)
         .count();
     let daily_average = if average_active_days > 0 {
-        rimz::theme::fmt::dollars2(selected.usd / average_active_days as f64)
+        rimz::theme::fmt::dollars2(average_usd / average_active_days as f64)
     } else {
         "—".to_owned()
     };
@@ -1361,7 +1364,7 @@ pub(super) fn insights_lines(
                 match active {
                     Window::Week => "week",
                     Window::Month => "month",
-                    Window::Year => "window",
+                    Window::Today | Window::Year => "window",
                 }
             )
         })
@@ -1392,7 +1395,7 @@ pub(super) fn spend_trend(
     let span = match window {
         Window::Week => 7,
         Window::Month => 30,
-        Window::Year => return None,
+        Window::Today | Window::Year => return None,
     };
     let current_start = today_day - span + 1;
     let prior_start = current_start - span;
@@ -1541,7 +1544,7 @@ impl Activity {
             .map(|(&day, _)| day)
             .collect();
 
-        if window == Window::Year {
+        if matches!(window, Window::Today | Window::Year) {
             const RECENT_ACTIVITY_DAYS: u32 = 28;
             let active_count = (today_day - i64::from(RECENT_ACTIVITY_DAYS - 1)..=today_day)
                 .filter(|day| active.contains(day))

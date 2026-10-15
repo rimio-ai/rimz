@@ -37,7 +37,7 @@ Unattributed stays separate and never folds away. It means RimZ has spend but no
 
 The heatmap follows: one local calendar day per cell and one week per column, with four to fifty-two weeks depending on terminal width. Shading uses the 90th-percentile active day as its ceiling, so a record day does not flatten the rest. `--dollars` shades cost rather than tokens. The final `as of` time tells you when these figures were published, with a date when they are not from today.
 
-For a live screen, `rimz stats --refresh` keeps the wordmark, heatmap, breakdowns, activity insights and assist counts. Tab and Shift-Tab select Week, Month or Year; q quits (except in the daemon's held pane). Year keeps a recent 28-day activity count; Week and Month compare spend with their preceding equal window.
+For a live screen, `rimz stats --refresh` keeps the wordmark, heatmap, breakdowns, activity insights and assist counts. It opens on Year; Tab and Shift-Tab select Today, Week, Month or Year; q quits (except in the daemon's held pane). Today shows the local day's spenders and assists, with Year's activity history and typical active-day spend beside today's figures. Today and Year keep a recent 28-day activity count; Week and Month compare spend with their preceding equal window.
 
 To see what RimZ did for you, `rimz stats --assists` lists the latest 50 assists that took effect. Its counts cover all retained records, and each count names its held attempts beside it. `-n 0` shows all retained events, and `--all` includes held and failed attempts when you need to explain a missing action.
 

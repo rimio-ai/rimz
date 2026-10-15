@@ -47,6 +47,22 @@ fn history_days_follow_published_zone_including_rolled_rows() {
     assert_eq!(result.days[&day("2026-01-12T00:00:00Z")].usd, 1.0);
     assert_eq!(result.days[&day("2026-01-13T00:00:00Z")].usd, 2.0);
     assert_eq!(result.days[&day("2026-01-02T00:00:00Z")].usd, 4.0);
+    assert_eq!(result.spending.total.day.usd, 2.0);
+    assert_eq!(result.spending.total.week.usd, 3.0);
+    assert_eq!(result.spending.total.day.sessions, 1);
+    assert_eq!(result.spending.total.week.sessions, 2);
+    assert_eq!(result.spending.total.headline.usd, 0.0);
+    assert_eq!(result.models[""].day.usd, 2.0);
+    assert_eq!(result.roles.unattributed.tally.day.usd, 2.0);
+    assert_eq!(result.spending.by_provider["opencode"].day.usd, 2.0);
+    assert_eq!(
+        result.spending.by_login.values().next().unwrap().day.usd,
+        2.0
+    );
+    assert_eq!(
+        result.spending.total.day.display_tokens(),
+        result.days[&day("2026-01-13T00:00:00Z")].tokens
+    );
     assert_eq!(
         result.days[&day("2026-01-13T00:00:00Z")].usd,
         result.provider_day.values().map(|day| day.usd).sum::<f64>()
@@ -167,8 +183,21 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         3.0
     );
     assert_eq!(result.roles.unattributed.tally.year.usd, 5.0);
-    let windows: [fn(&SpendTally) -> &SpendWindow; 4] =
-        [|t| &t.headline, |t| &t.week, |t| &t.month, |t| &t.year];
+    assert_eq!(result.roles.agents["claude"].day.usd, 3.0);
+    assert_eq!(result.roles.agents["claude"].day.sessions, 1);
+    assert_eq!(result.roles.subagents["fast"].tally.day.usd, 3.0);
+    assert_eq!(result.roles.subagents["fast"].tally.day.sessions, 1);
+    assert_eq!(
+        result.roles.subagents["fast"].models["child-model"].day.usd,
+        3.0
+    );
+    let windows: [fn(&SpendTally) -> &SpendWindow; 5] = [
+        |t| &t.headline,
+        |t| &t.day,
+        |t| &t.week,
+        |t| &t.month,
+        |t| &t.year,
+    ];
     for window in windows {
         let mut sum = SpendWindow::default();
         for tally in result

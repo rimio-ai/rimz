@@ -262,8 +262,8 @@ pub(super) enum AssistEvent {
 }
 
 impl AssistStats {
-    pub(super) fn load(state_root: &Path, window: Window, now: Timestamp) -> Self {
-        let since = window.assist_since(now);
+    pub(super) fn load(state_root: &Path, window: Window, now: Timestamp, timezone: &str) -> Self {
+        let since = window.assist_since(now, timezone);
         Self::from_records(window.assist_label(), assist_log::recent(state_root, since))
     }
 
@@ -764,8 +764,14 @@ impl AssistEvent {
 }
 
 impl Window {
-    fn assist_since(self, now: Timestamp) -> Option<Timestamp> {
+    fn assist_since(self, now: Timestamp, timezone: &str) -> Option<Timestamp> {
         let days = match self {
+            Self::Today => {
+                let now_secs = u64::try_from(now.as_second()).ok()?;
+                let cutoff =
+                    rimz::agents::spending::local_day_start_secs(now_secs, Some(timezone))?;
+                return Timestamp::from_second(i64::try_from(cutoff).ok()?).ok();
+            }
             Self::Week => 7,
             Self::Month => 30,
             Self::Year => 365,
@@ -775,6 +781,7 @@ impl Window {
 
     fn assist_label(self) -> &'static str {
         match self {
+            Self::Today => "today",
             Self::Week => "7d",
             Self::Month => "30d",
             Self::Year => "1y",

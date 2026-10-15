@@ -67,6 +67,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
                 sessions: 980,
                 ..Default::default()
             },
+            ..Default::default()
         }
         .into(),
     );
@@ -112,6 +113,7 @@ fn render_fleet_store_pins_week_month_rows_under_the_dashboard() {
                 sessions: 4,
                 ..Default::default()
             },
+            ..Default::default()
         }
         .into(),
     );

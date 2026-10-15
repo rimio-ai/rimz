@@ -156,21 +156,23 @@ pub(crate) const SESSION_GAP_SECS: u64 = 5 * 3_600;
 /// Stable sentinel for a session headline with no user-opened burst.
 pub(crate) const NO_BURST_CUTOFF: u64 = u64::MAX;
 
-/// Rolling spend and token tally over the configured headline window plus three
-/// trailing store windows: 7 days, 30 days, and 365 days. The store windows
-/// nest — `year` (365 days) is the widest and subsumes the rest — while the
-/// headline window is independent.
+/// Spend and token tally over the configured headline window, local calendar
+/// day, and trailing store windows: 7 days, 30 days, and 365 days. The store
+/// windows nest, with `year` the widest, while the headline is independent.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendTally {
     /// Configured headline window (`[sidebar] spend_window`): the current
     /// session by default, trailing 24 hours, or the local calendar day.
     #[serde(rename = "today")]
     pub headline: SpendWindow,
+    /// Local calendar day in the published history timezone.
+    #[serde(default)]
+    pub day: SpendWindow,
     /// Trailing 7 days.
     pub week: SpendWindow,
     /// Trailing 30 days.
     pub month: SpendWindow,
-    /// Trailing 365 days — the widest window, so it subsumes the other three.
+    /// Trailing 365 days — the widest window, so it subsumes the other windows.
     /// `#[serde(default)]` keeps an older `provider-spending.json` (which carried
     /// an `all_time` field and no `year`) readable: the stale field is ignored and
     /// `year` defaults to zero until the producer rewrites the cache next tick.
@@ -265,6 +267,8 @@ pub(crate) fn aggregate_counted_rollups(
         FastHashMap::default()
     };
     let (zone, timezone) = history_zone(crate::config::resolve_time_zone(spec.timezone.as_deref()));
+    let history_day_cutoff = local_day_start_secs(now_secs, Some(&timezone))
+        .unwrap_or_else(|| trailing_window_cutoff(now_secs, 86_400));
     let day_boundaries = if history_roles.is_some() {
         let first = counted.iter().map(|row| row.entry().ts_secs).min();
         let last = counted.iter().map(|row| row.entry().ts_secs).max();
@@ -279,7 +283,13 @@ pub(crate) fn aggregate_counted_rollups(
     for counted in counted {
         let provider = counted.kind();
         let entry = counted.entry();
-        accum(&mut spending.total, entry, now_secs, cutoffs.total);
+        accum(
+            &mut spending.total,
+            entry,
+            now_secs,
+            cutoffs.total,
+            history_day_cutoff,
+        );
         accum(
             spending
                 .by_login
@@ -288,12 +298,14 @@ pub(crate) fn aggregate_counted_rollups(
             entry,
             now_secs,
             cutoffs.total,
+            history_day_cutoff,
         );
         accum(
             spending.by_provider.entry(provider.to_owned()).or_default(),
             entry,
             now_secs,
             cutoffs.total,
+            history_day_cutoff,
         );
         if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
             login_day
@@ -318,7 +330,13 @@ pub(crate) fn aggregate_counted_rollups(
                 .origin()
                 .is_some_and(|origin| scope.contains(origin))
         {
-            accum(&mut workspace_tally, entry, now_secs, cutoffs.scoped());
+            accum(
+                &mut workspace_tally,
+                entry,
+                now_secs,
+                cutoffs.scoped(),
+                history_day_cutoff,
+            );
             if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
                 workspace_day.add(entry.cost_usd, entry);
                 workspace_day_sessions.insert(counted.session_key());
@@ -352,6 +370,7 @@ pub(crate) fn aggregate_counted_rollups(
                 entry,
                 now_secs,
                 u64::MAX,
+                history_day_cutoff,
             );
             if let Some(index) = joined_roles {
                 let native = file_sessions
@@ -365,6 +384,7 @@ pub(crate) fn aggregate_counted_rollups(
                     entry,
                     now_secs,
                     cutoffs.total,
+                    history_day_cutoff,
                 );
                 if let Some(SessionRole::Subagent { profile }) = role {
                     accum(
@@ -378,6 +398,7 @@ pub(crate) fn aggregate_counted_rollups(
                         entry,
                         now_secs,
                         cutoffs.total,
+                        history_day_cutoff,
                     );
                 }
                 let session = native
@@ -396,7 +417,14 @@ pub(crate) fn aggregate_counted_rollups(
         }
     }
 
-    add_spending_sessions(&mut spending, files, cache, now_secs, cutoffs.total);
+    add_spending_sessions(
+        &mut spending,
+        files,
+        cache,
+        now_secs,
+        cutoffs.total,
+        history_day_cutoff,
+    );
     if history_roles.is_some() && joined_roles.is_none() {
         roles.unattributed.by_provider = spending.by_provider.clone();
     }
@@ -406,10 +434,12 @@ pub(crate) fn aggregate_counted_rollups(
             youngest,
             now_secs,
             cutoffs.total,
+            history_day_cutoff,
         );
     }
     for tally in roles.unattributed.by_provider.values() {
         roles.unattributed.tally.headline.merge(&tally.headline);
+        roles.unattributed.tally.day.merge(&tally.day);
         roles.unattributed.tally.week.merge(&tally.week);
         roles.unattributed.tally.month.merge(&tally.month);
         roles.unattributed.tally.year.merge(&tally.year);
@@ -422,6 +452,7 @@ pub(crate) fn aggregate_counted_rollups(
             scope,
             now_secs,
             cutoffs.scoped(),
+            history_day_cutoff,
         );
     }
     workspace_day.sessions = workspace_day_sessions.len().try_into().unwrap_or(u32::MAX);
@@ -560,6 +591,7 @@ fn add_spending_sessions(
     cache: &SpendingDiskCache,
     now_secs: u64,
     headline_cutoff: u64,
+    day_cutoff: u64,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, (&'static str, u64)>::with_capacity_and_hasher(
         files.len(),
@@ -589,7 +621,13 @@ fn add_spending_sessions(
         }
     }
     for (provider, youngest) in threads.values() {
-        bump_sessions(&mut spending.total, *youngest, now_secs, headline_cutoff);
+        bump_sessions(
+            &mut spending.total,
+            *youngest,
+            now_secs,
+            headline_cutoff,
+            day_cutoff,
+        );
         bump_sessions(
             spending
                 .by_provider
@@ -598,6 +636,7 @@ fn add_spending_sessions(
             *youngest,
             now_secs,
             headline_cutoff,
+            day_cutoff,
         );
     }
     for ((login, _), youngest) in login_threads {
@@ -606,6 +645,7 @@ fn add_spending_sessions(
             youngest,
             now_secs,
             headline_cutoff,
+            day_cutoff,
         );
     }
 }
@@ -617,6 +657,7 @@ fn add_scoped_sessions(
     scope: &SpendScope,
     now_secs: u64,
     headline_cutoff: u64,
+    day_cutoff: u64,
 ) {
     let mut threads = FastHashMap::<SessionKey<'_>, u64>::default();
     for SpendingFile {
@@ -644,7 +685,7 @@ fn add_scoped_sessions(
         }
     }
     for youngest in threads.values() {
-        bump_sessions(tally, *youngest, now_secs, headline_cutoff);
+        bump_sessions(tally, *youngest, now_secs, headline_cutoff, day_cutoff);
     }
 }
 
@@ -1145,7 +1186,13 @@ fn burst_cutoff(prompts: &[u64], activity: &[u64], now_secs: u64) -> u64 {
     oldest_prompt.unwrap_or(NO_BURST_CUTOFF)
 }
 
-fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cutoff: u64) {
+fn accum(
+    tally: &mut SpendTally,
+    entry: &CachedEntry,
+    now_secs: u64,
+    headline_cutoff: u64,
+    day_cutoff: u64,
+) {
     let usd = entry.cost_usd;
     // Store-window bucketing: an entry counts toward each trailing window whose
     // span it still falls within. The configured headline window is independent
@@ -1161,14 +1208,23 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cu
     if age < 7 * 86_400 {
         tally.week.add(usd, entry);
     }
+    if entry.ts_secs >= day_cutoff {
+        tally.day.add(usd, entry);
+    }
     if entry.ts_secs >= headline_cutoff {
         tally.headline.add(usd, entry);
     }
 }
 
-/// Count one session (thread) toward each trailing store window its youngest
+/// Count one session (thread) toward each store window its youngest
 /// entry still falls within, plus the configured headline window.
-fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64, headline_cutoff: u64) {
+fn bump_sessions(
+    tally: &mut SpendTally,
+    youngest_ts: u64,
+    now_secs: u64,
+    headline_cutoff: u64,
+    day_cutoff: u64,
+) {
     let age = now_secs.saturating_sub(youngest_ts);
     if age >= WIDEST_SPEND_WINDOW_SECS {
         return;
@@ -1179,6 +1235,9 @@ fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64, headli
     }
     if age < 7 * 86_400 {
         tally.week.sessions += 1;
+    }
+    if youngest_ts >= day_cutoff {
+        tally.day.sessions += 1;
     }
     if youngest_ts >= headline_cutoff {
         tally.headline.sessions += 1;

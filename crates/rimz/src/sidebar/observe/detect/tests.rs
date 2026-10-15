@@ -1495,6 +1495,7 @@ fn aggregate_spend_drops_record_only_a_year_reset() {
                         week: spent(week),
                         month: spent(month),
                         year: spent(year),
+                        ..Default::default()
                     }
                     .into(),
                 ),
