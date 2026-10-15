@@ -472,7 +472,7 @@ Native client observations resolve the intent, with the pre-action client map as
 | --- | --- | --- |
 | `Confirmed` | Every observed client views the target pane. | The action landed; retire the intent. |
 | `Superseded` | The client map moved somewhere other than the target. | Something else took focus; drop the overlay. |
-| `Invalidated` | The target left the roster, no client remains, the client id set changed, or a requested anchor went stale before acceptance. | Detach, replacement, closure, or abandoned request; drop the overlay. A sidebar treats another session's anchor as absent, not invalidated, and never presents or retires it. |
+| `Invalidated` | The session changed (or the observation names no session), the target left the roster, no client remains, the client id set changed, or a requested anchor went stale before acceptance. | Detach, replacement, closure, or abandoned request; drop the overlay. A sidebar filters out another session's anchor before judging it, so it never presents, invalidates, or retires that anchor. |
 | `Present` | A requested anchor is fresh, or an applied anchor is fresh with its pre-action map unchanged. | Keep presenting the target. |
 | `Fence` | The pre-action map is unchanged past `FOCUS_ANCHOR_FRESH`. | Yield unknown instead of restoring stale evidence. |
 
