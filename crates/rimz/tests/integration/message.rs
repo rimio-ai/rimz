@@ -4013,7 +4013,7 @@ fn assert_ended_child_resume_refusal(unhooked: bool) {
 #[cfg(unix)]
 #[test]
 fn parent_message_to_resumed_child_waits_for_installed_registration() {
-    use crate::common::{exec_args, path_with_front, write_env_dump_shim};
+    use crate::common::{exec_args, path_with_front, write_long_lived_agent_shim};
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
     let env = Env::new();
@@ -4087,9 +4087,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
     run.status = rimz::store::run::RunStatus::Completed;
     run.joined_at = Some(jiff::Timestamp::now());
     rimz::harness::run::create(store.paths(), &run).unwrap();
-    let shim = write_env_dump_shim(&env, "claude");
-    // Keep the fixture provider alive without producing its registration hook.
-    std::fs::write(shim.join("claude"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    let shim = write_long_lived_agent_shim(&env, "claude");
     std::os::unix::fs::symlink(zellij_trace_shim(), shim.join("zellij")).unwrap();
     let mut parent_pane = agent_pane(&env, "claude");
     parent_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");

@@ -3339,9 +3339,8 @@ fn resume_exec_cleanup_case(queue_before_exit: bool) {
     run.joined_at = Some(jiff::Timestamp::now());
     rimz::harness::run::create(store.paths(), &run).unwrap();
 
-    let shim_dir = write_env_dump_shim(&env, "codex");
     // No natural provider exit may masquerade as the wrapper's self-cleanup.
-    std::fs::write(shim_dir.join("codex"), "#!/bin/sh\nexec sleep 300\n").unwrap();
+    let shim_dir = crate::common::write_long_lived_agent_shim(&env, "codex");
     std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
         .unwrap();
     let mut resume = ExecRequest {
