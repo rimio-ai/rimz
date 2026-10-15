@@ -115,6 +115,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `accounts.<kind>.<name>.history` | `shared` or `standalone`; `set` only declares the mode, and `rimz accounts add <kind> <name>` or the next launch on the account links or unlinks its history. `get` reports `shared` as unset, since absent means shared. |
 | `harness.turn_budget` | a dollar amount such as `3` or `$2.50` |
 | `resume.auto_redeem_min_gain` | a duration |
+| `resume.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
 | `gc.older_than` | a duration such as `8h` or `3d` |
 
 The two shorthands write the full key: `rimz config set theme <name>` sets `theme.scheme`, and `rimz config set theme.glyphs <set>` sets `theme.glyphs.set`.

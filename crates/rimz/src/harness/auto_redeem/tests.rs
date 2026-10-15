@@ -1,5 +1,4 @@
 use super::*;
-use crate::agents::context::{AgentContext, AgentTurnError, TurnErrorClass};
 use crate::agents::{AgentRateLimits, RateLimitWindow, RedeemEffect};
 use crate::ids::WorkspaceId;
 use jiff::SignedDuration;
@@ -75,7 +74,6 @@ fn verdict(
         credits,
         None,
         Duration::from_secs(12 * 3600),
-        true,
         true,
         now,
     )
@@ -186,7 +184,6 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
             None,
             Duration::from_secs(12 * 3600),
             false,
-            true,
             now,
         ),
         None,
@@ -200,7 +197,6 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
                 None,
                 Duration::from_secs(12 * 3600),
                 false,
-                false,
                 now,
             ),
             Some(RedeemReason::ExpiryRescue),
@@ -211,27 +207,22 @@ fn limit_redemption_requires_opt_in_but_rescue_does_not() {
 }
 
 #[test]
-fn limit_redemption_waits_for_a_limit_paused_agent() {
+fn limit_redemption_needs_no_parked_agent() {
     let now = ts(1_700_000_000);
     let blocked = spent_capacity(now, Duration::from_secs(3 * 86_400));
     let restarting = credits(now, Some(Duration::from_secs(10 * 86_400)));
     for credits in [restarting.clone(), keeping_schedule(restarting)] {
-        for (limit_paused, expected) in [(false, None), (true, Some(RedeemReason::BlockedGain))] {
-            assert_eq!(
-                redeem_verdict(
-                    Some(&blocked),
-                    &credits,
-                    None,
-                    Duration::from_secs(12 * 3600),
-                    true,
-                    limit_paused,
-                    now,
-                ),
-                expected,
-                "limit_paused {limit_paused} ({:?})",
-                credits.effect
-            );
-        }
+        assert_eq!(
+            redeem_verdict(
+                Some(&blocked),
+                &credits,
+                None,
+                Duration::from_secs(12 * 3600),
+                true,
+                now
+            ),
+            Some(RedeemReason::BlockedGain)
+        );
     }
 }
 
@@ -261,7 +252,6 @@ fn a_kept_schedule_redeems_doomed_credits_and_never_schedules() {
             credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
             true,
             now,
         )
@@ -306,19 +296,18 @@ fn the_schedule_fires_only_behind_the_gate() {
     let (spent, chain) = due_chain(now);
     let mut unspent = spent.clone();
     unspent.windows[0].used_percentage = Some(40);
-    let schedule = |capacity: &ProviderCapacity, limit_paused| {
+    let schedule = |capacity: &ProviderCapacity, auto_redeem| {
         redeem_verdict(
             Some(capacity),
             &chain,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
-            limit_paused,
+            auto_redeem,
             now,
         )
     };
     assert_eq!(schedule(&unspent, true), None, "no spent window");
-    assert_eq!(schedule(&spent, false), None, "no limit-paused agent");
+    assert_eq!(schedule(&spent, false), None, "auto-redeem off");
     assert_eq!(schedule(&spent, true), Some(RedeemReason::ScheduledRedeem));
 }
 
@@ -416,7 +405,6 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
             Some(20.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             early,
         ),
         None,
@@ -427,7 +415,6 @@ fn chain_deadlines_space_refills_and_fall_back_to_rescue() {
             &credits,
             Some(20.0),
             Duration::from_secs(12 * 3_600),
-            true,
             true,
             deadline,
         ),
@@ -458,7 +445,6 @@ fn expired_credit_does_not_suppress_the_live_chain() {
             Some(20.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             deadline,
         ),
         Some(RedeemReason::ScheduledRedeem),
@@ -486,7 +472,6 @@ fn window_start_paces_a_late_chain_after_every_reset() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             now,
         ),
         None,
@@ -498,7 +483,6 @@ fn window_start_paces_a_late_chain_after_every_reset() {
             &credits,
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
             true,
             later,
         ),
@@ -525,7 +509,6 @@ fn slow_burn_does_not_drain_an_overdue_chain_after_the_cooldown() {
             &credits,
             Some(2.0),
             Duration::from_secs(12 * 3_600),
-            true,
             true,
             now + POST_SUCCESS_COOLDOWN,
         ),
@@ -562,7 +545,6 @@ fn scheduled_redeem_requires_a_dated_duration_window() {
                 Some(100.0),
                 Duration::from_secs(12 * 3_600),
                 true,
-                true,
                 now,
             ),
             None,
@@ -598,7 +580,6 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             now,
         ),
         None,
@@ -610,7 +591,6 @@ fn near_free_reset_defers_only_a_credit_that_comfortably_survives() {
             &chain(reset + MIN_HOLD - Duration::from_secs(1)),
             Some(100.0),
             Duration::from_secs(12 * 3_600),
-            true,
             true,
             now,
         ),
@@ -638,7 +618,6 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             now,
         ),
         Some(RedeemReason::BlockedGain),
@@ -658,7 +637,6 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             true,
-            true,
             now,
         ),
         Some(RedeemReason::DoomedCredit),
@@ -670,7 +648,6 @@ fn spent_reasons_and_opt_out_take_precedence_over_chain_scheduling() {
             Some(100.0),
             Duration::from_secs(12 * 3_600),
             false,
-            true,
             now,
         ),
         None,
@@ -800,7 +777,7 @@ fn manual_consume_refuses_held_offers_before_locking_or_reserving() {
         let result = preview.consume(&runtime, &key, uuid::Uuid::now_v7());
         assert!(matches!(result, Err(AutoRedeemErr::Held(actual)) if actual == hold));
         assert_eq!(consumed.load(Ordering::SeqCst), 0);
-        assert!(!runtime.shared_auto_redeem_lock(&key).exists());
+        assert!(!redeem_lock_path(&runtime, &key).exists());
         assert!(!runtime.shared_auto_redeem_path(&key).exists());
     }
 }
@@ -939,38 +916,28 @@ fn manual_stamp_reads_and_round_trips() {
     assert_eq!(read_stamp(&path), Some(stamp));
 }
 
-/// A live root row whose displayed turn error, raised at `now`, has `class`.
-fn limit_parked(kind: &str, agent_id: &str, class: TurnErrorClass, now: Timestamp) -> AgentState {
-    let mut agent = crate::sidebar::test_support::root_agent(kind, agent_id, None);
-    agent.last_activity = now - Duration::from_secs(60);
-    agent.context = Some(AgentContext {
-        turn_error: Some(AgentTurnError {
-            class,
-            at: now,
-            label: None,
-        }),
-        ..Default::default()
-    });
-    agent
-}
-
 #[test]
-fn a_request_round_trips_its_paused_evidence_and_defaults_to_not_paused() {
+fn a_request_round_trips_and_ignores_obsolete_evidence() {
     let request = AutoRedeemRequest {
         workspace_id: WorkspaceId::from_project_root(Path::new("/srv/project")),
         login: LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
         reason: RedeemReason::BlockedGain,
         request_id: uuid::Uuid::now_v7(),
-        limit_paused: true,
     };
     let mut payload = serde_json::to_value(&request).unwrap();
     assert_eq!(
         serde_json::from_value::<AutoRedeemRequest>(payload.clone()).unwrap(),
         request
     );
-    payload.as_object_mut().unwrap().remove("limit_paused");
-    let older = serde_json::from_value::<AutoRedeemRequest>(payload).unwrap();
-    assert!(!older.limit_paused);
+    assert_eq!(payload.as_object().unwrap().len(), 4);
+    payload
+        .as_object_mut()
+        .unwrap()
+        .insert("legacy_evidence".into(), true.into());
+    assert_eq!(
+        serde_json::from_value::<AutoRedeemRequest>(payload).unwrap(),
+        request
+    );
 }
 
 #[test]
@@ -980,134 +947,54 @@ fn producer_reserves_a_spawn_and_paces_the_next_tick() {
     let runtime =
         RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
+    let key: LoginKey = "codex@default".parse().unwrap();
     let mut cache = crate::agents::account::RateLimitsCache::default();
-    cache.entries.insert(
-        LoginKey::default_for(crate::ids::AgentKind::new_unchecked(CODEX_KIND)),
-        crate::agents::account::RateLimitCacheEntry {
-            limits: AgentRateLimits {
-                windows: vec![RateLimitWindow {
-                    used_percentage: Some(100),
-                    resets_at: Some(now + Duration::from_secs(3 * 86_400)),
-                    duration_mins: Some(10_080),
-                    observed_at: Some(now),
-                    source: crate::agents::context::WindowSource::Authoritative,
-                    ..Default::default()
-                }],
-            },
-            ..Default::default()
-        },
-    );
+    cache
+        .entries
+        .insert(key.clone(), rate_limit_entry(&[(10_080, 100)], now));
     write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache).unwrap();
     let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     panel.reset_credits = Some(credits(now, Some(Duration::from_secs(10 * 86_400))));
+    seed_credit_entry(
+        &runtime,
+        &key,
+        panel.reset_credits.clone().unwrap(),
+        None,
+        now,
+    );
     let config = ResumeConfig {
         auto_redeem: true,
         ..Default::default()
     };
-    let stamp_path = runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
-        crate::ids::AgentKind::new_unchecked(CODEX_KIND),
-    ));
-
-    let mut other_login = limit_parked(CODEX_KIND, "work", TurnErrorClass::PausedRateLimit, now);
-    other_login.login = Some("work".parse().unwrap());
-    let mut budget_parked =
-        limit_parked(CODEX_KIND, "budget", TurnErrorClass::PausedSpendLimit, now);
-    budget_parked.budget_park = Some(crate::agents::BudgetPark {
-        cap_usd: 5.0,
-        spend_usd: 5.25,
-        window: crate::agents::BudgetWindow::Day,
-        at: now,
-        scope: crate::agents::BudgetScope::Agent,
-        account_kind: None,
-        resets_at: None,
-    });
-    let mut subagent = limit_parked(CODEX_KIND, "sub", TurnErrorClass::PausedRateLimit, now);
-    subagent.parent_agent_id = Some("root".into());
-    let mut ended = limit_parked(CODEX_KIND, "ended", TurnErrorClass::PausedRateLimit, now);
-    ended.ended_at = Some(now);
-    let closed = [
-        other_login,
-        limit_parked("claude", "claude", TurnErrorClass::PausedRateLimit, now),
-        budget_parked,
-        limit_parked(CODEX_KIND, "busy", TurnErrorClass::PausedOverloaded, now),
-        subagent,
-        ended,
-    ];
-    redeem_credits(
-        std::slice::from_ref(&panel),
-        &BTreeMap::new(),
-        &closed,
-        &runtime,
-        &crate::agents::RoomLoginSet::native(),
-        &config,
-        now,
-    );
+    let stamp_path = runtime.shared_auto_redeem_path(&key);
+    let mut spawned = 0;
+    for tick in [now, now + Duration::from_secs(1)] {
+        redeem_credits_with(
+            std::slice::from_ref(&panel),
+            &BTreeMap::new(),
+            &runtime,
+            &RoomLoginSet::native(),
+            &config,
+            tick,
+            |_, _, _, _| {
+                spawned += 1;
+                true
+            },
+        );
+        let stamp = read_stamp(&stamp_path).unwrap();
+        assert_eq!(stamp.attempted_at, now);
+        assert_eq!(stamp.reason, RedeemReason::BlockedGain);
+        assert_eq!(stamp.outcome, None);
+    }
+    assert_eq!(spawned, 1, "the pending reservation paces producer ticks");
     assert_eq!(
-        read_stamp(&stamp_path),
-        None,
-        "no row of this room is stopped on the Codex default login's limit"
-    );
-    assert!(
-        read_rate_stamp(
-            &runtime.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
-            ))
-        )
-        .is_some(),
-        "the burn-rate cache advances whatever the gate says"
-    );
-
-    let mut open = closed.to_vec();
-    open.push(limit_parked(
-        CODEX_KIND,
-        "root",
-        TurnErrorClass::PausedRateLimit,
-        now,
-    ));
-    redeem_credits(
-        std::slice::from_ref(&panel),
-        &BTreeMap::new(),
-        &open,
-        &runtime,
-        &crate::agents::RoomLoginSet::native(),
-        &config,
-        now,
-    );
-    let first = read_stamp(&stamp_path).unwrap();
-    assert_eq!(first.attempted_at, now);
-    assert_eq!(first.reason, RedeemReason::BlockedGain);
-    assert_eq!(first.outcome, None);
-    assert_eq!(
-        read_rate_stamp(
-            &runtime.shared_auto_redeem_rate_path(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
-            ))
-        ),
+        read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&key)),
         Some(RateStamp {
             window_resets_at: now + Duration::from_secs(3 * 86_400),
             last_used_pct: 100,
             last_observed_at: now,
             rate_pct_per_day: 0.0,
         })
-    );
-
-    redeem_credits(
-        std::slice::from_ref(&panel),
-        &BTreeMap::new(),
-        &open,
-        &runtime,
-        &crate::agents::RoomLoginSet::native(),
-        &config,
-        now + Duration::from_secs(1),
-    );
-    assert_eq!(
-        read_stamp(
-            &runtime.shared_auto_redeem_path(&crate::ids::LoginKey::default_for(
-                crate::ids::AgentKind::new_unchecked(CODEX_KIND)
-            ))
-        ),
-        Some(first),
-        "the pending reservation must pace producer ticks before the helper reports an outcome"
     );
 }
 
@@ -1212,6 +1099,7 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
         (key("unknown"), dying.clone()),
     ]);
     let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
+    seed_credit_entry(&runtime, &default, dying.clone(), None, now);
     panel.reset_credits = Some(dying);
     let config = ResumeConfig {
         auto_redeem: true,
@@ -1222,18 +1110,17 @@ fn an_idle_account_spawns_a_rescue_only_at_expiry_whatever_its_cached_windows_re
     redeem_credits_with(
         std::slice::from_ref(&panel),
         &idle_credits,
-        &[],
         &runtime,
         &crate::agents::RoomLoginSet::native(),
         &config,
         now,
-        |_, key, reason, _, limit_paused| {
-            spawned.push((key.to_string(), reason, limit_paused));
+        |_, key, reason, _| {
+            spawned.push((key.to_string(), reason));
             true
         },
     );
 
-    let rescue = |name: &str| (format!("codex@{name}"), RedeemReason::ExpiryRescue, false);
+    let rescue = |name: &str| (format!("codex@{name}"), RedeemReason::ExpiryRescue);
     assert_eq!(
         spawned,
         [
@@ -1268,7 +1155,12 @@ fn the_helper_judges_an_idle_login_as_rescue_only_whatever_the_request_carried()
     let held = credits(now, Some(Duration::from_secs(10 * 86_400)));
     let dying = credits(now, Some(Duration::from_secs(20 * 60)));
     let fresh = |idle, capacity: Option<&ProviderCapacity>, credits: &ResetCredits| {
-        fresh_verdict(idle, capacity, credits, None, &config, true, now)
+        fresh_verdict(
+            idle,
+            &fresh_facts(capacity, credits, None, None),
+            &config,
+            now,
+        )
     };
     assert_eq!(
         fresh(false, Some(&blocked), &held),
@@ -1478,11 +1370,11 @@ fn forecast(
     now: Timestamp,
 ) -> Option<RedeemForecast> {
     redeem_forecast(
-        capacity,
-        credits,
-        rate_pct_per_day,
-        Duration::from_secs(12 * 3_600),
-        auto_redeem,
+        &fresh_facts(capacity, credits, None, rate_pct_per_day),
+        &ResumeConfig {
+            auto_redeem,
+            ..Default::default()
+        },
         now,
     )
 }
@@ -1602,7 +1494,6 @@ fn holding_forecast_stays_firm_until_the_longest_reset() {
                         rate,
                         Duration::from_secs(12 * 3_600),
                         true,
-                        true,
                         now,
                     ),
                     None,
@@ -1625,6 +1516,13 @@ fn projection_forecasts_only_the_codex_panel_with_credits() {
         SidebarSnapshot::build_with_agents(runtime.workspace_id.clone(), Vec::new(), now);
     let mut codex = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
     codex.reset_credits = Some(chain(now + Duration::from_secs(3 * 86_400)));
+    seed_credit_entry(
+        &runtime,
+        &"codex@default".parse().unwrap(),
+        codex.reset_credits.clone().unwrap(),
+        None,
+        now,
+    );
     let mut other = crate::sidebar::test_support::provider_panel("claude", Vec::new());
     other.reset_credits = codex.reset_credits.clone();
     snapshot.providers = vec![codex, other];
@@ -1669,7 +1567,6 @@ fn claude_banked_credits_never_arm_the_automatic_path() {
     redeem_credits_with(
         &[panel],
         &BTreeMap::new(),
-        &[],
         &runtime,
         &RoomLoginSet::native(),
         &ResumeConfig {
@@ -1677,7 +1574,7 @@ fn claude_banked_credits_never_arm_the_automatic_path() {
             ..Default::default()
         },
         now,
-        |_, key, _, _, _| {
+        |_, key, _, _| {
             spawned.push(key.clone());
             true
         },
@@ -1685,4 +1582,216 @@ fn claude_banked_credits_never_arm_the_automatic_path() {
     assert!(spawned.is_empty(), "{spawned:?}");
     let key = "claude@default".parse().unwrap();
     assert!(!runtime.shared_auto_redeem_path(&key).exists());
+}
+
+fn seed_credit_entry(
+    runtime: &RuntimePaths,
+    key: &LoginKey,
+    reset_credits: ResetCredits,
+    extra_credits: Option<crate::agents::ExtraCredits>,
+    now: Timestamp,
+) {
+    let path = runtime.shared_credits_path();
+    let mut cache = crate::agents::credits::read_credits_cache(&path);
+    cache.logins.insert(
+        key.clone(),
+        crate::agents::credits::ProviderCreditsEntry {
+            ok: true,
+            observed_at_ms: now.as_millisecond() as u64,
+            reset_credits: Some(reset_credits),
+            extra_credits,
+            ..Default::default()
+        },
+    );
+    write_temp_then_rename_cache(&path, &cache).unwrap();
+}
+
+#[test]
+fn producer_follows_the_spend_step_without_a_parked_agent() {
+    use crate::config::SpendOrder;
+    let now = ts(1_700_000_000);
+    for (order, extra, enabled, used, dying, expected) in [
+        (
+            SpendOrder::CreditsFirst,
+            false,
+            true,
+            100,
+            false,
+            Some(RedeemReason::BlockedGain),
+        ),
+        (SpendOrder::CreditsFirst, true, true, 100, false, None),
+        (
+            SpendOrder::ResetsFirst,
+            true,
+            true,
+            100,
+            false,
+            Some(RedeemReason::BlockedGain),
+        ),
+        (SpendOrder::CreditsFirst, false, false, 100, false, None),
+        (
+            SpendOrder::CreditsFirst,
+            true,
+            false,
+            40,
+            true,
+            Some(RedeemReason::ExpiryRescue),
+        ),
+        (
+            SpendOrder::CreditsFirst,
+            true,
+            true,
+            40,
+            true,
+            Some(RedeemReason::ExpiryRescue),
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let key: LoginKey = "codex@default".parse().unwrap();
+        let mut rates = crate::agents::account::RateLimitsCache::default();
+        rates
+            .entries
+            .insert(key.clone(), rate_limit_entry(&[(10_080, used)], now));
+        write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &rates).unwrap();
+        let credits = credits(now, dying.then_some(Duration::from_secs(20 * 60)));
+        seed_credit_entry(
+            &runtime,
+            &key,
+            credits.clone(),
+            extra.then(|| crate::agents::ExtraCredits::known(None, Some(100.0), None)),
+            now,
+        );
+        let mut panel = crate::sidebar::test_support::provider_panel(CODEX_KIND, Vec::new());
+        panel.reset_credits = Some(credits);
+        let config = ResumeConfig {
+            auto_redeem: enabled,
+            spend_order: order,
+            ..Default::default()
+        };
+        let mut spawned = Vec::new();
+        redeem_credits_with(
+            &[panel],
+            &BTreeMap::new(),
+            &runtime,
+            &RoomLoginSet::native(),
+            &config,
+            now,
+            |_, _, reason, _| {
+                spawned.push(reason);
+                true
+            },
+        );
+        assert_eq!(
+            spawned,
+            expected.into_iter().collect::<Vec<_>>(),
+            "order {order:?}, extra {extra}, enabled {enabled}, used {used}, dying {dying}"
+        );
+    }
+}
+
+fn fresh_facts(
+    capacity: Option<&ProviderCapacity>,
+    credits: &ResetCredits,
+    extra: Option<crate::agents::ExtraCredits>,
+    rate: Option<f64>,
+) -> SpendFacts {
+    struct NeverConsume;
+    impl crate::agents::account::ResetCreditAction for NeverConsume {
+        fn consume(self: Box<Self>, _: &str) -> Result<ResetCreditResult, String> {
+            panic!("a pure policy test never consumes a credit")
+        }
+    }
+    let offer = crate::agents::account::ResetCreditOffer::new(
+        capacity.cloned(),
+        credits.clone(),
+        extra,
+        NeverConsume,
+    );
+    SpendFacts::from_offer(&"codex@default".parse().unwrap(), &offer, rate)
+}
+
+#[test]
+fn fresh_paid_credit_prevents_a_consume_but_not_idle_expiry_rescue() {
+    let now = ts(1_700_000_000);
+    let capacity = spent_capacity(now, Duration::from_secs(3 * 86_400));
+    let extra = Some(crate::agents::ExtraCredits::known(None, Some(100.0), None));
+    let config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+    let facts = fresh_facts(Some(&capacity), &credits(now, None), extra.clone(), None);
+    assert_eq!(fresh_verdict(false, &facts, &config, now), None);
+    let dying = fresh_facts(
+        Some(&capacity),
+        &credits(now, Some(Duration::from_secs(20 * 60))),
+        extra,
+        None,
+    );
+    assert_eq!(
+        fresh_verdict(true, &dying, &config, now),
+        Some(RedeemReason::ExpiryRescue)
+    );
+    assert_eq!(
+        fresh_verdict(false, &dying, &config, now),
+        Some(RedeemReason::ExpiryRescue)
+    );
+}
+
+#[test]
+fn forecast_holds_while_paid_credit_precedes_resets() {
+    let now = ts(1_700_000_000);
+    let capacity = open_capacity(now, Duration::from_secs(3 * 86_400));
+    let facts = fresh_facts(
+        Some(&capacity),
+        &credits(now, None),
+        Some(crate::agents::ExtraCredits::known(None, Some(100.0), None)),
+        None,
+    );
+    let mut config = ResumeConfig {
+        auto_redeem: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        redeem_forecast(&facts, &config, now),
+        Some(RedeemForecast::Holding)
+    );
+    config.spend_order = crate::config::SpendOrder::ResetsFirst;
+    assert_eq!(
+        redeem_forecast(&facts, &config, now),
+        Some(RedeemForecast::Armed)
+    );
+}
+
+#[test]
+fn shared_provider_account_identity_selects_one_redeem_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let first: LoginKey = "codex@default".parse().unwrap();
+    let second: LoginKey = "codex@work".parse().unwrap();
+    let unknown: LoginKey = "codex@unknown".parse().unwrap();
+    let mut cache = crate::agents::credits::CreditsCache::default();
+    for key in [&first, &second] {
+        cache.logins.insert(
+            key.clone(),
+            crate::agents::credits::ProviderCreditsEntry {
+                account_key: Some("provider/account".into()),
+                ..Default::default()
+            },
+        );
+    }
+    write_temp_then_rename_cache(&runtime.shared_credits_path(), &cache).unwrap();
+    assert_eq!(
+        redeem_lock_path(&runtime, &first),
+        redeem_lock_path(&runtime, &second)
+    );
+    assert_ne!(
+        redeem_lock_path(&runtime, &first),
+        redeem_lock_path(&runtime, &unknown)
+    );
+    assert!(redeem_lock_path(&runtime, &unknown).ends_with("auto_redeem.codex@unknown.lock"));
 }

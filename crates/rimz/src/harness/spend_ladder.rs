@@ -20,16 +20,32 @@ pub enum SpendStep {
     Spent,
 }
 
+#[derive(Clone)]
 pub struct SpendFacts {
     pub(super) capacity: Option<ProviderCapacity>,
     pub(super) extra_credits: Option<ExtraCredits>,
     pub(super) reset_credits: Option<ResetCredits>,
     pub(super) rate_pct_per_day: Option<f64>,
-    last_attempt: Option<RedeemStamp>,
+    pub(super) last_attempt: Option<RedeemStamp>,
     supports_reset: bool,
 }
 
 impl SpendFacts {
+    pub(super) fn from_offer(
+        key: &LoginKey,
+        offer: &crate::agents::account::ResetCreditOffer,
+        rate_pct_per_day: Option<f64>,
+    ) -> Self {
+        Self {
+            capacity: offer.capacity.clone(),
+            extra_credits: offer.extra_credits.clone(),
+            reset_credits: Some(offer.credits.clone()),
+            rate_pct_per_day,
+            last_attempt: None,
+            supports_reset: auto_redeem::supports_kind(&key.kind),
+        }
+    }
+
     pub fn read(runtime: &RuntimePaths, key: &LoginKey, now: Timestamp) -> Self {
         let cache = read_credits_cache(&runtime.shared_credits_path());
         let entry = cache.logins.get(key).filter(|entry| {
@@ -78,6 +94,13 @@ impl SpendFacts {
         }
     }
 
+    pub(super) fn redemption(&self, config: &ResumeConfig, now: Timestamp) -> Option<RedeemReason> {
+        let reason = self.verdict(config, now)?;
+        (reason == RedeemReason::ExpiryRescue
+            || self.step(config, None, now) == SpendStep::ResetCredit)
+            .then_some(reason)
+    }
+
     fn verdict(&self, config: &ResumeConfig, now: Timestamp) -> Option<RedeemReason> {
         if !self.supports_reset {
             return None;
@@ -88,7 +111,6 @@ impl SpendFacts {
             self.rate_pct_per_day,
             config.auto_redeem_min_gain(),
             config.auto_redeem,
-            true,
             now,
         )
     }

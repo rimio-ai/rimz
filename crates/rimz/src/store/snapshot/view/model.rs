@@ -80,8 +80,8 @@ pub struct DailyBudgetView {
     pub parked: bool,
 }
 
-/// What auto-redeem would do if the longest Codex window ran dry and parked an
-/// agent right now. A hypothetical, so it reads no live agent.
+/// What auto-redeem would do if the longest Codex window ran dry right now.
+/// A hypothetical, so it reads no live agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RedeemForecast {
@@ -89,7 +89,7 @@ pub enum RedeemForecast {
     Manual,
     /// A credit would be spent, or no natural reset is known to wait for.
     Armed,
-    /// Nothing would fire: the fleet would park until the natural reset. Firm
+    /// Nothing would fire: paid credit comes first or the natural reset is near. Firm
     /// until that reset only when it is nearer than `auto_redeem_min_gain` and
     /// the nearest credit outlives it by a day.
     Holding,
@@ -171,8 +171,8 @@ pub struct SidebarProviderPanel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
     /// Auto-redeem forecast for the reset-credit marker: manual (auto-redeem
-    /// off), armed (a dry window would spend a credit), or holding (the fleet
-    /// would park until the natural reset). `None` without reset credits.
+    /// off), armed (a dry window would spend a credit), or holding (paid credit
+    /// comes first or the fleet waits for the natural reset). `None` without reset credits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redeem_forecast: Option<RedeemForecast>,
     /// Descriptor-declared budget-window labels, painted as placeholder tracks

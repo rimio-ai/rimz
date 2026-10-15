@@ -77,8 +77,8 @@ pub struct ResumeConfig {
     /// on. Sent as a bracketed paste plus a submit Enter, the same pane-send path
     /// `message --steer` uses.
     pub auto_continue_text: String,
-    /// Spend a Codex reset credit automatically when a usage window is spent
-    /// and a Codex agent in this room is stopped on it. Expiry rescue remains
+    /// Spend a Codex reset credit automatically when an in-use account's spend
+    /// ladder reaches a useful reset. Expiry rescue remains
     /// enabled independently of this opt-in.
     pub auto_redeem: bool,
     /// Prefer paid usage or a useful banked reset after the subscription is spent.

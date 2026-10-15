@@ -1,13 +1,11 @@
 //! Producer-side Codex reset-credit policy and its detached helper action.
 //!
-//! The room host evaluates cached provider-neutral capacity and credit
-//! state, gated on an agent of this room stopped on the login's limit, then
-//! spawns a hidden CLI helper only when a redemption is useful. The verdict
+//! The room host evaluates the shared spend ladder and spawns a hidden CLI
+//! helper when a reset is next, or a credit needs expiry rescue. The verdict
 //! branches on what a redemption does to the window's reset (the credit's
-//! `RedeemEffect`), never on the provider. The helper serializes account-wide
-//! attempts, refreshes both inputs, re-evaluates the same pure verdict with the
-//! producer's limit-paused evidence, and performs the provider-specific consume
-//! request.
+//! `RedeemEffect`), never on the provider. The helper serializes provider-account
+//! attempts, refreshes capacity and credits, re-evaluates the ladder, and
+//! performs the provider-specific consume request.
 //! An idle account, one the machine declares and no agent of this room runs
 //! on, gets the expiry rescue alone: the producer reads its cached credits
 //! from its caller, the helper resolves its login from the machine catalog,
@@ -29,12 +27,13 @@ use crate::agents::account::{
     WindowSpan, prepare_reset_credit_redemption,
 };
 use crate::agents::{
-    AccountUsageIdentity, AccountUsageSnapshot, AgentState, ProviderLogin, RateLimitWindow,
-    RedeemEffect, ResetCredits, RoomLoginSet,
+    AccountUsageIdentity, AccountUsageSnapshot, ProviderLogin, RateLimitWindow, RedeemEffect,
+    ResetCredits, RoomLoginSet,
 };
 use crate::config::ResumeConfig;
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::assist_log::AssistWindowReset;
+use crate::harness::spend_ladder::SpendFacts;
 use crate::ids::{AgentKind, LoginKey, WorkspaceId};
 use crate::store::snapshot::{RedeemForecast, SidebarProviderPanel, SidebarSnapshot};
 
@@ -61,12 +60,12 @@ pub enum RedeemReason {
     /// one rule an idle account is evaluated for, and the helper drops it
     /// there when its fresh read shows the window unused.
     ExpiryRescue,
-    /// A spent window that parked an agent resets at least `min_gain` away.
+    /// A spent window resets at least `min_gain` away.
     BlockedGain,
     /// A credit that keeps the window's schedule would die within a day of the
     /// spent window's reset. Never fired for a credit that restarts the window.
     DoomedCredit,
-    /// The paced chain deadline passed while a spent window parked an agent.
+    /// The paced chain deadline passed on a spent window.
     ScheduledRedeem,
 }
 
@@ -76,10 +75,6 @@ pub struct AutoRedeemRequest {
     pub login: LoginKey,
     pub reason: RedeemReason,
     pub request_id: uuid::Uuid,
-    /// Whether the producer saw an agent of this room stopped on this login's
-    /// limit. A payload without it reads as not paused, so only a rescue fires.
-    #[serde(default)]
-    pub limit_paused: bool,
 }
 
 /// Whether auto-redeem has anything to act on here: the Codex CLI, the only
@@ -197,7 +192,7 @@ pub fn prepare_manual_redeem(
     let read_at = Timestamp::now();
     let prepared = prepare_reset_credit_redemption(
         key.kind.as_str(),
-        |_, _| Some(RedeemReason::Manual),
+        |_| Some(RedeemReason::Manual),
         login_env,
     )
     .map_err(AutoRedeemErr::Provider)?
@@ -207,6 +202,8 @@ pub fn prepare_manual_redeem(
     let credits = prepared.credits.clone();
     let min_gain = config.auto_redeem_min_gain();
     let rate = cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
+    let mut facts = SpendFacts::from_offer(key, prepared.offer(), rate);
+    facts.last_attempt = stamp_at_read.clone();
     let windows = [WindowSpan::FiveHour, WindowSpan::SevenDay]
         .into_iter()
         .filter_map(|span| capacity?.window_of_span(span, read_at))
@@ -214,16 +211,7 @@ pub fn prepare_manual_redeem(
     Ok(ManualRedeem {
         natural_reset: capacity.and_then(|capacity| capacity.latest_spent_window_reset(read_at)),
         forecast: supports_kind(&key.kind)
-            .then(|| {
-                redeem_forecast(
-                    capacity,
-                    &credits,
-                    rate,
-                    min_gain,
-                    config.auto_redeem,
-                    read_at,
-                )
-            })
+            .then(|| redeem_forecast(&facts, config, read_at))
             .flatten(),
         credits,
         windows,
@@ -248,8 +236,7 @@ impl ManualRedeem {
         if let Some(hold) = self.hold() {
             return Err(AutoRedeemErr::Held(hold.clone()));
         }
-        let _guard =
-            crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(key))?;
+        let _guard = crate::disk::lock::WorkspaceLock::acquire(&redeem_lock_path(runtime, key))?;
         let report = redemption_report(RedeemReason::Manual, &self.credits, self.natural_reset);
         let request_id = request_id.to_string();
         consume_manual_redemption(
@@ -299,16 +286,14 @@ fn consume_manual_redemption(
 
 /// Decide whether current provider-neutral capacity and reset credits warrant
 /// one consume attempt. Expiry rescue is unconditional; every other reason
-/// needs the user's opt-in and the gate: a spent window with a future reset
-/// and an agent of this room stopped on it. What follows depends on what a
-/// redemption does to the window's reset.
+/// needs the user's opt-in and a spent window with a future reset. What follows
+/// depends on what a redemption does to the window's reset.
 pub(super) fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
     min_gain: Duration,
     auto_redeem: bool,
-    limit_paused: bool,
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if credits.count == 0 {
@@ -320,7 +305,7 @@ pub(super) fn redeem_verdict(
     }) {
         return Some(RedeemReason::ExpiryRescue);
     }
-    if !auto_redeem || !limit_paused {
+    if !auto_redeem {
         return None;
     }
     let natural_reset = capacity?.latest_spent_window_reset(now)?;
@@ -345,7 +330,7 @@ pub(super) fn redeem_verdict(
 /// The verdict for an idle account, one no agent of this room runs on: the
 /// expiry rescue alone.
 fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
-    redeem_verdict(None, credits, None, Duration::ZERO, false, false, now)
+    redeem_verdict(None, credits, None, Duration::ZERO, false, now)
 }
 
 /// The helper's verdict on its fresh provider read. An idle account is judged
@@ -356,28 +341,21 @@ fn idle_rescue(credits: &ResetCredits, now: Timestamp) -> Option<RedeemReason> {
 /// evidence, so the rescue fires.
 fn fresh_verdict(
     idle: bool,
-    capacity: Option<&ProviderCapacity>,
-    credits: &ResetCredits,
-    rate_pct_per_day: Option<f64>,
+    facts: &SpendFacts,
     config: &ResumeConfig,
-    limit_paused: bool,
     now: Timestamp,
 ) -> Option<RedeemReason> {
     if idle {
-        if capacity.is_some_and(|capacity| capacity.known_unused(now)) {
+        if facts
+            .capacity
+            .as_ref()
+            .is_some_and(|capacity| capacity.known_unused(now))
+        {
             return None;
         }
-        return idle_rescue(credits, now);
+        return idle_rescue(facts.reset_credits.as_ref()?, now);
     }
-    redeem_verdict(
-        capacity,
-        credits,
-        rate_pct_per_day,
-        config.auto_redeem_min_gain(),
-        config.auto_redeem,
-        limit_paused,
-        now,
-    )
+    facts.redemption(config, now)
 }
 
 /// The paced chain for a credit whose redemption restarts the window: spend
@@ -408,35 +386,28 @@ fn scheduled_redeem(
     Some(RedeemReason::ScheduledRedeem)
 }
 
-/// Forecast what the verdict would do if the longest duration window ran dry
-/// now and parked an agent of this room, so the hypothetical opens the gate on
-/// its own and reads no live agent (`rimz providers` has none to read).
-/// Holding is a `None` verdict on that hypothetical; without a known natural
-/// reset there is no hold to prove, so auto mode reads armed.
+/// Forecast the shared ladder on a dry longest-duration window. Without known
+/// timing, auto mode remains armed unless paid credit demonstrably comes first.
 fn redeem_forecast(
-    capacity: Option<&ProviderCapacity>,
-    credits: &ResetCredits,
-    rate_pct_per_day: Option<f64>,
-    min_gain: Duration,
-    auto_redeem: bool,
+    facts: &SpendFacts,
+    config: &ResumeConfig,
     now: Timestamp,
 ) -> Option<RedeemForecast> {
-    if credits.count == 0 {
+    if facts.reset_credits.as_ref()?.count == 0 {
         return None;
     }
-    if !auto_redeem {
+    if !config.auto_redeem {
         return Some(RedeemForecast::Manual);
     }
-    let Some((capacity, longest)) = capacity.and_then(|capacity| {
-        let longest = capacity
-            .longest_window_observation(now)
-            .filter(|window| window.resets_at.is_some())?;
-        Some((capacity, longest))
-    }) else {
+    let Some((capacity, longest)) = facts
+        .capacity
+        .as_ref()
+        .and_then(|capacity| Some((capacity, capacity.longest_window_observation(now)?)))
+    else {
         return Some(RedeemForecast::Armed);
     };
-    let mut dry = capacity.clone();
-    dry.windows = capacity
+    let mut dry = facts.clone();
+    dry.capacity.as_mut()?.windows = capacity
         .projected_windows(now)
         .map(|mut window| {
             if window.scope.is_none() && window.duration_mins == longest.duration_mins {
@@ -445,20 +416,15 @@ fn redeem_forecast(
             window
         })
         .collect();
-    Some(
-        match redeem_verdict(
-            Some(&dry),
-            credits,
-            rate_pct_per_day,
-            min_gain,
-            true,
-            true,
-            now,
-        ) {
-            Some(_) => RedeemForecast::Armed,
-            None => RedeemForecast::Holding,
-        },
-    )
+    Some(if dry.redemption(config, now).is_some() {
+        RedeemForecast::Armed
+    } else if dry.step(config, None, now) == crate::harness::spend_ladder::SpendStep::PaidCredit
+        || longest.resets_at.is_some()
+    {
+        RedeemForecast::Holding
+    } else {
+        RedeemForecast::Armed
+    })
 }
 
 fn paced_chain_deadline(
@@ -646,7 +612,7 @@ fn reserve_attempt(
     request_id: &str,
 ) -> bool {
     let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(key))
+        crate::disk::lock::WorkspaceLock::try_acquire(&redeem_lock_path(runtime, key))
             .ok()
             .flatten()
     else {
@@ -670,7 +636,7 @@ fn reserve_attempt(
 
 fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id: &str) {
     let Some(_guard) =
-        crate::disk::lock::WorkspaceLock::try_acquire(&runtime.shared_auto_redeem_lock(key))
+        crate::disk::lock::WorkspaceLock::try_acquire(&redeem_lock_path(runtime, key))
             .ok()
             .flatten()
     else {
@@ -682,18 +648,6 @@ fn cancel_attempt_reservation(runtime: &RuntimePaths, key: &LoginKey, request_id
     if owns_reservation {
         let _ = std::fs::remove_file(stamp_path);
     }
-}
-
-/// Whether a live root row of this room is stopped on `key`'s provider limit.
-/// A RimZ dollar-cap park is not a provider limit, so it never counts.
-fn limit_paused_on(agents: &[AgentState], key: &LoginKey) -> bool {
-    agents.iter().any(|agent| {
-        agent.ended_at.is_none()
-            && !agent.is_provider_subagent()
-            && agent.budget_park.is_none()
-            && agent.login_key() == *key
-            && crate::harness::auto_continue::limit_marker_active(agent)
-    })
 }
 
 /// The idle accounts: every Codex login the machine declares, `default`
@@ -715,7 +669,6 @@ pub(crate) fn idle_logins(logins: &RoomLoginSet) -> Vec<ProviderLogin> {
 pub(crate) fn redeem_credits(
     panels: &[SidebarProviderPanel],
     idle_credits: &BTreeMap<LoginKey, ResetCredits>,
-    agents: &[AgentState],
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
     config: &ResumeConfig,
@@ -724,7 +677,6 @@ pub(crate) fn redeem_credits(
     redeem_credits_with(
         panels,
         idle_credits,
-        agents,
         runtime,
         logins,
         config,
@@ -733,44 +685,30 @@ pub(crate) fn redeem_credits(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn redeem_credits_with(
     panels: &[SidebarProviderPanel],
     idle_credits: &BTreeMap<LoginKey, ResetCredits>,
-    agents: &[AgentState],
     runtime: &RuntimePaths,
     logins: &RoomLoginSet,
     config: &ResumeConfig,
     now: Timestamp,
-    mut spawn: impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid, bool) -> bool,
+    mut spawn: impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid) -> bool,
 ) {
     for login in logins.in_use(CODEX_KIND) {
         let key = login.key();
-        let Some(panel) = panels.iter().find(|panel| panel.login_key() == key) else {
+        if !panels.iter().any(|panel| panel.login_key() == key) {
+            continue;
+        }
+        let mut facts = SpendFacts::read(runtime, &key, now);
+        facts.rate_pct_per_day = update_rate_cache(runtime, &key, facts.capacity.as_ref(), now);
+        let Some(reason) = facts.redemption(config, now) else {
             continue;
         };
-        let capacity = ProviderCapacity::read(runtime, &key);
-        let rate_pct_per_day = update_rate_cache(runtime, &key, capacity.as_ref(), now);
-        let Some(credits) = panel.reset_credits.as_ref() else {
-            continue;
-        };
-        let limit_paused = limit_paused_on(agents, &key);
-        let Some(reason) = redeem_verdict(
-            capacity.as_ref(),
-            credits,
-            rate_pct_per_day,
-            config.auto_redeem_min_gain(),
-            config.auto_redeem,
-            limit_paused,
-            now,
-        ) else {
-            continue;
-        };
-        reserve_and_spawn(runtime, &key, reason, limit_paused, now, &mut spawn);
+        reserve_and_spawn(runtime, &key, reason, now, &mut spawn);
     }
     for (key, credits) in idle_credits {
         if let Some(reason) = idle_rescue(credits, now) {
-            reserve_and_spawn(runtime, key, reason, false, now, &mut spawn);
+            reserve_and_spawn(runtime, key, reason, now, &mut spawn);
         }
     }
 }
@@ -779,9 +717,8 @@ fn reserve_and_spawn(
     runtime: &RuntimePaths,
     key: &LoginKey,
     reason: RedeemReason,
-    limit_paused: bool,
     now: Timestamp,
-    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid, bool) -> bool,
+    spawn: &mut impl FnMut(&RuntimePaths, &LoginKey, RedeemReason, uuid::Uuid) -> bool,
 ) {
     let request_id = uuid::Uuid::now_v7();
     // A pending reservation deliberately uses the 10-minute attempt cooldown
@@ -790,7 +727,7 @@ fn reserve_and_spawn(
     if !reserve_attempt(runtime, key, reason, now, &request_id.to_string()) {
         return;
     }
-    if !spawn(runtime, key, reason, request_id, limit_paused) {
+    if !spawn(runtime, key, reason, request_id) {
         cancel_attempt_reservation(runtime, key, &request_id.to_string());
     }
 }
@@ -811,7 +748,7 @@ pub(crate) fn project_redeem_forecasts(
         if panel.kind != CODEX_KIND {
             continue;
         }
-        let (Some(credits), Some(key)) = (
+        let (Some(_), Some(key)) = (
             panel.reset_credits.as_ref(),
             in_use
                 .contains(&panel.login_key())
@@ -819,17 +756,7 @@ pub(crate) fn project_redeem_forecasts(
         ) else {
             continue;
         };
-        let capacity = ProviderCapacity::read(runtime, &key);
-        let rate_pct_per_day =
-            cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(&key)).as_ref());
-        panel.redeem_forecast = redeem_forecast(
-            capacity.as_ref(),
-            credits,
-            rate_pct_per_day,
-            config.auto_redeem_min_gain(),
-            config.auto_redeem,
-            now,
-        );
+        panel.redeem_forecast = redeem_forecast(&SpendFacts::read(runtime, &key, now), config, now);
     }
 }
 
@@ -841,7 +768,6 @@ pub fn execute_auto_redeem(
     key: &LoginKey,
     requested_reason: RedeemReason,
     request_id: uuid::Uuid,
-    limit_paused: bool,
     config: &ResumeConfig,
 ) -> Result<Option<Redeemed>, AutoRedeemErr> {
     if key.kind.as_str() != CODEX_KIND {
@@ -856,7 +782,7 @@ pub fn execute_auto_redeem(
     }
     let request_id = request_id.to_string();
 
-    let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.shared_auto_redeem_lock(key))?;
+    let _guard = crate::disk::lock::WorkspaceLock::acquire(&redeem_lock_path(runtime, key))?;
     let stamp_path = runtime.shared_auto_redeem_path(key);
     let now = Timestamp::now();
     let prior_stamp = read_stamp(&stamp_path);
@@ -871,16 +797,9 @@ pub fn execute_auto_redeem(
         cached_rate(read_rate_stamp(&runtime.shared_auto_redeem_rate_path(key)).as_ref());
     let action = prepare_reset_credit_redemption(
         CODEX_KIND,
-        |capacity, credits| {
-            fresh_verdict(
-                idle,
-                capacity,
-                credits,
-                rate_pct_per_day,
-                config,
-                limit_paused,
-                now,
-            )
+        |offer| {
+            let facts = SpendFacts::from_offer(key, offer, rate_pct_per_day);
+            fresh_verdict(idle, &facts, config, Timestamp::now())
         },
         &logins.env(&login),
     );
@@ -888,6 +807,7 @@ pub fn execute_auto_redeem(
     let Some(action) = action else {
         return Ok(None);
     };
+    let now = Timestamp::now();
     let natural_reset = action
         .capacity
         .as_ref()
@@ -1055,14 +975,12 @@ fn spawn_auto_redeem(
     key: &LoginKey,
     reason: RedeemReason,
     request_id: uuid::Uuid,
-    limit_paused: bool,
 ) -> bool {
     let request = AutoRedeemRequest {
         workspace_id: runtime.workspace_id.clone(),
         login: key.clone(),
         reason,
         request_id,
-        limit_paused,
     };
     let args = crate::child_process::agent_helper_argv("auto-redeem", &request);
     tracing::info!(
@@ -1083,6 +1001,17 @@ fn spawn_auto_redeem(
         return false;
     }
     true
+}
+
+/// The lock every redeem path for `key` takes: one per cached provider
+/// account, so logins sharing an account serialize; the login key otherwise.
+fn redeem_lock_path(runtime: &RuntimePaths, key: &LoginKey) -> std::path::PathBuf {
+    let cache = crate::agents::credits::read_credits_cache(&runtime.shared_credits_path());
+    let account = cache
+        .logins
+        .get(key)
+        .and_then(|entry| entry.account_key.as_deref());
+    runtime.shared_auto_redeem_lock(key, account)
 }
 
 #[cfg(test)]
