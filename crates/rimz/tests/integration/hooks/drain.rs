@@ -70,7 +70,7 @@ fn spawned_drainer_uses_the_room_binary() {
         .wait_with_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    let connection = drainer_connection(&store);
+    let connection = drainer_connection(&store, None);
     let pid = nix::sys::socket::getsockopt(&connection, nix::sys::socket::sockopt::PeerCredentials)
         .unwrap()
         .pid();
@@ -175,10 +175,7 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
         .wait_with_output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
-    // Both drainers exec this test's private binary paths, whose first bind
-    // outlasts the shared 5 s deadline under full-gate load.
-    let mut connection =
-        drainer_connection_until(&store, Instant::now() + Duration::from_secs(15), "build A");
+    let mut connection = drainer_connection(&store, None);
     let before =
         nix::sys::socket::getsockopt(&connection, nix::sys::socket::sockopt::PeerCredentials)
             .unwrap()
@@ -216,8 +213,7 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
         json!({"through": through, "reply_for": null})
     )
     .unwrap();
-    // The apply child starts from the newly staged build, which can be cold under gate load.
-    let mut release = apply_barrier_until(&barrier, Instant::now() + Duration::from_secs(15));
+    let mut release = apply_barrier(&store, None, &barrier, "apply never reached its barrier");
     drop(spawning);
     let deadline = Instant::now() + Duration::from_secs(15);
     while WorkspaceLock::try_acquire(&store.runtime_paths().hook_drainer_spawn_lock())
@@ -242,11 +238,7 @@ fn reload_replaces_the_drainer_after_its_inflight_frame() {
         String::from_utf8_lossy(&output.stdout).contains("1 hook drainer"),
         "{output:?}"
     );
-    let successor = drainer_connection_until(
-        &store,
-        Instant::now() + Duration::from_secs(15),
-        "successor",
-    );
+    let successor = drainer_connection(&store, None);
     let after =
         nix::sys::socket::getsockopt(&successor, nix::sys::socket::sockopt::PeerCredentials)
             .unwrap()
@@ -589,49 +581,69 @@ fn deferred_lifecycle_and_active_time_use_the_ingress_timestamp() {
     assert_eq!(agent.turn_ended_at, Some(stop.ts));
 }
 
-fn apply_barrier(listener: &std::os::unix::net::UnixListener) -> std::os::unix::net::UnixStream {
-    apply_barrier_until(listener, Instant::now() + Duration::from_secs(5))
+// A hang guard: cargo xtask stress has no per-copy timeout, a failed apply child can leave its
+// watched drainer alive, and a drainer the hook or reload spawned has no handle to watch.
+const READINESS_HANG_GUARD: Duration = Duration::from_secs(60);
+
+/// Polls `probe` until it is ready. `child` is the process whose exit makes readiness
+/// impossible; `None` when the test holds no handle to it, bounded by the hang guard alone.
+#[track_caller]
+fn wait_for_readiness<T>(
+    store: &rimz::Store,
+    mut child: Option<&mut std::process::Child>,
+    boundary: &str,
+    mut probe: impl FnMut() -> Option<T>,
+) -> T {
+    let started = Instant::now();
+    loop {
+        if let Some(ready) = probe() {
+            return ready;
+        }
+        if let Some(status) = child.as_mut().and_then(|child| child.try_wait().unwrap()) {
+            if let Some(ready) = probe() {
+                return ready;
+            }
+            panic!(
+                "{boundary}: process exited with {status}; log: {:?}",
+                std::fs::read_to_string(store.paths().hook_drainer_log())
+            );
+        }
+        assert!(
+            started.elapsed() < READINESS_HANG_GUARD,
+            "{boundary}: not ready after {READINESS_HANG_GUARD:?}; log: {:?}",
+            std::fs::read_to_string(store.paths().hook_drainer_log())
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
-fn apply_barrier_until(
+#[track_caller]
+fn apply_barrier(
+    store: &rimz::Store,
+    child: Option<&mut std::process::Child>,
     listener: &std::os::unix::net::UnixListener,
-    deadline: Instant,
+    boundary: &str,
 ) -> std::os::unix::net::UnixStream {
     listener.set_nonblocking(true).unwrap();
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => return stream,
-            Err(error) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "apply never reached its barrier: {error}"
-                );
-                std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-    }
+    wait_for_readiness(store, child, boundary, || match listener.accept() {
+        Ok((stream, _)) => Some(stream),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => None,
+        Err(error) => panic!(
+            "{boundary}: {error}; log: {:?}",
+            std::fs::read_to_string(store.paths().hook_drainer_log())
+        ),
+    })
 }
 
-fn drainer_connection(store: &rimz::Store) -> std::os::unix::net::UnixStream {
-    drainer_connection_until(store, Instant::now() + Duration::from_secs(5), "drainer")
-}
-
-fn drainer_connection_until(
+#[track_caller]
+fn drainer_connection(
     store: &rimz::Store,
-    deadline: Instant,
-    which: &str,
+    child: Option<&mut std::process::Child>,
 ) -> std::os::unix::net::UnixStream {
-    loop {
-        match std::os::unix::net::UnixStream::connect(
-            store.runtime_paths().hook_drainer_socket_path(),
-        ) {
-            Ok(stream) => return stream,
-            Err(error) => {
-                assert!(Instant::now() < deadline, "{which} did not bind: {error}");
-                std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-    }
+    wait_for_readiness(store, child, "drainer did not bind", || {
+        std::os::unix::net::UnixStream::connect(store.runtime_paths().hook_drainer_socket_path())
+            .ok()
+    })
 }
 
 #[test]
@@ -663,7 +675,12 @@ fn prompt_receipt_does_not_wait_for_a_later_frame() {
     );
     append_frame(&env, later);
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let mut release = apply_barrier(&first_barrier);
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut drainer),
+        &first_barrier,
+        "apply never reached its barrier",
+    );
     let mut request =
         UnixStream::connect(store.runtime_paths().hook_drainer_socket_path()).unwrap();
     // The apply includes the git enrichment, budgeted 2 s; stay below the
@@ -708,7 +725,7 @@ fn stop_answers_a_satisfied_reply_client() {
     frame.event = Some("sessionStart".into());
     let (frame, through) = append_frame(&env, frame);
     let (mut drainer, mut release) = paused_drainer(&env, "RIMZ_TEST_HOOK_DRAIN_AFTER_APPLY");
-    let mut request = drainer_connection(&store);
+    let mut request = drainer_connection(&store, Some(&mut drainer));
     request
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
@@ -718,7 +735,7 @@ fn stop_answers_a_satisfied_reply_client() {
         json!({"through":through, "reply_for":frame.event_id})
     )
     .unwrap();
-    let mut stop = drainer_connection(&store);
+    let mut stop = drainer_connection(&store, Some(&mut drainer));
     writeln!(stop, "{}", json!({"through":0, "stop":true})).unwrap();
     release.write_all(&[1]).unwrap();
     let mut line = String::new();
@@ -752,7 +769,7 @@ fn late_request_claims_a_cached_reply_once() {
     frame.event = Some("sessionStart".into());
     let (frame, through) = append_frame(&env, frame);
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let _lease = drainer_connection(&store);
+    let _lease = drainer_connection(&store, Some(&mut drainer));
     rimz::harness::hook_drain::drain_through(&store, through, None, Duration::from_secs(5))
         .unwrap();
     let receipt = rimz::harness::hook_drain::drain_through(
@@ -789,7 +806,7 @@ fn truncated_ingress_receipts_do_not_reuse_the_old_offset() {
     let store = env.store();
     let (_, through) = append_stop(&env);
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let _lease = drainer_connection(&store);
+    let _lease = drainer_connection(&store, Some(&mut drainer));
     let old =
         rimz::harness::hook_drain::drain_through(&store, through, None, Duration::from_secs(5))
             .unwrap();
@@ -844,11 +861,16 @@ fn inline_drain_finishes_a_started_frame_after_the_reply_deadline() {
     let (pending, _) = append_stop(&env);
     let mut hook = env.hook_command("claude");
     hook.env("RIMZ_BIN", env.project_root.join("missing-rimz"));
-    let child = env.spawn_payload(
+    let mut child = env.spawn_payload(
         hook,
         &json!({"hook_event_name": "Stop", "session_id": "deadline-stop"}).to_string(),
     );
-    let mut release = apply_barrier(&barrier);
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut child),
+        &barrier,
+        "apply never reached its barrier",
+    );
     std::thread::sleep(Duration::from_millis(1300));
     let _ = release.write_all(&[1]);
     let output = child.wait_with_output().unwrap();
@@ -1247,23 +1269,14 @@ fn paused_drainer(
 ) -> (std::process::Child, std::os::unix::net::UnixStream) {
     let barrier = env.store().runtime_paths().sock_dir.join("drain-test.sock");
     let listener = std::os::unix::net::UnixListener::bind(&barrier).unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let child = drain_command(env).env(failpoint, &barrier).spawn().unwrap();
-    let until = Instant::now() + Duration::from_secs(5);
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => return (child, stream),
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < until =>
-            {
-                std::thread::sleep(Duration::from_millis(5))
-            }
-            Err(error) => panic!(
-                "drainer did not reach the crash boundary: {error}; log: {:?}",
-                std::fs::read_to_string(env.store().paths().hook_drainer_log())
-            ),
-        }
-    }
+    let mut child = drain_command(env).env(failpoint, &barrier).spawn().unwrap();
+    let stream = apply_barrier(
+        &env.store(),
+        Some(&mut child),
+        &listener,
+        "drainer did not reach the crash boundary",
+    );
+    (child, stream)
 }
 
 #[test]
@@ -1276,7 +1289,6 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
     let store = env.store();
     let barrier = store.runtime_paths().sock_dir.join("hung-apply.sock");
     let listener = UnixListener::bind(&barrier).unwrap();
-    listener.set_nonblocking(true).unwrap();
     let mut frame = stop_frame(&env);
     frame
         .env
@@ -1294,16 +1306,7 @@ fn hung_apply_is_killed_and_the_next_frame_is_applied() {
         )
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut blocked = loop {
-        match listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(error) => {
-                assert!(Instant::now() < deadline, "apply did not hang: {error}");
-                std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-    };
+    let mut blocked = apply_barrier(&store, Some(&mut drainer), &listener, "apply did not hang");
     let children = rimz::proc::children(drainer.id());
     assert_eq!(children.len(), 1, "{children:?}");
     let child_pid = children[0];
@@ -1431,7 +1434,7 @@ fn reset_stops_a_leased_drainer_and_allows_a_successor() {
     env.record(&env.project_root);
     let store = env.store();
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let _lease = drainer_connection(&store);
+    let _lease = drainer_connection(&store, Some(&mut drainer));
     store.reset_records(true).unwrap();
     let stopped = drainer_stops(&mut drainer);
     assert!(
@@ -1461,7 +1464,7 @@ fn drainer_exits_without_unlinking_a_replacement_socket() {
     env.record(&env.project_root);
     let store = env.store();
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let lease = drainer_connection(&store);
+    let lease = drainer_connection(&store, Some(&mut drainer));
     let socket = store.runtime_paths().hook_drainer_socket_path();
     std::fs::remove_file(&socket).unwrap();
     let _replacement = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -2039,7 +2042,7 @@ fn drained_log_is_truncated_and_cursor_reset() {
         .env("CLAUDE_CODE_ENVIRONMENT_KIND", "bridge")
         .spawn()
         .unwrap();
-    let _lease = drainer_connection(&store);
+    let _lease = drainer_connection(&store, Some(&mut drainer));
     let output = drain_command(&env)
         .arg("--once")
         .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000")
@@ -2188,14 +2191,24 @@ fn idle_exit_closes_the_socket_before_the_final_drain() {
         .env("RIMZ_TEST_HOOK_DRAIN_AFTER_FINAL_DRAIN", &barrier)
         .spawn()
         .unwrap();
-    let mut start = apply_barrier(&before_listener);
+    let mut start = apply_barrier(
+        &store,
+        Some(&mut drainer),
+        &before_listener,
+        "apply never reached its barrier",
+    );
     let socket = store.runtime_paths().hook_drainer_socket_path();
     assert!(
         !socket.exists(),
         "the socket must already be gone before the final drain starts"
     );
     start.write_all(&[1]).unwrap();
-    let mut release = apply_barrier(&listener);
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut drainer),
+        &listener,
+        "apply never reached its barrier",
+    );
     assert!(
         !socket.exists(),
         "the socket must already be gone when the final drain has read to end"
@@ -2390,7 +2403,7 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
         env.record(&env.project_root);
         let store = env.store();
         let mut drainer = drain_command(&env).spawn().unwrap();
-        let _lease = drainer_connection(&store);
+        let _lease = drainer_connection(&store, Some(&mut drainer));
         let mut command = env.hook_command(source);
         command.env("RIMZ_RUNTIME_ENV", "1");
         let output = env.spawn_payload(command, &json!({
@@ -2556,16 +2569,9 @@ fn leased_drainer_does_not_retain_unrequested_replies() {
         .spawn()
         .unwrap();
     let socket = store.runtime_paths().hook_drainer_socket_path();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let _lease = loop {
-        match std::os::unix::net::UnixStream::connect(&socket) {
-            Ok(lease) => break lease,
-            Err(error) => {
-                assert!(Instant::now() < deadline, "drainer did not listen: {error}");
-                std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-    };
+    let _lease = wait_for_readiness(&store, Some(&mut drainer), "drainer did not listen", || {
+        std::os::unix::net::UnixStream::connect(&socket).ok()
+    });
     for _ in 0..3 {
         let mut frame = stop_frame(&env);
         frame.source = AgentKind::new_unchecked("cursor");
@@ -2596,7 +2602,7 @@ fn antigravity_hook_reply_arrives_through_the_drainer() {
     env.record(&env.project_root);
     let store = env.store();
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let _lease = drainer_connection(&store);
+    let _lease = drainer_connection(&store, Some(&mut drainer));
     let output = env.spawn_hook("antigravity", &json!({"hook_event_name": "Stop", "conversation_id": "native-reply", "invocationNum": 0}).to_string()).wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
@@ -2826,7 +2832,7 @@ fn sandbox_hook_without_the_mount_pin_applies_inline_with_a_live_drainer() {
     env.record(&env.project_root);
     let store = env.store();
     let mut drainer = drain_command(&env).spawn().unwrap();
-    let lease = drainer_connection(&store);
+    let lease = drainer_connection(&store, Some(&mut drainer));
     let ingress_before = std::fs::read(&store.paths().hook_ingress_log).ok();
     let mut command = env.hook_command("claude");
     command
@@ -2963,8 +2969,15 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
     let (frame, _) = append_frame(&env, frame);
     let child = drain_command(&env).arg("--once").spawn().unwrap();
     #[cfg(target_os = "linux")]
+    let mut child = child;
+    #[cfg(target_os = "linux")]
     let actual_cwd = {
-        let mut release = apply_barrier(&barrier);
+        let mut release = apply_barrier(
+            &store,
+            Some(&mut child),
+            &barrier,
+            "apply never reached its barrier",
+        );
         let pid =
             nix::sys::socket::getsockopt(&release, nix::sys::socket::sockopt::PeerCredentials)
                 .unwrap()
@@ -3008,30 +3021,27 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
     std::fs::create_dir_all(&unit).unwrap();
     let transcript = unit.join("transcript.jsonl");
     #[cfg(target_os = "linux")]
-    let barrier = {
-        let listener = std::os::unix::net::UnixListener::bind(
-            store.runtime_paths().sock_dir.join("apply-env.sock"),
-        )
-        .unwrap();
-        listener.set_nonblocking(true).unwrap();
-        listener
-    };
+    let barrier = std::os::unix::net::UnixListener::bind(
+        store.runtime_paths().sock_dir.join("apply-env.sock"),
+    )
+    .unwrap();
     std::fs::write(&transcript, format!("{}\n", json!({"timestamp": "2026-06-11T07:18:00.000Z", "type": "event_msg", "payload": {"type": "turn_error", "message": "You've hit your usage limit", "codexErrorInfo": "usageLimitExceeded"}}))).unwrap();
     let mut drainer = drain_command(&env)
         .env("RIMZ_TEST_HOOK_DRAIN_IDLE_MS", "1000")
         .env("UNDECLARED_TOKEN", "worker-only")
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let lease = loop {
-        if let Ok(stream) = std::os::unix::net::UnixStream::connect(
-            store.runtime_paths().hook_drainer_socket_path(),
-        ) {
-            break stream;
-        }
-        assert!(Instant::now() < deadline, "host drainer did not bind");
-        std::thread::sleep(Duration::from_millis(5));
-    };
+    let lease = wait_for_readiness(
+        &store,
+        Some(&mut drainer),
+        "host drainer did not bind",
+        || {
+            std::os::unix::net::UnixStream::connect(
+                store.runtime_paths().hook_drainer_socket_path(),
+            )
+            .ok()
+        },
+    );
     let mut command = env.hook_command("codex");
     command
         .env("RIMZ_ISOLATION", "sandbox")
@@ -3081,19 +3091,12 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
     assert!(output.status.success(), "{output:?}");
     #[cfg(target_os = "linux")]
     {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut release = loop {
-            match barrier.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    std::thread::sleep(Duration::from_millis(5))
-                }
-                Err(error) => panic!("apply child did not reach its environment boundary: {error}"),
-            }
-        };
+        let mut release = apply_barrier(
+            &store,
+            Some(&mut drainer),
+            &barrier,
+            "apply child did not reach its environment boundary",
+        );
         let pid =
             nix::sys::socket::getsockopt(&release, nix::sys::socket::sockopt::PeerCredentials)
                 .unwrap()
