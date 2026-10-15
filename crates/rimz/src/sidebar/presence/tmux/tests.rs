@@ -169,11 +169,20 @@ fn existing_pane_command_change_emits_command_event() {
 }
 
 #[test]
-fn seed_window_switch_records_current_window_without_events() {
+fn active_window_seed_records_current_window_without_events() {
     let mut roster = TmuxPresenceState::default();
     project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
     project_apply(&mut roster, sub("%2", "@2", Some("claude"), true), true);
-    assert!(project_apply(&mut roster, swin("$1", "@1"), true).is_empty());
+    let seed = ControlLine::SeedPane {
+        pane: "%1".to_owned(),
+        window: "@1".to_owned(),
+        x: 0,
+        width: 80,
+        window_width: 80,
+        session: "$1".to_owned(),
+        window_active: true,
+    };
+    assert!(project_apply(&mut roster, seed, true).is_empty());
     assert_eq!(
         roster.current_window.get("$1").map(String::as_str),
         Some("@1")
