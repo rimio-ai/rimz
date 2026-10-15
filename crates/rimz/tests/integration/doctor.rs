@@ -1468,14 +1468,23 @@ fn write_last_death_marker(
 }
 
 fn write_diag_record(env: &Env, at_ms: u64, build: Option<&str>) {
+    write_diag_event(
+        env,
+        at_ms,
+        build,
+        DiagEvent::RendererExit {
+            cause: RendererExitCause::DegradedGaveUp,
+        },
+    );
+}
+
+fn write_diag_event(env: &Env, at_ms: u64, build: Option<&str>, event: DiagEvent) {
     let mut record = DiagEnvelope::new(
         env.workspace_id.clone(),
         "test-session".to_owned(),
         None,
         at_ms,
-        DiagEvent::RendererExit {
-            cause: RendererExitCause::DegradedGaveUp,
-        },
+        event,
     );
     record.build = build.map(ToOwned::to_owned);
     let mut line = serde_json::to_vec(&record).expect("encode diagnostic record");
@@ -1489,6 +1498,102 @@ fn diag_log_path(env: &Env) -> PathBuf {
     DiagSink::under(paths.root, env.workspace_id.clone(), "test-session", None)
         .log_path()
         .expect("diagnostic log path")
+}
+
+fn hook_lag() -> DiagEvent {
+    DiagEvent::HookDrainLag {
+        ingress: rimz::ids::EventId::new(),
+        hook_event: Some("Stop".into()),
+        lag_ms: 1_399_944,
+        pending_bytes: 5_474_624,
+    }
+}
+
+#[test]
+fn doctor_recent_hook_lag_counts_a_diagnostics_warning() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_diag_event(
+        &env,
+        rimz::utils::time::unix_now_ms() - 60_000,
+        None,
+        hook_lag(),
+    );
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.lines().any(|line| line.contains("warning")
+            && line.contains(" in ")
+            && line.contains("DIAGNOSTICS")),
+        "{text}"
+    );
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let incident = &report["diagnostics"]["incidents"][0];
+    assert_eq!(incident["state"], "investigate");
+    assert_eq!(incident["impact"], "warn");
+    assert_eq!(
+        incident["drain_lag"],
+        json!({"worst_lag_ms": 1_399_944, "peak_pending_bytes": 5_474_624})
+    );
+}
+
+#[test]
+fn doctor_quiet_hook_lag_is_settled_without_a_diagnostics_warning() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_diag_event(
+        &env,
+        rimz::utils::time::unix_now_ms() - 1_200_000,
+        None,
+        hook_lag(),
+    );
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let incident = &report["diagnostics"]["incidents"][0];
+    assert_eq!(incident["state"], "recovered");
+    assert_eq!(incident["impact"], "info");
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("1 handled and closed themselves: hook_drain_lag"),
+        "{text}"
+    );
+    assert!(
+        !text.lines().any(|line| line.contains("warning")
+            && line.contains(" in ")
+            && line.contains("DIAGNOSTICS")),
+        "{text}"
+    );
+}
+
+#[test]
+fn doctor_clear_dismisses_recent_hook_lag() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_diag_event(
+        &env,
+        rimz::utils::time::unix_now_ms() - 60_000,
+        None,
+        hook_lag(),
+    );
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--clear", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        report["diagnostics"]["incidents"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(!text.contains("hook_drain_lag"), "{text}");
+    assert!(
+        diag_log_path(&env).is_file(),
+        "clearing history preserves the evidence"
+    );
 }
 
 fn write_machine_config(env: &Env, text: &str) -> PathBuf {

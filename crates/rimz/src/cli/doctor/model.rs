@@ -807,10 +807,18 @@ pub(super) struct DiagIncident {
     pub(super) observer_ids: Vec<String>,
     pub(super) sink_suppressed: u64,
     pub(super) dropped_messages: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) drain_lag: Option<DrainLag>,
     pub(super) summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) build: Option<String>,
     pub(super) stale_build: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DrainLag {
+    pub(super) worst_lag_ms: u64,
+    pub(super) peak_pending_bytes: u64,
 }

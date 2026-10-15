@@ -1585,6 +1585,74 @@ fn diagnostics_section_renders_history_watermark() {
 }
 
 #[test]
+fn drain_lag_rows_count_only_while_investigative() {
+    use crate::cli::doctor::model::{DiagIncident, DrainLag};
+    for recovered in [false, true] {
+        let mut report = report_fixture();
+        report.diagnostics = Some(Diagnostics::Ready {
+            path: "/tmp/diagnostics".into(),
+            incidents: vec![DiagIncident {
+                kind: "hook_drain_lag".into(),
+                source_severity: rimz::diag::record::DiagSeverity::Warn,
+                state: if recovered {
+                    DoctorState::Recovered
+                } else {
+                    DoctorState::Investigate
+                },
+                impact: if recovered {
+                    DoctorImpact::Info
+                } else {
+                    DoctorImpact::Warn
+                },
+                first_at_ms: 1,
+                last_at_ms: 70_002,
+                record_count: 3,
+                distinct_observer_count: 0,
+                observer_ids: Vec::new(),
+                sink_suppressed: 7,
+                dropped_messages: 0,
+                drain_lag: Some(DrainLag {
+                    worst_lag_ms: 1_399_944,
+                    peak_pending_bytes: 5_474_624,
+                }),
+                summary: "worst lag 23m19s; peak pending 5.2 MB".into(),
+                build: None,
+                stale_build: false,
+                evidence_refs: Vec::new(),
+            }],
+        });
+        let out = strip(|w| {
+            let mut tally = Tally::default();
+            render_diagnostics(w, &report, &mut tally)?;
+            render_tally(w, &tally)
+        });
+        if recovered {
+            assert!(
+                out.contains("1 handled and closed themselves: hook_drain_lag"),
+                "{out}"
+            );
+            assert!(out.contains("everything checked is healthy"), "{out}");
+            assert!(!out.contains("worst lag"), "{out}");
+        } else {
+            for part in [
+                "hook_drain_lag",
+                "23m19s",
+                "5.2 MB",
+                "3 records",
+                "7 suppressed",
+                "1 warning in DIAGNOSTICS",
+            ] {
+                assert!(out.contains(part), "missing {part}: {out}");
+            }
+            assert!(
+                out.contains(" to "),
+                "the row retains the episode span: {out}"
+            );
+        }
+    }
+}
+
+#[test]
 fn last_incident_section_renders_cause_agents_and_forensics() {
     let mut report = report_fixture();
     report.last_incident = Some(LastIncident {
