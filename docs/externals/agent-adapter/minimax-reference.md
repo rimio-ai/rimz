@@ -10,8 +10,8 @@ Source claims use [MiniMax-AI/minimax-code at `9a935605956c4500e9cb415f29258e288
 | --- | --- |
 | Source snapshot | Root and TUI manifests say `0.6.5`. The README still calls it a `0.6.3` source preview. |
 | Public documentation | Official CLI pages, read on 2026-10-15, are rolling and unversioned. They can describe a different release. |
-| Published package | [The upstream README](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/README.md) names `@minimax-ai/code` and `mcode`. No published npm artifact was inspected. |
-| Live behavior | No provider session, login, paid probe, or installation was run. Reading event-dispatch code establishes implementation evidence only. |
+| Published package | The installed `@minimax-ai/code` reports `0.6.12`. Its entrypoint and imported bundles were inspected for the specific facts in [0.6.12 parity](#0612-parity). |
+| Live behavior | An isolated, logged-out `0.6.12` TUI and a hand-written local plugin were probed. No login or model turn was run; command-hook execution remains source evidence only. |
 
 Baseline evidence: the [root manifest](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/package.json), [TUI manifest](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/package.json), and [README](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/README.md). Matching version labels do not establish source-to-npm parity.
 
@@ -41,6 +41,10 @@ The public documentation lists these entry points: `mcode [prompt]` for the TUI,
 | Headless limits and output | `--timeout <duration>` (such as `30s` or `2m`), `--max-steps <count>`, `--output-format text\|json\|stream-json`. Default output is `text`. |
 
 The [CLI declarations](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/contract.ts), [invocation parser](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/headless/invocation.ts), and [model selection](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/headless/model-selection.ts) own these forms. Headless resume rejects archived sessions, internal subagent sessions, and sessions from another workspace. [Session selection](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/headless/runner.ts).
+
+The TUI auto-submits the positional prompt through `app.submit`. Root commands `init`, `exec`, `acp`, `login`, `logout`, `update`, `telemetry`, `provider`, and `plugin`, plus Commander's `help`, occupy that argument position instead of becoming prompt text. The retired words `git`, `changes`, and `projects` are explicitly rejected. [Command registration](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/program.ts), [retired words](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/contract.ts), [initial submission](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/tui/launcher.ts).
+
+The Node entrypoint sets `process.title` to `minimax-code` before dispatching commands, including non-TUI commands. The startup `comm` depends on Node; process title alone does not distinguish the TUI from exec or ACP. [CLI entrypoint](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/main.ts). See [0.6.12 parity](#0612-parity) for live process and prompt-boundary measurements.
 
 Both TUI and exec accept `--system-prompt <text>`, `--system-prompt-file <path>`, `--append-system-prompt <text>`, and `--append-system-prompt-file <path>`. Inline and file forms conflict within each replacement or append slot. Prompt files resolve against the process directory, not exec `--cwd`. Replacement retains runtime rules and global and project instructions. [Prompt options](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/system-prompt-options.ts), [prompt composition](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/turn-system/agent-host/preparation/config/local-agent-config-builder.ts).
 
@@ -107,6 +111,8 @@ Data-directory precedence is nonempty `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`,
 
 Public documentation places configuration at `<dataDir>/config.yaml`. [Configuration path](https://agent.minimax.io/docs/cli/faq).
 
+The source preset's default model is `minimax/MiniMax-M3.1-Flash-Preview`. Setting an explicit public data-directory variable disables Git auto-configuration; it does more than relocate files. [Preset and auto-configuration policy](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/config/src/config.ts).
+
 Exec `--config <path>` selects another configuration file without relocating auth or session data. Exec always overrides the file's `permissionMode`, including when `--permission` defaults to `smart`. [Exec runtime construction](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/cli/run-exec-command.ts).
 
 The public CLI supports MiniMax Token Plan, MiniMax API Key, and custom Anthropic-compatible or OpenAI-compatible providers. `mcode login` manages MiniMax OAuth. `mcode provider use token-plan` and `mcode provider use api-key` select the MiniMax credential source. [Features and configuration](https://agent.minimax.io/docs/cli/features).
@@ -120,6 +126,24 @@ The private OAuth implementation uses file-backed credential storage beneath `<d
 The shared hook implementation defines native `MINIMAX` handlers and `CLAUDE` and `CODEX` compatibility formats. The hook tables below describe `MINIMAX`. [Format contract](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/contracts.ts).
 
 The native manifest is `.minimax-plugin/plugin.json`, with `schemaVersion: 1`. Its `hooks` array references package-relative JSON files. The local package scanner reads `<dataDir>/plugins`. Only enabled hook contributions belong in the active runtime snapshot. [Native package reader](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/minimax-reader.ts), [package scanner](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/package-storage.ts), [snapshot assembly](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/snapshot-builder.ts).
+
+The scanner discovers direct, non-symlink child directories. Local management addresses a native package as `<name>@local`. They are enabled by default: the repository returns enabled when no disabled-root row exists in `local_runtime_plugin_local_disabled`. Copying a valid package directory into place needs no enable command. The local install operation is unsupported (`LOCAL_PLUGIN_INSTALL_UNSUPPORTED`). A recursive directory watch schedules rebuilds with a 150 ms debounce; rebuild input retains the last-good package during partial writes. Watch setup can fail, so this is not guaranteed delivery. [Local discovery](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/package-readers.ts), [local identity](https://agent.minimax.io/docs/cli/features), [enabled state](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/repository.ts), [install refusal](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/desktop-facade.ts), [watcher](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/local-directory-watcher.ts), [last-good input](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/runtime/snapshot-inputs.ts).
+
+The pinned native reader rejects unknown manifest fields. Its required fields are:
+
+| Field | Required value |
+| --- | --- |
+| `schemaVersion` | `1`. |
+| `name`, `version` | Lowercase segmented name, at most 80 characters; semver version, at most 128 characters. |
+| `description`, `author` | Nonempty strings. |
+| `icon` | Relative path to an existing PNG, JPG, JPEG, or WebP file. |
+| `category` | A marketplace category; `Other` is accepted. |
+| `exampleQueries` | String array; empty is accepted, blank entries are not. |
+| `apps`, `mcpServers`, `skills` | Arrays of capability-relative paths; empty is accepted. |
+
+Optional fields are `$schema`, `displayName`, `darkIcon`, `hooks`, and `hostBindings`. `hooks` must contain unique relative JSON paths. There is no native `hooks/hooks.json` fallback. A package with only invalid hook documents is rejected for having no executable capability. Unknown hook events are skipped with `HOOK_EVENT_UNSUPPORTED`, not a package-wide version error. These strict manifest-envelope rules describe the pinned source, not all later releases; `0.6.12` differs as recorded below. [Native validation](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/minimax-reader.ts), [hook documents](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/hook/reader.ts), [event validation](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/parser.ts).
+
+Compatibility formats load hooks from imported plugin packages, not ambient `~/.claude/settings.json` or `~/.codex/hooks.json`. Installing hooks in either provider's ambient configuration does not install them in MiniMax Code. [Package selection](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/package-readers.ts), [compatible-package reader](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/compatibility-reader.ts).
 
 The root `plugin.json` Agent Plugins V1 format has a separate reader, which returns `hooks: []`. A manifest accepted in that format does not establish command-hook installation. [Agent Plugins V1 reader](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/plugin-system/plugin/package/agent-plugin-reader.ts).
 
@@ -168,7 +192,7 @@ Matchers are limited to 256 characters. Tool matchers use case-sensitive native 
 
 ## Hook input and environment
 
-The runner starts each command in the current workspace directory with piped stdin, stdout, and stderr. It sends one JSON object on stdin and closes stdin. Native input uses these common fields:
+The TUI creates its runtime host in-process. The native runner starts each command with `shell: true`, detached on POSIX, in the current workspace directory with piped stdin, stdout, and stderr. Thus the hook shell's `$PPID` identifies that TUI process, not a separate runtime daemon. An `exec` in the shell preserves that parent identity. This is source evidence; no hook fired in the logged-out live probe. The runner sends one JSON object on stdin and closes stdin. [Embedded host](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/runtime/embedded-host.ts), [native invocation and spawn](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/runner.ts). Native input uses these common fields:
 
 | Field | Contents |
 | --- | --- |
@@ -182,7 +206,7 @@ The runner starts each command in the current workspace directory with piped std
 
 The runner projects internal event payloads into format-specific fields before serialization. Native input omits `prompt_id` and `effort`, although the shared serializer supports them for compatibility formats. Common fields override payload keys with the same name. Turn-admission and normal-close paths supply the runtime turn ID. [Coordinator](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/coordinator.ts). [Input projection, serializer, and process launch](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/runner.ts).
 
-The runner inherits a fixed environment allowlist, then adds plugin roots, plugin data directories, and project directories. `PLUGIN_ROOT` and `MINIMAX_PLUGIN_ROOT` identify the package. `PLUGIN_DATA` identifies writable plugin state selected by the host, separately from the package root. `MINIMAX_PROJECT_DIR` identifies the workspace. The allowlist excludes `RIMZ_*`, `MINIMAX_DATA_DIR`, and arbitrary parent variables. [Environment construction](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/runner.ts).
+The runner inherits a fixed environment allowlist, then adds plugin roots, plugin data directories, and project directories. `PLUGIN_ROOT` and `MINIMAX_PLUGIN_ROOT` identify the package. `PLUGIN_DATA` identifies writable plugin state selected by the host, separately from the package root. `MINIMAX_PROJECT_DIR` identifies the workspace. The allowlist excludes `RIMZ_*`, `XDG_RUNTIME_DIR`, `TMUX_PANE`, `ZELLIJ_PANE_ID`, `MINIMAX_DATA_DIR`, and arbitrary parent variables. [Environment construction](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/runner.ts).
 
 | Inherited environment | Names |
 | --- | --- |
@@ -284,16 +308,33 @@ The private summary adds input, output, and reasoning for `totalTokens`. It excl
 
 The public manual command is `/compact [instructions]`. Native hooks expose PreCompact and PostCompact. On the normal automatic path, PostCompact precedes SessionStart with `source: "compact"`. Manual compaction runs PreCompact, then PostCompact after history replacement. It marks a compact-source SessionStart for the next turn admission. [Slash commands](https://agent.minimax.io/docs/cli/features), [automatic lifecycle](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/turn-system/agent-host/execution/plugin-hook-compaction-lifecycle.ts), [manual executor](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/turn-system/agent-host/compaction/agent-host-compaction-executor.ts).
 
+The TUI passes the text after `/compact` as custom summary instructions to `requestCompaction`, rather than submitting it as a separate prompt. [Command dispatch](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/tui/controller/product/command-flow.ts), [compaction request](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/tui/src/tui/controller/product/feature-flow.ts).
+
 Compaction preserves the session identity. It snapshots the previous canonical history before replacing active history and recording generation lineage. The private compaction usage accumulator's `totalTokens` includes cache buckets, unlike the private ordinary-usage summary. [History replacement](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/session-system/messages/history/canonical-history-provider.ts), [compaction usage](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/local-runtime-v2/src/service/turn-system/agent-host/compaction/token-usage.ts).
 
 The coordinator registers parent session and turn identities alongside child session, turn, agent, and transcript identities. Native SubagentStart and SubagentStop serialize the child session identity. Inherited child tool events include `agent_id` and `agent_type`. Normal child closure uses SubagentStop instead of root Stop. Native hook stdin has no dedicated parent session or parent turn field. The parent-child registration remains internal. [Child registration and dispatch](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/coordinator.ts), [registration contract](https://github.com/MiniMax-AI/minimax-code/blob/9a935605956c4500e9cb415f29258e2887e97817/packages/agent-modules/plugin-hooks/src/contracts.ts).
+
+## 0.6.12 parity
+
+On 2026-10-15, the installed `/usr/local/bin/mcode` reported `0.6.12`. It is a small Node entrypoint importing bundles under `@minimax-ai/code/chunks`. Probes used disposable HOME, provider data, RimZ home, and XDG roots with a private tmux socket. No credentials were copied or login performed.
+
+| Probe | Observed result |
+| --- | --- |
+| Process identity | Linux `comm` changed from `node-MainThread` to `minimax-code`. The owner retained the launch's RimZ variables, `XDG_RUNTIME_DIR`, and `TMUX_PANE` in `/proc/<pid>/environ`. |
+| Local discovery | Copying a complete native hook package into `<dataDir>/plugins/probe` was sufficient: `mcode plugin list --marketplace local --json` reported `probe@local`, `installed: true`, `enabled: true`, without an enable command. |
+| Manifest drift | The installed reader retains required-field checks but no longer performs the pinned reader's blanket unknown-field rejection; it explicitly rejects `hostCapabilities`. Adding an otherwise unknown field to the probe manifest still yielded an installed, enabled package. |
+| Hook implementation | Imported bundles retain the exact environment allowlist above, plugin-directory additions, detached native shell spawn, `minimax-code` title assignment, and `local_runtime_plugin_local_disabled` table. These are package inspection, not live hook observations. |
+| Logged-out hooks | Neither TUI startup nor ordinary prompt submission produced SessionStart, SessionEnd, or UserPromptSubmit output from the installed probe. Submission displayed `Sign in to MiniMax to use Agent features. Run /login, then retry.` No hook environment dump or live `$PPID` measurement was obtained. |
+| Prompt boundaries | `mcode -probe`: exit `1`, unknown option. `mcode -- -probe`: TUI startup and login refusal. `mcode exec` and `mcode -- exec`: exit `2`, missing headless input. |
+
+The source-backed in-process runner and parent identity remain unconfirmed by a real hook. Hot reload, model-turn events, compaction, child sessions, token accounting, and authentication behavior were not exercised. This comparison establishes only the rows above, not full `0.6.5` to `0.6.12` parity.
 
 ## Remaining verification
 
 | Surface | Unverified boundary |
 | --- | --- |
-| Published releases | Source parity with a particular npm artifact and behavior in a live provider session. |
-| Launch and resume | Live TUI submission, leading-dash prompts, subcommand collisions, TUI resume eligibility, and profile selection. |
+| Published releases | Full source parity beyond the inspected `0.6.12` surfaces, and behavior in an authenticated provider session. |
+| Launch and resume | Authenticated TUI submission, prompt forms beyond the measured `-probe` and `exec` cases, TUI resume eligibility, and profile selection. |
 | Attention | Stable external access to actual ask and resolved events, including question prompts. |
 | Completion | Outcome reconciliation after process death, forced termination, or partial writes. |
 | Transcript | Nested message schemas, real-session ordering, origin classification for injected hook context, and crash-tail handling. |
