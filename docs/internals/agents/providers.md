@@ -37,7 +37,7 @@ Five account-scoped facts feed a panel. Account identity and included balance ri
 
 A window's identity is its duration or its scope id. Duration windows sort short to long (`5h`, `7d`) and support reset roll-forward, not-started detection, pace, and surplus; a window with an unknown duration makes each of those claims fail closed. Named provider windows (Copilot's monthly `AIC`, Qwen's Alibaba windows) fuse by scope id, display their real reset, and never roll forward.
 
-Paid usage keeps missing fields missing, so the renderer can show an unknown or uncapped `ex` row without inventing a cap. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, which shows the earliest expiry within a week and never blinks; for Codex its glyph also forecasts what [auto-redeem](#auto-redeem) would do. `rimz providers` lists the deadlines when credits are banked.
+Paid usage keeps missing fields missing: an uncapped `ex` row invents no cap, and an absent reading or a limit alone leaves no `ex` row. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, which shows the earliest expiry within a week and never blinks; for Codex its glyph also forecasts what [auto-redeem](#auto-redeem) would do. `rimz providers` lists the deadlines when credits are banked.
 
 ### Metered and unmetered
 
@@ -127,7 +127,7 @@ Live windows are partitioned by [birth account key](./model.md#the-rollup) befor
 
 A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered panel synthesizes `ExtraCredits::Known` from the login's trailing-month transcript spend. Either way, when the provider reported no cap, the display ceiling from `[accounts.usage_limit_usd]` (a map such as `claude = 50.0`) applies: a capped row drains by the spend and shows remaining dollars, and an uncapped API key paints a full `∞` bar. The ceiling is display only; no provider enforces it.
 
-A credits entry older than `CREDITS_DISPLAY_MAX_AGE` (24 hours), absent, or scope-mismatched leaves the `ex` row unknown (an `∞` value over a dim empty track). API spend projections are never persisted, since the spending walk and config rebuild them.
+A credits entry older than `CREDITS_DISPLAY_MAX_AGE` (24 hours), absent, or scope-mismatched leaves no `ex` row, including when a display ceiling alone is configured. API spend projections are never persisted, since the spending walk and config rebuild them.
 
 ### Entitlement
 

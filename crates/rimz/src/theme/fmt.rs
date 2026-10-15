@@ -107,6 +107,26 @@ pub(crate) fn dollars_cap(usd: f64) -> String {
     }
 }
 
+/// Dollars left, floored at the display tier and compact enough for a budget row.
+pub(crate) fn dollars_left(usd: f64) -> String {
+    let usd = usd.max(0.0);
+    if usd < 10.0 {
+        // Decimal cents such as 0.29 can multiply to just below an integer.
+        let cents = (usd * 100.0 + 1e-9).floor() as u64;
+        if cents.is_multiple_of(100) {
+            return format!("${}", cents / 100);
+        }
+        return format!("${}.{:02}", cents / 100, cents % 100);
+    }
+    if usd < 100_000.0 {
+        return format!("${}", group_thousands(usd.floor() as u64));
+    }
+    if usd < 1_000_000.0 {
+        return format!("${:.0}k", (usd / 1_000.0).floor());
+    }
+    format!("${:.1}M", (usd / 100_000.0).floor() / 10.0)
+}
+
 pub fn group_thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -192,6 +212,34 @@ mod tests {
     fn money_groups_and_rounds() {
         assert_eq!(dollars2(1_240.567), "$1,240.57");
         assert_eq!(dollars_cap(1_240.0), "$1,240");
+    }
+
+    #[test]
+    fn money_left_floors_at_each_display_tier() {
+        for (amount, expected) in [
+            (-1.0, "$0"),
+            (f64::NAN, "$0"),
+            (0.0, "$0"),
+            (0.29, "$0.29"),
+            (1.13, "$1.13"),
+            (7.5, "$7.50"),
+            (7.0, "$7"),
+            (9.999, "$9.99"),
+            (10.0, "$10"),
+            (42.99, "$42"),
+            (2414.19, "$2,414"),
+            (2600.0, "$2,600"),
+            (99_999.99, "$99,999"),
+            (100_000.0, "$100k"),
+            (999_999.0, "$999k"),
+            (1_000_000.0, "$1.0M"),
+            (1_299_999.0, "$1.2M"),
+            (999_900_000.0, "$999.9M"),
+        ] {
+            let value = dollars_left(amount);
+            assert_eq!(value, expected, "{amount}");
+            assert!(value.len() <= 8);
+        }
     }
 
     #[test]

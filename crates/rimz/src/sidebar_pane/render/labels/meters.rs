@@ -555,7 +555,7 @@ pub(in crate::sidebar_pane::render) struct ManaTick {
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
 /// Ticks use each sub-cap's own 0–100 remaining axis across the full width,
-/// independently of the parent fill, including on a fully spent track. The end
+/// independently of the parent fill, but never on a fully spent track. The end
 /// cells belong to exactly 0% and exactly 100%; any partial reading sits inside.
 /// Collisions keep the lowest remaining percentage.
 pub(in crate::sidebar_pane::render) fn mana_bar_spans(
@@ -569,6 +569,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     let filled = filled_cells(remaining_pct, width).max(usize::from(remaining_pct > 0));
     let mut ticks: Vec<_> = ticks
         .iter()
+        .filter(|_| remaining_pct > 0)
         .map(|tick| (tick_cell(tick.remaining_pct, width), tick))
         .collect();
     ticks.sort_unstable_by_key(|(cell, tick)| (*cell, tick.remaining_pct));
