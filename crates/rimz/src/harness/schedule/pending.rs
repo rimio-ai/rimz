@@ -133,14 +133,21 @@ pub(crate) fn project_pending_waits(
 /// Whether any agent has launched children or a team, the only case in which
 /// the projection lists `runs/`; a room without launched work never reads it.
 fn has_launched_work(agents: &[crate::agents::AgentState]) -> bool {
+    let identities: std::collections::HashSet<_> = agents
+        .iter()
+        .flat_map(|agent| agent.identity_ids().map(move |id| (&agent.kind, id)))
+        .collect();
     agents.iter().any(|agent| {
-        crate::harness::fleet::has_members(agents, agent)
+        (!agent.is_team_seat()
+            && agent
+                .launcher()
+                .is_some_and(|key| identities.contains(&key)))
             || (agent.is_team_seat() && agent.launched_by.is_some())
     })
 }
 
 fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) {
-    use crate::harness::fleet::{self, FleetRuns};
+    use crate::harness::fleet::{self, FleetRunIndex};
     use crate::store::run;
 
     if !has_launched_work(&snapshot.agents) {
@@ -154,11 +161,11 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
         }
     };
     let peers = crate::address::addressable_agents(snapshot);
-    let projected: Vec<Vec<PendingWait>> = snapshot
-        .agents
-        .iter()
-        .map(|agent| {
-            let mut waits: Vec<_> = FleetRuns::of(snapshot.agents.iter(), &runs, agent)
+    let fleets = FleetRunIndex::new(&snapshot.agents, &runs);
+    let projected: Vec<Vec<PendingWait>> = (0..snapshot.agents.len())
+        .map(|index| {
+            let mut waits: Vec<_> = fleets
+                .of(index)
                 .unsettled()
                 .into_iter()
                 .map(|(child, run)| PendingWait {
@@ -174,7 +181,7 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                     },
                 })
                 .collect();
-            for run in fleet::owed_team_runs(&snapshot.agents, &runs, agent) {
+            for run in fleets.owed_team_runs(index) {
                 let Some(team) = &run.team else { continue };
                 let stage = crate::harness::scratch::board_stage(&run.worktree_path)
                     .map(|stage| stage.name);
@@ -277,6 +284,121 @@ mod tests {
             agent_id: parent.agent_id.clone(),
         });
         assert!(has_launched_work(&[parent, peer]));
+    }
+
+    #[test]
+    fn run_waits_keep_launcher_member_and_turn_order() {
+        use crate::agents::{AgentState, AgentStatus, LaunchedBy, PermissionMode};
+        use crate::store::run::{self, PeerRun, ReportTo, RunRecord, RunStatus, TeamRun};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        let now = jiff::Timestamp::from_second(4_000).unwrap();
+        let mut first = AgentState::stub("claude", "first", AgentStatus::Idle);
+        first.launch_id = Some("first-launch".into());
+        let second = AgentState::stub("codex", "second", AgentStatus::Idle);
+        let mut children: Vec<_> = ["plain", "peer", "other", "leader"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let launcher = if index >= 2 { &second } else { &first };
+                let mut child = AgentState::stub(launcher.kind.as_str(), name, AgentStatus::Idle);
+                child.name = Some(name.into());
+                child.registered_at = Some(jiff::Timestamp::from_second(index as i64).unwrap());
+                child.launched_by = Some(LaunchedBy {
+                    kind: launcher.kind.clone(),
+                    agent_id: launcher
+                        .launch_id
+                        .as_ref()
+                        .unwrap_or(&launcher.agent_id)
+                        .clone(),
+                });
+                child
+            })
+            .collect();
+        children[1].launch_id = Some("peer-launch".into());
+        children[3].launch_id = Some("leader-launch".into());
+        children[3].team = Some("forge".into());
+        let make_run = |child: &AgentState, started| {
+            let mut record = RunRecord::new(
+                paths.workspace_id.clone(),
+                child.kind.clone(),
+                PermissionMode::Auto,
+                "task".into(),
+                dir.path().into(),
+            );
+            record.agent_id = Some(child.agent_id.clone());
+            record.started_at = jiff::Timestamp::from_second(started).unwrap();
+            record.updated_at = record.started_at;
+            record
+        };
+        let mut runs = vec![
+            make_run(&children[0], 1),
+            make_run(&children[0], 2),
+            make_run(&children[1], 3),
+            make_run(&children[1], 4),
+            make_run(&children[2], 5),
+            make_run(&children[3], 6),
+        ];
+        runs[0].status = RunStatus::Completed;
+        runs[1].deadline_at = Some(now);
+        runs[2].peer = Some(PeerRun {
+            launch_id: "peer-launch".into(),
+            opened_by: Vec::new(),
+        });
+        runs[2].agent_id = None;
+        runs[3].peer = runs[2].peer.clone();
+        runs[3].status = RunStatus::Completed;
+        runs[4].agent_id = None;
+        runs[4].agent_name = children[2].name.clone();
+        runs[5].team = Some(TeamRun {
+            launch_id: "leader-launch".into(),
+            instance: "forge#work".into(),
+        });
+        let mut detached = make_run(&children[1], 7);
+        detached.peer = runs[2].peer.clone();
+        detached.report_to = ReportTo::Nobody;
+        runs.push(detached);
+        for run in &runs {
+            run::write(&paths.runs_dir, run).unwrap();
+        }
+        let mut agents = vec![first, second];
+        agents.extend(children);
+        let mut snapshot =
+            SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
+        project_run_waits(&mut snapshot, &paths);
+        let first = &snapshot.agents[0].pending_waits;
+        assert_eq!(
+            first
+                .iter()
+                .map(|wait| wait.name.as_str())
+                .collect::<Vec<_>>(),
+            ["@plain", "@peer", "@peer"]
+        );
+        assert_eq!(
+            first
+                .iter()
+                .map(|wait| wait.armed_at.unwrap().as_second())
+                .collect::<Vec<_>>(),
+            [2, 4, 3]
+        );
+        let second = &snapshot.agents[1].pending_waits;
+        assert_eq!(
+            second
+                .iter()
+                .map(|wait| wait.name.as_str())
+                .collect::<Vec<_>>(),
+            ["@other", "forge#work"]
+        );
+        assert!(matches!(second[1].trigger, PendingWaitTrigger::Team { .. }));
+        assert!(
+            snapshot.agents[2..]
+                .iter()
+                .all(|agent| agent.pending_waits.is_empty())
+        );
     }
 
     #[test]

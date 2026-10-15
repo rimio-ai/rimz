@@ -1225,11 +1225,16 @@ impl AgentState {
             .map(|launcher| (&launcher.kind, &launcher.agent_id))
     }
 
+    /// Session identity followed by current and prior launch identities.
+    pub(crate) fn identity_ids(&self) -> impl Iterator<Item = &AgentSessionId> {
+        std::iter::once(&self.agent_id)
+            .chain(self.launch_id.iter())
+            .chain(&self.prior_launch_ids)
+    }
+
     /// Match this session, its current launch, or any earlier launch identity.
     pub fn answers_to(&self, id: &AgentSessionId) -> bool {
-        &self.agent_id == id
-            || self.launch_id.as_ref() == Some(id)
-            || self.prior_launch_ids.contains(id)
+        self.identity_ids().any(|identity| identity == id)
     }
 
     /// Rebind the process identity without losing earlier launch addresses.

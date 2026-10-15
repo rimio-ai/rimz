@@ -6,12 +6,14 @@ fn answers_to_session_current_and_prior_launch_ids() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     agent.launch_id = Some("current".into());
     agent.prior_launch_ids = vec!["oldest".into(), "previous".into()];
-    for id in [
+    let ids = [
         &agent.agent_id,
         &"current".into(),
         &"oldest".into(),
         &"previous".into(),
-    ] {
+    ];
+    assert_eq!(agent.identity_ids().collect::<Vec<_>>(), ids);
+    for id in ids {
         assert!(agent.answers_to(id), "{id}");
     }
     assert!(!agent.answers_to(&"unrelated".into()));

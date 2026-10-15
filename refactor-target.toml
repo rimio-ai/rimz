@@ -209,7 +209,14 @@ upward-dependencies = ["address"]
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
-surface-budget = 1070 # Shared credits-cache reads, model sub-cap veto, and prepared fresh offer (+8).
+# Shared credits-cache reads, model sub-cap veto, and prepared fresh offer (+8).
+# AgentState::identity_ids shares those identity keys with fleet joins and runtime projection (+1).
+surface-budget = 1071
+
+[[verdict]]
+kind = "item"
+key = "agents::state::identity_ids"
+reason = "Fleet joins and runtime parent lookup share the identities accepted by AgentState::answers_to."
 
 [[verdict]]
 kind = "item"
