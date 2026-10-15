@@ -8,8 +8,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    AgentKind, AgentSessionId, EventId, LinkTier, LoginKey, MessageId, PaneId, SidebarInstanceId,
-    ViewId, WorkspaceId,
+    AgentKind, AgentSessionId, EventId, LinkTier, LoginKey, MessageId, PaneId, RunId,
+    SidebarInstanceId, ViewId, WorkspaceId,
 };
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -80,6 +80,14 @@ pub enum SidebarHostUnavailableCause {
     Rejected,
     ReplyUnreadable,
     Lost,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentZoneLookup {
+    Projection,
+    Caller,
+    PaneListing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,6 +546,11 @@ pub enum DiagEvent {
         orphaned_at_ms: u64,
         error: String,
     },
+    SubagentZoneLookupFailed {
+        run_id: RunId,
+        lookup: SubagentZoneLookup,
+        error: String,
+    },
     PaneWinsizeRepaired {
         pane: PaneId,
         rows: u16,
@@ -637,6 +650,7 @@ impl DiagEvent {
             | Self::SidebarOrphanReaped { .. }
             | Self::SubagentOrphanReaped { .. }
             | Self::SubagentOrphanRepairFailed { .. }
+            | Self::SubagentZoneLookupFailed { .. }
             | Self::ProviderStartupExit { .. }
             | Self::PaneCacheDivergence { .. }
             | Self::SupervisorPreflightRejected { .. }
@@ -746,6 +760,7 @@ impl DiagEvent {
             Self::SubagentOrphanReaped { .. } => "subagent_orphan_reaped",
             Self::SubagentDigestBackstopped { .. } => "subagent_digest_backstopped",
             Self::SubagentOrphanRepairFailed { .. } => "subagent_orphan_repair_failed",
+            Self::SubagentZoneLookupFailed { .. } => "subagent_zone_lookup_failed",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
@@ -992,6 +1007,9 @@ impl DiagEvent {
             Self::SubagentDigestBackstopped {
                 parent_agent_id, ..
             } => format!("{}:{parent_agent_id}", self.kind_name()),
+            Self::SubagentZoneLookupFailed { run_id, lookup, .. } => {
+                format!("{}:{run_id}:{lookup:?}", self.kind_name())
+            }
             Self::ProviderStartupExit {
                 agent_kind,
                 agent_name,
@@ -1414,6 +1432,13 @@ impl DiagEvent {
                 error,
             } => format!(
                 "failed to repair orphaned subagent {agent_kind}/{agent_id} after parent {parent_agent_id} remained ended or absent past grace (evidence timestamp {orphaned_at_ms}): {error}"
+            ),
+            Self::SubagentZoneLookupFailed {
+                run_id,
+                lookup,
+                error,
+            } => format!(
+                "subagent run {run_id} opening a companion tab after {lookup:?} lookup failed: {error}"
             ),
             Self::PaneCacheDivergence {
                 pane_id,

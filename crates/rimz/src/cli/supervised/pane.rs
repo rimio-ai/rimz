@@ -8,6 +8,7 @@ use anyhow::Result;
 
 use crate::cli::GlobalFlags;
 use rimz::agents::AgentState;
+use rimz::diag::record::{DiagEvent, SubagentZoneLookup};
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
     COMPANION_PANE_LIMIT, CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions,
@@ -42,8 +43,6 @@ pub(super) enum SubagentZoneStrategy {
 #[derive(Debug)]
 pub(crate) enum SubagentZoneOpen {
     Opened,
-    CompanionTab,
-    RunTab,
     Failed(rimz::mux::MuxErr),
 }
 
@@ -53,14 +52,15 @@ pub(super) fn select_subagent_zone_strategy(
     caller: &AgentState,
     fallback_session: &str,
     theme: &rimz::config::ThemeConfig,
+    base: &str,
 ) -> Option<SubagentZoneStrategy> {
     let team = caller.team.as_deref().filter(|team| !team.is_empty());
-    if let Some(strategy) = companion_grid_strategy(live_panes, caller, fallback_session, theme) {
+    if let Some(strategy) = companion_grid_strategy(live_panes, fallback_session, theme, base) {
         return Some(strategy);
     }
     if team.is_some() {
         return Some(SubagentZoneStrategy::CompanionTab {
-            title: companion_title(caller, theme),
+            title: base.to_owned(),
         });
     }
     let live_caller = caller
@@ -106,11 +106,10 @@ pub(super) fn select_subagent_zone_strategy(
 
 fn companion_grid_strategy(
     live_panes: &[PaneRef],
-    caller: &AgentState,
     fallback_session: &str,
     theme: &rimz::config::ThemeConfig,
+    base: &str,
 ) -> Option<SubagentZoneStrategy> {
-    let base = companion_title(caller, theme);
     let mut views = BTreeMap::<(usize, String, String), Vec<&PaneRef>>::new();
     for pane in live_panes.iter().filter(|pane| !pane.is_floating) {
         let Some(name) = pane.view_name.as_deref() else {
@@ -193,7 +192,17 @@ fn companion_title(caller: &AgentState, theme: &rimz::config::ThemeConfig) -> St
         )
 }
 
-pub(in crate::cli) fn subagent_companion_title(store: &rimz::Store) -> String {
+fn channel_companion_title(channel: &str) -> String {
+    format!("#{channel} subagents")
+}
+
+pub(in crate::cli) fn subagent_companion_title(
+    store: &rimz::Store,
+    channel: Option<&str>,
+) -> String {
+    if let Some(channel) = channel {
+        return channel_companion_title(channel);
+    }
     let machine = rimz::config::MachineConfig::load_lenient();
     store
         .runtime_projection(rimz::RuntimeScope::Audit)
@@ -212,8 +221,7 @@ pub(in crate::cli) fn lock_subagent_zone(
     rimz::disk::lock::WorkspaceLock::acquire(&store.runtime_paths().lock_path("subagent-zone.lock"))
 }
 
-/// Open a supervised child in the caller's durable subagent zone, or select
-/// the tab fallback that preserves the launch when mux placement is unavailable.
+/// Open a supervised child in the caller's durable subagent zone, falling back to a companion tab when mux placement is unavailable.
 #[expect(
     clippy::too_many_arguments,
     reason = "one mux effect carries the complete pane birth contract"
@@ -227,15 +235,51 @@ pub(in crate::cli) fn split_into_subagent_zone(
     sidebar: SidebarPaneOptions,
     pane: &PaneCmd,
     child_name: &str,
+    channel: Option<&str>,
+    after: Option<PaneId>,
+    run_id: &rimz::RunId,
 ) -> SubagentZoneOpen {
+    let title = channel.map_or_else(|| "subagents".to_owned(), channel_companion_title);
+    let lookup_failed = |lookup, error| {
+        rimz::diag::DiagSink::under(
+            store.paths().root.clone(),
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            None,
+        )
+        .emit(DiagEvent::SubagentZoneLookupFailed {
+            run_id: run_id.clone(),
+            lookup,
+            error,
+        });
+    };
+    let open_companion = |title, after| match backend.open_tab(&TabOptions {
+        env: env.clone(),
+        title,
+        panes: LayoutPanes {
+            columns: vec![LayoutColumn {
+                panes: vec![pane.clone()],
+                stacked: false,
+            }],
+            focused_pane: 0,
+        },
+        focus: false,
+        dock_sidebar: true,
+        after,
+        sidebar: sidebar.clone(),
+    }) {
+        Ok(()) => SubagentZoneOpen::Opened,
+        Err(err) => {
+            // A failed response may follow a successful tab birth. Never execute the same durable run in a second tab.
+            tracing::debug!(error = %err, "subagent companion tab could not be confirmed");
+            SubagentZoneOpen::Failed(err)
+        }
+    };
     let mut projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
         Ok(projection) => projection,
         Err(err) => {
-            tracing::debug!(
-                error = &err as &dyn std::error::Error,
-                "subagent zone lookup failed; falling back to a run tab",
-            );
-            return SubagentZoneOpen::RunTab;
+            lookup_failed(SubagentZoneLookup::Projection, format!("{err:#}"));
+            return open_companion(title, after);
         }
     };
     rimz::store::agent_context::attach_rest_certificates(
@@ -245,33 +289,39 @@ pub(in crate::cli) fn split_into_subagent_zone(
     let caller = match rimz::harness::ancestry::resolve_calling_agent(&projection.agents) {
         Ok(caller) => caller,
         Err(err) => {
-            tracing::debug!(
-                error = &err as &dyn std::error::Error,
-                "subagent zone caller lookup failed; falling back to a run tab",
-            );
-            return SubagentZoneOpen::RunTab;
-        }
-    };
-    let live_panes = match list_subagent_zone_panes(backend, store, workspace) {
-        Ok(listing) => listing.panes,
-        Err(err) => {
-            tracing::debug!(
-                error = %err,
-                "subagent zone pane lookup failed; falling back to a run tab",
-            );
-            return SubagentZoneOpen::RunTab;
+            lookup_failed(SubagentZoneLookup::Caller, format!("{err:#}"));
+            return open_companion(title, after);
         }
     };
     let machine = rimz::config::MachineConfig::load_lenient();
-    let Some(strategy) = select_subagent_zone_strategy(
+    let title = if channel.is_none() {
+        companion_title(caller, &machine.theme)
+    } else {
+        title
+    };
+    let after = caller
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone())
+        .or(after);
+    let live_panes = match list_subagent_zone_panes(backend, store, workspace) {
+        Ok(listing) => listing.panes,
+        Err(err) => {
+            lookup_failed(SubagentZoneLookup::PaneListing, format!("{err:#}"));
+            return open_companion(title, after);
+        }
+    };
+    let strategy = select_subagent_zone_strategy(
         &projection.agents,
         &live_panes,
         caller,
         &workspace.session_name,
         &machine.theme,
-    ) else {
-        return SubagentZoneOpen::CompanionTab;
-    };
+        &title,
+    )
+    .unwrap_or_else(|| SubagentZoneStrategy::CompanionTab {
+        title: title.clone(),
+    });
     let split = |session_name: String, pane_id: PaneId, placement: SplitPlacement| match backend
         .split_pane(SplitPaneOptions {
             target: SplitTarget::SessionPane {
@@ -295,32 +345,8 @@ pub(in crate::cli) fn split_into_subagent_zone(
                 rimz::mux::MuxErr::Timeout { .. } | rimz::mux::MuxErr::Output { .. } => {
                     SubagentZoneOpen::Failed(err)
                 }
-                _ => SubagentZoneOpen::CompanionTab,
+                _ => open_companion(title.clone(), after.clone()),
             }
-        }
-    };
-    let open_companion = |title| match backend.open_tab(&TabOptions {
-        env: env.clone(),
-        title,
-        panes: LayoutPanes {
-            columns: vec![LayoutColumn {
-                panes: vec![pane.clone()],
-                stacked: false,
-            }],
-            focused_pane: 0,
-        },
-        focus: false,
-        dock_sidebar: true,
-        after: caller.pane.as_ref().map(|pane| pane.pane_id.clone()),
-        sidebar: sidebar.clone(),
-    }) {
-        Ok(()) => SubagentZoneOpen::Opened,
-        Err(err) => {
-            tracing::debug!(
-                error = &err as &dyn std::error::Error,
-                "subagent companion tab could not be confirmed",
-            );
-            SubagentZoneOpen::Failed(err)
         }
     };
     match strategy {
@@ -329,7 +355,7 @@ pub(in crate::cli) fn split_into_subagent_zone(
             pane_id,
             placement,
         } => split(session_name, pane_id, placement),
-        SubagentZoneStrategy::CompanionTab { title } => open_companion(title),
+        SubagentZoneStrategy::CompanionTab { title } => open_companion(title, after),
         SubagentZoneStrategy::CompanionGrid { anchors, title } => {
             for (session_name, pane_id) in anchors {
                 match backend.append_companion_pane(SplitPaneOptions {
@@ -351,7 +377,7 @@ pub(in crate::cli) fn split_into_subagent_zone(
                     }
                 }
             }
-            open_companion(title)
+            open_companion(title, after)
         }
     }
 }

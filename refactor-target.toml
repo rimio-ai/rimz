@@ -433,7 +433,8 @@ path = "crates/rimz/src/diag"
 # Hibernation timeout repair exposes its diagnostic module and append sink (+2).
 # WakeEvent, RefaultSample and record share wake telemetry with the harness (+6).
 # Hook-feed failures expose hook_feed, Record, and append to the CLI (+3).
-surface-budget = 104
+# SubagentZoneLookup names the placement lookup in CLI fallback diagnostics (+1).
+surface-budget = 105
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -2786,6 +2787,11 @@ reason = "Frozen rimz.diag.v1 wire; every variant payload type stays pub under p
 kind = "item"
 key = "diag::record::SidebarHostUnavailableCause"
 reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is required by private_interfaces for the diagnostic wire."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::SubagentZoneLookup"
+reason = "The CLI stamps projection, caller, or pane-listing failure in the public SubagentZoneLookupFailed diagnostic payload."
 
 [[verdict]]
 kind = "item"
