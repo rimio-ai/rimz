@@ -114,6 +114,7 @@ fn warm_sidecar_read_is_one_stat_per_file() {
             id,
             agent_activity::ToolRun::Reset,
             false,
+            now,
         )
         .expect("touch activity");
     }

@@ -17,7 +17,7 @@
 //!   agent is still idle (`last_activity` has not advanced), the producer
 //!   spawns the detached `rimz agents auto-continue` helper that queues and
 //!   delivers a resume-gated message record.
-//! - **Clear.** A rate-limit or overload record whose activity advanced is held while the reply is unclassified (Running or Failed with no displayed error), even before the resume message becomes visible. With a matching resume message, no root tool timestamp past the later of the provider turn start and resume enqueue time identifies a bare reply (enqueue time alone if the start is missing). A same-class limit or overload reply then carries the activity baseline forward, preserving the attempt anchor and retry state. An observed tool past that boundary earns a fresh allowance even if another limit follows; text-only work still counts as a reply. A settled status with no marker or a delivered message with no turn start clears the record. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
+//! - **Clear.** A rate-limit or overload record whose activity advanced is held while the reply is unclassified (Running or Failed with no displayed error), even before the resume message becomes visible. With a matching resume message, no root tool timestamp strictly after resume enqueue and at or after the provider turn start (when known) identifies a bare reply. A tool reopening the turn may equal its start, but an enqueue-time tie does not prove post-nudge work. A same-class limit or overload reply then carries the activity baseline forward, preserving the attempt anchor and retry state. An observed tool meeting those boundaries earns a fresh allowance even if another limit follows; text-only work still counts as a reply. A settled status with no marker or a delivered message with no turn start clears the record. Every retained terminal outcome and the live resume queue evidence exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
 //! arm decision is the pure, unit-tested [`resume_park`].
@@ -302,12 +302,11 @@ pub(crate) fn resume_parked(
 }
 
 fn nudged_turn_made_no_progress(agent: &AgentState, enqueued_at: Timestamp) -> bool {
-    let started_at = agent
-        .turn_started_at
-        .map_or(enqueued_at, |at| at.max(enqueued_at));
+    // A tool hook can itself reopen the turn at the same ingress timestamp.
+    let started_at = agent.turn_started_at.unwrap_or(enqueued_at);
     agent
         .last_tool_at
-        .is_none_or(|tool_at| tool_at <= started_at)
+        .is_none_or(|tool_at| tool_at <= enqueued_at || tool_at < started_at)
 }
 
 pub(crate) fn exhausted_parks(

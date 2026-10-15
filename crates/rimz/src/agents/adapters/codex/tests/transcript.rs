@@ -177,6 +177,33 @@ fn parse_transcript_messages_reads_paginated_visible_messages_only() {
 }
 
 #[test]
+fn task_complete_workspace_credits_depleted_is_a_rate_limit() {
+    let record = json!({
+        "timestamp": "2026-10-15T07:23:04.605Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "error": {
+                "message": "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.",
+                "codex_error_info": "usage_limit_exceeded"
+            }
+        }
+    }).to_string();
+    let error = detect_turn_error(&record).expect("credit exhaustion marks a paused turn");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        error.at,
+        "2026-10-15T07:23:04.605Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+    );
+    assert_eq!(
+        error.label.as_deref(),
+        Some("Your workspace is out of credits. Ask your workspace owner to refill in order to")
+    );
+}
+
+#[test]
 fn turn_error_detector_maps_known_error_shapes() {
     let rate_limit = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",

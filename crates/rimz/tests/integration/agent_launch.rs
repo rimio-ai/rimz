@@ -1661,6 +1661,7 @@ fn limit_parked_child_lists_paused_and_tells_its_parent_once() {
             child_id.as_str(),
             rimz::agent_activity::ToolRun::Reset,
             true,
+            jiff::Timestamp::now(),
         )
         .expect("touch the child's heartbeat");
         rimz::agent_activity::read_for_keys(
@@ -1968,6 +1969,7 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
         child_id.as_str(),
         rimz::agent_activity::ToolRun::Reset,
         true,
+        jiff::Timestamp::now(),
     )
     .unwrap();
     notify(1_800);
@@ -2034,6 +2036,7 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
         child_id.as_str(),
         rimz::agent_activity::ToolRun::Reset,
         true,
+        jiff::Timestamp::now(),
     )
     .unwrap();
     rimz::disk::atomic::write_temp_then_rename_cache(&heartbeat_path, &heartbeat).unwrap();

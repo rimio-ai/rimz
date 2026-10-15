@@ -1285,6 +1285,52 @@ fn productive_nudged_turns_start_fresh_allowances_before_limit_stops() {
 }
 
 #[test]
+fn tool_reopening_a_nudged_turn_starts_a_fresh_allowance_only_after_the_nudge() {
+    for (tool_at, expected_retries) in [(6_000, 2), (6_100, 0)] {
+        let (_dir, runtime) = temp_runtime();
+        let payload = json!({"sessionId": "sess", "toolName": "write", "error": "server_error"});
+        let mut snapshot = folded_hook_frames(
+            &runtime,
+            "grok",
+            &[
+                ("UserPromptSubmit", payload.clone(), 1_000),
+                (
+                    "Stop",
+                    json!({"sessionId": "sess", "reason": "end_turn"}),
+                    1_001,
+                ),
+                ("PostToolUse", payload.clone(), tool_at),
+                ("StopFailure", payload, tool_at + 1),
+            ],
+        );
+        assert_eq!(snapshot.agents[0].turn_started_at, Some(ts(tool_at)));
+        assert_eq!(snapshot.agents[0].last_tool_at, Some(ts(tool_at)));
+        std::sync::Arc::make_mut(&mut snapshot.agents)[0].context = parked_agent(
+            tool_at,
+            tool_at + 1,
+            TurnErrorClass::PausedOverloaded,
+            "overloaded",
+        )
+        .context;
+        let path = park_record_path(&runtime, &AgentKind::new_unchecked("grok"), &"sess".into());
+        write_park(&path, &overloaded_record(1_001, 1_001, Some(6_000), 2));
+        let mut message = resume_message(1, MessageStatus::Delivered, 6_000);
+        message.kind = AgentKind::new_unchecked("grok");
+        resume_parked(
+            &snapshot,
+            &runtime,
+            &crate::agents::RoomLoginSet::native(),
+            &ResumeConfig {
+                auto_continue: true,
+                ..ResumeConfig::default()
+            },
+            &[message],
+        );
+        assert_eq!(read_park(&path).unwrap().retries, expected_retries);
+    }
+}
+
+#[test]
 fn in_flight_turn_holds_park_when_resume_message_is_not_visible() {
     let (_dir, runtime) = temp_runtime();
     write_recovered_window(&runtime);

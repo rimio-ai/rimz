@@ -434,7 +434,7 @@ impl SidebarSnapshot {
                 continue;
             };
             agent.last_tool_at = touch.tool_at;
-            if touch.at > agent.last_activity {
+            if touch.at >= agent.last_activity {
                 agent.last_activity = touch.at;
                 agent.tool_repeat = touch.repeat.clone();
             }
