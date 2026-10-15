@@ -13,7 +13,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -582,6 +582,7 @@ impl std::ops::Deref for RunListing {
 struct RunListingCache {
     files: HashMap<PathBuf, (FileStamp, usize)>,
     listing: Option<RunListing>,
+    directory: Option<(FileStamp, SystemTime)>,
 }
 
 enum ListedRecord {
@@ -629,6 +630,30 @@ pub(crate) fn listing(runs_dir: &Path) -> Result<RunListing> {
 
 impl RunListingCache {
     fn refresh(&mut self, runs_dir: &Path) -> Result<RunListing> {
+        let scan_started = SystemTime::now();
+        let directory = match fs::metadata(runs_dir) {
+            Ok(metadata) => Some(FileStamp::from_metadata(&metadata)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(RunStoreErr::Io {
+                    path: runs_dir.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        if let Some((stamp, previous_scan)) = self.directory
+            && directory == Some(stamp)
+            && previous_scan
+                .duration_since(
+                    UNIX_EPOCH + Duration::new(stamp.modified_secs, stamp.modified_nanos),
+                )
+                .is_ok_and(|age| age >= Duration::from_secs(2))
+            && let Some(listing) = &self.listing
+        {
+            return Ok(listing.clone());
+        }
+        #[cfg(test)]
+        super::sidecar::testkit::record_enumeration();
         let entries = match fs::read_dir(runs_dir) {
             Ok(entries) => Some(entries),
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -650,6 +675,8 @@ impl RunListingCache {
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
+            #[cfg(test)]
+            super::sidecar::testkit::record_stat();
             let metadata = match fs::metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -679,6 +706,7 @@ impl RunListingCache {
             changed = true;
         }
         changed |= found.len() != self.files.len();
+        self.directory = directory.map(|stamp| (stamp, scan_started));
         if !changed && let Some(listing) = &self.listing {
             return Ok(listing.clone());
         }
@@ -731,6 +759,57 @@ mod tests {
             "task".into(),
             "/repo".into(),
         )
+    }
+
+    fn set_directory_mtime(path: &Path, modified: std::time::SystemTime) {
+        fs::File::open(path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+    }
+
+    #[test]
+    fn run_listing_aged_directory_skips_record_stats_and_enumeration() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), &listing_record()).unwrap();
+        set_directory_mtime(dir.path(), std::time::SystemTime::UNIX_EPOCH);
+        let cold = listing(dir.path()).unwrap();
+        let before = super::super::sidecar::testkit::read_counts();
+        let warm = listing(dir.path()).unwrap();
+        assert_eq!(super::super::sidecar::testkit::read_counts(), before);
+        assert_eq!(warm.generation, cold.generation);
+        assert!(Arc::ptr_eq(&cold.records, &warm.records));
+    }
+
+    #[test]
+    fn run_listing_sees_write_after_aged_reuse() {
+        let dir = tempdir().unwrap();
+        let mut record = listing_record();
+        write(dir.path(), &record).unwrap();
+        set_directory_mtime(dir.path(), std::time::SystemTime::UNIX_EPOCH);
+        let cold = listing(dir.path()).unwrap();
+        assert_eq!(listing(dir.path()).unwrap().generation, cold.generation);
+        record.prompt = "new task".into();
+        write(dir.path(), &record).unwrap();
+        let changed = listing(dir.path()).unwrap();
+        assert_eq!(changed[0].prompt, "new task");
+        assert_eq!(changed.generation, cold.generation + 1);
+    }
+
+    #[test]
+    fn run_listing_sees_same_tick_write_inside_margin() {
+        let dir = tempdir().unwrap();
+        let mut record = listing_record();
+        write(dir.path(), &record).unwrap();
+        let modified = std::time::SystemTime::now();
+        set_directory_mtime(dir.path(), modified);
+        let cold = listing(dir.path()).unwrap();
+        record.prompt = "new task".into();
+        write(dir.path(), &record).unwrap();
+        set_directory_mtime(dir.path(), modified);
+        let changed = listing(dir.path()).unwrap();
+        assert_eq!(changed[0].prompt, "new task");
+        assert_eq!(changed.generation, cold.generation + 1);
     }
 
     #[test]
