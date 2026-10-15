@@ -671,6 +671,55 @@ fn requested_focus_anchor(
     anchor
 }
 
+fn assert_foreign_focus_anchor_is_ignored(shared: bool) {
+    let mut rig = Rig::new();
+    let first = zellij("terminal_1");
+    let target = zellij("terminal_2");
+    rig.fold(
+        snapshot_with_focused_pane(&rig.ws, first.clone()),
+        SnapshotSource::Produced,
+    );
+    let mut anchor =
+        requested_focus_anchor(target.clone(), 7, crate::utils::time::unix_now_ms(), None);
+    anchor.session_name = "another-session".to_owned();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store foreign anchor");
+
+    for focused in [first, target] {
+        let snapshot = snapshot_with_focused_pane(&rig.ws, focused.clone());
+        if shared {
+            rig.shared_fold(
+                snapshot,
+                Arc::new(super::super::super::fetch::FoldInputs {
+                    anchor: Some(anchor.clone()),
+                    ..Default::default()
+                }),
+            );
+        } else {
+            rig.fold(snapshot, SnapshotSource::Produced);
+        }
+        assert_eq!(rig.state.ui.selected_pane, Some(focused));
+        assert!(rig.state.ui.focus_placement.is_none());
+        assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+        assert_eq!(rig.state.confirmed_focus_intent_ms, 0);
+        assert_eq!(
+            crate::mux::focus_anchor::load(&rig.runtime)
+                .expect("a foreign fold must not retire the anchor")
+                .nonce,
+            anchor.nonce,
+        );
+    }
+}
+
+#[test]
+fn live_foreign_focus_anchor_is_neither_presented_nor_retired() {
+    assert_foreign_focus_anchor_is_ignored(false);
+}
+
+#[test]
+fn shared_foreign_focus_anchor_is_neither_presented_nor_retired() {
+    assert_foreign_focus_anchor_is_ignored(true);
+}
+
 #[test]
 fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
     let mut rig = Rig::new();

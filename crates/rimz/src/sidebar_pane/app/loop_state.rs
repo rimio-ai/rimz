@@ -2028,11 +2028,17 @@ impl LoopState {
             {
                 return anchor.clone();
             }
-            self.observed_anchor = Some((inputs.sampled_at, inputs.anchor.clone()));
-            return inputs.anchor.clone();
+            let anchor = inputs
+                .anchor
+                .as_ref()
+                .filter(|anchor| anchor.session_name == self.config.session_name)
+                .cloned();
+            self.observed_anchor = Some((inputs.sampled_at, anchor.clone()));
+            return anchor;
         }
         let observed = Instant::now();
-        let anchor = crate::mux::focus_anchor::load(&self.runtime);
+        let anchor = crate::mux::focus_anchor::load(&self.runtime)
+            .filter(|anchor| anchor.session_name == self.config.session_name);
         if anchor.is_none()
             && let Some((_, Some(previous))) = &self.observed_anchor
         {
