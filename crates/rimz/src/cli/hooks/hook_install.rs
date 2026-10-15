@@ -34,7 +34,9 @@ fn install_disposition(
     }
 }
 
-pub(super) fn detected_installable_adapters() -> Vec<&'static rimz::agents::AgentDefinition> {
+pub(super) fn detected_installable_adapters(
+    login_env: &BTreeMap<String, String>,
+) -> Vec<&'static rimz::agents::AgentDefinition> {
     let mut detected = Vec::new();
     for agent in rimz::agents::all_definitions() {
         let definition = agent.spec();
@@ -56,7 +58,7 @@ pub(super) fn detected_installable_adapters() -> Vec<&'static rimz::agents::Agen
 
         if let Some(reason) = agent
             .managed_integration()
-            .and_then(|integration| integration.install_blocker())
+            .and_then(|integration| integration.install_blocker(login_env))
         {
             tracing::debug!(
                 agent = definition.kind,
@@ -75,7 +77,7 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
     let login_env = rimz::agents::ambient_env();
     let mut actionable = Vec::new();
 
-    for agent in detected_installable_adapters() {
+    for agent in detected_installable_adapters(&login_env) {
         let definition = agent.spec();
         if !agent.hooks_installed(&login_env)
             || agent

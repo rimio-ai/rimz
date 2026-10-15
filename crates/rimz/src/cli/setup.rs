@@ -175,9 +175,9 @@ impl SetupReport {
                     name: definition.kind,
                     binary: rimz::agents::locate_binary(definition),
                     hook_install: definition.has_wired_hook_install(),
-                    hook_install_blocked: agent
-                        .managed_integration()
-                        .is_some_and(|integration| integration.install_blocker().is_some()),
+                    hook_install_blocked: agent.managed_integration().is_some_and(|integration| {
+                        integration.install_blocker(&login_env).is_some()
+                    }),
                     hooks_installed: agent.hooks_installed(&login_env),
                     hook_upgrade_available: agent
                         .managed_integration()

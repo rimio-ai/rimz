@@ -590,7 +590,7 @@ struct OpencodeManagedIntegration;
 
 impl super::ManagedIntegration for OpencodeManagedIntegration {
     fn install(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallReport> {
-        if let Some(reason) = self.install_blocker() {
+        if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "opencode",
                 reason,
@@ -600,7 +600,7 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
     }
 
     fn preview(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallPreview> {
-        if let Some(reason) = self.install_blocker() {
+        if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "opencode",
                 reason,
@@ -633,7 +633,7 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
         OPENCODE_MANAGED_SOURCE.wiring_input_paths(descriptor, env)
     }
 
-    fn install_blocker(&self) -> Option<String> {
+    fn install_blocker(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         install_blocker_at(&crate::agents::locate_binary(&OPENCODE_DESCRIPTOR)?)
     }
 }

@@ -133,20 +133,21 @@ fn non_empty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
-pub(super) fn probe() -> AccountProbe {
-    let path = super::paths::auth_path();
+pub(super) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     probe_at(
-        &path,
+        super::paths::auth_path(login_env).as_deref(),
         ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]
             .into_iter()
-            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty())),
-        std::env::var("GROK_DISABLE_API_KEY_AUTH").ok().as_deref(),
+            .any(|key| login_env.get(key).is_some_and(|value| !value.is_empty())),
+        login_env
+            .get("GROK_DISABLE_API_KEY_AUTH")
+            .map(String::as_str),
         Timestamp::now(),
     )
 }
 
 fn probe_at(
-    path: &std::path::Path,
+    path: Option<&std::path::Path>,
     api_key_present: bool,
     disable_api_key_auth: Option<&str>,
     now: Timestamp,
@@ -157,12 +158,13 @@ fn probe_at(
             "" | "0" | "false" | "off" | "no"
         )
     });
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return AccountProbe::Unavailable(AccountProbeError::ReadFailed),
+    let bytes = match path.map(std::fs::read) {
+        None => None,
+        Some(Ok(bytes)) => Some(bytes),
+        Some(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Some(Err(_)) => return AccountProbe::Unavailable(AccountProbeError::ReadFailed),
     };
-    if let Some(bytes) = bytes {
+    if let (Some(bytes), Some(path)) = (bytes, path) {
         let records: BTreeMap<String, AuthRecord> = match serde_json::from_slice(&bytes) {
             Ok(records) => records,
             Err(_) => return AccountProbe::Unavailable(AccountProbeError::UnparseableOutput),
@@ -235,7 +237,7 @@ mod tests {
         )
         .unwrap();
         let now = "2026-07-20T00:00:00Z".parse().unwrap();
-        let AccountProbe::Found(account) = probe_at(&path, false, None, now) else {
+        let AccountProbe::Found(account) = probe_at(Some(&path), false, None, now) else {
             panic!("session account expected");
         };
         assert_eq!(account.account_id.as_deref(), Some("user-1"));
@@ -243,11 +245,11 @@ mod tests {
 
         std::fs::write(&path, "{").unwrap();
         assert!(matches!(
-            probe_at(&path, true, None, now),
+            probe_at(Some(&path), true, None, now),
             AccountProbe::Unavailable(AccountProbeError::UnparseableOutput)
         ));
         std::fs::remove_file(&path).unwrap();
-        let AccountProbe::Found(account) = probe_at(&path, true, None, now) else {
+        let AccountProbe::Found(account) = probe_at(Some(&path), true, None, now) else {
             panic!("environment API key fallback expected");
         };
         assert_eq!(account.metered, Some(false));
@@ -264,10 +266,10 @@ mod tests {
         .unwrap();
         let now = Timestamp::now();
         assert!(matches!(
-            probe_at(&path, false, None, now),
+            probe_at(Some(&path), false, None, now),
             AccountProbe::LoggedOut
         ));
-        let AccountProbe::Found(account) = probe_at(&path, true, None, now) else {
+        let AccountProbe::Found(account) = probe_at(Some(&path), true, None, now) else {
             panic!("API key fallback")
         };
         assert_eq!(account.plan.as_deref(), Some("API key"));
@@ -285,7 +287,7 @@ mod tests {
             for value in ["1", "true", "YES", "on", "anything", " true "] {
                 assert!(
                     matches!(
-                        probe_at(&path, !stored, Some(value), now),
+                        probe_at(Some(&path), !stored, Some(value), now),
                         AccountProbe::LoggedOut
                     ),
                     "{value}"
@@ -294,7 +296,7 @@ mod tests {
             for value in ["", "0", "FALSE", "off", "no", " false "] {
                 assert!(
                     matches!(
-                        probe_at(&path, !stored, Some(value), now),
+                        probe_at(Some(&path), !stored, Some(value), now),
                         AccountProbe::Found(_)
                     ),
                     "{value}"
@@ -303,7 +305,7 @@ mod tests {
         }
         std::fs::write(&path, r#"{"s":{"auth_mode":"oidc","key":"x"}}"#).unwrap();
         assert!(matches!(
-            probe_at(&path, false, Some("1"), now),
+            probe_at(Some(&path), false, Some("1"), now),
             AccountProbe::Found(_)
         ));
     }

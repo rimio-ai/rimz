@@ -235,7 +235,7 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                 }
             } else if let Some(fix) = agent
                 .managed_integration()
-                .and_then(|integration| integration.install_blocker())
+                .and_then(|integration| integration.install_blocker(&login_env))
             {
                 HookStatus::Blocked { fix }
             } else if agent.hooks_installed(&login_env) {

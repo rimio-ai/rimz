@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::agents::capabilities::LaunchCapability;
 #[cfg(test)]
 use crate::agents::hook_types::HookEventSpec;
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
@@ -37,12 +38,12 @@ pub(super) struct GrokManagedIntegration;
 
 impl ManagedIntegration for GrokManagedIntegration {
     fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
-        refuse_under_policy()?;
+        refuse_under_policy(env)?;
         MANAGED_SOURCE.install(env)
     }
 
     fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
-        refuse_under_policy()?;
+        refuse_under_policy(env)?;
         MANAGED_SOURCE.preview(env)
     }
 
@@ -70,20 +71,20 @@ impl ManagedIntegration for GrokManagedIntegration {
         MANAGED_SOURCE.wiring_input_paths(descriptor, env)
     }
 
-    fn install_blocker(&self) -> Option<String> {
-        policy_blocker().map(|reason| format!("{reason}; {POLICY_FIX}"))
+    fn install_blocker(&self, login_env: &BTreeMap<String, String>) -> Option<String> {
+        policy_blocker(login_env).map(|reason| format!("{reason}; {POLICY_FIX}"))
     }
 
-    fn hooks_disabled(&self, _env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
-        policy_blocker().map(|reason| HookPreflightErr::HooksDisabled {
+    fn hooks_disabled(&self, env: &BTreeMap<String, String>) -> Option<HookPreflightErr> {
+        policy_blocker(env).map(|reason| HookPreflightErr::HooksDisabled {
             reason,
             fix: POLICY_FIX.to_owned(),
         })
     }
 }
 
-fn refuse_under_policy() -> Result<()> {
-    match GrokManagedIntegration.install_blocker() {
+fn refuse_under_policy(env: &BTreeMap<String, String>) -> Result<()> {
+    match GrokManagedIntegration.install_blocker(env) {
         Some(reason) => Err(AgentErr::Install {
             agent: "grok",
             reason,
@@ -102,11 +103,23 @@ const CLAUDE_MANAGED_SETTINGS: &str =
 #[cfg(not(target_os = "macos"))]
 const CLAUDE_MANAGED_SETTINGS: &str = "/etc/claude-code/managed-settings.json";
 
-fn policy_blocker() -> Option<String> {
-    policy_blocker_at(
+fn policy_blocker(login_env: &BTreeMap<String, String>) -> Option<String> {
+    policy_blocker_for_env(
         &machine_path(SYSTEM_DIR),
-        &super::paths::home(),
+        login_env,
         &machine_path(CLAUDE_MANAGED_SETTINGS),
+    )
+}
+
+fn policy_blocker_for_env(
+    system: &Path,
+    login_env: &BTreeMap<String, String>,
+    claude: &Path,
+) -> Option<String> {
+    policy_blocker_at(
+        system,
+        super::GrokAdapter.config_home(login_env).as_deref(),
+        claude,
     )
 }
 
@@ -128,9 +141,10 @@ fn machine_path(path: &str) -> PathBuf {
 /// layer read: an unreadable or unparseable layer is skipped, while a
 /// non-bool value or both spellings disagreeing engage the pin. A signed user
 /// `requirements.toml` handler and macOS MDM policy are not read.
-fn policy_blocker_at(system: &Path, user: &Path, claude: &Path) -> Option<String> {
-    let toml_layers = [system, user]
+fn policy_blocker_at(system: &Path, user: Option<&Path>, claude: &Path) -> Option<String> {
+    let toml_layers = [Some(system), user]
         .into_iter()
+        .flatten()
         .flat_map(|dir| POLICY_FILES.map(|name| dir.join(name)))
         .filter_map(|path| Some((read_toml_layer(&path)?, path)));
     let claude_layer = std::fs::read_to_string(claude)
@@ -181,6 +195,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn managed_policy_uses_the_login_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let named = temp.path().join("named");
+        std::fs::create_dir(&named).unwrap();
+        let policy = named.join("managed_config.toml");
+        std::fs::write(&policy, "allow_managed_hooks_only = true").unwrap();
+        let mut env =
+            BTreeMap::from([("GROK_HOME".to_owned(), named.to_string_lossy().into_owned())]);
+        let system = temp.path().join("system");
+        let claude = temp.path().join("managed-settings.json");
+        let reason =
+            policy_blocker_for_env(&system, &env, &claude).expect("login policy blocks hooks");
+        assert!(reason.contains(&policy.display().to_string()));
+        env.insert(
+            "GROK_HOME".to_owned(),
+            temp.path().join("clean").to_string_lossy().into_owned(),
+        );
+        assert!(policy_blocker_for_env(&system, &env, &claude).is_none());
+    }
+
+    #[test]
     fn managed_policy_layers_and_surviving_handlers() {
         let dir = tempfile::tempdir().unwrap();
         let system = dir.path().join("system");
@@ -205,7 +240,7 @@ mod tests {
                     };
                     std::fs::write(path, content).unwrap();
                     let reason =
-                        policy_blocker_at(&system, &user, &claude).expect("policy engaged");
+                        policy_blocker_at(&system, Some(&user), &claude).expect("policy engaged");
                     assert!(reason.contains(&path.display().to_string()));
                     std::fs::remove_file(path).unwrap();
                 }
@@ -216,14 +251,14 @@ mod tests {
         let handler = "\n[hooks]\nSessionStart = [{ hooks = [{ type = 'command', command = 'rimz hooks feed --source grok' }] }]\n";
         std::fs::write(&pin, format!("allow_managed_hooks_only = true{handler}")).unwrap();
         assert!(
-            policy_blocker_at(&system, &user, &claude).is_some(),
+            policy_blocker_at(&system, Some(&user), &claude).is_some(),
             "user handler does not survive"
         );
         for name in ["managed_config.toml", "requirements.toml"] {
             let path = system.join(name);
             std::fs::write(&path, handler).unwrap();
             assert!(
-                policy_blocker_at(&system, &user, &claude).is_none(),
+                policy_blocker_at(&system, Some(&user), &claude).is_none(),
                 "system handler survives"
             );
             std::fs::remove_file(path).unwrap();
@@ -232,7 +267,7 @@ mod tests {
         for path in &layers {
             std::fs::write(path, "{").unwrap();
             assert!(
-                policy_blocker_at(&system, &user, &claude).is_none(),
+                policy_blocker_at(&system, Some(&user), &claude).is_none(),
                 "malformed layer skipped"
             );
             std::fs::write(
@@ -244,17 +279,17 @@ mod tests {
                 },
             )
             .unwrap();
-            assert!(policy_blocker_at(&system, &user, &claude).is_none());
+            assert!(policy_blocker_at(&system, Some(&user), &claude).is_none());
             std::fs::remove_file(path).unwrap();
         }
-        assert!(policy_blocker_at(&system, &user, &claude).is_none());
+        assert!(policy_blocker_at(&system, Some(&user), &claude).is_none());
         std::fs::write(
             &claude,
             r#"{"allowManagedHooksOnly":false,"allow_managed_hooks_only":true}"#,
         )
         .unwrap();
         assert!(
-            policy_blocker_at(&system, &user, &claude).is_some(),
+            policy_blocker_at(&system, Some(&user), &claude).is_some(),
             "conflicting spellings engage"
         );
     }

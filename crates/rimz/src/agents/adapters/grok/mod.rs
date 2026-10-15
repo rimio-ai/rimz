@@ -450,15 +450,13 @@ impl crate::agents::capabilities::HookCapability for GrokAdapter {
             })
             .flatten();
         observation.transcript_path = root_id.as_deref().and_then(|session_id| {
+            let ambient = crate::agents::ambient_env();
             parsed
                 .transcript_path
                 .as_deref()
-                .and_then(|path| paths::validate_transcript(Path::new(path), session_id))
+                .and_then(|path| paths::validate_transcript(Path::new(path), session_id, &ambient))
                 .or_else(|| {
-                    paths::transcript_for_session(
-                        session_id,
-                        self.transcript_files(&crate::agents::ambient_env()),
-                    )
+                    paths::transcript_for_session(session_id, self.transcript_files(&ambient))
                 })
                 .map(|path| path.to_string_lossy().into_owned())
         });
@@ -562,6 +560,7 @@ impl crate::agents::capabilities::ContextCapability for GrokAdapter {
             ctx.agent_id,
             ctx.current_transcript_path.map(Path::new),
             ctx.prior_transcript_path.map(Path::new),
+            ctx.login_env,
             self.transcript_files(ctx.login_env),
         )?;
         refresh_resolved_context(&path, ctx)
@@ -569,17 +568,19 @@ impl crate::agents::capabilities::ContextCapability for GrokAdapter {
 }
 
 impl crate::agents::capabilities::AccountCapability for GrokAdapter {
-    fn probe_account(&self, _login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
-        account::probe()
+    fn probe_account(&self, login_env: &BTreeMap<String, String>) -> super::account::AccountProbe {
+        account::probe(login_env)
     }
 }
 
 impl crate::agents::capabilities::SpendingCapability for GrokAdapter {
     fn spending_sources(
         &self,
-        _login_env: &BTreeMap<String, String>,
+        login_env: &BTreeMap<String, String>,
     ) -> Vec<crate::agents::spending::SpendingSource> {
-        crate::agents::spending::SpendingSource::tree(paths::sessions_root(), "**/updates.jsonl")
+        paths::sessions_root(login_env)
+            .map(|root| crate::agents::spending::SpendingSource::tree(root, "**/updates.jsonl"))
+            .unwrap_or_default()
     }
 
     fn session_transcript(
@@ -592,6 +593,7 @@ impl crate::agents::capabilities::SpendingCapability for GrokAdapter {
             session_id,
             None,
             prior_path,
+            login_env,
             self.transcript_files(login_env),
         )
     }

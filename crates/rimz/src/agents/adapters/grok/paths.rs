@@ -3,18 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use crate::agents::capabilities::LaunchCapability;
 use crate::agents::{AgentErr, Result};
-
-pub(super) fn home() -> PathBuf {
-    home_from(
-        std::env::var_os("GROK_HOME").as_deref(),
-        std::env::var("HOME")
-            .ok()
-            .as_deref()
-            .map(std::ffi::OsStr::new),
-    )
-    .unwrap_or_else(|| PathBuf::from("/.grok"))
-}
 
 pub(super) fn home_from(
     configured: Option<&std::ffi::OsStr>,
@@ -26,21 +16,32 @@ pub(super) fn home_from(
         .or_else(|| home.map(|home| PathBuf::from(home).join(".grok")))
 }
 
-pub(super) fn sessions_root() -> PathBuf {
-    home().join("sessions")
+fn home(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    super::GrokAdapter.config_home(login_env)
 }
 
-pub(super) fn auth_path() -> PathBuf {
-    std::env::var_os("GROK_AUTH_PATH")
+pub(super) fn sessions_root(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    home(login_env).map(|home| home.join("sessions"))
+}
+
+pub(super) fn auth_path(login_env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    login_env
+        .get("GROK_AUTH_PATH")
         .filter(|value| !value.is_empty())
-        .map_or_else(|| home().join("auth.json"), PathBuf::from)
+        .map(PathBuf::from)
+        .or_else(|| home(login_env).map(|home| home.join("auth.json")))
 }
 
-pub(super) fn hooks_path(_login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+pub(super) fn hooks_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("RIMZ_GROK_HOOKS").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    let root = home();
+    let Some(root) = home(login_env) else {
+        return Err(AgentErr::Install {
+            agent: "grok",
+            reason: "$GROK_HOME and $HOME are not set; cannot resolve Grok hooks".to_owned(),
+        });
+    };
     if !root.is_absolute() {
         return Err(AgentErr::Install {
             agent: "grok",
@@ -51,8 +52,12 @@ pub(super) fn hooks_path(_login_env: &BTreeMap<String, String>) -> Result<PathBu
 }
 
 /// Accept only Grok's durable main-session update file for this exact id.
-pub(super) fn validate_transcript(path: &Path, session_id: &str) -> Option<PathBuf> {
-    validate_transcript_under(path, session_id, &sessions_root())
+pub(super) fn validate_transcript(
+    path: &Path,
+    session_id: &str,
+    login_env: &BTreeMap<String, String>,
+) -> Option<PathBuf> {
+    validate_transcript_under(path, session_id, &sessions_root(login_env)?)
 }
 
 fn validate_transcript_under(
@@ -78,11 +83,12 @@ pub(super) fn resolve_transcript(
     session_id: &str,
     current: Option<&Path>,
     prior: Option<&Path>,
+    login_env: &BTreeMap<String, String>,
     files: impl IntoIterator<Item = PathBuf>,
 ) -> Option<PathBuf> {
     current
-        .and_then(|path| validate_transcript(path, session_id))
-        .or_else(|| prior.and_then(|path| validate_transcript(path, session_id)))
+        .and_then(|path| validate_transcript(path, session_id, login_env))
+        .or_else(|| prior.and_then(|path| validate_transcript(path, session_id, login_env)))
         .or_else(|| transcript_for_session(session_id, files))
 }
 

@@ -41,7 +41,7 @@ impl ManagedIntegration for KimiManagedIntegration {
         config_path().is_ok_and(|path| managed(&path))
     }
 
-    fn install_blocker(&self) -> Option<String> {
+    fn install_blocker(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         version_blocker(installed_cli_version())
     }
 

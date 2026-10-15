@@ -48,7 +48,7 @@ impl ManagedIntegration for KiroManagedIntegration {
         hooks_path(login_env).is_ok_and(|path| managed_at(&path))
     }
 
-    fn install_blocker(&self) -> Option<String> {
+    fn install_blocker(&self, _login_env: &BTreeMap<String, String>) -> Option<String> {
         refuse_old_cli(installed_cli_version())
             .err()
             .map(|err| err.to_string())
