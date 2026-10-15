@@ -25,7 +25,7 @@ mod verify;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(in crate::cli) enum OutputFormat {
-    /// The final assistant message as plain text.
+    /// The run's answer as plain text: every turn of a parked run, in order.
     #[default]
     Text,
     /// The full run record as pretty JSON.

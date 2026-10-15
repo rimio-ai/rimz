@@ -279,7 +279,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 
 | Flag | Effect |
 | --- | --- |
-| `--output-format text\|json\|stream-json` | `text` (default) prints the final assistant message; `json` prints the full run record; `stream-json` prints run events as NDJSON while the turn runs. The JSON `run_id` opens the RimZ transcript with `rimz transcript <run_id>`; `transcript_path` is the provider's own session file. |
+| `--output-format text\|json\|stream-json` | `text` (default) prints the run's answer: the final assistant message, every turn of a [parked run](./subagents.md#launch-one-child) in order; `json` prints the full run record; `stream-json` prints run events as NDJSON while the turn runs. The JSON `run_id` opens the RimZ transcript with `rimz transcript <run_id>`; `transcript_path` is the provider's own session file. |
 | `--input-format text\|stream-json` | `text` (default) uses the positional `PROMPT` plus `--stdin` content; `stream-json` reads user messages from stdin until EOF and refuses a positional prompt or `--stdin`. |
 | `--stdin` | Read stdin to EOF as prompt content. With a positional prompt, the prompt comes first and stdin follows inside `<stdin>…</stdin>` tags. |
 | `--timeout <DURATION>` | Cap the run; exceeding it exits `124`. |

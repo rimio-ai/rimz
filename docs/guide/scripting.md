@@ -93,7 +93,7 @@ rimz agents claude -p --output-format stream-json "Refactor the parser."
 
 | Format | Prints | Use it for |
 | --- | --- | --- |
-| `text` (default) | the final assistant message | humans, and simple `grep`/`case` gates |
+| `text` (default) | the run's answer: the final assistant message, or every turn's in order, separated by a `---` line, when the run parked on a wait | humans, and simple `grep`/`case` gates |
 | `json` | the full run record | reading `run_id` (which `rimz transcript <run_id>` opens) and `transcript_path` (the provider's own session file) |
 | `stream-json` | run events as newline-delimited JSON while the turn runs | a pipeline that wants progress rather than a final blob |
 
