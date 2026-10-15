@@ -1,8 +1,8 @@
 # The adapter layer
 
-Fourteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
+Seventeen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
 
-Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and twelve siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
+Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and fifteen siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
 
 ## The one rule
 
@@ -24,7 +24,7 @@ Everything left of the boundary is provider knowledge, and everything right of i
 
 ## The registry
 
-[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `hermes`, `qoder`, `omp`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
+[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `hermes`, `qoder`, `omp`, `muse`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
 
 | Function | Answers |
 | --- | --- |
@@ -191,12 +191,12 @@ That resolution is also the trap in driving a hook by hand. Feeding a payload to
 
 Installing hooks edits the agent's own config, so it is a visible security step. `rimz hooks install --dry-run` prints a per-agent summary and a unified diff without writing, and the commands are in [hooks-trust.md](../../reference/cli/hooks-trust.md#agent-hooks). `rimz start` checks every detected agent on each run and asks once for all agents whose hooks are missing or have an upgrade available: Enter installs or refreshes every listed agent, and `n` or EOF changes nothing. An unattended start prints a notice and installs nothing ([`ensure_detected_agent_hooks`](../../../crates/rimz/src/cli/hooks/hook_install.rs)).
 
-An adapter declares one `managed_integration`, and that single interface drives install, preview, uninstall, detection, partial-artifact cleanup, upgrades, wiring inputs, wrapped statuslines, and installed-hook trust. Two backends implement it:
+An adapter declares one `managed_integration`, and that single interface drives install, preview, uninstall, detection, partial-artifact cleanup, upgrades, wiring inputs, wrapped statuslines, and provider-native installed-hook trust. Two backends implement it:
 
 | Backend | Adapters |
 | --- | --- |
 | Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Qoder, Grok, Amp, Pi, OMP, OpenCode, Kiro |
-| The adapter's own `install.rs`: a TOML or YAML rewrite, or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity, Hermes |
+| The adapter's own `install.rs`: a TOML or YAML rewrite, or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity, Hermes, Muse |
 
 Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro wraps its whole-file `ManagedSource` in a thin `install.rs` that refuses a Kiro CLI older than 2.31.0 and reclaims the unmarked file earlier RimZ builds wrote. An adapter whose install is refused on this machine or in the login's provider home (Grok's managed-hooks policy) before any file is touched reports it through `install_blocker`, and detected installs (`rimz start`, `rimz setup`, bare `rimz hooks install`) skip it while an install that names the agent still refuses.
 
@@ -204,7 +204,7 @@ Install wires every event the state machine needs (the turn-boundary signals) pl
 
 Inside whatever shape the agent's config takes, the installed form stays minimal:
 
-- One command for every event: `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with `--event <event>` appended when the agent omits the event name from its payload.
+- One feed command for every event, commonly `RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source <agent>`, with `--event <event>` appended when the agent omits the event name from its payload. Muse uses a shell-neutral `rimz hooks feed --source muse` and managed env passthrough ([adapter_muse.md](./adapter_muse.md#managed-installation-and-identity)).
 - Install reclaims every RimZ-owned entry before rewriting the canonical set, so duplicate or stale blocks never accumulate and user-authored hooks stay untouched. JSON-merge entries are owned by a `_rimz_managed` marker key ([`managed_json_hooks.rs`](../../../crates/rimz/src/agents/managed_json_hooks.rs)); an unmarked entry counts as RimZ's when its command contains the hook command substring.
 - Claude, Codex, Droid, Qwen, Qoder, and Grok have no wildcard event key, so install writes one block per wired event. Copilot, Amp, Pi, OMP, and OpenCode instead get one whole integration file that RimZ authors, so the payload schema is RimZ's by design ([adapter_copilot.md](./adapter_copilot.md), [adapter_amp.md](./adapter_amp.md), [adapter_pi.md](./adapter_pi.md), [adapter_omp.md](./adapter_omp.md), [adapter_opencode.md](./adapter_opencode.md)).
 
@@ -212,9 +212,9 @@ Installed provider hooks are outside RimZ's project-config executable-surface ha
 
 ## Context sources
 
-A session's context gauge describes how full the window is and what the turn cost. An adapter can offer no source, as Qoder does, or one to three sources, and any one alone is valid. All three normalize onto the same fields, so the rest of RimZ does not depend on the choice. Enrichment is never correctness: a missing file, a torn line, or an absent binary each leaves a field unset, never a failed hook or a wrong decision.
+A session's context gauge describes how full the window is and what the turn cost. An adapter can offer no source, as Qoder and Muse do, or one to three verified sources, and any one alone is valid. All three normalize onto the same fields, so the rest of RimZ does not depend on the choice. Enrichment is never correctness: a missing file, a torn line, or an absent binary each leaves a field unset, never a failed hook or a wrong decision.
 
-The transcript or store tail supplies local usage where supported (JSONL for Claude, Codex, Grok, Pi, and OMP; SQLite for OpenCode). For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
+The transcript or store tail supplies local usage where supported (JSONL for Claude, Codex, Grok, Pi, and OMP; SQLite for OpenCode). Muse's unpublished store is not integrated ([adapter_muse.md](./adapter_muse.md#context-and-transcript)). For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
 
 A rich out-of-band transport is the provider-specific upgrade where one exists. It carries what a local read cannot derive (rate-limit windows, account plan, PR info, model display name, version) on the provider's own cadence. Claude pushes statusline JSON; Codex reads read-only app-server methods. Transport payloads normalize through `observe_context` into one typed session observation whose [`AgentContext`](../../../crates/rimz/src/agents/context.rs) carries no identity.
 

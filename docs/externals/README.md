@@ -25,7 +25,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [hermes-reference.md](./agent-adapter/hermes-reference.md) | Hermes Agent | v0.22.2 (2026-10-15, commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`) | [adapter_hermes.md](../internals/agents/adapter_hermes.md) |
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 2.1.1 (tag `@moonshot-ai/kimi-code@2.1.1`, 2026-09-24) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.30.0 (2026-10-12; engine `@kiro/agent` 0.66.33; turn-order captures: 2.12.1 and 2.21.4) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
-| [muse-reference.md](./agent-adapter/muse-reference.md) | Meta Muse Code | Docs read 2026-10-15, newest changelog entry 1.4.8, SDK docs 1.4 (hook checks: 1.3.0). No binary verification. | No mapping yet |
+| [muse-reference.md](./agent-adapter/muse-reference.md) | Meta Muse Code | 1.4.9 echo captured; docs read 2026-10-15, SDK docs 1.4 (hook checks: 1.3.0) | [adapter_muse.md](../internals/agents/adapter_muse.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
 | [omp-reference.md](./agent-adapter/omp-reference.md) | OMP (Oh My Pi) | Source `13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74` (18.11.0); installed 18.11.1 bundle and isolated live proof (checked 2026-10-15) | [adapter_omp.md](../internals/agents/adapter_omp.md) |
 | [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 1.2.0 (tag `v1.2.0`, 2026-10-12) | [adapter_pi.md](../internals/agents/adapter_pi.md) |
