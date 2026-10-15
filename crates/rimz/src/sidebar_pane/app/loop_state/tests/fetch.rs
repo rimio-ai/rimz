@@ -149,7 +149,7 @@ fn synthetic_fold_releases_baseline_after_overlay_expires() {
     rig.state.on_snapshot(&mut rig.fetch);
     assert_eq!(
         rig.state.content_applications, 2,
-        "a local event promotes queued clocks back to content for fusion"
+        "a local event requires queued content to reconcile through fusion"
     );
     assert!(rig.state.overlay_baseline.is_some());
     assert_eq!(
@@ -313,7 +313,7 @@ fn pre_tab_fold_seeds_without_selection() {
     let now_ms = crate::utils::time::unix_now_ms();
     let frame =
         crate::sidebar::frame::assemble_frame(vec![shell.clone()], now_ms - 1_000, "rimz-test");
-    rig.state.seed(WorkspaceFold {
+    rig.state.seed(&WorkspaceFold {
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
         frame: Some(Arc::new(frame)),
     });
@@ -371,7 +371,7 @@ fn pre_tab_seed_and_worker_fold_paint_resting_cards_until_correction() {
         crate::utils::time::unix_now_ms(),
         "rimz-test",
     );
-    rig.state.seed(WorkspaceFold {
+    rig.state.seed(&WorkspaceFold {
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed.clone()),
         frame: Some(Arc::new(frame)),
     });
@@ -651,7 +651,7 @@ fn seed_commits_before_delivery_and_keeps_the_final_correction() {
     assert!(rig.next_request().unwrap().forces_fold());
     rig.fetch.request(FetchRequest::fresh_panes(), true);
     rig.state.dirty = false;
-    rig.state.seed(fold);
+    rig.state.seed(&fold);
 
     assert_eq!(
         rig.state.current.rows().count(),
@@ -761,7 +761,7 @@ fn seed_listing_the_own_pane_seats_its_focus_at_once() {
         seed.now.as_millisecond() as u64,
         "rimz-test",
     );
-    rig.state.seed(WorkspaceFold {
+    rig.state.seed(&WorkspaceFold {
         workspace: crate::sidebar::enrich::WorkspaceSnapshot(seed),
         frame: Some(Arc::new(frame)),
     });

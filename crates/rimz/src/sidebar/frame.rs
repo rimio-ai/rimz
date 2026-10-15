@@ -308,9 +308,9 @@ impl PaneState {
 
 // The constructor lives here, beside the frame it consumes, rather than with
 // the `SidebarOwnView` type in `store/snapshot` — the store read path stays
-// free of sidebar imports and only the sidebar fold derives an own-view.
+// free of sidebar imports; projection and its cheap preview share this rule.
 impl SidebarOwnView {
-    pub(super) fn from_frame(own: &PaneId, frame: &PaneFrame) -> Option<Self> {
+    pub(crate) fn from_frame(own: &PaneId, frame: &PaneFrame) -> Option<Self> {
         let tab = frame
             .tabs
             .iter()
