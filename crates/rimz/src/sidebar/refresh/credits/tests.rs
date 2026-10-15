@@ -644,6 +644,45 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
 }
 
 #[test]
+fn fold_keeps_unlimited_codex_credits_under_display_ceiling() {
+    let mut snapshot = SidebarSnapshot::build(
+        WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+        Vec::new(),
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    );
+    snapshot.providers = vec![panel("codex", true)];
+    let cache = CreditsCache {
+        logins: BTreeMap::from([(
+            snapshot.providers[0].login_key(),
+            ProviderCreditsEntry {
+                observed_at_ms: 100,
+                ok: true,
+                extra_credits: Some(ExtraCredits::Unlimited),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let mut accounts = AccountsConfig::default();
+    accounts.usage_limit_usd.insert(
+        "codex".to_owned(),
+        crate::config::UsageLimitUsd::from_usd(25.0),
+    );
+
+    apply_credits_cache_with(
+        &mut snapshot,
+        &cache,
+        &accounts,
+        &RoomLoginSet::native(),
+        100,
+    );
+    assert_eq!(
+        snapshot.providers[0].extra_credits,
+        Some(ExtraCredits::Unlimited)
+    );
+}
+
+#[test]
 fn account_usage_fresh_attempt_blocks_claim_but_identity_changes_are_due() {
     let (_dir, runtime) = runtime();
     let now = 1_000_000;

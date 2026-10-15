@@ -103,7 +103,7 @@ pub(crate) fn normalize_credits(credits: UsageCredits) -> Option<ExtraCredits> {
         return Some(ExtraCredits::known(None, Some(0.0), None));
     }
     if credits.unlimited == Some(true) {
-        return Some(ExtraCredits::known(None, None, None));
+        return Some(ExtraCredits::Unlimited);
     }
     if let Some(balance) = credits.balance {
         return Some(ExtraCredits::known(

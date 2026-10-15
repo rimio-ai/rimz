@@ -1247,8 +1247,10 @@ enum CreditDisplay {
 
 impl CreditDisplay {
     fn classify(credits: Option<&ExtraCredits>) -> Self {
-        let Some(credits) = credits else {
-            return Self::Missing;
+        let credits = match credits {
+            Some(ExtraCredits::Unlimited) => return Self::Unlimited,
+            Some(credits) => credits,
+            None => return Self::Missing,
         };
         if credits.is_disabled() {
             return Self::Off;
@@ -1265,6 +1267,7 @@ impl CreditDisplay {
         if credits.limit_usd().is_some() {
             Self::Unknown
         } else {
+            // Preserve the legacy uncapped reading, including Claude/Kimi's "figures unreported" Known values.
             Self::Unlimited
         }
     }
