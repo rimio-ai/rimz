@@ -2,7 +2,7 @@
 
 > Read [model.md](./model.md) for the provider-neutral agent model and [adapter.md](./adapter.md) for the integration layer every adapter implements. Accounts and balances are in [providers.md](./providers.md), spend and pricing in [spending.md](./spending.md); the raw upstream protocol is in [qwen-reference.md](../../externals/agent-adapter/qwen-reference.md).
 
-Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hooks in Qwen's `settings.json`, which resolves from the login env: `RIMZ_QWEN_SETTINGS` when set, then `$QWEN_HOME/settings.json`, then `$HOME/.qwen/settings.json`, so a named account's hooks land in that account's home. It wraps a command-mode `ui.statusLine`, and reads session JSONL from the Qwen runtime tree.
+Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hooks in Qwen's `settings.json`, which resolves from the login env: `RIMZ_QWEN_SETTINGS` when set, then `$QWEN_HOME/settings.json`, then `$HOME/.qwen/settings.json`, so the settings file follows the login env's `QWEN_HOME`. It wraps a command-mode `ui.statusLine`, and reads session JSONL from the Qwen runtime tree.
 
 Only the registry reaches the concrete adapter. Effective selection, Alibaba quota, payloads, statusline projection, installation, and spend stay private to the Qwen adapter; other modules consume the provider-neutral capabilities.
 

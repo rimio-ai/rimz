@@ -82,6 +82,8 @@ Codex removes `--no-daemon`, leaves profile flags before `exec`, and appends `-c
 
 The table names each trait's central methods; the trait file is the full list.
 
+`LaunchCapability::config_home` resolves a login's home from the env keys the adapter declares in `config_home_env_keys`. Declaring `config_home_env_keys` lets the adapter resolve a login's home; only the kinds `AccountsConfig::named` lists (Claude and Codex) can be declared as named accounts ([providers.md](./providers.md)).
+
 `LaunchCapability::skills_home` also supplies the root for host-mode library links. `agents::skill_links` plans and applies them; uninstall resolves the same root for every native and declared login. Ownership is structural: a symlink target, resolved relative to its root and lexically normalized without canonicalizing, lies under the RimZ skill library. User-owned entries are preserved.
 
 | Trait | Central methods | The default means |
