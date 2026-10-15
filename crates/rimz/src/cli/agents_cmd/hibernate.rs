@@ -5,7 +5,14 @@ use rimz::harness::hibernate::{self, HibernateHelperRequest};
 
 pub(super) fn wake(request: hibernate::WakeHelperRequest) -> Result<()> {
     let ctx = super::Ctx::for_workspace(request.workspace_id.clone(), Some(request.pane_id.mux()))?;
-    hibernate::wake_request(&ctx.store, &request).context("waking hibernating agent")?;
+    let backend = rimz::mux::backend_for(request.pane_id.mux());
+    hibernate::wake_request(
+        &ctx.store,
+        &request,
+        backend.as_ref(),
+        &ctx.workspace.session_name,
+    )
+    .context("waking hibernating agent")?;
     Ok(())
 }
 

@@ -131,7 +131,7 @@ fn focus_wake_targets(
             entries.iter().any(|entry| &entry.pane_id == *pane)
                 && pacing
                     .get(*pane)
-                    .is_none_or(|last| now.saturating_sub(*last) >= 5_000)
+                    .is_none_or(|last| now.saturating_sub(*last) >= 2_000)
         })
         .cloned()
         .collect()

@@ -712,10 +712,6 @@ pub(crate) fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
 }
 
 /// Open a provider's controlling pty without consuming input or acquiring a controlling terminal.
-#[expect(
-    dead_code,
-    reason = "The next hibernation step wires this probe into focus dwell"
-)]
 pub(crate) fn input_tty(provider_pid: u32) -> Option<std::fs::File> {
     #[cfg(target_os = "linux")]
     {
