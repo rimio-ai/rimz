@@ -84,6 +84,21 @@ pub struct AgentShellErr {
     reason: &'static str,
 }
 
+impl From<AgentShellErr> for crate::blocker::Blocker {
+    fn from(error: AgentShellErr) -> Self {
+        Self::new(format!(
+            "[agents] shell = \"{}\" {}",
+            error.shell.display(),
+            error.reason
+        ))
+        .with_fix(
+            AGENT_SHELL_FIX,
+            Some("rimz config set agents.shell \"$(command -v bash)\"".into()),
+            crate::blocker::Surface::Plain,
+        )
+    }
+}
+
 /// Refuse a configured `[agents] shell` the launch wrapper cannot run under.
 /// A relative name would resolve through a PATH other than the one checked
 /// here, and a csh-family shell would silently skip the wrapper.
