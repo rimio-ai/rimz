@@ -2405,6 +2405,116 @@ fn lsp_attach_adopts_lost_broker_leases() {
     );
 }
 
+fn write_unreserved_config(env: &Env, request: &rimz::lsp::admission::ServeRequest) {
+    let mut lsp = request.policy.clone();
+    lsp.servers.insert("rust".into(), request.config.clone());
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        toml::to_string(&std::collections::BTreeMap::from([("lsp", &lsp)])).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn lsp_query_revives_lost_broker_with_its_leases() {
+    let env = Env::new();
+    let (directory, request, previous) = lost_stub_broker(&env);
+    write_unreserved_config(&env, &request);
+    std::fs::write(env.project_root.join("lib.rs"), "fn work() {}\n").unwrap();
+    let list = env
+        .rimz()
+        .args(["lsp", "list", "--all", "--json"])
+        .output()
+        .unwrap();
+    assert!(list.status.success(), "{list:?}");
+    assert!(
+        !String::from_utf8_lossy(&list.stdout).contains(previous["root"].as_str().unwrap()),
+        "a lost row is not listed: {list:?}"
+    );
+    assert!(
+        directory.join("entry.json").exists(),
+        "the sweep must keep a lost row"
+    );
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .success()
+        .stdout("fixture hover\n");
+    let entry = editor_rpc(&directory, json!({"op":"status"}));
+    assert_ne!(entry["broker_pid"], previous["broker_pid"]);
+    assert!(
+        entry["leases"]
+            .as_array()
+            .unwrap()
+            .contains(&previous["leases"][0]),
+        "revival must keep the holder's lease: {entry}"
+    );
+    let records = lsp_records(&env, "revived");
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0]["details"]["broker_pid"], previous["broker_pid"]);
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+}
+
+#[test]
+fn lsp_query_does_not_revive_unleased_lost_broker() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let (mut broker, directory, request) = start_stub_broker(&env, env.project_root.clone());
+    write_unreserved_config(&env, &request);
+    std::fs::write(env.project_root.join("lib.rs"), "fn work() {}\n").unwrap();
+    let killed = broker.id();
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .code(3);
+    env.rimz().args(["lsp", "list"]).assert().success();
+    assert!(!directory.exists(), "an unleased dead row is swept");
+    let swept = lsp_records(&env, "swept");
+    assert_eq!(swept.len(), 1, "{swept:?}");
+    assert_eq!(swept[0]["details"]["broker_pid"], killed);
+    assert!(lsp_records(&env, "revived").is_empty());
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("not running"));
+    assert!(!directory.exists(), "a query must not spawn a broker");
+}
+
+#[test]
+fn lsp_query_never_starts_an_unleased_checkout() {
+    let env = Env::new();
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    std::fs::write(env.project_root.join("lib.rs"), "fn work() {}\n").unwrap();
+    let stub = crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"));
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!(
+            "[lsp.servers.rust]\ncommand = [{:?}]\nextensions = [\"rs\"]\nroot-markers = [\"Cargo.toml\"]\nmemory-estimate = \"1M\"\n",
+            stub.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    env.rimz()
+        .args(["lsp", "hover", "lib.rs:1:4"])
+        .assert()
+        .code(3)
+        .stderr(predicates::str::contains("not running"));
+    let runtime = env.runtime_root.join("rimz/lsp");
+    let keys: Vec<_> = std::fs::read_dir(&runtime)
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != "queue" && name != "admission.lock")
+        .collect();
+    assert!(keys.is_empty(), "a query spawned a broker: {keys:?}");
+}
+
 fn lsp_records(env: &Env, event: &str) -> Vec<Value> {
     std::fs::read_to_string(env.rimz_home().join("logs/lsp.log.jsonl"))
         .unwrap_or_default()
