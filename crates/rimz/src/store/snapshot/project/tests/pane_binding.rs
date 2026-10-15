@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn picked_session_adopts_new_identity_or_revives_closed_identity() {
     for (kind, signal) in [("claude", "registered"), ("codex", "turn_started")] {
-        for recorded in [false, true] {
+        for (recorded, old_pane) in [(false, None), (true, None), (true, Some("tmux:%3"))] {
             let mut events = Vec::new();
             if recorded {
                 events.push(launch_event(
@@ -11,9 +11,23 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
                     AgentLaunchPayload {
                         description: Some("saved history".into()),
                         launch_id: Some("launch_old".into()),
+                        pane_id: old_pane.map(|pane| PaneId::parse(pane).unwrap()),
                         ..launch_payload("picked-id", "old-handle")
                     },
                 ));
+                let mut child = launch_payload("child-1", "child-handle");
+                child.launch_id = Some("launch_child".into());
+                child.pane_id = Some(PaneId::parse("tmux:%8").unwrap());
+                child.launch.parent_agent_id = Some("launch_old".into());
+                child.launch.launch_depth = Some(1);
+                events.push(launch_event(kind, child));
+                let mut peer = launch_payload("peer-1", "peer-handle");
+                peer.launch_id = Some("launch_peer".into());
+                peer.launch.launched_by = Some(Box::new(crate::agents::LaunchedBy {
+                    kind: AgentKind::new_unchecked(kind),
+                    agent_id: "launch_old".into(),
+                }));
+                events.push(launch_event(kind, peer));
                 events.push(raw_lifecycle_at(
                     kind,
                     1,
@@ -40,8 +54,15 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
                 }),
             ));
             let agents = reduce_agent_states(&events);
-            assert_eq!(agents.len(), 1, "{kind}, recorded={recorded}");
-            let agent = &agents[0];
+            assert_eq!(
+                agents.len(),
+                if recorded { 3 } else { 1 },
+                "{kind}, recorded={recorded}, old_pane={old_pane:?}"
+            );
+            let agent = agents
+                .iter()
+                .find(|agent| agent.agent_id == "picked-id")
+                .unwrap();
             assert_eq!(agent.agent_id.as_str(), "picked-id");
             assert_eq!(
                 crate::address::launch_row(
@@ -61,9 +82,167 @@ fn picked_session_adopts_new_identity_or_revives_closed_identity() {
             assert!(agent.ended_at.is_none());
             if recorded {
                 assert_eq!(agent.description.as_deref(), Some("saved history"));
+                assert_eq!(
+                    crate::address::launch_row(&agents, &agent.kind, &"launch_old".into())
+                        .map(|row| row.agent_id.as_str()),
+                    Some("picked-id")
+                );
+                let child = agents.iter().find(|row| row.agent_id == "child-1").unwrap();
+                assert!(child.parent_is(agent));
+                assert_eq!(
+                    crate::address::launched_parent(&agents, child)
+                        .map(|row| row.agent_id.as_str()),
+                    Some("picked-id")
+                );
+                assert!(crate::address::launched_children(&agents, agent).contains(&child));
+                let peer = agents.iter().find(|row| row.agent_id == "peer-1").unwrap();
+                assert!(peer.launcher_is(agent));
+                assert!(crate::address::launched_fleet(&agents, agent).contains(&peer));
             }
         }
     }
+}
+
+#[test]
+fn repeated_picker_revives_keep_children_and_exact_resume_keeps_prior_ids() {
+    for (kind, signal) in [("claude", "registered"), ("codex", "turn_started")] {
+        let mut events = vec![launch_event(
+            kind,
+            AgentLaunchPayload {
+                launch_id: Some("launch_old".into()),
+                pane_id: Some(PaneId::parse("tmux:%3").unwrap()),
+                ..launch_payload("picked-id", "old-handle")
+            },
+        )];
+        for (prior, next, pane, child_id, child_name) in [
+            (
+                "launch_old",
+                "launch_p1",
+                "tmux:%7",
+                "child-1",
+                "first-child",
+            ),
+            (
+                "launch_p1",
+                "launch_p2",
+                "tmux:%9",
+                "child-2",
+                "second-child",
+            ),
+        ] {
+            let mut child = launch_payload(child_id, child_name);
+            child.launch.parent_agent_id = Some(prior.into());
+            child.launch.launch_depth = Some(1);
+            child.pane_id = Some(PaneId::parse("tmux:%8").unwrap());
+            events.push(launch_event(kind, child));
+            events.push(raw_lifecycle_at(
+                kind,
+                1,
+                json!({"agent_id": "picked-id", "signal": {"signal": "ended"}}),
+            ));
+            events.push(launch_event(
+                kind,
+                AgentLaunchPayload {
+                    launch_id: Some(next.into()),
+                    pane_id: Some(PaneId::parse(pane).unwrap()),
+                    prompt: None,
+                    ..launch_payload(next, "new-handle")
+                },
+            ));
+            events.push(raw_lifecycle_at(kind, 2, json!({"agent_id": "picked-id", "agent_name": "new-handle", "pane_id": pane, "signal": {"signal": signal}})));
+        }
+        let agents = reduce_agent_states(&events);
+        assert_eq!(agents.len(), 3, "{kind}: no provisional duplicates");
+        let revived = agents
+            .iter()
+            .find(|row| row.agent_id == "picked-id")
+            .unwrap();
+        assert_eq!(revived.launch_id.as_deref(), Some("launch_p2"));
+        assert_eq!(
+            revived.prior_launch_ids,
+            vec![AgentSessionId::from("launch_old"), "launch_p1".into()]
+        );
+        assert_eq!(crate::address::launched_children(&agents, revived).len(), 2);
+        for child in agents.iter().filter(|row| row.is_launched_child()) {
+            assert!(child.parent_is(revived));
+            assert_eq!(
+                crate::address::launched_parent(&agents, child),
+                Some(revived)
+            );
+        }
+        events.push(attach_event(
+            kind,
+            "picked-id",
+            Some("launch_p2"),
+            "tmux:%10",
+            None,
+            42,
+        ));
+        let attached = reduce_agent_states(&events);
+        let attached = attached
+            .iter()
+            .find(|row| row.agent_id == "picked-id")
+            .unwrap();
+        assert_eq!(attached.launch_id, revived.launch_id);
+        assert_eq!(attached.prior_launch_ids, revived.prior_launch_ids);
+    }
+}
+
+#[test]
+fn launch_and_attach_rebindings_preserve_prior_ids() {
+    let mut events = vec![launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some("launch_old".into()),
+            ..launch_payload("session", "coder")
+        },
+    )];
+    events.push(attach_event(
+        "codex",
+        "session",
+        Some("launch_attach"),
+        "tmux:%4",
+        None,
+        42,
+    ));
+    events.push(launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch_id: Some("launch_new".into()),
+            ..launch_payload("session", "coder")
+        },
+    ));
+    let agents = reduce_agent_states(&events);
+    assert_eq!(agents[0].launch_id.as_deref(), Some("launch_new"));
+    assert_eq!(
+        agents[0].prior_launch_ids,
+        vec![AgentSessionId::from("launch_old"), "launch_attach".into()]
+    );
+}
+
+#[test]
+fn successor_inherits_prior_launch_ids() {
+    let mut events = resumed_fork_events("tmux:%1");
+    events.insert(
+        2,
+        attach_event(
+            "codex",
+            "primary",
+            Some("launch_previous"),
+            "tmux:%1",
+            None,
+            41,
+        ),
+    );
+    let agents = reduce_agent_states(&events);
+    let successor = agents
+        .iter()
+        .find(|agent| agent.agent_id == "side-thread")
+        .unwrap();
+    assert_eq!(
+        successor.prior_launch_ids,
+        vec![AgentSessionId::from("launch_previous")]
+    );
 }
 
 #[test]

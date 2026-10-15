@@ -3,6 +3,99 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn picker_revive_links_survive_rollup_cache_and_carryover() {
+    for carryover in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        for (method, params) in [
+            (
+                "agent.launched",
+                serde_json::json!({"agent_id": "picked-id", "agent_name": "old-handle", "launch_id": "launch_old"}),
+            ),
+            (
+                "agent.launched",
+                serde_json::json!({"agent_id": "child-1", "agent_name": "child-handle", "parent_agent_id": "launch_old", "launch_depth": 1, "pane_id": "tmux:%8"}),
+            ),
+            (
+                "agent.lifecycle",
+                serde_json::json!({"agent_id": "picked-id", "signal": {"signal": "ended"}}),
+            ),
+            (
+                "agent.launched",
+                serde_json::json!({"agent_id": "launch_picker", "agent_name": "new-handle", "launch_id": "launch_picker", "pane_id": "tmux:%7"}),
+            ),
+            (
+                "agent.lifecycle",
+                serde_json::json!({"agent_id": "picked-id", "agent_name": "new-handle", "pane_id": "tmux:%7", "signal": {"signal": "registered"}}),
+            ),
+        ] {
+            let event = EventEnvelope::new(
+                workspace.clone(),
+                "session",
+                "claude",
+                "agent",
+                method,
+                params,
+            );
+            event_log::append(&paths.events_log, &event).unwrap();
+        }
+        let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+        let resumed_paths = if carryover {
+            let resumed =
+                StatePaths::under(workspace.clone(), &dir.path().join("resumed")).unwrap();
+            resumed.ensure_dirs().unwrap();
+            write_carryover(
+                &resumed.agents_carryover,
+                &EventCarryover {
+                    agents,
+                    ..EventCarryover::default()
+                },
+            )
+            .unwrap();
+            resumed
+        } else {
+            write_rollup_cache(&paths.rollup_cache, &cache).unwrap();
+            paths
+        };
+        event_log::append(
+            &resumed_paths.events_log,
+            &lifecycle_at(
+                &workspace,
+                "claude",
+                "UserPromptSubmit",
+                "picked-id",
+                lifecycle::LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+        )
+        .unwrap();
+        let (_, agents, _) = catch_up_rollup(&resumed_paths).unwrap();
+        let revived = agents
+            .iter()
+            .find(|agent| agent.agent_id == "picked-id")
+            .unwrap();
+        let child = agents
+            .iter()
+            .find(|agent| agent.agent_id == "child-1")
+            .unwrap();
+        assert!(child.parent_is(revived), "carryover={carryover}");
+        assert_eq!(
+            crate::address::launched_parent(&agents, child),
+            Some(revived)
+        );
+        assert_eq!(
+            crate::address::launched_children(&agents, revived),
+            vec![child]
+        );
+        assert_eq!(
+            revived.prior_launch_ids,
+            vec![AgentSessionId::from("launch_old")]
+        );
+    }
+}
+
+#[test]
 fn derived_carryover_is_published_only_by_rebuild() {
     let dir = tempfile::tempdir().unwrap();
     let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();

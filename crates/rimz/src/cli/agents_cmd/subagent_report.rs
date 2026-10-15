@@ -79,9 +79,7 @@ pub(super) fn report_parent<'a>(
         None => {
             &agents
                 .iter()
-                .find(|agent| {
-                    &agent.agent_id == parent_id || agent.launch_id.as_ref() == Some(parent_id)
-                })?
+                .find(|agent| agent.answers_to(parent_id))?
                 .kind
         }
     };

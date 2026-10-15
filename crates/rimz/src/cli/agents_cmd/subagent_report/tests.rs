@@ -64,21 +64,22 @@ fn digest_parent_routes_to_live_successor_with_corroborated_kind() {
     old.ended_at = Some(Timestamp::from_second(1_000).unwrap());
     let mut new = child("NEW", None);
     new.launch_id = old.launch_id.clone();
+    new.prior_launch_ids = vec!["previous".into()];
     let wrong = AgentState::stub("claude", "L", AgentStatus::Idle);
     let agents = [wrong, old, new.clone()];
 
-    for parent_id in ["L", "OLD"] {
-        let parent =
-            report_parent(&agents, &AgentSessionId::from(parent_id), Some(&new.kind)).unwrap();
-        assert_eq!(parent.agent_id, new.agent_id);
-        assert!(parent.ended_at.is_none());
+    for parent_id in ["L", "OLD", "previous"] {
+        let parent = report_parent(&agents, &AgentSessionId::from(parent_id), Some(&new.kind));
+        assert_eq!(parent.map(|parent| &parent.agent_id), Some(&new.agent_id));
+        assert!(parent.is_some_and(|parent| parent.ended_at.is_none()));
     }
-    assert_eq!(
-        report_parent(&agents[1..], &AgentSessionId::from("OLD"), None)
-            .unwrap()
-            .agent_id,
-        new.agent_id
-    );
+    for id in ["OLD", "previous"] {
+        assert_eq!(
+            report_parent(&agents[1..], &AgentSessionId::from(id), None)
+                .map(|parent| &parent.agent_id),
+            Some(&new.agent_id)
+        );
+    }
 }
 
 #[test]

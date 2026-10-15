@@ -703,11 +703,14 @@ fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
     pub agent_id: AgentSessionId,
-    /// Stable RimZ launch identity. Unlike `agent_id`, this survives adoption
+    /// Current RimZ launch identity. Unlike `agent_id`, this survives adoption
     /// of the provider's native session id and remains equal to the id exported
-    /// to the launched process.
+    /// to the launched process. Rebinding keeps earlier ids in `prior_launch_ids`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<AgentSessionId>,
+    /// Earlier launch ids, oldest first, without duplicates or the current id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_launch_ids: Vec<AgentSessionId>,
     /// The fresh launch's configured system-prompt baseline, unchanged by resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt_digest: Option<String>,
@@ -1102,6 +1105,7 @@ impl AgentState {
         Self {
             agent_id,
             launch_id: None,
+            prior_launch_ids: Vec::new(),
             system_prompt_digest: None,
             launch_warnings: Vec::new(),
             kind,
@@ -1221,12 +1225,28 @@ impl AgentState {
             .map(|launcher| (&launcher.kind, &launcher.agent_id))
     }
 
+    /// Match this session, its current launch, or any earlier launch identity.
+    pub fn answers_to(&self, id: &AgentSessionId) -> bool {
+        &self.agent_id == id
+            || self.launch_id.as_ref() == Some(id)
+            || self.prior_launch_ids.contains(id)
+    }
+
+    /// Rebind the process identity without losing earlier launch addresses.
+    pub(crate) fn set_launch_id(&mut self, id: AgentSessionId) {
+        if self.launch_id.as_ref() == Some(&id) {
+            return;
+        }
+        self.prior_launch_ids.retain(|prior| prior != &id);
+        if let Some(previous) = self.launch_id.replace(id) {
+            self.prior_launch_ids.push(previous);
+        }
+    }
+
     /// Match [`launcher`](Self::launcher) to a candidate session or launch.
     pub fn launcher_is(&self, candidate: &AgentState) -> bool {
-        self.launcher().is_some_and(|(kind, id)| {
-            kind == &candidate.kind
-                && (&candidate.agent_id == id || candidate.launch_id.as_ref() == Some(id))
-        })
+        self.launcher()
+            .is_some_and(|(kind, id)| kind == &candidate.kind && candidate.answers_to(id))
     }
 
     /// Whether this row is a seat of a team cohort. An agent-launched team
@@ -1240,7 +1260,7 @@ impl AgentState {
     pub fn parent_is(&self, candidate: &AgentState) -> bool {
         self.parent_agent_id
             .as_ref()
-            .is_some_and(|id| &candidate.agent_id == id || candidate.launch_id.as_ref() == Some(id))
+            .is_some_and(|id| candidate.answers_to(id))
             && self.parent_agent_kind.as_ref().unwrap_or(&self.kind) == &candidate.kind
     }
 

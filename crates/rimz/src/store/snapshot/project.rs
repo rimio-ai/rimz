@@ -332,7 +332,7 @@ impl ReducerState {
             )
         });
         if let Some(launch_id) = &payload.launch_id {
-            state.launch_id = Some(launch_id.clone());
+            state.set_launch_id(launch_id.clone());
         }
         if let Some(login) = &payload.login {
             state.login = (!login.is_default()).then(|| login.clone());
@@ -513,7 +513,11 @@ impl ReducerState {
         {
             return;
         }
-        if self.map.get(key).is_none_or(|state| state.pane.is_some()) {
+        if self
+            .map
+            .get(key)
+            .is_none_or(|state| state.pane.is_some() && state.ended_at.is_none())
+        {
             return;
         }
         let Some(provisional_key) = observation.pane_id.as_ref().and_then(|pane_id| {
@@ -526,7 +530,7 @@ impl ReducerState {
             && let Some(launch_id) = provisional.launch_id
             && let Some(existing) = self.map.get_mut(key)
         {
-            existing.launch_id = Some(launch_id);
+            existing.set_launch_id(launch_id);
             self.launch_identity.replace(key, existing);
         }
     }
@@ -686,6 +690,7 @@ fn carried_base(
     let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
     if let Some(prior) = prior {
         state.launch_id = prior.launch_id.clone();
+        state.prior_launch_ids.clone_from(&prior.prior_launch_ids);
         state
             .system_prompt_digest
             .clone_from(&prior.system_prompt_digest);
@@ -965,6 +970,9 @@ fn inherit_launch_identity(
 
     successor.launch_id.clone_from(&predecessor.launch_id);
     successor
+        .prior_launch_ids
+        .clone_from(&predecessor.prior_launch_ids);
+    successor
         .launch_warnings
         .clone_from(&predecessor.launch_warnings);
     successor.profile.clone_from(&predecessor.profile);
@@ -1002,7 +1010,7 @@ fn assemble_launch_state(
         state.system_prompt_digest = Some(digest.clone());
     }
     if let Some(launch_id) = &payload.launch_id {
-        state.launch_id = Some(launch_id.clone());
+        state.set_launch_id(launch_id.clone());
     }
     fold_launch_params(&mut state, &payload.launch);
     if let Some(pane_id) = &payload.pane_id {

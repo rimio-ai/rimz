@@ -24,7 +24,7 @@ pub(crate) fn resolve_sender<'a>(
         agent.ended_at.is_none()
             && &agent.kind == kind
             && match agent_id {
-                Some(id) => &agent.agent_id == id || agent.launch_id.as_ref() == Some(id),
+                Some(id) => agent.answers_to(id),
                 None => name.is_some() && &agent.name == name,
             }
     });
