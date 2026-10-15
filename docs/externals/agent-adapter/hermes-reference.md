@@ -92,6 +92,8 @@ Latest-session lookup defines the workspace as the Git repository root, or the c
 
 `/plan [task]` queues a planning prompt with the existing tools. The prompt permits a plan file under `.hermes/plans/` and instructs against implementation. The inspected handler activates no read-only tool policy. Do not treat `/plan` as enforced filesystem isolation. See [the handler][plan-handler] and [plan rules][plan-rules].
 
+`hermes chat --cli -q "/plan Review the working tree"` submits that text literally. It does not invoke the slash command. The inspected launch parser supplies no dedicated planning-mode argument.
+
 The inspected [chat parser][parser] exposes no plan or approval-mode enum flag. Approval policy comes from configuration, with `--yolo` as the bypass switch. Toolset selection is a separate control.
 
 `HERMES_EPHEMERAL_SYSTEM_PROMPT` selects additional system text during classic CLI initialization. The turn builder appends it to the cached system prompt at API time. This differs from `pre_llm_call` context, which enters the user message. See [initialization][system-overlay] and [prompt assembly][system-assembly].
@@ -135,7 +137,7 @@ This documentary table summarizes the [pinned observer guide][observer-doc]. Fie
 | `post_llm_call` | Turn-level assistant output. It is not an API-attempt event or sufficient evidence of a clean turn. |
 | `on_session_end` | Turn outcome, not session teardown. Finalizer fields include `completed`, `failed`, `interrupted`, and `turn_exit_reason`. |
 | `on_session_finalize` | Teardown of an active session identity. Distinct from per-turn end. |
-| `on_session_reset` | Identity transition. Can carry `old_session_id`, `new_session_id`, and `reason`. |
+| `on_session_reset` | Identity transition. Classic CLI carries the new `session_id`. Gateway reset can also carry `old_session_id` and `new_session_id`. |
 | `pre_api_request`, `post_api_request`, `api_request_error` | Main-loop provider requests and failures. Common correlations include `session_id`, `turn_id`, and `api_request_id`. Retries can reuse the request ID. |
 | `pre_auxiliary_call`, `post_auxiliary_call` | Auxiliary model attempts, such as compression and titling. Carry `aux_task`. |
 | `pre_tool_call`, `post_tool_call` | Tool execution boundaries. Correlate with `tool_call_id` and turn/session identity when present. |
@@ -167,10 +169,12 @@ The synchronous dispatcher bounds selected hooks through `plugins.hook_callback_
 | `pre_tool_call` | Supports `block`, `modify`, and `approve` directives. `approve` requests human approval, not automatic permission. |
 | `pre_tool_call` policy resolution | A block takes precedence over escalation. Modified argument fields are shallow-merged. |
 | `pre_verify` | `{"action":"continue","message":"..."}` or `{"decision":"block","reason":"..."}` requests more work, subject to stop-gate limits. |
-| `pre_llm_call` | Can add context to the turn. An observer must avoid returning unintended context. |
+| `pre_llm_call` | A plugin can return a string or `{"context":"text"}`. Shell stdout uses the JSON object. Context enters the user message. |
 | Bounded plugin callbacks | A timed-out, still-running, or raising `pre_tool_call` callback fails closed. Other bounded hooks fail open. |
 
 See [plugin dispatch][dispatch], [the public invocation contract][plugins], and [shell reply parsing][shell]. Callback isolation does not establish durable delivery, retries, or delivery after a process dies.
+
+The [context collector][hook-context] skips `pre_llm_call` when `_persist_disabled` is set. It can spill oversized context to disk before injection. A returned context object does not make an observation event a prompt modifier.
 
 On bounded events, the default 30-second callback deadline can expire before a shell hook's separate 60-second deadline.
 
@@ -214,7 +218,17 @@ Session identity comes from approval context, then `HERMES_SESSION_ID`. It can b
 
 That redaction applies to this helper's payload. Other hook families can carry user messages, tool arguments, commands, or results. An integration must treat them as sensitive data.
 
-Source brackets cover [`clarify`][clarify], [sudo][sudo], and [approval waits][approval-prompt]. The helper carries no turn or tool ID by default. Approval observers use another correlation shape and do not share the generic human-input UUID. Source-level brackets must be checked before claiming coverage of other panels. A `pre_tool_call` for `clarify` establishes an attempted call, not a rendered question.
+Source brackets cover [`clarify`][clarify], [sudo][sudo], and [standard dangerous-command approval waits][approval-prompt]. The helper carries no turn or tool ID by default. Approval observers use another correlation shape and do not share the generic human-input UUID. Source-level brackets must be checked before claiming coverage of other panels. A `pre_tool_call` for `clarify` establishes an attempted call, not a rendered question.
+
+| Checked `kind` | Resolution `outcome` |
+| --- | --- |
+| `clarify` | Callback outcome. Classic CLI returns `submitted`, `timed_out`, or `cancelled`. Callback exceptions produce `error`. |
+| `sudo` | `provided`, `skipped`, `timeout`, `cancelled`, or `error`, depending on the callback or terminal fallback. |
+| `approval` | The selected choice or wait failure. The standard callback path records the returned choice directly. |
+
+See [clarify][clarify], [sudo][sudo], [approval][approval-prompt], and [classic callback outcomes][modal]. These are checked emitters, not a closed enum for every transport.
+
+With `write_approval` enabled, the [inline memory-write prompt][write-approval] calls the CLI approval callback directly. That path has no generic human-wait bracket. Native UI ownership alone therefore does not establish hook coverage.
 
 Secret-capture, vault, and confirmation panels remain unchecked. The generic helper's existence does not prove those panels emit human-wait events.
 
@@ -234,7 +248,7 @@ Finite `chat -q` runs use the single-query policy, including `-Q` and chat-subco
 | --- | --- |
 | Fresh conversation | Establish a native `session_id`. Fresh-session hooks run after prompt construction. |
 | Resume | Resolve the requested ID or title and load history. A continued identity need not emit a fresh-session hook. |
-| `/new` or `/clear` after confirmation | Switch to a fresh identity and clear the active history. Lifecycle payloads can identify the old and new IDs. |
+| `/new` or `/clear` after confirmation | Switch to a fresh identity and clear the active history. Classic CLI emits separate finalize/reset observations. |
 | Compression, default in-place path | Keep the session ID. Archive summarized rows and publish the replacement active history. |
 | Compression, rotation path | Publish a continuation with the old session as `parent_session_id`, then switch the agent to that ID. |
 | Per-turn completion | Emit the run outcome. The same identity can accept another turn. |
@@ -243,13 +257,18 @@ See [session argument resolution][main], [session initialization][conversation],
 
 The classic CLI's [`/new` and `/clear` handlers][session-controls] call `new_session` after destructive-action confirmation. Ordinary native IDs use `YYYYMMDD_HHMMSS_<six random hex digits>`. Other surfaces can use other forms. Treat the ID as opaque. See [ID construction][session-ids].
 
+When an agent exists, [classic session reset][classic-reset] emits `on_session_finalize` with the old `session_id`, then `on_session_reset` with the new `session_id`. Neither payload carries the pair. [Gateway reset][gateway-reset] additionally supplies `old_session_id` and `new_session_id`. Event pairing needs transport-specific handling and recorded validation.
+
 | Manual compression command | Effect |
 | --- | --- |
 | `/compress [focus text]` | Request compression, optionally naming what the summary should preserve. `/compact` is an alias. |
 | `/compress here [N]` | Keep the last `N` exchanges verbatim. The default is two. |
+| `/compress --keep N` | Alternate partial form. Also accepts `-k N`, `--keep=N`, and `up to here [N]`. |
 | `/compress --preview` | Preview without changing history. `--dry-run` is an alias. |
 
-Manual compression remains available when automatic compression is disabled. See [command names][session-command-names], [argument parsing][partial-compress], and [manual execution][manual-compress].
+Manual compression remains available when automatic compression is disabled. The classic handler does nothing with fewer than four history messages. It refuses `--aggressive` execution. See [command names][session-command-names], [argument parsing][partial-compress], [minimum history][compression-manual], and [manual execution][manual-compress].
+
+The [plugin catalog][plugins] has no named compaction hook. The inspected [manual handler][manual-compress] and [rotation publisher][compression] emit no finalize/reset plugin event. A later payload's changed session ID is separate evidence from a lifecycle notification.
 
 Compression marks named `compaction` and `compaction.attempt` use Hermes's Relay telemetry API. Emission requires an instrumented session or turn, called a Relay scope. These marks do not establish an ordinary plugin or shell-hook subscription. See [mark selection][compaction-events] and [Relay emission][relay-compaction]. Compression engine and memory-provider callbacks are also separate interfaces.
 
@@ -291,6 +310,8 @@ Request usage, session totals, and context occupancy are different measurements.
 See [API usage normalization][api-hooks], [usage schema][schema], [the status-bar snapshot][status-bar], and [pricing semantics][pricing]. The status bar clamps occupancy to the context window and marks estimated display sources. Its display anchoring does not replace the compressor's real last-request usage for compression decisions.
 
 The ordinary `post_api_request` payload carries both `usage` and `context_length`. Shell hooks receive them as `extra.usage` and `extra.context_length`. Request `usage.prompt_tokens` measures that request's input occupancy, not cumulative session tokens or the status bar's anchored display. Missing usage or capacity leaves the gauge incomplete. See [the emitter][post-api] and [shell serialization][shell].
+
+The usage keys are `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `request_count`, `prompt_tokens`, and `total_tokens`. The same event includes `response` and `assistant_message`, which can contain sensitive text and tool calls. Consumers need an explicit payload-size and redaction policy. See [usage projection][api-hooks] and [the response payload][post-api].
 
 Canonical `prompt_tokens` adds uncached input, cache-read, and cache-write tokens. `total_tokens` adds output to that prompt total. Do not add reasoning again. Child cost can be rolled into the parent's in-memory estimate, so summing parent and children can double count. See [canonical usage][pricing] and [child cost rollup][child-results].
 
@@ -336,13 +357,14 @@ The [stop emitter][child-results] runs during result processing, not at the chil
 | --- | --- |
 | Redacted recorded sessions at this pin | Hook order and outcomes for success, interruption, cancellation, errors, and resume. No user records were inspected. |
 | Native prompt captures | Rendering order, answer selection, and coverage of every approval, secret, vault, and confirmation panel. |
-| Compression and reset fixtures | Ordinary plugin compaction brackets, continuation selection, and history projection across resets and rewinds. Engine callbacks alone do not prove plugin events. |
+| Compression and reset fixtures | Detection without a named compaction hook, continuation selection, and history projection across resets and rewinds. |
 | Process and isolation probes | Runtime ownership and environment stamps for classic CLI, TUI, and hosted plugins. Static paths establish intended ownership only. |
 | Backend-specific runs | API hook parity and usage/cost completeness across inference transports, retries, auxiliary calls, and external runtimes. |
 | Read-only history validation | Correct SQLite queries during concurrent writes, migration, pruning, compression, and recovery. |
 | Delivery and crash tests | No verified hook replay, durable delivery, or process-crash completion guarantee. |
 | Transport captures | Full ACP, gateway RPC, and HTTP/SSE schemas and parity. Their catalog above is documentary. |
 | Home and skill isolation tests | Runtime credential precedence across routed profiles and a complete allow-only skill restriction. |
+| File-edit approval traces | Whether `write_file` or `patch` prompts under each interactive policy. Command approval alone does not establish file-edit gating. |
 | Other attention surfaces | Background-process parking, idle notifications, remote control, and terminal answer keystrokes were not traced in this pass. |
 
 These gaps constrain later claims. They do not decide whether the eventual integration should use a built-in adapter or a process plugin. The next artifact is the [mapping worksheet](../../contributing/agent-adapters.md#step-2--map-the-protocol-onto-the-model), grounded in the pinned contract and recorded-session evidence.
@@ -434,8 +456,6 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 
 [delegate-registry]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/delegate_tool_registry.py#L179-L309
 
-[oneshot-dispatch]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/main.py#L3073-L3103
-
 [callback-timeout]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/plugins.py#L1125-L1150
 
 [plan-handler]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_commands_mixin.py#L1607-L1630
@@ -451,9 +471,15 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 [session-ids]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_state_ids.py#L50-L60
 [session-command-names]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/commands.py#L106-L117
 [partial-compress]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/partial_compress.py#L21-L47
-[manual-compress]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_session_mixin.py#L885-L927
+[manual-compress]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_session_mixin.py#L885-L961
 [post-api]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/turn_response_intake.py#L66-L98
 
 [shutdown]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_shutdown.py#L185-L203
 [oneshot-setup]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/oneshot.py#L270-L280
 [cli-export]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/session_export.py#L222-L240
+
+[hook-context]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/turn_context.py#L797-L853
+[write-approval]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/write_approval.py#L206-L248
+[classic-reset]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_session_mixin.py#L415-L575
+[gateway-reset]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/gateway/slash_commands_session.py#L210-L218
+[compression-manual]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression_manual.py#L14-L20
