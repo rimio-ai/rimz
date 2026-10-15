@@ -1,4 +1,10 @@
 //! Start preconditions and user-run remedies, independent of their presentation.
+//!
+//! A printed fix command runs in the user's own shell, not under the start
+//! that judged the blocker, so it carries that start's context: the started
+//! path, the named accounts, and any provider home (`CLAUDE_CONFIG_DIR`). A
+//! command that resolves one of these from the cwd or the defaults hands the
+//! user a fix for another room or account.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
