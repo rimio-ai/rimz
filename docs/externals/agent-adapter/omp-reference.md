@@ -42,12 +42,14 @@ The default agent directory is `~/.omp/agent`. The following paths assume the de
 | `OMP_PROFILE`, legacy `PI_PROFILE` | `OMP_PROFILE` wins when defined, including an empty value. Empty, whitespace, and `default` select the default profile. |
 | `PI_CONFIG_DIR` | Changes the user config root name, normally `.omp`. |
 | `PI_CODING_AGENT_DIR` | Overrides agent-directory consumers in the default profile. Named profiles ignore it. Generic config lookup still uses its own base root. See [configuration lookup][config]. |
-| Linux/macOS `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Relocate classified paths when the target `omp/` directory exists. Named profiles require the corresponding `omp/profiles/<name>` directory. Custom agent-directory overrides bypass this relocation for agent state. |
+| Linux/macOS `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Relocate classified paths when the target `omp/` directory exists. Named profiles require the corresponding `omp/profiles/<name>` directory. Custom agent-directory overrides bypass profile-local XDG relocation, including agent state and config-root paths. |
 | `PI_CODING_AGENT_SESSION_DIR` | Sets the initial session directory. `--session-dir` overrides it. |
 | `--config <file>` | Adds a settings overlay. Repeatable. |
 | Native settings | User `config.yml`, with `config.yaml` fallback. Project `.omp/config.yml` and legacy `.omp/settings.json` also supply settings. |
 
-The pinned path comments describe migration, but `omp config init-xdg` only creates directories. It does not move existing data. The accepted config actions contain no `migrate` action. See the [config command][config-command] and [XDG initialization][init-xdg] implementations.
+The config action `init-xdg` creates base directories and does not move existing sessions or credentials. It can create fallback directories when XDG variables are unset, but the resolver still requires those variables. Named profiles require profile directories that this action does not create. The accepted config actions contain no `migrate` action. See the [config command][config-command] and [XDG initialization][init-xdg] implementations.
+
+Each XDG category activates independently. Data paths drop the `agent/` prefix: sessions become `$XDG_DATA_HOME/omp/sessions`. Existing sessions, blobs, and `agent.db` remain at their old locations unless transferred separately. Some helpers lazily copy selected legacy state, such as the secret-placeholder key, without removing the old copy. Machine-global runtime paths use the base XDG `omp/` root across profiles and agent-directory overrides. See the [path resolver][dirs].
 
 Native extension discovery scans `<cwd>/.omp/extensions` and `<agentDir>/extensions`, plus legacy settings entries. The project extension root is cwd-only. It does not walk ancestors. `.pi/extensions` is not a native extension root. See [extension loading][loading] and the [native discovery provider][native].
 
@@ -216,7 +218,7 @@ Provider key precedence follows this order ([credential cascade][cascade]):
 6. Provider environment variables.
 7. Stored API keys without `source: "login"`.
 
-Custom keys can intentionally override stored OAuth for a custom endpoint. The pinned [provider documentation][providers] omits the final stored-key fallback, which the source implements.
+Custom keys can intentionally override stored OAuth for a custom endpoint. The [provider documentation][providers] describes the same precedence.
 
 Project trust and extension authority are defined under [configuration roots and extension discovery](#configuration-roots-and-extension-discovery).
 
