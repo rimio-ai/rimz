@@ -298,6 +298,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "opencode",
         "pi",
         "qwen",
+        "qoder",
     ];
     let concrete_types = [
         "AmpAdapter",
@@ -313,6 +314,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "OpencodeAdapter",
         "PiAdapter",
         "QwenAdapter",
+        "QoderAdapter",
     ];
     let removed_api = [
         concat!("Agent", "Adapter"),
@@ -1805,6 +1807,7 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
         "QWEN_HOME",
+        "QODER_CONFIG_DIR",
         "QWEN_RUNTIME_DIR",
         "GROK_HOME",
         "GROK_AUTH_PATH",

@@ -174,6 +174,7 @@ Each sandbox launch overlays at most one user skill root, declared by the adapte
 | --- | --- | --- |
 | Claude | First non-empty `CLAUDE_CONFIG_DIR` entry (default `$HOME/.claude`), plus `/skills` | `Frontmatter` |
 | Qwen | `QWEN_HOME` (default `$HOME/.qwen`), plus `/skills` | `Frontmatter` |
+| Qoder | `QODER_CONFIG_DIR` (default `$HOME/.qoder`), plus `/skills` | `Frontmatter` |
 | Codex | `$HOME/.agents/skills` | `OpenAiPolicy` |
 | Cursor, Copilot, Droid, Kimi, Pi | `$HOME/.agents/skills` | `Frontmatter` |
 | Kiro | `KIRO_HOME` (default `$HOME/.kiro`), plus `/skills` | `Unsupported` |

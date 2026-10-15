@@ -68,7 +68,7 @@ subagents: [explorer]
 
 Omit the field and delegation is unrestricted; `subagents: [explorer]` allows only `explorer`; `subagents: []` allows none. A launch outside the list is refused before any record or pane exists, including one that re-bases a listed profile onto an unlisted one with `--agent`. A profile that sets any `subagents:` list cannot also grant the native `Agent` tool, so each agent delegates through one doorway or the other, and a child profile cannot set the field at all.
 
-Every agent RimZ launches on Claude, Codex, Qwen, or Droid learns its list at launch, in the system prompt RimZ appends: the children its profile allows, with their descriptions. When the list is `[]`, it is told to do the work itself; when nothing is configured, it is told that you enable children by adding `subagents/<name>.md` files. The paragraph points the agent at a skill named `rimz-subagents` for how to launch and collect. Other providers get no paragraph and learn their list from `rimz subagents profiles`, which applies the same filter when an agent runs it.
+An agent that accepts [launch reminders](../reference/agent-support.md#the-wiring-matrix), including Qoder, learns its list at launch, in the system prompt RimZ appends: the children its profile allows, with their descriptions. When the list is `[]`, it is told to do the work itself; when nothing is configured, it is told that you enable children by adding `subagents/<name>.md` files. The paragraph points the agent at a skill named `rimz-subagents` for how to launch and collect. Other providers get no paragraph and learn their list from `rimz subagents profiles`, which applies the same filter when an agent runs it.
 
 ## Share code navigation
 

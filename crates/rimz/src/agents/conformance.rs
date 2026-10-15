@@ -194,6 +194,7 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
         ("claude", "settings.json"),
         ("codex", "config.toml"),
         ("qwen", "settings.json"),
+        ("qoder", "settings.json"),
         ("grok", "hooks/rimz.json"),
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -238,6 +239,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("droid", ".factory"),
         ("kiro", ".kiro"),
         ("qwen", ".qwen"),
+        ("qoder", ".qoder"),
         ("grok", ".grok"),
     ];
     assert_eq!(defaults.len(), BUILTINS.len());
@@ -271,6 +273,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("droid", ".agents/skills", ManualSkill::Frontmatter),
         ("kiro", ".kiro/skills", ManualSkill::Unsupported),
         ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
+        ("qoder", ".qoder/skills", ManualSkill::Frontmatter),
         ("grok", ".agents/skills", ManualSkill::Unsupported),
     ];
     assert_eq!(table.len(), BUILTINS.len());
@@ -299,6 +302,7 @@ fn builtin_skills_homes_follow_config_homes() {
     for (kind, key, value) in [
         ("claude", "CLAUDE_CONFIG_DIR", " /selected , /archive "),
         ("qwen", "QWEN_HOME", "/selected"),
+        ("qoder", "QODER_CONFIG_DIR", "/selected"),
         ("kiro", "KIRO_HOME", "/selected"),
     ] {
         let adapter = BUILTINS
@@ -337,6 +341,7 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("cursor", "CURSOR_CONFIG_DIR", "/selected", "/selected"),
         ("kiro", "KIRO_HOME", "/selected", "/selected"),
         ("qwen", "QWEN_HOME", "/selected", "/selected"),
+        ("qoder", "QODER_CONFIG_DIR", "/selected", "/selected"),
         ("grok", "GROK_HOME", "/selected", "/selected"),
     ];
     for adapter in BUILTINS {
@@ -394,6 +399,7 @@ fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
         ("copilot", "RIMZ_COPILOT_SETTINGS"),
         ("pi", "RIMZ_PI_EXTENSION"),
         ("qwen", "RIMZ_QWEN_SETTINGS"),
+        ("qoder", "RIMZ_QODER_SETTINGS"),
         ("opencode", "RIMZ_OPENCODE_PLUGIN"),
     ] {
         let adapter = BUILTINS
@@ -702,6 +708,13 @@ system-prompt-file-flag = "--system-prompt-file"
     grok.empty-Effort=Ok([])
     grok.empty-AutoCompact=Ok([])
     grok.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
+    qoder.Model=Ok(["--model", "model-x"])
+    qoder.Effort=Ok(["--reasoning-effort", "high"])
+    qoder.AutoCompact=Err(UnsupportedField { agent: "qoder", field: "auto-compact" })
+    qoder.empty-Model=Ok([])
+    qoder.empty-Effort=Ok([])
+    qoder.empty-AutoCompact=Ok([])
+    qoder.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -763,6 +776,7 @@ fn fast_switch_characterization() {
     kiro: on=agent `kiro` has no fast-mode launch switch; launch without --fast off=Ok([])
     qwen: on=agent `qwen` has no fast-mode launch switch; launch without --fast off=Ok([])
     grok: on=agent `grok` has no fast-mode launch switch; launch without --fast off=Ok([])
+    qoder: on=agent `qoder` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -1730,7 +1744,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 13] = [
+    const AGENTS: [(&str, &str); 14] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1744,6 +1758,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Qwen", "qwen"),
         ("Kimi", "kimi"),
         ("Grok", "grok"),
+        ("Qoder", "qoder"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 

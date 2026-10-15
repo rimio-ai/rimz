@@ -368,6 +368,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Amp         | Experimental |   ●   |  ✗   |    ✗    |    ◐    |  ◐  |     ✗     |
 | Kiro        | Experimental |   ◐   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
 | Qwen        | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ●     |
+| Qoder       | Experimental |   ●   |  ✗   |    ✗    |    ✗    |  ●  |     ◐     |
 | Kimi        | Experimental |   ●   |  ◐   |    ◐    |    ●    |  ●  |     ◐     |
 | Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ◐     |
 

@@ -302,6 +302,10 @@ path = "crates/rimz/src/agents/adapters/qwen"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/qoder"
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/adapters/amp"
 surface-budget = 1
 
@@ -3631,6 +3635,11 @@ reason = "Registry registration is the only outside-provider interface; a constr
 kind = "item"
 key = "agents::adapters::qwen::QwenAdapter"
 reason = "Registry registration is the only outside-provider interface. Hook decoding retains provider-specific fresh-root stamping for startup/clear; Kimi has no equivalent stamp to share, preserving the pass-2 origin verdict (pass 19c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::qoder::QoderAdapter"
+reason = "Registry registration is the only outside-provider interface; the provider-neutral capabilities hide native hook, installation, and folder-trust policy."
 
 [[verdict]]
 kind = "item"

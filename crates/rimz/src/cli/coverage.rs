@@ -394,7 +394,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "qoder"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -537,6 +538,16 @@ mod tests {
         );
 
         let grok = agent_cells(&matrix, "grok");
+        let qoder = agent_cells(&matrix, "qoder");
+        assert_eq!(count(&qoder, MatrixCellState::Ok), 10);
+        assert_eq!(count(&qoder, MatrixCellState::Partial), 0);
+        assert_eq!(count(&qoder, MatrixCellState::Absent), 9);
+        assert_eq!(
+            agent_labels(&matrix, "qoder", MatrixCellState::Absent),
+            [
+                "answer", "bg", "bgsh", "usage", "live$", "rich", "spend", "tools", "remote"
+            ]
+        );
         assert_eq!(count(&grok, MatrixCellState::Ok), 11);
         assert_eq!(count(&grok, MatrixCellState::Partial), 3);
         assert_eq!(count(&grok, MatrixCellState::Absent), 5);
@@ -595,7 +606,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "qoder"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -617,6 +629,7 @@ mod tests {
                 MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Ok,      // qoder
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -638,6 +651,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Ok,      // qoder
             ]
         );
 
@@ -658,6 +672,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Partial, // grok
+                MatrixCellState::Ok,      // qoder
             ]
         );
     }
