@@ -140,6 +140,99 @@ fn probe_without_fold(watch: &mut ParentWatchdog, now: Instant) -> bool {
 }
 
 #[test]
+fn a_forced_probe_confirms_a_tail_end_before_returning() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), |_, _| ProbeConfirm::Ended).start();
+    append(&paths, "OLD", LifecycleSignal::Ended);
+
+    watch.probe_now();
+
+    assert!(
+        watch.parent_ended(),
+        "the forced pass must observe the tail end"
+    );
+}
+
+#[test]
+fn a_forced_probe_of_a_quiet_live_parent_never_confirms() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let confirmed = Arc::new(AtomicBool::new(false));
+    let seen = confirmed.clone();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_, _| {
+        seen.store(true, Ordering::Release);
+        panic!("a quiet live parent must not need a confirmation helper")
+    })
+    .start();
+    append(
+        &paths,
+        "OLD",
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+            turn_id: None,
+        },
+    );
+
+    watch.probe_now();
+
+    assert!(
+        watch.take_parent_changed(),
+        "the forced pass must drain the tail"
+    );
+    assert!(!watch.parent_ended());
+    assert!(!confirmed.load(Ordering::Acquire));
+}
+
+#[test]
+fn a_forced_probe_after_a_latched_end_returns_without_another_pass() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let calls = Arc::new(Mutex::new(0));
+    let seen = calls.clone();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_, _| {
+        *seen.lock().unwrap() += 1;
+        ProbeConfirm::Ended
+    })
+    .start();
+    append(&paths, "OLD", LifecycleSignal::Ended);
+    watch.probe_now();
+    assert!(watch.parent_ended());
+
+    let (done, returned) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        watch.probe_now();
+        done.send(watch.parent_ended()).unwrap();
+    });
+    assert_eq!(returned.recv_timeout(Duration::from_secs(1)), Ok(true));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn a_forced_probe_returns_when_the_worker_panics() {
+    let (_dir, paths, _rt, seed) = fixture();
+    let confirmed = Arc::new(AtomicBool::new(false));
+    let seen = confirmed.clone();
+    let watch = ParentWatchdog::from_seed(seed, paths.clone(), move |_, _| {
+        seen.store(true, Ordering::Release);
+        panic!("failed confirmation")
+    })
+    .start();
+    append(&paths, "OLD", LifecycleSignal::Ended);
+
+    watch.probe_now();
+    assert!(
+        confirmed.load(Ordering::Acquire),
+        "the worker must have reached confirmation"
+    );
+    assert!(!watch.parent_ended());
+    let (done, returned) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        watch.probe_now();
+        done.send(()).unwrap();
+    });
+    assert_eq!(returned.recv_timeout(Duration::from_secs(1)), Ok(()));
+}
+
+#[test]
 fn cursor_end_requires_confirmation_without_parsing_carryover() {
     let (_dir, paths, _rt, seed) = fixture();
     append(&paths, "OLD", LifecycleSignal::Ended);

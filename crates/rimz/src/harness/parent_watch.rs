@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -141,15 +142,30 @@ pub struct ParentWatchdog {
     last_observed_at_ms: Option<u64>,
 }
 
-/// Non-blocking parent-death and receipt-trigger signals for the supervisor.
+/// Parent-death and receipt-trigger signals, with an on-demand probe barrier.
 pub struct ParentWatch {
     ended: Arc<AtomicBool>,
     changed: Arc<AtomicBool>,
     receipt_waiting: Arc<AtomicBool>,
+    probe_requests: mpsc::SyncSender<mpsc::Sender<()>>,
     worker: thread::Thread,
 }
 
 impl ParentWatch {
+    /// Wait for a probe pass begun after this call, refreshing the parent verdict.
+    /// Returns immediately if the parent has ended or the worker has stopped.
+    pub fn probe_now(&self) {
+        if self.parent_ended() {
+            return;
+        }
+        let (done, completed) = mpsc::channel();
+        if self.probe_requests.send(done).is_err() {
+            return;
+        }
+        self.worker.unpark();
+        let _ = completed.recv();
+    }
+
     /// Wake the tail reader while a terminal child awaits its parent's receipt.
     pub fn set_receipt_waiting(&self, waiting: bool) {
         if self.receipt_waiting.swap(waiting, Ordering::AcqRel) != waiting {
@@ -199,9 +215,11 @@ impl ParentWatchdog {
         let signal = ended.clone();
         let changed = self.changed.clone();
         let receipt_waiting = self.receipt_waiting.clone();
+        let (probe_requests, probes) = mpsc::sync_channel::<mpsc::Sender<()>>(1);
         let worker = thread::spawn(move || {
             let mut was_waiting = false;
             loop {
+                let probe = probes.try_recv().ok();
                 let now = Instant::now();
                 let waiting = self.receipt_waiting.load(Ordering::Acquire);
                 if waiting && !was_waiting {
@@ -210,6 +228,10 @@ impl ParentWatchdog {
                     self.next_tail = self.next_probe;
                 }
                 was_waiting = waiting;
+                if probe.is_some() {
+                    self.next_probe = now;
+                    self.next_tail = now;
+                }
                 if self.probe_if_due(now) {
                     signal.store(true, Ordering::Release);
                     #[cfg(feature = "testkit")]
@@ -223,6 +245,10 @@ impl ParentWatchdog {
                     }
                     break;
                 }
+                if let Some(done) = probe {
+                    let _ = done.send(());
+                    continue;
+                }
                 let deadline = self.next_probe.min(self.next_tail);
                 thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
             }
@@ -231,6 +257,7 @@ impl ParentWatchdog {
             ended,
             changed,
             receipt_waiting,
+            probe_requests,
             worker: worker.thread().clone(),
         }
     }
