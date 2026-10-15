@@ -18,7 +18,7 @@ A subagent launched without its own `--isolation` inherits its parent's recorded
 
 ## Preflight
 
-Every entry point that can start a sandboxed agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change.
+Every entry point that can start a sandboxed agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change. Start and detached room ensure convert these to structured blockers: cause fixes stay print-only, and the host-isolation command carries the security marker without a run-only bypass.
 
 | Entry point | When it probes |
 | --- | --- |
