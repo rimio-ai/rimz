@@ -83,6 +83,8 @@ DIAGNOSTICS
 
 Most symptoms below show up as a named doctor row with the fix already attached, so the report doubles as the fix list.
 
+If agent state stays stale or messages wait behind queued hooks, look for a drain-lag warning in DIAGNOSTICS. It shows the episode's worst sampled delay and peak backlog size. The warning clears after 15 minutes without another lag report; `rimz doctor --clear` dismisses the retained history immediately without deleting the evidence.
+
 ### Reading the report
 
 Each row carries a glyph that sets its tone:
