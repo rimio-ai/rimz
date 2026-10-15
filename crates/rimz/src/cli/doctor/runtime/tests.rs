@@ -804,6 +804,38 @@ fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
             "{event:?}"
         );
     }
+    let ingress = rimz::ids::EventId::new();
+    for (wire, state, impact) in [
+        (
+            serde_json::json!({"kind": "hook_drain_lag", "ingress": ingress, "hook_event": null, "lag_ms": 60_000, "pending_bytes": 1024}),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            serde_json::json!({"kind": "hook_apply_failed", "ingress": ingress, "error": "failed"}),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            serde_json::json!({"kind": "hook_ingress_skipped", "start": 12, "end": 34, "error": "corrupt"}),
+            model::DoctorState::Investigate,
+            model::DoctorImpact::Warn,
+        ),
+        (
+            serde_json::json!({"kind": "hook_ingress_truncated", "start": 34, "end": 56}),
+            model::DoctorState::Contained,
+            model::DoctorImpact::Info,
+        ),
+    ] {
+        let event = serde_json::from_value::<DiagEvent>(wire);
+        assert!(event.is_ok(), "hook diagnostic must decode: {event:?}");
+        let event = event.unwrap();
+        assert_eq!(
+            classify_diagnostic(&event, event.severity()),
+            (state, impact),
+            "{event:?}"
+        );
+    }
 }
 
 #[test]

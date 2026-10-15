@@ -145,8 +145,9 @@ pub fn repair_and_read(
     start: u64,
     _workspace: &WorkspaceLock,
     wait: std::time::Duration,
+    diag: &crate::diag::DiagSink,
 ) -> Result<Vec<(Option<HookIngress>, u64)>, EventLogErr> {
-    use crate::diag::hook_drain::{self, HookDrainEvent};
+    use crate::diag::record::DiagEvent;
 
     let _ingress = WorkspaceLock::acquire_with_timeout(&paths.hook_ingress_lock, wait)
         .map_err(|error| io_error(&paths.hook_ingress_lock, io::Error::other(error)))?;
@@ -155,21 +156,18 @@ pub fn repair_and_read(
         let end = at + bytes.len() as u64 + u64::from(terminated);
         if !terminated {
             atomic::truncate_file(&paths.hook_ingress_log, at)?;
-            hook_drain::append(paths, HookDrainEvent::TruncateTail { start: at, end });
+            diag.emit(DiagEvent::HookIngressTruncated { start: at, end });
             break;
         }
         match event_log::frame::decode_record(at, terminated, &bytes) {
             Ok(frame) => records.push((Some(frame), end)),
             Err(error) if error.is_corruption() => {
                 let fused = fused_frame(at, &bytes);
-                hook_drain::append(
-                    paths,
-                    HookDrainEvent::SkipRecord {
-                        start: at,
-                        end: fused.as_ref().map_or(end, |(start, _)| *start),
-                        error: error.to_string(),
-                    },
-                );
+                diag.emit(DiagEvent::HookIngressSkipped {
+                    start: at,
+                    end: fused.as_ref().map_or(end, |(start, _)| *start),
+                    error: error.to_string(),
+                });
                 records.push((fused.map(|(_, frame)| frame), end));
             }
             Err(error) => return Err(error),

@@ -1,4 +1,4 @@
-//! Durable sidebar diagnostic record schema.
+//! Durable workspace diagnostic record schema.
 //!
 //! Diagnostics are evidence, not correctness input. Anomalies, bounded traces,
 //! and fetch-window totals are JSONL entries under the workspace state directory.
@@ -8,8 +8,8 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    AgentKind, AgentSessionId, LinkTier, LoginKey, MessageId, PaneId, SidebarInstanceId, ViewId,
-    WorkspaceId,
+    AgentKind, AgentSessionId, EventId, LinkTier, LoginKey, MessageId, PaneId, SidebarInstanceId,
+    ViewId, WorkspaceId,
 };
 
 const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -254,6 +254,25 @@ impl LocalSessionBindRejectReason {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiagEvent {
+    HookDrainLag {
+        ingress: EventId,
+        hook_event: Option<String>,
+        lag_ms: u64,
+        pending_bytes: u64,
+    },
+    HookApplyFailed {
+        ingress: EventId,
+        error: String,
+    },
+    HookIngressSkipped {
+        start: u64,
+        end: u64,
+        error: String,
+    },
+    HookIngressTruncated {
+        start: u64,
+        end: u64,
+    },
     FrameRejected {
         reason: FrameRejectReason,
         prior_pane_count: usize,
@@ -588,7 +607,11 @@ impl DiagEvent {
                 ModelCatalogFallback::CachedCatalog => DiagSeverity::Info,
                 ModelCatalogFallback::Baked => DiagSeverity::Warn,
             },
-            Self::FrameRejected { .. }
+            Self::HookDrainLag { .. }
+            | Self::HookApplyFailed { .. }
+            | Self::HookIngressSkipped { .. }
+            | Self::HookIngressTruncated { .. }
+            | Self::FrameRejected { .. }
             | Self::PaneCountDrop { .. }
             | Self::PaneCarryForward { .. }
             | Self::CarryForwardExpired { .. }
@@ -679,6 +702,10 @@ impl DiagEvent {
 
     pub(super) fn kind_name(&self) -> &'static str {
         match self {
+            Self::HookDrainLag { .. } => "hook_drain_lag",
+            Self::HookApplyFailed { .. } => "hook_apply_failed",
+            Self::HookIngressSkipped { .. } => "hook_ingress_skipped",
+            Self::HookIngressTruncated { .. } => "hook_ingress_truncated",
             Self::ModelCatalogRefreshFailed { .. } => "model_catalog_refresh_failed",
             Self::FrameRejected { .. } => "frame_rejected",
             Self::ResolutionFallback { .. } => "resolution_fallback",
@@ -734,6 +761,12 @@ impl DiagEvent {
 
     pub fn identity_key(&self) -> String {
         match self {
+            Self::HookDrainLag { .. } => self.kind_name().to_owned(),
+            Self::HookApplyFailed { ingress, .. } => format!("{}:{ingress}", self.kind_name()),
+            Self::HookIngressSkipped { start, end, .. }
+            | Self::HookIngressTruncated { start, end } => {
+                format!("{}:{start}:{end}", self.kind_name())
+            }
             Self::ModelCatalogRefreshFailed {
                 agent_kind, login, ..
             } => format!("{}:{agent_kind}:{login}", self.kind_name()),
@@ -1037,6 +1070,22 @@ impl DiagEvent {
     /// A one-line human description of what this event records.
     pub fn summary(&self) -> String {
         match self {
+            Self::HookDrainLag {
+                lag_ms,
+                pending_bytes,
+                ..
+            } => {
+                format!("hook drain lag {lag_ms}ms; {pending_bytes} bytes pending")
+            }
+            Self::HookApplyFailed { ingress, error } => {
+                format!("hook ingress {ingress} apply failed: {error}")
+            }
+            Self::HookIngressSkipped { start, end, error } => {
+                format!("skipped corrupt hook ingress bytes {start}..{end}: {error}")
+            }
+            Self::HookIngressTruncated { start, end } => {
+                format!("truncated torn hook ingress tail at bytes {start}..{end}")
+            }
             Self::ModelCatalogRefreshFailed {
                 login,
                 alias,

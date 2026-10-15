@@ -1,4 +1,4 @@
-//! Durable anomaly diagnostics for sidebar state.
+//! Durable anomaly diagnostics for workspace state.
 //!
 //! The log is a human/debugging surface: producer and renderer code append
 //! typed JSONL records, while correctness continues to read store/cache truth.
@@ -20,7 +20,6 @@ pub mod binding;
 pub mod focus_repair;
 pub(crate) mod focus_trace;
 pub(crate) mod hibernate;
-pub(crate) mod hook_drain;
 pub mod hook_feed;
 pub mod lsp;
 pub mod notify;

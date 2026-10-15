@@ -1135,7 +1135,8 @@ fn classify_diagnostic(
             }
             rimz::diag::record::ModelCatalogFallback::Baked => model::DoctorState::Investigate,
         },
-        DiagEvent::FrameRejected { .. }
+        DiagEvent::HookIngressTruncated { .. }
+        | DiagEvent::FrameRejected { .. }
         | DiagEvent::PaneCarryForward { .. }
         | DiagEvent::GateHold { .. }
         | DiagEvent::TopologyWriteRejected { .. }
@@ -1181,7 +1182,10 @@ fn classify_diagnostic(
         | DiagEvent::FetchDeliveryStats { .. }
         | DiagEvent::ToolLoopEscalated { .. }
         | DiagEvent::GroupMigration { .. } => model::DoctorState::Expected,
-        DiagEvent::ResolutionFallback { .. }
+        DiagEvent::HookDrainLag { .. }
+        | DiagEvent::HookApplyFailed { .. }
+        | DiagEvent::HookIngressSkipped { .. }
+        | DiagEvent::ResolutionFallback { .. }
         | DiagEvent::PaneCountDrop { .. }
         | DiagEvent::CarryForwardExpired { .. }
         | DiagEvent::HostedCarryDropped {
