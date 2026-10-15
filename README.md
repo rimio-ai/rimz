@@ -373,6 +373,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ◐     |
 | Hermes      | Experimental |   ●   |  ◐   |    ✗    |    ✗    |  ◐  |     ◐     |
 | OMP         | Experimental |   ◐   |  ◐   |    ◐    |    ◐    |  ◐  |     ✗     |
+| Muse        | Experimental |   ●   |  ✗   |    ✗    |    ✗    |  ◐  |     ✗     |
 
 
 <sub>● full: complete and live · ◐ partial: a working version with a stated limit · ✗ unsupported</sub>

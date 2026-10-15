@@ -221,7 +221,8 @@ upward-dependencies = ["address"]
 # AgentState::is_child_session shares child eligibility between resume guards and exit hints (+1).
 # account::cached_usage_read_at shares cache timestamps with doctor without a CLI codec (+1).
 # SignalSet::ASK_RESOLVED lets adapters declare the Hermes ask-close lifecycle signal (+1).
-surface-budget = 1090
+# Managed-hook installers share the ingress env names without importing the drainer (+2).
+surface-budget = 1092
 
 [[verdict]]
 kind = "item"
@@ -325,6 +326,10 @@ surface-budget = 1
 [[module]]
 path = "crates/rimz/src/agents/adapters/hermes"
 # HermesAdapter is the registry's only provider-facing item.
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/muse"
 surface-budget = 1
 
 [[module]]
@@ -3745,6 +3750,21 @@ reason = "Registry registration is the only outside-provider interface; the hook
 kind = "item"
 key = "agents::adapters::omp::OmpAdapter"
 reason = "The registry consumes only OmpAdapter; the extension, payloads, install paths, and session parsers remain adapter-local."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::muse::MuseAdapter"
+reason = "Registry registration is the only outside-provider interface; native payloads, managed-hook transaction and the hook catalog stay adapter-local."
+
+[[verdict]]
+kind = "item"
+key = "agents::hook_types::HOOK_ENV_NAMES"
+reason = "Managed-hook passthrough and ingress capture share the identity list; hook_drain retains its public re-export for CLI callers."
+
+[[verdict]]
+kind = "item"
+key = "agents::hook_types::HOOK_ENV_EXTRA_NAMES"
+reason = "Managed-hook passthrough and ingress capture share runtime roots separately from the drainer's identity scrub."
 
 [[verdict]]
 kind = "item"

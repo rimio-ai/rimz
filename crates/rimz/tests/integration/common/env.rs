@@ -494,6 +494,7 @@ impl Env {
             "grok" => self.home_root.join(".grok/hooks/rimz.json"),
             "kiro" => self.home_root.join(".kiro/hooks/rimz.json"),
             "hermes" => self.home_root.join(".hermes/config.yaml"),
+            "muse" => self.config_root().join("muse/rimz-hooks.json"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -533,6 +534,11 @@ impl Env {
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
             "hermes" => text.contains("rimz hooks feed --source hermes"),
+            "muse" => {
+                text.contains("rimz hooks feed --source muse")
+                    && std::fs::read_to_string(self.config_root().join("muse/settings.json"))
+                        .is_ok_and(|settings| settings.contains("managed_hooks_path"))
+            }
             "claude" | "pi" | "qwen" | "grok" | "kiro" | "qoder" => text.contains("_rimz_managed"),
             "copilot" => {
                 text.contains("_rimz_managed")

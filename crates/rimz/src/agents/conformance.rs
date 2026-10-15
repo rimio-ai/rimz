@@ -243,6 +243,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("grok", ".grok"),
         ("hermes", ".hermes"),
         ("omp", ".omp/agent"),
+        ("muse", ".config/muse"),
     ];
     assert_eq!(defaults.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -279,6 +280,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("grok", ".agents/skills", ManualSkill::Unsupported),
         ("hermes", ".hermes/skills", ManualSkill::Unsupported),
         ("omp", ".omp/agent/skills", ManualSkill::Frontmatter),
+        ("muse", ".config/muse/skills", ManualSkill::Unsupported),
     ];
     assert_eq!(table.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -736,6 +738,13 @@ system-prompt-file-flag = "--system-prompt-file"
     omp.empty-Effort=Ok([])
     omp.empty-AutoCompact=Ok([])
     omp.all=Ok(["--model", "model-x", "--thinking", "high"])
+    muse.Model=Ok(["--model", "model-x"])
+    muse.Effort=Ok(["--reasoning-effort", "high"])
+    muse.AutoCompact=Err(UnsupportedField { agent: "muse", field: "auto-compact" })
+    muse.empty-Model=Ok([])
+    muse.empty-Effort=Ok([])
+    muse.empty-AutoCompact=Ok([])
+    muse.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -800,6 +809,7 @@ fn fast_switch_characterization() {
     hermes: on=agent `hermes` has no fast-mode launch switch; launch without --fast off=Ok([])
     qoder: on=agent `qoder` has no fast-mode launch switch; launch without --fast off=Ok([])
     omp: on=agent `omp` has no fast-mode launch switch; launch without --fast off=Ok([])
+    muse: on=agent `muse` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -1772,7 +1782,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 16] = [
+    const AGENTS: [(&str, &str); 17] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1789,6 +1799,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Hermes", "hermes"),
         ("Qoder", "qoder"),
         ("OMP", "omp"),
+        ("Muse", "muse"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 

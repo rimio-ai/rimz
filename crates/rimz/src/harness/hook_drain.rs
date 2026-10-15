@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Store;
+use crate::agents::hook_types::HOOK_ENV_EXTRA_NAMES;
 use crate::agents::{HookIngressOwner, HookReply};
 use crate::disk::lock::WorkspaceLock;
 use crate::ids::EventId;
@@ -30,46 +31,7 @@ const RETRY: Duration = Duration::from_millis(5);
 const LOCK_WAIT: Duration = Duration::from_secs(30);
 const WIRE_LIMIT: u64 = 1024 * 1024;
 
-pub const HOOK_ENV_NAMES: &[&str] = &[
-    "RIMZ_AGENT_PID",
-    "RIMZ_HOOK_OWNER_KIND",
-    "RIMZ_RUN_ID",
-    "RIMZ_WORKFLOW_RUN",
-    "RIMZ_WORKSPACE_ID",
-    "RIMZ_PROJECT_ROOT",
-    "RIMZ_WORKTREE_PATH",
-    "RIMZ_CHANNEL",
-    "RIMZ_AGENT_KIND",
-    "RIMZ_AGENT_ID",
-    "RIMZ_AGENT_NAME",
-    "RIMZ_AGENT_PROFILE",
-    "RIMZ_AGENT_ROLE",
-    "RIMZ_AGENT_MODEL",
-    "RIMZ_AGENT_EFFORT",
-    "RIMZ_AGENT_BUDGET",
-    "RIMZ_TEAM",
-    "RIMZ_LAUNCH_GROUP",
-    "RIMZ_LAUNCH_ORDINAL",
-    "RIMZ_RUNTIME_ENV",
-    "RIMZ_LOOP_TASK",
-    "RIMZ_ZELLIJ_BIN",
-    "RIMZ_TMUX_BIN",
-    "RIMZ_MESSAGE_INTERVAL_MS",
-    "RIMZ_MESSAGE_SETTLE_MS",
-    #[cfg(feature = "testkit")]
-    "RIMZ_TEST_ZELLIJ_LOG",
-    "RIMZ_CODEX_SESSIONS",
-    "RIMZ_CODEX_APP_SERVER_SOCK",
-    "RIMZ_CODEX_CONFIG",
-    "TMUX",
-    "TMUX_TMPDIR",
-    "TMUX_PANE",
-    "ZELLIJ",
-    "ZELLIJ_SESSION_NAME",
-    "ZELLIJ_SOCKET_DIR",
-    "ZELLIJ_PANE_ID",
-    "CLAUDE_CODE_PROJECT_DIR_NAME",
-];
+pub use crate::agents::hook_types::HOOK_ENV_NAMES;
 
 type Processor = fn(
     &Store,
@@ -138,16 +100,7 @@ pub fn capture_env() -> BTreeMap<String, String> {
         .with(|frame| frame.borrow().as_ref().map(|frame| frame.env.clone()))
         .unwrap_or_else(|| {
             let mut names = HOOK_ENV_NAMES.to_vec();
-            names.extend([
-                "HOME",
-                "PATH",
-                "TMPDIR",
-                "XDG_CONFIG_HOME",
-                "XDG_DATA_HOME",
-                "XDG_CACHE_HOME",
-                "XDG_STATE_HOME",
-                "XDG_RUNTIME_DIR",
-            ]);
+            names.extend(HOOK_ENV_EXTRA_NAMES);
             for agent in crate::agents::all_definitions() {
                 names.extend(agent.config_home_env_keys());
                 names.extend(agent.temp_dir_env_keys());

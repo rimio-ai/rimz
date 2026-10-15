@@ -17,6 +17,7 @@ use super::adapters::grok::GrokAdapter;
 use super::adapters::hermes::HermesAdapter;
 use super::adapters::kimi::KimiAdapter;
 use super::adapters::kiro::KiroAdapter;
+use super::adapters::muse::MuseAdapter;
 use super::adapters::omp::OmpAdapter;
 use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
@@ -45,6 +46,7 @@ static GROK: AgentDefinition = AgentDefinition::new(&GrokAdapter);
 static HERMES: AgentDefinition = AgentDefinition::new(&HermesAdapter);
 static QODER: AgentDefinition = AgentDefinition::new(&QoderAdapter);
 static OMP: AgentDefinition = AgentDefinition::new(&OmpAdapter);
+static MUSE: AgentDefinition = AgentDefinition::new(&MuseAdapter);
 
 /// Every built-in definition, in stable display order.
 pub(super) static BUILTINS: &[&AgentDefinition] = &[
@@ -64,6 +66,7 @@ pub(super) static BUILTINS: &[&AgentDefinition] = &[
     &HERMES,
     &QODER,
     &OMP,
+    &MUSE,
 ];
 
 /// Every built-in and valid machine-tier plugin definition, in display order.
