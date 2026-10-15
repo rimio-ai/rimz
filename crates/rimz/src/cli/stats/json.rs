@@ -283,10 +283,10 @@ fn stats_json<'a>(
             .map(|day| utc_date(day.max(0) as u64 * DAY_SECS as u64)),
         windows: WindowsJson {
             today: WindowJson {
-                tokens: stats.by_day.get(&today_day).map_or(0, |day| day.tokens),
-                usd: stats.by_day.get(&today_day).map_or(0.0, |day| day.usd),
-                tool_calls: 0,
-                tools: BTreeMap::new(),
+                tokens: stats.total.day.display_tokens(),
+                usd: stats.total.day.usd,
+                tool_calls: stats.total.day.tool_calls,
+                tools: stats.total.day.tools.clone(),
             },
             week: WindowJson {
                 tokens: stats.total.week.display_tokens(),
