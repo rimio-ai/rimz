@@ -86,13 +86,59 @@ fn local_session_tokenizing_is_bounded_per_simple_pane_and_kind() {
         })
         .collect();
     crate::proc::command::TOKENIZE_CALLS.set(0);
-    let (snapshot, _) = room(Vec::new()).with_local_sessions_and_diagnostics(&panes, observations);
+    let (snapshot, diagnostics) =
+        room(Vec::new()).with_local_sessions_and_diagnostics(&panes, observations);
     let calls = crate::proc::command::TOKENIZE_CALLS.get();
     assert!(
         calls > 0 && calls <= panes.len() * (2 + 1),
         "{calls} tokenizations"
     );
     assert!(snapshot.agents.is_empty());
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn stamped_sessions_take_the_first_matching_unused_pane_in_frame_order() {
+    for count in [1, 2] {
+        let panes = [
+            pane("%0", "kiro-cli chat", "/elsewhere"),
+            pane("%2", "kiro-cli chat", "/repo/main"),
+            pane("%1", "kiro-cli chat", "/repo/main"),
+        ];
+        let agents = panes
+            .iter()
+            .map(|pane| agent("kiro", "session", AgentStatus::Idle, 0).in_pane(pane.pane_id.raw()))
+            .collect();
+        let observations = (0..count)
+            .map(|_| event_observation("session", 20, 10))
+            .collect();
+        let (snapshot, diagnostics) =
+            room(agents).with_local_sessions_and_diagnostics(&panes, observations);
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            snapshot.agents[0].pane.as_ref().unwrap().pane_id,
+            panes[count].pane_id
+        );
+        assert_eq!(snapshot.agents.len(), 1);
+    }
+}
+
+#[test]
+fn fenced_session_still_consumes_its_stamped_live_pane() {
+    let pane = pane("%1", "kiro-cli chat", "/repo/main");
+    let durable = agent("kiro", "session", AgentStatus::Idle, 0).in_pane("%1");
+    let mut snapshot = room(vec![durable]);
+    std::sync::Arc::make_mut(&mut snapshot.fenced_sessions).insert((
+        AgentKind::new_unchecked("kiro"),
+        AgentSessionId::from("session"),
+    ));
+    let (snapshot, diagnostics) = snapshot
+        .with_local_sessions_and_diagnostics(&[pane], vec![event_observation("session", 20, 10)]);
+    assert!(diagnostics.is_empty());
+    assert_eq!(
+        snapshot.agents[0].transcript_path.as_deref(),
+        Some("/kiro/session/messages.jsonl")
+    );
 }
 
 #[test]

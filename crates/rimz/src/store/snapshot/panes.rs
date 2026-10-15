@@ -97,20 +97,17 @@ impl<'a> PaneBindingIndex<'a> {
             .min_by(|left, right| left.compare_same_pane_owner(right))
     }
 
-    pub(super) fn stamped_agent_for_session(
-        &self,
-        pane: &PaneRef,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-    ) -> Option<&'a AgentState> {
+    pub(super) fn stamped_agents<'b>(
+        &'b self,
+        pane: &'b PaneRef,
+    ) -> impl Iterator<Item = &'a AgentState> + 'b {
         self.stamped_by_pane
-            .get(&pane.pane_id)?
-            .iter()
+            .get(&pane.pane_id)
+            .into_iter()
+            .flatten()
             .filter_map(|index| self.agents.get(*index))
-            .find(|agent| {
+            .filter(|agent| {
                 agent.parent_agent_id.is_none()
-                    && agent.kind == *kind
-                    && agent.agent_id == *agent_id
                     && agent.pane.as_ref().is_some_and(|stamped| {
                         stamped_agent_matches_live_pane(agent, stamped, pane)
                     })
