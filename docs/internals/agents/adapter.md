@@ -1,6 +1,6 @@
 # The adapter layer
 
-Thirteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
+Fourteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
 
 Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
 
@@ -24,7 +24,7 @@ Everything left of the boundary is provider knowledge, and everything right of i
 
 ## The registry
 
-[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
+[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `minimax`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
 
 | Function | Answers |
 | --- | --- |
@@ -196,9 +196,11 @@ An adapter declares one `managed_integration`, and that single interface drives 
 | Backend | Adapters |
 | --- | --- |
 | Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Grok, Amp, Pi, OpenCode, Kiro |
-| The adapter's own `install.rs`: a TOML rewrite or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity |
+| The adapter's own `install.rs`: a TOML rewrite, multi-file transaction, or native plugin package | Codex, Cursor, Copilot, Kimi, Antigravity, MiniMax |
 
 Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro wraps its whole-file `ManagedSource` in a thin `install.rs` that refuses a Kiro CLI older than 2.31.0 and reclaims the unmarked file earlier RimZ builds wrote. An adapter whose install is refused on this machine or in the login's provider home (Grok's managed-hooks policy) before any file is touched reports it through `install_blocker`, and detected installs (`rimz start`, `rimz setup`, bare `rimz hooks install`) skip it while an install that names the agent still refuses.
+
+MiniMax owns one real native package directory and publishes its manifest last; detection compares all embedded file bytes. Its hook runner scrubs the launch environment, so feed restores the verified owner's environment before resolving RimZ paths. [The MiniMax mapping](./adapter_minimax.md) owns both contracts and their limits.
 
 Install wires every event the state machine needs (the turn-boundary signals) plus the high-frequency per-tool events that keep enrichment current, and each adapter's hook catalog constant is the source of truth for that set. For the JSON-merge adapters, detection walks the whole catalog, so an under-wired config reports not installed and `rimz start` offers the idempotent merge again. An agent that runs before its hooks land is therefore invisible to RimZ rather than half-tracked, and `rimz doctor` reports the install state.
 

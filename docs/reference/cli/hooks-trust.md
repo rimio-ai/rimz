@@ -52,6 +52,7 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `grok` | `${GROK_HOME:-~/.grok}/hooks/rimz.json` | Merge |
 | `kimi` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | Merge into `[[hooks]]` |
 | `kiro` | `${KIRO_HOME:-~/.kiro}/hooks/rimz.json` | Whole file; needs Kiro CLI 2.31.0 or later |
+| `minimax` (`mcode`) | `<dataDir>/plugins/rimz/{.minimax-plugin/plugin.json,hooks/rimz.json,icon.png}` | Whole native plugin package |
 | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/rimz.ts` | Whole file |
 | `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
@@ -61,6 +62,8 @@ RimZ's Kiro integration needs CLI 2.31.0 or later for one shared configuration, 
 A merge adds RimZ's entries and keeps your own hooks and every other value. Rewriting a JSON settings file can reorder its keys, so a dry-run diff may show more lines than the hook entries.
 
 A whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Pi, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
+
+MiniMax's data directory is the first nonempty, trimmed `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, then `~/.minimax`. Its package uses manifest name `rimz` and author `RimZ` for ownership, not `_rimz_managed`; symlinked package directories and a foreign manifest are refused. Install writes the icon and nine-hook document before the manifest. MiniMax discovers it as `rimz@local`, enabled by default. Preview shows the two JSON files, not the binary icon; uninstall removes only `plugins/rimz`. Changed package bytes offer a refresh. RimZ does not inspect MiniMax's private disabled-plugin setting: if disabled, restore it with `mcode plugin enable rimz@local` in the same data-directory environment. [MiniMax's mapping](../../internals/agents/adapter_minimax.md) records the integration limits.
 
 Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall. A Cursor install writes the single `~/.cursor/hooks.json` once per config home it resolves, pairing it each time with that home's `cli-config.json`, and commits each pass on its own: a failed write rolls back the pass it was in, while earlier passes and the statusline record stay. Fix the cause and rerun the install.
 
