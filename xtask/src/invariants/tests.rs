@@ -764,6 +764,32 @@ fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn pane_auto_use_invariant_ignores_declarations() {
+    let root = temp_repo_root("pane-declarations");
+    let fake = root.join("crates/rimz/src/cli/supervised/tests.rs");
+    std::fs::create_dir_all(fake.parent().expect("test path has parent")).expect("mkdir");
+    let declarations = concat!(
+        "impl MuxBackend for Fake {\n",
+        "    fn capture_pane(&self) -> Result<PaneCapture> { panic!() }\n",
+        "    pub fn send_keys(&self) -> Result<()> { panic!() }\n",
+        "    fn  send_key(&self) -> Result<()> { panic!() }\n",
+        "}\n",
+    );
+    std::fs::write(&fake, declarations).expect("write declarations");
+    ensure_no_core_pane_auto_use(&root, std::slice::from_ref(&fake)).unwrap();
+
+    std::fs::write(
+        &fake,
+        format!("{declarations}fn f(fake: &Fake) {{ fake.capture_pane(); }}\n"),
+    )
+    .expect("write call");
+    let err = ensure_no_core_pane_auto_use(&root, std::slice::from_ref(&fake)).unwrap_err();
+    assert!(err.to_string().contains(&format!("{}:6:", fake.display())));
+    assert!(!err.to_string().contains(&format!("{}:2:", fake.display())));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn temp_repo_root(label: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

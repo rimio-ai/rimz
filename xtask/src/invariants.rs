@@ -1648,7 +1648,12 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
             };
             let lines: Vec<&str> = text.lines().collect();
             for (idx, line) in lines.iter().enumerate() {
-                if !line.contains(needle) {
+                // A declaration (a trait fake's stub) reads no pane; only a
+                // call does.
+                let calls = line
+                    .match_indices(needle)
+                    .any(|(at, _)| !line[..at].trim_end().ends_with("fn"));
+                if !calls {
                     continue;
                 }
                 // `rimz agents show --capture` is an explicit user-facing pane
