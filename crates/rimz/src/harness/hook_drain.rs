@@ -679,9 +679,8 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
         .map(UnixStream::connect)
         .transpose()?;
     loop {
-        if !socket_guard.is_current() {
-            return Ok(());
-        }
+        #[cfg(feature = "testkit")]
+        crate::testkit::rendezvous("RIMZ_TEST_HOOK_DRAIN_BEFORE_POLL_CLIENTS");
         if poll_clients(store, &listener, &mut clients)? {
             active = Instant::now();
         }
@@ -709,6 +708,9 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
                 return Ok(());
             }
         }
+        if !socket_guard.is_current() {
+            return Ok(());
+        }
         if clients.is_empty() && active.elapsed() >= idle() {
             break;
         }
@@ -733,9 +735,6 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
             Ok(_) | Err(Errno::EINTR) => {}
             Err(error) => return Err(io::Error::from(error).into()),
         }
-    }
-    if !socket_guard.is_current() {
-        return Ok(());
     }
     drop(socket_guard);
     drop(listener);
