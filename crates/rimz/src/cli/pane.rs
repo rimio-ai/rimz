@@ -740,8 +740,6 @@ fn zoom(
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("pane zoom requires a managed RimZ room session"))?;
         let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
-        let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)?;
-        rimz::harness::hibernate::wake_pane_at(&paths, &sibling.pane_id)?;
         rimz::mux::focus_anchor::execute_action(
             backend,
             &runtime,
