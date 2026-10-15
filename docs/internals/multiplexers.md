@@ -282,7 +282,7 @@ The attached-client sample is the only runtime authority for focus. Hidden tabs 
 
 ### Jumping to a pane
 
-`focus_pane` is a one-way jump that crosses views on both backends: Zellij switches to the containing tab directly, and tmux selects the window, then the pane.
+`focus_pane` is a one-way jump that crosses views on both backends: Zellij switches to the containing tab directly, and tmux selects the pane, then its window, so the presence watch never sees the destination's stale active pane.
 
 Every attached-client jump is wrapped in the two-phase intent in [`focus_anchor.rs`](../../crates/rimz/src/mux/focus_anchor.rs): `Requested` is durable and wakes every renderer before the command, and acceptance moves the same nonce to `Applied`. Native client observations then confirm, supersede, invalidate, or fence it; the phases and verdicts are in [state.md → focus intent](./sidebar/state.md#focus-intent). The separation matters on Zellij, where `action focus-pane-id` can move the visible pane and routed input without a matching `ListClients` update.
 

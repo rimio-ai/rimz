@@ -459,18 +459,18 @@ impl MuxBackend for TmuxBackend {
         // tmux pane ids are server-global, so no session target is needed.
         let _ = session;
         ensure_pane_backend(pane, MuxName::Tmux)?;
-        // `select-pane` activates within its window only — it never switches
-        // the session's current window — so a cross-window jump needs
-        // `select-window` first. A pane id resolves as a window target to the
-        // window holding it, and both verbs ride one batched client call.
+        // `select-pane` sets a hidden window's active pane without switching
+        // to it. Then `select-window` shows it with the right pane already
+        // active, so the presence watch never sees its stale active pane.
+        // A pane id resolves as a window target to the window holding it.
         self.batch(&[
             vec![
-                "select-window".to_owned(),
+                "select-pane".to_owned(),
                 "-t".to_owned(),
                 pane.raw().to_owned(),
             ],
             vec![
-                "select-pane".to_owned(),
+                "select-window".to_owned(),
                 "-t".to_owned(),
                 pane.raw().to_owned(),
             ],

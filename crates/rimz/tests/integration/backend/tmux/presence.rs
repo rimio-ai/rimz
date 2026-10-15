@@ -120,6 +120,68 @@ fn presence_watch_seeds_current_window_before_hidden_pane_activation() {
     drain.join().expect("drain thread");
 }
 
+#[test]
+fn focus_pane_reports_hidden_pane_activation_before_window_switch() {
+    use rimz::mux::tmux::{ControlLine, PresenceWatch};
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("focus-order");
+    server.tmux(&[
+        "new-window",
+        "-d",
+        "-t",
+        "focus-order",
+        "-n",
+        "hidden",
+        "sh",
+    ]);
+    server.tmux(&["split-window", "-d", "-t", "focus-order:hidden", "sh"]);
+    let hidden_window = server.display("focus-order:hidden", "#{window_id}");
+    let hidden_pane = server.display("focus-order:hidden.1", "#{pane_id}");
+    let session_id = server.display("focus-order", "#{session_id}");
+    let watch =
+        PresenceWatch::attach(&server.socket, "focus-order").expect("attach control client");
+    let (rx, drain) = spawn_presence_drain(watch);
+    for _ in 0..3 {
+        recv_presence_line_until(&rx, Duration::from_secs(5), "attach seed", |line| {
+            matches!(line, ControlLine::SeedPane { .. })
+        });
+    }
+
+    server
+        .backend
+        .focus_pane(&PaneId::from_parts(MuxName::Tmux, &hidden_pane), None)
+        .expect("focus_pane");
+    let first = recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "pane activation or window switch",
+        |line| {
+            matches!(line, ControlLine::WindowPaneChanged { window, pane }
+                if window == &hidden_window && pane == &hidden_pane)
+                || matches!(line, ControlLine::SessionWindowChanged { session, window }
+                    if session == &session_id && window == &hidden_window)
+        },
+    );
+    assert!(
+        matches!(first, ControlLine::WindowPaneChanged { .. }),
+        "the target pane must become active before its window is shown: {first:?}",
+    );
+    recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "window switch after pane activation",
+        |line| {
+            matches!(line, ControlLine::SessionWindowChanged { session, window }
+            if session == &session_id && window == &hidden_window)
+        },
+    );
+    server.tmux(&["kill-server"]);
+    wait_for_presence_stream_end(&rx);
+    drain.join().expect("drain thread");
+}
+
 /// The control-mode presence stream surfaces typed subscription changes — the
 /// tmux fast path the elder sidebar consumes. Command changes and window closes
 /// must produce typed control lines within the budget, and killing the server

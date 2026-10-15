@@ -497,9 +497,10 @@ fn ensure_session_unsets_border_options_to_restore_inheritance() {
 }
 
 /// `focus_pane` lands cross-window: tmux's `select-pane` activates within its
-/// window only, so the backend batches `select-window` (a pane id resolves as
-/// a window target to the window holding it) before `select-pane`. The
-/// session's current window must follow the jump.
+/// window only, so the backend batches it before `select-window` to show the
+/// destination with the target pane already active. A pane id resolves as a
+/// window target to the window holding it. The session's current window must
+/// follow the jump.
 
 #[test]
 fn list_panes_metadata_and_cross_window_focus_round_trip() {
