@@ -445,7 +445,7 @@ impl QueryFailures {
 }
 
 fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
-    let entries = registry::read_entries()?;
+    let mut entries = registry::read_entries()?;
     let cwd = std::fs::canonicalize(globals.root.clone().unwrap_or(std::env::current_dir()?))?;
     let workspace = rimz::workspace::WorkspaceResolver::resolve(&cwd, globals.root.clone())?;
     let root = registry::enclosing_checkout(&cwd, &entries)
@@ -453,6 +453,17 @@ fn query_context(globals: &GlobalFlags) -> Result<QueryContext> {
         .to_owned();
     let machine = rimz::config::MachineConfig::load()?;
     let config = rimz::config::effective::load(&machine, workspace.launch_repo_root())?;
+    let runtime = rimz::RuntimePaths::for_project_root(&workspace.project_root)?;
+    if rimz::lsp::admission::revive(&rimz::lsp::admission::AdmissionRequest {
+        root: &root,
+        project: workspace.launch_repo_root(),
+        servers: &config.lsp_servers,
+        untrusted_servers: &[],
+        policy: &machine.lsp,
+        runtime: &runtime,
+    })? {
+        entries = registry::read_entries()?;
+    }
     Ok(QueryContext {
         root,
         entries,

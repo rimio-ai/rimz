@@ -613,23 +613,7 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
             eager: config.policy == LspPolicy::Required,
             settings_hash,
         };
-        let payload = serde_json::to_string(&serve)?;
-        crate::disk::paths::ensure_private_runtime_dir(&request.runtime.shared_root)?;
-        crate::child_process::spawn_detached_rimz(
-            request.runtime,
-            ["lsp", "serve", "--request", &payload],
-            "lsp-broker",
-        )?;
-        let path = registry::directory(&root, server)?.join("entry.json");
-        let Some(entry) = await_startup(
-            &root,
-            server,
-            config.policy,
-            &path,
-            Duration::from_secs(5),
-            &mut result,
-        )?
-        else {
+        let Some(entry) = spawn_broker(request.runtime, &serve, config.policy, &mut result)? else {
             queue.startup_refused.insert(format!("server:{server}"));
             continue;
         };
@@ -640,6 +624,79 @@ pub fn admit_launch(request: &AdmissionRequest<'_>, queue: &mut WaitQueue) -> Re
         queue.ticket = None;
     }
     Ok(result)
+}
+
+/// Respawn a dormant broker for each lost row at the checkout, so the query starts it through
+/// memory admission. Returns whether the caller's entries are stale.
+pub fn revive(request: &AdmissionRequest<'_>) -> Result<bool> {
+    let root = std::fs::canonicalize(request.root)?;
+    let lost: Vec<String> = registry::read_entries()?
+        .into_iter()
+        .filter(|entry| {
+            entry.root == root && !entry.broker_is_alive() && entry.has_live_lease_holder()
+        })
+        .map(|entry| entry.server)
+        .filter(|server| {
+            request
+                .servers
+                .get(server)
+                .is_some_and(|config| matches!(select_server(&root, server, config), Ok(true)))
+        })
+        .collect();
+    if lost.is_empty() {
+        return Ok(false);
+    }
+    let _lock = registry::lock()?;
+    let live = registry::sweep_locked()?;
+    let mut result = Admitted::default();
+    for server in lost {
+        let swept = !registry::directory(&root, &server)?
+            .join("entry.json")
+            .exists();
+        if swept
+            || live
+                .iter()
+                .any(|entry| entry.root == root && entry.server == server)
+        {
+            continue;
+        }
+        let config = &request.servers[&server];
+        let serve = ServeRequest {
+            root: root.clone(),
+            project: request.project.into(),
+            settings_hash: history::settings_hash(config),
+            server,
+            config: config.clone(),
+            policy: request.policy.clone(),
+            eager: false,
+        };
+        spawn_broker(request.runtime, &serve, LspPolicy::Optional, &mut result)?;
+    }
+    Ok(true)
+}
+
+fn spawn_broker(
+    runtime: &crate::disk::paths::RuntimePaths,
+    serve: &ServeRequest,
+    policy: LspPolicy,
+    result: &mut Admitted,
+) -> Result<Option<registry::Entry>> {
+    let payload = serde_json::to_string(serve)?;
+    crate::disk::paths::ensure_private_runtime_dir(&runtime.shared_root)?;
+    crate::child_process::spawn_detached_rimz(
+        runtime,
+        ["lsp", "serve", "--request", &payload],
+        "lsp-broker",
+    )?;
+    let path = registry::directory(&serve.root, &serve.server)?.join("entry.json");
+    await_startup(
+        &serve.root,
+        &serve.server,
+        policy,
+        &path,
+        Duration::from_secs(5),
+        result,
+    )
 }
 
 fn validate_policy(policy: &crate::config::LspConfig) -> Result<()> {
