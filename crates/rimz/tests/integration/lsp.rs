@@ -2347,6 +2347,100 @@ fn lsp_crash_preserves_exit_and_stderr_in_status_and_diagnostics() {
     assert!(broker.wait().unwrap().success());
 }
 
+fn lsp_records(env: &Env, event: &str) -> Vec<Value> {
+    std::fs::read_to_string(env.rimz_home().join("logs/lsp.log.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["event"] == event)
+        .collect()
+}
+
+#[test]
+fn lsp_broker_setup_error_is_recorded() {
+    let env = Env::new();
+    let (mut broker, _, mut request) = start_stub_broker(&env, env.project_root.clone());
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    request.policy.idle_timeout = "invalid".into();
+    env.rimz()
+        .args([
+            "lsp",
+            "serve",
+            "--request",
+            &serde_json::to_string(&request).unwrap(),
+        ])
+        .assert()
+        .failure();
+    let records = lsp_records(&env, "broker_exited");
+    assert_eq!(
+        records.len(),
+        1,
+        "setup failure must record exactly one exit"
+    );
+    assert_eq!(records[0]["root"], json!(request.root));
+    assert_eq!(records[0]["server"], "rust");
+    assert!(
+        records[0]["details"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("idle-timeout")
+    );
+    assert!(records[0]["details"]["reason"].is_null());
+    assert!(records[0]["details"]["broker_pid"].as_u64().unwrap() > 0);
+    assert_eq!(records[0]["details"]["leases"], 0);
+}
+
+#[test]
+fn lsp_dormant_checkout_removal_is_recorded() {
+    let env = Env::new();
+    let (mut broker, _, request) = start_stub_broker(&env, env.project_root.clone());
+    let pid = broker.id();
+    std::fs::remove_dir_all(&request.root).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = broker.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "dormant broker did not exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let records = lsp_records(&env, "broker_exited");
+    assert_eq!(
+        records.len(),
+        1,
+        "dormant terminal stop must record one exit"
+    );
+    assert_eq!(
+        records[0]["details"],
+        json!({"reason":"checkout removed", "broker_pid":pid, "leases":0})
+    );
+}
+
+#[test]
+fn lsp_sweep_records_killed_unleased_broker() {
+    let env = Env::new();
+    let (mut broker, directory, request) = start_stub_broker(&env, env.project_root.clone());
+    let entry: Value =
+        serde_json::from_slice(&std::fs::read(directory.join("entry.json")).unwrap()).unwrap();
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    env.rimz()
+        .args(["lsp", "list", "--all", "--json"])
+        .assert()
+        .success();
+    assert!(!directory.exists());
+    let records = lsp_records(&env, "swept");
+    assert_eq!(records.len(), 1, "sweep must record the removed row");
+    assert_eq!(records[0]["root"], json!(request.root));
+    assert_eq!(records[0]["server"], "rust");
+    for field in ["broker_pid", "state", "peak_rss_kb", "last_crash"] {
+        assert_eq!(records[0]["details"][field], entry[field]);
+    }
+    assert_eq!(records[0]["details"]["leases"], 0);
+}
+
 pub(super) fn spawn_test_broker(
     env: &Env,
     request: &rimz::lsp::admission::ServeRequest,

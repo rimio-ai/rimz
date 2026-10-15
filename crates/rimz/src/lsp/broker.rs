@@ -162,6 +162,49 @@ impl Model {
 
 /// Run the detached broker. Initial publication deliberately does not take admission.lock.
 pub fn serve(mut request: ServeRequest) -> Result<()> {
+    let mut shared: Option<Arc<Shared>> = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serve_inner(&mut request, &mut shared)
+    }));
+    let leases = shared.as_ref().map_or(0, |shared| {
+        shared
+            .model
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry
+            .leases
+            .len()
+    });
+    let mut details = json!({"broker_pid": std::process::id(), "leases": leases});
+    match &result {
+        Ok(Ok(reason)) => details["reason"] = json!(reason),
+        Ok(Err(error)) => details["error"] = json!(error.to_string()),
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("broker panicked");
+            details["error"] = json!(message);
+        }
+    }
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: request.root,
+        server: request.server,
+        event: "broker_exited".into(),
+        details,
+    });
+    match result {
+        Ok(result) => result.map(|_| ()),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn serve_inner(
+    request: &mut ServeRequest,
+    exit_shared: &mut Option<Arc<Shared>>,
+) -> Result<StopReason> {
     let root = std::fs::canonicalize(&request.root)?;
     request.root = root.clone();
     if request.config.command.is_empty() {
@@ -193,7 +236,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         },
         started_at_ms: crate::utils::time::unix_now_ms(),
         ready_at_ms: None,
-        estimate_bytes: estimate(&request)?,
+        estimate_bytes: estimate(request)?,
         settings_hash: request.settings_hash.clone(),
         request_count: 0,
         last_request_at_ms: None,
@@ -236,6 +279,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         requests: socket::Requests::default(),
     });
+    *exit_shared = Some(shared.clone());
     let routing = shared.clone();
     let router = std::thread::spawn(move || router::run(routing, router_rx));
     socket::listen(listener, shared.clone());
@@ -246,7 +290,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let mut last_housekeeping = Instant::now();
     let reason = loop {
         if last_housekeeping.elapsed() >= Duration::from_secs(5) {
-            housekeeping(&shared, &request)?;
+            housekeeping(&shared, request)?;
             last_housekeeping = Instant::now();
         }
         {
@@ -267,7 +311,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
             }
             model.start_requested = false;
         }
-        let admitted = prepare_start(&shared, &request, eager)?;
+        let admitted = prepare_start(&shared, request, eager)?;
         eager = false;
         if !admitted {
             continue;
@@ -276,7 +320,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
         let _ = shared
             .router
             .send(router::RouterEvent::Starting(lifetime_epoch));
-        let result = lifetime(&shared, &request, lifetime_epoch);
+        let result = lifetime(&shared, request, lifetime_epoch);
         if let Err(error) = &result {
             tracing::warn!(%error, "language server stopped");
             shared.stop(StopReason::Crashed);
@@ -320,7 +364,7 @@ pub fn serve(mut request: ServeRequest) -> Result<()> {
     let _lock = registry::lock()?;
     drop(_socket);
     std::fs::remove_dir_all(directory)?;
-    Ok(())
+    Ok(reason)
 }
 
 fn estimate(request: &ServeRequest) -> Result<u64> {

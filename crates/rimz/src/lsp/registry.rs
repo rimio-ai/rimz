@@ -349,6 +349,19 @@ fn sweep_at(base: &Path) -> Result<Vec<Entry>> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        crate::diag::lsp::append(&crate::diag::lsp::Record {
+            at: jiff::Timestamp::now(),
+            root: entry.root,
+            server: entry.server,
+            event: "swept".into(),
+            details: serde_json::json!({
+                "broker_pid": entry.broker_pid,
+                "state": entry.state,
+                "leases": entry.leases.len(),
+                "peak_rss_kb": entry.peak_rss_kb,
+                "last_crash": entry.last_crash,
+            }),
+        });
     }
     Ok(live)
 }
