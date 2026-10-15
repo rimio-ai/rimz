@@ -219,10 +219,8 @@ done
         message_id
     );
     assert_eq!(std::fs::read(&received).unwrap(), before);
+    // The Done boundary's hook delivers the notice; a sweep here would race it.
     hook("Stop");
-    command()
-        .args(["message", "sweep"])
-        .assert_success_within_timeout("deliver after the receiver's Done boundary");
     let text = wait_for_text(&received, &pending[0].text, &server, &pane);
     let delivered = &text[before.len()..];
     assert!(delivered.contains("Type: STAGE"), "{delivered}");
@@ -260,10 +258,8 @@ done
         .reconcile_stale_messages(&workspace.session_name, deadline, 0)
         .unwrap();
     assert_eq!(report.timed_out, 1);
+    // The registration's hook queues the re-wake and delivers it.
     hook("SessionStart");
-    command()
-        .args(["message", "sweep"])
-        .assert_success_within_timeout("deliver to the registered idle receiver");
     assert_eq!(stage_count(), 2);
     let messages = store.list_messages().unwrap();
     let rewake = messages
@@ -275,8 +271,10 @@ done
         })
         .expect("registration creates a still-yours notice");
     assert_eq!(rewake.gate, DeliveryGate::Done);
-    assert_eq!(rewake.status, MessageStatus::Sent);
     let text = wait_for_text(&received, &rewake.text, &server, &pane);
+    assert!(store.list_messages().unwrap().iter().any(|message| {
+        message.message_id == rewake.message_id && message.status == MessageStatus::Sent
+    }));
     let delivered = &text[before.len()..];
     assert!(delivered.contains("Type: STAGE"), "{delivered}");
     assert!(delivered.contains("From: @rimz"), "{delivered}");
