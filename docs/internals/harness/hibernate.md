@@ -2,6 +2,8 @@
 
 Hibernation is a default-on memory optimization under `[agents.hibernate]`, with `after = "30m"` and `deep_after = "120m"`. Both durations are validated at use, cannot exceed 24 hours, and require `deep_after >= after`. Off Linux the loader disables it silently unless `enabled = true` was explicit, in which case start prints a notice.
 
+Live checks: [Hibernate an agent](../../contributing/sidebar-live-check.md#hibernate-an-agent) covers freeze, deepen, and wake in a sandbox room with a stub agent; a check against a real provider's turns needs a host room the user starts ([recipe](../../contributing/sidebar-live-check.md#check-against-a-real-provider-login)).
+
 ## Admission
 
 `crates/rimz/src/harness/hibernate.rs::admit` validates the schedule and returns the capability verdict without publishing it. Start uses that verdict for its notice and early config refusal. `crates/rimz/src/room/birth.rs::RoomContext::birth` publishes admission before session creation and resume seeding, then again after its health gate and any recovery reset, for normal and supervised rooms alike. `crates/rimz/src/harness/hibernate.rs::Admission::publish` writes the rename-atomic runtime cache at `live/hibernate/admission.json`; GC preserves that file regardless of age, while sibling pacing and wake caches still expire. Launch planning, the producer, and the freeze helper require both the enabled setting and an available cached verdict; an absent or unreadable cache disables them. Adding swap or repairing delegation takes effect at the next room birth or reattach. `crates/rimz/src/harness/hibernate.rs::inspect` probes live capabilities for doctor, whose `active` line reports whether hibernation is available or why it is skipped.
