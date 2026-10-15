@@ -246,6 +246,49 @@ fn successor_inherits_prior_launch_ids() {
 }
 
 #[test]
+fn live_successor_keeps_its_launch_after_predecessor_picker_revive() {
+    let mut events = resumed_fork_events("tmux:%1");
+    events.push(launch_event(
+        "codex",
+        AgentLaunchPayload {
+            pane_id: Some(PaneId::parse("tmux:%7").unwrap()),
+            launch_id: Some("launch_picker".into()),
+            prompt: None,
+            ..launch_payload("launch_picker", "picker-card")
+        },
+    ));
+    events.push(raw_lifecycle(
+        "codex",
+        json!({
+            "agent_id": "primary", "pane_id": "tmux:%7",
+            "signal": {"signal": "turn_started"}
+        }),
+    ));
+    for (index, event) in events.iter_mut().enumerate().skip(6) {
+        event.timestamp = Timestamp::from_second(epoch().as_second() + index as i64).unwrap();
+    }
+    let agents = reduce_agent_states(&events);
+    let primary = agents.iter().find(|row| row.agent_id == "primary").unwrap();
+    let fork = agents
+        .iter()
+        .find(|row| row.agent_id == "side-thread")
+        .unwrap();
+    assert!(primary.ended_at.is_none() && primary.holds_open_turn());
+    assert_eq!(
+        primary.prior_launch_ids,
+        vec![AgentSessionId::from("launch_coder")]
+    );
+    let codex = AgentKind::new_unchecked("codex");
+    assert_eq!(
+        crate::address::launch_row(&agents, &codex, &"launch_coder".into())
+            .map(|row| row.agent_id.as_str()),
+        Some("side-thread")
+    );
+    assert!(crate::address::is_launch_row(&agents, fork));
+    assert!(crate::address::is_launch_row(&agents, primary));
+}
+
+#[test]
 fn lifecycle_reduces_pane_id_and_carries_it_forward() {
     // The hook stamps the mux pane id on every lifecycle event so the
     // reducer can bind each agent to its own pane. A later event that omits

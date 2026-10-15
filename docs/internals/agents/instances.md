@@ -75,6 +75,8 @@ Inheritance runs after each lifecycle reduction. A successor that registers befo
 
 A row rebound to a new launch keeps answering to its earlier launch ids through `prior_launch_ids`, so its pre-close children and peers stay linked. A picker launch merges into a known session when that session is paneless or ended, even if the ended row retains its old pane stamp; a live pane-stamped session is not taken over.
 
+A launch id can be held by several conversations of one instance at once (a fork, a `/clear`, a compaction successor); a change that maps a launch id to one row must say which of them wins. `launch_row` prefers a live row that holds the id as its current `launch_id` over a live row that answers to it only as an earlier id, so a successor still running on the id keeps resolving to itself after its predecessor is revived. Child links stay broader: a child stamped with that id matches both rows through `parent_is`.
+
 The inherited identity excludes the card `name`, `name_explicit`, `kind_ordinal`, and `registered_at`. Only a provider-linked compaction continuation takes its predecessor's `registered_at`, so it keeps the open-turn rank the predecessor held.
 
 The ownership rule also selects one un-ended row per launch as its current occupant. Only that row renders and resolves launch-derived handles such as the role; other conversations stay audit records, and a snapshot with a live pane never offers them as message targets. When every row has ended, the most recently active row keeps the launch handle as the audit and resume representative.
