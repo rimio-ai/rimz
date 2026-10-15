@@ -29,3 +29,5 @@ An internal repair keeps a durable record of what it did — [`focus_repair.rs`]
 ## Tests
 
 Severity mapping, rotation, and rate-limit windows stay in-module beside the file they cover. Fixtures pin time, so a record's envelope is asserted rather than approximated.
+
+A new `DiagEvent` kind also gets a row in the Event taxonomy table and its severity row in the Severity table of `docs/internals/diagnostics.md`; both tables enumerate every kind.
