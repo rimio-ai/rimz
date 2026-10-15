@@ -1,14 +1,4 @@
 
-# Keeps main synced with origin; assumes push rights on the remote.
-[tasks.sync-repo-rimz]
-agent = "codex"
-prompt = "Repair the scheduled repository sync. If a rebase is in progress, resolve the conflicts preserving both upstream and local intent, stage the files, and finish with GIT_EDITOR=true git rebase --continue. If the failure came from cargo xtask install-dev, fix the compile errors and rerun it until it passes; the sync script runs install-dev itself after code changes, so do not run it otherwise. Finish by rerunning ./scripts/sync-repo --loop-check until it exits 0."
-check = "./scripts/sync-repo --loop-check"
-on = "fail"
-mode = "yolo"
-timeout = "2h"
-every = "5m"
-
 # The coordinator is read-only at the project root. Each batch gets its own fresh deps-repair-* worktree
 # and one spot team; the fire ends after launch, and later fires stop finished lanes or idle on active ones.
 [tasks.dependabot-repair]

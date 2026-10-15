@@ -6,7 +6,7 @@ This repository's dependency loop queries GitHub Dependabot PRs and launches one
 
 Each repository loop owns a directory under [loops/](../../loops/README.md). This task keeps its [Python coordinator](../../loops/dependabot/dependabot.py), [team prompt](../../loops/dependabot/prompt.md), and tests together in `loops/dependabot/`. The schedule is declared directly in [.rimz/config.toml](../../.rimz/config.toml), without an installer or machine-local definition for this task. The scheduled command is `uv run --no-project --script loops/dependabot/dependabot.py run`, started at the project root.
 
-The coordinator never edits files, so it runs read-only at the project root, where project check commands start; `scripts/sync-repo` keeps that primary checkout on `origin/main`. Only a selected repair attempt gets a worktree, and it is fresh for that attempt.
+The coordinator never edits files, so it runs read-only at the project root, where project check commands start; `scripts/trunk-install` keeps that primary checkout on `origin/main` when a machine loop runs it. Only a selected repair attempt gets a worktree, and it is fresh for that attempt.
 
 `run` takes the repository-common lock and queries the live agent cards and PRs. A repair lane is finished only when its checkout's `blackboard.md` has `Stage: Done` and no open PR heads its branch. The first `Stage:` line decides; its value is trimmed and a valid terminal ` (@owner)` is dropped. A mid-stage board, an open PR (even at `Done`), or a missing or unreadable checkout/board keeps the lane occupied. A board with no `Stage:` line is also occupied. If any repair pane belongs to an unfinished lane, the fire returns idle without stopping anyone or reclaiming trees.
 

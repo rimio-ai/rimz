@@ -1,0 +1,403 @@
+#!/usr/bin/env -S uv run python
+# /// script
+# requires-python = ">=3.11"
+# ///
+# Usage:
+#   scripts/trunk-install [--branch main] [--remote origin] [--force-install]
+#
+# Keeps the project-root checkout's trunk synced with its remote and installs
+# the build it carries. Each run, from the repository's main worktree:
+#
+#   1. Skips (exit 0) when the checkout is not on the trunk branch or has local
+#      changes: the root is shared, so this never switches branches or stashes.
+#   2. Fetches the remote, then fast-forwards, pushes local-only commits, or
+#      rebases diverged local commits and pushes the result.
+#   3. When the trunk differs from the last installed commit and the change
+#      touches build inputs, runs `cargo xtask install-dev`, `cargo xtask
+#      install-system`, and a best-effort `rimz reload`.
+#
+# A rebase conflict, a rejected push, or a failed install exits nonzero so the
+# RimZ loop's `on = "fail"` agent can act. A failed install is not retried for
+# the same commit (the next trunk move retries it) unless `--force-install` is
+# given. Scheduled as the machine loop task `trunk-install`:
+#
+#   rimz loop add trunk-install --root <repo> --every 1m \
+#     --check './scripts/trunk-install' --check-timeout 30m \
+#     --on fail --agent codex --mode yolo --timeout 1h --prompt '...'
+from __future__ import annotations
+
+import argparse
+import atexit
+import os
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+
+LOCK_FILES = ("token", "pid", "host", "started", "repo", "branch", "remote")
+LOCK_DIR = "rimz-trunk-install.lock"
+INSTALLED_RECORD = "rimz-trunk-install.installed"
+FAILED_RECORD = "rimz-trunk-install.failed"
+INSTALL_PATHS = (
+    ".cargo",
+    "Cargo.lock",
+    "Cargo.toml",
+    "crates",
+    "rust-toolchain.toml",
+    "scripts/install-dev-tools.sh",
+    "xtask",
+)
+
+
+class CommandFailed(Exception):
+    def __init__(self, args: list[str], returncode: int) -> None:
+        self.args_list = args
+        self.returncode = returncode
+        super().__init__(f"{args[0]} exited with status {returncode}")
+
+
+class FatalError(Exception):
+    def __init__(self, message: str, code: int = 1) -> None:
+        self.message = message
+        self.code = code
+        super().__init__(message)
+
+
+@dataclass
+class Config:
+    branch: str
+    remote: str
+    rimz_bin: str
+    force_install: bool
+
+
+def parse_args(argv: list[str]) -> Config:
+    parser = argparse.ArgumentParser(
+        usage="%(prog)s [--branch NAME] [--remote NAME] [--force-install]",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--branch", default=os.environ.get("RIMZ_TRUNK_INSTALL_BRANCH", "main"))
+    parser.add_argument("--remote", default=os.environ.get("RIMZ_TRUNK_INSTALL_REMOTE", "origin"))
+    parser.add_argument(
+        "--force-install",
+        action="store_true",
+        help="install the current trunk even if it is already installed or failed before",
+    )
+    args = parser.parse_args(argv)
+    return Config(
+        branch=args.branch,
+        remote=args.remote,
+        rimz_bin=os.environ.get("RIMZ_BIN", "rimz"),
+        force_install=args.force_install,
+    )
+
+
+def log(message: str) -> None:
+    print(f"rimz-trunk-install: {message}", file=sys.stderr, flush=True)
+
+
+def die(message: str, code: int = 1) -> None:
+    raise FatalError(message, code)
+
+
+def run(
+    args: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+    quiet: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    stdout = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet else None)
+    stderr = subprocess.PIPE if capture else (subprocess.DEVNULL if quiet else None)
+    try:
+        result = subprocess.run(args, check=False, stderr=stderr, stdout=stdout, text=True)
+    except FileNotFoundError:
+        die(f"{args[0]} is not on PATH")
+    if check and result.returncode != 0:
+        raise CommandFailed(args, result.returncode)
+    return result
+
+
+def git(*args: str, check: bool = True, capture: bool = False, quiet: bool = False) -> subprocess.CompletedProcess[str]:
+    return run(["git", *args], check=check, capture=capture, quiet=quiet)
+
+
+def git_output(*args: str, quiet: bool = False) -> str:
+    return git(*args, capture=True, quiet=quiet).stdout.strip()
+
+
+def git_success(*args: str) -> bool:
+    return git(*args, check=False, quiet=True).returncode == 0
+
+
+def read_first_line(path: Path) -> str:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return handle.readline().strip()
+    except OSError:
+        return ""
+
+
+def write_atomic(path: Path, value: str) -> None:
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(f"{value}\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def remove_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+class TrunkInstall:
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        try:
+            self.repo_root = Path(git_output("rev-parse", "--show-toplevel", quiet=True))
+        except CommandFailed:
+            die("run inside a git repository")
+        os.chdir(self.repo_root)
+
+        git_common_dir = Path(git_output("rev-parse", "--git-common-dir"))
+        if not git_common_dir.is_absolute():
+            git_common_dir = self.repo_root / git_common_dir
+        self.git_common_dir = git_common_dir
+        self.lock_dir = git_common_dir / LOCK_DIR
+        self.installed_record = git_common_dir / INSTALLED_RECORD
+        self.failed_record = git_common_dir / FAILED_RECORD
+        self.lock_host = socket.gethostname() or "unknown"
+        self.lock_token = f"{os.getpid()}.{secrets.token_hex(4)}.{int(time.time())}"
+        self.lock_acquired = False
+
+    # Lock -----------------------------------------------------------------
+
+    def acquire_lock(self) -> None:
+        while True:
+            try:
+                self.lock_dir.mkdir()
+                break
+            except FileExistsError:
+                if not self.maybe_clear_stale_lock():
+                    raise SystemExit(0)
+        self.lock_acquired = True
+        atexit.register(self.cleanup_lock)
+        self.install_signal_handlers()
+        self.write_lock_metadata()
+
+    def maybe_clear_stale_lock(self) -> bool:
+        owner_pid = read_first_line(self.lock_dir / "pid")
+        owner_host = read_first_line(self.lock_dir / "host")
+        owner_started = read_first_line(self.lock_dir / "started")
+        started_detail = f", started {owner_started}" if owner_started else ""
+
+        if not owner_pid:
+            return self.clear_stale_lock("missing owner metadata")
+        if owner_pid == "0" or not owner_pid.isdigit():
+            return self.clear_stale_lock(f"invalid owner pid {owner_pid}")
+        if owner_host and owner_host != self.lock_host:
+            log(f"another run may be active on {owner_host} (pid {owner_pid}{started_detail}); skipping")
+            return False
+
+        try:
+            os.kill(int(owner_pid), 0)
+        except ProcessLookupError:
+            return self.clear_stale_lock(f"owner pid {owner_pid} is gone")
+        except PermissionError:
+            pass
+
+        log(f"another run is active (pid {owner_pid}{started_detail}); skipping")
+        return False
+
+    def clear_stale_lock(self, reason: str) -> bool:
+        for name in LOCK_FILES:
+            remove_file(self.lock_dir / name)
+        try:
+            self.lock_dir.rmdir()
+        except OSError:
+            log("another run is active; skipping")
+            return False
+        log(f"removed stale lock: {reason}")
+        return True
+
+    def cleanup_lock(self) -> None:
+        if not self.lock_acquired or not self.lock_dir.is_dir():
+            return
+        if read_first_line(self.lock_dir / "token") != self.lock_token:
+            return
+        for name in LOCK_FILES:
+            remove_file(self.lock_dir / name)
+        try:
+            self.lock_dir.rmdir()
+        except OSError:
+            pass
+
+    def install_signal_handlers(self) -> None:
+        def handle(signum: int, _frame: object) -> None:
+            raise SystemExit(128 + signum)
+
+        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            signal.signal(signum, handle)
+
+    def write_lock_metadata(self) -> None:
+        values = {
+            "token": self.lock_token,
+            "pid": str(os.getpid()),
+            "host": self.lock_host,
+            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "repo": str(self.repo_root),
+            "branch": self.config.branch,
+            "remote": self.config.remote,
+        }
+        for name, value in values.items():
+            (self.lock_dir / name).write_text(f"{value}\n", encoding="utf-8")
+
+    # Run ------------------------------------------------------------------
+
+    def run(self) -> int:
+        self.acquire_lock()
+        if not git_success("remote", "get-url", self.config.remote):
+            die(f"remote {self.config.remote} is not configured")
+
+        if self.rebase_in_progress():
+            self.request_rebase_repair()
+
+        current = git_output("rev-parse", "--abbrev-ref", "HEAD")
+        if current != self.config.branch:
+            log(f"checkout is on {current}, not {self.config.branch}; skipping")
+            return 0
+        if self.tree_dirty():
+            log(f"{self.config.branch} has local changes; skipping")
+            return 0
+
+        self.sync_branch()
+        self.install_if_needed()
+        return 0
+
+    # Sync -----------------------------------------------------------------
+
+    def rebase_in_progress(self) -> bool:
+        for name in ("rebase-merge", "rebase-apply"):
+            path = Path(git_output("rev-parse", "--git-path", name))
+            if not path.is_absolute():
+                path = self.repo_root / path
+            if path.is_dir():
+                return True
+        return False
+
+    def tree_dirty(self) -> bool:
+        git("update-index", "-q", "--refresh", check=False, quiet=True)
+        return (
+            not git_success("diff", "--quiet")
+            or not git_success("diff", "--cached", "--quiet")
+            or bool(git_output("ls-files", "--others", "--exclude-standard"))
+        )
+
+    def request_rebase_repair(self) -> None:
+        status_short = git_output("status", "--short", "--branch")
+        print(
+            f"""Trunk sync needs a rebase repaired.
+
+Repository: {self.repo_root}
+Branch: {self.config.branch}
+Remote: {self.config.remote}/{self.config.branch}
+
+Current status:
+{status_short}
+
+Resolve the conflicts preserving both upstream and local intent, stage the files, finish with `GIT_EDITOR=true git rebase --continue`, then rerun `./scripts/trunk-install` until it exits 0.""",
+            file=sys.stderr,
+            flush=True,
+        )
+        die("rebase conflicts need agent repair")
+
+    def push(self) -> None:
+        log(f"pushing {self.config.branch}")
+        git("push", self.config.remote, self.config.branch)
+
+    def sync_branch(self) -> None:
+        remote_ref = f"refs/remotes/{self.config.remote}/{self.config.branch}"
+        local_ref = f"refs/heads/{self.config.branch}"
+
+        git("fetch", "--prune", "--quiet", self.config.remote)
+
+        if not git_success("show-ref", "--verify", "--quiet", remote_ref):
+            die(f"{self.config.remote}/{self.config.branch} does not exist")
+
+        local_oid = git_output("rev-parse", local_ref)
+        remote_oid = git_output("rev-parse", remote_ref)
+        if local_oid == remote_oid:
+            return
+
+        if git_success("merge-base", "--is-ancestor", local_oid, remote_oid):
+            log(f"fast-forwarding {self.config.branch} to {self.config.remote}/{self.config.branch}")
+            git("merge", "--ff-only", "--quiet", remote_ref)
+        elif git_success("merge-base", "--is-ancestor", remote_oid, local_oid):
+            log(f"{self.config.branch} is ahead of {self.config.remote}/{self.config.branch}")
+            self.push()
+        else:
+            log(f"{self.config.branch} diverged from {self.config.remote}/{self.config.branch}; rebasing local commits")
+            if git("rebase", remote_ref, check=False).returncode != 0:
+                self.request_rebase_repair()
+            self.push()
+
+    # Install --------------------------------------------------------------
+
+    def install_if_needed(self) -> None:
+        head = git_output("rev-parse", f"refs/heads/{self.config.branch}")
+        installed = read_first_line(self.installed_record)
+
+        if not self.config.force_install:
+            if installed == head:
+                return
+            if read_first_line(self.failed_record) == head:
+                log(f"install already failed at {head[:12]}; waiting for the next trunk move")
+                return
+            if installed and not self.touches_build_inputs(installed, head):
+                write_atomic(self.installed_record, head)
+                return
+
+        log(f"installing {head[:12]}")
+        try:
+            run(["cargo", "xtask", "install-dev"])
+            run(["cargo", "xtask", "install-system"])
+        except CommandFailed:
+            write_atomic(self.failed_record, head)
+            raise
+        write_atomic(self.installed_record, head)
+        remove_file(self.failed_record)
+
+        # Reload is latency, not correctness: a running sidebar that misses it
+        # keeps the old build until its next restart.
+        if run([self.config.rimz_bin, "reload"], check=False).returncode != 0:
+            log("rimz reload failed; running sidebars keep the previous build")
+
+    def touches_build_inputs(self, installed: str, head: str) -> bool:
+        if not git_success("cat-file", "-e", f"{installed}^{{commit}}"):
+            return True
+        changed = git("diff", "--quiet", installed, head, "--", *INSTALL_PATHS, check=False, quiet=True)
+        if changed.returncode not in (0, 1):
+            raise CommandFailed(["git", "diff", installed, head], changed.returncode)
+        return changed.returncode == 1
+
+
+def main(argv: list[str]) -> int:
+    config = parse_args(argv)
+    try:
+        return TrunkInstall(config).run()
+    except FatalError as error:
+        log(error.message)
+        return error.code
+    except CommandFailed as error:
+        log(f"{' '.join(error.args_list)} exited with status {error.returncode}")
+        return error.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
