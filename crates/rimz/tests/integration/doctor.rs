@@ -235,22 +235,12 @@ fn doctor_flags_clock_tasks_without_a_scheduler() {
             .contains("rimz loop timer install")
     );
 
-    let runtime = env.runtime_paths();
-    runtime.ensure_dirs().unwrap();
-    let instance = SidebarInstanceId::new();
-    let heartbeat = SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        instance.clone(),
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
         MuxName::Tmux,
         "rimz-test",
-        runtime.sock_dir.join("sidebar.sock"),
-        None,
+        "sidebar",
     );
-    std::fs::write(
-        runtime.sidebar_heartbeat_path(&instance),
-        serde_json::to_vec(&heartbeat).unwrap(),
-    )
-    .unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(report["loop_tasks"]["tasks"][0]["room_open"], true);
     assert_eq!(report["loop_tasks"]["unscheduled"], json!([]));
@@ -1824,11 +1814,9 @@ fn doctor_reports_cross_backend_room_conflicts_and_duplicate_groups() {
             runtime.sock_dir.join(format!("event.{name}.sock")),
             Some(PaneId::parse(pane).expect("pane id")),
         );
-        rimz::disk::atomic::write_temp_then_rename(
-            &runtime.heartbeat_dir.join(format!("sidebar.{name}.json")),
-            &heartbeat,
-        )
-        .expect("write heartbeat");
+        let path = runtime.heartbeat_dir.join(format!("sidebar.{name}.json"));
+        rimz::disk::atomic::write_temp_then_rename(&path, &heartbeat).expect("write heartbeat");
+        crate::common::room::date_heartbeat_as_live(&path);
     }
 
     let report = doctor_with_mux(&env, &stub_dir, "--tmux");
