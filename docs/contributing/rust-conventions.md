@@ -211,6 +211,8 @@ When a change adds a verdict, marker, or timer to an existing state machine, enu
 
 A test of a polling consumer holds each state the consumer must observe open for at least three poll intervals: a state that opens and closes between two polls is never seen, and the test then passes on the broken build. The negative control for a regression test is the fix commit's files checked out from its parent, run several times when the test is timing-based, never a hand-made mutant of the fixed code.
 
+A test of a timing floor or rate limit queues the inputs it means to merge before the worker can wake (sent from inside the cycle, or held behind a barrier) instead of racing a sleep against the floor; it asserts a delay's lower bound against the floor and its upper bound against the floor plus generous slack.
+
 ## Dependency budget
 
 The direct-dependency snapshot. Entries move when a better-designed alternative wins on design fit, maintenance, footprint, and security. The full justification for each entry — what it provides, what it replaces, why RimZ does not write the moral equivalent in twenty lines — lives as a comment beside it in the workspace [Cargo.toml](../../Cargo.toml); this table is the policy summary.
