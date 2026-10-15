@@ -2,6 +2,145 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn issues_carry_user_run_fixes_and_surfaces() {
+    use crate::blocker::Surface::{Plain, Privacy, Security};
+    let cases = [
+        (
+            Issue::TrafficDisabled {
+                variable: "DISABLE_GROWTHBOOK",
+                settings_path: None,
+            },
+            vec![(Some("unset DISABLE_GROWTHBOOK"), Privacy)],
+        ),
+        (
+            Issue::TrafficDisabled {
+                variable: "DISABLE_GROWTHBOOK",
+                settings_path: Some(settings_path()),
+            },
+            vec![(None, Privacy)],
+        ),
+        (
+            Issue::RemoteControlDisabled {
+                settings_path: settings_path(),
+            },
+            vec![(None, Plain)],
+        ),
+        (
+            Issue::ConsentPending {
+                config_path: "/home/u/.claude.json".into(),
+            },
+            vec![
+                (Some("chmod u+w /home/u"), Plain),
+                (Some("claude remote-control"), Plain),
+            ],
+        ),
+        (
+            Issue::ConsentRefused {
+                config_path: "/home/u/.claude.json".into(),
+            },
+            vec![(None, Plain)],
+        ),
+        (
+            Issue::TooOld {
+                found: CliVersion::new(2, 1, 50),
+            },
+            vec![(Some("claude update"), Plain)],
+        ),
+        (
+            Issue::FolderTrust {
+                fix: "Grant folder trust".into(),
+                command: Some("rimz trust grant --agents claude".into()),
+            },
+            vec![(Some("rimz trust grant --agents claude"), Security)],
+        ),
+        (
+            Issue::AuthConflict {
+                sources: vec![
+                    AuthConflictSource::ApiKeyEnv,
+                    AuthConflictSource::AuthTokenEnv,
+                    AuthConflictSource::OAuthTokenEnv,
+                    AuthConflictSource::ApiKeyHelperSetting,
+                    AuthConflictSource::SettingsEnv,
+                    AuthConflictSource::EndpointEnv,
+                    AuthConflictSource::SettingsEndpoint,
+                ],
+            },
+            vec![
+                (Some("unset ANTHROPIC_API_KEY"), Security),
+                (Some("unset ANTHROPIC_AUTH_TOKEN"), Security),
+                (Some("unset CLAUDE_CODE_OAUTH_TOKEN"), Security),
+                (None, Security),
+                (None, Security),
+                (
+                    Some(
+                        "unset ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY",
+                    ),
+                    Security,
+                ),
+                (None, Security),
+                (Some("claude auth login"), Security),
+            ],
+        ),
+    ];
+    for (issue, expected) in cases {
+        let blocker = issue.blocker(&settings_path(), &BTreeMap::new());
+        assert_eq!(
+            blocker
+                .fixes
+                .iter()
+                .map(|fix| (fix.command.as_deref(), fix.surface))
+                .collect::<Vec<_>>(),
+            expected,
+            "{issue:?}"
+        );
+        assert!(!blocker.problem.contains('\n'));
+        for fix in &blocker.fixes {
+            assert!(
+                !fix.command
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("rimz config set")
+            );
+            if fix.command.is_none() && !matches!(issue, Issue::ConsentRefused { .. }) {
+                assert!(
+                    fix.summary.contains("/home/u/.claude/settings.json"),
+                    "{fix:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn claude_commands_run_in_the_rooms_account_home() {
+    let login_env = BTreeMap::from([(
+        "CLAUDE_CONFIG_DIR".to_owned(),
+        "/home/u/.rimz/accounts/claude/my work".to_owned(),
+    )]);
+    let commands = |issue: Issue| {
+        issue
+            .blocker(&settings_path(), &login_env)
+            .fixes
+            .into_iter()
+            .filter_map(|fix| fix.command)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        commands(Issue::AuthConflict { sources: vec![] }),
+        ["CLAUDE_CONFIG_DIR='/home/u/.rimz/accounts/claude/my work' claude auth login"]
+    );
+    assert_eq!(
+        commands(Issue::ConsentPending {
+            config_path: "/home/u/.rimz/accounts/claude/my work/.claude.json".into(),
+        }),
+        [
+            "chmod u+w '/home/u/.rimz/accounts/claude/my work'",
+            "CLAUDE_CONFIG_DIR='/home/u/.rimz/accounts/claude/my work' claude remote-control",
+        ]
+    );
+}
+
 fn assert_traffic_block(variable: &'static str, in_settings: bool) {
     for version in [None, v(50), v(296)] {
         let settings = if in_settings {
@@ -22,15 +161,19 @@ fn assert_traffic_block(variable: &'static str, in_settings: bool) {
             None,
         )
         .expect_err("traffic switches must block remote control")
-        .to_string();
-        assert!(issue.contains(variable), "{issue}");
-        assert!(issue.contains("[remote_control] claude = false"), "{issue}");
+        .blocker(&settings_path(), &BTreeMap::new());
+        assert!(issue.problem.contains(variable), "{issue}");
+        assert_eq!(issue.fixes[0].surface, crate::blocker::Surface::Privacy);
+        assert_eq!(
+            issue.fixes[0].command,
+            (!in_settings).then(|| format!("unset {variable}"))
+        );
         let source = if in_settings {
             "/home/u/.claude/settings.json"
         } else {
             "launch environment"
         };
-        assert!(issue.contains(source), "{issue}");
+        assert!(issue.problem.contains(source), "{issue}");
     }
 }
 
@@ -543,34 +686,6 @@ fn an_unreadable_global_config_leaves_the_host_launchable() {
         )
         .is_ok()
     );
-}
-
-#[test]
-fn consent_issues_keep_claude_setup_guidance() {
-    let pending = Issue::ConsentPending {
-        config_path: PathBuf::from("/home/u/.claude.json"),
-    }
-    .to_string();
-    assert!(pending.contains("[remote_control] claude"));
-    assert!(pending.contains("remoteDialogSeen"));
-    assert!(pending.contains("/home/u/.claude.json"));
-
-    let refused = Issue::ConsentRefused {
-        config_path: PathBuf::from("/home/u/.claude.json"),
-    }
-    .to_string();
-    assert!(refused.contains("[remote_control] claude"));
-    assert!(refused.contains("remoteDialogSeen"));
-}
-
-#[test]
-fn issues_keep_claude_setup_guidance() {
-    let issue = Issue::TooOld {
-        found: CliVersion::new(2, 1, 50),
-    }
-    .to_string();
-    assert!(issue.contains("[remote_control] claude"));
-    assert!(issue.contains(">= 2.1.51"));
 }
 
 #[test]

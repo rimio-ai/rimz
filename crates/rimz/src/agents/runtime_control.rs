@@ -45,30 +45,34 @@ pub enum DaemonSessions {
 pub struct RuntimeControlIssue {
     kind: &'static str,
     code: &'static str,
-    message: String,
+    pub(crate) blocker: crate::blocker::Blocker,
 }
 
 impl RuntimeControlIssue {
     pub(crate) fn new(
         kind: &'static str,
         code: &'static str,
-        issue: &dyn std::fmt::Display,
+        blocker: crate::blocker::Blocker,
     ) -> Self {
         Self {
             kind,
             code,
-            message: issue.to_string(),
+            blocker,
         }
     }
 }
 
 impl std::fmt::Display for RuntimeControlIssue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
+        self.blocker.fmt(formatter)
     }
 }
 
-impl std::error::Error for RuntimeControlIssue {}
+impl std::error::Error for RuntimeControlIssue {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.blocker)
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("{kind} runtime-control transition failed: {message}")]

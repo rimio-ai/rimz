@@ -23,6 +23,7 @@
 pub mod address;
 pub mod agent_activity;
 pub mod agents;
+pub mod blocker;
 pub mod build_id;
 pub mod channel;
 pub mod child_process;

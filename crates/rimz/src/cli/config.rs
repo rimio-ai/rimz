@@ -4,7 +4,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::config::{ConfigEditor, MachineConfig};
+use rimz::config::ConfigEditor;
 
 use super::GlobalFlags;
 
@@ -144,15 +144,10 @@ fn set(args: SetArgs) -> Result<()> {
             .unwrap_or_else(|| args.value.clone());
         rimz::harness::launch::validate_agent_shell(std::path::Path::new(&shell))?;
     }
-    let transition = remote_control_transition(&args.key, &args.value);
-    if let Some((host, true)) = transition {
-        rimz::remote_control::preflight_enable(host)?;
-    }
-    ConfigEditor::machine().set(&args.key, &args.value)?;
-    if let Some((host, _)) = transition {
-        let machine = MachineConfig::load().context("loading the updated per-machine config")?;
-        rimz::remote_control::apply_runtime_toggle(host, &machine)
-            .context("applying the remote-control toggle")?;
+    if let Some((host, enabled)) = remote_control_transition(&args.key, &args.value) {
+        rimz::remote_control::persist_toggle(host, enabled)?;
+    } else {
+        ConfigEditor::machine().set(&args.key, &args.value)?;
     }
     print_line(&format!("set {}", args.key))
 }

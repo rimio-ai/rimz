@@ -2,6 +2,7 @@ version = 5
 layers = [
     [
     "build_id",
+    "blocker",
     "utils",
     "tui",
     "ids",
@@ -207,7 +208,8 @@ upward-dependencies = ["address"]
 # LocalSessionLookup and the capability/login locate_session methods support exact provider resume (+3).
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
-surface-budget = 1061
+# RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
+surface-budget = 1062
 
 [[verdict]]
 kind = "item"
@@ -743,7 +745,8 @@ surface-budget = 9
 
 [[module]]
 path = "crates/rimz/src/lib.rs"
-surface-budget = 70
+# The lowest-layer blocker vocabulary is shared with the CLI (+1).
+surface-budget = 71
 
 [[module]]
 path = "crates/rimz/src/main.rs"
@@ -861,7 +864,38 @@ surface-budget = 176
 [[module]]
 path = "crates/rimz/src/remote_control.rs"
 # The injected readiness probe verifies per-host account failure at the daemon-view consumer (+1).
-surface-budget = 19
+# StartBlock carries host and blocker; persist_toggle and ToggleErr share the config/start transition (+5).
+surface-budget = 24
+
+[[module]]
+path = "crates/rimz/src/blocker.rs"
+# Blocker/Fix/Surface, their five fields, and the two producer constructors.
+surface-budget = 10
+
+[[verdict]]
+kind = "item"
+key = "blocker::Blocker"
+reason = "Producers return typed refusals; the binary renders their problems and fixes."
+
+[[verdict]]
+kind = "item"
+key = "blocker::Fix"
+reason = "The public Blocker carries ordered printed remedies, never executable actions."
+
+[[verdict]]
+kind = "item"
+key = "blocker::Surface"
+reason = "Fixes expose privacy/security provenance to binary renderers."
+
+[[verdict]]
+kind = "item"
+key = "remote_control::StartBlock"
+reason = "The start gate returns the blocked host and structured refusal to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "remote_control::ToggleErr"
+reason = "The shared domain toggle persists machine intent for config and attended start."
 
 [[module]]
 path = "crates/rimz/src/sandbox"
