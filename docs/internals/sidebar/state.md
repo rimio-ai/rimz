@@ -399,7 +399,7 @@ Neither backend constructs a `SidebarEvent`. Both normalize what they see into p
 | A pane joins the room | `PaneOpened` | Zellij diffs a new terminal id out of the announced manifest. tmux takes the first non-seeding subscription line naming an unknown pane. |
 | A pane's command changes | `CommandChanged` | Zellij compares the pane command across two live manifests. tmux reads the changed command field of a subscription line. |
 | A pane leaves the room | `PaneClosed` | Zellij finds the terminal id absent from the new manifest. tmux takes a window-close line, or a pane missing from the layout roster. |
-| Focus moves between panes | `FocusChanged` | Zellij projects session focus from client observations. tmux takes the newly active pane or a pane-changed line. |
+| Focus moves between panes | `FocusChanged` | Zellij projects session focus from client observations. tmux takes a newly active subscription pane or a pane-changed line only in a session's current window, seeded at attach from the pane seed's session id and window-active flag (falling back to any window only if no current-window seed arrived); a hidden window's active pane is window-local state, retained for a later view switch. |
 | A view switch lands away from a sidebar | `FocusChanged` | Zellij settles the switch generation. tmux takes the window-changed line. |
 | A view switch lands on a sidebar that has a working sibling | `FocusStranded` | The same inputs, classified by the landed pane's role. |
 | The layout cannot be read whole | `PanesChanged` | tmux only: a window holding a floating pane, or a layout line that fails to parse. |

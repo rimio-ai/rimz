@@ -90,6 +90,8 @@ fn seed_geometry(pane: &str, window: &str, x: u64, width: u64, window_width: u64
         x,
         width,
         window_width,
+        session: "$1".to_owned(),
+        window_active: false,
     }
 }
 
@@ -113,20 +115,25 @@ fn seed_updates_roster_without_events() {
 
 #[test]
 fn new_pane_emits_open_and_focus_when_active() {
-    let mut roster = TmuxPresenceState::default();
-    assert_eq!(
-        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), false),
-        vec![
-            SidebarEvent::PaneOpened {
-                pane_id: pane_id("%1"),
-                command: Some("zsh".to_owned()),
-            },
-            SidebarEvent::FocusChanged {
-                focused: vec![pane_id("%1")],
-                unfocused: Vec::new(),
-            },
-        ]
-    );
+    for current_window in [None, Some("@1")] {
+        let mut roster = TmuxPresenceState::default();
+        if let Some(window) = current_window {
+            project_apply(&mut roster, swin("$1", window), true);
+        }
+        assert_eq!(
+            project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), false),
+            vec![
+                SidebarEvent::PaneOpened {
+                    pane_id: pane_id("%1"),
+                    command: Some("zsh".to_owned()),
+                },
+                SidebarEvent::FocusChanged {
+                    focused: vec![pane_id("%1")],
+                    unfocused: Vec::new(),
+                },
+            ]
+        );
+    }
 }
 
 #[test]
@@ -288,18 +295,126 @@ fn focus_change_keeps_unfocused_when_inactive_line_arrives_first() {
 
 #[test]
 fn window_pane_change_focuses_new_active_working_pane() {
-    let mut roster = TmuxPresenceState::default();
-    project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
-    project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
-    assert_eq!(
-        project_apply(&mut roster, wpane("@1", "%2"), false),
-        vec![SidebarEvent::FocusChanged {
-            focused: vec![pane_id("%2")],
-            unfocused: vec![pane_id("%1")],
-        }]
+    for current_window in [None, Some("@1")] {
+        let mut roster = TmuxPresenceState::default();
+        project_apply(&mut roster, sub("%1", "@1", Some("zsh"), true), true);
+        project_apply(&mut roster, sub("%2", "@1", Some("claude"), false), true);
+        if let Some(window) = current_window {
+            project_apply(&mut roster, swin("$1", window), true);
+        }
+        assert_eq!(
+            project_apply(&mut roster, wpane("@1", "%2"), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%2")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+        assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
+        assert!(roster.panes.get("%2").is_some_and(|entry| entry.active));
+    }
+}
+
+fn hidden_window_fixture() -> TmuxPresenceState {
+    let mut state = TmuxPresenceState::default();
+    for line in [
+        sub("%1", "@1", Some("zsh"), true),
+        sub("%2", "@2", Some("zsh"), true),
+        sub("%3", "@2", Some("zsh"), false),
+        ControlLine::SeedPane {
+            pane: "%1".to_owned(),
+            window: "@1".to_owned(),
+            x: 0,
+            width: 80,
+            window_width: 80,
+            session: "$1".to_owned(),
+            window_active: true,
+        },
+        seed_geometry("%2", "@2", 0, 40, 80),
+        seed_geometry("%3", "@2", 40, 40, 80),
+    ] {
+        assert!(state.apply(line, true).0.is_empty());
+    }
+    state
+}
+
+#[test]
+fn pane_seed_suppresses_hidden_focus_without_window_switch() {
+    let mut state = TmuxPresenceState::default();
+    for line in [
+        sub("%1", "@1", Some("zsh"), true),
+        sub("%2", "@2", Some("zsh"), false),
+    ] {
+        state.apply(line, true);
+    }
+    let seed = ControlLine::SeedPane {
+        pane: "%1".to_owned(),
+        window: "@1".to_owned(),
+        x: 0,
+        width: 80,
+        window_width: 80,
+        session: "$1".to_owned(),
+        window_active: true,
+    };
+    assert!(state.apply(seed, false).0.is_empty());
+    assert!(
+        project_apply(&mut state, sub("%2", "@2", Some("zsh"), true), false).is_empty(),
+        "the attach seed must suppress hidden focus without a window-change notification",
     );
-    assert!(!roster.panes.get("%1").is_some_and(|entry| entry.active));
-    assert!(roster.panes.get("%2").is_some_and(|entry| entry.active));
+    assert_eq!(
+        state.current_window.get("$1").map(String::as_str),
+        Some("@1")
+    );
+    assert!(state.panes["%2"].active);
+}
+
+fn assert_hidden_activation_waits_for_window_switch(line: ControlLine) {
+    let mut state = hidden_window_fixture();
+    let transitions = state.apply(line, false).0;
+    assert!(
+        !transitions
+            .iter()
+            .any(|transition| matches!(transition, PresenceTransition::PaneFocused { .. })),
+        "a hidden window's active pane is not session focus: {transitions:?}",
+    );
+    assert!(state.panes["%1"].active);
+    assert!(!state.panes["%2"].active);
+    assert!(state.panes["%3"].active);
+    let transitions = state.apply(swin("$1", "@2"), false).0;
+    assert!(matches!(
+        transitions.as_slice(),
+        [PresenceTransition::ViewSwitched { focused: Some(focused), .. }]
+            if focused.pane_id == pane_id("%3")
+    ));
+    assert_eq!(
+        project_presence(transitions),
+        vec![SidebarEvent::FocusChanged {
+            focused: vec![pane_id("%3")],
+            unfocused: vec![pane_id("%1")],
+        }],
+    );
+}
+
+#[test]
+fn hidden_window_pane_change_waits_for_window_switch() {
+    assert_hidden_activation_waits_for_window_switch(wpane("@2", "%3"));
+}
+
+#[test]
+fn hidden_subscription_activation_waits_for_window_switch() {
+    assert_hidden_activation_waits_for_window_switch(sub("%3", "@2", Some("zsh"), true));
+}
+
+#[test]
+fn first_active_pane_in_hidden_window_opens_without_focus() {
+    let mut state = hidden_window_fixture();
+    assert_eq!(
+        project_apply(&mut state, sub("%4", "@3", Some("zsh"), true), false),
+        vec![SidebarEvent::PaneOpened {
+            pane_id: pane_id("%4"),
+            command: Some("zsh".to_owned()),
+        }],
+    );
+    assert!(state.panes["%4"].active);
 }
 
 #[test]

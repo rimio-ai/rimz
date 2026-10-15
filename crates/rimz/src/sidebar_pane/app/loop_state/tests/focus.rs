@@ -2,7 +2,140 @@
 //! keep the frame still while the user acts, and the read-mark receipts.
 
 use super::*;
+use crate::mux::tmux::ControlLine;
+use crate::sidebar::presence::{projector::project_presence, tmux::TmuxPresenceState};
 use crate::sidebar_pane::app::fixtures::focus_fixture;
+
+fn tmux(raw: &str) -> PaneId {
+    PaneId::from_parts(MuxName::Tmux, raw)
+}
+
+fn tmux_subscription(raw: &str, window: &str, active: bool) -> ControlLine {
+    ControlLine::Subscription {
+        pane: raw.to_owned(),
+        window: window.to_owned(),
+        command: Some("zsh".to_owned()),
+        active,
+        title: None,
+        floating: false,
+    }
+}
+
+fn tmux_focus_snapshot(rig: &Rig, third_window: &str, stamp: u64) -> SidebarSnapshot {
+    let panes = [("%1", "@1"), ("%2", "@2"), ("%3", third_window)]
+        .into_iter()
+        .map(|(raw, window)| {
+            let mut result = pane(raw, window, false);
+            result.pane_id = tmux(raw);
+            result.view_kind = Some(crate::ids::ViewKind::Window);
+            result
+        })
+        .collect();
+    let mut result = snapshot_with_panes(&rig.ws, panes);
+    result.panes_produced_at_ms = Some(stamp);
+    result.panes_observed_at_ms = Some(stamp);
+    result.focused_pane = Some(tmux("%1"));
+    result.viewed_panes = vec![tmux("%1")];
+    result.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("test-client".to_owned()),
+        pane_id: tmux("%1"),
+    }];
+    result
+}
+
+fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expected: &str) {
+    let mut producer = TmuxPresenceState::default();
+    for line in [
+        tmux_subscription("%1", "@1", true),
+        tmux_subscription("%2", "@2", true),
+        tmux_subscription("%3", third_window, false),
+        ControlLine::SeedPane {
+            pane: "%1".to_owned(),
+            window: "@1".to_owned(),
+            x: 0,
+            width: 80,
+            window_width: 80,
+            session: "$1".to_owned(),
+            window_active: true,
+        },
+    ] {
+        assert!(producer.apply(line, true).0.is_empty());
+    }
+    let mut rig = Rig::new();
+    let stamp = crate::utils::time::unix_now_ms() - 100;
+    rig.fold(
+        tmux_focus_snapshot(&rig, third_window, stamp),
+        SnapshotSource::Produced,
+    );
+    assert_eq!(rig.state.ui.selected_pane, Some(tmux("%1")));
+    let clients = rig.state.current.client_views.clone();
+    for event in project_presence(producer.apply(line, false).0) {
+        let envelope = SidebarEventEnvelope::new(
+            rig.ws.clone(),
+            Some("rimz-test".to_owned()),
+            stamp + 10,
+            event,
+        );
+        rig.state
+            .on_event(&mut rig.fetch, &mut rig.terminal, envelope);
+    }
+    assert_eq!(rig.state.current.client_views, clients);
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(tmux(expected)),
+        "interim selection"
+    );
+    rig.fold(
+        tmux_focus_snapshot(&rig, third_window, stamp),
+        SnapshotSource::Produced,
+    );
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(tmux(expected)),
+        "produced/final selection"
+    );
+    let mut latest = tmux_focus_snapshot(&rig, third_window, stamp + 20);
+    if third_window == "@1" {
+        latest.focused_pane = Some(tmux("%3"));
+        latest.viewed_panes = vec![tmux("%3")];
+        latest.client_views[0].pane_id = tmux("%3");
+    }
+    rig.fold(latest, SnapshotSource::Produced);
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(tmux(expected)),
+        "following pull selection"
+    );
+}
+
+#[test]
+fn hidden_window_pane_changed_must_not_select_phantom() {
+    assert_tmux_activation_selection(
+        "@2",
+        ControlLine::WindowPaneChanged {
+            window: "@2".to_owned(),
+            pane: "%3".to_owned(),
+        },
+        "%1",
+    );
+}
+
+#[test]
+fn hidden_subscription_activation_must_not_select_phantom() {
+    assert_tmux_activation_selection("@2", tmux_subscription("%3", "@2", true), "%1");
+}
+
+#[test]
+fn current_window_focus_change_selects_and_stays_control() {
+    assert_tmux_activation_selection(
+        "@1",
+        ControlLine::WindowPaneChanged {
+            window: "@1".to_owned(),
+            pane: "%3".to_owned(),
+        },
+        "%3",
+    );
+}
 
 fn fenced_request(
     rig: &Rig,

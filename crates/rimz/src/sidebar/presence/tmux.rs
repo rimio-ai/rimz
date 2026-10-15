@@ -76,7 +76,12 @@ impl TmuxPresenceState {
                 x,
                 width,
                 window_width,
+                session,
+                window_active,
             } => {
+                if window_active {
+                    self.current_window.insert(session, window.clone());
+                }
                 self.seed_geometry(pane, window, x, width, window_width);
                 (Vec::new(), None)
             }
@@ -206,7 +211,14 @@ impl TmuxPresenceState {
         pending: Option<String>,
     ) -> Vec<PresenceTransition> {
         let mut events = Vec::new();
-        if !seeding {
+        // A hidden window's active pane is window-local state, not where a client looks.
+        if !seeding
+            && (self.current_window.is_empty()
+                || self
+                    .current_window
+                    .values()
+                    .any(|current| current == window))
+        {
             let prior = self
                 .prior_active_working_pane(window, pane)
                 .or(pending)

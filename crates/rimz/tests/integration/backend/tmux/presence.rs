@@ -52,6 +52,74 @@ fn wait_for_presence_stream_end(
     }
 }
 
+#[test]
+fn presence_watch_seeds_current_window_before_hidden_pane_activation() {
+    use rimz::mux::tmux::{ControlLine, PresenceWatch};
+
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("seed-focus");
+    let current_window = server.display("seed-focus:0", "#{window_id}");
+    let session_id = server.display("seed-focus:0", "#{session_id}");
+    server.tmux(&["new-window", "-d", "-t", "seed-focus", "-n", "hidden", "sh"]);
+    server.tmux(&["split-window", "-d", "-t", "seed-focus:hidden", "sh"]);
+    let hidden_window = server.display("seed-focus:hidden", "#{window_id}");
+    let hidden_pane = server.display("seed-focus:hidden.1", "#{pane_id}");
+    let watch = PresenceWatch::attach(&server.socket, "seed-focus").expect("attach control client");
+    let (rx, drain) = spawn_presence_drain(watch);
+    let mut seeds = Vec::new();
+    for _ in 0..3 {
+        seeds.push(recv_presence_line_until(
+            &rx,
+            Duration::from_secs(5),
+            "attach seed",
+            |line| {
+                assert!(
+                    !matches!(line, ControlLine::SessionWindowChanged { .. }),
+                    "attach must not need a window switch: {line:?}"
+                );
+                matches!(line, ControlLine::SeedPane { .. })
+            },
+        ));
+    }
+    assert!(
+        seeds.iter().any(|line| matches!(line,
+            ControlLine::SeedPane { session, window, window_active: true, .. }
+                if session == &session_id && window == &current_window
+        )),
+        "attach must seed the current window: {seeds:?}"
+    );
+    assert_eq!(
+        seeds
+            .iter()
+            .filter(|line| matches!(line,
+                ControlLine::SeedPane { session, window, window_active: false, .. }
+                    if session == &session_id && window == &hidden_window
+            ))
+            .count(),
+        2,
+        "hidden-window seeds: {seeds:?}"
+    );
+    server.tmux(&["select-pane", "-t", &hidden_pane]);
+    recv_presence_line_until(
+        &rx,
+        Duration::from_secs(1),
+        "hidden pane activation",
+        |line| {
+            assert!(
+                !matches!(line, ControlLine::SessionWindowChanged { .. }),
+                "hidden activation must not switch windows: {line:?}"
+            );
+            matches!(line, ControlLine::WindowPaneChanged { window, pane }
+            if window == &hidden_window && pane == &hidden_pane)
+        },
+    );
+    assert_eq!(server.display("seed-focus", "#{window_id}"), current_window);
+    server.tmux(&["kill-server"]);
+    wait_for_presence_stream_end(&rx);
+    drain.join().expect("drain thread");
+}
+
 /// The control-mode presence stream surfaces typed subscription changes — the
 /// tmux fast path the elder sidebar consumes. Command changes and window closes
 /// must produce typed control lines within the budget, and killing the server

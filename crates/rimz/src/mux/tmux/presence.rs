@@ -17,7 +17,9 @@ const SEED_COMMAND: &str = concat!(
     ",#{window_id}",
     ",#{pane_left}",
     ",#{pane_width}",
-    ",#{window_width}\"\n",
+    ",#{window_width}",
+    ",#{session_id}",
+    ",#{window_active}\"\n",
 );
 type LayoutGeometry = (u64, Vec<TmuxLayoutPane>);
 
@@ -38,6 +40,8 @@ pub enum ControlLine {
         x: u64,
         width: u64,
         window_width: u64,
+        session: String,
+        window_active: bool,
     },
     WindowClosed {
         window: String,
@@ -76,7 +80,7 @@ pub struct TmuxLayoutPane {
 /// subscription, and surfaces typed presence changes. Writable keeps tmux
 /// 3.7 `send-keys` usable when this watch is the sole attached client in a
 /// headless session; safety lives in the stdin allowlist, which writes only the
-/// subscription and geometry-seed commands. Poll stays truth — a dropped stream
+/// subscription and pane-seed commands. Poll stays truth — a dropped stream
 /// loses only latency, never correctness, and the consumer respawns it.
 pub struct PresenceWatch {
     child: std::process::Child,
@@ -174,7 +178,7 @@ impl Drop for PresenceWatch {
 
 /// Classify one tmux control-mode line. Reply blocks, pane output, and
 /// identity-free focus noise are ignored; a window's active-pane notification
-/// is forwarded as a realtime focus overlay, and topology notifications that
+/// is forwarded for current-window focus projection, and topology notifications that
 /// lack identity stay as a producer-verification nudge.
 fn classify_control_line(line: &str) -> ControlLine {
     if line.starts_with("rimz-presence-seed:") {
@@ -203,13 +207,15 @@ fn classify_control_line(line: &str) -> ControlLine {
 
 fn parse_seed(line: &str) -> Option<ControlLine> {
     let value = line.strip_prefix("rimz-presence-seed:")?;
-    let mut fields = value.splitn(5, ',');
+    let mut fields = value.splitn(7, ',');
     Some(ControlLine::SeedPane {
         pane: nonempty(fields.next()?)?,
         window: nonempty(fields.next()?)?,
         x: fields.next()?.trim().parse().ok()?,
         width: fields.next()?.trim().parse().ok()?,
         window_width: fields.next()?.trim().parse().ok()?,
+        session: nonempty(fields.next()?)?,
+        window_active: fields.next()?.trim() == "1",
     })
 }
 
@@ -415,15 +421,32 @@ mod tests {
                 },
             ),
             (
-                "rimz-presence-seed:%2,@1,55,79,213",
+                "rimz-presence-seed:%2,@1,55,79,213,$0,1",
                 ControlLine::SeedPane {
                     pane: "%2".to_owned(),
                     window: "@1".to_owned(),
                     x: 55,
                     width: 79,
                     window_width: 213,
+                    session: "$0".to_owned(),
+                    window_active: true,
                 },
             ),
+            (
+                "rimz-presence-seed:%3,@2,0,80,80,$0,0",
+                ControlLine::SeedPane {
+                    pane: "%3".to_owned(),
+                    window: "@2".to_owned(),
+                    x: 0,
+                    width: 80,
+                    window_width: 80,
+                    session: "$0".to_owned(),
+                    window_active: false,
+                },
+            ),
+            ("rimz-presence-seed:%2,@1,55,79,213", ControlLine::Ignore),
+            ("rimz-presence-seed:%2,@1,55,79,213,$0", ControlLine::Ignore),
+            ("rimz-presence-seed:%2,@1,55,79,213,,1", ControlLine::Ignore),
             (
                 "%subscription-changed rimz-presence $0 @1 1 %2 : %2,@1,,0,",
                 ControlLine::Subscription {
