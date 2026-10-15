@@ -296,6 +296,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "hermes",
         "kimi",
         "kiro",
+        "minimax",
         "muse",
         "omp",
         "opencode",
@@ -315,6 +316,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "HermesAdapter",
         "KimiAdapter",
         "KiroAdapter",
+        "MiniMaxAdapter",
         "MuseAdapter",
         "OmpAdapter",
         "OpencodeAdapter",
@@ -1818,6 +1820,8 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "GROK_HOME",
         "GROK_AUTH_PATH",
         "HERMES_HOME",
+        "MAVIS_DATA_DIR",
+        "MINIMAX_DATA_DIR",
     ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(

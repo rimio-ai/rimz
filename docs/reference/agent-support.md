@@ -75,6 +75,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Hermes | ● | ◐ | ✗ | ✗ | ◐ | ◐ |
 | OMP | ◐ | ◐ | ◐ | ◐ | ◐ | ✗ |
 | Muse | ● | ✗ | ✗ | ✗ | ◐ | ✗ |
+| MiniMax Code | ◐ | ◐ | ✗ | ✗ | ◐ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -272,6 +273,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Hermes | none | none | none | `--yolo` |
 | OMP | `--approval-mode always-ask` | `--approval-mode write` | `--approval-mode always-ask` | `--approval-mode yolo` |
 | Muse | `--permission-profile :ask-me` | `--permission-profile :auto-review` | `--permission-profile :read-only` | `--yolo` |
+| MiniMax Code | none | none | none | none |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 On host isolation, Codex Ask and Auto use a launch-scoped `rimz` permission profile. It extends your `default_permissions` profile, or `:workspace` when unset or already `rimz`, adds write access to the room's state, runtime, and shared runtime roots, and disables network access inside the command sandbox. Other paths and network access can escalate: interactive Ask uses the human reviewer, Auto uses Guardian, including headless runs. Headless Ask cannot escalate, because Codex forces approval policy `never` for the human reviewer. Yolo still bypasses both sandbox and approval checks. Invalid parent profiles fail in Codex at startup.

@@ -966,7 +966,13 @@ fn compile_agent_process_with_extra_env(
         crate::harness::launch_reminders::render(request, reminders, cwd, shell.as_deref());
     let channel = adapter.append_system_text_channel();
     if let Some(channel) = &channel {
-        merge_appended_system_text(action.extra_args_mut(), channel, &reminder);
+        merge_appended_system_text(
+            action.extra_args_mut(),
+            channel,
+            &reminder,
+            &adapter.system_prompt_arg_matchers(),
+            cwd,
+        )?;
     }
     let mut skill_env = reminders
         .settings
@@ -1090,16 +1096,42 @@ fn merge_appended_system_text(
     extra_args: &mut Vec<String>,
     channel: &SystemTextChannel,
     text: &str,
-) {
+    prompt_matchers: &[crate::agents::PresetArgMatcher],
+    cwd: &Path,
+) -> Result<(), crate::agents::skills::LaunchSettingsErr> {
     let Some(matcher) = argv_matcher(channel) else {
-        return;
+        return Ok(());
     };
     let Some(existing) = matcher.occurrences(extra_args).into_iter().last() else {
         if let Some((flag, value)) = render_system_text_channel(channel, text) {
             extra_args.extend([flag, value]);
         }
-        return;
+        return Ok(());
     };
+
+    let file_value = prompt_matchers.iter().any(|prompt_matcher| {
+        matches!(prompt_matcher, crate::agents::PresetArgMatcher::Flag(_))
+            && prompt_matcher
+                .occurrences(extra_args)
+                .iter()
+                .any(|occurrence| occurrence.argv_range == existing.argv_range)
+    });
+    if file_value {
+        let path = cwd.join(&existing.value);
+        let existing_text = std::fs::read_to_string(&path).map_err(|source| {
+            crate::agents::skills::LaunchSettingsErr::Settings {
+                path,
+                reason: source.to_string(),
+            }
+        })?;
+        matcher.remove_occurrences(extra_args);
+        if let Some((flag, value)) =
+            render_system_text_channel(channel, &format!("{existing_text}\n\n{text}"))
+        {
+            extra_args.extend([flag, value]);
+        }
+        return Ok(());
+    }
 
     let config_key = match channel {
         SystemTextChannel::ConfigKey { key, .. } => Some(key),
@@ -1125,6 +1157,7 @@ fn merge_appended_system_text(
     } else {
         extra_args[existing.argv_range.start + 1] = separate_value;
     }
+    Ok(())
 }
 
 fn render_system_text_channel(channel: &SystemTextChannel, text: &str) -> Option<(String, String)> {

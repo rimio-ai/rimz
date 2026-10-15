@@ -357,6 +357,11 @@ path = "crates/rimz/src/agents/adapters/muse"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/minimax"
+# Only MiniMaxAdapter crosses the provider-private boundary into the registry.
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/adapters/opencode"
 surface-budget = 1
 
@@ -3853,6 +3858,11 @@ reason = "Registry registration is the only outside-provider interface; the glob
 kind = "item"
 key = "agents::adapters::hermes::HermesAdapter"
 reason = "Registry registration is the only outside-provider interface; shell payloads, YAML editing, and consent reporting stay adapter-local."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::minimax::MiniMaxAdapter"
+reason = "Only registry registration crosses the provider boundary; native plugin installation, payload normalization and process interpretation remain adapter-local."
 
 [[verdict]]
 kind = "item"

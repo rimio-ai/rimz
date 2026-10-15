@@ -1,4 +1,40 @@
 use super::*;
+
+#[test]
+fn appended_system_file_and_text_share_one_slot() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("rules.txt"), "keep the user's rules").unwrap();
+    let channel = SystemTextChannel::TextFlag {
+        flags: vec![
+            "--append-system-prompt".into(),
+            "--append-system-prompt-file".into(),
+        ],
+    };
+    let files = [crate::agents::PresetArgMatcher::Flag(vec![
+        "--append-system-prompt-file".into(),
+    ])];
+    for args in [
+        vec!["--append-system-prompt-file", "rules.txt"],
+        vec!["--append-system-prompt-file=rules.txt"],
+    ] {
+        let mut args = args.into_iter().map(str::to_owned).collect();
+        merge_appended_system_text(&mut args, &channel, "RimZ reminder", &files, root.path())
+            .unwrap();
+        assert_eq!(
+            args,
+            [
+                "--append-system-prompt",
+                "keep the user's rules\n\nRimZ reminder"
+            ],
+            "the file and inline form must not conflict at launch"
+        );
+    }
+    let mut args = vec!["--append-system-prompt-file".into(), "missing.txt".into()];
+    assert!(
+        merge_appended_system_text(&mut args, &channel, "reminder", &files, root.path()).is_err(),
+        "an unreadable configured prompt must fail at launch"
+    );
+}
 use crate::harness::launch_reminders::{TempFiles, subagent_reminder, wrap};
 
 #[test]

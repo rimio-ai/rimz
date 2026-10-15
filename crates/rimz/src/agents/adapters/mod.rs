@@ -23,6 +23,7 @@ pub(super) mod hermes;
 mod install_report;
 pub(super) mod kimi;
 pub(super) mod kiro;
+pub(super) mod minimax;
 pub(super) mod muse;
 pub(super) mod omp;
 pub(super) mod opencode;
