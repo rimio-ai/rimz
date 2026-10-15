@@ -612,10 +612,14 @@ fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
 
 #[test]
 fn windows_wrap_forward_and_back() {
-    assert_eq!(Window::Year.next(), Window::Week);
-    assert_eq!(Window::Month.next(), Window::Year);
-    assert_eq!(Window::Year.prev(), Window::Month);
-    assert_eq!(Window::Week.prev(), Window::Year);
+    assert_eq!(
+        Window::TABS.map(Window::label).as_slice(),
+        ["Today", "Week", "Month", "Year"]
+    );
+    for (index, window) in Window::TABS.into_iter().enumerate() {
+        assert_eq!(window.next(), Window::TABS[(index + 1) % 4]);
+        assert_eq!(window.prev(), Window::TABS[(index + 3) % 4]);
+    }
 }
 
 #[test]
@@ -701,14 +705,15 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
     let mut state = HeldStats::new(false, panel_glyphs(), false);
     let mut out = Vec::new();
 
-    for expected in [Window::Week, Window::Month, Window::Year, Window::Week] {
+    assert_eq!(state.active(), Window::Year);
+    for expected in ["Today", "Week", "Month", "Year", "Today", "Week"] {
         assert_eq!(
             state
                 .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out,)
                 .unwrap(),
             KeyOutcome::NextWindow
         );
-        assert_eq!(state.active(), expected);
+        assert_eq!(state.active().label(), expected);
     }
     assert!(
         out.is_empty(),
@@ -724,7 +729,7 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
             .unwrap(),
         KeyOutcome::PrevWindow
     );
-    assert_eq!(state.active(), Window::Year);
+    assert_eq!(state.active().label(), "Today");
     assert!(out.is_empty());
 }
 
@@ -1092,6 +1097,9 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
         total: SpendTally::default(),
     };
     stats.total.week.tokens = 7;
+    stats.total.day.tokens = 1;
+    stats.total.day.cache_read = 2;
+    stats.total.headline.tokens = 999;
     stats.total.month.tokens = 30;
     stats.total.year.tokens = 365;
     let mut lines = Vec::new();
@@ -1103,6 +1111,8 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
     assert!(lines[0].contains(&render::paint(active_tab(), " Week 7   ")));
     let row = strip_ansi(&lines[0]);
     assert!(!row.contains("All time"));
+    assert!(row.contains("Today 3"), "{row}");
+    assert!(row.find("Today").unwrap() < row.find("Week").unwrap());
     assert!(row.contains("Week 7"));
     assert!(row.contains("Month 30"));
     assert!(row.contains("Year 365"));
@@ -1870,6 +1880,84 @@ fn insights_sessions_scope_to_the_active_window() {
 }
 
 #[test]
+fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
+    let today = 20_000;
+    let mut current = tally(900, 60.0, 10);
+    current.day = spend_window(30, 12.0, 20, 10, 5, 2);
+    current.headline = spend_window(800, 50.0, 600, 200, 0, 9);
+    let old = tally(1_000, 100.0, 1);
+    let stats = Stats {
+        timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        subagents: BTreeMap::new(),
+        unattributed: Default::default(),
+        by_day: BTreeMap::from([
+            (today, day(35, 12.0)),
+            (today - 1, day(50, 18.0)),
+            (today - 100, day(900, 30.0)),
+        ]),
+        by_model: BTreeMap::from([
+            ("current-model".into(), current.clone()),
+            ("old-model".into(), old.clone()),
+        ]),
+        by_agent: BTreeMap::from([("codex".into(), current.clone()), ("claude".into(), old)]),
+        total: current,
+    };
+    let active = Window::Week.prev();
+    let models = model_breakdown(&stats, active, MAX_MODELS);
+    assert_eq!(
+        models.len(),
+        1,
+        "only today's model belongs in the breakdown"
+    );
+    assert_eq!(models[0].1, stats.total.day);
+    let agents = agent_breakdown(&stats, active, Some(MAX_AGENTS));
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].window, stats.total.day);
+    let mut out = Vec::new();
+    render_panel(
+        &mut out,
+        PanelStats {
+            usage: &stats,
+            assists: &AssistStats::default(),
+            active: Some(active),
+        },
+        today,
+        false,
+        &panel_glyphs(),
+        false,
+        "\n",
+    )
+    .unwrap();
+    let rendered = strip_ansi(std::str::from_utf8(&out).unwrap());
+    for expected in [
+        "Today 35",
+        "Current Model",
+        "Codex",
+        "Sessions: 2",
+        "Cost/session: $6.00",
+        "Spend: $12.00",
+        "Active days: 2/28",
+        "Most active day:",
+        "Longest streak: 2 days",
+        "Current streak: 2 days",
+        "Daily avg: $20.00",
+    ] {
+        assert!(
+            rendered.contains(expected),
+            "missing {expected}: {rendered}"
+        );
+    }
+    assert!(rendered.contains(&fmt_day(today - 100)), "{rendered}");
+    for absent in ["Old Model", "Claude", "vs prior", "$50", "$60"] {
+        assert!(
+            !rendered.contains(absent),
+            "unexpected {absent}: {rendered}"
+        );
+    }
+}
+
+#[test]
 fn insights_append_the_prior_window_spend_trend() {
     let today = 20_000;
     let mut stats = Stats {
@@ -2448,6 +2536,46 @@ fn manual_redeems_stay_in_the_ledger_but_not_the_automation_row() {
 }
 
 #[test]
+fn today_assists_start_at_midnight_in_the_publication_zone() {
+    use rimz::harness::assist_log;
+
+    for (zone, now, midnight) in [
+        (
+            "Asia/Shanghai",
+            "2026-01-12T17:00:00Z",
+            "2026-01-12T16:00:00Z",
+        ),
+        (
+            "America/New_York",
+            "2026-03-08T18:00:00Z",
+            "2026-03-08T05:00:00Z",
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let midnight: Timestamp = midnight.parse().unwrap();
+        let records = [
+            midnight - Duration::from_secs(1),
+            midnight,
+            now.parse().unwrap(),
+        ]
+        .map(|at| {
+            serde_json::json!({
+                "at": at, "assist": "auto_compact", "kind": "codex", "agent_id": "session",
+                "threshold": {"percent": 70}, "message_id": "msg"
+            })
+            .to_string()
+        });
+        let path = assist_log::log_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, records.join("\n") + "\n").unwrap();
+        let assists =
+            AssistStats::load(dir.path(), Window::Week.prev(), now.parse().unwrap(), zone);
+        assert_eq!(assists.rollup.compacts, 2, "{zone}");
+        assert_eq!(assists.window, "today");
+    }
+}
+
+#[test]
 fn assists_load_scopes_the_log_to_the_selected_window() {
     use rimz::harness::assist_log::{self, Assist, AssistRecord};
     use rimz::harness::auto_redeem::RedeemReason;
@@ -2493,7 +2621,7 @@ fn assists_load_scopes_the_log_to_the_selected_window() {
     )
     .unwrap();
 
-    let stats = AssistStats::load(dir.path(), Window::Week, now);
+    let stats = AssistStats::load(dir.path(), Window::Week, now, "UTC");
     assert_eq!(stats.rollup.redeems, 0);
     assert_eq!(stats.rollup.compacts, 1);
     assert_eq!(stats.events.len(), 1);

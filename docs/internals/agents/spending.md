@@ -28,7 +28,7 @@ The provider panel's live session count is a separate input. The pane projection
 
 ## Cost history
 
-The spending walk reads the whole transcript and store history of every provider and totals spend, token throughput, and named tool calls into a [`SpendTally`](../../../crates/rimz/src/agents/spending/aggregate.rs) per provider. Each tally holds the configured `[sidebar] spend_window` headline plus trailing 7d, 30d, and 365d windows.
+The spending walk reads the whole transcript and store history of every provider and totals spend, token throughput, and named tool calls into a [`SpendTally`](../../../crates/rimz/src/agents/spending/aggregate.rs) per provider. Each tally holds the configured `[sidebar] spend_window` headline, a local-calendar-day `day` window in the publication's timezone, and trailing 7d, 30d, and 365d windows. `day` also populates model and session-role tallies for the held stats dashboard; it is independent of the headline serialized as `today`.
 
 Each parsed file yields, per entry: a cost, a four-way token split (`input`, `output`, `cache_write`, `cache_read`), a per-name tool-call map where the provider exposes one, a timestamp, a provider-native thread id when one store holds many sessions, and one per-file origin path when the provider exposes one. A window folds `cache_write` into its `↘` input, so the `◇` total is folded input plus output, and `cache_read` rides apart. Its `sessions` count is the distinct threads that ran in the window.
 
@@ -108,12 +108,13 @@ Dirty cursor state persists on the first walk, after `SPENDING_PERSIST_MIN_INTER
 
 The long-lived walker memo keeps only `(file index, entry index)` locations of dedup winners, keyed by cache generation and signature. Aggregation borrows paths and thread ids from the cache and allocates session strings only for the published live-baseline and session-key outputs. An append, truncate, compaction, or file-set change rebuilds the locations once.
 
-Two version constants gate schema changes:
+Three version constants gate schema changes:
 
 | Constant | Current version | Bump when | Effect |
 | --- | --- | --- | --- |
 | `SPENDING_CACHE_VERSION` ([`cache.rs`](../../../crates/rimz/src/agents/spending/cache.rs)) | 27: Codex priority-tier pricing | the entry split, response timing, cursor state, store-time dedup, origin metadata, pricing fallback, or logical stamp changes shape or parsed value | every cursor re-parses once |
-| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 17: local days and session roles | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
+| `PROVIDER_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 18: calendar-day tally window | the published aggregate or its pricing guarantees change without needing a re-parse | `provider-spending.json` recomputes once from the entry cache |
+| `WORKSPACE_SPENDING_VERSION` ([`publish.rs`](../../../crates/rimz/src/agents/spending/publish.rs)) | 8: calendar-day tally window | the workspace tally or its walked baselines change | the workspace sidecar recomputes once from the entry cache |
 
 Writers refuse a schema downgrade after a cheap leading-version probe. An older long-lived build therefore cannot blank a newer build's aggregate or force cursor cold walks: a bump costs one recompute, and the higher version holds.
 

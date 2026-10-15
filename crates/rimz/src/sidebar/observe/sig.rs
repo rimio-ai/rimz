@@ -580,6 +580,7 @@ mod tests {
             week: spent(20.25),
             month: spent(300.0),
             year: spent(4000.01),
+            ..Default::default()
         };
         let panel = crate::store::snapshot::SidebarProviderPanel {
             version: Some("2.1.291".to_owned()),

@@ -57,13 +57,13 @@ Every run except `--assists` creates RimZ's shared state directories when they a
 
 | Key | Action |
 | --- | --- |
-| `Tab`, `Shift-Tab` | Select the next or previous window (Week, Month, Year) for the breakdowns, insights, and assists. |
+| `Tab`, `Shift-Tab` | Select the next or previous window (Today, Week, Month, Year) for the breakdowns, insights, and assists. |
 | `r`, `R` | Restart the dashboard on the current binary, keeping its flags. `rimz reload` does the same to every running dashboard. |
 | `q`, `Ctrl-C` | Quit. |
 
 Other keys do nothing. In the daemon view both `q` and `Ctrl-C` are ignored; closing the pane ends the dashboard.
 
-Week and Month add a spend comparison with the preceding week or month when that period had spend. A refresh that fails leaves the last frame on screen with no marker. When the first refresh fails, the dashboard shows `Spending refresh unavailable - retrying.` with the cause and tries again after 5 seconds.
+The dashboard starts on Year. Today scopes the breakdowns, sessions, cost per session, spend, and assists to the local calendar day in the published timezone. Its activity rows and daily average keep Year's history, so today's spend can be compared with a typical active day. Today and Year have no spend trend; Week and Month add a spend comparison with the preceding week or month when that period had spend. A refresh that fails leaves the last frame on screen with no marker. When the first refresh fails, the dashboard shows `Spending refresh unavailable - retrying.` with the cause and tries again after 5 seconds.
 
 ## JSON output
 
@@ -94,7 +94,7 @@ $ rimz stats --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del
 | `active_days_28` | Days with usage among the last 28. |
 | `longest_streak`, `current_streak` | Consecutive days with usage. |
 | `most_active_day` | `YYYY-MM-DD` of the heaviest day. Omitted when there is no usage. |
-| `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`. `week`, `month`, and `year` add `tool_calls` and a `tools` map of calls by tool name, each omitted when empty; tool calls are not bucketed by day, so `today` never carries them. |
+| `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`. `week`, `month`, and `year` add `tool_calls` and a `tools` map of calls by tool name, each omitted when empty; `today` never carries tool-call counts. |
 | `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
 | `agents` | One object per top-level agent kind with non-zero spend, sorted by dollars: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, and `share` of fleet dollars as a fraction. |
 | `days` | One object per local calendar day in the published timezone with usage, oldest first: `date`, `tokens`, `usd`. |

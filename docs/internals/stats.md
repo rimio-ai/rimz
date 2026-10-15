@@ -34,9 +34,9 @@ If the service call fails, the held dashboard falls back to any current-version 
 
 ## Windows
 
-`Window` has three variants: Week, Month and Year (trailing 7/30/365 days). The held view starts on Year; Tab and Shift-Tab cycle the tabs. The heatmap ignores selection. One-shot and JSON breakdowns use Year, while Today reads the local-day bucket in the publication's timezone.
+`Window` has four variants in tab order: Today (local calendar day), Week, Month and Year (trailing 7/30/365 days). The held view starts on Year; Tab and Shift-Tab cycle the tabs. Today selects `SpendTally.day`, independently of the configured sidebar headline. The heatmap ignores selection. One-shot and JSON breakdowns use Year, while their Today figures still read the local-day bucket in the publication's timezone.
 
-Year insights preserve the recent 28-day activity count under the explicit `RECENT_ACTIVITY_DAYS` constant; their streaks use the cached history. Week and Month scope activity and compare spend with the preceding equal span. Year has no spend trend. The held assist counts use the selected trailing window; the standalone assist timeline reads both retained log generations without a date cutoff.
+Today and Year insights preserve the recent 28-day activity count under the explicit `RECENT_ACTIVITY_DAYS` constant; their most-active day and streaks use the cached history, and their daily average divides trailing-year spend by that year's active days. Today's sessions, cost per session and spend use the day window. Week and Month scope activity and compare spend with the preceding equal span. Today and Year have no spend trend. Held assist counts use local midnight in the publication's timezone for Today (label `today`), and the selected trailing window otherwise; the standalone assist timeline reads both retained log generations without a date cutoff.
 
 Every token total on the panel is `SpendWindow::display_tokens`, which adds cache-read tokens to input plus output. A day counts as active when its bucket has tokens, priced or not.
 

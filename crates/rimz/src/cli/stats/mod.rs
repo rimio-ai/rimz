@@ -108,13 +108,14 @@ pub struct StatsArgs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Window {
+    Today,
     Week,
     Month,
     Year,
 }
 
 impl Window {
-    const TABS: [Self; 3] = [Self::Week, Self::Month, Self::Year];
+    const TABS: [Self; 4] = [Self::Today, Self::Week, Self::Month, Self::Year];
 
     fn next(self) -> Self {
         let index = Self::TABS
@@ -134,6 +135,7 @@ impl Window {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Today => "Today",
             Self::Week => "Week",
             Self::Month => "Month",
             Self::Year => "Year",
@@ -142,6 +144,7 @@ impl Window {
 
     fn select(self, tally: &SpendTally) -> SpendWindow {
         match self {
+            Self::Today => tally.day.clone(),
             Self::Year => tally.year.clone(),
             Self::Week => tally.week.clone(),
             Self::Month => tally.month.clone(),
@@ -150,6 +153,7 @@ impl Window {
 
     fn span_days(self) -> u32 {
         match self {
+            Self::Today => 1,
             Self::Week => 7,
             Self::Month => 30,
             Self::Year => 365,
@@ -170,7 +174,12 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     }
     let loaded = load_stats(!args.json)?;
     let today_day = loaded.stats.today_day(unix_secs_now());
-    let assists = AssistStats::load(&logs_dir(), Window::Year, Timestamp::now());
+    let assists = AssistStats::load(
+        &logs_dir(),
+        Window::Year,
+        Timestamp::now(),
+        &loaded.stats.timezone,
+    );
     if args.subagents {
         if args.json {
             return json::emit_subagents(&loaded.stats);

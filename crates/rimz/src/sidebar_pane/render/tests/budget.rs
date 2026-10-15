@@ -142,6 +142,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
                 week: spend_window(31.0 + index as f64),
                 month: spend_window(118.0 + index as f64),
                 year: spend_window(960.0 + index as f64),
+                ..Default::default()
             }
             .into(),
         ),

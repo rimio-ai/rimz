@@ -234,6 +234,7 @@ fn spend_tally(headline_usd: f64, week_usd: f64, month_usd: f64, sessions: u32) 
         week: spend_window(week_usd, 0),
         month: spend_window(month_usd, 0),
         year: spend_window(headline_usd + week_usd + month_usd, sessions),
+        ..Default::default()
     }
 }
 

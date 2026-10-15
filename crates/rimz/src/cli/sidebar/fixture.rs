@@ -2550,5 +2550,6 @@ fn spend_tally(usd: f64, tokens: u64, sessions: u32) -> rimz::SpendTally {
         week: window(2.8),
         month: window(11.2),
         year: window(36.4),
+        ..Default::default()
     }
 }
