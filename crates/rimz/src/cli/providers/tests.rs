@@ -368,7 +368,7 @@ fn named_accounts_carry_their_own_spend_and_default_never_reads_kind_wide() {
     )
     .unwrap();
     let pretty = String::from_utf8(out.into_inner()).unwrap();
-    assert!(pretty.contains("●  new rooms"), "{pretty}");
+    assert!(pretty.contains("●  machine default"), "{pretty}");
     insta::assert_snapshot!("provider_named_detail", pretty);
     let unprobed = assemble_reports(
         &logins,
