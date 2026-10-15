@@ -133,7 +133,8 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
         );
         assert_installed_alone(&installed, shell);
 
-        // A signal that kills the shell must still run the EXIT trap that removes the staging.
+        // A signal that ends the shell must still remove the staging; each signal trap cleans up
+        // itself, because zsh under `set -e` skips the EXIT trap when a signal trap calls exit.
         for (signal, code) in [("HUP", 129), ("INT", 130), ("TERM", 143)] {
             let out = setup(&published, signal);
             let stderr = String::from_utf8_lossy(&out.stderr);
