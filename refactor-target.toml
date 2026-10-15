@@ -695,6 +695,11 @@ surface-budget = 846 # agent_check::replay rebuilds a held judge's record from i
 
 [[verdict]]
 kind = "item"
+key = "harness::parent_watch::ParentWatch::probe_now"
+reason = "The exec supervisor refreshes the parent verdict at each startup-relaunch deadline."
+
+[[verdict]]
+kind = "item"
 key = "harness::hook_drain::restart"
 reason = "Reload delegates stop guards and best-effort successor wake to the drainer owner."
 
