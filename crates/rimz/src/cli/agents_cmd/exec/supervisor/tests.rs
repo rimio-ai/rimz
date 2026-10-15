@@ -314,6 +314,35 @@ fn a_parent_end_is_confirmed_once_at_the_relaunch_deadline() {
 }
 
 #[test]
+fn a_relaunch_refreshes_its_parent_after_the_deadline_before_the_last_ask() {
+    use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
+
+    let answers = [Due, Spent].map(|initial| {
+        let refreshed = std::cell::Cell::new(false);
+        let deadline = Instant::now() + CHILD_WAIT_POLL;
+        startup_relaunch_at(
+            deadline,
+            CHILD_WAIT_POLL,
+            || if refreshed.get() { No } else { initial },
+            || {
+                assert!(
+                    Instant::now() >= deadline,
+                    "refresh must follow the deadline"
+                );
+                refreshed.set(true);
+                Some(false)
+            },
+        )
+    });
+
+    assert_eq!(
+        answers,
+        [No, No],
+        "the last ask must see the fresh parent verdict"
+    );
+}
+
+#[test]
 fn folding_card_evidence_asks_have_a_quarter_second_floor() {
     use rimz::harness::run::StartupRelaunch::Due;
     let mut asks = Vec::new();
