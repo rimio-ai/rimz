@@ -2,6 +2,49 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn answers_to_session_current_and_prior_launch_ids() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    agent.launch_id = Some("current".into());
+    agent.prior_launch_ids = vec!["oldest".into(), "previous".into()];
+    for id in [
+        &agent.agent_id,
+        &"current".into(),
+        &"oldest".into(),
+        &"previous".into(),
+    ] {
+        assert!(agent.answers_to(id), "{id}");
+    }
+    assert!(!agent.answers_to(&"unrelated".into()));
+}
+
+#[test]
+fn launch_rebinding_keeps_order_without_duplicates_or_the_current_id() {
+    let mut agent = test_agent(AgentStatus::Idle, 1_000);
+    for id in ["oldest", "previous", "current", "current", "oldest"] {
+        agent.set_launch_id(id.into());
+    }
+    assert_eq!(agent.launch_id.as_deref(), Some("oldest"));
+    assert_eq!(
+        agent.prior_launch_ids,
+        vec![AgentSessionId::from("previous"), "current".into()]
+    );
+}
+
+#[test]
+fn prior_launch_ids_decode_legacy_rows_and_skip_empty_lists() {
+    let agent = test_agent(AgentStatus::Idle, 1_000);
+    let wire = serde_json::to_value(&agent).unwrap();
+    assert!(wire.get("prior_launch_ids").is_none());
+    let mut decoded: AgentState = serde_json::from_value(wire).unwrap();
+    assert!(decoded.prior_launch_ids.is_empty());
+    decoded.set_launch_id("old".into());
+    decoded.set_launch_id("new".into());
+    let wire = serde_json::to_value(&decoded).unwrap();
+    assert_eq!(wire["prior_launch_ids"], serde_json::json!(["old"]));
+    assert_eq!(serde_json::from_value::<AgentState>(wire).unwrap(), decoded);
+}
+
+#[test]
 fn recent_prompts_truncate_multibyte_text_before_deduplication() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     let prompt = "🦀".repeat(10_000);

@@ -205,7 +205,8 @@ upward-dependencies = ["address"]
 # AgentDefinition::is_foreign_hook_payload and HookCapability::recognizes_hook_payload keep native recognition in adapters (+2).
 # LocalSessionLookup and the capability/login locate_session methods support exact provider resume (+3).
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
-surface-budget = 1059
+# AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
+surface-budget = 1061
 
 [[verdict]]
 kind = "item"

@@ -1135,8 +1135,7 @@ fn launch_members<'a>(
         .filter(|agent| {
             &agent.kind == kind
                 && !agent.is_provider_subagent()
-                && (&agent.agent_id == id
-                    || agent.launch_id.as_ref() == Some(id)
+                && (agent.answers_to(id)
                     || alias.is_some_and(|alias| agent.launch_id.as_ref() == Some(alias)))
         })
         .collect()

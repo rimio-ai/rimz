@@ -73,6 +73,8 @@ A launch identity belongs to one live agent instance, not to one conversation. E
 
 Inheritance runs after each lifecycle reduction. A successor that registers before the provider-owned attach lands carries no launch identity until its next lifecycle event, such as a turn start or a tool hook; the attach itself does not repair an already-registered successor. Rows that reuse a `launch_id` across a relaunch stay separate, because launch grouping also requires the same instance, and an unstamped row forms its own group.
 
+A row rebound to a new launch keeps answering to its earlier launch ids through `prior_launch_ids`, so its pre-close children and peers stay linked. A picker launch merges into a known session when that session is paneless or ended, even if the ended row retains its old pane stamp; a live pane-stamped session is not taken over.
+
 The inherited identity excludes the card `name`, `name_explicit`, `kind_ordinal`, and `registered_at`. Only a provider-linked compaction continuation takes its predecessor's `registered_at`, so it keeps the open-turn rank the predecessor held.
 
 The ownership rule also selects one un-ended row per launch as its current occupant. Only that row renders and resolves launch-derived handles such as the role; other conversations stay audit records, and a snapshot with a live pane never offers them as message targets. When every row has ended, the most recently active row keeps the launch handle as the audit and resume representative.

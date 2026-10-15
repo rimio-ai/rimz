@@ -6,9 +6,15 @@ fn sender_resolution_uses_live_launch_or_session_identity_then_legacy_name() {
     let mut card = agent();
     card.agent_id = "sender-session".into();
     card.launch_id = Some("sender-launch".into());
+    card.prior_launch_ids = vec!["sender-prior".into()];
     card.name = Some("sender".into());
     let mut origin = sender();
-    for identity in [Some("sender-session"), Some("sender-launch"), None] {
+    for identity in [
+        Some("sender-session"),
+        Some("sender-launch"),
+        Some("sender-prior"),
+        None,
+    ] {
         if let MessageSender::Agent { agent_id, .. } = &mut origin {
             *agent_id = identity.map(Into::into);
         }
