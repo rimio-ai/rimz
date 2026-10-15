@@ -974,3 +974,49 @@ fn report_leaves_blank_continuation_lines_without_trailing_spaces() {
     let output = strip(|w| write_report_with_args(w, &error, &["rimz".into()]));
     assert_eq!(output, "error: outer\n\n  tail\n  head\n\n  body\n");
 }
+
+fn traffic_blocker() -> rimz::blocker::Blocker {
+    use rimz::blocker::{Blocker, Surface};
+    let settings = "/home/dev/.claude/settings.json";
+    Blocker::new(format!(
+        "Claude remote-control is enabled (`[remote_control] claude = true`) but `DISABLE_GROWTHBOOK` in the settings env in {settings} blocks it."
+    ))
+    .with_fix(
+        format!("Remove `DISABLE_GROWTHBOOK` from `env` in {settings}"),
+        None,
+        Surface::Privacy,
+    )
+    .with_fix(
+        "Turn claude remote control off for good",
+        Some("rimz config set remote_control.claude false".into()),
+        Surface::Plain,
+    )
+}
+
+#[test]
+fn a_blocked_start_lists_fixes_commands_and_the_run_only_hint() {
+    let error: anyhow::Error = rimz::remote_control::StartBlock {
+        host: rimz::remote_control::RemoteControlHost::Claude,
+        blocker: traffic_blocker(),
+    }
+    .into();
+    let output = strip(|out| write_report_with_args(out, &error, &[]));
+    insta::assert_snapshot!(output);
+}
+
+#[test]
+fn a_live_room_refusal_and_a_declined_prompt_carry_no_run_only_hint() {
+    let live: anyhow::Error = traffic_blocker().into();
+    let output = strip(|out| write_report_with_args(out, &live, &[]));
+    assert!(
+        output.contains("rimz config set remote_control.claude false"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("run `rimz start` in a terminal"),
+        "{output}"
+    );
+
+    let declined: anyhow::Error = AlreadyReported.into();
+    assert_eq!(strip(|out| write_report_with_args(out, &declined, &[])), "");
+}

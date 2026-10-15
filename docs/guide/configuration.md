@@ -485,7 +485,7 @@ Set either one with `rimz config set`, not by editing the file, because `set` al
 
 A hand edit does not reach a running room the same way. A Claude host catches up on the daemon view's next repair pass, within about thirty seconds. A Codex edit only changes what the next room start decides, so a daemon already running keeps running.
 
-A `codex` CLI on `PATH` adds its per-session app-server broker whatever this toggle says. `rimz start` and the live Claude enable path both refuse when an enabled host is installed but misconfigured in a way you can fix, such as an incompatible Claude version. An enabled host whose agent is not installed at all is skipped so the room still starts, and `rimz doctor` reports it with the install fix. The security boundary is in [security.md](./security.md).
+A `codex` CLI on `PATH` adds its per-session app-server broker whatever this toggle says. `rimz start` and the live Claude enable path both refuse when an enabled host is installed but misconfigured in a way you can fix, such as an incompatible Claude version. An enabled host whose agent is not installed at all is skipped so the room still starts, and `rimz doctor` reports it with the install fix. In a terminal the refusal offers to start without the blocked host for this run only, shown as a muted `rc off` on the dashboard; the choice never edits the file. The security boundary is in [security.md](./security.md).
 
 ### Daemon view
 

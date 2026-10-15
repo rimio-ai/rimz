@@ -210,6 +210,9 @@ impl RoomContext {
         if let Some(logins) = &self.birth_logins {
             self.pin_room_logins(logins)?;
         }
+        if let Some(off) = self.birth_remote_control_off.take() {
+            self.record_remote_control_off(off)?;
+        }
         if !pre_existed {
             if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
                 bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");

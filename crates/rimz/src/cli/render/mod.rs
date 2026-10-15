@@ -138,6 +138,20 @@ fn write_report_with_args(
     if let Some(ambiguity) = error.downcast_ref::<AmbiguousAgents>() {
         return ambiguity.write(w, argv);
     }
+    if error.downcast_ref::<AlreadyReported>().is_some() {
+        return Ok(());
+    }
+    if let Some(block) = error.downcast_ref::<rimz::remote_control::StartBlock>() {
+        write_blocker(w, &block.blocker, &paint(palette::alarm().bold(), "error:"))?;
+        return writeln!(
+            w,
+            "\n  To start with {} remote control off for this run, run `rimz start` in a terminal.",
+            block.host.kind()
+        );
+    }
+    if let Some(blocker) = error.downcast_ref::<rimz::blocker::Blocker>() {
+        return write_blocker(w, blocker, &paint(palette::alarm().bold(), "error:"));
+    }
     let mut messages = distinct_messages(error).into_iter();
     let Some(message) = messages.next() else {
         return Ok(());
@@ -174,6 +188,34 @@ fn write_report_with_args(
         && let Some(command) = corrected_command(argv, target, channel, *channel_flag)
     {
         writeln!(w, "  try: {command}")?;
+    }
+    Ok(())
+}
+
+/// A command failure whose reason the user already read, so `report` prints
+/// nothing and the exit code is the only trace.
+#[derive(Debug, thiserror::Error)]
+#[error("declined")]
+pub(crate) struct AlreadyReported;
+
+/// A start precondition: the problem under `head`, then each fix with its
+/// copyable command on its own line. A privacy or security fix says RimZ will
+/// not change it.
+pub(crate) fn write_blocker(
+    w: &mut impl Write,
+    blocker: &rimz::blocker::Blocker,
+    head: &str,
+) -> std::io::Result<()> {
+    let mut lines = blocker.problem.lines();
+    writeln!(w, "{head} {}", lines.next().unwrap_or_default())?;
+    for line in lines {
+        write_continuation(w, line)?;
+    }
+    for fix in &blocker.fixes {
+        writeln!(w, "  - {}{}", fix.summary, fix.surface)?;
+        if let Some(command) = &fix.command {
+            writeln!(w, "      {command}")?;
+        }
     }
     Ok(())
 }

@@ -29,7 +29,7 @@ impl RemoteControlConfig {
     }
 
     /// This policy with each named kind turned off.
-    pub(crate) fn without<'a>(&self, kinds: impl IntoIterator<Item = &'a str>) -> Self {
+    pub fn without<'a>(&self, kinds: impl IntoIterator<Item = &'a str>) -> Self {
         let mut config = self.clone();
         for kind in kinds {
             if let Some(enabled) = config.enabled.get_mut(kind) {
