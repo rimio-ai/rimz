@@ -240,9 +240,16 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
         let rows = rows_with_locator(&logins, dir.path(), dir.path(), |_| {
             Some("/detected".into())
         });
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         for row in rows {
-            assert_eq!(row.login.as_str(), "work");
+            assert_eq!(
+                row.login.as_str(),
+                if row.kind == "qoder" {
+                    "default"
+                } else {
+                    "work"
+                }
+            );
             let FolderTrust::Undecided(gap) = row.trust else {
                 panic!("missing decision")
             };
@@ -251,6 +258,7 @@ fn rows_require_detection_and_a_model_and_use_the_room_login() {
                 ("claude", false) => home.join(".claude.json"),
                 ("codex", true) => dir.path().join("override.toml"),
                 ("claude", true) => dir.path().join("override.json"),
+                ("qoder", _) => dir.path().join("ambient/.qoder/settings.json"),
                 _ => panic!("unexpected model"),
             };
             assert_eq!(gap.path, expected);

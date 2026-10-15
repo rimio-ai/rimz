@@ -28,6 +28,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
 | [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 1.2.0 (tag `v1.2.0`, 2026-10-12) | [adapter_pi.md](../internals/agents/adapter_pi.md) |
 | [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.25.1 (tag `v0.25.1`, 2026-10-11) | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
+| [qoder-reference.md](./agent-adapter/qoder-reference.md) | Qoder CLI | 1.1.72 (no-login probes and installed-bundle trace) | [adapter_qoder.md](../internals/agents/adapter_qoder.md) |
 
 The provider-neutral contracts every adapter page feeds are [model.md](../internals/agents/model.md) for lifecycle and status, [adapter.md](../internals/agents/adapter.md) for the adapter layer, and [providers.md](../internals/agents/providers.md) for accounts and spend.
 
