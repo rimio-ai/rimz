@@ -154,6 +154,7 @@ Agent hibernation spans `harness/hibernate.rs` (read-only selection and wake-hel
 - Shared utilities and presentation — `utils::time` compact duration/wall-clock parsing and the crate's one Unix-millisecond clock; `utils::path` lexical normalization; `utils::parallel` bounded ordered fan-out with lane attribution; `utils::tokens` the `o200k_base` token estimate; `utils::env` the on/off reading of RimZ's own environment switches; `theme` semantic palette, provider identity, glyph resolution and setup probes, and value formats.
 - Daemon view — `daemon_view` spec and reconciliation; `daemon_content` supervisors; `remote_control` provider-neutral readiness/toggle coordination.
 - Process and config — `config`, `observability`, `agent_activity`, `lane`, `proc` user-shell selection and process inspection, `reload`, `osc`, `build_id`, `child_process`, `tui`, `testkit`.
+- Start preconditions — `blocker` typed problems and user-run fixes, including privacy and security surfaces; the CLI owns their presentation.
 - Install lifecycle — `update` install-origin detection, release verification, and atomic binary replacement; `uninstall` machine-wide removal mechanics.
 - Shared language servers — `lsp/` admission, process leases, registry, cost history, broker, editor attachment, saved-file watching, memory watchdog, and read-only queries.
 

@@ -79,24 +79,59 @@ fn start_gate_skips_uninstalled_hosts_and_keeps_hard_refusals() {
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "claude",
             "uninstalled",
-            &"Claude is not installed",
+            crate::blocker::Blocker::new("Claude is not installed"),
         )),
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            &"Codex standalone is missing",
+            crate::blocker::Blocker::new("Codex standalone is missing"),
         )),
     );
     assert_eq!(skipped.start_gate(), Ok(()));
 
-    let issue = RuntimeControlIssue::new("claude", "blocked", &"Claude is too old");
+    let issue = RuntimeControlIssue::new(
+        "claude",
+        "blocked",
+        crate::blocker::Blocker::new("Claude is too old"),
+    );
     let blocked = ReadinessSnapshot::from_states(
         RuntimeControlReadiness::Blocked(issue.clone()),
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            &"Codex standalone is missing",
+            crate::blocker::Blocker::new("Codex standalone is missing"),
         )),
     );
-    assert_eq!(blocked.start_gate(), Err(issue));
+    let block = blocked.start_gate().unwrap_err();
+    assert_eq!(block.host, RemoteControlHost::Claude);
+    assert_eq!(block.blocker.problem, issue.to_string());
+    assert_eq!(
+        block
+            .blocker
+            .fixes
+            .last()
+            .and_then(|fix| fix.command.as_deref()),
+        Some("rimz config set remote_control.claude false")
+    );
+
+    let both = ReadinessSnapshot::from_states(
+        RuntimeControlReadiness::Blocked(issue),
+        RuntimeControlReadiness::Blocked(RuntimeControlIssue::new(
+            "codex",
+            "account_unavailable",
+            crate::blocker::Blocker::new("Account unavailable"),
+        )),
+    );
+    assert_eq!(
+        both.start_gate().unwrap_err().host,
+        RemoteControlHost::Codex
+    );
+    assert!(
+        !both
+            .blocked_host()
+            .unwrap_err()
+            .1
+            .to_string()
+            .contains("rimz config set")
+    );
 }

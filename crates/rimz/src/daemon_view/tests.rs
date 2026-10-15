@@ -230,7 +230,7 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
             RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
                 "claude",
                 "uninstalled",
-                &"Claude is not installed",
+                crate::blocker::Blocker::new("Claude is not installed"),
             )),
             false,
         )

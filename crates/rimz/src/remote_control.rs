@@ -32,6 +32,14 @@ impl RemoteControlHost {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{blocker}")]
+pub struct StartBlock {
+    pub host: RemoteControlHost,
+    #[source]
+    pub blocker: crate::blocker::Blocker,
+}
+
 /// The provider environment each remote-control host of one room runs under.
 #[derive(Clone, Debug)]
 pub struct HostLoginEnvs {
@@ -116,9 +124,13 @@ impl ReadinessSnapshot {
                 env,
                 project_root,
             ),
-            Err(error) if config.enabled_for(host.kind()) => RuntimeControlReadiness::Blocked(
-                RuntimeControlIssue::new(host.kind(), "account_unavailable", error),
-            ),
+            Err(error) if config.enabled_for(host.kind()) => {
+                RuntimeControlReadiness::Blocked(RuntimeControlIssue::new(
+                    host.kind(),
+                    "account_unavailable",
+                    crate::blocker::Blocker::new(error.to_string()),
+                ))
+            }
             Err(_) => RuntimeControlReadiness::Disabled,
         };
         Self::from_readiness(
@@ -173,10 +185,24 @@ impl ReadinessSnapshot {
     }
 
     /// Skip uninstalled providers and refuse the first installed-provider block.
-    pub fn start_gate(&self) -> Result<(), RuntimeControlIssue> {
+    pub fn start_gate(&self) -> Result<(), StartBlock> {
+        self.blocked_host().map_err(|(host, issue)| StartBlock {
+            host,
+            blocker: issue.blocker.with_fix(
+                format!("Turn {} remote control off for good", host.kind()),
+                Some(format!(
+                    "rimz config set remote_control.{} false",
+                    host.kind()
+                )),
+                crate::blocker::Surface::Plain,
+            ),
+        })
+    }
+
+    fn blocked_host(&self) -> Result<(), (RemoteControlHost, RuntimeControlIssue)> {
         for host in [RemoteControlHost::Codex, RemoteControlHost::Claude] {
             if let RuntimeControlReadiness::Blocked(issue) = self.for_host(host) {
-                return Err(issue.clone());
+                return Err((host, issue.clone()));
             }
         }
         Ok(())
@@ -212,7 +238,38 @@ pub fn prepare_hosts(config: &RemoteControlConfig, envs: &HostLoginEnvs) {
 pub fn preflight_enable(host: RemoteControlHost) -> Result<(), RuntimeControlIssue> {
     let login_env = crate::agents::ambient_env();
     runtime_control::prepare(host.kind(), true, &login_env);
-    ReadinessSnapshot::probe_transition(host).start_gate()
+    ReadinessSnapshot::probe_transition(host)
+        .blocked_host()
+        .map_err(|(_, issue)| issue)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ToggleErr {
+    #[error(transparent)]
+    Blocked(#[from] RuntimeControlIssue),
+    #[error(transparent)]
+    Edit(#[from] crate::config::ConfigEditErr),
+    #[error("loading the updated per-machine config: {0}")]
+    Load(#[from] crate::config::ConfigErr),
+    #[error("applying the remote-control toggle: {0}")]
+    Apply(#[from] RuntimeControlError),
+}
+
+/// Persist machine intent and apply it to running hosts, shared by config and start.
+pub fn persist_toggle(
+    host: RemoteControlHost,
+    enabled: bool,
+) -> Result<crate::config::MachineConfig, ToggleErr> {
+    if enabled {
+        preflight_enable(host)?;
+    }
+    crate::config::ConfigEditor::machine().set(
+        &format!("remote_control.{}", host.kind()),
+        if enabled { "true" } else { "false" },
+    )?;
+    let machine = crate::config::MachineConfig::load()?;
+    apply_runtime_toggle(host, &machine)?;
+    Ok(machine)
 }
 
 /// Advisory-only provider daemon findings. These never gate `rimz start`.

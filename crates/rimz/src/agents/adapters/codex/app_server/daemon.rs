@@ -138,7 +138,7 @@ pub fn readiness(
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "codex",
             "standalone_missing",
-            &managed_missing_guidance(),
+            crate::blocker::Blocker::new(managed_missing_guidance()),
         ))
     }
 }

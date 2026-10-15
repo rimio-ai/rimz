@@ -303,6 +303,7 @@ pub enum Issue {
     },
     FolderTrust {
         fix: String,
+        command: Option<String>,
     },
 }
 
@@ -345,86 +346,176 @@ impl std::fmt::Display for AuthConflictSource {
 
 impl std::fmt::Display for Issue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::TrafficDisabled {
-                variable,
-                settings_path,
-            } => {
-                write!(
-                    f,
-                    "Claude remote-control is enabled (`[remote_control] claude = true`) but `{variable}` in "
-                )?;
-                match settings_path {
-                    Some(path) => write!(f, "the settings env in {}", path.display())?,
-                    None => write!(f, "the launch environment")?,
-                }
-                write!(
-                    f,
-                    " blocks it.\n\nUnset that value, then re-run, or set `[remote_control] claude = false` to disable the Claude host."
-                )
-            }
-            Self::FolderTrust { fix } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but the project has no folder-trust decision.\n\n{fix}; or set `[remote_control] claude = false` to disable the Claude host."
-            ),
-            Self::Uninstalled => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but `claude` is not on PATH."
-            ),
-            Self::TooOld { found } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 `claude --version` reports {found}; remote control requires Claude Code \
-                 >= {MIN_REMOTE_CONTROL}.\n\n\
-                 Upgrade Claude Code, then re-run, or set `[remote_control] claude = false` \
-                 to disable the Claude host."
-            ),
-            Self::RemoteControlDisabled { settings_path } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 `disableRemoteControl: true` in {} blocks it.\n\n\
-                 Remove that setting or set it to false, then re-run, or set \
-                 `[remote_control] claude = false` to disable the Claude host.",
-                settings_path.display(),
-            ),
-            Self::ConsentPending { config_path } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 `claude remote-control` still asks `Enable Remote Control? (y/n)` once per \
-                 machine, and RimZ could not record the answer in {}.\n\n\
-                 Make that file writable and re-run so RimZ can set `remoteDialogSeen`, or run \
-                 `claude remote-control` in this project once by hand and answer `y`, or set \
-                 `[remote_control] claude = false` to disable the Claude host.",
-                config_path.display(),
-            ),
-            Self::ConsentRefused { config_path } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 `remoteDialogSeen` is set to a non-`true` value in {}, which RimZ leaves \
-                 alone.\n\n\
-                 Set it to `true` or remove it, then re-run, or set \
-                 `[remote_control] claude = false` to disable the Claude host.",
-                config_path.display(),
-            ),
-            Self::AuthConflict { sources } => write!(
-                f,
-                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
-                 Claude Code disables remote control with the configured authentication \
-                 or API endpoint on this version. Conflicting source(s): {}.\n\n\
-                 Unset those environment values or remove them from Claude settings, run \
-                 `claude auth login`, then re-run; or set `[remote_control] claude = false` \
-                 to disable the Claude host.",
-                sources
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-        }
+        self.blocker(Path::new(FALLBACK_SETTINGS_PATH), &BTreeMap::new())
+            .fmt(f)
     }
 }
 
 impl std::error::Error for Issue {}
+
+impl Issue {
+    /// The refusal with its fixes; a command that runs `claude` names the
+    /// account home `login_env` carries, so it acts on the room's account.
+    fn blocker(
+        &self,
+        settings_path: &Path,
+        login_env: &BTreeMap<String, String>,
+    ) -> crate::blocker::Blocker {
+        use crate::blocker::{
+            Blocker,
+            Surface::{Plain, Privacy, Security},
+        };
+        let problem = |cause: String| {
+            Blocker::new(format!(
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but {cause}"
+            ))
+        };
+        let settings = settings_path.display();
+        // The assignment prefix quotes only its value: a quoted whole word
+        // would run as a command name rather than set the variable.
+        let claude = |args: &[&str]| {
+            let command =
+                shlex::try_join(std::iter::once("claude").chain(args.iter().copied())).ok()?;
+            match login_env.get("CLAUDE_CONFIG_DIR") {
+                Some(home) => Some(format!(
+                    "CLAUDE_CONFIG_DIR={} {command}",
+                    shlex::try_quote(home).ok()?
+                )),
+                None => Some(command),
+            }
+        };
+        match self {
+            Self::Uninstalled => problem("`claude` is not on PATH.".to_owned()),
+            Self::TooOld { found } => problem(format!(
+                "`claude --version` reports {found}; \
+                 remote control requires Claude Code >= {MIN_REMOTE_CONTROL}."
+            ))
+            .with_fix("Upgrade Claude Code", Some("claude update".into()), Plain),
+            Self::RemoteControlDisabled { settings_path } => {
+                let path = settings_path.display();
+                problem(format!("`disableRemoteControl: true` in {path} blocks it.")).with_fix(
+                    format!("Remove `disableRemoteControl` or set it to false in {path}"),
+                    None,
+                    Plain,
+                )
+            }
+            Self::ConsentPending { config_path } => {
+                let path = config_path.display();
+                // RimZ replaces the file by a rename in its directory, so the
+                // directory is what must be writable, not the file.
+                let dir = config_path.parent().unwrap_or(Path::new("."));
+                let chmod = shlex::try_join(["chmod", "u+w", &dir.to_string_lossy()]).ok();
+                problem(format!(
+                    "RimZ could not record `remoteDialogSeen` in {path}."
+                ))
+                .with_fix(
+                    format!(
+                        "Make {} writable so RimZ can record the dialog answer in {path}",
+                        dir.display()
+                    ),
+                    chmod,
+                    Plain,
+                )
+                .with_fix(
+                    "Answer Claude's remote-control prompt once in this project",
+                    claude(&["remote-control"]),
+                    Plain,
+                )
+            }
+            Self::ConsentRefused { config_path } => {
+                let path = config_path.display();
+                problem(format!("`remoteDialogSeen` is not true in {path}.")).with_fix(
+                    format!("Set `remoteDialogSeen` to true in {path}"),
+                    None,
+                    Plain,
+                )
+            }
+            Self::TrafficDisabled {
+                variable,
+                settings_path: Some(path),
+            } => problem(format!(
+                "`{variable}` in the settings env in {} blocks it.",
+                path.display()
+            ))
+            .with_fix(
+                format!("Remove `{variable}` from `env` in {}", path.display()),
+                None,
+                Privacy,
+            ),
+            Self::TrafficDisabled {
+                variable,
+                settings_path: None,
+            } => problem(format!("`{variable}` in the launch environment blocks it.")).with_fix(
+                "Unset the traffic switch in the launching shell",
+                Some(format!("unset {variable}")),
+                Privacy,
+            ),
+            Self::FolderTrust { fix, command } => problem(
+                "the project has no folder-trust decision.".to_owned(),
+            )
+            .with_fix(fix, command.clone(), Security),
+            Self::AuthConflict { sources } => {
+                let mut blocker = problem(
+                    "Claude Code disables remote control with the configured authentication \
+                     or API endpoint on this version."
+                        .to_owned(),
+                );
+                for source in sources {
+                    let (summary, command) = match source {
+                        AuthConflictSource::ApiKeyEnv => (
+                            "Unset ANTHROPIC_API_KEY in the launching shell".to_owned(),
+                            Some("unset ANTHROPIC_API_KEY".into()),
+                        ),
+                        AuthConflictSource::AuthTokenEnv => (
+                            "Unset ANTHROPIC_AUTH_TOKEN in the launching shell".to_owned(),
+                            Some("unset ANTHROPIC_AUTH_TOKEN".into()),
+                        ),
+                        AuthConflictSource::OAuthTokenEnv => (
+                            format!(
+                                "Unset CLAUDE_CODE_OAUTH_TOKEN in the launching shell \
+                                 and remove it from `env` in {settings} if present"
+                            ),
+                            Some("unset CLAUDE_CODE_OAUTH_TOKEN".into()),
+                        ),
+                        AuthConflictSource::ApiKeyHelperSetting => {
+                            (format!("Remove `apiKeyHelper` from {settings}"), None)
+                        }
+                        AuthConflictSource::SettingsEnv => (
+                            format!(
+                                "Remove ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN \
+                                 from `env` in {settings}"
+                            ),
+                            None,
+                        ),
+                        AuthConflictSource::EndpointEnv => (
+                            "Unset custom endpoint and third-party provider values \
+                             in the launching shell"
+                                .to_owned(),
+                            Some(
+                                "unset ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK \
+                                 CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY"
+                                    .into(),
+                            ),
+                        ),
+                        AuthConflictSource::SettingsEndpoint => (
+                            format!(
+                                "Remove the custom Anthropic endpoint and third-party \
+                                 provider values from `env` in {settings}"
+                            ),
+                            None,
+                        ),
+                    };
+                    blocker = blocker.with_fix(summary, command, Security);
+                }
+                blocker.with_fix(
+                    "Sign in to Claude again",
+                    claude(&["auth", "login"]),
+                    Security,
+                )
+            }
+        }
+    }
+}
 
 /// Probe configured Claude readiness once and return launch argv with success.
 pub fn readiness(
@@ -439,7 +530,7 @@ pub fn readiness(
         return RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "claude",
             "uninstalled",
-            &Issue::Uninstalled,
+            Issue::Uninstalled.blocker(Path::new(FALLBACK_SETTINGS_PATH), login_env),
         ));
     }
     let (settings_path, settings) = read_rc_settings(login_env);
@@ -448,7 +539,7 @@ pub fn readiness(
         .flatten();
     match readiness_from(
         version,
-        settings_path,
+        settings_path.clone(),
         settings,
         env_value_present(ANTHROPIC_API_KEY),
         env_value_present(ANTHROPIC_AUTH_TOKEN),
@@ -467,9 +558,11 @@ pub fn readiness(
         Ok(host_argv) => RuntimeControlReadiness::Ready {
             host_argv: Some(host_argv_with_login(host_argv, login_env)),
         },
-        Err(issue) => {
-            RuntimeControlReadiness::Blocked(RuntimeControlIssue::new("claude", "blocked", &issue))
-        }
+        Err(issue) => RuntimeControlReadiness::Blocked(RuntimeControlIssue::new(
+            "claude",
+            "blocked",
+            issue.blocker(&settings_path, login_env),
+        )),
     }
 }
 
@@ -570,7 +663,18 @@ fn readiness_from(
     }
     if let Some(crate::agents::FolderTrust::Undecided(gap)) = folder_trust {
         return Err(Issue::FolderTrust {
-            fix: gap.fix("claude"),
+            fix: if gap.grant.is_ok() {
+                format!(
+                    "Grant folder trust in {}, or answer Claude's folder-trust prompt there",
+                    gap.key.display()
+                )
+            } else {
+                gap.fix("claude")
+            },
+            command: gap
+                .grant
+                .is_ok()
+                .then(|| "rimz trust grant --agents claude".to_owned()),
         });
     }
     match version {
