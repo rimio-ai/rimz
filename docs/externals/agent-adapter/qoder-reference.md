@@ -4,9 +4,9 @@ Qoder CLI is Qoder's terminal coding agent. This reference records its upstream 
 
 ## Evidence boundary and sources
 
-Baseline: official rolling CLI documentation read on 2026-10-15. No installed release, minimum compatible version, or executable alias was verified. The documented executable is `qoder`. No Qoder installation, login, provider call, hook write, or private transcript read was performed.
+Baseline: official rolling CLI documentation read on 2026-10-15, supplemented by no-login probes of installed qodercli 1.1.72 in throwaway homes and a private tmux, and a source trace of its installed `@qoder-ai/qodercli/bundle/qodercli.js`. No real login, provider call, or private transcript read was performed. Statements labeled live were observed in those probes; statements labeled traced describe that bundle, not captured model turns. No earlier compatible release was established.
 
-The tables describe upstream contracts, not captured emissions. CLI and IDE hooks have separate documentation. This page uses CLI documentation and separately labels Agent SDK contracts.
+Unless labeled otherwise, the tables describe upstream documentation, not captured emissions. CLI and IDE hooks have separate documentation. This page uses CLI documentation and separately labels Agent SDK contracts.
 
 | Surface | Official source |
 | --- | --- |
@@ -25,7 +25,7 @@ The tables describe upstream contracts, not captured emissions. CLI and IDE hook
 
 ## Launch and configuration
 
-The [CLI reference](https://docs.qoder.com/cli/cli-reference) documents `qoder [options] [prompt text]`. A positional prompt selects non-interactive execution. An interactive launch with an initial task uses `--prompt-interactive`.
+The [CLI reference](https://docs.qoder.com/cli/cli-reference) documents `qoder [options] [prompt text]`. Live 1.1.72 probes show that positional prompts default to interactive mode. `qodercli -i <text>` places and submits an initial prompt in the TUI. `qodercli` directly runs the CLI; `qoder` is a dispatcher that spawns an inner Node CLI process.
 
 | Form or flag | Documented behavior |
 | --- | --- |
@@ -44,7 +44,7 @@ The [CLI reference](https://docs.qoder.com/cli/cli-reference) documents `qoder [
 | `--no-session-persistence` | Disable session writes and restoration. Valid only with `--print`. |
 | `--acp` | Serve ACP over stdin/stdout. |
 
-Leading-dash prompts and the parser's handling of `--` remain unverified.
+Live: `qodercli -i '-x probe'` submits the leading-dash prompt. Pass flag and value as separate argv elements: `-i=-x` submits `=-x`. The installed help recognizes `--` as an option separator; its prompt behavior was not probed.
 
 Additional launch flags are grouped under [sessions](#sessions-and-transcripts), [permissions](#permissions-and-working-modes), and [models](#models-context-skills-and-native-children).
 
@@ -58,6 +58,8 @@ The [settings page](https://docs.qoder.com/cli/settings) orders precedence: defa
 | `QODER_CONFIG_DIR` | Custom user configuration directory. Default: `~/.qoder`. |
 
 Project and local settings load only in trusted directories. Folder trust is enabled by default through `security.folderTrust.enabled`. The [hooks page](https://docs.qoder.com/cli/hooks#configuration) explicitly says same-event hooks combine across the three files. It does not settle hook-array merging for `--settings`. The cited settings and CLI pages do not define precedence between `--config-dir` and `QODER_CONFIG_DIR`.
+
+Live: `--config-dir` wins over `QODER_CONFIG_DIR`, and the environment variable alone selects the root. Traced: `QODER_CLI_HOME` and `QODER_CONFIG_DIR_NAME` also move the default root. Hooks are disabled by `disableAllHooks: true` or `hooksConfig.enabled: false`.
 
 ## Sessions and transcripts
 
@@ -151,7 +153,7 @@ Hook stdin is JSON. The [common input contract](https://docs.qoder.com/cli/hooks
 | `permission_mode` | Permission mode, when provided. |
 | `agent_id`, `agent_type` | Agent identity and type, when provided. |
 
-Documented hook environment variables are `QODER_PROJECT_DIR`, `QODER_PLUGIN_ROOT`, and `QODER_PLUGIN_DATA`. Plugin variables apply to plugin-owned hooks. The hooks page defines no provider PID field or variable. Process ancestry and environment inheritance beyond these variables remain unverified.
+Documented hook environment variables are `QODER_PROJECT_DIR`, `QODER_PLUGIN_ROOT`, and `QODER_PLUGIN_DATA`. Plugin variables apply to plugin-owned hooks. The hooks page defines no provider PID field or variable. Live: hooks run through `bash -c`, with `$PPID` the main CLI Node process (the inner child for `qoder`, the pane process for `qodercli`). Node 26 reports `node-MainThread` as its comm. Traced: environment redaction is off by default, so `RIMZ_*` survives.
 
 ## Hook events and payloads
 
@@ -170,7 +172,7 @@ The following table covers the 23 detailed events. Fields are additional to comm
 | `PermissionRequest` | Tool name | `tool_name`, `tool_input`, `permission_suggestions` | No. Use the JSON decision. |
 | `PermissionDenied` | Tool name | `tool_name`, `tool_input`, `tool_use_id`, `reason` | No. |
 | `Stop` | None | `stop_hook_active`, `last_assistant_message` | Block stopping and make the main agent continue. |
-| `StopFailure` | `error_type` | `error_type`, `error`, `error_details`, `last_assistant_message` | Output and exit code ignored. |
+| `StopFailure` | `error` (traced) | `error`, `error_details`, `last_assistant_message`; no `error_type` in 1.1.72 | Output and exit code ignored. |
 | `SubagentStart` | Agent type | `agent_id`, `agent_type` | No. |
 | `SubagentStop` | Agent type | `agent_id`, `agent_type`, `stop_hook_active`, `agent_transcript_path`, `last_assistant_message` | Block stopping and make the child continue. |
 | `PreCompact` | `trigger` | `trigger`, `custom_instructions` | Prevent compaction. |
@@ -191,7 +193,7 @@ The guide documents these selector values:
 | --- | --- |
 | `SessionStart.source` | `startup`, `resume`, `clear`, `compact`, `new`. |
 | `SessionEnd.reason` | `clear`, `resume`, `logout`, `prompt_input_exit`, `bypass_permissions_disabled`, `other`. |
-| `StopFailure.error_type` | `rate_limit`, `authentication_failed`, `billing_error`, `invalid_request`, `server_error`, `max_output_tokens`, `unknown`. |
+| `StopFailure.error` (traced) | `rate_limit`, `authentication_failed`, `billing_error`, `overloaded`, `server_error`, `max_output_tokens`, `invalid_request`, `empty_response`, `model_not_found`, `oauth_org_not_allowed`, `unknown`. |
 | Compaction `trigger` | `manual`, `auto`. |
 | `Notification.notification_type` | `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_response`, `elicitation_complete`. |
 | `InstructionsLoaded.load_reason` | `session_start`, `nested_traversal`, `path_glob_match`, `include`, `compact`. |
@@ -200,7 +202,9 @@ The guide documents these selector values:
 
 Tool examples include `Bash`, `Write`, `Edit`, `Read`, `Glob`, and `Grep`. MCP tools use `mcp__server__tool`. MCP tool hooks can also carry `mcp_context` and `original_request_name`. Tool responses have tool-dependent shapes.
 
-`Stop` denotes a response ending without pending tool calls. Its `stop_hook_active` flag identifies a turn driven by a Stop hook. `StopFailure` denotes an unexpected error. The hooks catalog specifies no dedicated user-interruption event. `PostToolUseFailure.is_interrupt` appears in a sample payload. Its coverage of whole-turn cancellation remains unverified.
+`Stop` denotes a response ending without pending tool calls and carries `last_assistant_message`. Its `stop_hook_active` flag identifies a turn driven by a Stop hook. `StopFailure` denotes an unexpected error. Traced: Esc/Ctrl-C mid-turn emits neither Stop, StopFailure, nor PostToolUseFailure. The undocumented `QueryEnd` runs in `finally` for every main-agent query, with `reason` (including `abort` and `end_turn`), `request_set_id`, and `model`. It never fires for subagents. The 1.1.72 closed event enum accepts QueryEnd; unknown names produce a visible nonfatal hook-config error.
+
+Live before login in a trusted folder: SessionStart (`startup`), Notification (`idle_prompt`), SessionEnd (`other`). Traced: `/new` and `/clear` end the old UUID with reason `clear`, then start a new UUID with source `new` or `clear`; resume uses `resume`, and fork uses a new UUID with `resume`. Compaction emits PostCompact then SessionStart (`compact`). Subagents share the parent `session_id`, adding `agent_id` and `agent_type` to ordinary hooks; compaction carries no child identity.
 
 ## Hook replies and approval decisions
 
@@ -266,7 +270,7 @@ The outcome of `permissionDecision: "ask"` depends on the [permission pipeline](
 }
 ```
 
-Neither this schema nor an exit-0 definition proves that empty stdout preserves Qoder's native approval prompt. Empty-response neutrality remains unverified.
+Traced in 1.1.72: exit 0 with empty stdout gives no decision. PreToolUse continues normal checks; PermissionRequest leaves the concurrently displayed native prompt for the user. A timeout also gives no decision. On PreToolUse, non-JSON text explicitly allows, while malformed JSON denies. These outcomes have not been exercised against a logged-in approval prompt. AskUserQuestion and ExitPlanMode both use Notification (`permission_prompt`, tool in `details.toolName`) then PermissionRequest (`tool_name`), even in bypass/auto modes.
 
 ## Permissions and working modes
 
@@ -283,11 +287,13 @@ The [permission pipeline](https://docs.qoder.com/cli/permissions) runs PreToolUs
 
 `--yolo` and `--dangerously-skip-permissions` alias `bypass_permissions`. Non-default modes require a trusted directory. Otherwise, Qoder falls back to `default`. A PreToolUse denial still blocks in bypass mode.
 
+Live: `--permission-mode plan` and `--yolo` parse in 1.1.72, although absent from its help choices. Traced: plan combines default permissions with Plan work state (hook `permission_mode` remains `default`); auto is classifier-judged.
+
 The [permissions page](https://docs.qoder.com/cli/permissions#pretooluse-hook) says PreToolUse `ask` continues the normal permission pipeline. The [hooks page](https://docs.qoder.com/cli/hooks#permissionrequest) describes it as the route to interactive authorization. These descriptions do not prove an unconditional prompt. Actual approval behavior needs a live check.
 
 A request still classified as `ask` opens a prompt in the terminal UI and becomes denial in plain headless execution. Agent SDK hosts receive the `canUseTool` authorization callback. Agent Client Protocol (ACP) clients receive the `requestPermission` RPC. The [script guide](https://docs.qoder.com/cli/run-in-scripts) also distinguishes host-driven `stream-json` confirmation from plain headless mode.
 
-The [permissions page](https://docs.qoder.com/cli/permissions#trust-directories) treats startup CWD as the main trust directory. `--add-dir`, `/add-dir`, and `permissions.additionalDirectories` extend working directories. `permissions.trustDirectories` persists explicit trust in user-level settings. The [settings reference](https://docs.qoder.com/cli/settings-reference) says project configuration cannot override that list. Startup trust-prompt behavior and persisted path normalization have not been checked live.
+The [permissions page](https://docs.qoder.com/cli/permissions#trust-directories) treats startup CWD as the main trust directory. `--add-dir`, `/add-dir`, and `permissions.additionalDirectories` extend working directories. `permissions.trustDirectories` persists explicit trust in user-level settings. The [settings reference](https://docs.qoder.com/cli/settings-reference) says project configuration cannot override that list. Live: untrusted folders block user-level and `--settings` hooks, losing the first SessionStart; pre-populating the cwd in user `permissions.trustDirectories` permits them. Traced: grants append the project root, matching the union of trustDirectories and additionalDirectories by realpath exact match or separator-delimited descendant. `security.folderTrust.enabled=false` trusts all folders. Headless mode trusts without this prompt.
 
 [Plan](https://docs.qoder.com/cli/working-modes#plan-before-execution-plan) is a work state for read-only exploration before approved execution. `/plan` enters or exits it.
 
@@ -353,27 +359,26 @@ Credits fields are optional for older CLI compatibility. Missing values mean una
 
 ## Live-validation gaps
 
-The table consolidates the documentation gaps and untested behavior above. Captures and file inspection require a separate, authorized validation pass.
+The table records remaining live evidence gaps. The no-login probes above establish startup, configuration-root, prompt, ancestry, and trust behavior only. Bundle traces establish implementation paths, not observed logged-in turns.
+
+Traced transcript limitation: JSONL is Claude-shaped, but `message.usage` token counts are zeroed unless the model is custom/BYOK or `EXPOSE_TOKEN_USAGE` is set; usage may carry Credits. Live: no transcript file exists before login. No logged-in transcript schema or Credits-to-dollars conversion was established. Traced: `/compact <text>` supplies custom instructions (`/compress` and `/summarize` are aliases), and `--resume <id> -i <prompt>` restores then submits.
 
 | Question | Missing evidence |
 | --- | --- |
-| Which releases emit these events? | Installed-version help and event captures, including the four catalog-only events. |
+| Which releases emit these events? | Earlier-version boundaries and logged-in captures, including the four catalog-only events. |
 | Do hooks fire in interactive and print modes? | Captures from each launch form and configuration source. |
 | Does empty success preserve native approval? | A real approval prompt before and after the hook response. |
 | Which events coincide with a visible prompt? | Ordering of PermissionRequest, permission notifications, and native UI display. |
 | How do timeout and competing hooks behave? | Deadline outcomes, execution order, duplicate handling, and conflicting replies. |
 | Does PreToolUse `ask` force a prompt? | A live decision after the normal permission pipeline. |
 | How do per-run hooks combine? | `--settings` tested alongside existing user, project, and local hooks. |
-| Which process owns a hook? | Provider PID, helper ancestry, and environment captures. |
 | What happens on cancel or failure? | Interrupted turns, failed tools, provider errors, and process-death captures. |
 | How do IDs change? | `/new`, `/clear`, compaction, resume, fork, and child-session records. |
 | Can a caller assign a new ID? | `--session-id` with no saved session, plus hook-ID equality with resume IDs and transcript filenames. |
-| Can resume start a new task immediately? | `--resume <id>` combined with `--prompt-interactive`. |
+| Can resume start a new task immediately? | Logged-in capture of the traced `--resume <id> -i <prompt>` path. |
 | What do files and streams contain? | Redacted JSONL, state, statusline, and structured-output schemas with usage fields. |
-| How are prompts parsed? | Interactive initial prompts, leading dashes, and option separators. |
-| How is the configuration root selected? | Conflicting flag and environment settings across session and hook paths. |
-| How is startup trust granted? | Native trust prompts, saved grants, and path normalization. |
+| How are prompts parsed? | Live option-separator behavior beyond the verified `-i` forms. |
 | Can a standalone main session restrict skills? | Interactive-launch behavior corresponding to SDK `options.skills`. |
 | Does Qoder expose a native command sandbox? | A documented sandbox boundary and disable switch. None was established from the cited CLI and permission pages. |
-| How are compact focus areas supplied? | `/compact` argument grammar and its relationship to `PreCompact.custom_instructions`. |
+| How are compact focus areas supplied? | Logged-in capture of the traced trailing-instruction path. |
 | Where are credentials stored? | Documented filenames, refresh-token schema, and configuration-root behavior. |
