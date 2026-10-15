@@ -54,6 +54,7 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `kimi` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | Merge into `[[hooks]]` |
 | `kiro` | `${KIRO_HOME:-~/.kiro}/hooks/rimz.json` | Whole file; needs Kiro CLI 2.31.0 or later |
 | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/rimz.ts` | Whole file |
+| `omp` | `~/.omp/agent/extensions/rimz.ts` | Whole file; default home only |
 | `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
 | `qoder` | `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` | Merge; needs Qoder CLI 1.1.72 or later |
@@ -62,7 +63,7 @@ RimZ's Kiro integration needs CLI 2.31.0 or later for one shared configuration, 
 
 A merge adds RimZ's entries and keeps your own hooks and every other value. Rewriting a JSON settings file can reorder its keys, so a dry-run diff may show more lines than the hook entries.
 
-A whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Pi, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
+A whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Pi, OMP, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
 
 Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall. A Cursor install writes the single `~/.cursor/hooks.json` once per config home it resolves, pairing it each time with that home's `cli-config.json`, and commits each pass on its own: a failed write rolls back the pass it was in, while earlier passes and the statusline record stay. Fix the cause and rerun the install.
 

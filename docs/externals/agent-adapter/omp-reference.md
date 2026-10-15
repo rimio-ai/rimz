@@ -1,12 +1,49 @@
 # OMP protocol reference
 
-OMP (Oh My Pi) is a fork of Pi, published as `@oh-my-pi/pi-coding-agent` with the executable `omp`. This page records its upstream integration surface for contributors evaluating an adapter. It does not establish RimZ support or select an integration design. The [adapter playbook](../../contributing/agent-adapters.md#step-2--map-the-protocol-onto-the-model) owns the mapping worksheet for later integration work. The [Pi reference](./pi-reference.md) records Pi's independent contract.
+OMP (Oh My Pi) is a fork of Pi, published as `@oh-my-pi/pi-coding-agent` with the executable `omp`. This page records its upstream integration surface; the experimental built-in's choices and gaps live in [the OMP adapter mapping](../../internals/agents/adapter_omp.md). The [adapter playbook](../../contributing/agent-adapters.md#step-2--map-the-protocol-onto-the-model) owns the mapping worksheet. The [Pi reference](./pi-reference.md) records Pi's independent contract.
 
 ## Verification baseline
 
 Checked 2026-10-15 against official source commit [`13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74`](https://github.com/can1357/oh-my-pi/commit/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74). The pinned [package manifest][package] declares version `18.11.0`. The [npm version metadata](https://registry.npmjs.org/@oh-my-pi/pi-coding-agent/18.11.0) also identifies `18.11.0`, with `omp` mapped to `dist/cli.js` and Bun `>=1.3.14`. Matching version strings do not prove the published bundle matches this commit.
 
-Verification is static: official documentation and source were read, but no OMP executable, authenticated turn, extension, or recorded session was run. All upstream links below pin the inspected commit unless explicitly labeled as registry metadata. This page follows source definitions when upstream prose differs.
+That source baseline was a static read. A later installed `18.11.1` artifact inspection and isolated live proof are recorded [below](#verified-against-the-installed-18111-artifact); neither establishes its build commit or real-provider billing. All upstream links below pin the inspected source commit unless explicitly labeled as registry metadata. This page follows executable control flow when upstream prose differs.
+
+## Verified against the installed 18.11.1 artifact
+
+The installed `/usr/local/bin/omp` reported `omp/18.11.1`: a 253,568,992-byte Bun-compiled ELF, SHA-256 `bf1e86a935b1ea26166a5280001eccea1205e6c21efe1b5853f0fd368c754974`. Inspection extracted its NUL-delimited records containing `// @bun @bytecode`, retaining JavaScript and removing NUL separators. The resulting 28,141,382-byte bundle (912,573 lines) had SHA-256 `a23ef697aa7763a35c7b79a60faabea3dd64a4de14b4006edab9af94daf9429d`. Embedded source-path comments identified the modules linked below at the pinned source baseline; those links are not a claim that commit `13a3d52` built this different-version artifact.
+
+### Extension dispatch and decisions
+
+The following are static findings from embedded executable control flow, not merely events declared in a type union:
+
+| Surface | Installed artifact behavior | Source counterpart |
+| --- | --- | --- |
+| Tool execution | `tool_execution_start`, `tool_execution_update`, and `tool_execution_end` reach extension handlers. End carries `toolCallId`, `toolName`, `result`, `isError`. | [Lifecycle mirror][lifecycle-mirror] |
+| Absent events | No `agent_settled`, `ui_prompt_start`, `ui_prompt_end`, `session_compact_failed`, `model_select`, `thinking_level_select`, or `session_info_changed` exists in the bundle. | [Lifecycle mirror][lifecycle-mirror], [extension types][extension-types] |
+| Session start/shutdown | Only `type`; shutdown has no `reason`. There is no built-in `/reload` command. | [Session implementation][agent-session] |
+| Session switch | `reason: new\|resume\|fork`, `previousSessionFile`, no session id; read the manager's current id. Context `reload()` emits a same-file `resume` switch. | [Extension runner][runner], [session implementation][agent-session] |
+| Agent end | Detached emission with `messages` and optional `willContinue`; `awaitingAsyncWork` is present only when both it and continuation are true. No `isTerminal` or `yielded`. | [Lifecycle mirror][lifecycle-mirror], [session implementation][agent-session] |
+| Tool call | `{toolName, toolCallId, input}`; default budget 30 seconds. Timeout or throw becomes a blocking result. Returning `undefined` is neutral. Native question tool name is `ask`. | [Runner][runner], [wrapper][wrapper], [ask tool][ask] |
+| Approval | Required approval emits requested when either approval handler is registered. Requested has `sessionId`, `toolName`, `toolCallId`, optional `reason`, `approvalMode`; resolved has the same identity, `approved`, optional `reason`. Headless emits requested then resolved(false) immediately. | [Tool wrapper][wrapper] |
+| Plan review | Requested has `reviewId`, `sessionId`, `title`, `planFilePath`, `planContent`, `options`, optional `tiers`; resolved has `reviewId`, `sessionId`, optional `choice`, `by`. Opens only in plan mode, from idle when not aborting a turn. | [Extension event contract][extension-types] |
+| Compaction | Before-event has no reason. `session_compact` fires only after a committed entry with `compactionEntry`, `fromExtension`. Failed/aborted automatic compaction mirrors `auto_compaction_end` with `action`, `result`, `aborted`, `willRetry`, `errorMessage`, `skipped`. Failed manual compaction emits no finish event. | [Lifecycle mirror][lifecycle-mirror], [session implementation][agent-session] |
+| Provider response | `after_provider_response.headers` is a plain lowercased header object. | [Extension types][extension-types], [session implementation][agent-session] |
+
+`ctx.getContextUsage()` returns `{tokens, contextWindow, percent}` or unavailable; `ctx.model.id`, `ctx.hasUI`, `pi.getThinkingLevel()`, and session manager `getSessionId/getSessionFile/getCwd/getBranch` are available. `ctx.isIdle()` is only `!isStreaming`, not the complete RPC settlement predicate. `ctx.agent` carries `kind: main|sub`, id, name, depth, and optional parentId. Task children bind extension factories afresh in the same JS realm, with `hasUI: false`, `kind: sub`, and their own `session_start`; module/global state is therefore shared, not a main-session discriminator. See [extension runner][runner] and [task executor][executor].
+
+`before_agent_start.systemPrompt` is `string[]`; a returned `systemPrompt` replaces it for the turn. Append by returning `[...event.systemPrompt, text]`. CLI `--append-system-prompt` replaces the discovered `APPEND_SYSTEM.md` selection, rather than adding to it. Extension discovery accepts a plain default-export factory with no package import from `<cwd>/.omp/extensions` or `<agentDir>/extensions` (`*.ts`/`*.js`). See [extension runner][runner], [CLI][cli], and [extension loading][loading].
+
+### Paths, files, and approval flags
+
+The bundle confirms `~/.omp/agent` as logical agentDir. `OMP_PROFILE` wins over `PI_PROFILE` even when empty; empty, whitespace, and `default` normalize to default. `PI_CONFIG_DIR` renames the user root, not the project's `.omp` discovery directory. `PI_CODING_AGENT_DIR` applies only to the default profile. XDG never moves agentDir or its extensions. A nonempty `XDG_DATA_HOME` activates session relocation only if `$XDG_DATA_HOME/omp` exists (or its `profiles/<name>` directory for a named profile), and only for the normal agent path. The default-profile relocated session root is `$XDG_DATA_HOME/omp/sessions`, without `agent/`. See [directory resolver][dirs] and [native discovery][native].
+
+Main-session filenames are `<ISO-with-colons-and-dot-replaced-by-hyphens>_<uuidv7>.jsonl`, with the fixed 256-byte title slot then the v3 session header and cwd. Assistant `message.usage.cost.total` and standalone `model_usage` entries carry accounting; `model_usage` has purpose, provider, model, usage and does not reach extension handlers. `compaction` and `branch_summary` entries carry no usage. Task files can instead be `<taskId>.jsonl` under parent artifacts; whether parent totals already include all of that usage remains unverified. See [session entries][entries], [title slot][title-slot], [statistics][stats], and [task executor][executor].
+
+Executable parsing accepts `--approval-mode always-ask|write|yolo`; `--yolo` and `--auto-approve` force yolo, also the native default. Native `ask` is read-class approval. See [CLI][cli], [approval policy][approval], and [ask tool][ask].
+
+### Isolated live proof
+
+A later interactive proof used the installed prebuilt in private tmux with disposable HOME/RIMZ_HOME/XDG directories and a keyless local OpenAI-compatible SSE provider. A plain factory loaded from the ambient extension directory. Prompts `hello`, `config`, and `-prefixed` each reached `before_agent_start` unchanged through `omp --model probe/probe -- <prompt>`; `--` therefore shields a subcommand-name prompt. The pane's OMP PID matched the extension's process PID, and `/proc/<pid>/comm` read `omp`. Observed event order was `session_start` → `before_agent_start` → `tool_execution_end(read)` → final `agent_end` without continuation. A separate native logger also observed `tool_call(read)` and an earlier `agent_end` with `willContinue=true`. These runs did not use credentials, open `agent.db`, or exercise native asks/compaction. RimZ's exact probe outcomes and delivery ordering fix are in [the adapter mapping](../../internals/agents/adapter_omp.md#verified-against-omp-18111).
 
 ## Executable and launch arguments
 
@@ -30,7 +67,7 @@ Verification is static: official documentation and source were read, but no OMP 
 | Skills and rules | `--skills <globs>`, `--no-skills`, `--no-rules`. |
 | Headless | `--print` / `-p`, `--mode text\|json\|rpc\|rpc-ui\|acp`. Explicit `--mode text` is non-interactive. `--no-ui` disables extension UI in RPC modes. |
 
-With terminal stdin and neither `--mode` nor `--print`, OMP uses the interactive TUI. Process names under Bun and prebuilt binaries were not observed. The package manifest establishes the executable name, not a process-detection rule.
+With terminal stdin and neither `--mode` nor `--print`, OMP uses the interactive TUI. The installed prebuilt's process name was verified as `omp` in the [isolated live proof](#isolated-live-proof); Bun package process identity remains unverified. The package manifest alone establishes the executable name, not a process-detection rule.
 
 ## Configuration roots and extension discovery
 
@@ -250,14 +287,14 @@ The [upstream README][readme] documents macOS, Linux, and Windows installation. 
 
 | Question | Remaining verification |
 | --- | --- |
-| Process detection and containment | Observe Bun and prebuilt process identity. No native sandbox or delegation-lockdown flag contract was verified. |
-| Published artifact parity | Compare the installed or unpacked `18.11.0` artifact with the pinned source. Version equality alone is insufficient. |
-| Extension-only settlement | Verify whether extension `agent_end` flags and context queries can reproduce the complete RPC quiescence predicate. No dedicated settled event exists in the inspected extension union. |
-| Actual lifecycle order | Capture native interactive, print, RPC, retry, cancellation, compaction, and background-child sessions. Static event unions do not prove observed order. |
+| Process detection and containment | Prebuilt comm `omp` verified live; Bun package identity remains unverified. No native sandbox or delegation-lockdown flag contract was verified. |
+| Published artifact parity | Installed `18.11.1` executable control flow was inspected; its exact build commit and parity with source `18.11.0` remain unverified. |
+| Extension-only settlement | No dedicated settlement event exists in the bundle; `isIdle()` only checks streaming. Equivalence between `agent_end` flags and complete RPC quiescence remains unverified. |
+| Actual lifecycle order | Interactive startup, tool completion, and turn end verified with a local stub provider. Print, RPC, retry, cancellation, compaction, and background-child order remain unverified. |
 | Blocking asks | Exercise native approval, plan review, ask dialogs, cancellation, and headless defaults on each intended transport. |
-| Durable history | Capture title-slot updates, forks, branch navigation, blob references, and crash recovery. No real transcript was inspected here. |
+| Durable history | Bundle confirms title/header/accounting writers. Live title-slot mutation, forks, branch navigation, blob replay, crash recovery, and parent/child spend overlap remain unverified. |
 | Account and cost mapping | Validate each target provider's credential rotation, usage refresh, quota windows, and monetary units. No account was accessed. |
-| Pi compatibility | Test any proposed reuse against OMP's roots, runtime API, event sets, and payloads. Compatibility import rewriting alone is insufficient. |
+| Pi compatibility | Installed event sets differ and task factories share a realm; Pi's extension cannot be reused as-is. Other proposed parser reuse still requires payload evidence. |
 
 [package]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/package.json
 [cli]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/docs/cli-reference.md
@@ -271,6 +308,8 @@ The [upstream README][readme] documents macOS, Linux, and Windows installation. 
 [session-events]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/session/agent-session-events.ts
 [settle]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/modes/rpc/rpc-session-settle.ts
 [runner]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/extensibility/extensions/runner.ts
+[lifecycle-mirror]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/extensibility/extensions/lifecycle-mirror.ts
+[agent-session]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/session/agent-session.ts
 [wrapper]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/extensibility/extensions/wrapper.ts
 [extensions]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/docs/extensions.md
 [session]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/docs/session.md

@@ -56,7 +56,7 @@ Install or refresh reporting hooks? [Y/n]
 
 Enter or `y` installs for every agent listed; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks are already current is not listed at all.
 
-What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, and Pi instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
+What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, Pi, and OMP instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
 
 `rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
 
