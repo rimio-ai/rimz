@@ -695,7 +695,7 @@ If the alert persists, see [troubleshooting](../guide/troubleshooting.md#the-sid
 ```
 ╭ help ─────────────────────────────────╮
 │ keys                                  │
-│   /   search                          │
+│   /   search          esc   clear     │
 │ ↕ j/k rows          ↕ J/K   worktrees │
 │ ↕ g/G ends          ↕ ^f/^b page      │
 │ ↕ H/L screen        ⏎ l     focus     │
@@ -739,6 +739,7 @@ These keys work while the sidebar has focus. From any other pane, `Alt+p` focuse
 | `x` | dismiss a recovered alert |
 | `?` | open the help overlay |
 | `/` | start or edit a text search |
+| `Esc` | clear only the text search; while help is open, close help only |
 
 | filter key | cards shown |
 |------------|-------------|
@@ -780,7 +781,7 @@ The right-edge count is matching visible rows over all rows, processes included.
 
 Every printable key pressed without `Ctrl` or `Alt` enters the draft, including `n`, `j`, `q`, `r`, `?`, `A`, and digits. `Backspace` removes one character; on an empty draft it cancels. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; every other `Ctrl` or `Alt` chord does nothing, whether or not `[sidebar.keys]` binds it. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
 
-`Esc` ends typing and clears the committed query, leaving any other pick intact. A click commits the draft and then acts normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, ordinary movement stays inside the matches and `n` / `N` keep their needs-you meaning. Clear with `/` then `Esc`, or `A` to clear both narrowings.
+`Esc` clears the text search, whether typing or committed, leaving any status, unread, or open-PR pick intact. It also works during a health alert; while help is open it only closes help. Clicking a card or subagent entry while typing focuses its pane and drops the search. Other clicks commit the draft and then act normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, clicks keep the query, ordinary movement stays inside the matches, and `n` / `N` keep their needs-you meaning. Press `A` to clear both narrowings.
 
 ### Mouse
 

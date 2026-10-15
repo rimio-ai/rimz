@@ -56,6 +56,7 @@ pub(in crate::sidebar_pane) enum KeyAction {
     Search,
     QueryChar(char),
     Backspace,
+    /// End typing, if active, and clear only the text query, keeping the pick.
     CancelSearch,
     /// `n`/`Space` — jump to the next item that needs you and focus it; `N`
     /// walks the same inbox in reverse. The fleet-scale triage keys.
@@ -117,6 +118,7 @@ pub(super) fn resolve_key(
     match code {
         KeyCode::Left => KeyAction::TabPrev,
         KeyCode::Right => KeyAction::TabNext,
+        KeyCode::Esc => KeyAction::CancelSearch,
         KeyCode::Enter | KeyCode::Char('l') => KeyAction::Enter,
         // `n` and `Space` are one key: walk forward through the inbox and read.
         // `N` walks it in reverse.

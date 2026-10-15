@@ -214,7 +214,18 @@ pub(super) fn handle_key(
             select_first_search_match(ui, snapshot);
             InputOutcome::redraw()
         }
-        KeyAction::CancelSearch => finish_search(ui, snapshot, false),
+        KeyAction::CancelSearch => {
+            if ui.search_draft.is_some() {
+                return finish_search(ui, snapshot, false);
+            }
+            let mut lens = ui.make_up_filter.clone();
+            if lens.query.take().is_none() {
+                return InputOutcome::default();
+            }
+            set_make_up_filter(ui, snapshot, lens);
+            reconcile_selection(ui, snapshot, None);
+            InputOutcome::sync_filter(ui.make_up_filter.clone())
+        }
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
         KeyAction::Reload => InputOutcome {

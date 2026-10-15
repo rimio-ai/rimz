@@ -205,6 +205,21 @@ pub(super) fn handle_wakeup(
         Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
+            if ui.search_draft.is_some() {
+                // Resolve the pane against the painted draft before clearing widens the roster.
+                let pane = match ui.interactions.target_at(column, row) {
+                    Some(render::HitTarget::Row(index)) => {
+                        ui.visible_roster(snapshot).pane_at_ordinal(index)
+                    }
+                    Some(render::HitTarget::SubAgentPane(pane)) => Some(pane),
+                    _ => None,
+                };
+                if let Some(pane) = pane {
+                    let mut outcome = finish_search(ui, snapshot, false);
+                    outcome.effects.push(InputEffect::Focus(pane));
+                    return outcome;
+                }
+            }
             let mut outcome = finish_search(ui, snapshot, true);
             let click = handle_mouse_click(column, row, ui, snapshot);
             outcome.redraw |= click.redraw;

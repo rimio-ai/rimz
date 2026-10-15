@@ -22,7 +22,7 @@ expression: screen
 ▎  task-2                                                                      🮇
 ▎  ▢ ──────────────────────────────────╭ help ─────────────────────────────────╮
 ▎  ▤ 0                                 │ keys                                  │
-                                       │   /   search                          │
+                                       │   /   search          esc   clear     │
  ⑂ beta                                │ ↕ j/k rows          ↕ J/K   worktrees │
  ⣾ codex                               │ ↕ g/G ends          ↕ ^f/^b page      │
    task-3                              │ ↕ H/L screen        ⏎ l     focus     │

@@ -421,7 +421,10 @@ fn help_body_rows(
         )
     };
     let keys_section = vec![
-        (key_entry(theme, None, "/", "search"), None),
+        (
+            key_entry(theme, None, "/", "search"),
+            Some(key_entry(theme, None, "esc", "clear")),
+        ),
         (
             movement(
                 format!("{}/{}", chord_label(&keys.down), chord_label(&keys.up)),
@@ -872,6 +875,8 @@ mod tests {
         assert!(text.contains("done"));
         assert!(text.contains("A"));
         assert!(text.contains("all"));
+        assert!(text.contains("esc"));
+        assert!(text.contains("clear"));
     }
 
     #[test]

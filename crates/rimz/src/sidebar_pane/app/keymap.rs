@@ -62,6 +62,7 @@ fn parse_code(raw: &str) -> Option<KeyCode> {
         "pageup" => Some(KeyCode::PageUp),
         "pagedown" => Some(KeyCode::PageDown),
         "enter" => Some(KeyCode::Enter),
+        "esc" => Some(KeyCode::Esc),
         "space" => Some(KeyCode::Char(' ')),
         _ => None,
     }
