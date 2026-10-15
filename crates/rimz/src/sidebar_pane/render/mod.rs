@@ -125,6 +125,7 @@ fn draw_into(
     ui.painted_rows = composed.painted_rows;
     ui.anchored_rows = composed.anchored_rows;
     ui.drawn_selection = composed.drawn_selection;
+    ui.held_expansions = composed.held_expansions;
     ui.scroll_zone_top = top_height;
     ui.banner_shown = composed.banner_shown;
     ui.anchor_clamped = composed.anchor_clamped;
@@ -353,9 +354,9 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
     ui.visible_roster(snapshot).row(ui.selected_index?)
 }
 
-/// Selection expands a bare, not-yet-prompted idle card whose compose
-/// affordance needs the breath animation grid. This can be the selected row
-/// itself or a visible named teammate expanded alongside it.
+/// Live or held selection expands a bare, not-yet-prompted idle card whose
+/// compose affordance needs the breath animation grid. This can be the selected
+/// row itself or a visible named teammate expanded alongside it.
 fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
     let roster = ui.visible_roster(snapshot);
     roster.groups().iter().any(|group| {
@@ -363,8 +364,14 @@ fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) 
             .range()
             .zip(group.rows(&roster).iter().copied())
             .any(|(row_index, row)| {
-                sections::row_selection_reach(&roster, group, row_index, ui.selected_index)
-                    .opens_card()
+                sections::row_selection_reach(
+                    &roster,
+                    group,
+                    row_index,
+                    ui.selected_index,
+                    &ui.held_expansions,
+                )
+                .opens_card()
                     && sections::awaiting_first_prompt_affordance(row)
             })
     })
@@ -387,7 +394,13 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
                     &ui.delegation_history,
                     density,
                     row,
-                    sections::row_selection_reach(&roster, group, row_index, ui.selected_index),
+                    sections::row_selection_reach(
+                        &roster,
+                        group,
+                        row_index,
+                        ui.selected_index,
+                        &ui.held_expansions,
+                    ),
                 );
                 sections::delegation_motion(row, density, expansion)
             })

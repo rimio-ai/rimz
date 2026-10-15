@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::agents::AgentStatus;
 use crate::config::ScrollbarMode;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
@@ -62,6 +64,12 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// carries a track/thumb glyph in the right rail column — part of the composed
 /// line, so every consumer of the frame sees it.
 ///
+/// Compose without held expansion first. If that clamps the selected card's own
+/// anchor or shared click placement, compose again holding all previous
+/// selection sources; otherwise release them together. Authoritative inputs
+/// release in this paint. Steady frames without candidates compose the scroll
+/// zone once.
+///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
 /// on-screen content line `i` belongs to (`app::visible_rows()` order), or
@@ -91,10 +99,11 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // the same frame the cards carry (see `with_gutter`).
     let roster = ui.visible_roster(snapshot);
     let mut top = top_lines(snapshot, ui, cells, theme);
-    let scroll = scroll_lines(
+    let mut scroll = scroll_lines(
         snapshot,
         ui,
         &roster,
+        &BTreeSet::new(),
         cells,
         theme,
         meter_pixels.as_deref_mut(),
@@ -116,18 +125,53 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         .sum::<usize>()
         .min(height);
 
-    let scroll_len = scroll.lines.len();
-    let layout = plan_zones(ZoneInputs {
-        snapshot,
-        ui,
-        roster: &roster,
-        scroll_map: scroll.interactions.row_map(),
-        card_starts: &scroll.card_starts,
-        scroll_len,
-        top_len: top.lines.len(),
-        height,
-        bottom_height,
+    let plan_scroll = |scroll: &RenderedBlock| {
+        plan_zones(ZoneInputs {
+            snapshot,
+            ui,
+            roster: &roster,
+            scroll_map: scroll.interactions.row_map(),
+            card_starts: &scroll.card_starts,
+            scroll_len: scroll.lines.len(),
+            top_len: top.lines.len(),
+            height,
+            bottom_height,
+        })
+    };
+    let mut layout = plan_scroll(&scroll);
+    let selected_id = ui
+        .selected_index
+        .and_then(|index| roster.row(index))
+        .map(|row| &row.id);
+    let mut held_expansions = ui.held_expansions.clone();
+    if selected_id != ui.drawn_selection.as_ref()
+        && let Some(previous) = &ui.drawn_selection
+    {
+        held_expansions.insert(previous.clone());
+    }
+    held_expansions.retain(|id| Some(id) != selected_id && roster.ordinal_of_id(id).is_some());
+    let selected_target = selected_id.is_some_and(|id| {
+        ui.anchored_rows.iter().any(|(anchor, _)| anchor == id)
+            || ui
+                .focus_placement
+                .as_ref()
+                .is_some_and(|placement| &placement.row_id == id)
     });
+    if !held_expansions.is_empty() && layout.resolution.clamped && selected_target {
+        scroll = scroll_lines(
+            snapshot,
+            ui,
+            &roster,
+            &held_expansions,
+            cells,
+            theme,
+            meter_pixels.as_deref_mut(),
+        );
+        layout = plan_scroll(&scroll);
+    } else {
+        held_expansions.clear();
+    }
+    let scroll_len = scroll.lines.len();
     let placements = |offset| {
         scroll
             .card_starts
@@ -182,6 +226,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
             .selected_index
             .and_then(|index| roster.row(index))
             .map(|row| row.id.clone()),
+        held_expansions,
         banner_shown: layout.show_banner,
         anchor_clamped: layout.resolution.clamped,
         correction: layout.resolution.correction,
@@ -521,6 +566,7 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(super) painted_rows: Vec<(String, isize)>,
     pub(super) anchored_rows: Vec<(String, isize)>,
     pub(super) drawn_selection: Option<String>,
+    pub(super) held_expansions: BTreeSet<String>,
     pub(super) banner_shown: bool,
     pub(super) anchor_clamped: bool,
     pub(super) correction: isize,
@@ -950,6 +996,7 @@ pub(super) fn scroll_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     roster: &VisibleRoster<'_>,
+    held_expansions: &BTreeSet<String>,
     width: usize,
     theme: &Theme,
     mut meter_pixels: Option<&mut MeterPixels>,
@@ -979,6 +1026,7 @@ pub(super) fn scroll_lines(
             stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
             card_density: snapshot.theme.display.card_density,
             selected_index: ui.selected_index,
+            held_expansions,
             focused_pane: snapshot.focused_pane.as_ref(),
             animation_phase: ui.animation_phase,
             cost_rolls: &ui.cost_rolls,

@@ -244,6 +244,64 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     );
 }
 
+#[test]
+fn held_card_with_running_child_keeps_the_fast_grid() {
+    let mut parent = agent(
+        "parent",
+        "codex",
+        AgentStatus::Sleeping,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.user_turn_started_at = Some(fixed_now());
+    let mut child = agent(
+        "child",
+        "codex",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("Explore"),
+    );
+    child.parent_agent_id = Some("parent".into());
+    let snapshot = snapshot_with(vec![parent, child]);
+    let mut ui = UiState::default();
+    ui.held_expansions.insert("parent".into());
+    ui.theme(&snapshot.theme);
+    assert_eq!(
+        animation_interval(&snapshot, &ui, 0, false),
+        Some(crate::sidebar::timing::animation_frame(
+            snapshot.theme.display.resolved_refresh_ms()
+        ))
+    );
+}
+
+#[test]
+fn held_fresh_teammate_keeps_the_breath_grid() {
+    let mut parent = agent(
+        "parent",
+        "codex",
+        AgentStatus::Sleeping,
+        Some("/repo/main"),
+        Some("main"),
+        Some("delegate"),
+    );
+    parent.team = Some("forge".into());
+    let mut teammate = agent(
+        "teammate",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    teammate.team = Some("forge".into());
+    let snapshot = snapshot_with(vec![parent, teammate]);
+    let mut ui = UiState::default();
+    ui.held_expansions.insert("parent".into());
+    assert!(expanded_row_awaiting_first_prompt(&snapshot, &ui));
+}
+
 /// Shell jobs and live children animate inside an open delegation section
 /// whatever the parent's status; timers and signals stay static, and a closed
 /// or resting section holds nothing in motion.

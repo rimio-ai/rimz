@@ -1,5 +1,170 @@
 use super::*;
 
+fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
+    let now = fixed_now();
+    let mut agents = (0..12)
+        .map(|i| {
+            let mut card = agent(
+                &format!("codex-{i}"),
+                "codex",
+                AgentStatus::Running,
+                Some("/repo/alpha"),
+                Some("alpha"),
+                Some(&format!("task-{i}")),
+            );
+            card.last_activity = now - Duration::from_secs(8);
+            card
+        })
+        .collect::<Vec<_>>();
+    for parent in parents {
+        for i in 0..4_u64 {
+            let mut child = agent(
+                &format!("child-{parent}-{i}"),
+                "codex",
+                AgentStatus::Running,
+                None,
+                None,
+                Some("Explore"),
+            );
+            child.parent_agent_id = Some(format!("codex-{parent}").into());
+            child.subagent_description = Some(format!("survey area {parent}-{i}"));
+            child.subagent_started_at = Some(now - Duration::from_secs(240 - i * 30));
+            child.last_activity = now;
+            agents.push(child);
+        }
+    }
+    snapshot_with(agents)
+}
+
+fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
+    ui.selected_index = ui.visible_roster(snapshot).ordinal_of_id(id);
+    assert!(ui.selected_index.is_some(), "selection exists");
+}
+
+fn assert_collapse_hold(offset: usize, parent: usize, target: usize) {
+    let snapshot = delegation_fleet(&[parent]);
+    let mut ui = UiState {
+        scroll_offset: offset,
+        ..Default::default()
+    };
+    select_card(&snapshot, &mut ui, &format!("codex-{parent}"));
+    let task = format!("task-{target}");
+    let before = paint_card_row(&snapshot, &mut ui, &task, 45);
+    select_card(&snapshot, &mut ui, &format!("codex-{target}"));
+    let after = paint_card_row(&snapshot, &mut ui, &task, 45);
+    assert_eq!(
+        after, before,
+        "previous selection's collapse must not move the click"
+    );
+    assert!(!ui.anchor_clamped);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    assert!(
+        screen.contains("survey area"),
+        "held entries remain painted: {screen}"
+    );
+    assert!(!line_containing(&screen, "survey area").starts_with('▌'));
+    assert!(line_containing(&screen, &task).starts_with('▌'));
+}
+
+#[test]
+fn collapse_above_at_zero_keeps_clicked_card_and_unselected_entries() {
+    assert_collapse_hold(0, 0, 2);
+}
+
+#[test]
+fn collapse_above_with_partial_room_keeps_clicked_card() {
+    assert_collapse_hold(3, 0, 2);
+}
+
+#[test]
+fn collapse_below_at_bottom_keeps_clicked_card() {
+    assert_collapse_hold(1000, 11, 9);
+}
+
+#[test]
+fn collapse_with_room_releases_entries_immediately() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut ui = UiState {
+        scroll_offset: 10,
+        ..Default::default()
+    };
+    select_card(&snapshot, &mut ui, "codex-0");
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert!(ui.held_expansions.is_empty());
+    assert!(
+        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+    );
+}
+
+#[test]
+fn authoritative_wheel_paint_releases_a_collapse_hold() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut ui = selected_ui();
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    ui.scroll_offset += 3;
+    ui.offset_authoritative = true;
+    ui.scroll_ease.arm();
+    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    assert!(ui.held_expansions.is_empty());
+    assert!(
+        !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+    );
+}
+
+#[test]
+fn collapse_holds_accumulate_across_clicks_at_the_top() {
+    let snapshot = delegation_fleet(&[0, 1]);
+    let mut ui = selected_ui();
+    paint_card_row(&snapshot, &mut ui, "task-1", 45);
+    select_card(&snapshot, &mut ui, "codex-1");
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(ui.held_expansions.len(), 2);
+}
+
+#[test]
+fn compact_collapse_at_zero_keeps_the_clicked_card_shape() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let mut ui = selected_ui();
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
+    ui.selected_index = Some(2);
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 30), before);
+    assert!(!ui.anchor_clamped);
+}
+
+#[test]
+fn offscreen_selection_releases_the_previous_card_and_reveals() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut ui = selected_ui();
+    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-11");
+    paint_card_row(&snapshot, &mut ui, "task-11", 45);
+    assert!(ui.held_expansions.is_empty());
+    let theme = Theme::fixed(false);
+    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 200);
+    assert!(
+        !composed
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("survey area"))
+    );
+}
+
+#[test]
+fn collapse_hold_drops_departed_and_live_selection_ids() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut ui = selected_ui();
+    ui.held_expansions = ["codex-0".into(), "departed".into()].into();
+    paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    assert!(ui.held_expansions.is_empty());
+}
+
 fn paint_card_row(snapshot: &SidebarSnapshot, ui: &mut UiState, task: &str, height: u16) -> usize {
     let mut terminal = Terminal::new(TestBackend::new(54, height)).unwrap();
     draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
