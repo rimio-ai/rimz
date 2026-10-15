@@ -508,12 +508,6 @@ mod zone_backend {
         pub(super) tab_error: Mutex<Option<m::MuxErr>>,
     }
 
-    macro_rules! unused_methods {
-        ($($name:ident: ($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
-            $(fn $name(&self, $($arg: $ty),*) -> $ret { panic!("unexpected {}", stringify!($name)) })*
-        };
-    }
-
     impl m::MuxBackend for Backend {
         fn name(&self) -> MuxName {
             MuxName::Tmux
@@ -555,32 +549,136 @@ mod zone_backend {
             }
             Ok(())
         }
-        unused_methods! {
-            ensure_session: (_opts: &m::SessionOptions) -> m::Result<()>;
-            attach_command: (_name: &str, _config: &rimz::config::MultiplexerConfig) -> m::CommandSpec;
-            attach_existing_command: (_name: &str) -> m::CommandSpec;
-            attach_readonly_command: (_name: &str) -> m::CommandSpec;
-            detach: (_name: &str) -> m::Result<()>;
-            kill_session: (_name: &str) -> m::Result<()>;
-            list_sessions_within: (_timeout: Duration) -> m::Result<Vec<String>>;
-            pane_content_size: (_pane: &PaneId, _session: Option<&str>, _timeout: Duration) -> m::Result<Option<m::PaneContentSize>>;
-            append_companion_pane: (_opts: m::SplitPaneOptions) -> m::Result<m::CompanionPaneAppend>;
-            focus_pane: (_pane: &PaneId, _session: Option<&str>) -> m::Result<()>;
-            toggle_fullscreen: (_pane: &PaneId, _session: Option<&str>) -> m::Result<()>;
-            sidebar_width_step: (_runtime: &RuntimePaths, _session: &str, _pane: &PaneId, _min_observed_at_ms: Option<u64>) -> m::Result<m::WidthStep>;
-            nudge_sidebar_width: (_session: &str, _pane: &PaneId, _current_cols: u16, _target_cols: u16) -> m::Result<()>;
-            record_sidebar_width_default: (_session: &str, _cols: u16) -> m::Result<()>;
-            capture_pane: (_pane: &PaneId, _session: &str, _lines: Option<u16>, _ansi: bool) -> m::Result<m::PaneCapture>;
-            send_keys: (_pane: &PaneId, _session: &str, _text: &str) -> m::Result<()>;
-            send_key: (_pane: &PaneId, _session: &str, _key: rimz::pane::keys::NamedKey) -> m::Result<()>;
-            paste_text: (_pane: &PaneId, _session: &str, _text: &str) -> m::Result<()>;
-            open_sidebar: (_opts: &m::SidebarPaneOptions, _daemon: Option<&m::DaemonView>) -> m::Result<()>;
-            reconcile_sidebars: (_opts: &m::SidebarPaneOptions, _live: &m::SidebarLiveness) -> m::Result<m::SidebarRecovery>;
-            open_background_view: (_opts: &m::BackgroundViewOptions) -> m::Result<m::BackgroundViewLaunch>;
-            confirm_resume_tabs: (_session: &str, _tabs: &[m::ResumeTab]) -> Vec<std::result::Result<(), m::ResumeTabUnconfirmed>>;
-            rename_tab: (_session: &str, _anchor: &PaneId, _name: &str, _intent: m::tab_name::TabNameIntent) -> m::Result<()>;
-            close_pane: (_session: &str, _pane: &PaneId) -> m::Result<()>;
-            version: () -> m::Result<String>;
+        fn ensure_session(&self, _opts: &m::SessionOptions) -> m::Result<()> {
+            panic!("unexpected ensure_session")
+        }
+        fn attach_command(
+            &self,
+            _name: &str,
+            _config: &rimz::config::MultiplexerConfig,
+        ) -> m::CommandSpec {
+            panic!("unexpected attach_command")
+        }
+        fn attach_existing_command(&self, _name: &str) -> m::CommandSpec {
+            panic!("unexpected attach_existing_command")
+        }
+        fn attach_readonly_command(&self, _name: &str) -> m::CommandSpec {
+            panic!("unexpected attach_readonly_command")
+        }
+        fn detach(&self, _name: &str) -> m::Result<()> {
+            panic!("unexpected detach")
+        }
+        fn kill_session(&self, _name: &str) -> m::Result<()> {
+            panic!("unexpected kill_session")
+        }
+        fn list_sessions_within(&self, _timeout: Duration) -> m::Result<Vec<String>> {
+            panic!("unexpected list_sessions_within")
+        }
+        fn pane_content_size(
+            &self,
+            _pane: &PaneId,
+            _session: Option<&str>,
+            _timeout: Duration,
+        ) -> m::Result<Option<m::PaneContentSize>> {
+            panic!("unexpected pane_content_size")
+        }
+        fn append_companion_pane(
+            &self,
+            _opts: m::SplitPaneOptions,
+        ) -> m::Result<m::CompanionPaneAppend> {
+            panic!("unexpected append_companion_pane")
+        }
+        fn focus_pane(&self, _pane: &PaneId, _session: Option<&str>) -> m::Result<()> {
+            panic!("unexpected focus_pane")
+        }
+        fn toggle_fullscreen(&self, _pane: &PaneId, _session: Option<&str>) -> m::Result<()> {
+            panic!("unexpected toggle_fullscreen")
+        }
+        fn sidebar_width_step(
+            &self,
+            _runtime: &RuntimePaths,
+            _session: &str,
+            _pane: &PaneId,
+            _min_observed_at_ms: Option<u64>,
+        ) -> m::Result<m::WidthStep> {
+            panic!("unexpected sidebar_width_step")
+        }
+        fn nudge_sidebar_width(
+            &self,
+            _session: &str,
+            _pane: &PaneId,
+            _current_cols: u16,
+            _target_cols: u16,
+        ) -> m::Result<()> {
+            panic!("unexpected nudge_sidebar_width")
+        }
+        fn record_sidebar_width_default(&self, _session: &str, _cols: u16) -> m::Result<()> {
+            panic!("unexpected record_sidebar_width_default")
+        }
+        fn capture_pane(
+            &self,
+            _pane: &PaneId,
+            _session: &str,
+            _lines: Option<u16>,
+            _ansi: bool,
+        ) -> m::Result<m::PaneCapture> {
+            panic!("unexpected capture_pane")
+        }
+        fn send_keys(&self, _pane: &PaneId, _session: &str, _text: &str) -> m::Result<()> {
+            panic!("unexpected send_keys")
+        }
+        fn send_key(
+            &self,
+            _pane: &PaneId,
+            _session: &str,
+            _key: rimz::pane::keys::NamedKey,
+        ) -> m::Result<()> {
+            panic!("unexpected send_key")
+        }
+        fn paste_text(&self, _pane: &PaneId, _session: &str, _text: &str) -> m::Result<()> {
+            panic!("unexpected paste_text")
+        }
+        fn open_sidebar(
+            &self,
+            _opts: &m::SidebarPaneOptions,
+            _daemon: Option<&m::DaemonView>,
+        ) -> m::Result<()> {
+            panic!("unexpected open_sidebar")
+        }
+        fn reconcile_sidebars(
+            &self,
+            _opts: &m::SidebarPaneOptions,
+            _live: &m::SidebarLiveness,
+        ) -> m::Result<m::SidebarRecovery> {
+            panic!("unexpected reconcile_sidebars")
+        }
+        fn open_background_view(
+            &self,
+            _opts: &m::BackgroundViewOptions,
+        ) -> m::Result<m::BackgroundViewLaunch> {
+            panic!("unexpected open_background_view")
+        }
+        fn confirm_resume_tabs(
+            &self,
+            _session: &str,
+            _tabs: &[m::ResumeTab],
+        ) -> Vec<std::result::Result<(), m::ResumeTabUnconfirmed>> {
+            panic!("unexpected confirm_resume_tabs")
+        }
+        fn rename_tab(
+            &self,
+            _session: &str,
+            _anchor: &PaneId,
+            _name: &str,
+            _intent: m::tab_name::TabNameIntent,
+        ) -> m::Result<()> {
+            panic!("unexpected rename_tab")
+        }
+        fn close_pane(&self, _session: &str, _pane: &PaneId) -> m::Result<()> {
+            panic!("unexpected close_pane")
+        }
+        fn version(&self) -> m::Result<String> {
+            panic!("unexpected version")
         }
     }
 
