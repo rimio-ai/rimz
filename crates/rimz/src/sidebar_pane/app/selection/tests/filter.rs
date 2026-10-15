@@ -375,6 +375,159 @@ fn search_cancel_and_empty_enter_clear_only_query() {
 }
 
 #[test]
+fn normal_escape_clears_only_query_even_during_an_alert() {
+    use super::super::super::input::Wakeup;
+    use super::super::super::loop_state::handle_wakeup;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+
+    let snapshot = clickable_block_snapshot(&workspace());
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
+    for alert_active in [false, true] {
+        let mut ui = UiState {
+            make_up_filter: BodyLens {
+                filter: Some(filter),
+                query: Some("no match".to_owned()),
+            },
+            ..Default::default()
+        };
+        let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+        reconcile_selection(&mut ui, &snapshot, Some(baseline.clone()));
+        for expected in [
+            InputOutcome::sync_filter(BodyLens::from(filter)),
+            InputOutcome::default(),
+        ] {
+            let outcome = handle_wakeup(
+                Wakeup::Press {
+                    code: KeyCode::Esc,
+                    mods: KeyModifiers::NONE,
+                },
+                &mut ui,
+                &snapshot,
+                &keymap,
+                alert_active,
+            );
+            assert_eq!(outcome, expected);
+            assert_eq!(ui.make_up_filter, BodyLens::from(filter));
+            assert_eq!(ui.selected_pane, Some(baseline.clone()));
+            assert_eq!(ui.selected_index, Some(0));
+        }
+    }
+}
+
+#[test]
+fn draft_focus_click_clears_query_after_resolving_painted_target() {
+    use super::super::super::input::Wakeup;
+    use super::super::super::loop_state::handle_wakeup;
+
+    let snapshot = clickable_block_snapshot(&workspace());
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+    for target in [HitTarget::Row(0), HitTarget::SubAgentPane(pane.clone())] {
+        for query in [None, Some("cla".to_owned())] {
+            let mut ui = UiState {
+                make_up_filter: BodyLens {
+                    query: query.clone(),
+                    ..Default::default()
+                },
+                search_draft: Some("zsh".to_owned()),
+                ..Default::default()
+            };
+            let theme = ui.theme(&snapshot.theme);
+            ui.interactions =
+                render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
+            let row = ui.interactions.line_for_row(0).unwrap();
+            // Child entries carry pane identities, not roster ordinals.
+            if matches!(target, HitTarget::SubAgentPane(_)) {
+                ui.interactions = render::FrameInteractions::from_parts(
+                    Vec::new(),
+                    vec![render::HitRegion::whole_line(row, target.clone())],
+                );
+            }
+            let outcome = handle_wakeup(
+                Wakeup::MouseClick {
+                    column: 1,
+                    row: screen_row_for(row),
+                },
+                &mut ui,
+                &snapshot,
+                &keymap,
+                false,
+            );
+            assert_eq!(ui.search_draft, None);
+            assert_eq!(ui.make_up_filter.query, None);
+            let mut effects = Vec::new();
+            if query.is_some() {
+                effects.push(InputEffect::SyncFilter(BodyLens::default()));
+            }
+            effects.push(InputEffect::Focus(pane.clone()));
+            assert_eq!(outcome.effects, effects);
+            assert!(outcome.redraw);
+        }
+    }
+}
+
+#[test]
+fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
+    use super::super::super::input::Wakeup;
+    use super::super::super::loop_state::handle_wakeup;
+    use ratatui::crossterm::event::KeyCode;
+
+    let snapshot = clickable_block_snapshot(&workspace());
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
+    for target in [HitTarget::BodyFilter(filter), HitTarget::Row(99)] {
+        let mut ui = UiState {
+            search_draft: Some("cla".to_owned()),
+            interactions: render::FrameInteractions::from_parts(
+                Vec::new(),
+                vec![render::HitRegion::whole_line(0, target.clone())],
+            ),
+            ..Default::default()
+        };
+        let outcome = handle_wakeup(
+            Wakeup::MouseClick { column: 1, row: 0 },
+            &mut ui,
+            &snapshot,
+            &keymap,
+            false,
+        );
+        let committed = BodyLens {
+            query: Some("cla".to_owned()),
+            ..Default::default()
+        };
+        let mut effects = vec![InputEffect::SyncFilter(committed.clone())];
+        let mut expected = committed;
+        if matches!(target, HitTarget::BodyFilter(_)) {
+            expected.filter = Some(filter);
+            effects.push(InputEffect::SyncFilter(expected.clone()));
+        }
+        assert_eq!(ui.search_draft, None);
+        assert_eq!(ui.make_up_filter, expected);
+        assert_eq!(outcome.effects, effects);
+    }
+
+    let mut ui = UiState::default();
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "zsh".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    search_key(&mut ui, &snapshot, KeyCode::Enter);
+    ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
+    assert_eq!(
+        handle_wakeup(
+            Wakeup::MouseClick { column: 1, row: 0 },
+            &mut ui,
+            &snapshot,
+            &keymap,
+            false
+        ),
+        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_10"))
+    );
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("zsh"));
+}
+
+#[test]
 fn search_navigation_click_scroll_and_zero_match_commit() {
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     let snapshot = clickable_block_snapshot(&workspace());
@@ -433,18 +586,15 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
     assert_eq!(ui.search_draft, None);
     assert_eq!(
         outcome.effects,
-        vec![
-            InputEffect::SyncFilter(BodyLens {
-                query: Some("c".to_owned()),
-                ..Default::default()
-            }),
-            InputEffect::Focus(PaneId::from_parts(MuxName::Zellij, "terminal_9"))
-        ]
+        vec![InputEffect::Focus(PaneId::from_parts(
+            MuxName::Zellij,
+            "terminal_9"
+        ))]
     );
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
     search_key(&mut ui, &snapshot, KeyCode::Char('!'));
     let outcome = search_key(&mut ui, &snapshot, KeyCode::Enter);
-    assert_eq!(ui.make_up_filter.query.as_deref(), Some("c!"));
+    assert_eq!(ui.make_up_filter.query.as_deref(), Some("!"));
     assert_eq!(
         outcome.effects.len(),
         1,

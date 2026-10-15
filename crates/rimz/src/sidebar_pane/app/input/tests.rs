@@ -539,11 +539,28 @@ fn digit_keys_round_trip_one_through_nine() {
 
 #[test]
 fn unbound_keys_round_trip_as_other() {
-    for code in [KeyCode::Esc, KeyCode::Char('y')] {
+    for code in [KeyCode::Char('v'), KeyCode::Char('y')] {
         let encoded = encode_key(code, KeyModifiers::NONE).expect("unbound key is encoded");
         assert_eq!(
             resolve_wakeup(encoded.as_bytes()),
             Wakeup::Key(KeyAction::Other)
         );
     }
+}
+
+#[test]
+fn escape_clears_search_unless_rebound() {
+    let encoded = encode_default(KeyCode::Esc).unwrap();
+    assert_eq!(
+        resolve_wakeup(encoded.as_bytes()),
+        Wakeup::Key(KeyAction::CancelSearch)
+    );
+    let keymap = NavKeymap::from_config(&crate::config::SidebarKeys {
+        wider: "esc".to_owned(),
+        ..Default::default()
+    });
+    assert_eq!(
+        resolve_key(&keymap, InputMode::Normal, KeyCode::Esc, KeyModifiers::NONE),
+        KeyAction::WidthWider
+    );
 }

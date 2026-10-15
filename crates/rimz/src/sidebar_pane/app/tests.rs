@@ -521,11 +521,13 @@ fn configurable_width_bindings_shadow_fixed_actions() {
             KeyModifiers::NONE,
             KeyAction::WidthWider,
         ),
+        (KeyCode::Esc, KeyModifiers::NONE, KeyAction::CancelSearch),
     ] {
         assert_eq!(resolve_key(&keymap, InputMode::Normal, code, mods), action);
     }
     for (code, mods) in [
-        (KeyCode::Esc, KeyModifiers::NONE),
+        (KeyCode::Esc, KeyModifiers::CONTROL),
+        (KeyCode::Esc, KeyModifiers::ALT),
         (KeyCode::Char('y'), KeyModifiers::NONE),
         (KeyCode::Char('s'), KeyModifiers::CONTROL),
     ] {
@@ -565,6 +567,10 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
 
     for wakeup in [
         Wakeup::Press {
+            code: KeyCode::Esc,
+            mods: KeyModifiers::NONE,
+        },
+        Wakeup::Press {
             code: KeyCode::Char('/'),
             mods: KeyModifiers::NONE,
         },
@@ -583,6 +589,10 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
     ] {
         let mut ui = UiState {
             help_visible: true,
+            make_up_filter: crate::sidebar_pane::view::BodyLens {
+                query: Some("kept".to_owned()),
+                ..Default::default()
+            },
             selected_index: Some(0),
             scroll_offset: 4,
             interactions: render::FrameInteractions::from_parts(vec![Some(1)], Vec::new()),
@@ -593,6 +603,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
 
         assert_eq!(outcome, InputOutcome::redraw());
         assert!(!ui.help_visible);
+        assert_eq!(ui.make_up_filter.query.as_deref(), Some("kept"));
         assert_eq!(ui.selected_index, Some(0), "key input was consumed");
         assert_eq!(ui.scroll_offset, 4, "scroll input was consumed");
         assert!(!ui.offset_authoritative, "scroll input was consumed");
