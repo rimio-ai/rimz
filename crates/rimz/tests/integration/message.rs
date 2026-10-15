@@ -4193,11 +4193,19 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
             .contains("is resuming; delivers when its provider registers")
     );
     let zellij = zellij_trace_shim();
-    let provider_pid = rimz::harness::run::load(store.paths(), &run.run_id)
-        .unwrap()
-        .provider_pid
-        .unwrap()
-        .to_string();
+    // The sender returns once the wrapper binds the pane, which the wrapper writes before the provider PID.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let provider_pid = loop {
+        let record = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        if let Some(pid) = record.provider_pid {
+            break pid.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "wrapper never recorded the resumed provider PID: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
     let hook_env = [
         ("ZELLIJ_PANE_ID", "3"),
         ("RIMZ_AGENT_PID", provider_pid.as_str()),
