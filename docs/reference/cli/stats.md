@@ -94,7 +94,7 @@ $ rimz stats --json | jq 'first(.models[] | select(has("tokens_per_sec"))) | del
 | `active_days_28` | Days with usage among the last 28. |
 | `longest_streak`, `current_streak` | Consecutive days with usage. |
 | `most_active_day` | `YYYY-MM-DD` of the heaviest day. Omitted when there is no usage. |
-| `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`. `week`, `month`, and `year` add `tool_calls` and a `tools` map of calls by tool name, each omitted when empty; `today` never carries tool-call counts. |
+| `windows` | `today`, `week`, `month`, and `year`, each with `tokens` and `usd`, plus `tool_calls` and a `tools` map of calls by tool name, each omitted when empty. `today` is the local calendar day in the published timezone. |
 | `models` | One object per model, sorted by `usd`: `model` id, display `name`, `tokens`, `input`, `output`, `cache_read`, `tool_calls`, `tools`, `cache_hit_pct`, `tokens_per_sec`, `usd`, and `share` of the total dollars as a fraction. |
 | `agents` | One object per top-level agent kind with non-zero spend, sorted by dollars: `kind`, display `name`, `tokens`, `usd`, `sessions`, `tool_calls`, `tools`, `cache_hit_pct`, and `share` of fleet dollars as a fraction. |
 | `days` | One object per local calendar day in the published timezone with usage, oldest first: `date`, `tokens`, `usd`. |
