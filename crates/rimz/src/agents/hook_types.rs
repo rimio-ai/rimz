@@ -599,6 +599,7 @@ pub(super) enum SessionSource {
     Startup,
     Resume,
     Clear,
+    New,
     Compact,
     Fork,
     #[serde(other)]
@@ -722,7 +723,10 @@ mod tests {
 
     #[test]
     fn session_start_source_maps_to_one_lifecycle_rule() {
+        let new: SessionSource = serde_json::from_str(r#""new""#).unwrap();
+        assert_ne!(new, SessionSource::Unknown);
         for (source, signal) in [
+            (new, LifecycleSignal::Registered),
             (SessionSource::Startup, LifecycleSignal::Registered),
             (SessionSource::Resume, LifecycleSignal::Registered),
             (SessionSource::Clear, LifecycleSignal::Registered),
