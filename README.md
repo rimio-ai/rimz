@@ -372,6 +372,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Kimi        | Experimental |   ●   |  ◐   |    ◐    |    ●    |  ●  |     ◐     |
 | Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ◐     |
 | Hermes      | Experimental |   ●   |  ◐   |    ✗    |    ✗    |  ◐  |     ◐     |
+| OMP         | Experimental |   ◐   |  ◐   |    ◐    |    ◐    |  ◐  |     ✗     |
 
 
 <sub>● full: complete and live · ◐ partial: a working version with a stated limit · ✗ unsupported</sub>
