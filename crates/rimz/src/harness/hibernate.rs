@@ -12,6 +12,8 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::proc::cgroup::ScopePath;
 use crate::{Store, store::StoreErr};
 
+const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 mod execute;
 pub use execute::run_request;
 mod wake;
@@ -153,6 +155,7 @@ pub enum Hold {
     Compacting,
     Busy,
     Clock,
+    WakeClock,
     Owed(super::owed::OwedWake),
     Message,
     OpenRun,
@@ -193,20 +196,13 @@ pub fn decide(
     if let Some(hold) = cheap_hold(agent, config, now, scope.focused) {
         return Ok(Verdict::Hold(hold));
     }
-    let woke_at = [
-        read_wake_stamp(store.runtime_paths(), None),
-        agent
-            .pane
-            .as_ref()
-            .and_then(|pane| read_wake_stamp(store.runtime_paths(), Some(&pane.pane_id))),
-    ]
-    .into_iter()
-    .flatten()
-    .max();
-    if woke_at.is_some_and(|at| {
-        now.duration_since(at).as_nanos() < config.schedule.after.as_nanos() as i128
-    }) {
-        return Ok(Verdict::Hold(Hold::Clock));
+    if wake_stamp_holds(
+        store.runtime_paths(),
+        agent.pane.as_ref().map(|pane| &pane.pane_id),
+        config.schedule.after,
+        now,
+    ) {
+        return Ok(Verdict::Hold(Hold::WakeClock));
     }
     if scope.scope.is_none() {
         return Ok(Verdict::Hold(Hold::NoScope));
@@ -424,6 +420,7 @@ fn hibernate_idle_agents_with(
     if !cfg!(target_os = "linux") {
         return;
     }
+    update_focus_trail(runtime, snapshot.focused_pane.as_ref(), snapshot.now);
     let entries = crate::store::hibernate::read(paths);
     if let Some(pane) = &snapshot.focused_pane {
         let event = crate::wakeup::events::SidebarEvent::FocusChanged {
@@ -464,22 +461,32 @@ fn hibernate_idle_agents_with(
             continue;
         };
         if entry.is_none()
-            && cheap_hold(
+            && (cheap_hold(
                 agent,
                 &policy,
                 snapshot.now,
                 snapshot.focused_pane.as_ref() == Some(&pane.pane_id),
             )
             .is_some()
+                || wake_stamp_holds(
+                    runtime,
+                    Some(&pane.pane_id),
+                    policy.schedule.after,
+                    snapshot.now,
+                ))
         {
             continue;
         }
         let path = fire_record_path(runtime, &agent.kind, &agent.agent_id);
         let mut record = read_fire_record(&path);
-        if record
-            .fired_at
-            .is_some_and(|fired| snapshot.now.as_second() - fired.as_second() < 30)
-        {
+        if record.fired_at.is_some_and(|fired| {
+            snapshot.now.as_second() - fired.as_second() < 30
+                && (entry.is_some()
+                    || !matches!(
+                        read_wake_stamp(runtime, Some(&pane.pane_id)),
+                        Some(WakeStamp::Focus { focus }) if focus > fired
+                    ))
+        }) {
             continue;
         }
         let peers = crate::address::addressable_agents(snapshot);
@@ -529,13 +536,84 @@ fn wake_stamp_path(runtime: &crate::RuntimePaths, pane: Option<&PaneId>) -> Path
     runtime.live_path("hibernate").join(name)
 }
 
-fn read_wake_stamp(
-    runtime: &crate::RuntimePaths,
-    pane: Option<&PaneId>,
-) -> Option<jiff::Timestamp> {
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum WakeStamp {
+    Sync(jiff::Timestamp),
+    Focus { focus: jiff::Timestamp },
+}
+
+fn read_wake_stamp(runtime: &crate::RuntimePaths, pane: Option<&PaneId>) -> Option<WakeStamp> {
     std::fs::read(wake_stamp_path(runtime, pane))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+fn wake_stamp_holds(
+    runtime: &crate::RuntimePaths,
+    pane: Option<&PaneId>,
+    after: std::time::Duration,
+    now: jiff::Timestamp,
+) -> bool {
+    if let Some(WakeStamp::Sync(at)) = read_wake_stamp(runtime, None)
+        && now.duration_since(at).as_nanos() < after.as_nanos() as i128
+    {
+        return true;
+    }
+    let Some(pane) = pane else {
+        return false;
+    };
+    let (at, grace) = match read_wake_stamp(runtime, Some(pane)) {
+        Some(WakeStamp::Sync(at)) => (at, after),
+        Some(WakeStamp::Focus { focus }) => (
+            read_focus_trail(runtime)
+                .departed
+                .get(pane)
+                .copied()
+                .unwrap_or(focus)
+                .max(focus),
+            FOCUS_GRACE,
+        ),
+        None => return false,
+    };
+    now.duration_since(at).as_nanos() < grace.as_nanos() as i128
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct FocusTrail {
+    focused: Option<PaneId>,
+    departed: std::collections::HashMap<PaneId, jiff::Timestamp>,
+}
+
+fn read_focus_trail(runtime: &crate::RuntimePaths) -> FocusTrail {
+    std::fs::read(runtime.live_path("hibernate").join("focus.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn update_focus_trail(
+    runtime: &crate::RuntimePaths,
+    focused: Option<&PaneId>,
+    now: jiff::Timestamp,
+) {
+    let mut trail = read_focus_trail(runtime);
+    if trail.focused.as_ref() == focused {
+        return;
+    }
+    trail
+        .departed
+        .retain(|_, at| now.duration_since(*at).as_nanos() < FOCUS_GRACE.as_nanos() as i128);
+    if let Some(previous) = trail.focused.take() {
+        trail.departed.insert(previous, now);
+    }
+    trail.focused = focused.cloned();
+    if let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.live_path("hibernate").join("focus.json"),
+        &trail,
+    ) {
+        tracing::debug!(%error, "failed to record hibernation focus trail");
+    }
 }
 
 fn fire_record_path(
