@@ -25,6 +25,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 2.1.1 (tag `@moonshot-ai/kimi-code@2.1.1`, 2026-09-24) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.30.0 (2026-10-12; engine `@kiro/agent` 0.66.33; turn-order captures: 2.12.1 and 2.21.4) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
+| [omp-reference.md](./agent-adapter/omp-reference.md) | OMP (Oh My Pi) | Source commit `13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74`, declaring 18.11.0 (checked 2026-10-15) | Evaluation only. No adapter mapping. |
 | [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 1.2.0 (tag `v1.2.0`, 2026-10-12) | [adapter_pi.md](../internals/agents/adapter_pi.md) |
 | [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.25.1 (tag `v0.25.1`, 2026-10-11) | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |
 
