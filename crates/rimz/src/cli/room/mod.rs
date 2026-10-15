@@ -878,7 +878,7 @@ fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
             workspace, args, ..
         } => {
             rimz_socket_environment_preflight(&workspace.project_root)?;
-            let rerun = start_under(mux.other(), &workspace.project_root, &args.account);
+            let rerun = start_under(mux.other(), &workspace.worktree_root, &args.account);
             mux_environment_preflight(mux, &workspace.session_name, Some(rerun))
         }
         RoomEntry::StartDetached { workspace, .. } | RoomEntry::AttachCwd { workspace, .. } => {
@@ -1137,14 +1137,15 @@ pub(in crate::cli) fn birth_socket_preflight(
 }
 
 /// The `rimz start` that births the same room, under the same accounts, on
-/// `mux`; it names the room by its absolute root so it holds from any cwd.
+/// `mux`; it names the room by the absolute worktree root it was started
+/// from, so it holds from any cwd and a linked worktree stays the cwd.
 fn start_under(
     mux: MuxName,
-    project_root: &Path,
+    worktree_root: &Path,
     accounts: &[crate::cli::accounts::AccountFlag],
 ) -> String {
     let mux = mux.to_string();
-    let root = project_root.to_string_lossy();
+    let root = worktree_root.to_string_lossy();
     let accounts: Vec<String> = accounts.iter().map(ToString::to_string).collect();
     crate::cli::usage::shell_command(
         ["rimz", "start", "--mux", mux.as_str(), &root]
