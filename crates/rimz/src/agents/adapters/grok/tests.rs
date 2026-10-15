@@ -6,6 +6,142 @@ use crate::agents::testkit::{hook_lifecycle, hook_observation, hook_output, hook
 use crate::agents::{AgentHookClass, ClassificationSample, ClassifiedHook};
 
 #[test]
+fn named_login_scopes_spending_and_session_transcripts() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let named = temp.path().join("work");
+    let native_file = home.join(".grok/sessions/project/shared-session/updates.jsonl");
+    let named_file = named.join("sessions/project/shared-session/updates.jsonl");
+    for path in [&native_file, &named_file] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    let ambient = BTreeMap::from([("HOME".to_owned(), home.to_string_lossy().into_owned())]);
+    let login_env = crate::agents::ProviderLogin::named(
+        crate::ids::AgentKind::new_unchecked("grok"),
+        "work".parse().unwrap(),
+        named,
+    )
+    .unwrap()
+    .env(&ambient);
+    let files = GrokAdapter
+        .spending_sources(&login_env)
+        .into_iter()
+        .flat_map(|source| source.complete_files())
+        .collect::<Vec<_>>();
+    assert_eq!(files, vec![named_file.clone()]);
+    assert_eq!(
+        GrokAdapter.session_transcript("shared-session", Some(&native_file), &login_env),
+        Some(named_file.clone()),
+    );
+    let pricing = temp.path().join("pricing.json");
+    for (current, prior) in [(Some(&named_file), None), (None, Some(&named_file))] {
+        let ctx = LocalContextRefreshCtx {
+            login_env: &login_env,
+            agent_id: "shared-session",
+            model_hint: None,
+            prior_session_name: None,
+            current_transcript_path: current.and_then(|path| path.to_str()),
+            prior_transcript_path: prior.and_then(|path| path.to_str()),
+            prior_transcript_stat: None,
+            prior_spend_fold: None,
+            shared_pricing_cache_path: &pricing,
+        };
+        assert_eq!(
+            GrokAdapter
+                .local_context_refresh(RefreshTrigger::Tick, &ctx)
+                .unwrap()
+                .transcript_path,
+            Some(named_file.to_string_lossy().into_owned()),
+        );
+    }
+}
+
+#[test]
+fn login_home_auth_file_decides_account() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("auth.json"),
+        r#"{"work":{"auth_mode":"oidc","key":"token","user_id":"work-user"}}"#,
+    )
+    .unwrap();
+    let env = BTreeMap::from([(
+        "GROK_HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    let crate::agents::account::AccountProbe::Found(account) = GrokAdapter.probe_account(&env)
+    else {
+        panic!("login's auth file must be used");
+    };
+    assert_eq!(account.account_id.as_deref(), Some("work-user"));
+}
+
+#[test]
+fn login_auth_path_overrides_home_auth_file() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("auth.json"), "malformed").unwrap();
+    let path = temp.path().join("override.json");
+    std::fs::write(
+        &path,
+        r#"{"work":{"auth_mode":"external","key":"token","user_id":"override-user"}}"#,
+    )
+    .unwrap();
+    let env = BTreeMap::from([
+        (
+            "GROK_HOME".to_owned(),
+            temp.path().to_string_lossy().into_owned(),
+        ),
+        (
+            "GROK_AUTH_PATH".to_owned(),
+            path.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let crate::agents::account::AccountProbe::Found(account) = GrokAdapter.probe_account(&env)
+    else {
+        panic!("login's auth path must win");
+    };
+    assert_eq!(account.account_id.as_deref(), Some("override-user"));
+}
+
+#[test]
+fn login_api_keys_count_without_an_auth_file() {
+    for key in ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] {
+        let env = BTreeMap::from([(key.to_owned(), "login-key".to_owned())]);
+        let crate::agents::account::AccountProbe::Found(account) = GrokAdapter.probe_account(&env)
+        else {
+            panic!("{key} in the login env must count");
+        };
+        assert_eq!(account.plan.as_deref(), Some("API key"));
+    }
+}
+
+#[test]
+fn login_flag_disables_stored_and_environment_api_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("auth.json"),
+        r#"{"work":{"auth_mode":"api_key","key":"token"}}"#,
+    )
+    .unwrap();
+    let mut env = BTreeMap::from([
+        (
+            "GROK_HOME".to_owned(),
+            temp.path().to_string_lossy().into_owned(),
+        ),
+        ("XAI_API_KEY".to_owned(), "login-key".to_owned()),
+    ]);
+    assert!(matches!(
+        GrokAdapter.probe_account(&env),
+        crate::agents::account::AccountProbe::Found(_)
+    ));
+    env.insert("GROK_DISABLE_API_KEY_AUTH".to_owned(), " true ".to_owned());
+    assert!(matches!(
+        GrokAdapter.probe_account(&env),
+        crate::agents::account::AccountProbe::LoggedOut
+    ));
+}
+
+#[test]
 fn native_hook_envelope_recognition_is_owned_by_grok() {
     let envelope = json!({"hookEventName":"session_start", "workspaceRoot":"/project"});
     for definition in crate::agents::registry::all_definitions() {

@@ -1800,6 +1800,8 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "CODEX_HOME",
         "QWEN_HOME",
         "QWEN_RUNTIME_DIR",
+        "GROK_HOME",
+        "GROK_AUTH_PATH",
     ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(

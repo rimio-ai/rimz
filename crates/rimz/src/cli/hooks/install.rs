@@ -13,7 +13,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
         return run_install_dry_run(agent);
     }
 
-    let adapters = install_definitions(agent)?;
+    let adapters = install_definitions(agent, &login_env)?;
     let mut out = crate::cli::render::out();
     for integration in adapters {
         install_hooks_into(integration, &login_env, &mut out)?;
@@ -24,7 +24,7 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
     let mut previews = Vec::new();
-    for integration in install_definitions(agent)? {
+    for integration in install_definitions(agent, &login_env)? {
         previews.push(integration.preview_hook_install(&login_env)?);
     }
     let mut out = crate::cli::render::out();
@@ -66,12 +66,13 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
 
 fn install_definitions(
     agent: Option<String>,
+    login_env: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<&'static rimz::agents::AgentDefinition>> {
     if let Some(agent) = agent {
         return Ok(vec![definition_by_kind(&agent)?]);
     }
 
-    let adapters = detected_installable_adapters();
+    let adapters = detected_installable_adapters(login_env);
     if adapters.is_empty() {
         anyhow::bail!(
             "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",

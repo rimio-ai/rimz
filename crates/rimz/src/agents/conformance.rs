@@ -194,6 +194,7 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
         ("claude", "settings.json"),
         ("codex", "config.toml"),
         ("qwen", "settings.json"),
+        ("grok", "hooks/rimz.json"),
     ] {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");

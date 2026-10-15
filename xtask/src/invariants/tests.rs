@@ -255,7 +255,12 @@ fn provider_homes_reject_process_env_reads_and_allow_ambient_snapshot_and_tests(
     let tests = agents.join("tests.rs");
     let home_read = "let home = std::env::var_os(\"QWEN_HOME\");\n";
     let snapshot = "let env = std::env::vars_os().collect();\n";
-    for source in [home_read, snapshot] {
+    for source in [
+        home_read,
+        "let home = std::env::var_os(\"GROK_HOME\");\n",
+        "let auth = std::env::var(\"GROK_AUTH_PATH\");\n",
+        snapshot,
+    ] {
         std::fs::write(&caller, source).unwrap();
         assert!(
             ensure_provider_homes_resolve_from_login_env(&root, std::slice::from_ref(&caller))
