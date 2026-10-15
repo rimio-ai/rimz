@@ -6,13 +6,87 @@
 //! API-key spend projection, or a future admin API, so the type keeps each
 //! figure optional and lets the renderer state only what is known.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::agents::AccountUsageIdentity;
-use crate::agents::context::AgentRateLimits;
+use crate::agents::context::{AgentRateLimits, ProviderAccountScope};
+use crate::ids::LoginKey;
+
+/// How long an extra-credits/account-usage reading stays displayable. Paid
+/// usage is a coarse monthly signal; after a day without a refresh, the
+/// dashboard drops the provider-supplied figures rather than showing stale
+/// balance as current.
+pub(crate) const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Shared provider extra-credits cache, keyed by provider login.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub(crate) struct CreditsCache {
+    pub refreshed_at_ms: u64,
+    pub logins: BTreeMap<LoginKey, ProviderCreditsEntry>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ProviderCreditsEntry {
+    #[serde(default)]
+    pub scope: ProviderAccountScope,
+    #[serde(default)]
+    pub entitlement: Entitlement,
+    pub observed_at_ms: u64,
+    /// Last OAuth account-usage attempt. App-server/realtime credit writes
+    /// preserve this stamp and its settled-auth state and never advance the
+    /// OAuth cadence.
+    #[serde(default)]
+    pub oauth_read_at_ms: u64,
+    /// Last OAuth attempt settled as an auth or entitlement rejection: retried on the long TTL
+    /// until the credential source changes.
+    #[serde(default)]
+    pub auth_settled: bool,
+    /// Credential-source stamp at that settled attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_stamp: Option<u64>,
+    /// Stable local OAuth account identifier for the facts cached here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
+    /// Raw provider plan tier from the OAuth usage response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_credits: Option<ExtraCredits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
+    /// One cross-workspace direct-query lease. Old cache files omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_query_claim: Option<DirectQueryClaim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DirectQueryClaim {
+    pub nonce: Uuid,
+    pub claimed_at_ms: u64,
+    pub requested_scope: ProviderAccountScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_stamp: Option<u64>,
+    /// Cache-derived owner fallback for a probe that could not resolve its
+    /// authoritative account identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight_account_key: Option<String>,
+}
+
+pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
+    crate::disk::atomic::read_json_cache(path)
+}
+
+pub(crate) fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
+    entry.ok
+        && now_ms.saturating_sub(entry.observed_at_ms) <= CREDITS_DISPLAY_MAX_AGE.as_millis() as u64
+}
 
 /// `true` when direct provider account-usage fetches are disabled for this
 /// process (tests, CI, air-gapped runs).
