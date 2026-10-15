@@ -75,6 +75,178 @@ fn paint_at(rig: &mut Rig, elapsed_ms: u64) {
     rig.paint(true);
 }
 
+fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnchor) {
+    use crate::mux::focus_anchor::{FocusAnchor, FocusIntentState, FocusPlacement};
+    let (mut rig, output) = scroll_rig();
+    let target = rig.state.current.worktree_groups[0].rows[4].clone();
+    let pane_id = target.pane.as_ref().unwrap().pane_id.clone();
+    rig.state.current.own_view = Some(SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![pane_id.clone()],
+        own_view_is_daemon: false,
+    });
+    rig.state.current.focused_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+    rig.state.current.viewed_panes.clear();
+    rig.state.current.pane_session_name = Some("rimz-test".to_owned());
+    rig.state.optimistic_watch_until = None;
+    rig.state.ui.scroll_offset = 30;
+    let pulled = rig.state.current.clone();
+    rig.fold(pulled, SnapshotSource::Produced);
+    assert!(!rig.state.watched());
+    let anchor = FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".to_owned(),
+        pane_id,
+        origin: FocusOrigin::User,
+        repair_generation: None,
+        issued_at_ms: crate::utils::time::unix_now_ms(),
+        applied_at_ms: None,
+        state: FocusIntentState::Requested,
+        pre_action: Vec::new(),
+        placement: Some(FocusPlacement {
+            row_id: target.id,
+            viewport_row: 2,
+        }),
+        order: Some(rig.state.ui.last_order.clone()),
+    };
+    (rig, output, anchor)
+}
+
+#[test]
+fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_switch() {
+    let (mut rig, output, anchor) = hidden_destination();
+    let target = anchor.pane_id.clone();
+    let placement = anchor.placement.clone().unwrap();
+    let (push, ack) = focus_push(anchor.clone());
+    assert!(!rig.runtime.focus_anchor_path().exists());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
+    assert!(
+        rig.state.watched(),
+        "the overlay must open the existing paint gate"
+    );
+    assert_eq!(
+        ack.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty),
+        "folding is not painting"
+    );
+    rig.paint(true);
+    assert_eq!(paints(&output), 1);
+    assert_eq!(ack.try_recv(), Ok(()));
+    let y = |rig: &Rig| {
+        rig.state
+            .ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &placement.row_id)
+            .unwrap()
+            .1
+    };
+    assert_eq!(
+        y(&rig),
+        rig.state.ui.scroll_zone_top as isize + placement.viewport_row
+    );
+    assert_eq!(rig.state.ui.last_focus_anchor_ms, anchor.issued_at_ms);
+    let old_y = y(&rig);
+    let mut switched = rig.state.current.clone();
+    switched.focused_pane = Some(target.clone());
+    switched.viewed_panes = vec![target];
+    rig.fold(switched, SnapshotSource::Produced);
+    assert!(!rig.state.ui.focus_group_reveal);
+    assert!(rig.state.ui.focus_placement.is_none());
+    paint_at(&mut rig, 100);
+    assert_eq!(
+        y(&rig),
+        old_y,
+        "the post-switch fold must not reveal the card again"
+    );
+}
+
+#[test]
+fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
+    for exit in [false, true] {
+        let (mut rig, output, anchor) = hidden_destination();
+        let (push, ack) = focus_push(anchor);
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+        rig.state
+            .paint_hold
+            .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        rig.paint(true);
+        assert_eq!(paints(&output), 0);
+        assert_eq!(
+            ack.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty),
+            "a blocked destination keeps its acknowledgement"
+        );
+        rig.state.paint_hold.release();
+        rig.state.should_exit = exit;
+        rig.paint(true);
+        if exit {
+            assert_eq!(paints(&output), 0);
+            assert_eq!(
+                ack.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            );
+        } else {
+            assert_eq!(paints(&output), 1);
+            assert_eq!(ack.try_recv(), Ok(()));
+        }
+    }
+}
+
+#[test]
+fn a_late_duplicate_push_uses_the_painted_frame_unless_the_destination_is_exiting() {
+    for exit in [false, true] {
+        let (mut rig, output, anchor) = hidden_destination();
+        let (push, ack) = focus_push(anchor.clone());
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+        rig.paint(true);
+        assert_eq!(ack.try_recv(), Ok(()));
+        rig.state.should_exit = exit;
+        let (push, ack) = focus_push(anchor);
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+        if exit {
+            assert_eq!(
+                ack.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected),
+                "an exiting destination must release a late acknowledgement"
+            );
+        } else {
+            assert_eq!(ack.try_recv(), Ok(()));
+        }
+        assert_eq!(paints(&output), 1, "a duplicate push must not paint again");
+    }
+}
+
+#[test]
+fn cleared_anchor_without_push_still_reveals_on_the_first_target_fold() {
+    let (mut rig, _, anchor) = hidden_destination();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    assert!(crate::mux::focus_anchor::clear_matching(
+        &rig.runtime,
+        anchor.nonce
+    ));
+    let mut switched = rig.state.current.clone();
+    switched.focused_pane = Some(anchor.pane_id.clone());
+    switched.viewed_panes = vec![anchor.pane_id.clone()];
+    rig.fold(switched, SnapshotSource::Produced);
+    assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
+    assert!(
+        rig.state.ui.focus_group_reveal,
+        "a missed intent still uses the external-focus fallback"
+    );
+    assert!(rig.state.ui.focus_placement.is_none());
+    assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
+}
+
 #[test]
 fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
     let (mut rig, _) = scroll_rig();

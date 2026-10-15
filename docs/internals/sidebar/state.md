@@ -381,7 +381,7 @@ A pane retains its baseline only while a fold applies an overlay or focus intent
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull. Admits no card on its own. | Host presence projector |
 | `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. | Projector fallback, or an incomplete tmux layout |
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup. A session start or end also requests fresh panes. | Store and context-sidecar writers ([store.md → wakeups](../store.md#wakeups)) |
-| `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now, so hidden peer tabs adopt the target before the mux switch reveals them. | Renderer jumps |
+| `FocusIntent` | target `pane_id`, nonce | Fold the durable focus anchor now unless the same nonce was already folded through the host push. | Renderer jumps |
 | `FocusStranded` | owning sidebar `pane_id`, generation, client views | Focus repair in the matching renderer: keep its baseline if that is a live visible work sibling, otherwise pick the leftmost sibling; other renderers ignore it. Distinct observed client views leave focus alone, because `focus-pane-id` is session-global: use the strand's sample on Zellij, the pulled `client_views` on tmux, never fused focus or intents. Dropped after `FOCUS_STRANDED_EVENT_TTL` (2 seconds) so late delivery cannot yank focus. | Host presence projector, from a settled Zellij switch or a tmux window switch |
 | `WidthTargetChanged` | none | Re-read the room-runtime width share, resolve it against this renderer's view, and converge only its own pane. | The resolver or renderer that published a new target |
 | `BodyFilterChanged` | none | Re-read the whole body lens and adopt pick and committed query without a producer fetch, leaving any local draft intact. | A renderer that changed the lens or auto-cleared its empty pick |
@@ -463,7 +463,7 @@ The shared input cut is stamped before its reads. A pane's later focus-anchor ob
 
 The intent has two states:
 
-- **`Requested`** is written, and wakes every renderer with `FocusIntent`, before the one-way mux focus command. It supplies a bounded presentation overlay, so peer tabs adopt the target, optional card placement, and frozen order while the destination is still hidden.
+- **`Requested`** is written and broadcast with `FocusIntent` before the one-way mux focus command. A user jump to another tab also pushes that stored anchor through the host's attachment inboxes. Peers fold its target, optional card placement, and frozen order once per nonce across push and datagram. The source waits off the render loop for the destination's frame to be written, every peer to release, or 100 ms, then dispatches with the existing nonce check. Same-tab jumps and automatic repairs do not push or wait.
 - **`Applied`** records that the mux accepted the command, without reseeding presentation. Native confirmation and fencing read this phase.
 
 Native client observations resolve the intent, with the pre-action client map as the fence. [`observation_outcome`](../../../crates/rimz/src/mux/focus_anchor.rs) returns one of five verdicts:
@@ -476,7 +476,7 @@ Native client observations resolve the intent, with the pre-action client map as
 | `Present` | A requested anchor is fresh, or an applied anchor is fresh with its pre-action map unchanged. | Keep presenting the target. |
 | `Fence` | The pre-action map is unchanged past `FOCUS_ANCHOR_FRESH`. | Yield unknown instead of restoring stale evidence. |
 
-A missed `FocusIntent` wakeup only delays the fold until the next event or pull, because the file stays authoritative until an observation resolves it. Automatic repairs append to the account-global `focus-repairs.log.jsonl` at command acceptance (`AcceptedUnconfirmed`) or failure, and again when observation confirms, supersedes, or invalidates the action. Dispatch records carry the final live fence sample in `observed` and the request count in `attempts`; abandonment and later resolution records use zero attempts and no fence sample. Older records default to an empty sample and one attempt.
+A same-host push folds the anchor value as an observation at arrival, without reading the file; older shared cuts yield to it and newer reads supersede it. The destination acknowledges only after writing a frame with the owning card selected and its placement consumed. Other peers release immediately. A resize paint hold, empty-tab confirmation, or exit can prevent acknowledgement; the wait cap still permits dispatch and logs the miss. A missed `FocusIntent` outside this push path waits for the next event or pull while the file remains unresolved; if it was already retired, the first native-focus fold uses ordinary reveal instead. Automatic repairs append to the account-global `focus-repairs.log.jsonl` at command acceptance (`AcceptedUnconfirmed`) or failure, and again when observation confirms, supersedes, or invalidates the action. Dispatch records carry the final live fence sample in `observed` and the request count in `attempts`; abandonment and later resolution records use zero attempts and no fence sample. Older records default to an empty sample and one attempt.
 
 ## Cadences
 

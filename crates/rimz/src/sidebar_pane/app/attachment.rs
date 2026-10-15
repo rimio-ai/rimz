@@ -166,6 +166,7 @@ impl Attachment {
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
+        state.focus_peers = Some(plane.focus_peers(config.instance_id.clone()));
         state.request_reload = request_reload;
         state.baseline_changed = baseline_changed;
         state.set_probed_aspect(terminal.backend().cell_aspect());

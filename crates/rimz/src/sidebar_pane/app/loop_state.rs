@@ -43,6 +43,7 @@ use super::fetch::{
     FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, ResultReceiver, SnapshotSource,
     WorkspaceFold,
 };
+use super::focus_push::{FocusPeers, FocusPush};
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
 use super::inbox::WakeupInbox;
@@ -127,6 +128,9 @@ pub(super) struct LoopState {
     observation: Option<Arc<observe::FrameSig>>,
     fold_inputs: Option<Arc<super::fetch::FoldInputs>>,
     observed_anchor: Option<(Instant, Option<crate::mux::focus_anchor::FocusAnchor>)>,
+    last_folded_focus_intent: Option<FocusNonce>,
+    pending_focus_push: Option<FocusPush>,
+    painted_focus_anchor_ms: u64,
     retired_anchor: Option<(Instant, u64)>,
     filter_observed_at: Option<Instant>,
     last_pulled_rows: usize,
@@ -149,6 +153,7 @@ pub(super) struct LoopState {
     pub(super) ui: UiState,
     paint: FramePainter,
     pub(super) room_caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
+    pub(super) focus_peers: Option<FocusPeers>,
     remind: RemindState,
     dirty: bool,
     paint_hold: PaintHold,
@@ -231,9 +236,11 @@ pub(super) fn handle_wakeup(
         // The serve loop intercepts these before dispatching here: a tick, a
         // typed sidebar event is a re-fetch trigger, worker completions are
         // folded, and raw presses are resolved against the current UI mode.
-        Wakeup::Tick | Wakeup::Event(_) | Wakeup::Press { .. } | Wakeup::Snapshot => {
-            InputOutcome::default()
-        }
+        Wakeup::Tick
+        | Wakeup::Event(_)
+        | Wakeup::Press { .. }
+        | Wakeup::Snapshot
+        | Wakeup::FocusPush(_) => InputOutcome::default(),
     }
 }
 
@@ -289,6 +296,9 @@ impl LoopState {
             observation: None,
             fold_inputs: None,
             observed_anchor: None,
+            last_folded_focus_intent: None,
+            pending_focus_push: None,
+            painted_focus_anchor_ms: 0,
             retired_anchor: None,
             filter_observed_at: None,
             last_pulled_rows: 0,
@@ -313,6 +323,7 @@ impl LoopState {
             },
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             room_caps: Arc::default(),
+            focus_peers: None,
             remind: RemindState::default(),
             dirty: true,
             paint_hold: PaintHold::default(),
@@ -609,6 +620,9 @@ impl LoopState {
             // Focus-anchor bookkeeping: a live intent or fence holds
             // `overlay_baseline`, and an anchor change is content.
             observed_anchor: _,
+            last_folded_focus_intent: _,
+            pending_focus_push: _,
+            painted_focus_anchor_ms: _,
             retired_anchor: _,
             confirmed_focus_intent_ms: _,
             // Overlay events: an active one holds `overlay_baseline`.
@@ -641,6 +655,7 @@ impl LoopState {
             exit_cause: _,
             tab_emptied: _,
             last_reported_baseline: _,
+            focus_peers: _,
         } = self;
         !should_exit
             && !rejected
@@ -673,6 +688,10 @@ impl LoopState {
         wakeup: Wakeup,
     ) -> Result<()> {
         match wakeup {
+            Wakeup::FocusPush(push) => {
+                self.on_focus_push(*push, fetch);
+                Ok(())
+            }
             Wakeup::Snapshot => {
                 self.on_snapshot(fetch);
                 Ok(())
@@ -818,6 +837,48 @@ impl LoopState {
         self.next_frame = Instant::now();
     }
 
+    fn fold_focus_intent(
+        &mut self,
+        anchor: crate::mux::focus_anchor::FocusAnchor,
+        arrived: Instant,
+    ) {
+        if anchor.session_name != self.config.session_name
+            || self.last_folded_focus_intent.replace(anchor.nonce) == Some(anchor.nonce)
+        {
+            return;
+        }
+        let previous = self.fold_inputs.replace(Arc::new(super::fetch::FoldInputs {
+            sampled_at: arrived,
+            anchor: Some(anchor),
+            filter: self.ui.make_up_filter.clone(),
+        }));
+        self.fold_fused_now();
+        self.fold_inputs = previous;
+    }
+
+    fn on_focus_push(&mut self, push: FocusPush, fetch: &mut FetchDispatcher) {
+        let arrived = Instant::now();
+        if self.last_folded_focus_intent != Some(push.anchor.nonce) {
+            self.prepare_action(fetch);
+            self.fold_focus_intent(push.anchor.clone(), arrived);
+        }
+        if push.anchor.session_name != self.config.session_name
+            || !self.owns_focus_target(&push.anchor.pane_id)
+        {
+            return;
+        }
+        if self.should_exit {
+            debug!(nonce = %push.anchor.nonce, target = %push.anchor.pane_id, should_exit = true, "focus push paint blocked");
+            self.pending_focus_push = None;
+            return;
+        }
+        if self.painted_focus_matches(&push.anchor) {
+            push.ack.painted();
+            return;
+        }
+        self.pending_focus_push = Some(push);
+    }
+
     pub(super) fn on_event(
         &mut self,
         fetch: &mut FetchDispatcher,
@@ -881,9 +942,16 @@ impl LoopState {
                     fetch.request(FetchRequest::fresh_panes(), true);
                 }
             }
-            SidebarEvent::FocusIntent { .. } => {
+            SidebarEvent::FocusIntent { nonce, .. } => {
+                if self.last_folded_focus_intent == Some(nonce) {
+                    return;
+                }
                 self.prepare_action(fetch);
-                self.fold_fused_now();
+                if let Some(anchor) = self.focus_anchor().filter(|anchor| anchor.nonce == nonce) {
+                    self.fold_focus_intent(anchor, Instant::now());
+                } else {
+                    self.fold_fused_now();
+                }
             }
             event if event.is_overlay() => {
                 self.prepare_action(fetch);
@@ -993,6 +1061,7 @@ impl LoopState {
             expected,
             (placement, Some(self.ui.last_order.clone())),
             Some(dispatch),
+            None,
         );
         true
     }
@@ -1222,6 +1291,7 @@ impl LoopState {
             match effect {
                 InputEffect::Focus(pane) => {
                     let placement = self.focus_placement(&pane);
+                    let peers = self.focus_peers_for(&pane);
                     spawn_pane_focus(
                         pane,
                         &self.config.session_name,
@@ -1230,6 +1300,7 @@ impl LoopState {
                         None,
                         (placement, Some(self.ui.last_order.clone())),
                         None,
+                        peers,
                     );
                 }
                 InputEffect::Width(dir) => {
@@ -1545,6 +1616,16 @@ impl LoopState {
     ) -> Result<()> {
         let now = Instant::now();
         let paint_blocked = self.prepare_paint(terminal, now);
+        if let Some(push) = &self.pending_focus_push {
+            if paint_blocked || self.self_close.confirming_empty() || self.should_exit {
+                debug!(nonce = %push.anchor.nonce, target = %push.anchor.pane_id,
+                    paint_hold = paint_blocked, confirming_empty = self.self_close.confirming_empty(),
+                    should_exit = self.should_exit, "focus push destination paint blocked");
+            }
+            if now >= push.until || self.should_exit {
+                self.pending_focus_push = None;
+            }
+        }
         let watched = self.watched();
         let foreground = self.foreground_paint_due(now, active, watched);
         // Once the tab has emptied, never paint again. A grow resize also
@@ -2060,6 +2141,43 @@ impl LoopState {
             })
     }
 
+    fn owns_focus_target(&self, pane: &PaneId) -> bool {
+        self.current.own_view.as_ref().is_some_and(|view| {
+            self.config
+                .own_pane
+                .as_ref()
+                .is_some_and(|own| own_tab_viewed(std::slice::from_ref(pane), view, own))
+        })
+    }
+
+    fn focus_peers_for(&self, pane: &PaneId) -> Option<FocusPeers> {
+        if self.owns_focus_target(pane) {
+            return None;
+        }
+        self.focus_peers.clone()
+    }
+
+    fn painted_focus_matches(&self, anchor: &crate::mux::focus_anchor::FocusAnchor) -> bool {
+        self.painted_focus_anchor_ms == anchor.issued_at_ms
+            && self.ui.last_focus_anchor_ms == anchor.issued_at_ms
+            && self.ui.focus_placement.is_none()
+            && self
+                .current
+                .row_owning_pane(&anchor.pane_id)
+                .is_some_and(|row| {
+                    self.ui.drawn_selection.as_ref() == Some(&row.id)
+                        && anchor.placement.as_ref().is_none_or(|placement| {
+                            self.ui.anchor_clamped
+                                || self.ui.painted_rows.iter().any(|(id, y)| {
+                                    id == &placement.row_id
+                                        && *y
+                                            == self.ui.scroll_zone_top as isize
+                                                + placement.viewport_row
+                                })
+                        })
+                })
+    }
+
     fn apply_focus_anchor(&mut self) {
         let Some(anchor) = self.focus_anchor() else {
             return;
@@ -2228,6 +2346,15 @@ impl LoopState {
     }
 
     fn observe_paint(&mut self, now: Instant) {
+        self.painted_focus_anchor_ms = self.ui.last_focus_anchor_ms;
+        if self.pending_focus_push.as_ref().is_some_and(|push| {
+            now < push.until
+                && self.owns_focus_target(&push.anchor.pane_id)
+                && self.painted_focus_matches(&push.anchor)
+        }) && let Some(push) = self.pending_focus_push.take()
+        {
+            push.ack.painted();
+        }
         let hold_expired = std::mem::take(&mut self.hold_expired_since_paint);
         let Some(mut watch) = self.clicked_row.take() else {
             return;
@@ -2413,15 +2540,19 @@ fn request_focus_until(
 /// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux
 /// equivalent), which must never block the loop. The snapshot-bound pane is
 /// focused directly — no `rimz pane focus` child and no per-click pane roster.
-/// The shared intent helper takes a fresh attached-client sample immediately
-/// before dispatch and serializes concurrent focus actions. An automatic
+/// The shared intent helper takes a fresh attached-client sample at request
+/// time and serializes concurrent focus actions. An automatic
 /// Zellij repair re-samples a mismatching fence until its strand deadline.
 /// Errors are logged at `debug!`, not surfaced: a pane recycled in the
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
-/// channel. The durable request wakes every renderer before mux dispatch;
+/// channel. A cross-tab user request pushes the stored anchor to host peers
+/// and waits up to 100 ms for the destination's frame before mux dispatch;
+/// the dispatch nonce check still fences superseded requests. The durable
+/// request also wakes renderers outside the push path;
 /// command acceptance applies it, and later native observations confirm or
 /// supersede it.
+#[allow(clippy::too_many_arguments)]
 fn spawn_pane_focus(
     pane_id: PaneId,
     session_name: &str,
@@ -2433,6 +2564,7 @@ fn spawn_pane_focus(
         Option<crate::mux::focus_anchor::FrozenOrder>,
     ),
     repair: Option<FocusRepairDispatch>,
+    peers: Option<FocusPeers>,
 ) {
     let session_name = session_name.to_owned();
     let requested_at_ms = crate::utils::time::unix_now_ms();
@@ -2466,22 +2598,35 @@ fn spawn_pane_focus(
             std::thread::sleep,
         );
         let outcome = match requested {
-            Some(Ok(nonce)) => match crate::mux::focus_anchor::dispatch_action(
-                backend.as_ref(),
-                &runtime,
-                &session_name,
-                &pane_id,
-                nonce,
-                Default::default(),
-            ) {
-                Ok(true) => (Some(nonce), "accepted_unconfirmed", None),
-                Ok(false) => (
-                    Some(nonce),
-                    "failed",
-                    Some("superseded before focus dispatch".to_owned()),
-                ),
-                Err(err) => (Some(nonce), "failed", Some(err.to_string())),
-            },
+            Some(Ok(nonce)) => {
+                let dispatch = || {
+                    crate::mux::focus_anchor::dispatch_action(
+                        backend.as_ref(),
+                        &runtime,
+                        &session_name,
+                        &pane_id,
+                        nonce,
+                        Default::default(),
+                    )
+                };
+                let dispatched = if let Some(peers) = &peers
+                    && let Some(anchor) = crate::mux::focus_anchor::load(&runtime)
+                        .filter(|anchor| anchor.nonce == nonce)
+                {
+                    peers.dispatch(anchor, dispatch)
+                } else {
+                    dispatch()
+                };
+                match dispatched {
+                    Ok(true) => (Some(nonce), "accepted_unconfirmed", None),
+                    Ok(false) => (
+                        Some(nonce),
+                        "failed",
+                        Some("superseded before focus dispatch".to_owned()),
+                    ),
+                    Err(err) => (Some(nonce), "failed", Some(err.to_string())),
+                }
+            }
             Some(Err(err)) => (None, "failed", Some(err.to_string())),
             None => (
                 None,
