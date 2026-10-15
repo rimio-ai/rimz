@@ -12,6 +12,8 @@ A third-party agent normally ships as a [process plugin](../reference/agent-plug
 
 The integration starts as a document, not code. `docs/externals/agent-adapter/<kind>-reference.md` maps the agent's upstream protocol surface, pinned to source URLs: hooks and their payloads, session identity and resume, transcripts, auth and account, headless modes. The recent references are the template — [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) records a validated provider-owned store, excluded session classes, negative hook evidence, and the boundary for new claims. The reference is the artifact every later step reads, and it outlives the integration as the drift-check target.
 
+When the provider's CLI is installed on this machine (`command -v <bin>`, and its config home), its `--help` and a probe under a throwaway home with no credentials outrank the reference's gap table: a reference written before installation goes stale. Brief the first source trace with the whole mapping worksheet below in one pass: the built-in tool names, the fields each hook event actually sends, how permission modes are parsed, how folder trust gates hooks, and how hook replies are parsed. A second trace round for a question the first could have answered delays the design.
+
 The pinned reference mirrors upstream prose, not observed behaviour. Before you rest a design on which hook a provider does or does not fire, read the provider's own recorded sessions on disk; they carry the outcome fields upstream never documented.
 
 Read alongside it, in order: [adapter.md](../internals/agents/adapter.md) end to end (the boundary, the capability traits, the hook path, context sources, declared coverage), [model.md](../internals/agents/model.md) (the state machine and displayed status your observations drive), [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) (the authoring contract), then one small worked adapter ([`pi/`](../../crates/rimz/src/agents/adapters/pi/mod.rs) with its internals doc [adapter_pi.md](../internals/agents/adapter_pi.md)) and one large ([`claude/`](../../crates/rimz/src/agents/adapters/claude/mod.rs) with [adapter_claude.md](../internals/agents/adapter_claude.md)).
@@ -164,6 +166,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `crates/rimz/src/agents/adapters/<kind>/mod.rs` — private adapter, spec, every capability trait (empty where unsupported)
 - [ ] `payloads.rs` typed wire · `spend.rs` · `account.rs` (± `oauth_usage.rs`) · install surface
 - [ ] Private module in `adapters/mod.rs`, one composed entry in `registry::BUILTINS`
+- [ ] Curated art for the kind in `crates/rimz/src/agents/emblems.toml`
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed` · machine and login-home refusals through `install_blocker` · provider paths checked under the tmux-pinned and inherited pane env
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support · launch prompt style proven live
