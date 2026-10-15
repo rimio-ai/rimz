@@ -248,6 +248,10 @@ Four agents have a wrinkle beyond the install, and [agent support](../reference/
 
 If a card stops updating after you hand-edited an agent's config, the RimZ-managed hook block was probably disturbed. Run `rimz hooks install --dry-run` to see the current diff, then `rimz hooks install` to restore the block. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, the `HOOKS` row in `rimz doctor` prints the exact fix.
 
+### MiniMax Code has hooks installed but no updates
+
+MiniMax can disable the `rimz@local` plugin while its installed files remain intact. RimZ cannot detect that setting. Run `mcode plugin enable rimz@local` with the same data-directory environment as the agent. If the files are missing or changed, run `rimz hooks install minimax` first. Logged-out MiniMax emits no reporting hooks; sign in with `/login` and retry your prompt. See [MiniMax support](../reference/agent-support.md#minimax-code) for the remaining card limits.
+
 ### Codex sessions drop with a WebSocket reset about hourly
 
 `WebSocket protocol error: Connection reset without closing handshake` can mean Codex's own updater is running a different release from the managed install. `rimz doctor` reports that state in its `REMOTE CONTROL` section, as `Codex remote-control updater version skew`, and prints the two process paths that disagree.
