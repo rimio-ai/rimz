@@ -680,6 +680,15 @@ pub enum HibernateErr {
     Schedule(#[from] crate::config::HibernateScheduleErr),
 }
 
+impl From<HibernateErr> for crate::blocker::Blocker {
+    fn from(error: HibernateErr) -> Self {
+        match error {
+            HibernateErr::Schedule(error) => error.into(),
+            other => Self::new(other.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
