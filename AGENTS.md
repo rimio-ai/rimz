@@ -124,7 +124,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 - `gate` compiles the host target only. A change that touches `nix`, `libc`, or platform-gated code also runs CI's macOS type-check, `cargo-zigbuild check -p rimz --target aarch64-apple-darwin --locked`: an item that exists only on Linux passes the gate and breaks that step.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
 - A shell snippet that another host runs through its login shell (`remote setup`, `remote connect`) is tested by executing the generated text under `sh` and, when present, `zsh`, with the network commands stubbed; a substring test cannot see a zsh-only reserved word such as `status`.
-- **Invariant.** `cargo xtask invariants` greps tracked text, Rust and Markdown alike, to guard the architectural boundaries. Because it matches text rather than parsed code, an `AGENTS.md` inside a guarded subtree is scanned with it: describe a boundary in prose and leave the banned path unwritten.
+- **Invariant.** `cargo xtask invariants` greps tracked text, Rust and Markdown alike, to guard the architectural boundaries. Because it matches text rather than parsed code, an `AGENTS.md` inside a guarded subtree is scanned with it: describe a boundary in prose and leave the banned path unwritten. Because it reads only tracked text, a new untracked file escapes both `invariants` and `gate` until the pre-commit hook rejects it, so stage new files with `git add -N` before running either.
 
 ## Code map
 
