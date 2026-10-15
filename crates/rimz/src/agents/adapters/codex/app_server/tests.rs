@@ -344,7 +344,7 @@ fn rate_limits_response_maps_credit_state_fields() {
                 "rateLimits": {},
                 "credits": { "unlimited": true }
             }),
-            ExtraCredits::known(None, None, None),
+            ExtraCredits::Unlimited,
         ),
         (
             "exhausted",

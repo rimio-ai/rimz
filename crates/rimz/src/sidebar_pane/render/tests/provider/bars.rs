@@ -642,6 +642,20 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
 }
 
 #[test]
+fn unlimited_codex_credit_under_ceiling_follows_spent_window() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("codex", "Codex", 173, true, false, Some((40, 100)));
+    panel.extra_credits =
+        Some(crate::agents::ExtraCredits::Unlimited.with_limit_if_missing(Some(25.0)));
+    let rows = metered_bar_rows(&theme, &panel);
+    let labels: Vec<_> = rows.iter().map(|row| row.spans[0].content.trim()).collect();
+    assert_eq!(labels, ["7d", "ex"]);
+    assert!(rows[1].to_string().contains('∞'));
+    assert!(rows[1].to_string().contains('▰'));
+    assert!(!rows[1].to_string().contains('▱'));
+}
+
+#[test]
 fn extra_usage_value_is_dollars_left_or_unlimited() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((100, 40)));

@@ -125,7 +125,7 @@ Live windows are partitioned by [birth account key](./model.md#the-rollup) befor
 
 ### Paid and API rows
 
-A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered panel synthesizes `ExtraCredits::Known` from the login's trailing-month transcript spend. Either way, when the provider reported no cap, the display ceiling from `[accounts.usage_limit_usd]` (a map such as `claude = 50.0`) applies: a capped row drains by the spend and shows remaining dollars, and an uncapped API key paints a full `∞` bar. The ceiling is display only; no provider enforces it.
+A metered panel takes `ExtraCredits` from its `credits.json` entry. An unmetered panel synthesizes `ExtraCredits::Known` from the login's trailing-month transcript spend. Either way, when the provider reported neither a cap nor unlimited credit, the display ceiling from `[accounts.usage_limit_usd]` (a map such as `claude = 50.0`) applies: a capped row drains by the spend and shows remaining dollars, and an uncapped API key paints a full `∞` bar. Reported unlimited credit always paints `∞`, even with a display ceiling. The ceiling is display only; no provider enforces it.
 
 A credits entry older than `CREDITS_DISPLAY_MAX_AGE` (24 hours), absent, or scope-mismatched leaves no `ex` row, including when a display ceiling alone is configured. API spend projections are never persisted, since the spending walk and config rebuild them.
 

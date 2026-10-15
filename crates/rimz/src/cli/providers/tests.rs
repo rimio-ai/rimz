@@ -90,6 +90,20 @@ fn panel(kind: &str) -> SidebarProviderPanel {
 }
 
 #[test]
+fn unlimited_credits_render_in_overview_and_detail() {
+    let mut provider = panel("codex");
+    provider.extra_credits = Some(ExtraCredits::Unlimited);
+    let reports = group("codex", vec![("default", provider)]);
+    let now = Timestamp::from_second(1_700_000_000).unwrap();
+    let text = overview(&reports, now, &BTreeMap::new(), false);
+    assert!(text.contains('∞'), "{text}");
+    let mut out = anstream::StripStream::new(Vec::new());
+    write_pretty(&mut out, &reports, now, &TimeZone::UTC).unwrap();
+    let text = String::from_utf8(out.into_inner()).unwrap();
+    assert!(text.contains("unlimited"), "{text}");
+}
+
+#[test]
 fn lapsed_provider_report_does_not_restore_the_cached_plan() {
     let mut value = serde_json::to_value(panel("claude")).unwrap();
     value["plan"] = serde_json::Value::Null;

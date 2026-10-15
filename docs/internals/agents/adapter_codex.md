@@ -312,7 +312,7 @@ Normalization clamps and rounds percentages and orders windows short to long. Wh
 | Wire field | `ExtraCredits` |
 | --- | --- |
 | `overageLimitReached` | known, 0 remaining |
-| `unlimited` | usable, balance unknown |
+| `unlimited` | `ExtraCredits::Unlimited`, no cap on paid extra usage |
 | `balance`, a number or numeric string | known, clamped at 0. The wire value is in credits; `normalize_credits` divides by 25 credits per US dollar, so `remaining_usd` holds dollars. The rate comes from observed account data (62,500 credits against a $2,500 balance), not from upstream source |
 | `hasCredits: false` | disabled |
 

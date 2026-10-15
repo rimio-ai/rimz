@@ -534,10 +534,7 @@ fn usage_response_maps_credit_state_ladder() {
     assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
 
     let usage = parse_usage_response(r#"{ "credits": { "unlimited": true } }"#).unwrap();
-    assert_eq!(
-        usage.extra_credits,
-        Some(ExtraCredits::known(None, None, None))
-    );
+    assert_eq!(usage.extra_credits, Some(ExtraCredits::Unlimited));
 
     let usage =
         parse_usage_response(r#"{ "credits": { "overage_limit_reached": true } }"#).unwrap();

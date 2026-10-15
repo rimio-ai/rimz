@@ -270,13 +270,27 @@ pub struct AccountUsageSnapshot {
 /// Paid usage beyond the subscription windows: Claude extra usage, Codex
 /// credits, or API-key spend against a display ceiling.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(from = "ExtraCreditsWire", into = "ExtraCreditsWire")]
 pub enum ExtraCredits {
     /// The provider says this account cannot use extra paid usage.
     Disabled,
+    /// The provider reports no cap on paid extra usage.
+    Unlimited,
     /// The source supplied some combination of usage, remaining balance, and
     /// limit. Missing values stay missing; callers may fill a display-only
     /// ceiling when a real limit is absent.
+    Known {
+        used_usd: Option<f64>,
+        remaining_usd: Option<f64>,
+        limit_usd: Option<f64>,
+    },
+}
+
+// Older binaries sharing the credits cache must still accept reported unlimited credit.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExtraCreditsWire {
+    Disabled,
     Known {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         used_usd: Option<f64>,
@@ -284,7 +298,55 @@ pub enum ExtraCredits {
         remaining_usd: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit_usd: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unlimited: Option<bool>,
     },
+}
+
+impl From<ExtraCreditsWire> for ExtraCredits {
+    fn from(credits: ExtraCreditsWire) -> Self {
+        match credits {
+            ExtraCreditsWire::Disabled => Self::Disabled,
+            ExtraCreditsWire::Known {
+                unlimited: Some(true),
+                ..
+            } => Self::Unlimited,
+            ExtraCreditsWire::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+                ..
+            } => Self::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+            },
+        }
+    }
+}
+
+impl From<ExtraCredits> for ExtraCreditsWire {
+    fn from(credits: ExtraCredits) -> Self {
+        match credits {
+            ExtraCredits::Disabled => Self::Disabled,
+            ExtraCredits::Unlimited => Self::Known {
+                used_usd: None,
+                remaining_usd: None,
+                limit_usd: None,
+                unlimited: Some(true),
+            },
+            ExtraCredits::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+            } => Self::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+                unlimited: None,
+            },
+        }
+    }
 }
 
 /// Banked rate-limit reset credits from Codex or Claude.
@@ -360,6 +422,7 @@ impl ExtraCredits {
                 remaining_usd,
                 limit_usd: limit_usd.or_else(|| clean_usd(fallback_limit_usd)),
             },
+            Self::Unlimited => Self::Unlimited,
             Self::Disabled => Self::Disabled,
         }
     }
@@ -371,6 +434,7 @@ impl ExtraCredits {
     /// Remaining percentage for a draining bar, when enough data is known.
     pub(crate) fn remaining_percentage(&self) -> Option<u8> {
         match self {
+            Self::Unlimited => None,
             Self::Disabled => Some(0),
             Self::Known {
                 used_usd,
@@ -391,6 +455,7 @@ impl ExtraCredits {
     /// Remaining dollars, direct or derived from `limit - used`, when known.
     pub(crate) fn remaining_usd_left(&self) -> Option<f64> {
         match self {
+            Self::Unlimited => None,
             Self::Disabled => Some(0.0),
             Self::Known {
                 used_usd,
@@ -407,6 +472,7 @@ impl ExtraCredits {
     pub(crate) fn limit_usd(&self) -> Option<f64> {
         match self {
             Self::Known { limit_usd, .. } => *limit_usd,
+            Self::Unlimited => None,
             Self::Disabled => Some(0.0),
         }
     }
@@ -780,6 +846,88 @@ mod tests {
             );
             assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
         }
+    }
+
+    #[test]
+    fn extra_credits_wire_preserves_legacy_shapes_and_unlimited() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyExtraCredits {
+            Disabled,
+            Known {
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                used_usd: Option<f64>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                remaining_usd: Option<f64>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                limit_usd: Option<f64>,
+            },
+        }
+
+        for (credits, expected) in [
+            (ExtraCredits::Disabled, r#""disabled""#),
+            (ExtraCredits::known(None, None, None), r#"{"known":{}}"#),
+            (
+                ExtraCredits::known(Some(12.0), None, None),
+                r#"{"known":{"used_usd":12.0}}"#,
+            ),
+            (
+                ExtraCredits::known(None, Some(7.5), None),
+                r#"{"known":{"remaining_usd":7.5}}"#,
+            ),
+            (
+                ExtraCredits::known(None, None, Some(50.0)),
+                r#"{"known":{"limit_usd":50.0}}"#,
+            ),
+            (
+                ExtraCredits::known(Some(12.0), Some(7.5), Some(50.0)),
+                r#"{"known":{"used_usd":12.0,"remaining_usd":7.5,"limit_usd":50.0}}"#,
+            ),
+            (ExtraCredits::Unlimited, r#"{"known":{"unlimited":true}}"#),
+        ] {
+            assert_eq!(serde_json::to_string(&credits).unwrap(), expected);
+            assert_eq!(
+                serde_json::from_str::<ExtraCredits>(expected).unwrap(),
+                credits
+            );
+            let legacy: LegacyExtraCredits = serde_json::from_str(expected).unwrap();
+            if credits == ExtraCredits::Unlimited {
+                assert_eq!(
+                    legacy,
+                    LegacyExtraCredits::Known {
+                        used_usd: None,
+                        remaining_usd: None,
+                        limit_usd: None,
+                    }
+                );
+            } else {
+                assert_eq!(serde_json::to_string(&legacy).unwrap(), expected);
+            }
+        }
+        assert_eq!(
+            serde_json::from_str::<ExtraCredits>(r#"{"known":{"unlimited":true,"used_usd":12.0,"remaining_usd":0.0,"limit_usd":50.0}}"#).unwrap(),
+            ExtraCredits::Unlimited,
+        );
+        assert_eq!(
+            serde_json::from_str::<ExtraCredits>(
+                r#"{"known":{"unlimited":false,"limit_usd":50.0}}"#
+            )
+            .unwrap(),
+            ExtraCredits::known(None, None, Some(50.0)),
+        );
+    }
+
+    #[test]
+    fn unlimited_credits_have_no_finite_balance_or_limit() {
+        let credits = ExtraCredits::Unlimited;
+        assert!(!credits.is_disabled());
+        assert_eq!(credits.remaining_usd_left(), None);
+        assert_eq!(credits.remaining_percentage(), None);
+        assert_eq!(credits.limit_usd(), None);
+        assert_eq!(
+            credits.with_limit_if_missing(Some(25.0)),
+            ExtraCredits::Unlimited
+        );
     }
 
     #[test]

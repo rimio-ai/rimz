@@ -634,6 +634,7 @@ fn write_comparison(
 
 fn extra_cell(extra: Option<&ExtraCredits>) -> render::Cell {
     match extra {
+        Some(ExtraCredits::Unlimited) => cell("∞"),
         Some(ExtraCredits::Disabled) => cell("off"),
         Some(ExtraCredits::Known {
             remaining_usd: Some(remaining),
@@ -956,6 +957,7 @@ fn money_cell(value: f64) -> render::Cell {
 
 fn extra_credit_spans(extra: &ExtraCredits) -> Option<Vec<render::Cell>> {
     match extra {
+        ExtraCredits::Unlimited => Some(vec![cell("unlimited")]),
         ExtraCredits::Disabled => Some(vec![cell("off")]),
         ExtraCredits::Known {
             used_usd,

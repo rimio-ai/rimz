@@ -452,6 +452,7 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
             (
                 PanelField::ExtraCredits,
                 panel.extra_credits.as_ref().map(|credits| match credits {
+                    ExtraCredits::Unlimited => "unlimited".to_owned(),
                     ExtraCredits::Disabled => "disabled".to_owned(),
                     ExtraCredits::Known {
                         used_usd,
@@ -625,6 +626,21 @@ mod tests {
 
     fn self_pulled(snapshot: &SidebarSnapshot) -> Vec<AggregateSig> {
         extract_aggregates(snapshot, &PulledFrameSig::from_snapshot(snapshot))
+    }
+
+    #[test]
+    fn unlimited_credits_have_an_explicit_fingerprint() {
+        let mut snapshot = full_snapshot();
+        snapshot.providers[0].extra_credits = Some(ExtraCredits::Unlimited);
+        let aggregates = self_pulled(&snapshot);
+        let credits = aggregates
+            .iter()
+            .find(|aggregate| {
+                aggregate.key.identity() == "provider_field:claude@default:extra_credits"
+            })
+            .unwrap();
+        assert_eq!(credits.pulled.as_deref(), Some("unlimited"));
+        assert_eq!(credits.committed.as_deref(), Some("unlimited"));
     }
 
     #[test]

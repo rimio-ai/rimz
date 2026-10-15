@@ -133,7 +133,7 @@ Three settings change what these figures mean or where you see them, all plain T
 
 - `[sidebar] spend_window` picks the cockpit and provider-row window (`session`, `24h`, `today`), and the global `timezone` sets the `today` cutoff and every displayed time ([configuration](./configuration.md#sidebar-rendering)).
 - `[theme.display] provider_list`, `provider_tabs`, and `max_provider_blocks` choose which provider blocks the dashboard shows, in what order, and whether they stack or share a tab rail ([theming](./theme.md#display)).
-- `[accounts.usage_limit_usd]` gives an account with no provider-reported cap a display ceiling, turning its full `∞` row into a bar that drains against trailing-month spend. It tunes the bar only; the provider still enforces the real limit ([configuration](./configuration.md#accounts)).
+- `[accounts.usage_limit_usd]` gives an account whose provider reports neither a cap nor unlimited credit a display ceiling, turning its full `∞` row into a bar that drains against trailing-month spend. It tunes the bar only; the provider still enforces the real limit ([configuration](./configuration.md#accounts)).
 
 ## See also
 
