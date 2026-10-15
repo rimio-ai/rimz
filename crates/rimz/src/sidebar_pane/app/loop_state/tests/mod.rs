@@ -15,6 +15,18 @@ mod maintenance;
 mod paint;
 mod scroll;
 
+fn focus_push(anchor: crate::mux::focus_anchor::FocusAnchor) -> (Wakeup, Receiver<()>) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    (
+        Wakeup::FocusPush(Box::new(super::super::focus_push::FocusPush {
+            anchor,
+            ack: super::super::focus_push::PaintedAck::new(tx),
+            until: Instant::now() + Duration::from_secs(10),
+        })),
+        rx,
+    )
+}
+
 #[derive(Clone, Default)]
 struct FrameOutput(
     Arc<std::sync::Mutex<Vec<u8>>>,

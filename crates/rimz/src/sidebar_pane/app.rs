@@ -20,6 +20,7 @@ mod demo;
 mod fetch;
 #[cfg(test)]
 pub(super) mod fixtures;
+mod focus_push;
 mod gate;
 mod health;
 mod inbox;

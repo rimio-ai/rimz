@@ -10,6 +10,95 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
+#[test]
+fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
+    for outcome in ["painted", "released", "capped", "superseded"] {
+        let plane = DataPlane::detached();
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
+        let source = serve_config(&workspace());
+        let destination = serve_config(&workspace());
+        let (source_tx, source_rx) = std::sync::mpsc::sync_channel(64);
+        let (destination_tx, destination_rx) = std::sync::mpsc::sync_channel(64);
+        let _source = plane.subscribe(&source, source_tx);
+        let _destination = plane.subscribe(&destination, destination_tx);
+        let peers = plane.focus_peers(source.instance_id);
+        let anchor = crate::mux::focus_anchor::FocusAnchor {
+            nonce: crate::ids::FocusNonce::new(),
+            session_name: source.session_name,
+            pane_id: crate::ids::PaneId::from_parts(MuxName::Zellij, "terminal_2"),
+            origin: crate::mux::focus_anchor::FocusOrigin::User,
+            repair_generation: None,
+            issued_at_ms: crate::utils::time::unix_now_ms(),
+            applied_at_ms: None,
+            state: crate::mux::focus_anchor::FocusIntentState::Requested,
+            pre_action: Vec::new(),
+            placement: None,
+            order: None,
+        };
+        let expected = anchor.clone();
+        crate::mux::focus_anchor::store(&runtime, &anchor).unwrap();
+        let nonce = anchor.nonce;
+        let target = anchor.pane_id.clone();
+        let session = anchor.session_name.clone();
+        let (painted_tx, painted_rx) = std::sync::mpsc::channel();
+        let (dispatched_tx, dispatched_rx) = std::sync::mpsc::channel();
+        let peer_runtime = runtime.clone();
+        let destination = std::thread::spawn(move || {
+            let Wakeup::FocusPush(push) = destination_rx.recv_timeout(SETTLE).unwrap() else {
+                panic!("destination must receive the focus push")
+            };
+            assert_eq!(push.anchor, expected);
+            if outcome == "superseded" {
+                let mut newer = expected;
+                newer.nonce = crate::ids::FocusNonce::new();
+                crate::mux::focus_anchor::store(&peer_runtime, &newer).unwrap();
+            }
+            painted_tx.send(()).unwrap();
+            match outcome {
+                "painted" | "superseded" => push.ack.painted(),
+                "capped" => {
+                    dispatched_rx.recv_timeout(SETTLE).unwrap();
+                    drop(push);
+                }
+                _ => drop(push),
+            }
+        });
+        let started = Instant::now();
+        peers.dispatch(anchor, || {
+            assert!(
+                painted_rx.try_recv().is_ok(),
+                "dispatch must follow destination paint, release, or cap"
+            );
+            assert_eq!(
+                source_rx.try_recv(),
+                Err(Empty),
+                "the source must not receive its own push"
+            );
+            if outcome == "capped" {
+                assert!(started.elapsed() >= Duration::from_millis(100));
+                dispatched_tx.send(()).unwrap();
+            }
+            if outcome == "superseded" {
+                let backend = crate::mux::backend_for(target.mux());
+                assert!(
+                    !crate::mux::focus_anchor::dispatch_action(
+                        backend.as_ref(),
+                        &runtime,
+                        &session,
+                        &target,
+                        nonce,
+                        Default::default()
+                    )
+                    .unwrap(),
+                    "the post-wait nonce check must still prevent dispatch"
+                );
+            }
+        });
+        destination.join().unwrap();
+    }
+}
+
 struct Room {
     _dir: tempfile::TempDir,
     runtime: RuntimePaths,

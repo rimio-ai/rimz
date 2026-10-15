@@ -671,6 +671,94 @@ fn requested_focus_anchor(
     anchor
 }
 
+#[test]
+fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
+    let own = zellij("terminal_99");
+    let target = zellij("terminal_2");
+    let mut rig = Rig::with_own_pane(own);
+    let mut snapshot = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));
+    snapshot.own_view = Some(own_view());
+    snapshot.viewed_panes.clear();
+    rig.fold(snapshot, SnapshotSource::Produced);
+    let anchor = requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
+    let (push, ack) = focus_push(anchor);
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    assert_eq!(
+        rig.state.ui.selected_pane,
+        Some(target),
+        "every peer folds the push"
+    );
+    assert!(!rig.state.watched());
+    assert_eq!(
+        ack.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Disconnected)
+    );
+}
+
+#[test]
+fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
+    for push_first in [true, false] {
+        let mut rig = Rig::new();
+        let target = zellij("terminal_2");
+        rig.fold(
+            snapshot_with_focused_pane(&rig.ws, zellij("terminal_1")),
+            SnapshotSource::Produced,
+        );
+        let anchor =
+            requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+        let event = SidebarEvent::FocusIntent {
+            pane_id: target.clone(),
+            nonce: anchor.nonce,
+        };
+        let (push, _ack) = focus_push(anchor);
+        if push_first {
+            rig.state
+                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.clone())
+                .unwrap();
+        } else {
+            rig.event(event.clone());
+        }
+        assert_eq!(rig.state.ui.selected_pane, Some(target));
+        let next_frame = Instant::now() + Duration::from_secs(1);
+        rig.state.next_frame = next_frame;
+        if push_first {
+            rig.event(event);
+        } else {
+            rig.state
+                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+                .unwrap();
+        }
+        assert_eq!(
+            rig.state.next_frame, next_frame,
+            "duplicate delivery must not fold again"
+        );
+    }
+}
+
+#[test]
+fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
+    let mut rig = Rig::with_own_pane(zellij("terminal_99"));
+    let plane = super::super::super::plane::DataPlane::detached();
+    rig.state.focus_peers = Some(plane.focus_peers(rig.state.config.instance_id.clone()));
+    rig.state.current.own_view = Some(own_view());
+    assert!(
+        rig.state.focus_peers_for(&zellij("terminal_2")).is_some(),
+        "cross-tab jumps push"
+    );
+    assert!(
+        rig.state.focus_peers_for(&zellij("terminal_9")).is_none(),
+        "same-tab jumps stay synchronous"
+    );
+    rig.state.current.own_view = None;
+    assert!(
+        rig.state.focus_peers_for(&zellij("terminal_9")).is_some(),
+        "unknown ownership uses the bounded wait"
+    );
+}
+
 fn assert_foreign_focus_anchor_is_ignored(shared: bool) {
     let mut rig = Rig::new();
     let first = zellij("terminal_1");

@@ -34,6 +34,13 @@ pub(in crate::sidebar_pane) struct DataPlane {
 type Lanes = Box<dyn FnOnce() + Send>;
 
 impl DataPlane {
+    pub(in crate::sidebar_pane) fn focus_peers(
+        &self,
+        source: SidebarInstanceId,
+    ) -> super::focus_push::FocusPeers {
+        super::focus_push::FocusPeers::new(self.subscribers.clone(), source)
+    }
+
     /// Threads start with the first pane and live as long as the host. Fetch and production run off every render loop, so animation and input never block on them.
     pub(in crate::sidebar_pane) fn start(
         config: &ServeConfig,
