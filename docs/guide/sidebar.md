@@ -179,7 +179,7 @@ Working, waiting, failed, paused, and waiting on live subagents all take precede
 
 **Hibernation** saves memory by default on a [supported Linux machine](./configuration.md#agent-hibernation). An unfocused idle or successful agent can freeze after the grace period when it owes no work, has no background commands, and has no foreign processes in its scope. Agents with remote control enabled or a keep-warm horizon holding their cache stay awake. Hibernation leaves the card's state and unread result unchanged; `rimz agents show` carries the freeze time and reclaimed memory.
 
-Focus the pane, click its card, or send it a message or pane input to wake it. RimZ also wakes it before answering, interrupting, restarting, or closing it. Waking restarts the configured grace period, so a glance does not immediately freeze the agent again. Waking may take seconds as memory comes back from swap; keys typed before thaw remain in the terminal queue and arrive when it wakes.
+Focus the pane, click its card, or send it a message or pane input to wake it. RimZ also wakes it before answering, interrupting, restarting, or closing it. An agent woken by a look and given no new turn freezes again about 10 seconds after you leave its pane. Messages, answers, and commands restart the full configured grace period. Waking may take seconds as memory comes back from swap; keys typed before thaw remain in the terminal queue and arrive when it wakes.
 
 ## Glance, jump, answer
 

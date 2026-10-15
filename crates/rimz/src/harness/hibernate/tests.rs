@@ -113,7 +113,7 @@ fn keep_warm_holds_hibernation_only_while_the_cache_can_stay_warm() {
 }
 
 #[test]
-fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
+fn sync_waking_restarts_grace_for_a_queued_helper_and_recorded_pane() {
     for recorded in [false, true] {
         let (dir, store, mut agent, config, scope) = decision_fixture();
         let pane: PaneId = "tmux:%3".parse().unwrap();
@@ -154,11 +154,79 @@ fn waking_restarts_grace_for_a_queued_helper_and_after_a_glance() {
         .unwrap();
         assert_eq!(
             decision(&store, &agent, &config, &scope, now),
-            Verdict::Hold(Hold::Clock),
+            Verdict::Hold(Hold::WakeClock),
             "recorded={recorded}"
         );
         assert!(matches!(
             decision(&store, &agent, &config, &scope, now + 181),
+            Verdict::Hibernate { .. }
+        ));
+    }
+}
+
+#[test]
+fn focus_stamp_holds_since_wake_or_departure_but_a_turn_uses_the_rest_clock() {
+    let (_dir, store, mut agent, config, scope) = decision_fixture();
+    let pane: PaneId = "tmux:%3".parse().unwrap();
+    agent.pane = Some(crate::pane::PaneRef::from_id(pane.clone()));
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &wake_stamp_path(store.runtime_paths(), Some(&pane)),
+        &serde_json::json!({"focus": "1970-01-01T00:20:00Z"}),
+    )
+    .unwrap();
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 1_209),
+        Verdict::Hold(Hold::WakeClock)
+    );
+    assert!(matches!(
+        decision(&store, &agent, &config, &scope, 1_210),
+        Verdict::Hibernate { .. }
+    ));
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().live_path("hibernate").join("focus.json"),
+        &serde_json::json!({"focused": null, "departed": {pane.to_string(): "1970-01-01T00:21:40Z"}}),
+    ).unwrap();
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 1_309),
+        Verdict::Hold(Hold::WakeClock)
+    );
+    assert!(matches!(
+        decision(&store, &agent, &config, &scope, 1_310),
+        Verdict::Hibernate { .. }
+    ));
+    agent.last_activity = jiff::Timestamp::from_second(1_305).unwrap();
+    agent.turn_ended_at = Some(agent.last_activity);
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 1_310),
+        Verdict::Hold(Hold::Clock)
+    );
+    assert_eq!(
+        decision(&store, &agent, &config, &scope, 1_484),
+        Verdict::Hold(Hold::Clock)
+    );
+    assert!(matches!(
+        decision(&store, &agent, &config, &scope, 1_485),
+        Verdict::Hibernate { .. }
+    ));
+}
+
+#[test]
+fn bare_pane_and_workspace_stamps_hold_the_full_after() {
+    for workspace in [false, true] {
+        let (_dir, store, mut agent, config, scope) = decision_fixture();
+        let pane: PaneId = "tmux:%3".parse().unwrap();
+        agent.pane = Some(crate::pane::PaneRef::from_id(pane.clone()));
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &wake_stamp_path(store.runtime_paths(), (!workspace).then_some(&pane)),
+            &jiff::Timestamp::from_second(1_200).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decision(&store, &agent, &config, &scope, 1_379),
+            Verdict::Hold(Hold::WakeClock)
+        );
+        assert!(matches!(
+            decision(&store, &agent, &config, &scope, 1_380),
             Verdict::Hibernate { .. }
         ));
     }
@@ -530,18 +598,54 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
         },
     )
     .unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &wake_stamp_path(runtime, Some(&pane)),
+        &serde_json::json!({"focus": "1970-01-01T00:19:35Z"}),
+    )
+    .unwrap();
+    assert!(spawned(&snapshot).is_empty());
+    assert!(!fire_record_path(runtime, &agent.kind, &agent.agent_id).exists());
+    snapshot.now = jiff::Timestamp::from_second(1_184).unwrap();
+    assert!(spawned(&snapshot).is_empty());
+    assert!(!fire_record_path(runtime, &agent.kind, &agent.agent_id).exists());
+    snapshot.now = jiff::Timestamp::from_second(1_185).unwrap();
     assert_eq!(spawned(&snapshot).len(), 1);
-    snapshot.now = jiff::Timestamp::from_second(1_210).unwrap();
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &wake_stamp_path(runtime, Some(&pane)),
+        &serde_json::json!({"focus": "1970-01-01T00:19:50Z"}),
+    )
+    .unwrap();
+    snapshot.now = jiff::Timestamp::from_second(1_199).unwrap();
+    assert!(spawned(&snapshot).is_empty());
+    assert_eq!(
+        read_fire_record(&fire_record_path(runtime, &agent.kind, &agent.agent_id))
+            .fired_at
+            .unwrap()
+            .as_second(),
+        1_185
+    );
+    snapshot.now = jiff::Timestamp::from_second(1_200).unwrap();
+    assert_eq!(
+        spawned(&snapshot).len(),
+        1,
+        "a fire before a focus wake must not extend its grace"
+    );
+    snapshot.now = jiff::Timestamp::from_second(1_230).unwrap();
     snapshot.focused_pane = Some(pane.clone());
     assert!(spawned(&snapshot).is_empty());
     snapshot.focused_pane = None;
+    assert!(
+        spawned(&snapshot).is_empty(),
+        "leaving starts the focus grace"
+    );
+    snapshot.now = jiff::Timestamp::from_second(1_240).unwrap();
     let requests = spawned(&snapshot);
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].pane_id, pane);
     assert_eq!(requests[0].root_pid, 42);
-    assert_eq!(requests[0].idle_secs, 210);
+    assert_eq!(requests[0].idle_secs, 240);
     assert!(spawned(&snapshot).is_empty());
-    snapshot.now = jiff::Timestamp::from_second(1_240).unwrap();
+    snapshot.now = jiff::Timestamp::from_second(1_270).unwrap();
     assert_eq!(spawned(&snapshot).len(), 1);
     assert!(crate::store::hibernate::read(paths).is_empty());
     crate::store::hibernate::record(
@@ -561,9 +665,9 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     )
     .unwrap();
     std::sync::Arc::make_mut(&mut snapshot.agents)[0].status = crate::agents::AgentStatus::Sleeping;
-    snapshot.now = jiff::Timestamp::from_second(3039).unwrap();
+    snapshot.now = jiff::Timestamp::from_second(3069).unwrap();
     assert!(spawned(&snapshot).is_empty());
-    snapshot.now = jiff::Timestamp::from_second(3040).unwrap();
+    snapshot.now = jiff::Timestamp::from_second(3070).unwrap();
     assert_eq!(
         spawned(&snapshot).len(),
         1,
@@ -682,6 +786,48 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
         [pane.clone(), pane.clone(), pane],
         "pulled focus must repair a missing event or a record published after focus, with pacing"
     );
+}
+
+#[test]
+fn producer_trails_departures_only_on_focus_changes_even_when_disabled() {
+    for raw in ["tmux:%3", "zellij:terminal_3"] {
+        let (_dir, store, agent, _policy, _scope) = decision_fixture();
+        let pane: PaneId = raw.parse().unwrap();
+        let mut config = MachineConfig::default();
+        config.agents.hibernate.enabled = Some(false);
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            store.paths().workspace_id.clone(),
+            vec![agent],
+            jiff::Timestamp::from_second(1_180).unwrap(),
+        );
+        let produce = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
+            hibernate_idle_agents_with(
+                snapshot,
+                store.paths(),
+                store.runtime_paths(),
+                &config,
+                &KeepWarmPolicy::default(),
+                |_| panic!("disabled"),
+                |_| {},
+            );
+        };
+        snapshot.focused_pane = Some(pane.clone());
+        produce(&snapshot);
+        let path = store
+            .runtime_paths()
+            .live_path("hibernate")
+            .join("focus.json");
+        let first =
+            std::fs::read(&path).expect("producer must publish focus trail before admission");
+        snapshot.now = jiff::Timestamp::from_second(1_190).unwrap();
+        produce(&snapshot);
+        assert_eq!(std::fs::read(&path).unwrap(), first);
+        snapshot.focused_pane = None;
+        produce(&snapshot);
+        let trail: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(trail["departed"][pane.to_string()], "1970-01-01T00:19:50Z");
+    }
 }
 
 #[test]

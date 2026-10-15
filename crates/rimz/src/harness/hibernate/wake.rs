@@ -111,7 +111,12 @@ fn wake_with(
     };
     crate::disk::atomic::write_temp_then_rename_cache(
         &wake_stamp_path(runtime, Some(pane)),
-        &jiff::Timestamp::now(),
+        &match trigger {
+            WakeTrigger::Sync => WakeStamp::Sync(jiff::Timestamp::now()),
+            WakeTrigger::Helper(_) => WakeStamp::Focus {
+                focus: jiff::Timestamp::now(),
+            },
+        },
     )?;
     let mut result = Woken::NotHibernating;
     for mut entry in crate::store::hibernate::read(paths)
