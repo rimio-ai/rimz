@@ -1382,8 +1382,6 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         let workspace = rimz::room::session::workspace_record_for_session(&session_name)?
             .ok_or_else(|| anyhow::anyhow!("session {session_name} is not a managed RimZ room"))?;
         let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-        let paths = rimz::StatePaths::for_workspace(workspace.workspace_id)?;
-        rimz::harness::hibernate::wake_pane_at(&paths, &target)?;
         rimz::mux::focus_anchor::execute_action(backend.as_ref(), &runtime, &session_name, target)
             .context("focusing pane")?;
     }
