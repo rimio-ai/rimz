@@ -61,6 +61,20 @@ pub struct SocketPathTooLong {
     pub limit: usize,
 }
 
+impl From<SocketPathTooLong> for crate::blocker::Blocker {
+    fn from(error: SocketPathTooLong) -> Self {
+        Self::new(format!(
+            "socket path {} needs {} bytes; AF_UNIX allows {} including the terminator",
+            error.path.display(), error.used, error.limit,
+        ))
+        .with_fix(
+            "Use a shorter runtime directory; add the export to your shell profile to make it permanent",
+            Some(XDG_REMEDY.into()),
+            crate::blocker::Surface::Plain,
+        )
+    }
+}
+
 pub(crate) fn validate_socket_path(path: &Path) -> Result<(), SocketPathTooLong> {
     let used = path_len(path) + 1;
     if used > AF_UNIX_PATH_LIMIT {
