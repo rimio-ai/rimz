@@ -18,7 +18,7 @@ The house style is explicit Rust, and [rust-conventions.md](./docs/contributing/
 
 Unsafe code is denied; two sites are admitted, each annotated with `#[expect(unsafe_code, reason = "...")]`: the glibc arena cap in `crates/rimz/src/main.rs`, and the bench-only counting allocator in `crates/rimz/benches/fleet.rs`, which the shipped binary never links. A third site is a design decision.
 
-An event or timing fix is proven at the consumer's decision point. That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time.
+An event or timing fix is proven at the consumer's decision point. That the producer emitted, or that a timestamp is fresh, is not evidence that the consumer saw it in time. Work placed between a decision and the action it gates (a helper process, a lock, a network call) makes the decision stale by that work's duration: read the decision again after the work, or say why it cannot have changed.
 
 Three invariants sit underneath that style:
 
