@@ -1142,6 +1142,150 @@ fn a_room_click_reaches_only_the_named_attachment() {
 }
 
 #[test]
+fn a_room_click_pushes_only_cross_tab_targets_before_dispatch() {
+    use crate::ids::PaneId;
+    use crate::mux::focus_anchor::{FocusIntentState, load};
+    use crate::sidebar_pane::app::fixtures::{pane, snapshot_with_panes};
+
+    const CHILD: &str = "RIMZ_TEST_HOST_CLICK_PUSH";
+    if std::env::var_os(CHILD).is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("zellij");
+        std::fs::write(
+            &shim,
+            r#"#!/bin/sh
+click_dir=${0%/*}
+case " $* " in
+  *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n' ;;
+  *" action focus-pane-id "*)
+    if [ -e "$click_dir/pushed" ]; then
+      printf 'after-push\n'
+    else
+      printf 'without-push\n'
+    fi > "$click_dir/dispatched" ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sidebar_pane::host::tests::a_room_click_pushes_only_cross_tab_targets_before_dispatch",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("RIMZ_ZELLIJ_BIN", shim)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+
+    let dir = PathBuf::from(std::env::var_os(CHILD).unwrap());
+    for cross_tab in [true, false] {
+        let room = Room::new();
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_10");
+        let first = PaneId::from_parts(MuxName::Zellij, "terminal_11");
+        let target = PaneId::from_parts(MuxName::Zellij, "terminal_12");
+        let mut pty = Pty::open(54, 30);
+        let source = room.attach_as(&pty, Some(own));
+        painted(&mut pty);
+
+        // Keep B's real inbox under test control so receipt and acknowledgement
+        // are observed independently of datagram folds or destination paints.
+        let mut greeting = hello(&SidebarInstanceId::new());
+        greeting.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_20"));
+        let (destination, live) = room.host.admit(&greeting).unwrap();
+        let _subscription = room
+            .host
+            .plane
+            .subscribe(&room.host.config_for(&greeting), live.close.wake);
+
+        let mut snapshot = snapshot_with_panes(
+            &workspace(),
+            vec![
+                pane("terminal_11", "tab_1", false),
+                pane(
+                    "terminal_12",
+                    if cross_tab { "tab_2" } else { "tab_1" },
+                    false,
+                ),
+            ],
+        );
+        Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)[1].name =
+            "click-target".into();
+        snapshot.focused_pane = Some(first.clone());
+        snapshot.viewed_panes = vec![first.clone()];
+        snapshot.own_view = Some(crate::store::snapshot::SidebarOwnView {
+            sibling_count: 2,
+            working_pane_ids: if cross_tab {
+                vec![first]
+            } else {
+                vec![first, target.clone()]
+            },
+            own_view_is_daemon: false,
+        });
+        room.host
+            .plane
+            .publish_snapshot(&source.instance_id, snapshot);
+        let mut parser = vt100::Parser::new(30, 54, 0);
+        let mut row = None;
+        eventually("the click target is painted", || {
+            parser.process(&pty.drain());
+            row = parser
+                .screen()
+                .contents()
+                .lines()
+                .position(|line| line.contains("click-target"));
+            row.is_some()
+        });
+        room.host
+            .room_wakeup(format!("click:{}:4:{}", source.instance_id, row.unwrap()).as_bytes());
+
+        if cross_tab {
+            let received = destination.inbox.recv_timeout(SETTLE);
+            assert!(
+                matches!(&received, Ok(Wakeup::FocusPush(_))),
+                "a cross-tab room click must push to B before dispatch: {received:?}"
+            );
+            let Wakeup::FocusPush(push) = received.unwrap() else {
+                unreachable!()
+            };
+            assert_eq!(push.anchor.pane_id, target);
+            assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
+            assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
+            std::fs::write(dir.join("pushed"), b"").unwrap();
+            push.ack.painted();
+        }
+        eventually("the click is dispatched", || {
+            load(&room.runtime).is_some_and(|anchor| anchor.state == FocusIntentState::Applied)
+        });
+        assert_eq!(
+            std::fs::read_to_string(dir.join("dispatched")).unwrap(),
+            if cross_tab {
+                "after-push\n"
+            } else {
+                "without-push\n"
+            }
+        );
+        assert_eq!(destination.inbox.try_recv(), Err(Empty));
+        room.host.leave();
+        drop(source);
+        std::fs::remove_file(dir.join("dispatched")).unwrap();
+        if cross_tab {
+            std::fs::remove_file(dir.join("pushed")).unwrap();
+        }
+    }
+}
+
+#[test]
 fn room_events_of_an_unknown_kind_reach_no_attachment() {
     use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
     let room = Room::new();
