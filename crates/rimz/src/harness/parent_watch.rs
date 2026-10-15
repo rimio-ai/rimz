@@ -45,6 +45,13 @@ pub struct WatchdogSeed {
     pub cursor: LogExtent,
 }
 
+impl WatchdogSeed {
+    /// Whether every known parent launch row has ended.
+    pub fn parent_ended(&self) -> bool {
+        !self.members.is_empty() && self.members.values().all(|ended| *ended)
+    }
+}
+
 /// Authoritative answer from the one-shot parent probe.
 pub enum ProbeConfirm {
     Ended,
@@ -165,7 +172,7 @@ impl ParentWatchdog {
     ) -> Self {
         let tail_uncertain = seed.parent_refs.is_empty();
         let next_probe = Instant::now()
-            + if tail_uncertain {
+            + if tail_uncertain || seed.parent_ended() {
                 Duration::ZERO
             } else {
                 probe_interval()
@@ -254,8 +261,7 @@ impl ParentWatchdog {
             return false;
         }
         self.next_probe = now + probe_interval();
-        let ended = !self.seed.members.is_empty() && self.seed.members.values().all(|ended| *ended);
-        let probe = if ended || self.tail_uncertain {
+        let probe = if self.seed.parent_ended() || self.tail_uncertain {
             ParentProbe::Ended
         } else {
             pane_probe(&self.seed, &self.paths.workspace_id)

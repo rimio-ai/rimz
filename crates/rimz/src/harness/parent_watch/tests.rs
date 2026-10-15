@@ -262,6 +262,28 @@ fn seed_to_first_probe_rotation_loses_no_end_frame() {
 }
 
 #[test]
+fn an_ended_seed_confirms_without_waiting_the_probe_interval() {
+    let (_dir, paths, _rt, mut seed) = fixture();
+    seed.members.insert("OLD".into(), true);
+    let calls = Arc::new(Mutex::new(0));
+    let seen = calls.clone();
+    let watch = ParentWatchdog::from_seed(seed, paths, move |_, _| {
+        *seen.lock().unwrap() += 1;
+        ProbeConfirm::Ended
+    })
+    .start();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !watch.parent_ended() {
+        assert!(
+            Instant::now() < deadline,
+            "an end the seed records must not wait the probe interval"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[test]
 fn receipt_mode_wakes_a_sleeping_watch_and_drains_without_a_confirm() {
     let (_dir, paths, _rt, seed) = fixture();
     let watch = ParentWatchdog::from_seed(seed, paths.clone(), |_, _| {

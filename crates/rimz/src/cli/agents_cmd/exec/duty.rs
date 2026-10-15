@@ -257,7 +257,7 @@ fn run_parent_probe(
         cursor,
     )
     .context("parent launch is not in the runtime projection")?;
-    let mut ended = !seed.members.is_empty() && seed.members.values().all(|ended| *ended);
+    let mut ended = seed.parent_ended();
     if pane_strikes
         && !ended
         && let Some(parent_pane) = &seed.parent_pane
