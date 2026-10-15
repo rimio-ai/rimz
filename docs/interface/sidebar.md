@@ -242,7 +242,7 @@ A room with no agents has no make-up line:
 
 ## The agent cards
 
-The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. At the top or bottom, when there is no room to absorb a change, the card moves.
+The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. If collapsing a previous selection would move the newly selected visible card, the previous card stays open until its collapse fits. Only data or configuration changes with no room to absorb them still move the card at the top or bottom.
 
 Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card brings it into view with the least motion; a card taller than the view lands by its first line. A focus from outside the sidebar brings the group header too, but only if the card is off-screen. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection.
 
@@ -284,7 +284,7 @@ A card's lines are set by its stage. Within a stage, data fills in place and no 
 | engaged, with subagents or waits | adds the subagents and waits line |
 | selected | lights the spines and lists the subagent and wait entries below the card |
 
-Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens to its full shape too, with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line: only the selected card lists them, and the spines stay on it. `card_density = "expanded"` lists entries on every card, teammates included.
+Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens to its full shape too, with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its open shape and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` lists entries on every card, teammates included.
 
 `[theme.display] card_density` changes how much a resting card shows:
 

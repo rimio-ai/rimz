@@ -90,6 +90,11 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) anchored_rows: Vec<(String, isize)>,
     /// Row id the last draw treated as selected; a different id is a selection change.
     pub(in crate::sidebar_pane) drawn_selection: Option<String>,
+    /// Renderer-local previous selection sources, including their teammates'
+    /// shapes, kept open until the hold-free layout preserves the selected
+    /// card's row. Written back each draw; departed and live-selected ids drop
+    /// out. Authoritative inputs release all holds.
+    pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
     /// Absolute pane row of the last draw's scroll-zone top.
     pub(in crate::sidebar_pane) scroll_zone_top: usize,
     /// The last draw's anchor correction hit the offset clamp, so the card moved.

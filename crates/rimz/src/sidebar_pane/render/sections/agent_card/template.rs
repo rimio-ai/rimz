@@ -178,9 +178,9 @@ mod tests {
         }
     }
 
-    /// The card shape follows selection alone and the delegation entries follow
-    /// the resolved open state alone, so a selected card can close its entries
-    /// and an unselected one can open them.
+    /// The card shape follows live or held selection and the delegation entries
+    /// follow the resolved open state alone, so a selected card can close its
+    /// entries and an unselected one can open them.
     #[test]
     fn table_pins_every_state_status_density_and_expansion_combination() {
         assert!(ENGAGED_EXPANDED.starts_with(ENGAGED));

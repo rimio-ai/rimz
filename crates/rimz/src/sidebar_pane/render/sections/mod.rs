@@ -13,7 +13,7 @@
 //! This file owns only the shared section primitives — the width tiers and the
 //! gutter every section composes with.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
@@ -54,8 +54,9 @@ pub(super) use provider::{
 };
 pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
 
-/// How far selection reaches a row: the selected row itself, a named teammate
-/// opened alongside it, or neither.
+/// How far live or held selection reaches a row: the source row itself, a named
+/// teammate opened alongside it, or neither. This controls expansion, not
+/// selection styling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SelectionReach {
     Selected,
@@ -71,41 +72,44 @@ impl SelectionReach {
     }
 }
 
-/// How selection reaches this row. A sibling is a teammate only when both rows
-/// belong to the same projected non-external group and share a named team.
+/// The strongest reach from the live selection and held rows. A sibling is a
+/// teammate only when both rows belong to the same projected non-external group
+/// and share a named team.
 pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
     row_index: usize,
     selected_index: Option<usize>,
+    held_expansions: &BTreeSet<String>,
 ) -> SelectionReach {
-    let Some(selected_index) = selected_index else {
-        return SelectionReach::Unreached;
-    };
     let range = group.range();
     if !range.contains(&row_index) {
         return SelectionReach::Unreached;
     }
-    if row_index == selected_index {
-        return SelectionReach::Selected;
+    let sources = selected_index.into_iter().chain(
+        held_expansions
+            .iter()
+            .filter_map(|id| roster.ordinal_of_id(id)),
+    );
+    let mut reach = SelectionReach::Unreached;
+    for source in sources {
+        if row_index == source {
+            return SelectionReach::Selected;
+        }
+        if group.source().kind != SidebarWorktreeKind::External
+            && range.contains(&source)
+            && let Some(team) = roster.row(source).and_then(SidebarRow::team)
+            && roster.row(row_index).and_then(SidebarRow::team) == Some(team)
+        {
+            reach = SelectionReach::Teammate;
+        }
     }
-    if group.source().kind == SidebarWorktreeKind::External || !range.contains(&selected_index) {
-        return SelectionReach::Unreached;
-    }
-    let Some(selected_team) = roster.row(selected_index).and_then(SidebarRow::team) else {
-        return SelectionReach::Unreached;
-    };
-    if roster.row(row_index).and_then(SidebarRow::team) == Some(selected_team) {
-        SelectionReach::Teammate
-    } else {
-        SelectionReach::Unreached
-    }
+    reach
 }
 
-/// What a card opens: the full card shape follows selection, teammates
-/// included, while the delegation section's entries follow the sticky header
-/// override when one is set and otherwise open for the selected row alone or
-/// under `expanded` density.
+/// What a card opens: the full shape follows live or held selection, teammates
+/// included. Delegation entries follow the sticky header override, else open
+/// for a live or held source row or under `expanded` density.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CardExpansion {
     pub(super) by_selection: bool,
@@ -147,6 +151,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) stalled_after_secs: u32,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
+    pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
     pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
