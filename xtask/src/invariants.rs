@@ -295,6 +295,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "grok",
         "kimi",
         "kiro",
+        "minimax",
         "opencode",
         "pi",
         "qwen",
@@ -310,6 +311,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "GrokAdapter",
         "KimiAdapter",
         "KiroAdapter",
+        "MiniMaxAdapter",
         "OpencodeAdapter",
         "PiAdapter",
         "QwenAdapter",
@@ -1808,6 +1810,8 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "QWEN_RUNTIME_DIR",
         "GROK_HOME",
         "GROK_AUTH_PATH",
+        "MINIMAX_DATA_DIR",
+        "MAVIS_DATA_DIR",
     ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(

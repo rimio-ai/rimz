@@ -19,6 +19,7 @@ use crate::common::{
 };
 
 mod drain;
+mod minimax;
 
 #[test]
 fn failed_hook_feed_records_one_machine_diagnostic_without_changing_exit() {
