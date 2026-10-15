@@ -1798,12 +1798,22 @@ fn permission_mode_table_matches_the_declared_arguments() {
             label == "Process plugin" || AGENTS.iter().any(|(display, _)| *display == label),
             "{DOC} Permission modes has a row for {label}, which is no built-in"
         );
+        assert_eq!(
+            row.len(),
+            header.len(),
+            "{DOC} Permission modes: the {label} row has {} cells; the header has {}",
+            row.len(),
+            header.len()
+        );
     }
     for (display, kind) in AGENTS {
-        let row = body
-            .iter()
-            .find(|row| row[0] == display)
-            .unwrap_or_else(|| panic!("{DOC} Permission modes has no row for {display}"));
+        let matches: Vec<_> = body.iter().filter(|row| row[0] == display).collect();
+        let [row] = matches.as_slice() else {
+            panic!(
+                "{DOC} Permission modes has {} rows for {display}; expected one",
+                matches.len()
+            );
+        };
         let adapter = BUILTINS
             .iter()
             .find(|adapter| adapter.spec().kind == kind)
@@ -1815,7 +1825,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
             } else {
                 format!("`{}`", args.join(" "))
             };
-            let published = row.get(column + 1).map_or("", String::as_str);
+            let published = row[column + 1].as_str();
             assert_eq!(
                 published, declared,
                 "{DOC} Permission modes: {display} {label} publishes {published}; \
