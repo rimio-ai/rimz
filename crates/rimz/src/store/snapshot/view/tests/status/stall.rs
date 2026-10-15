@@ -38,7 +38,6 @@ fn repeated_tool_loop_escalates_and_self_clears() {
     let mut session = agent("claude", "live-claude", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1");
-    session.last_activity = ago(1);
     let repeat = crate::agent_activity::ToolRepeat {
         digest: "digest".to_owned(),
         tool: "Bash".to_owned(),
@@ -53,12 +52,15 @@ fn repeated_tool_loop_escalates_and_self_clears() {
         repeat: Some(repeat),
     };
 
-    let looping = room(vec![session.clone()])
-        .with_agent_activity(&[touch])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-    let row = &looping.worktree_groups[0].rows[0];
-    assert_eq!(row.status(), Some(AgentStatus::Failed));
-    assert_eq!(row.turn_error_label(), Some("loop: Bash ×20"));
+    for last_activity in [ago(1), epoch()] {
+        session.last_activity = last_activity;
+        let looping = room(vec![session.clone()])
+            .with_agent_activity(std::slice::from_ref(&touch))
+            .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+        let row = &looping.worktree_groups[0].rows[0];
+        assert_eq!(row.status(), Some(AgentStatus::Failed));
+        assert_eq!(row.turn_error_label(), Some("loop: Bash ×20"));
+    }
 
     session.tool_repeat = None;
     let recovered =

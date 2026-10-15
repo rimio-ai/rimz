@@ -51,6 +51,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             store.runtime_paths(),
             agent.spec().kind,
             agent_id,
+            rimz::harness::hook_drain::frame_timestamp(),
         )
     {
         warn!(
@@ -124,6 +125,7 @@ pub(super) fn touch_agent_activity(
         agent_id,
         run,
         tool_used,
+        rimz::harness::hook_drain::frame_timestamp(),
     ) {
         Ok(count)
             if count

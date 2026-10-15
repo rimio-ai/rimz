@@ -174,6 +174,99 @@ fn cold_apply_frame_reads_one_carryover_and_resolves_git_once() {
 }
 
 #[test]
+fn delayed_progress_hook_preserves_credit_limit_park_instead_of_stall() {
+    use rimz::agents::{
+        AgentContext, AgentState, AgentStatus, AgentTurnError, PermissionMode, TurnErrorClass,
+    };
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::run::{RunRecord, RunStatus};
+    use rimz::store::snapshot::SidebarSnapshot;
+    use std::time::Duration;
+
+    let (dir, store) = hooks_test_store();
+    let now = jiff::Timestamp::now();
+    let ingress_at = now - Duration::from_secs(10);
+    let marker_at = now - Duration::from_secs(5);
+    let label = "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.";
+    let parent = AgentState::stub("claude", "parent", AgentStatus::Sleeping);
+    let mut child = AgentState::stub("codex", "child", AgentStatus::Running);
+    child.parent_agent_id = Some(parent.agent_id.clone());
+    child.parent_agent_kind = Some(parent.kind.clone());
+    child.launch_depth = Some(1);
+    child.last_activity = ingress_at - Duration::from_secs(1);
+    let mut context = AgentContext::new("codex", marker_at);
+    context.turn_error = Some(AgentTurnError {
+        class: TurnErrorClass::PausedRateLimit,
+        at: marker_at,
+        label: Some(label.to_owned()),
+    });
+    child.context = Some(context);
+    let mut run = RunRecord::new(
+        store.paths().workspace_id.clone(),
+        child.kind.clone(),
+        PermissionMode::Auto,
+        "task".into(),
+        "/tmp/hooks-test".into(),
+    );
+    run.subagent = true;
+    run.status = RunStatus::Running;
+    run.agent_id = Some(child.agent_id.clone());
+    let payload = serde_json::json!({"session_id": "child", "tool_name": "Bash", "tool_input": {"command": "true"}});
+    let frame = rimz::store::ingress::HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::EventId::new(),
+        ts: ingress_at,
+        source: child.kind.clone(),
+        event: Some("PostToolUse".into()),
+        payload: payload.to_string(),
+        cwd: "/tmp/hooks-test".into(),
+        hook_pid: std::process::id(),
+        env: std::collections::BTreeMap::from([(
+            "HOME".into(),
+            dir.path().to_string_lossy().into_owned(),
+        )]),
+    };
+    let adapter = rimz::agents::definition_by_kind("codex").unwrap();
+    with_frame_env(&frame, FrameAttempt::First, || {
+        let mut decoded = adapter.decode_hook("PostToolUse", &payload).unwrap();
+        handle_lifecycle_hook(
+            &hooks_test_workspace(None),
+            &store.for_hook_ingress(frame.event_id.clone(), frame.ts),
+            adapter,
+            &mut decoded,
+            &payload,
+            rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+            &hooks_test_globals(),
+        )
+        .unwrap();
+    });
+    let activity = rimz::agent_activity::read_for_keys(store.runtime_paths(), [("codex", "child")]);
+    let snapshot = SidebarSnapshot::build_with_agents(
+        store.paths().workspace_id.clone(),
+        vec![parent, child],
+        now,
+    )
+    .with_agent_activity(&activity);
+    let park = rimz::harness::park_notice::unnoticed_park(&run, &snapshot.agents)
+        .expect("delayed hook apply must not hide the child's credit-limit park");
+    let (class, error) = park.child.displayed_turn_error().unwrap();
+    assert_eq!(class, TurnErrorClass::PausedRateLimit);
+    assert_eq!(error.label.as_deref(), Some(label));
+    assert_eq!(park.child.last_activity, ingress_at);
+    assert_eq!(activity[0].tool_at, Some(ingress_at));
+    assert!(
+        rimz::harness::stall_notice::unnoticed_stall(
+            &run,
+            &snapshot.agents,
+            now + Duration::from_secs(1_800),
+            1_800,
+        )
+        .is_none(),
+        "the limit marker suppresses silent_child_for even past the stall window"
+    );
+}
+
+#[test]
 fn lifecycle_records_pane_roles_for_roots_and_native_children() {
     use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
     use rimz::harness::launch::{ENV_AGENT_PROFILE, ENV_RUN_ID};
