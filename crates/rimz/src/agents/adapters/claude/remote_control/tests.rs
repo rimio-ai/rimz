@@ -307,14 +307,14 @@ fn pane_auto_status_uses_account_version_for_auth_gate() {
     );
     assert!(pane_auto_enabled_from(
         &conflict,
-        Some(CliVersion::new(2, 1, 156)),
+        Some(CliVersion::new(2, 1, 138)),
         false,
         false,
         None,
     ));
     assert!(!pane_auto_enabled_from(
         &conflict,
-        Some(CliVersion::new(2, 1, 157)),
+        Some(CliVersion::new(2, 1, 139)),
         false,
         false,
         None,
@@ -546,15 +546,15 @@ fn readiness_blocks_old_versions_and_disabled_settings() {
 }
 
 #[test]
-fn readiness_auth_conflict_gate_starts_at_2_1_157() {
+fn readiness_auth_conflict_gate_starts_at_2_1_139() {
     let settings = ClaudeRcSettings {
         api_key_helper: true,
         env_auth_conflict: true,
         ..readiness_settings()
     };
-    assert!(decision(v(156), settings.clone(), true, true, true).is_ok());
+    assert!(decision(v(138), settings.clone(), true, true, true).is_ok());
     assert_eq!(
-        decision(v(157), settings, true, true, true),
+        decision(v(139), settings, true, true, true),
         Err(Issue::AuthConflict {
             sources: vec![
                 AuthConflictSource::ApiKeyEnv,

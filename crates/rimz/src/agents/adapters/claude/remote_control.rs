@@ -15,7 +15,7 @@ use super::install::{claude_settings_path, read_existing_json};
 use super::remote_consent;
 
 pub(crate) const MIN_REMOTE_CONTROL: CliVersion = CliVersion::new(2, 1, 51);
-pub(crate) const AUTH_ENV_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 157);
+pub(crate) const AUTH_ENV_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 139);
 pub(crate) const CUSTOM_ENDPOINT_BLOCKS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 196);
 
 const FALLBACK_SETTINGS_PATH: &str = "~/.claude/settings.json";
