@@ -927,33 +927,51 @@ fn inline_drain_stops_at_the_hook_reply_deadline() {
         hook,
         &json!({"hook_event_name": "Stop", "session_id": "deadline-stop"}).to_string(),
     );
-    let deadline = Instant::now() + Duration::from_millis(2500);
-    let completed = loop {
+    let hook_pid = child.id();
+    // Caps the run well under the 30 s `LOCK_WAIT` a drain ignoring its
+    // deadline would spend on the held workspace.lock.
+    let cap = Instant::now() + Duration::from_secs(15);
+    let exited_at = loop {
         if child.try_wait().unwrap().is_some() {
-            break true;
+            break Some(Timestamp::now());
         }
-        if Instant::now() >= deadline {
-            break false;
+        if Instant::now() >= cap {
+            break None;
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    if !completed {
+    if exited_at.is_none() {
         child.kill().unwrap();
     }
     let output = child.wait_with_output().unwrap();
     assert!(
-        completed,
+        exited_at.is_some(),
         "an inline drain must not wait past the hook deadline to start a frame"
     );
     assert!(output.status.success(), "{output:?}");
     drop(workspace);
+    let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
+    let hook_frame = frames
+        .iter()
+        .map(|(frame, _)| frame)
+        .find(|frame| frame.hook_pid == hook_pid)
+        .expect("the hook appends its own frame");
+    // Clocked from the hook's frame stamp, taken after exec and startup, so a
+    // slow start under load does not count. The bound covers `REPLY_WAIT`
+    // (1,200 ms) plus slack for the append, the failed drainer spawns, exit,
+    // and the poll interval.
+    let drained_in = exited_at.unwrap().duration_since(hook_frame.ts);
+    assert!(
+        drained_in <= jiff::SignedDuration::from_millis(2500),
+        "an inline drain must not wait past the hook deadline to start a frame: \
+         {drained_in:#} from the hook's frame stamp to its exit"
+    );
     assert!(derived(&env, &frame.event_id).is_empty());
     assert_eq!(
         ingress::read_cursor(store.paths()).unwrap(),
         HookDrainCursor::default(),
         "a frame reached with no time left must not be claimed"
     );
-    let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
     assert_eq!(frames.len(), 2, "both frames must remain pending");
 }
 
