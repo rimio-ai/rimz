@@ -116,6 +116,31 @@ fn authoritative_wheel_paint_releases_a_collapse_hold() {
 }
 
 #[test]
+fn growth_above_releases_a_collapse_hold_without_authoritative_input() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut ui = selected_ui();
+    ui.delegation_overrides.insert("codex-1".into(), true);
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert_eq!(ui.held_expansions, ["codex-0".into()].into());
+    assert!(
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45)
+            .contains("survey area 0-")
+    );
+
+    // The already-open card above gains children, making room to collapse.
+    let grown = delegation_fleet(&[0, 1]);
+    assert!(!ui.offset_authoritative);
+    assert_eq!(paint_card_row(&grown, &mut ui, "task-2", 45), before);
+    assert!(!ui.anchor_clamped);
+    assert!(ui.held_expansions.is_empty());
+    let screen = snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, 54, 45);
+    assert!(!screen.contains("survey area 0-"));
+    assert!(screen.contains("survey area 1-"));
+}
+
+#[test]
 fn collapse_holds_accumulate_across_clicks_at_the_top() {
     let snapshot = delegation_fleet(&[0, 1]);
     let mut ui = selected_ui();
@@ -160,9 +185,12 @@ fn offscreen_selection_releases_the_previous_card_and_reveals() {
 fn collapse_hold_drops_departed_and_live_selection_ids() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
-    ui.held_expansions = ["codex-0".into(), "departed".into()].into();
-    paint_card_row(&snapshot, &mut ui, "task-2", 45);
-    assert!(ui.held_expansions.is_empty());
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    ui.held_expansions = ["codex-2".into(), "departed".into()].into();
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert!(!ui.anchor_clamped);
+    assert_eq!(ui.held_expansions, ["codex-0".into()].into());
 }
 
 fn paint_card_row(snapshot: &SidebarSnapshot, ui: &mut UiState, task: &str, height: u16) -> usize {
