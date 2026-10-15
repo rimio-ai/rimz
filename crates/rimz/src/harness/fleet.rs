@@ -1,8 +1,9 @@
 //! Shared settlement rules for a launcher's fleet runs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::agents::AgentState;
+use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::run::{ReportTo, RunRecord};
 
 /// Newest run of one launched child.
@@ -20,6 +21,284 @@ pub(super) fn has_members(agents: &[AgentState], launcher: &AgentState) -> bool 
 
 /// Newest non-peer run and all open or unclaimed peer turns per member, deduplicated by run id and ordered as `address::launched_fleet` orders its members. A member whose selected run reports to nobody has no row.
 pub struct FleetRuns<'a>(Vec<(&'a AgentState, &'a RunRecord)>);
+
+type AgentKey = (AgentKind, AgentSessionId);
+
+#[derive(Hash, PartialEq, Eq)]
+enum RunMatchKey {
+    Session(AgentKind, AgentSessionId),
+    Launch(AgentKind, AgentSessionId),
+    Name(AgentKind, String),
+}
+
+#[derive(Default)]
+struct SelectedRuns<'a> {
+    newest: Option<(usize, &'a RunRecord)>,
+    peers: Vec<(usize, &'a RunRecord)>,
+}
+
+#[derive(Default)]
+struct LaunchRows {
+    answers: HashMap<AgentKey, Vec<usize>>,
+    launches: HashMap<AgentKey, Vec<usize>>,
+    aliases: HashMap<AgentKey, Option<AgentSessionId>>,
+}
+
+impl LaunchRows {
+    fn new(agents: &[AgentState]) -> Self {
+        let mut rows = Self::default();
+        for (index, agent) in agents
+            .iter()
+            .enumerate()
+            .filter(|(_, agent)| !agent.is_provider_subagent())
+        {
+            rows.aliases
+                .entry((agent.kind.clone(), agent.agent_id.clone()))
+                .or_insert_with(|| agent.launch_id.clone());
+            let ids: HashSet<_> = agent.identity_ids().collect();
+            for id in ids {
+                rows.answers
+                    .entry((agent.kind.clone(), id.clone()))
+                    .or_default()
+                    .push(index);
+            }
+            if let Some(id) = &agent.launch_id {
+                rows.launches
+                    .entry((agent.kind.clone(), id.clone()))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        rows
+    }
+
+    fn members(&self, kind: &AgentKind, id: &AgentSessionId) -> Vec<usize> {
+        let key = (kind.clone(), id.clone());
+        let mut members = self.answers.get(&key).cloned().unwrap_or_default();
+        if let Some(Some(alias)) = self.aliases.get(&key)
+            && let Some(siblings) = self.launches.get(&(kind.clone(), alias.clone()))
+        {
+            members.extend(siblings);
+            members.sort_unstable();
+            members.dedup();
+        }
+        members
+    }
+}
+
+/// One projection's keyed fleet joins; member and run order match [`FleetRuns::of`].
+pub(super) struct FleetRunIndex<'a> {
+    agents: &'a [AgentState],
+    members: Vec<Vec<usize>>,
+    selected: HashMap<RunMatchKey, SelectedRuns<'a>>,
+    teams: Vec<Vec<&'a RunRecord>>,
+}
+
+impl<'a> FleetRunIndex<'a> {
+    pub(super) fn new(agents: &'a [AgentState], runs: &'a [RunRecord]) -> Self {
+        let launch_rows = LaunchRows::new(agents);
+        let mut children: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        let mut launchers: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        for (index, agent) in agents.iter().enumerate() {
+            if !agent.is_team_seat()
+                && let Some((kind, id)) = agent.launcher()
+            {
+                children
+                    .entry((kind.clone(), id.clone()))
+                    .or_default()
+                    .push(index);
+            }
+            let ids: HashSet<_> = agent.identity_ids().collect();
+            for id in ids {
+                launchers
+                    .entry((agent.kind.clone(), id.clone()))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        let mut fleets: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        let members = agents
+            .iter()
+            .map(|launcher| {
+                let key = (
+                    launcher.kind.clone(),
+                    launcher
+                        .launch_id
+                        .as_ref()
+                        .unwrap_or(&launcher.agent_id)
+                        .clone(),
+                );
+                let group = fleets.entry(key.clone()).or_insert_with(|| {
+                    let group = launch_rows.members(&key.0, &key.1);
+                    let mut keys = HashSet::new();
+                    for member in group.iter().map(|index| &agents[*index]) {
+                        for id in member.identity_ids() {
+                            keys.insert((member.kind.clone(), id.clone()));
+                        }
+                    }
+                    let mut members: Vec<_> = keys
+                        .iter()
+                        .filter_map(|key| children.get(key))
+                        .flatten()
+                        .copied()
+                        .collect();
+                    members.sort_unstable();
+                    members.dedup();
+                    members.sort_by_key(|index| {
+                        (
+                            agents[*index].registered_at,
+                            agents[*index].agent_id.clone(),
+                        )
+                    });
+                    members
+                });
+                let mut members = group.clone();
+                if launcher.is_provider_subagent() {
+                    for id in launcher.identity_ids() {
+                        if let Some(direct) = children.get(&(launcher.kind.clone(), id.clone())) {
+                            members.extend(direct);
+                        }
+                    }
+                    members.sort_unstable();
+                    members.dedup();
+                    members.sort_by_key(|index| {
+                        (
+                            agents[*index].registered_at,
+                            agents[*index].agent_id.clone(),
+                        )
+                    });
+                }
+                members
+            })
+            .collect();
+        let mut selected: HashMap<RunMatchKey, SelectedRuns<'a>> = HashMap::new();
+        let mut teams = vec![Vec::new(); agents.len()];
+        let mut team_launchers: HashMap<AgentKey, Vec<usize>> = HashMap::new();
+        for (run_index, run) in runs.iter().enumerate() {
+            let mut keys = Vec::new();
+            if let Some(peer) = &run.peer {
+                keys.push(RunMatchKey::Launch(
+                    run.kind.clone(),
+                    peer.launch_id.clone(),
+                ));
+                if let Some(id) = &run.agent_id {
+                    keys.push(RunMatchKey::Session(run.kind.clone(), id.clone()));
+                }
+            } else if let Some(team) = &run.team {
+                keys.push(RunMatchKey::Launch(
+                    run.kind.clone(),
+                    team.launch_id.clone(),
+                ));
+            } else {
+                if let Some(id) = &run.agent_id {
+                    keys.push(RunMatchKey::Session(run.kind.clone(), id.clone()));
+                }
+                if let Some(name) = &run.agent_name {
+                    keys.push(RunMatchKey::Name(run.kind.clone(), name.clone()));
+                }
+            }
+            for key in keys {
+                let selected = selected.entry(key).or_default();
+                if run.peer.is_some() {
+                    if !run.status.is_terminal() || run.owes_report() {
+                        selected.peers.push((run_index, run));
+                    }
+                } else if selected
+                    .newest
+                    .is_none_or(|(_, previous)| previous.started_at <= run.started_at)
+                {
+                    selected.newest = Some((run_index, run));
+                }
+            }
+            if !run.status.is_terminal()
+                && run.report_to == ReportTo::Launcher
+                && let Some(team) = &run.team
+            {
+                let owners = team_launchers
+                    .entry((run.kind.clone(), team.launch_id.clone()))
+                    .or_insert_with(|| {
+                        let group = launch_rows.members(&run.kind, &team.launch_id);
+                        crate::address::launch_row(
+                            group.iter().map(|index| &agents[*index]),
+                            &run.kind,
+                            &team.launch_id,
+                        )
+                        .and_then(|leader| leader.launcher())
+                        .and_then(|(kind, id)| launchers.get(&(kind.clone(), id.clone())))
+                        .cloned()
+                        .unwrap_or_default()
+                    });
+                for index in owners {
+                    teams[*index].push(run);
+                }
+            }
+        }
+        Self {
+            agents,
+            members,
+            selected,
+            teams,
+        }
+    }
+
+    pub(super) fn of(&self, launcher: usize) -> FleetRuns<'a> {
+        let mut seen = HashSet::new();
+        let mut seen_groups = HashSet::new();
+        let mut fleet = Vec::new();
+        for index in &self.members[launcher] {
+            let child = &self.agents[*index];
+            let mut keys = vec![
+                RunMatchKey::Session(child.kind.clone(), child.agent_id.clone()),
+                RunMatchKey::Launch(child.kind.clone(), child.agent_id.clone()),
+            ];
+            if let Some(id) = &child.launch_id
+                && id != &child.agent_id
+            {
+                keys.push(RunMatchKey::Launch(child.kind.clone(), id.clone()));
+            }
+            if let Some(name) = &child.name {
+                keys.push(RunMatchKey::Name(child.kind.clone(), name.clone()));
+            }
+            let groups: Vec<_> = keys
+                .iter()
+                .filter_map(|key| self.selected.get_key_value(key))
+                .collect();
+            let newest = groups
+                .iter()
+                .filter_map(|(_, selected)| selected.newest)
+                .max_by_key(|(index, run)| (run.started_at, *index));
+            if let Some((_, run)) = newest
+                && run.report_to == ReportTo::Launcher
+                && seen.insert(&run.run_id)
+            {
+                fleet.push((child, run));
+            }
+            let mut peers: Vec<_> = groups
+                .into_iter()
+                .filter(|(key, _)| seen_groups.insert(*key))
+                .map(|(_, selected)| selected.peers.iter().peekable())
+                .collect();
+            while let Some(source) = peers
+                .iter_mut()
+                .enumerate()
+                .filter_map(|(source, peers)| peers.peek().map(|(index, _)| (source, *index)))
+                .min_by_key(|(_, index)| *index)
+                .map(|(source, _)| source)
+            {
+                // The selected source was just peeked and cannot be empty.
+                let (_, run) = peers[source].next().expect("peeked peer run");
+                if run.report_to == ReportTo::Launcher && seen.insert(&run.run_id) {
+                    fleet.push((child, *run));
+                }
+            }
+        }
+        FleetRuns(fleet)
+    }
+
+    pub(super) fn owed_team_runs(&self, launcher: usize) -> &[&'a RunRecord] {
+        &self.teams[launcher]
+    }
+}
 
 /// Open team runs report once at Done, separately from the per-member fleet digest.
 fn open_team_runs<'a, 'agents>(
@@ -156,6 +435,52 @@ mod tests {
     use crate::ids::{AgentKind, WorkspaceId};
     use jiff::Timestamp;
 
+    fn fleet_runs<'a>(
+        agents: &'a [AgentState],
+        runs: &'a [RunRecord],
+        launcher: &AgentState,
+    ) -> FleetRuns<'a> {
+        let fleet = FleetRuns::of(agents, runs, launcher);
+        let Some(launcher) = agents.iter().position(|agent| agent == launcher) else {
+            return fleet;
+        };
+        let indexed = FleetRunIndex::new(agents, runs);
+        assert_eq!(
+            indexed
+                .of(launcher)
+                .0
+                .iter()
+                .map(|(agent, run)| (&agent.agent_id, &run.run_id))
+                .collect::<Vec<_>>(),
+            fleet
+                .0
+                .iter()
+                .map(|(agent, run)| (&agent.agent_id, &run.run_id))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            indexed
+                .owed_team_runs(launcher)
+                .iter()
+                .map(|run| &run.run_id)
+                .collect::<Vec<_>>(),
+            owed_team_runs(agents, runs, &agents[launcher])
+                .iter()
+                .map(|run| &run.run_id)
+                .collect::<Vec<_>>()
+        );
+        fleet
+    }
+
+    fn owed_runs<'a>(
+        agents: &'a [AgentState],
+        runs: &'a [RunRecord],
+        launcher: &AgentState,
+    ) -> Vec<&'a RunRecord> {
+        fleet_runs(agents, runs, launcher);
+        owed_team_runs(agents, runs, launcher)
+    }
+
     #[test]
     fn peer_fleet_keeps_each_unclaimed_turn_and_rejects_reused_names() {
         let parent = AgentState::stub("codex", "parent", AgentStatus::Idle);
@@ -182,17 +507,17 @@ mod tests {
         second.run_id = crate::ids::RunId::new();
         let mut runs = vec![first, second];
         let agents = [parent.clone(), child.clone()];
-        assert_eq!(FleetRuns::of(&agents, &runs, &parent).unreported().len(), 2);
-        assert_eq!(FleetRuns::of(&agents, &runs, &parent).unsettled().len(), 2);
+        assert_eq!(fleet_runs(&agents, &runs, &parent).unreported().len(), 2);
+        assert_eq!(fleet_runs(&agents, &runs, &parent).unsettled().len(), 2);
         runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
         runs[1].report_message_id = Some(crate::MessageId::new());
-        assert!(FleetRuns::of(&agents, &runs, &parent).settled().is_empty());
+        assert!(fleet_runs(&agents, &runs, &parent).settled().is_empty());
         runs[0].status = crate::store::run::RunStatus::Running;
-        assert!(FleetRuns::of(&agents, &runs, &parent).any_running());
+        assert!(fleet_runs(&agents, &runs, &parent).any_running());
         value["peer"]["launch_id"] = serde_json::json!("old-launch");
         let old: RunRecord = serde_json::from_value(value).unwrap();
         assert!(newest_run(&child, std::slice::from_ref(&old)).is_none());
-        assert!(FleetRuns::of(&agents, &[old], &parent).is_empty());
+        assert!(fleet_runs(&agents, &[old], &parent).is_empty());
         child.launch_id = None;
         child.agent_id = "launch".into();
         assert!(newest_run(&child, &runs).is_some());
@@ -250,7 +575,7 @@ mod tests {
         assert!(team_cohort_gone(&[], "forge#feat-x"));
         runs[0].report_to = crate::store::run::ReportTo::Nobody;
         assert!(
-            owed_team_runs(&agents, &runs, &parent).is_empty(),
+            owed_runs(&agents, &runs, &parent).is_empty(),
             "a detached team owes its launcher no Done"
         );
         assert_eq!(
@@ -259,7 +584,7 @@ mod tests {
             "a dead detached cohort still settles its run"
         );
         runs[0].report_to = crate::store::run::ReportTo::Launcher;
-        assert_eq!(owed_team_runs(&agents, &runs, &parent).len(), 1);
+        assert_eq!(owed_runs(&agents, &runs, &parent).len(), 1);
         runs[0].status = crate::store::run::RunStatus::Completed;
         assert!(open_team_runs(&agents, &runs, &parent).is_empty());
         assert!(ended_team_runs(&agents, &runs, &parent).is_empty());
@@ -329,11 +654,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let agents = [vec![parent.clone()], children.to_vec()].concat();
-        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let fleet = fleet_runs(&agents, &runs, &parent);
         assert!(fleet.any_running());
         assert!(fleet.unreported().is_empty());
         runs[1].status = crate::store::run::RunStatus::Completed;
-        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let fleet = fleet_runs(&agents, &runs, &parent);
         let unsettled = fleet.unsettled();
         assert_eq!(unsettled.len(), 2);
         let ordered = crate::address::launched_fleet(&agents, &parent);
@@ -342,7 +667,7 @@ mod tests {
         for run in &mut runs {
             run.status = crate::store::run::RunStatus::Completed;
         }
-        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let fleet = fleet_runs(&agents, &runs, &parent);
         assert!(!fleet.any_running());
         let settled = fleet.unreported();
         assert_eq!(settled.len(), 2, "the alias shares its run with `first`");
@@ -350,17 +675,9 @@ mod tests {
         assert_eq!(settled[0].0.agent_id, ordered[0].agent_id);
         runs[0].joined_at = Some(Timestamp::UNIX_EPOCH);
         runs[1].report_message_id = Some(crate::MessageId::new());
-        assert!(
-            FleetRuns::of(&agents, &runs, &parent)
-                .unsettled()
-                .is_empty()
-        );
-        assert!(
-            FleetRuns::of(&agents, &runs, &parent)
-                .unreported()
-                .is_empty()
-        );
-        assert!(FleetRuns::of(&agents, &[], &parent).is_empty());
+        assert!(fleet_runs(&agents, &runs, &parent).unsettled().is_empty());
+        assert!(fleet_runs(&agents, &runs, &parent).unreported().is_empty());
+        assert!(fleet_runs(&agents, &[], &parent).is_empty());
         runs[0].joined_at = None;
         runs[0].report_to = crate::store::run::ReportTo::Nobody;
         runs[0].status = crate::store::run::RunStatus::Running;
@@ -371,7 +688,7 @@ mod tests {
         attached_before.status = crate::store::run::RunStatus::Completed;
         attached_before.started_at = runs[0].started_at - std::time::Duration::from_secs(60);
         runs.push(attached_before);
-        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let fleet = fleet_runs(&agents, &runs, &parent);
         assert!(
             !fleet.any_running(),
             "a running detached member holds nobody"
@@ -381,7 +698,7 @@ mod tests {
         assert_eq!(unreported[0].1.run_id, runs[1].run_id);
         assert_eq!(fleet.unsettled().len(), 1);
         runs[0].status = crate::store::run::RunStatus::Completed;
-        let fleet = FleetRuns::of(&agents, &runs, &parent);
+        let fleet = fleet_runs(&agents, &runs, &parent);
         assert_eq!(
             fleet.unreported().len(),
             1,
