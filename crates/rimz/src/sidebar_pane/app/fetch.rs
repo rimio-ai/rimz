@@ -1852,7 +1852,7 @@ impl FetchWorker {
         // Several renderers share this worker: one cycle answers every
         // request already waiting, and none a published cycle answered.
         let covered = sink.covered.clone();
-        drive(&request_rx, &covered, |cycle| {
+        drive(&request_rx, &covered, FOLD_FLOOR, |cycle| {
             sink.answering = Some(cycle);
             // Re-resolved every cycle so `workspace migrate` repoints reads
             // without restarting the renderer.
@@ -1935,7 +1935,8 @@ impl Coverage {
 /// final outcome, before sending it, so every renderer the cycle serves either
 /// finds its next request answered here or receives that outcome after asking.
 /// A request observed while a cycle runs costs one more cycle, never a lost
-/// change.
+/// change; one observed during the post-cycle rest merges into the next cycle,
+/// whose start stamp follows that rest.
 #[derive(Clone, Default)]
 pub(super) struct Covered(Arc<Mutex<Option<Coverage>>>);
 
@@ -1961,15 +1962,29 @@ impl Covered {
     }
 }
 
-/// Run one cycle per batch of waiting requests, dropping every request the
-/// last answered cycle covers. `cycle` records itself in `covered` once its
-/// final outcome goes out.
+/// The worker's idle gap after each cycle returns: an end-to-start gap bounds
+/// its duty cycle even when one cycle takes longer than the gap.
+const FOLD_FLOOR: Duration = Duration::from_millis(250);
+
+/// Run one cycle per batch, starting none sooner than `fold_floor` after the
+/// previous one returned, whatever the request's mode or flags. Requests that
+/// arrive during the rest join the same merge and coverage filter, and a batch
+/// in hand still runs after every sender disconnects. Coverage is stamped after
+/// the rest, outside the cycle's tick meter. `cycle` records itself in
+/// `covered` before publishing its final outcome.
 fn drive(
     requests: &std::sync::mpsc::Receiver<FetchRequest>,
     covered: &Covered,
+    fold_floor: Duration,
     mut cycle: impl FnMut(Coverage),
 ) {
+    let mut next_cycle_at: Option<Instant> = None;
     while let Ok(first) = requests.recv() {
+        if let Some(rest) =
+            next_cycle_at.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+        {
+            std::thread::sleep(rest);
+        }
         let last = covered.last();
         let mut batch: Option<FetchRequest> = None;
         let waiting = std::iter::once(first).chain(std::iter::from_fn(|| requests.try_recv().ok()));
@@ -1984,6 +1999,7 @@ fn drive(
                 started: Instant::now(),
                 request,
             });
+            next_cycle_at = Some(Instant::now() + fold_floor);
         }
     }
 }

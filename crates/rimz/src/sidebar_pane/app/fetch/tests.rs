@@ -2136,6 +2136,150 @@ fn tick_clock() {
 }
 
 #[test]
+fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
+    let floor = Duration::from_millis(150);
+    let covered = Covered::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    let worker_covered = covered.clone();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(move || {
+            let mut cycles = Vec::new();
+            drive(&rx, &worker_covered, floor, |cycle| {
+                cycles.push(cycle);
+                worker_covered.record(cycle);
+                if cycles.len() == 1 {
+                    // A start-to-start floor would already have expired.
+                    std::thread::sleep(floor + Duration::from_millis(10));
+                    finished_tx.send(Instant::now()).unwrap();
+                }
+            });
+            cycles
+        });
+        let returned_at = finished_rx.recv().unwrap();
+        tx.send(FetchRequest::default()).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let during_wait = FetchRequest {
+            min_pane_cache_ms: Some(20),
+            ..FetchRequest::fresh_panes()
+        };
+        tx.send(during_wait).unwrap();
+        tx.send(FetchRequest {
+            min_pane_cache_ms: Some(10),
+            ..FetchRequest::default()
+        })
+        .unwrap();
+        drop(tx);
+
+        let cycles = worker.join().unwrap();
+        assert!(cycles[1].started.duration_since(returned_at) >= floor);
+        assert_eq!(
+            cycles.len(),
+            2,
+            "requests during the gap merge into one fold"
+        );
+        assert_eq!(cycles[1].request.mode, FetchMode::FreshPanes);
+        assert_eq!(cycles[1].request.min_pane_cache_ms, Some(20));
+        assert!(!cycles[0].answers(&during_wait));
+        assert!(cycles[1].answers(&during_wait));
+        assert!(covered.answers(&during_wait));
+    });
+}
+
+#[test]
+fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
+    let floor = Duration::from_millis(150);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    tx.send(FetchRequest::default()).unwrap();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(move || {
+            let mut cycles = Vec::new();
+            drive(&rx, &Covered::default(), floor, |cycle| {
+                cycles.push(cycle);
+                if cycles.len() == 1 {
+                    finished_tx.send(()).unwrap();
+                }
+            });
+            cycles
+        });
+        finished_rx.recv().unwrap();
+        std::thread::sleep(floor * 2);
+        let request = FetchRequest::default();
+        tx.send(request).unwrap();
+        drop(tx);
+        let cycles = worker.join().unwrap();
+        assert_eq!(cycles.len(), 2);
+        assert!(cycles[1].started.duration_since(request.observed_at) < floor);
+    });
+}
+
+#[test]
+fn fetch_floor_has_no_refresh_or_forced_fold_bypass() {
+    let floor = Duration::from_millis(40);
+    for request in [
+        FetchRequest::default(),
+        FetchRequest::fresh_panes(),
+        FetchRequest::hard_refresh(),
+        FetchRequest::force_fold(),
+    ] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(FetchRequest::default()).unwrap();
+        let mut sender = Some(tx);
+        let mut returned_at = None;
+        let mut cycles = Vec::new();
+        drive(&rx, &Covered::default(), floor, |cycle| {
+            cycles.push(cycle);
+            if let Some(tx) = sender.take() {
+                tx.send(request.observed_now()).unwrap();
+                returned_at = Some(Instant::now());
+            }
+        });
+        assert_eq!(cycles.len(), 2);
+        assert!(
+            cycles[1].started.duration_since(returned_at.unwrap()) >= floor,
+            "no bypass for {request:?}"
+        );
+        assert_eq!(cycles[1].request.mode, request.mode);
+        assert_eq!(cycles[1].request.force_fold, request.force_fold);
+    }
+}
+
+#[test]
+fn fetch_floor_finishes_the_batch_when_senders_disconnect_during_the_gap() {
+    let floor = Duration::from_millis(150);
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(move || {
+            let mut cycles = Vec::new();
+            drive(&rx, &Covered::default(), floor, |cycle| {
+                cycles.push(cycle);
+                if cycles.len() == 1 {
+                    finished_tx.send(Instant::now()).unwrap();
+                }
+            });
+            cycles
+        });
+        tx.send(FetchRequest::default()).unwrap();
+        let returned_at = finished_rx.recv().unwrap();
+        // The rendezvous proves the worker holds this batch before disconnect.
+        tx.send(FetchRequest::force_fold()).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        drop(tx);
+        let cycles = worker.join().unwrap();
+        assert_eq!(
+            cycles.len(),
+            2,
+            "disconnect must not discard the held batch"
+        );
+        assert!(cycles[1].started.duration_since(returned_at) >= floor);
+        assert!(cycles[1].request.force_fold);
+    });
+}
+
+#[test]
 fn staggered_requests_behind_one_fold_cost_at_most_two_folds() {
     staggered_requests(false);
 }
@@ -2295,7 +2439,7 @@ fn requests_beyond_finished_fold(idle: bool) {
     let mut sender = Some(tx);
     let mut cycles = Vec::new();
     let mut mid_first = None;
-    drive(&rx, &covered, |cycle| {
+    drive(&rx, &covered, Duration::ZERO, |cycle| {
         cycles.push(cycle.request);
         if idle {
             delivery.sink.begin_cycle();
@@ -2360,7 +2504,7 @@ fn a_fold_that_failed_answers_nothing() {
     let observed_at = Instant::now();
     tick_clock();
     // Nothing went out, so nothing is recorded.
-    drive(&rx, &covered, |_cycle| {
+    drive(&rx, &covered, Duration::ZERO, |_cycle| {
         cycles += 1;
         if let Some(tx) = sender.take() {
             tx.send(FetchRequest {
