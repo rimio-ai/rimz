@@ -62,6 +62,8 @@ A change to a declared coverage or lifecycle-hook verdict runs `cargo xtask test
 
 `conformance.rs` enforces completeness on both and grounds them one-directionally — a full capability rests on wired mechanism, an unsupported capability on unsupported mechanism — while cross-checking each concern claim against capabilities, installed events, the classification corpus, and the realtime-cost spend fixture. A wired concern still rolls up to partial when the user-visible result is incomplete or arrives late; that judgement is the adapter's.
 
+A conformance failure on a new adapter's declared marks is fixed in the marks, never by loosening a shared check; a check that seems wrong goes to review as its own change.
+
 Write capability text as product language: it prints verbatim to users, so keep it lowercase, without a trailing period, and about six to fourteen words. The rubric lives in [agent-support.md](../../../../docs/reference/agent-support.md). `rimz coverage` leads with the capability grid and `rimz coverage --wiring` adds the concern and lifecycle-hook grids, so a missing surface is visible product behavior.
 
 A coverage change runs two pins the adapter filters miss: `cargo xtask test -E 'binary(integration) & test(coverage::)'` checks the capability matrices in both `README.md` and `agent-support.md` against the descriptors, and `cargo xtask test 'cli::coverage'` pins each agent's partial and absent wiring cells by lowercase kind name.
