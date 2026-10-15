@@ -96,7 +96,8 @@ fn broadcast_argv_has_no_write_or_auth_and_uses_share_shim() {
     assert!(!spec.args.iter().any(|arg| arg == "-c"));
     assert!(
         super::super::TTYD_AMBIENT_CONTEXT_ENV
-            .iter()
+            .into_iter()
+            .flatten()
             .all(|key| spec.env_remove.contains(*key))
     );
     assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));
@@ -237,7 +238,8 @@ fn argv_uses_loopback_auth_url_args_and_rimz_shim() {
     assert!(spec.args.windows(2).any(|args| args == ["-P", "3600"]));
     assert!(
         super::super::TTYD_AMBIENT_CONTEXT_ENV
-            .iter()
+            .into_iter()
+            .flatten()
             .all(|key| spec.env_remove.contains(*key))
     );
     assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));

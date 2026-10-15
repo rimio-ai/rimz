@@ -85,6 +85,9 @@ impl ZellijBackend {
             layout.to_string_lossy().into_owned(),
         ];
         let mut spec = self.cmd().without_mux_context().args(option_args);
+        for key in crate::mux::REMOTE_CLIENT_ENV {
+            spec = spec.env_remove(key);
+        }
         // The identity pin rides the spawning client's environment: the
         // per-session server is forked from this command, and every pane is
         // forked from the server, so panes — and the agents and in-pane hook
