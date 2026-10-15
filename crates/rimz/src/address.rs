@@ -1149,6 +1149,9 @@ fn launch_members<'a>(
 /// - Live rows win by pane-owner order.
 /// - An ended launch keeps its latest-active row.
 /// - Attach rest certificates before selecting among live rows.
+/// - One launch can be live in several panes (an exact-id resume of a
+///   cleared conversation); a caller that needs the row on a given pane
+///   filters by pane first.
 pub fn launch_row<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,
