@@ -81,6 +81,7 @@ These are defaults; a pipeline may reassign any of them.
 - Within a stage, the owner decides. Design and intent belong to the design stage's owner where the pipeline has one. Push back with evidence; their call is final.
 - The code and the live state decide correctness. Bring `file:line` or observed output, and concede as soon as it shows you wrong.
 - A judging stage's measurements stand for the run. The leader and every later owner read the judge's numbers instead of reproducing them, and a doubt is a question to the judge.
+- A run another stage recorded in its file, with its command and result, is evidence too: rerun it only when the code contradicts it, and send a confirming run to a gatekeeper subagent rather than holding your own turn on the build.
 - Two rounds bound a dispute. Past them, between a judge and the stage it judges, the judge rules; a design or intent clash goes to the design stage's owner; between any other two roles, the leader rules.
 
 ## Recovery
