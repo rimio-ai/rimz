@@ -13,7 +13,7 @@ A hook is an entry in the agent's config that runs `rimz hooks feed` on a lifecy
 
 ### Install hooks
 
-`rimz hooks install` with no `AGENT` installs hooks for every agent that has an installer and whose binary RimZ finds, on `PATH` or in the agent's usual install directory under your home (`~/.opencode/bin`, `~/.kimi-code/bin`, `~/.local/bin`). With `AGENT` it installs that kind whether or not its binary is present. Install writes into the provider home your environment selects (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and the others in the table below); a named [provider account](./accounts.md#add)'s home gets its hooks from `rimz accounts add`.
+`rimz hooks install` with no `AGENT` installs hooks for every agent that has an installer and whose binary RimZ finds, on `PATH` or in the agent's usual install directory under your home (`~/.opencode/bin`, `~/.kimi-code/bin`, `~/.local/bin`), skipping agents whose install preconditions fail. With `AGENT` it attempts that kind and reports any refusal; Muse requires a readable version of at least 1.4.9 even for an explicit install. Install writes into the provider home your environment selects (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GROK_HOME`, and the others in the table below); a named [provider account](./accounts.md#add)'s home gets its hooks from `rimz accounts add`.
 
 Rerunning install is safe. RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand is restored.
 
@@ -58,12 +58,15 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
 | `qoder` | `${QODER_CONFIG_DIR:-~/.qoder}/settings.json` | Merge; needs Qoder CLI 1.1.72 or later |
+| `muse` | `${XDG_CONFIG_HOME:-~/.config}/muse/rimz-hooks.json`, `settings.json` in the same directory | Whole hook file plus managed-hook settings; needs Muse Code 1.4.9 or later |
 
 RimZ's Kiro integration needs CLI 2.31.0 or later for one shared configuration, session, skills, and global-hook home. Older releases refuse with `RimZ's Kiro integration needs Kiro CLI 2.31.0 or later (found <found>); upgrade to 2.31.0 or later`, and an install with no `AGENT` skips Kiro silently. The home is `KIRO_HOME` when absolute, non-root, and neither equal to nor an ancestor of `HOME`; otherwise it is `$HOME/.kiro`. An unmarked hook file at that path whose every hook runs RimZ's feed command is reclaimed rather than refused. [Plugin agents](../agent-plugins.md) have no installer.
 
 A merge adds RimZ's entries and keeps your own hooks and every other value. Rewriting a JSON settings file can reorder its keys, so a dry-run diff may show more lines than the hook entries.
 
-A whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Pi, OMP, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
+Muse installation sets `managed_hooks_path` and `managed_hooks_env_vars`, preserving user hooks and unrelated settings. A new settings file also gets `schema_version: 1`; an existing file without that version, an unreadable or older CLI version, or a path to another managed-hook source refuses installation. An unnamed install skips Muse on refusal. Uninstall deletes RimZ's hook file and removes the two settings only while the path names that file; other settings remain. Enterprise policy can override the user settings and is not checked by this installer. See [Muse support](../agent-support.md#muse).
+
+For Amp, Kiro, Pi, OMP, OpenCode, and Copilot, a whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Muse's separate hook file has no marker and is replaced whole. Pi, OMP, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
 
 Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall. A Cursor install writes the single `~/.cursor/hooks.json` once per config home it resolves, pairing it each time with that home's `cli-config.json`, and commits each pass on its own: a failed write rolls back the pass it was in, while earlier passes and the statusline record stay. Fix the cause and rerun the install.
 

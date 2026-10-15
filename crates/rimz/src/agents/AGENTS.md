@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/agents/` — the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md).
 
-Topic detail lives in the internals leaves the root map describes — [adapter.md](../../../../docs/internals/agents/adapter.md) (this layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage), [model.md](../../../../docs/internals/agents/model.md) (the agent model the adapters feed: the rollup, the state machine, and the displayed-status ladder), the per-kind internal mappings ([adapter_claude.md](../../../../docs/internals/agents/adapter_claude.md) and its Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, Grok, Hermes, [Qoder](../../../../docs/internals/agents/adapter_qoder.md), and [OMP](../../../../docs/internals/agents/adapter_omp.md) siblings), [providers.md](../../../../docs/internals/agents/providers.md) (accounts and balances), [spending.md](../../../../docs/internals/agents/spending.md) (spend and pricing), and the per-agent upstream references in [agent-adapter/](../../../../docs/externals/agent-adapter/claude-reference.md). The sequenced integration playbook for a new built-in is [agent-adapters.md](../../../../docs/contributing/agent-adapters.md).
+Topic detail lives in the internals leaves the root map describes: [adapter.md](../../../../docs/internals/agents/adapter.md) (this layer: the registry, the capability traits, the hook path, install, context sources, and declared coverage), [model.md](../../../../docs/internals/agents/model.md) (the agent model the adapters feed: the rollup, the state machine, and the displayed-status ladder), the per-kind internal mappings ([adapter_claude.md](../../../../docs/internals/agents/adapter_claude.md) and its Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kiro, Qwen, Grok, Hermes, [Qoder](../../../../docs/internals/agents/adapter_qoder.md), [OMP](../../../../docs/internals/agents/adapter_omp.md), and [Muse](../../../../docs/internals/agents/adapter_muse.md) siblings), [providers.md](../../../../docs/internals/agents/providers.md) (accounts and balances), [spending.md](../../../../docs/internals/agents/spending.md) (spend and pricing), and the per-agent upstream references in [agent-adapter/](../../../../docs/externals/agent-adapter/claude-reference.md). The sequenced integration playbook for a new built-in is [agent-adapters.md](../../../../docs/contributing/agent-adapters.md).
 
 ## Layout
 
@@ -42,7 +42,7 @@ Nothing under `agents` imports `store`: Store folds the agent model, and agent r
 - **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's hook catalog or equivalent typed installer declaration, never the on-disk config.
 - **Neutral follows the agent's decision contract.** Claude, Codex, Pi, OMP, OpenCode, Grok, and Hermes use empty stdout; Cursor and Antigravity answer every wired event with JSON because their hook contracts require it. Diagnostics stay off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
 - **Set installed hook timeouts from upstream deadlines**, leaving margin for RimZ to finish store writes before the agent kills the hook.
-- **Install is idempotent.** Reclaim every rimz-owned entry by the stable command substring before rewriting the canonical set; leave user-authored entries untouched.
+- **Install is idempotent.** Reclaim owned entries or whole files before rewriting the canonical set; shared JSON merges use the stable command substring, while Muse owns its marker-free hook file structurally. Leave user-authored entries untouched.
 
 ## Tests
 
@@ -70,6 +70,6 @@ A coverage change runs two pins the adapter filters miss: `cargo xtask test -E '
 
 A change to an adapter's install version gate or hook set also runs `cargo xtask test -E 'binary(integration) & test(hooks::)'`.
 
-A lifecycle signal declared derived while its native mapping stays installed (an event the provider defines but never sends) leaves the adapter's conformance corpus: conformance requires that no corpus sample produce a non-native signal. The adapter tests keep pinning that mapping.
+A lifecycle signal declared derived may keep a native mapping in the conformance corpus only when its `via` names every corpus event that produces it. An absent signal must have no producing sample; a native signal needs a producing sample for its declared event (`crates/rimz/src/agents/conformance.rs::assert_lifecycle_hook_honest`).
 
 A change to an adapter's `process_names` or `bin_names` greps each removed name as a quoted literal across `crates/`: fixtures model a provider's pane by its command string (`pane("%1", "<name>", ...)`), and a text search for the kind misses them.

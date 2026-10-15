@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ has a built-in adapter for fourteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
+RimZ has a built-in adapter for seventeen coding agents. Each adapter reads the agent's available hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv within its declared coverage. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
 Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
@@ -8,7 +8,7 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Qoder, Kimi Code, Grok Build, Hermes Agent, OMP | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Qoder, Kimi Code, Grok Build, Hermes Agent, OMP, Muse Code | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -16,7 +16,7 @@ RimZ tracks each agent's latest release. Where a feature needs a minimum agent v
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
-The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes, qoder, omp) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
+The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes, qoder, omp, muse) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
 ## What the marks mean
 
@@ -176,9 +176,18 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Only the default `~/.omp/agent` home is wired. Launch preflight refuses non-default `OMP_PROFILE` (or `PI_PROFILE` when `OMP_PROFILE` is unset), nonempty `PI_CONFIG_DIR`, and nonempty `PI_CODING_AGENT_DIR`, with an unset fix. Empty, whitespace, and `default` profiles select default; an empty `OMP_PROFILE` still overrides `PI_PROFILE`.
 - Raw `--no-extensions`, `--trusted-extension`, and `--profile` arguments can bypass reporting. Bun-run package installs are not detected; the prebuilt `omp` is.
 
+### Muse
+
+- Muse Code 1.4.9 or later is required. Install refuses an older or unreadable version and asks you to update Muse. It writes a separate managed hook file and two settings, preserving your hooks; [what install writes](./cli/hooks-trust.md#what-install-writes) names the paths and uninstall behavior.
+- Turns, model tool activity, and session exits update the card. Cancellation rests the card at Idle; explicit user `!` shell actions do not start model activity. Tool approvals raise Waiting and route you to Muse's pane; questions and options stay there, and `rimz answer` is unsupported. Clarifying questions do not raise Waiting.
+- Native approval timing and the empty reply's preservation of the approval UI are not live-verified. An automatically approved call may briefly raise Waiting. The failure-stop mapping is also documented-only, not captured against a real provider.
+- Live context, tokens, dollars, history, account details, and child cards are unsupported. Only internal reminder children have been observed, and RimZ ignores their hooks.
+- Plan selects Muse's read-only profile, but real tool-call enforcement is unverified. `/compact` was unavailable under echo; compaction lifecycle is unsupported.
+- Initial prompts submit after `--`, but a prompt exactly equal to a Muse subcommand, such as `resume`, can open that command instead. Resume binds the card at the first prompt. Enterprise policy can override user managed-hook settings without the installer detecting it.
+
 ## Config homes and skills
 
-Each built-in agent keeps its settings, sessions, and credentials in a config home. RimZ reads from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation).
+Each built-in agent resolves a config home. RimZ reads provider settings from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation). Session stores can live elsewhere, as Muse's does.
 
 | Agent | Config home | Override | Skill root | Sandbox `skills` list | Host switch |
 | --- | --- | --- | --- | --- | --- |
@@ -198,6 +207,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
 | OMP | `~/.omp/agent` | none; relocated homes refused | `<home>/skills` | refused | none |
+| Muse | `~/.config/muse` | `XDG_CONFIG_HOME` + `/muse` | `<home>/skills` | refused | none |
 | Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
@@ -236,6 +246,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
 | Hermes | Unsupported | Unsupported |
 | OMP | `omp --resume` | Unsupported |
+| Muse | Partial: `muse resume`; card binds at the first prompt | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
@@ -306,6 +317,7 @@ OMP Plan uses the same conservative approval flags as Ask, not native plan mode.
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
 | Hermes | `--model <model>` | `--reasoning <level>`; levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
 | OMP | `--model <model>` | `--thinking <level>` |
+| Muse | `--model <model>` | `--reasoning-effort <level>` |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
@@ -338,7 +350,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | OMP | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder | ✗ | no verified replacement flag |
+| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder, Muse | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
@@ -440,7 +452,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Hermes | `on_session_start`; `on_session_reset` | `pre_llm_call` | `on_session_end` | `post_tool_call` | ◐ `on_human_input_request` | `subagent_start` | `subagent_stop` | ✗ | ✗ | ◐ derived | ◐ derived |
 | OMP | `session_start` | `before_agent_start` | `agent_end` without `willContinue` | `tool_execution_end` | `tool_call`; `tool_approval_requested` | ✗ | ✗ | `session_before_compact` | `session_compact`; failed `auto_compaction_end` | `session_shutdown` | ◐ derived |
-| Muse | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `Interrupt` | `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | `PermissionRequest` | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
+| Muse | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `Interrupt` (interrupted) | Model `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | `PermissionRequest` | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp, Hermes), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
@@ -468,6 +480,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
 | Hermes | [adapter_hermes.md](../internals/agents/adapter_hermes.md) | [hermes-reference.md](../externals/agent-adapter/hermes-reference.md) |
 | OMP | [adapter_omp.md](../internals/agents/adapter_omp.md) | [omp-reference.md](../externals/agent-adapter/omp-reference.md) |
+| Muse | [adapter_muse.md](../internals/agents/adapter_muse.md) | [muse-reference.md](../externals/agent-adapter/muse-reference.md) |
 
 ## Agents not yet supported
 

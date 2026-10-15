@@ -10,7 +10,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. This capture uses a fresh home with hibernation disabled and legacy directories still present:
+The report reads top to bottom, machine setup first and live room state last. This capture uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse:
 
 ```console
 RimZ doctor
