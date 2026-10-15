@@ -494,12 +494,135 @@ fn diagnostic_incidents_collapse_same_episode_records() {
         ],
         12,
         None,
+        0,
     );
 
     assert_eq!(incidents.len(), 1);
     assert_eq!(incidents[0].last_at_ms, 2);
     assert_eq!(incidents[0].record_count, 2);
     assert!(incidents[0].summary.contains("over budget for 6 ticks"));
+}
+
+fn hook_lag(lag_ms: u64, pending_bytes: u64) -> DiagEvent {
+    DiagEvent::HookDrainLag {
+        ingress: rimz::ids::EventId::new(),
+        hook_event: Some("Stop".into()),
+        lag_ms,
+        pending_bytes,
+    }
+}
+
+#[test]
+fn hook_lag_incidents_join_sparse_samples_and_keep_independent_peaks() {
+    let mut first = diag_record(1, hook_lag(1_399_944, 12));
+    first.suppressed_since_last = 3;
+    let incidents = diagnostic_incidents(
+        vec![
+            diag_record(120_003, hook_lag(11_000, 100)),
+            first,
+            diag_record(70_002, hook_lag(12_000, 5_474_624)),
+        ],
+        12,
+        None,
+        120_003 + 899_999,
+    );
+    assert_eq!(
+        incidents.len(),
+        1,
+        "samples under 15 minutes apart are one episode"
+    );
+    let incident = &incidents[0];
+    assert_eq!((incident.first_at_ms, incident.last_at_ms), (1, 120_003));
+    assert_eq!(incident.record_count, 3);
+    assert_eq!(incident.sink_suppressed, 3);
+    assert_eq!(incident.state, model::DoctorState::Investigate);
+    assert_eq!(incident.impact, model::DoctorImpact::Warn);
+    assert!(incident.summary.contains("23m19s"), "{}", incident.summary);
+    assert!(incident.summary.contains("5.2 MB"), "{}", incident.summary);
+    let json = serde_json::to_value(incident).unwrap();
+    assert_eq!(
+        json["drain_lag"],
+        serde_json::json!({"worst_lag_ms": 1_399_944, "peak_pending_bytes": 5_474_624})
+    );
+    let other = diagnostic_incidents(vec![diag_record(1, tick_breach(1, None, 5))], 12, None, 2);
+    assert!(
+        serde_json::to_value(&other[0])
+            .unwrap()
+            .get("drain_lag")
+            .is_none()
+    );
+}
+
+#[test]
+fn hook_lag_incidents_recover_at_fifteen_quiet_minutes() {
+    for quiet_ms in [899_999, 900_000, 900_001] {
+        let incidents = diagnostic_incidents(
+            vec![diag_record(100, hook_lag(60_000, 1024))],
+            12,
+            None,
+            100 + quiet_ms,
+        );
+        let incident = &incidents[0];
+        let expected = if quiet_ms < 900_000 {
+            (model::DoctorState::Investigate, model::DoctorImpact::Warn)
+        } else {
+            (model::DoctorState::Recovered, model::DoctorImpact::Info)
+        };
+        assert_eq!(
+            (incident.state, incident.impact),
+            expected,
+            "quiet for {quiet_ms}ms"
+        );
+        assert_eq!(
+            incident.source_severity,
+            rimz::diag::record::DiagSeverity::Warn
+        );
+    }
+}
+
+#[test]
+fn hook_lag_incidents_split_at_fifteen_quiet_minutes() {
+    for gap_ms in [899_999, 900_000, 900_001] {
+        let incidents = diagnostic_incidents(
+            vec![
+                diag_record(1, hook_lag(60_000, 1024)),
+                diag_record(1 + gap_ms, hook_lag(11_000, 512)),
+            ],
+            12,
+            None,
+            2 + gap_ms,
+        );
+        assert_eq!(
+            incidents.len(),
+            if gap_ms < 900_000 { 1 } else { 2 },
+            "gap {gap_ms}ms"
+        );
+        assert_eq!(
+            incidents.last().unwrap().state,
+            model::DoctorState::Investigate
+        );
+    }
+}
+
+#[test]
+fn hook_lag_incidents_drop_records_at_or_before_watermark() {
+    let incidents = diagnostic_incidents(
+        vec![
+            diag_record(9, hook_lag(90_000, 4096)),
+            diag_record(10, hook_lag(80_000, 2048)),
+            diag_record(11, hook_lag(11_000, 512)),
+        ],
+        12,
+        Some(10),
+        12,
+    );
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0].record_count, 1);
+    let json = serde_json::to_value(&incidents[0]).unwrap();
+    assert_eq!(
+        json["drain_lag"],
+        serde_json::json!({"worst_lag_ms": 11_000, "peak_pending_bytes": 512})
+    );
 }
 
 #[test]
@@ -511,7 +634,7 @@ fn diagnostic_incidents_pair_recovery_and_keep_recurrence_distinct() {
     records.push(diag_record(20, tick_breach(10, Some(10), 13)));
     records.push(diag_record(21, tick_breach(30, None, 5)));
 
-    let incidents = diagnostic_incidents(records, 12, None);
+    let incidents = diagnostic_incidents(records, 12, None, 0);
 
     assert_eq!(incidents.len(), 2);
     assert_eq!(incidents[0].record_count, 14);
@@ -552,6 +675,7 @@ fn diagnostic_incidents_pair_link_recovery_by_stable_episode_start() {
         ],
         12,
         None,
+        0,
     );
 
     assert_eq!(incidents.len(), 2);
@@ -571,7 +695,7 @@ fn diagnostic_incidents_collapse_cross_observer_frame_copies_only() {
     let mut recurrence = diag_record(3, frame_anomaly(901));
     recurrence.instance_id = second.instance_id.clone();
 
-    let incidents = diagnostic_incidents(vec![first, second, recurrence], 12, None);
+    let incidents = diagnostic_incidents(vec![first, second, recurrence], 12, None, 0);
 
     assert_eq!(incidents.len(), 2);
     assert_eq!(incidents[0].record_count, 2);
@@ -591,7 +715,7 @@ fn diagnostic_incidents_collapse_cross_observer_presence_flaps() {
     let mut third = diag_record(3, presence_flap(900, 2_400));
     third.instance_id = Some(sidebar("sb_019ec1f0a25c7f9284d3b1e5c6a70b12"));
 
-    let incidents = diagnostic_incidents(vec![first, second, third], 12, None);
+    let incidents = diagnostic_incidents(vec![first, second, third], 12, None, 0);
 
     assert_eq!(incidents.len(), 1);
     assert_eq!(incidents[0].record_count, 3);
@@ -607,6 +731,7 @@ fn diagnostic_incidents_split_same_identity_after_quiet_gap() {
         ],
         12,
         None,
+        0,
     );
 
     assert_eq!(incidents.len(), 2);
@@ -622,6 +747,7 @@ fn diagnostic_incidents_split_same_identity_after_quiet_gap() {
         vec![diag_record(1, first), diag_record(60_002, second)],
         12,
         None,
+        0,
     );
     assert_eq!(
         incidents.len(),
@@ -848,6 +974,7 @@ fn diagnostic_incidents_drop_records_at_or_before_watermark() {
         ],
         12,
         Some(10),
+        0,
     );
 
     assert_eq!(incidents.len(), 1);

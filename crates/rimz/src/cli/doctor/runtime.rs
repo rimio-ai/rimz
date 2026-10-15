@@ -972,7 +972,12 @@ pub(super) fn collect_diagnostics(
         return model::Diagnostics::Unavailable;
     };
     let cleared_at_ms = cleared_at.and_then(|at| u64::try_from(at.as_millisecond()).ok());
-    let incidents = diagnostic_incidents(records, RECENT_DIAG_INCIDENTS, cleared_at_ms);
+    let incidents = diagnostic_incidents(
+        records,
+        RECENT_DIAG_INCIDENTS,
+        cleared_at_ms,
+        rimz::utils::time::unix_now_ms(),
+    );
     model::Diagnostics::Ready {
         path: path.display().to_string(),
         incidents,
@@ -983,6 +988,7 @@ fn diagnostic_incidents(
     mut records: Vec<rimz::diag::record::DiagEnvelope>,
     limit: usize,
     cleared_at_ms: Option<u64>,
+    now_ms: u64,
 ) -> Vec<model::DiagIncident> {
     const EPISODE_GAP_MS: u64 = 60_000;
     records.retain(|record| cleared_at_ms.is_none_or(|cleared_at| record.at_ms > cleared_at));
@@ -993,8 +999,10 @@ fn diagnostic_incidents(
     for record in records {
         let (key, exact_frame) = incident_key(&record);
         let existing = latest_by_key.get(&key).copied().filter(|index| {
+            let gap_ms = record.at_ms.saturating_sub(builders[*index].last_at_ms);
             exact_frame
-                || record.at_ms.saturating_sub(builders[*index].last_at_ms) <= EPISODE_GAP_MS
+                || diagnostic_quiet_period_ms(record.event.family())
+                    .map_or(gap_ms <= EPISODE_GAP_MS, |quiet_ms| gap_ms < quiet_ms)
         });
         match existing {
             Some(index) => builders[index].merge(record),
@@ -1009,7 +1017,17 @@ fn diagnostic_incidents(
     if builders.len() > limit {
         builders.drain(..builders.len() - limit);
     }
-    builders.into_iter().map(IncidentBuilder::finish).collect()
+    builders
+        .into_iter()
+        .map(|incident| incident.finish(now_ms))
+        .collect()
+}
+
+fn diagnostic_quiet_period_ms(kind: &str) -> Option<u64> {
+    match kind {
+        "hook_drain_lag" => Some(15 * 60 * 1_000),
+        _ => None,
+    }
 }
 
 struct IncidentBuilder {
@@ -1023,6 +1041,7 @@ struct IncidentBuilder {
     observer_ids: BTreeSet<String>,
     sink_suppressed: u64,
     dropped_messages: u64,
+    drain_lag: Option<model::DrainLag>,
     summary: String,
     build: Option<String>,
     evidence_refs: BTreeSet<String>,
@@ -1042,6 +1061,7 @@ impl IncidentBuilder {
             observer_ids: BTreeSet::new(),
             sink_suppressed: 0,
             dropped_messages: 0,
+            drain_lag: None,
             summary: String::new(),
             build: record.build.clone(),
             evidence_refs: BTreeSet::new(),
@@ -1066,11 +1086,37 @@ impl IncidentBuilder {
                 .dropped_messages
                 .saturating_add(u64::from(*dropped_msgs));
         }
+        if let rimz::diag::record::DiagEvent::HookDrainLag {
+            lag_ms,
+            pending_bytes,
+            ..
+        } = &record.event
+        {
+            let lag = self.drain_lag.get_or_insert(model::DrainLag {
+                worst_lag_ms: 0,
+                peak_pending_bytes: 0,
+            });
+            lag.worst_lag_ms = lag.worst_lag_ms.max(*lag_ms);
+            lag.peak_pending_bytes = lag.peak_pending_bytes.max(*pending_bytes);
+        }
         self.summary = record.event.summary();
         self.evidence_refs.extend(record.event.evidence_refs());
     }
 
-    fn finish(self) -> model::DiagIncident {
+    fn finish(mut self, now_ms: u64) -> model::DiagIncident {
+        if diagnostic_quiet_period_ms(&self.kind)
+            .is_some_and(|quiet_ms| now_ms.saturating_sub(self.last_at_ms) >= quiet_ms)
+        {
+            self.state = model::DoctorState::Recovered;
+            self.impact = model::DoctorImpact::Info;
+        }
+        if let Some(lag) = &self.drain_lag {
+            self.summary = format!(
+                "worst lag {}; peak pending {}",
+                crate::cli::render::format_compact_duration(lag.worst_lag_ms / 1_000),
+                crate::cli::render::fmt_bytes(lag.peak_pending_bytes),
+            );
+        }
         let stale_build = stale_build(self.build.as_deref(), rimz::build_id::current());
         let observer_ids = self.observer_ids.into_iter().collect::<Vec<_>>();
         model::DiagIncident {
@@ -1085,6 +1131,7 @@ impl IncidentBuilder {
             observer_ids,
             sink_suppressed: self.sink_suppressed,
             dropped_messages: self.dropped_messages,
+            drain_lag: self.drain_lag,
             summary: self.summary,
             build: self.build,
             stale_build,
