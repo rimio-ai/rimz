@@ -1262,6 +1262,7 @@ impl crate::agents::capabilities::AccountCapability for CodexAdapter {
         Ok(super::account::ResetCreditOffer::new(
             capacity,
             credits,
+            usage.extra_credits,
             CodexResetCreditAction {
                 credentials,
                 base_url,
