@@ -67,6 +67,7 @@ pub(super) struct ReceiverReadiness {
     pub status: AgentStatus,
     pub compacting: bool,
     pub gate_open: bool,
+    pub turn_lifecycle_gap: Option<&'static str>,
     pub waiting: bool,
 }
 
@@ -82,10 +83,20 @@ pub(super) fn receiver_readiness(
     force: bool,
     now: Timestamp,
 ) -> ReceiverReadiness {
+    let turn_lifecycle_gap = match (
+        gate,
+        crate::agents::spec_by_kind(agent.kind.as_str()).map(|spec| spec.coverage.turn_lifecycle),
+    ) {
+        (DeliveryGate::Done, Some(crate::agents::ConcernCoverage::Unsupported { reason })) => {
+            Some(reason)
+        }
+        _ => None,
+    };
     ReceiverReadiness {
         status: agent.effective_status(),
         compacting: agent.is_compacting(now),
-        gate_open: gate_open_for_agent(gate, agent, force, now),
+        gate_open: turn_lifecycle_gap.is_none() && gate_open_for_agent(gate, agent, force, now),
+        turn_lifecycle_gap,
         waiting: !force && agent.is_awaiting_input(),
     }
 }
@@ -141,6 +152,9 @@ pub enum DeliveryVerdict {
     },
     ReceiverGone,
     ReceiverEnded,
+    TurnLifecycleUnsupported {
+        reason: &'static str,
+    },
     Compacting,
     GateClosed {
         gate: DeliveryGate,
@@ -184,6 +198,7 @@ impl DeliveryVerdict {
             | Self::AskWaiting
             | Self::ReceiverGone
             | Self::ReceiverEnded
+            | Self::TurnLifecycleUnsupported { .. }
             | Self::GateClosed { .. } => Some(StallClass::NotWorking),
             Self::Scheduled { .. }
             | Self::WaitingOnAfter { .. }
@@ -202,6 +217,9 @@ impl DeliveryVerdict {
             Self::AskWaiting => "waiting on input in its pane".to_owned(),
             Self::ReceiverGone => "receiver has no current card".to_owned(),
             Self::ReceiverEnded => "receiver ended".to_owned(),
+            Self::TurnLifecycleUnsupported { reason } => {
+                format!("turn lifecycle unsupported: {reason}")
+            }
             Self::Compacting => "compacting".to_owned(),
             Self::GateClosed {
                 status: Some(AgentStatus::Running),
@@ -877,6 +895,9 @@ impl DeliveryCheck {
         if self.agent.ended {
             return DeliveryVerdict::ReceiverEnded;
         }
+        if let Some(reason) = self.gate.turn_lifecycle_gap {
+            return DeliveryVerdict::TurnLifecycleUnsupported { reason };
+        }
         if self.gate.compacting {
             return DeliveryVerdict::Compacting;
         }
@@ -962,6 +983,8 @@ pub struct GateCheck {
     pub status: Option<AgentStatus>,
     pub compacting: bool,
     pub open: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_lifecycle_gap: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_recovered: Option<bool>,
 }
@@ -1119,6 +1142,7 @@ fn evaluate_delivery<'a>(
             status,
             compacting,
             open,
+            turn_lifecycle_gap: readiness.and_then(|readiness| readiness.turn_lifecycle_gap),
             resume_recovered,
         },
         ask: AskCheck {

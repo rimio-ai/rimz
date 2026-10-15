@@ -158,16 +158,22 @@ fn launched_lane_label(channel: Option<&str>, cwd: &Path, project_root: &Path) -
 }
 
 fn write_picker_receipt(w: &mut impl Write, kind: &str, lane: Option<&str>) -> Result<()> {
-    let boundary = if rimz::agents::spec_by_kind(kind)
-        .is_some_and(|spec| spec.capabilities.registers_lazily)
-    {
-        "at the first prompt"
+    let spec = rimz::agents::spec_by_kind(kind);
+    let binding = if spec.is_some_and(|spec| {
+        matches!(
+            spec.coverage.turn_lifecycle,
+            rimz::agents::ConcernCoverage::Unsupported { .. }
+        )
+    }) {
+        "turn tracking is unavailable"
+    } else if spec.is_some_and(|spec| spec.capabilities.registers_lazily) {
+        "the card binds at the first prompt"
     } else {
-        "once a session is picked"
+        "the card binds once a session is picked"
     };
     writeln!(
         w,
-        "opened {kind} session picker in #{}; the card binds {boundary}",
+        "opened {kind} session picker in #{}; {binding}",
         lane.unwrap_or("main")
     )?;
     Ok(())

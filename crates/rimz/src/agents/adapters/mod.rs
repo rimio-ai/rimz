@@ -26,3 +26,4 @@ pub(super) mod opencode;
 pub(super) mod pi;
 pub(super) mod plugin;
 pub(super) mod qwen;
+pub(super) mod trae;

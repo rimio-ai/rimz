@@ -1025,7 +1025,13 @@ fn assemble_launch_state(
     let (status, phase) = match payload.state {
         AgentLaunchState::Failed => (AgentStatus::Failed, lifecycle::TurnPhase::Idle),
         AgentLaunchState::Starting | AgentLaunchState::Bound => {
-            if payload.prompt.is_some() {
+            let untracked = crate::agents::spec_by_kind(kind.as_str()).is_some_and(|spec| {
+                matches!(
+                    spec.coverage.turn_lifecycle,
+                    crate::agents::ConcernCoverage::Unsupported { .. }
+                )
+            });
+            if payload.prompt.is_some() && !untracked {
                 (AgentStatus::Running, lifecycle::TurnPhase::Reasoning)
             } else {
                 (AgentStatus::Idle, lifecycle::TurnPhase::Idle)

@@ -217,6 +217,10 @@ pub enum DispatchErr {
     #[error("unknown agent kind `{0}`")]
     UnknownAgentKind(AgentKind),
     #[error(
+        "{kind} reports no turn boundaries, so RimZ cannot deliver at one: {reason}; use `--steer` to type into the pane now"
+    )]
+    TurnLifecycleUnsupported { kind: AgentKind, reason: String },
+    #[error(
         "queued delivery requires {kind} hooks so messages can deliver at turn boundaries; run `rimz hooks install {kind}`"
     )]
     HooksMissing { kind: AgentKind },
@@ -859,6 +863,25 @@ fn dispatch_targets(
     text: &str,
     mode: &PreparedMode,
 ) -> Result<(Vec<DispatchOutcome>, Vec<String>)> {
+    if mode.kind == DeliveryKind::Boundary
+        && let Some((kind, reason)) = targets.iter().find_map(|target| {
+            let agent = target.agent.as_ref()?;
+            match crate::agents::spec_by_kind(agent.kind.as_str())?
+                .coverage
+                .turn_lifecycle
+            {
+                crate::agents::ConcernCoverage::Unsupported { reason } => {
+                    Some((&agent.kind, reason))
+                }
+                _ => None,
+            }
+        })
+    {
+        return Err(DispatchErr::TurnLifecycleUnsupported {
+            kind: kind.clone(),
+            reason: reason.to_owned(),
+        });
+    }
     let now = Timestamp::now();
     let decisions = targets
         .iter()

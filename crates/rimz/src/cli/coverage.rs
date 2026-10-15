@@ -394,12 +394,18 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "trae"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
 
         let claude = agent_cells(&matrix, "claude");
+        let trae = agent_cells(&matrix, "trae");
+        assert_eq!(
+            count(&trae, MatrixCellState::Absent),
+            IntegrationConcern::ALL.len()
+        );
         assert_eq!(
             count(&claude, MatrixCellState::Ok),
             IntegrationConcern::ALL.len()
@@ -595,7 +601,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "trae"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -617,6 +624,7 @@ mod tests {
                 MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Absent,  // trae
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -638,6 +646,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Absent,  // trae
             ]
         );
 
@@ -658,6 +667,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Partial, // grok
+                MatrixCellState::Absent,  // trae
             ]
         );
     }

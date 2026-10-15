@@ -76,6 +76,7 @@ Arming is refused, exit 1, in these cases (an invalid `--label` exits 2 during a
 | `cannot watch PID <PID>: permission denied; choose a process owned by your user` | The caller may not signal that process. |
 | `arming a wait is only available to an agent RimZ can identify; run this command from an agent pane` | Run from a user shell, or from a process RimZ cannot trace to an agent. |
 | `the calling agent has not registered a real session yet` | The agent has not reported its provider session yet. |
+| `turn lifecycle unsupported: <reason>` | The caller's kind has no turn tracking, so self-wakes cannot be armed. No watcher or wait is created. |
 
 ## Triggers
 

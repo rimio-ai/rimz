@@ -289,6 +289,10 @@ path = "crates/rimz/src/agents/adapters/kiro"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/trae"
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/adapters/opencode"
 surface-budget = 1
 
@@ -3461,6 +3465,11 @@ reason = "Registry registration is the only outside-provider interface; custom-m
 kind = "item"
 key = "agents::adapters::kiro::KiroAdapter"
 reason = "Registry registration is the only outside-provider interface; the global-hook install and the local session store stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::trae::TraeAdapter"
+reason = "Registry registration is the only outside-provider interface; the launch-only descriptor and home resolution stay adapter-local."
 
 [[verdict]]
 kind = "item"

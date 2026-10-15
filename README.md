@@ -370,11 +370,14 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Qwen        | Experimental |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ●     |
 | Kimi        | Experimental |   ●   |  ◐   |    ◐    |    ●    |  ●  |     ◐     |
 | Grok        | Experimental |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ◐     |
+| Trae        | Launch only  |   ✗   |  ✗   |    ✗    |    ✗    |  ✗  |     ✗     |
 
 
 <sub>● full: complete and live · ◐ partial: a working version with a stated limit · ✗ unsupported</sub>
 
 A mark answers what you see and when; the mechanism behind it is in the reference.
+
+Trae launches `traecli` with model and yolo options and a native resume picker. Its RimZ-launched card shows presence only, not turn state; [launch-only limits](./docs/reference/agent-support.md#trae-launch-only) explain what remains unverified.
 
 - **State**: the card tracks the agent's whole life. It appears at session start, follows working, waiting, and idle, and clears when the session ends.
 - **Live**: while a turn runs, the card shows context-window fill, the token breakdown behind it, and a dollar figure for the work in flight.

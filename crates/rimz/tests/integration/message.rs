@@ -19,6 +19,172 @@ use rimz::store::message::{
 use crate::common::{Env, trust_codex_preflight_hooks, zellij_trace_shim};
 
 #[test]
+fn sweep_keeps_launch_only_boundary_records_pending_but_delivers_to_claude() {
+    for kind in ["trae", "claude"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id,
+                &workspace.session_name,
+                &AgentKind::new_unchecked(kind),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: "launch_receiver".into(),
+                    launch_id: None,
+                    agent_name: "coder".to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE)),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        let snapshot = env.store().snapshot_cached().unwrap();
+        let message = MessageRecord::new(
+            env.workspace_id.clone(),
+            &snapshot.agents[0],
+            "child finished".to_owned(),
+            DeliveryGate::Done,
+        )
+        .with_sender(MessageSender::Harness {
+            notice: HarnessNotice::SubagentReport,
+        });
+        env.store().queue_message(&message, "rimz-test").unwrap();
+        let command = if kind == "trae" { "traecli" } else { kind };
+        let panes = env.write_pane_fixture(&[agent_pane(&env, command)]);
+        let log = env.project_root.join("boundary-sweep.log");
+        run_success(
+            traced_rimz(&env, &log)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "sweep"]),
+            "sweep synthetic boundary record",
+        );
+        let expected = if kind == "trae" {
+            MessageStatus::Queued
+        } else {
+            MessageStatus::Sent
+        };
+        assert_eq!(message_by_id(&env, &message.message_id).status, expected);
+        let pasted = trace_lines(&log).iter().any(|line| {
+            is_paste(
+                line,
+                "Type: SUBAGENT_REPORT\nFrom: @rimz\nContent:\nchild finished",
+            )
+        });
+        assert_eq!(pasted, kind == "claude");
+        if kind == "trae" {
+            let output = traced_rimz(&env, &log)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "show", message.message_id.as_str()])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let shown = String::from_utf8_lossy(&output.stdout);
+            let reason = rimz::agents::spec_by_kind(kind)
+                .unwrap()
+                .coverage
+                .turn_lifecycle
+                .detail();
+            assert!(shown.contains("turn lifecycle unsupported"), "{shown}");
+            assert!(shown.contains(reason), "{shown}");
+            assert!(!shown.contains("opens at next turn end"), "{shown}");
+        }
+    }
+}
+
+#[test]
+fn launch_only_boundary_refuses_in_any_status_but_steer_delivers() {
+    for running in [false, true] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let workspace = env.resolve_workspace(&env.project_root);
+        let kind = AgentKind::new_unchecked("trae");
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &kind,
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: "launch_trae".into(),
+                    launch_id: None,
+                    agent_name: "coder".to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE)),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        if running {
+            env.store()
+                .append_event(&EventEnvelope::agent_lifecycle(
+                    workspace.workspace_id,
+                    &workspace.session_name,
+                    "trae",
+                    "test",
+                    &AgentLifecycleObservation::new(
+                        Some("launch_trae".into()),
+                        LifecycleSignal::TurnStarted { turn_id: None },
+                    ),
+                ))
+                .unwrap();
+        }
+        let panes = env.write_pane_fixture(&[agent_pane(&env, "traecli")]);
+        let log = env.project_root.join("trae-send.log");
+        let output = traced_rimz(&env, &log)
+            .env("RIMZ_TEST_PANE_LIST", &panes)
+            .args(["message", "@coder", "next task"])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "boundary send must refuse; running={running}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("trae")
+                && stderr.contains("turn boundaries")
+                && stderr.contains("--steer"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("rimz hooks install"), "{stderr}");
+        assert!(
+            trace_lines(&log)
+                .iter()
+                .all(|line| !is_paste(line, &user_message("next task")))
+        );
+        assert!(env.store().list_messages().unwrap().is_empty());
+
+        run_success(
+            traced_rimz(&env, &log)
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .args(["message", "--steer", "@coder", "next task"]),
+            "launch-only steer",
+        );
+        assert!(
+            trace_lines(&log)
+                .iter()
+                .any(|line| is_paste(line, &user_message("next task")))
+        );
+    }
+}
+
+#[test]
 fn targetless_send_flags_refuse_with_usage_error() {
     let env = Env::new();
     let mut failures = Vec::new();

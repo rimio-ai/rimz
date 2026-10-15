@@ -14,6 +14,56 @@ use rimz::store::message::{
 use rimz::store::writer::AgentLifecycleIntent;
 
 #[test]
+fn launch_only_callers_cannot_arm_self_wakes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+            workspace.workspace_id,
+            &workspace.session_name,
+            &AgentKind::new_unchecked("trae"),
+            rimz::store::event::AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "trae-session".into(),
+                launch_id: None,
+                agent_name: "planner".to_owned(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: rimz::store::event::AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let reason = rimz::agents::spec_by_kind("trae")
+        .unwrap()
+        .coverage
+        .turn_lifecycle
+        .detail();
+    for args in [["wait", "--in", "5m"], ["wait", "--run", "false"]] {
+        let output = env
+            .rimz()
+            .env("RIMZ_AGENT_KIND", "trae")
+            .env("RIMZ_AGENT_ID", "trae-session")
+            .env("RIMZ_AGENT_NAME", "planner")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "self-wake must refuse: {args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("turn lifecycle unsupported"), "{stderr}");
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(!loop_instances_path(&env).exists());
+    }
+}
+
+#[test]
 fn wait_labels_persist_for_every_trigger_and_replace_watch_previews() {
     let env = Env::new();
     env.record(&env.project_root);

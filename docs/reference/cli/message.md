@@ -59,7 +59,7 @@ A parked message delivers once all of these hold, checked in this order:
 4. No open prompt in the agent's pane reserves its input, unless the message has `--force`.
 5. A live pane can receive the text.
 
-Parking needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
+Boundary delivery requires turn tracking. A kind without it, such as launch-only Trae, refuses a default send even when its presence card reads idle; use `--steer` to type into its pane now. RimZ-queued boundary records, such as subagent digests and team stage wakes, stay pending instead of reaching that card. `rimz message show <id>` names the missing turn lifecycle and its declared reason. `rimz wait` self-wakes refuse before arming, and idle compaction cannot reach the card either; automated commands retain their normal expiry. Steer, including a steer parked without a pane, is unchanged. Parking also needs the agent's hooks installed and trusted, because turn-end hooks trigger delivery; a send that would park for a kind without them is refused. `rimz message show <id>` names the first unmet condition.
 
 Interrupt skips Escape when the agent is already resting. A native prompt waiting for input is refused unless `--force` is passed; that prompt then receives the text and Escape. A live pane without a durable session is refused; a durable session without a live pane parks the message. Unsupported agents, including any unsupported member of a fan-out, are refused before any message is recorded. `RIMZ_MESSAGE_INTERRUPT_DELAY_MS` sets the gap between the text and Escape, in milliseconds (default 3000).
 

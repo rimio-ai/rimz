@@ -2,11 +2,15 @@
 
 The sequenced playbook for wiring a new coding agent into RimZ as a compiled-in adapter: the order of work, the decision points at each step, and the complete deliverables checklist. Every step points at the leaf that owns its detail — this guide owns the sequence, never the detail. The agent model and adapter boundary live in [model.md](../internals/agents/model.md), the code contract in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), and the account and spend half in [providers.md](../internals/agents/providers.md) and [spending.md](../internals/agents/spending.md).
 
-An adapter that follows this sequence gets the state machine, ranking, liveness, attention routing, messaging, supervised runs, and the sidebar row for free: the [`AgentLifecycleObservation`](../../crates/rimz/src/agents/observation.rs) it emits is agent-agnostic by construction, so nothing downstream needs to know the new agent exists.
+An adapter that emits verified lifecycle observations gets the state machine, ranking, liveness, attention routing, messaging, supervised runs, and the sidebar row from the shared model: [`AgentLifecycleObservation`](../../crates/rimz/src/agents/observation.rs) is agent-agnostic by construction, so nothing downstream needs to know the new agent exists. A launch-only adapter gets presence instead, as Step 0 describes.
 
 ## Step 0 — Confirm a built-in is the right shape
 
 A third-party agent normally ships as a [process plugin](../reference/agent-plugins.md): one machine-tier manifest, an agent-side shim speaking the canonical envelope, optional probes, and no RimZ source change. A built-in is appropriate when RimZ must own a native config migration (a hook installer that writes the agent's own config) or a protocol surface the canonical wire cannot express (an out-of-band rich-context transport, a bespoke ask-answer path) — the gate is stated in [adapter.md → Adding an agent](../internals/agents/adapter.md#adding-an-agent). Everything below is the built-in path.
+
+A deliberately narrower launch-only integration, such as [Trae](../internals/agents/adapter_trae.md), must record the exception to Step 0. Declaring HookInstall Unsupported skips hook health, including home existence checks. Declaring TurnLifecycle Unsupported makes prompted launches idle presence cards, refuses CLI boundary sends with a `--steer` alternative, and keeps RimZ-queued boundary records pending; supervised runs and reply waits remain unavailable. Never invent hooks or storage to satisfy the wider integration sequence.
+
+A rule about which messages a card may receive is enforced at the delivery gate (`crates/rimz/src/message/deliver.rs::receiver_readiness`), since RimZ queues Done-gated records straight into the store; `rg -n 'DeliveryGate::Done' crates/rimz/src` lists the producers.
 
 ## Step 1 — Land the protocol reference first
 
@@ -45,7 +49,7 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 
 ## Step 4 — Declare the definition
 
-`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Built-ins require curated art in [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); conformance rejects shared fallback art.
 
 Two coverage declarations sit side by side and answer different questions:
 

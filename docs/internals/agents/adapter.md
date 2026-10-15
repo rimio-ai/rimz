@@ -1,8 +1,10 @@
 # The adapter layer
 
-Thirteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
+Fourteen built-in coding agents integrate with RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
 
-Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
+[Trae](./adapter_trae.md) is deliberately launch-only: it supplies documented argv and presence, not verified lifecycle observations.
+
+Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and twelve siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
 
 ## The one rule
 
@@ -24,7 +26,7 @@ Everything left of the boundary is provider knowledge, and everything right of i
 
 ## The registry
 
-[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
+[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `trae`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
 
 | Function | Answers |
 | --- | --- |
@@ -191,7 +193,7 @@ That resolution is also the trap in driving a hook by hand. Feeding a payload to
 
 Installing hooks edits the agent's own config, so it is a visible security step. `rimz hooks install --dry-run` prints a per-agent summary and a unified diff without writing, and the commands are in [hooks-trust.md](../../reference/cli/hooks-trust.md#agent-hooks). `rimz start` checks every detected agent on each run and asks once for all agents whose hooks are missing or have an upgrade available: Enter installs or refreshes every listed agent, and `n` or EOF changes nothing. An unattended start prints a notice and installs nothing ([`ensure_detected_agent_hooks`](../../../crates/rimz/src/cli/hooks/hook_install.rs)).
 
-An adapter declares one `managed_integration`, and that single interface drives install, preview, uninstall, detection, partial-artifact cleanup, upgrades, wiring inputs, wrapped statuslines, and installed-hook trust. Two backends implement it:
+An adapter with an installer declares one `managed_integration`, and that single interface drives install, preview, uninstall, detection, partial-artifact cleanup, upgrades, wiring inputs, wrapped statuslines, and installed-hook trust. A kind declaring HookInstall Unsupported, such as launch-only [Trae](./adapter_trae.md), skips hook health, including the home existence check; there is no trusted-hook precondition to enforce. Two backends implement it:
 
 | Backend | Adapters |
 | --- | --- |
@@ -214,7 +216,7 @@ Every hook command enters the executable-surface hash, so a tampered hook config
 
 A session's context gauge (how full the window is, what the turn cost) is what no agent puts in its hook JSON. An adapter offers one to three sources, and any one alone is valid. All three normalize onto the same fields, so the rest of RimZ does not depend on the choice. Enrichment is never correctness: a missing file, a torn line, or an absent binary each leaves a field unset, never a failed hook or a wrong decision.
 
-The transcript or store tail is the universal floor. Every provider keeps a local usage store its spend parser already understands (JSONL for Claude, Codex, Grok, and Pi; SQLite for OpenCode). For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
+The transcript or store tail is the baseline where a verified usage store exists (JSONL for Claude, Codex, Grok, and Pi; SQLite for OpenCode). Launch-only Trae has none verified. For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
 
 A rich out-of-band transport is the provider-specific upgrade where one exists. It carries what a local read cannot derive (rate-limit windows, account plan, PR info, model display name, version) on the provider's own cadence. Claude pushes statusline JSON; Codex reads read-only app-server methods. Transport payloads normalize through `observe_context` into one typed session observation whose [`AgentContext`](../../../crates/rimz/src/agents/context.rs) carries no identity.
 
@@ -241,7 +243,7 @@ Every adapter declares what it supports in three records on its spec. Each recor
 | Record | One field per | Arms |
 | --- | --- | --- |
 | `user_coverage` ([`UserCoverage`](../../../crates/rimz/src/agents/definition.rs)) | `UserCapability`: what the person watching the sidebar gets (6) | `Full { note }`, `Partial { shows, limit }`, `Unsupported { reason }` |
-| `coverage` ([`CoverageAnnotations`](../../../crates/rimz/src/agents/definition.rs)) | `IntegrationConcern`: what the adapter reads from the agent (18) | `Wired { via }`, `Partial { via, gap }`, `Unsupported { reason }` |
+| `coverage` ([`CoverageAnnotations`](../../../crates/rimz/src/agents/definition.rs)) | `IntegrationConcern`: what the adapter reads from the agent (19) | `Wired { via }`, `Partial { via, gap }`, `Unsupported { reason }` |
 | `lifecycle_hooks` (`LifecycleAnnotations`) | `LifecycleSignalKind`: the native event behind each signal (11) | `Native { event }`, `Derived { via, gap }`, `Absent { reason }` |
 
 `rimz coverage` prints the capability grid with a detail table under it; `--wiring` adds the concern grid and the lifecycle-hook grid, each with its own detail table. Every detail cell carries its text, and a partial cell prints both halves (`via` with `gap`, `shows` with `limit`).
@@ -257,6 +259,7 @@ codex        ✓      ✓     ✓        ✓        ✓    ✓
 ...
 kiro         !      !     !        ✗        !    ✗
 ...
+trae         ✗      ✗     ✗        ✗        ✗    ✗
   legend ✓ full   ! partial   ✗ unsupported
 
 DETAIL
@@ -269,10 +272,13 @@ codex        ✓     ✓     ✓     ✓    ✓       ✓        ✓    ✓     
 ...
 kiro         ✓     !     ✗     !    ✗       ✗        ✗    ✗       ✗   ✗     ✓    !     !      ✗      !     ✓        ✗      ✗      ✗
 ...
+trae         ✗     ✗     ✗     ✗    ✗       ✗        ✗    ✗       ✗   ✗     ✗    ✗     ✗      ✗      ✗     ✗        ✗      ✗      ✗
   legend ✓ wired   ! partial   ✗ unsupported
 ...
 WIRING — LIFECYCLE HOOKS
+AGENT        registered  turn_started  turn_ended  tool_used  awaiting_input  subagent_started  subagent_stopped  compacting  compaction_ended  ended  lost
 ...
+trae         ✗           ✗             ✗           ✗          ✗               ✗                 ✗                 ✗           ✗                 ✗      !
   legend ✓ native   ! derived   ✗ absent
 ```
 
@@ -339,5 +345,5 @@ Adding a [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) varia
 - [plugin.md](./plugin.md): the third-party process-plugin manifest, wire, and probes.
 - [agent-adapters.md](../../contributing/agent-adapters.md): the step-by-step integration playbook and deliverables checklist.
 - [agent-support.md](../../reference/agent-support.md): the published capability, wiring, and lifecycle-hook matrices.
-- [adapter_claude.md](./adapter_claude.md) and its twelve siblings: per-kind native mappings.
+- [adapter_claude.md](./adapter_claude.md) and its thirteen siblings: per-kind native mappings.
 - [claude-reference.md](../../externals/agent-adapter/claude-reference.md) and its siblings: the raw upstream protocols adapters read, pinned to source URLs.

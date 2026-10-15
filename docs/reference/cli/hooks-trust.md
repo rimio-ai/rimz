@@ -56,6 +56,8 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `pi` | `~/.pi/agent/extensions/rimz.ts` | Whole file |
 | `qwen` | `${QWEN_HOME:-~/.qwen}/settings.json` | Merge; wraps the statusline |
 
+Launch-only Trae has no hook installer. Its documented CLI hook payloads remain unverified; see [Trae support](../agent-support.md#trae-launch-only).
+
 RimZ's Kiro integration needs CLI 2.31.0 or later for one shared configuration, session, skills, and global-hook home. Older releases refuse with `RimZ's Kiro integration needs Kiro CLI 2.31.0 or later (found <found>); upgrade to 2.31.0 or later`, and an install with no `AGENT` skips Kiro silently. The home is `KIRO_HOME` when absolute, non-root, and neither equal to nor an ancestor of `HOME`; otherwise it is `$HOME/.kiro`. An unmarked hook file at that path whose every hook runs RimZ's feed command is reclaimed rather than refused. [Plugin agents](../agent-plugins.md) have no installer.
 
 A merge adds RimZ's entries and keeps your own hooks and every other value. Rewriting a JSON settings file can reorder its keys, so a dry-run diff may show more lines than the hook entries.

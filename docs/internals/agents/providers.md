@@ -330,6 +330,8 @@ Each adapter page maps its native surfaces onto these types; this table is the i
 | Cursor | CLI `status --format json` and `about --format json` → email, tier, version | none ([adapter_cursor.md](./adapter_cursor.md#account-and-balance)) |
 | Grok | `${GROK_HOME:-~/.grok}/auth.json` metadata → session metered, API key unmetered | none; spend comes from `turn_completed` ([adapter_grok.md](./adapter_grok.md#account-and-balance)) |
 | Amp | `AMP_API_KEY` or `secrets.json` presence → pay-per-use, no identity ([adapter_amp.md](./adapter_amp.md#account-and-balance)) | none |
+| Kiro | none; login schema unpublished ([adapter_kiro.md](./adapter_kiro.md#account-and-balance)) | none |
+| Trae | none; CLI login probe schema unverified ([adapter_trae.md](./adapter_trae.md#coverage-and-evidence-gaps)) | none |
 
 Claude, Codex, Copilot, Pi, OpenCode, Kimi, and Qwen declare `direct_account_usage` and read provider credentials for it; Antigravity reads no credential and pairs identity and quota through the verified service of an already-running `agy`. Antigravity, Copilot, OpenCode, Kimi, and Qwen have no realtime leg, so the direct query is their only balance source. Pi and OpenCode delegate to the Claude or Codex usage fetcher for their backing token. Copilot's scopes and Claude's gateway `spend` scope omit a duration on purpose, keeping these allowances out of 5h and 7d policy. The gateway reset does not schedule auto-continue; a spend-limit park becomes actionable after reset.
 
@@ -342,7 +344,7 @@ A new agent gets an account block and balance bars by filling these types from i
 1. Fill `AgentAccount` on the session's `AgentContext` from the transport, override `probe_account` for the idle case, or both.
 2. Fill `AgentRateLimits` from the transport: each window with `used_percentage`, a reset instant, and either `duration_mins` or a stable scope id and label.
 3. Where a read-only account-usage surface exists, implement `probe_account_usage`, declare `direct_account_usage`, and fill `ExtraCredits`. Use `Disabled` only when the provider says paid usage is off.
-4. Set the spec's color and name, and optionally add art to [`emblems.toml`](../../../crates/rimz/src/agents/emblems.toml).
+4. Set the spec's color and name, and add curated art for a built-in to [`emblems.toml`](../../../crates/rimz/src/agents/emblems.toml).
 5. Implement the transcript spend parser ([spending.md](./spending.md#per-provider-parsing)).
 6. Keep every step best-effort: a missing fact is an omitted label, a `v?`, or an unknown track, never an error.
 

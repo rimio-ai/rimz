@@ -122,6 +122,27 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
 }
 
 #[test]
+fn prompted_launch_without_turn_lifecycle_stays_idle() {
+    for (kind, status, phase) in [
+        ("trae", AgentStatus::Idle, TurnPhase::Idle),
+        ("claude", AgentStatus::Running, TurnPhase::Reasoning),
+    ] {
+        for launch_state in [AgentLaunchState::Starting, AgentLaunchState::Bound] {
+            let mut payload = launch_payload("launch_test", "coder");
+            payload.state = launch_state;
+            let states = reduce_agent_states(&[launch_event(kind, payload)]);
+            let state = &states[0];
+            assert_eq!((state.status, state.phase), (status, phase), "{kind}");
+            assert_eq!(state.task.as_deref(), Some("boot"));
+            assert_eq!(
+                state.turn_started_at.is_some(),
+                status == AgentStatus::Running
+            );
+        }
+    }
+}
+
+#[test]
 fn system_prompt_digest_survives_attach_and_absent_launch_values() {
     let digest = "a".repeat(64);
     let launch = |digest: Option<&str>| {

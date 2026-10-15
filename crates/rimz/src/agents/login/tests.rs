@@ -770,6 +770,19 @@ fn default_health_checks_the_provider_home_and_names_the_hooks_fix() {
 }
 
 #[test]
+fn health_accepts_a_launch_only_home_with_or_without_a_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let ambient = BTreeMap::from([(
+        "HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    let login = ProviderLogin::default_for(kind("trae"));
+    assert_eq!(login.health(&ambient), Ok(()));
+    std::fs::create_dir(temp.path().join(".trae")).unwrap();
+    assert_eq!(login.health(&ambient), Ok(()));
+}
+
+#[test]
 fn native_ambient_drops_only_an_exported_home_naming_a_declared_account() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[codex.team]\nhome = \"/srv/team\"\n"),

@@ -256,6 +256,26 @@ use crate::ids::WorkspaceId;
 use crate::store::snapshot::PaneAgent;
 
 #[test]
+fn launch_only_readiness_blocks_done_even_with_force_but_preserves_any() {
+    let now = Timestamp::now();
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Success,
+    ] {
+        let mut receiver = agent("launch-trae", status);
+        receiver.kind = crate::ids::AgentKind::new_unchecked("trae");
+        for force in [false, true] {
+            assert!(!receiver_readiness(&receiver, DeliveryGate::Done, force, now).gate_open);
+        }
+        if status == AgentStatus::Idle {
+            assert!(receiver_readiness(&receiver, DeliveryGate::Any, false, now).accepts_prompt());
+        }
+    }
+}
+
+#[test]
 fn receiver_readiness_unifies_gate_waiting_and_force() {
     let now = Timestamp::now();
     let idle = agent("sess-idle", AgentStatus::Idle);
@@ -572,6 +592,7 @@ fn ready_check() -> DeliveryCheck {
             status: Some(AgentStatus::Idle),
             compacting: false,
             open: true,
+            turn_lifecycle_gap: None,
             resume_recovered: None,
         },
         ask: AskCheck {

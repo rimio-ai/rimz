@@ -145,8 +145,8 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 | Cell | Available for | Launch posture |
 | --- | --- | --- |
 | `<kind>-ask` | every kind | the agent asks before tool use |
-| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, Qwen); the default posture otherwise (Codex, Grok, Pi, Amp, Kiro, OpenCode) |
-| `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, and `pi` | the adapter's automatic-approval flags |
+| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, Qwen); the default posture otherwise (Codex, Grok, Pi, Amp, Kiro, OpenCode, Trae) |
+| `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, `trae`, and `pi` | the adapter's automatic-approval flags |
 | `<kind>-yolo` | every kind except `droid`, `amp`, and `pi` | the adapter's bypass flags |
 
 On the command line, `--ask` keeps native permission prompts and `--yolo` passes the adapter's bypass flags. Either flag replaces a profile's declared mode or a permission-mode cell's posture, and the agent's record keeps it, so restart, resume, and rebirth replay that mode rather than the profile's. With neither, the declared mode stays, or the CLI keeps its own default (supervised `-p` defaults an unset mode to `auto`). Replacement recognizes the adapter's rendered flag vectors, not alternate spellings in raw profile `args` such as `--permission-mode=plan`. Each agent's exact flags per mode are in [agent support](../agent-support.md#permission-modes).

@@ -177,6 +177,7 @@ Each sandbox launch overlays at most one user skill root, declared by the adapte
 | Kiro | `KIRO_HOME` (default `$HOME/.kiro`), plus `/skills` | `Unsupported` |
 | Antigravity, Amp, OpenCode, Grok | `$HOME/.agents/skills` | `Unsupported` |
 | Plugins | None | `Unsupported` |
+| Trae | None verified | `Unsupported` |
 
 A provider marked `Unsupported`, or without a root, refuses every configured list under sandbox isolation, whatever skills are installed. `Frontmatter` writes `disable-model-invocation: true` into `SKILL.md` frontmatter. `OpenAiPolicy` writes `policy.allow_implicit_invocation: false` into `agents/openai.yaml`.
 

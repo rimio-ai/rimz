@@ -476,8 +476,8 @@ pub trait LaunchCapability: CoreCapability {
     /// `SessionStart` with `source: "resume"`, coalescing back onto the same
     /// `(kind, agent_id)` rollup row and re-stamping the new pane. `None` when
     /// the agent has no resume CLI, so [`crate::harness::resume::plan_resume`] skips it.
-    /// Default `None` keeps the contract "implement nothing else" for an agent
-    /// that cannot resume yet.
+    /// The default renders the definition's resume form; an absent form returns
+    /// `None` for an agent that cannot resume yet.
     fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         self.spec().launch.resume_command(_session_id)
     }

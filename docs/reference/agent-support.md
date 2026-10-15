@@ -1,14 +1,15 @@
 # Agent support
 
-RimZ has a built-in adapter for thirteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
+RimZ has a built-in adapter for fourteen coding agents. Where verified, adapters read the agent's own hooks, transcripts, and local files, and turn them into the sidebar card, `rimz asks`, spend figures, and launch argv. Trae is launch-only. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
-Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
+Each agent sits in a support tier. Supported, Alpha, and Experimental describe how much the author runs it day to day; their integrations are wired against verified surfaces and covered by tests. Launch only means argv support without verified reporting. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
 | Tier | Agents | What to expect |
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
 | Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Launch only | Trae | Launch, native picker, yolo, model selection, and a presence card; no turn tracking. |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -16,7 +17,7 @@ RimZ tracks each agent's latest release. Where a feature needs a minimum agent v
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
-The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
+The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, trae) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
 ## What the marks mean
 
@@ -36,7 +37,7 @@ Each capability is one thing a card or command shows you. State is the base the 
 
 | Capability | What it covers | ● full | ◐ partial | ✗ unsupported |
 | --- | --- | --- | --- | --- |
-| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | RimZ reads the lifecycle from a local store instead of being told, so the card can drift: a cancel or failure can read as an ordinary stop. | No live state; the pane shows as a plain process row. |
+| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | RimZ reads the lifecycle from a local store instead of being told, so the card can drift: a cancel or failure can read as an ordinary stop. | No turn tracking; a RimZ launch may have a presence-only card. |
 | Live | While a turn runs: context-window fill, the token breakdown (input, output, cache), and a dollar figure. | All three, moving during the turn. | Some of it: a fill percentage without token counts, totals without the breakdown, an estimated price instead of a billed one, or figures that update only at the turn boundary. | No numbers; the card carries state only. |
 | History | Past sessions readable end to end, with per-turn tokens and dollars feeding [`rimz stats`](./cli/stats.md), the provider dashboard, and the heatmap. | Transcripts, tokens, and dollars, complete across sessions. | Sessions read back, but dollars are estimated locally or missing. | No archive RimZ can read. |
 | Account | Your login, plan, and usage windows (a 5-hour and weekly pair, monthly credits, a prepaid balance) with fill and reset time. | Plan and windows, with usage counted against them. | Identity and plan with no usage, windows with no plan, or a quota the provider publishes as display-only. | No readable account surface. |
@@ -71,6 +72,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| Trae | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -145,9 +147,17 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Idle notifications rest the card only when their timestamp is newer than its last activity.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
 
+### Trae: launch only
+
+`rimz agents trae "task"` launches the documented `traecli` TUI. `trae-yolo` adds `--yolo`, which disables provider approvals and sandbox; `--model` selects a model. Bare `--resume` opens `traecli resume`, not latest-session resume. Exact-id resume and fork are unsupported.
+
+The RimZ-launched card is presence only: idle means present with turns untracked, even with a task prompt. It clears on pane exit and a nonzero provisional exit reads failed. CLI hook payloads, session storage, transcripts, usage, login probes, and ACP remain [unverified](../externals/agent-adapter/trae-reference.md#evidence-required-before-implementation). There are no state transitions, asks, live context, spend, or supervised subagents. Native delegation remains in Trae's UI.
+
+Default `rimz message` refuses because Trae reports no turn boundaries. Use `--steer` to type into the pane now, or answer directly there; `--wait` is unsupported. There is no hook installer or verified skill root. Run `traecli` once on the host before using sandbox isolation: an absent `~/.trae` is not bound, so a first sandbox login would not persist. CLI 2.0 requires TRAE Enterprise entitlement; no binary was installed or captured for this adapter.
+
 ## Config homes and skills
 
-Each built-in agent keeps its settings, sessions, and credentials in a config home. RimZ reads from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation).
+Each built-in agent has a config home. RimZ reads verified surfaces, installs reporting hooks where supported, and binds an existing home into the [sandbox](../guide/configuration.md#agent-isolation).
 
 | Agent | Config home | Override | Skill root | Sandbox `skills` list | Host switch |
 | --- | --- | --- | --- | --- | --- |
@@ -164,6 +174,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
+| Trae | `~/.trae` | absolute `TRAE_HOME`, excluding root and ancestors of `HOME` (including itself) | none verified | refused | none |
 | Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
@@ -199,6 +210,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Qwen | `qwen --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
+| Trae | `traecli resume`; no session binding back to the card | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
@@ -220,6 +232,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| Trae | none | none | none | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
@@ -260,6 +273,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Qwen | `--model <model>` | refused |
 | Kimi | `--model <model>` | refused |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
+| Trae | `--model <model>` | refused |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
@@ -291,7 +305,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Pi | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok | ✗ | no verified replacement flag |
+| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Trae | ✗ | no verified replacement flag |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
 Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills, and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
@@ -337,6 +351,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Trae | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -383,8 +398,9 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Trae | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived |
 
-`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
+`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the launch wrapper and reaper. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits. Trae declares no session-end reporting; only its RimZ-launched pane has wrapper cleanup.
 
 Codex's `Interrupt` hook ends the turn with an interrupted outcome. RimZ does not install Codex's `SessionEnd` hook, because Codex also fires it when an idle app server unloads while the pane stays open.
 
@@ -407,6 +423,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Qwen | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
+| Trae | [adapter_trae.md](../internals/agents/adapter_trae.md) | [trae-reference.md](../externals/agent-adapter/trae-reference.md) |
 
 ## Agents not yet supported
 

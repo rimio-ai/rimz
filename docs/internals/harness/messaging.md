@@ -14,6 +14,8 @@ Every send persists a `MessageRecord` before a byte reaches a pane. If the recei
 
 The rest of the module follows from that rule: how a record decides it is ready, who wakes up to deliver it, how a write is confirmed, and what happens when confirmation never arrives.
 
+Boundary dispatch first checks declared TurnLifecycle coverage for each resolved agent. Unsupported refuses before either a live send or enqueue, regardless of card status, with an explicit `--steer` alternative. An idle presence-only card does not prove a turn boundary. RimZ's own producers also queue boundary records directly into the store. `crates/rimz/src/message/deliver.rs::receiver_readiness` keeps their Done gate closed for Unsupported turn lifecycles, including forced records. They remain durable and pending, not archived for this gap; `rimz message show` names the missing turn lifecycle and its declared reason. The Any gate stays unchanged for steer and interrupt, including steer parked without a pane. Reply waits retain their separate lifecycle preflight.
+
 ## Module layout
 
 | File | Owns |
@@ -171,7 +173,7 @@ Every mode resolves targets through the same parser, writes the same record shap
 
 Steer still writes a `Queued` record first and moves it to `Sent` when the paste lands. When the address resolves only to a durable card with no live pane, steer parks, prints `queued for @handle (msg_...)`, and the retry path delivers once a pane appears.
 
-Internal callers pick a mode too. Self-only timer and watched-command waits use steer, but a native prompt open at the pane-write check leaves a `HarnessNotice::Wait` record `Queued` with gate `Any`, for the next turn boundary after the prompt is answered. This also applies to check-ins; human steers and deadline notices retain their waiting-input error. Scheduled loop and signal deliveries, team bindings included, use boundary with the `Done` gate. `rimz message @me` resolves the calling agent to its pinned session through the shared CLI resolver and refuses an unidentified, provisional, or ended caller.
+Internal callers pick a mode too. Self-only timer and watched-command waits use steer, but a native prompt open at the pane-write check leaves a `HarnessNotice::Wait` record `Queued` with gate `Any`, for the next turn boundary after the prompt is answered. `crates/rimz/src/cli/wait/add.rs::run` refuses to arm any self-wake for a caller declaring TurnLifecycle Unsupported, with its declared reason. This also applies to check-ins; human steers and deadline notices retain their waiting-input error. Scheduled loop and signal deliveries, team bindings included, use boundary with the `Done` gate. `rimz message @me` resolves the calling agent to its pinned session through the shared CLI resolver and refuses an unidentified, provisional, or ended caller.
 
 ### Conditions
 

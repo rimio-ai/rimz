@@ -1,6 +1,6 @@
 # TRAE CLI protocol reference
 
-This page records the official `traecli` surface for contributors preparing an integration. It makes no claim about RimZ support. The [adapter playbook](../../contributing/agent-adapters.md) owns the integration sequence. The [externals index](../README.md#agent-adapters) lists this as a reference-only surface.
+This page records the official `traecli` surface behind RimZ's [launch-only Trae adapter](../../internals/agents/adapter_trae.md). The [adapter playbook](../../contributing/agent-adapters.md) owns the integration sequence. The [externals index](../README.md#agent-adapters) records its documentation-only evidence baseline.
 
 ## Scope and evidence
 

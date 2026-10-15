@@ -25,6 +25,14 @@ pub(super) fn run(args: WaitArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.resolution_snapshot()?;
     let agent = caller_agent(&snapshot, caller.as_ref())?
         .context("arming a wait is only available to an agent RimZ can identify; run this command from an agent pane")?;
+    if let Some(spec) = rimz::agents::spec_by_kind(agent.kind.as_str())
+        && let rimz::agents::ConcernCoverage::Unsupported { reason } = spec.coverage.turn_lifecycle
+    {
+        return Err(rimz::agents::HookPreflightErr::TurnLifecycleUnsupported {
+            reason: reason.to_owned(),
+        }
+        .into());
+    }
     if agent.agent_id.is_provisional() {
         bail!("the calling agent has not registered a real session yet");
     }

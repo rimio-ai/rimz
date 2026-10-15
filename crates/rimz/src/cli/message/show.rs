@@ -542,7 +542,9 @@ fn fifo_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
 }
 
 fn gate_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
-    let detail = if check.gate.open && check.gate.provider_start_pending {
+    let detail = if let Some(reason) = check.gate.turn_lifecycle_gap {
+        format!("turn lifecycle unsupported: {reason}")
+    } else if check.gate.open && check.gate.provider_start_pending {
         "waiting for provider registration".to_owned()
     } else if check.gate.resume_recovered == Some(false) {
         "waiting for provider recovery".to_owned()
@@ -685,6 +687,9 @@ pub(super) fn render_verdict(
         deliver::DeliveryVerdict::Compacting => {
             format!("waiting: {target} is compacting its context")
         }
+        deliver::DeliveryVerdict::TurnLifecycleUnsupported { reason } => {
+            format!("stuck: {target}: turn lifecycle unsupported: {reason}")
+        }
         deliver::DeliveryVerdict::GateClosed { gate, status } => {
             let status = status
                 .as_ref()
@@ -729,6 +734,7 @@ pub(super) fn delivery_action_hint(
         | deliver::DeliveryVerdict::BehindFifo { .. }
         | deliver::DeliveryVerdict::ReceiverGone
         | deliver::DeliveryVerdict::Compacting
+        | deliver::DeliveryVerdict::TurnLifecycleUnsupported { .. }
         | deliver::DeliveryVerdict::GateClosed { .. }
         | deliver::DeliveryVerdict::ProviderStarting
         | deliver::DeliveryVerdict::ResumeUnrecovered => {
@@ -821,6 +827,7 @@ mod tests {
                 status: Some(AgentStatus::Idle),
                 compacting: false,
                 open: true,
+                turn_lifecycle_gap: None,
                 resume_recovered: None,
             },
             ask: deliver::AskCheck {

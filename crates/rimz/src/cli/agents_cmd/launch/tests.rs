@@ -34,6 +34,12 @@ fn picker_receipt_names_lane_and_binding_boundary() {
             format!("opened {kind} session picker in #docs; the card binds {boundary}\n")
         );
     }
+    let mut output = Vec::new();
+    write_picker_receipt(&mut output, "trae", Some("docs")).unwrap();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "opened trae session picker in #docs; turn tracking is unavailable\n"
+    );
 }
 
 #[test]

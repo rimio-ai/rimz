@@ -734,10 +734,17 @@ impl ProviderLogin {
     /// hooks. It is the gate every RimZ launch and relaunch runs on the login
     /// it launches under, `default` included, and what the account rows
     /// display; pass it the [`LoginCatalog::native_ambient`] of its kind.
+    /// Kinds declaring no hook installer have no hook health precondition.
     pub fn health(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
         let Some(adapter) = crate::agents::find_definition(&self.kind) else {
             return Ok(());
         };
+        if matches!(
+            adapter.spec().coverage.hook_install,
+            crate::agents::ConcernCoverage::Unsupported { .. }
+        ) {
+            return Ok(());
+        }
         let env = self.env(ambient);
         let Some(path) = self
             .home()

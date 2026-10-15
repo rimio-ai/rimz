@@ -18,13 +18,13 @@ AgentState, one per (kind, agent_id)
 sidebar row                                                      sidebar.md
 ```
 
-Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts and balances are [providers.md](./providers.md), spend and pricing [spending.md](./spending.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
+Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and twelve siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts and balances are [providers.md](./providers.md), spend and pricing [spending.md](./spending.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
 
 ## Terms
 
 | Term | Meaning |
 | --- | --- |
-| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
+| agent kind | A registered integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `trae`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
 | session | Identity: the id the agent's own hooks report. Every durable fact attaches to a session, keyed `(kind, agent_id)`. |
 | agent instance | Presence: a live local pane running a known agent right now, read from the multiplexer on every snapshot. Joining instances to sessions is [instances.md](./instances.md). |
 | rollup entry | The one `AgentState` per session that store replay derives. The sidebar enriches and renders it. |
@@ -53,6 +53,8 @@ The phase ([`TurnPhase`](../../../crates/rimz/src/agents/lifecycle.rs)) is `reas
 ## The rollup
 
 The reducer folds `agent.lifecycle` events, in log order, into one `AgentState` keyed by `(kind, agent_id)`. Because `agent_id` is the session id, two concurrent agents of the same kind never share a row. Production replay runs through `reduce_agent_states_seeded_with_identity` in [`project.rs`](../../../crates/rimz/src/store/snapshot/project.rs), which also assigns card names and applies [launch identity inheritance](./instances.md#launch-identity-across-conversations) after each event.
+
+Launch events retain the prompt as the card's task. A prompted Starting or Bound launch normally begins Running/Reasoning. When the registered kind declares TurnLifecycle Unsupported, it instead begins Idle/Idle: present, turns untracked, not evidence that the provider stopped. This prevents a false silent-turn failure. Failed launches still begin Failed; wrapper exit and pane-loss cleanup are unchanged. Replay derives this rule from the adapter spec without changing the snapshot schema.
 
 Each event is a partial update. `carried_base` clones the prior row, `assemble_agent_state` overlays what the event carries, and the rule for a field the event omits is that field's lifetime. The types do not state these rules, so the table does. [`AgentState`](../../../crates/rimz/src/agents/state.rs) is the full field catalog. Adding a field bumps `SNAPSHOT_VERSION` in [`store/snapshot/view.rs`](../../../crates/rimz/src/store/snapshot/view.rs).
 
