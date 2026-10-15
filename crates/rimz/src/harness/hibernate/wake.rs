@@ -308,11 +308,14 @@ fn wake_with(
             crate::store::hibernate::record(paths, entry)?;
             return Err(error.into());
         }
-        if dwell.is_some() {
-            crate::disk::atomic::write_temp_then_rename_cache(
+        // The stamp only grants grace; a failed write must not keep a thawed agent recorded.
+        if dwell.is_some()
+            && let Err(error) = crate::disk::atomic::write_temp_then_rename_cache(
                 &wake_stamp_path(runtime, Some(pane)),
                 &WakeStamp::Focus { focus: thawed_at },
-            )?;
+            )
+        {
+            tracing::debug!(%error, "failed to record hibernation focus wake stamp");
         }
         let baseline = crate::proc::cgroup::memory_stat(&scope).ok();
         if let Some(baseline) = baseline {

@@ -453,6 +453,40 @@ fn dwell_elapsed_thaws_while_focused() {
 }
 
 #[test]
+fn focus_stamp_failure_still_withdraws_the_thawed_record() {
+    let (dir, paths, _, entry) = fixture();
+    let runtime =
+        crate::RuntimePaths::under(paths.workspace_id.clone(), &dir.path().join("runtime"))
+            .unwrap();
+    // A non-empty directory at the stamp path makes the atomic rename fail.
+    let stamp = wake_stamp_path(&runtime, Some(&entry.pane_id));
+    std::fs::create_dir_all(stamp.join("blocker")).unwrap();
+    let request = WakeHelperRequest {
+        workspace_id: paths.workspace_id.clone(),
+        pane_id: entry.pane_id.clone(),
+        requested_at_ms: Some(0),
+    };
+    let result = wake_focus_with(
+        &paths,
+        &runtime,
+        &request,
+        dir.path(),
+        || Some(Dwell::Elapsed),
+        || Some(true),
+        |_| {},
+    );
+    assert!(matches!(result, Ok(Woken::Thawed { .. })), "{result:?}");
+    assert_eq!(
+        std::fs::read_to_string(entry.scope.join("cgroup.freeze")).unwrap(),
+        "0"
+    );
+    assert!(
+        hibernate::read(&paths).is_empty(),
+        "a thawed agent must not stay recorded as hibernating"
+    );
+}
+
+#[test]
 fn dwell_input_growth_thaws_while_focused() {
     dwell_case(
         |ms| Some(if ms >= 500 { 4 } else { 3 }),
