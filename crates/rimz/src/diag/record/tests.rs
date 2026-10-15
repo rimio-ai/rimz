@@ -2,6 +2,33 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn subagent_zone_lookup_failures_round_trip_and_distinguish_run_and_lookup() {
+    let run_id = crate::RunId::new();
+    let mut identities = std::collections::BTreeSet::new();
+    for lookup in ["projection", "caller", "pane_listing"] {
+        let wire = serde_json::json!({
+            "kind": "subagent_zone_lookup_failed", "run_id": run_id,
+            "lookup": lookup, "error": "placement unavailable",
+        });
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(
+            decoded.is_ok(),
+            "placement diagnostic must decode: {decoded:?}"
+        );
+        let event = decoded.unwrap();
+        assert_eq!(event.severity(), DiagSeverity::Warn);
+        assert!(identities.insert(event.identity_key()));
+        assert!(event.summary().contains("placement unavailable"));
+        assert!(event.summary().contains(&run_id.to_string()));
+        assert_eq!(serde_json::to_value(&event).unwrap(), wire);
+        let mut other_run = wire;
+        other_run["run_id"] = serde_json::to_value(crate::RunId::new()).unwrap();
+        let other = serde_json::from_value::<DiagEvent>(other_run).unwrap();
+        assert_ne!(event.identity_key(), other.identity_key());
+    }
+}
+
+#[test]
 fn hook_diagnostics_round_trip_with_distinct_failure_and_room_lag_identities() {
     let ingress = crate::ids::EventId::new();
     for (wire, identity) in [

@@ -46,6 +46,19 @@ pub(super) fn run_placement(
     }
 }
 
+pub(super) fn run_tab_title(
+    store: &rimz::Store,
+    channel: Option<&str>,
+    subagent: bool,
+    kind: &AgentKind,
+) -> String {
+    if subagent {
+        supervised::pane::subagent_companion_title(store, channel)
+    } else {
+        format!("run {kind}")
+    }
+}
+
 pub(super) fn supervised_prompt<'a>(
     request: &'a SupervisedRunRequest,
     adapter: &rimz::agents::AgentDefinition,
@@ -315,23 +328,22 @@ fn open_attempt_pane(
                     sidebar,
                     pane,
                     &launch_identity.name,
+                    prepared.room_channel.as_deref(),
+                    tab_anchor.clone(),
+                    run_id,
                 ) {
                     supervised::pane::SubagentZoneOpen::Opened => Ok(()),
                     supervised::pane::SubagentZoneOpen::Failed(err) => Err(err.into()),
-                    supervised::pane::SubagentZoneOpen::CompanionTab => {
-                        let companion = supervised::pane::subagent_companion_title(&prepared.store);
-                        // A failed response may follow a successful tab birth.
-                        // Do not execute the same durable run in a second tab.
-                        tab(companion)
-                    }
-                    supervised::pane::SubagentZoneOpen::RunTab => {
-                        tab(format!("run {}", prepared.adapter.spec().kind))
-                    }
                 }
             }
             Err(err) => Err(anyhow::Error::from(err)),
         },
-        RunPlacement::Tab => tab(format!("run {}", prepared.adapter.spec().kind)),
+        RunPlacement::Tab => tab(run_tab_title(
+            &prepared.store,
+            prepared.room_channel.as_deref(),
+            request.subagent,
+            &launch_identity.kind,
+        )),
     };
     if let Err(err) = open_result {
         let err = err.context("opening run pane");

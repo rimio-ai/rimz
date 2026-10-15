@@ -166,36 +166,16 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         store,
         &parent_workspace,
         &cwd,
-        env.clone(),
-        sidebar.clone(),
+        env,
+        sidebar,
         &pane,
         child.name.as_deref().unwrap_or(child.agent_id.as_str()),
+        child.channel.as_deref(),
+        Some(parent_pane.pane_id.clone()),
+        &run.run_id,
     ) {
         supervised::pane::SubagentZoneOpen::Opened => {}
         supervised::pane::SubagentZoneOpen::Failed(err) => return Err(err.into()),
-        fallback => {
-            let title = match fallback {
-                supervised::pane::SubagentZoneOpen::CompanionTab => {
-                    supervised::pane::subagent_companion_title(store)
-                }
-                _ => format!("run {}", child.kind),
-            };
-            room.backend().open_tab(&rimz::mux::TabOptions {
-                env,
-                title,
-                panes: rimz::mux::LayoutPanes {
-                    columns: vec![rimz::mux::LayoutColumn {
-                        panes: vec![pane],
-                        stacked: false,
-                    }],
-                    focused_pane: 0,
-                },
-                focus: false,
-                dock_sidebar: true,
-                after: Some(parent_pane.pane_id.clone()),
-                sidebar,
-            })?;
-        }
     }
     if !supervised::pane::wait_for_subagent_pane_bind(store, &child.kind, launch_id) {
         return Err(resume_bind_timeout(child));

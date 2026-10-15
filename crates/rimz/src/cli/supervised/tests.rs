@@ -58,7 +58,14 @@ fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
     solo.pane = Some(pane_ref("%1", "work"));
     let live = vec![solo.pane.clone().unwrap()];
     assert_eq!(
-        select_subagent_zone_strategy(std::slice::from_ref(&solo), &live, &solo, "room", &theme),
+        select_subagent_zone_strategy(
+            std::slice::from_ref(&solo),
+            &live,
+            &solo,
+            "room",
+            &theme,
+            "work subagents"
+        ),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
@@ -78,6 +85,7 @@ fn subagent_zone_strategy_uses_solo_column_and_team_companion_tab() {
             &planner,
             "room",
             &theme,
+            "design subagents",
         ),
         Some(SubagentZoneStrategy::CompanionTab {
             title: "design subagents".to_owned(),
@@ -111,7 +119,7 @@ fn subagent_zone_strategy_shares_companion_across_team() {
     let agents = vec![planner.clone(), coder, older, newer];
 
     assert_eq!(
-        select_subagent_zone_strategy(&agents, &live, &planner, "room", &theme),
+        select_subagent_zone_strategy(&agents, &live, &planner, "room", &theme, "design subagents"),
         Some(SubagentZoneStrategy::CompanionGrid {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%3"))],
             title: "design subagents 2".to_owned(),
@@ -143,7 +151,7 @@ fn subagent_zone_strategy_reuses_legacy_parent_launch_children() {
     let agents = vec![old, parent.clone(), child, wrong];
 
     assert_eq!(
-        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme),
+        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme, "work subagents"),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%2"),
@@ -167,7 +175,7 @@ fn subagent_zone_strategy_uses_live_ended_child_and_skips_dead_newer_child() {
     let agents = vec![parent.clone(), kept, dead];
 
     assert_eq!(
-        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme),
+        select_subagent_zone_strategy(&agents, &live, &parent, "room", &theme, "work subagents"),
         Some(SubagentZoneStrategy::Split {
             session_name: "room".to_owned(),
             pane_id: PaneId::from_parts(MuxName::Tmux, "%2"),
@@ -198,6 +206,7 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &planner,
             "room",
             &theme,
+            "design subagents",
         ),
         Some(SubagentZoneStrategy::CompanionGrid {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%2"))],
@@ -211,6 +220,7 @@ fn subagent_zone_strategy_reuses_unbound_team_companion_view() {
             &planner,
             "room",
             &theme,
+            "design subagents",
         ),
         Some(SubagentZoneStrategy::CompanionGrid {
             anchors: vec![("room".to_owned(), PaneId::from_parts(MuxName::Tmux, "%3"))],
@@ -236,7 +246,14 @@ fn subagent_zone_strategy_caps_physical_companions_and_reuses_overflow() {
     sidebar.command = Some(rimz::pane::SIDEBAR_CHROME_TITLE.to_owned());
     live.push(sidebar);
     let choose = |live: &[PaneRef]| {
-        select_subagent_zone_strategy(std::slice::from_ref(&parent), live, &parent, "room", &theme)
+        select_subagent_zone_strategy(
+            std::slice::from_ref(&parent),
+            live,
+            &parent,
+            "room",
+            &theme,
+            "design subagents",
+        )
     };
     assert_eq!(
         choose(&live),
@@ -300,6 +317,382 @@ fn subagent_launch_waits_for_wrapper_pane_bind_but_caps_the_wait() {
         Duration::ZERO,
         Duration::ZERO,
     ));
+}
+
+#[test]
+fn subagent_zone_caller_failure_opens_channel_companion() {
+    assert_zone_fallback("caller");
+}
+
+#[test]
+fn subagent_zone_pane_listing_failure_opens_channel_companion() {
+    assert_zone_fallback("pane_listing");
+}
+
+#[test]
+fn subagent_zone_projection_failure_opens_channel_companion() {
+    assert_zone_fallback("projection");
+}
+
+#[test]
+fn subagent_zone_missing_anchor_and_split_failure_open_channel_companion() {
+    for split in [false, true] {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let parent = zone_backend::register_caller(&fixture);
+        let backend = zone_backend::Backend {
+            listed: Some(if split { vec![parent] } else { vec![] }),
+            ..Default::default()
+        };
+        let result = zone_backend::open(&fixture, &backend);
+        let tabs = backend.tabs.lock().unwrap();
+        assert_eq!(tabs.len(), 1, "must open a companion: {result:?}");
+        assert_eq!(tabs[0].title, "#ch subagents");
+        assert!(matches!(result, super::pane::SubagentZoneOpen::Opened));
+    }
+}
+
+#[test]
+fn subagent_zone_ambiguous_split_never_opens_a_second_pane() {
+    for error in [
+        rimz::mux::MuxErr::Timeout {
+            program: "fake".to_owned(),
+            args: "split".to_owned(),
+            seconds: 1,
+        },
+        rimz::mux::MuxErr::Output {
+            program: "fake".to_owned(),
+            reason: "unconfirmed pane".to_owned(),
+        },
+    ] {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let parent = zone_backend::register_caller(&fixture);
+        let backend = zone_backend::Backend {
+            listed: Some(vec![parent]),
+            split_error: std::sync::Mutex::new(Some(error)),
+            ..Default::default()
+        };
+        assert!(matches!(
+            zone_backend::open(&fixture, &backend),
+            super::pane::SubagentZoneOpen::Failed(_)
+        ));
+        assert!(backend.tabs.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn subagent_zone_failed_tab_is_not_retried() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let backend = zone_backend::Backend {
+        tab_error: std::sync::Mutex::new(Some(rimz::mux::MuxErr::Output {
+            program: "fake".to_owned(),
+            reason: "unconfirmed tab".to_owned(),
+        })),
+        ..Default::default()
+    };
+    let result = zone_backend::open(&fixture, &backend);
+    assert_eq!(
+        backend.tabs.lock().unwrap().len(),
+        1,
+        "must attempt exactly one tab: {result:?}"
+    );
+    assert!(matches!(result, super::pane::SubagentZoneOpen::Failed(_)));
+}
+
+fn assert_zone_fallback(lookup: &str) {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let after = if lookup == "pane_listing" {
+        zone_backend::register_caller(&fixture).pane_id
+    } else {
+        PaneId::parse("tmux:%99").unwrap()
+    };
+    if lookup == "projection" {
+        if fixture.paths.events_log.is_file() {
+            std::fs::remove_file(&fixture.paths.events_log).unwrap();
+        }
+        std::fs::create_dir_all(&fixture.paths.events_log).unwrap();
+    }
+    let backend = zone_backend::Backend::default();
+    let result = zone_backend::open(&fixture, &backend);
+    let tabs = backend.tabs.lock().unwrap();
+    assert_eq!(
+        tabs.len(),
+        1,
+        "lookup {lookup} must open a companion: {result:?}"
+    );
+    assert_eq!(tabs[0].title, "#ch subagents");
+    assert_eq!(tabs[0].after, Some(after));
+    assert!(!tabs[0].focus);
+    assert!(matches!(result, super::pane::SubagentZoneOpen::Opened));
+    let sink = rimz::diag::DiagSink::under(
+        fixture.paths.root.clone(),
+        fixture.workspace_id.clone(),
+        "room",
+        None,
+    );
+    let records = std::fs::read_to_string(sink.log_path().unwrap()).unwrap();
+    let record: serde_json::Value = serde_json::from_str(records.trim()).unwrap();
+    assert_eq!(record["severity"], "warn");
+    assert_eq!(record["event"]["kind"], "subagent_zone_lookup_failed");
+    assert_eq!(record["event"]["lookup"], lookup);
+    assert_eq!(record["event"]["run_id"], fixture.run_id().to_string());
+    assert!(!record["event"]["error"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn subagent_companion_channel_title_needs_no_caller() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    assert_eq!(
+        super::pane::subagent_companion_title(&fixture.store, Some("ch")),
+        "#ch subagents"
+    );
+    assert_eq!(
+        super::pane::subagent_companion_title(&fixture.store, None),
+        "subagents"
+    );
+}
+
+#[test]
+fn supervised_tab_titles_distinguish_children_from_plain_print_runs() {
+    let fixture = RunFixture::new(RunStatus::Running);
+    let kind = AgentKind::new_unchecked("codex");
+    for (subagent, channel, expected) in [
+        (false, None, "run codex"),
+        (false, Some("ch"), "run codex"),
+        (true, Some("ch"), "#ch subagents"),
+        (true, None, "subagents"),
+    ] {
+        assert_eq!(
+            super::run::run_tab_title(&fixture.store, channel, subagent, &kind),
+            expected
+        );
+    }
+}
+
+#[test]
+fn subagent_zone_strategy_uses_channel_family_instead_of_parent_view() {
+    use super::pane::{SubagentZoneStrategy, select_subagent_zone_strategy};
+    let theme = rimz::config::ThemeConfig::default();
+    let mut parent = agent_state("codex", "parent", AgentStatus::Running);
+    parent.team = Some("forge".to_owned());
+    parent.pane = Some(pane_ref("%1", "different-view"));
+    let live = vec![
+        parent.pane.clone().unwrap(),
+        pane_ref("%2", "#ch subagents"),
+    ];
+    assert_eq!(
+        select_subagent_zone_strategy(
+            &[parent.clone()],
+            &live,
+            &parent,
+            "room",
+            &theme,
+            "#ch subagents"
+        ),
+        Some(SubagentZoneStrategy::CompanionGrid {
+            anchors: vec![("room".to_owned(), PaneId::parse("tmux:%2").unwrap())],
+            title: "#ch subagents 2".to_owned(),
+        })
+    );
+}
+
+mod zone_backend {
+    use super::*;
+    use rimz::mux as m;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    pub(super) struct Backend {
+        pub(super) tabs: Mutex<Vec<m::TabOptions>>,
+        pub(super) listed: Option<Vec<PaneRef>>,
+        pub(super) split_error: Mutex<Option<m::MuxErr>>,
+        pub(super) tab_error: Mutex<Option<m::MuxErr>>,
+    }
+
+    macro_rules! unused_methods {
+        ($($name:ident: ($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {
+            $(fn $name(&self, $($arg: $ty),*) -> $ret { panic!("unexpected {}", stringify!($name)) })*
+        };
+    }
+
+    impl m::MuxBackend for Backend {
+        fn name(&self) -> MuxName {
+            MuxName::Tmux
+        }
+        fn list_panes(&self, opts: m::PaneListOptions) -> m::Result<m::PaneListing> {
+            assert_eq!(opts.command_timeout, Some(Duration::from_millis(500)));
+            assert_eq!(
+                opts.consistency,
+                m::PaneReadConsistency::RequireAuthoritative
+            );
+            if let Some(panes) = &self.listed {
+                return Ok(m::PaneListing {
+                    panes: panes.clone(),
+                    ..Default::default()
+                });
+            }
+            Err(m::MuxErr::Timeout {
+                program: "fake".to_owned(),
+                args: "list-panes".to_owned(),
+                seconds: 1,
+            })
+        }
+        fn split_pane(&self, _opts: m::SplitPaneOptions) -> m::Result<Option<PaneId>> {
+            Err(self
+                .split_error
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| m::MuxErr::Command {
+                    program: "fake".to_owned(),
+                    args: "split".to_owned(),
+                    stderr: "no room".to_owned(),
+                }))
+        }
+        fn open_tab(&self, opts: &m::TabOptions) -> m::Result<()> {
+            self.tabs.lock().unwrap().push(opts.clone());
+            if let Some(error) = self.tab_error.lock().unwrap().take() {
+                return Err(error);
+            }
+            Ok(())
+        }
+        unused_methods! {
+            ensure_session: (_opts: &m::SessionOptions) -> m::Result<()>;
+            attach_command: (_name: &str, _config: &rimz::config::MultiplexerConfig) -> m::CommandSpec;
+            attach_existing_command: (_name: &str) -> m::CommandSpec;
+            attach_readonly_command: (_name: &str) -> m::CommandSpec;
+            detach: (_name: &str) -> m::Result<()>;
+            kill_session: (_name: &str) -> m::Result<()>;
+            list_sessions_within: (_timeout: Duration) -> m::Result<Vec<String>>;
+            pane_content_size: (_pane: &PaneId, _session: Option<&str>, _timeout: Duration) -> m::Result<Option<m::PaneContentSize>>;
+            append_companion_pane: (_opts: m::SplitPaneOptions) -> m::Result<m::CompanionPaneAppend>;
+            focus_pane: (_pane: &PaneId, _session: Option<&str>) -> m::Result<()>;
+            toggle_fullscreen: (_pane: &PaneId, _session: Option<&str>) -> m::Result<()>;
+            sidebar_width_step: (_runtime: &RuntimePaths, _session: &str, _pane: &PaneId, _min_observed_at_ms: Option<u64>) -> m::Result<m::WidthStep>;
+            nudge_sidebar_width: (_session: &str, _pane: &PaneId, _current_cols: u16, _target_cols: u16) -> m::Result<()>;
+            record_sidebar_width_default: (_session: &str, _cols: u16) -> m::Result<()>;
+            capture_pane: (_pane: &PaneId, _session: &str, _lines: Option<u16>, _ansi: bool) -> m::Result<m::PaneCapture>;
+            send_keys: (_pane: &PaneId, _session: &str, _text: &str) -> m::Result<()>;
+            send_key: (_pane: &PaneId, _session: &str, _key: rimz::pane::keys::NamedKey) -> m::Result<()>;
+            paste_text: (_pane: &PaneId, _session: &str, _text: &str) -> m::Result<()>;
+            open_sidebar: (_opts: &m::SidebarPaneOptions, _daemon: Option<&m::DaemonView>) -> m::Result<()>;
+            reconcile_sidebars: (_opts: &m::SidebarPaneOptions, _live: &m::SidebarLiveness) -> m::Result<m::SidebarRecovery>;
+            open_background_view: (_opts: &m::BackgroundViewOptions) -> m::Result<m::BackgroundViewLaunch>;
+            confirm_resume_tabs: (_session: &str, _tabs: &[m::ResumeTab]) -> Vec<std::result::Result<(), m::ResumeTabUnconfirmed>>;
+            rename_tab: (_session: &str, _anchor: &PaneId, _name: &str, _intent: m::tab_name::TabNameIntent) -> m::Result<()>;
+            close_pane: (_session: &str, _pane: &PaneId) -> m::Result<()>;
+            version: () -> m::Result<String>;
+        }
+    }
+
+    pub(super) fn register_caller(fixture: &RunFixture) -> PaneRef {
+        let identity = rimz::harness::ancestry::CallerIdentity::from_env();
+        let kind = identity.as_ref().map_or_else(
+            || AgentKind::new_unchecked("codex"),
+            |caller| caller.kind.clone(),
+        );
+        let id = identity
+            .as_ref()
+            .and_then(|caller| caller.launch_id.clone())
+            .unwrap_or_else(|| "parent".into());
+        let pane = identity
+            .and_then(|caller| caller.pane_id)
+            .unwrap_or_else(|| PaneId::parse("tmux:%1").unwrap());
+        fixture
+            .store
+            .append_event(&rimz::EventEnvelope::agent_lifecycle(
+                fixture.workspace_id.clone(),
+                "room",
+                kind.as_str(),
+                "SessionStart",
+                &rimz::agents::AgentLifecycleObservation::new(
+                    Some(id.clone()),
+                    rimz::agents::LifecycleSignal::Registered,
+                ),
+            ))
+            .unwrap();
+        let owner_pid = std::os::unix::process::parent_id();
+        fixture
+            .store
+            .attach_agent_pane(
+                &kind,
+                &id,
+                Some(&id),
+                &rimz::ids::LoginName::default(),
+                "room",
+                &pane,
+                rimz::pane::RuntimeOwner::new(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "parent",
+                    owner_pid,
+                    rimz::proc::process_start_token(owner_pid),
+                ),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let projection = fixture
+            .store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap();
+        rimz::harness::ancestry::resolve_calling_agent(&projection.agents)
+            .unwrap()
+            .pane
+            .clone()
+            .unwrap()
+    }
+
+    pub(super) fn open(
+        fixture: &RunFixture,
+        backend: &Backend,
+    ) -> super::super::pane::SubagentZoneOpen {
+        let cwd = fixture._dir.path();
+        let workspace = rimz::ResolvedWorkspace {
+            workspace_id: fixture.workspace_id.clone(),
+            project_root: cwd.to_owned(),
+            cwd_project_root: None,
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: cwd.to_owned(),
+            worktree_branch: None,
+            session_name: "room".to_owned(),
+            mux_hint: Some(MuxName::Tmux),
+        };
+        let sidebar = m::SidebarPaneOptions {
+            runtime: fixture.runtime.clone(),
+            session_name: "room".to_owned(),
+            workspace_id: fixture.workspace_id.clone(),
+            project_root: cwd.to_owned(),
+            extra_env: Default::default(),
+            cwd: cwd.to_owned(),
+            target: m::SidebarTarget {
+                share: m::WidthPermille::try_from(200).unwrap(),
+                max_cols: std::num::NonZeroU16::new(40).unwrap(),
+                pinned: false,
+            },
+            detected_view_size: None,
+            rimz_bin: "rimz".into(),
+            pristine_birth: false,
+            config: Default::default(),
+            resume_tabs: vec![],
+            refresh_ms: None,
+        };
+        super::super::pane::split_into_subagent_zone(
+            backend,
+            &fixture.store,
+            &workspace,
+            cwd,
+            Default::default(),
+            sidebar,
+            &m::PaneCmd {
+                argv: vec!["child".to_owned()],
+                name: Some("child".to_owned()),
+            },
+            "child",
+            Some("ch"),
+            Some(PaneId::parse("tmux:%99").unwrap()),
+            &fixture.run_id(),
+        )
+    }
 }
 
 #[test]
