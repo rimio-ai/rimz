@@ -189,7 +189,7 @@ fn provider_money_values_share_the_header_end_column() {
         Some(50.0),
     ));
 
-    for (panel, bar_value) in [(extra, "$50"), (api, "$40")] {
+    for (panel, bar_value) in [(extra, "$43"), (api, "$40")] {
         let lines = Dashboard::stacked(&theme, &[panel])
             .width(30)
             .lines()
@@ -496,7 +496,7 @@ fn provider_reset_marker_greens_only_mature_underspend() {
 }
 
 #[test]
-fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent() {
+fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     let theme = Theme::fixed(false);
     let labels = |panel: &crate::store::snapshot::SidebarProviderPanel| -> Vec<String> {
         metered_bar_rows(&theme, panel)
@@ -521,13 +521,13 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
         None,
         Some(50.0),
     ));
-    assert_eq!(labels(&panel), vec!["ex", "7d"]);
-    let row_text = metered_bar_rows(&theme, &panel)[0]
+    assert_eq!(labels(&panel), vec!["5h", "ex"]);
+    let row_text = metered_bar_rows(&theme, &panel)[1]
         .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(row_text.contains("$50"), "{row_text:?}");
+    assert!(row_text.contains("$43"), "{row_text:?}");
     assert!(!row_text.contains("$7"), "{row_text:?}");
 
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
@@ -542,8 +542,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["7d", "ex"],
-        "unknown extra credits keep the binding spent window first"
+        vec!["5h", "7d"],
+        "unknown extra credits use the disabled fallback"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(7.0),
@@ -552,8 +552,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     ));
     assert_eq!(
         labels(&panel),
-        vec!["ex", "7d"],
-        "known-usable extra credits lead while the spent long cap keeps its reset row"
+        vec!["7d", "ex"],
+        "the binding window leads usable credit"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(50.0),
@@ -589,8 +589,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["7d", "ex"],
-        "unknown extra credits keep a spent middle window first"
+        vec!["5h", "7d"],
+        "unknown extra credits keep the binding middle window visible"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(7.0),
@@ -599,8 +599,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     ));
     assert_eq!(
         labels(&panel),
-        vec!["ex", "30d"],
-        "known-usable extra credits lead while the longest included window remains visible"
+        vec!["7d", "ex"],
+        "the binding middle window leads usable credit"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     assert_eq!(
@@ -626,8 +626,8 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     panel.extra_credits = None;
     assert_eq!(
         labels(&panel),
-        vec!["5h", "ex"],
-        "unknown extra credits keep the spent short window first"
+        vec!["5h", "7d"],
+        "unknown extra credits keep the included-window pair"
     );
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         Some(50.0),
@@ -636,30 +636,34 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
     ));
     assert_eq!(
         labels(&panel),
-        vec!["5h", "7d"],
-        "exhausted extra credits do not replace an included window"
+        vec!["5h", "ex"],
+        "exhausted extra credits still show their zero balance"
     );
 }
 
 #[test]
-fn extra_usage_value_is_the_rounded_whole_dollar_budget() {
+fn extra_usage_value_is_dollars_left_or_unlimited() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((100, 40)));
 
-    for (used, limit, expected) in [(10.03, 50.0, "$50"), (7.0, 49.5, "$50")] {
-        panel.extra_credits = Some(crate::agents::ExtraCredits::known(
-            Some(used),
-            None,
-            Some(limit),
-        ));
-        let values = metered_bar_rows(&theme, &panel)[0]
+    for (used, limit, expected) in [
+        (Some(45.0), Some(50.0), "$5"),
+        (Some(12.0), None, "∞"),
+        (None, None, "∞"),
+    ] {
+        panel.extra_credits = Some(crate::agents::ExtraCredits::known(used, None, limit));
+        let rows = metered_bar_rows(&theme, &panel);
+        let values = rows[1]
             .spans
             .iter()
             .map(|span| span.content.as_ref())
-            .filter(|value| value.starts_with('$'))
+            .filter(|value| value.starts_with('$') || *value == "∞")
             .map(str::to_owned)
             .collect::<Vec<_>>();
         assert_eq!(values, vec![expected.to_owned()]);
+        let text = rows[1].to_string();
+        assert!(text.contains('▰'));
+        assert_eq!(text.contains('▱'), limit.is_some());
     }
 }
 
@@ -726,14 +730,14 @@ fn model_sub_cap_marks_its_own_axis_only_on_its_parent_without_changing_rows() {
 
     panel.windows[0].used_percentage = Some(100);
     let rows = metered_bar_rows(&theme, &panel);
-    assert!(text(&rows[0]).starts_with("ex"));
+    assert!(text(&rows[0]).starts_with("5h"));
     assert!(
-        text(&rows[1]).starts_with("7d  ╱"),
-        "the tick follows the parent through ex substitution"
+        text(&rows[1]).starts_with("ex") && !text(&rows[1]).contains('╱'),
+        "the hidden parent cannot lend its tick to extra usage"
     );
 
     let rows = metered_bar_rows(&Theme::fixed(true), &panel);
-    assert!(text(&rows[1]).contains('╱'));
+    assert!(!text(&rows[1]).contains('╱'));
     assert!(
         rows.iter()
             .flat_map(|row| &row.spans)
@@ -757,14 +761,14 @@ fn model_sub_cap_marks_its_own_axis_only_on_its_parent_without_changing_rows() {
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| !text(row).contains('▰')));
-    assert!(text(&rows[1]).starts_with("7d  ╱"));
+    assert!(!text(&rows[1]).contains('╱'));
 
     panel.windows[2].duration_mins = panel.windows[0].duration_mins;
     panel.windows[2].used_percentage = Some(0);
     let rows = metered_bar_rows(&theme, &panel);
     assert!(
-        text(&rows[0]).contains("▱╱"),
-        "a gated parent keeps its tick"
+        !text(&rows[0]).contains('╱'),
+        "a gated parent hides its tick"
     );
     assert!(!text(&rows[0]).contains('▰'));
     panel.windows[2].duration_mins = panel.windows[1].duration_mins;
@@ -780,6 +784,62 @@ fn model_sub_cap_marks_its_own_axis_only_on_its_parent_without_changing_rows() {
         "a missing parent cannot promote Fable to a row"
     );
     assert_eq!(rows[0], baseline[0]);
+}
+
+#[test]
+fn credit_balances_draw_full_or_spent_on_extra_and_api_rows() {
+    let theme = Theme::fixed(false);
+    for metered in [true, false] {
+        for (left, expected, percentage) in [(2414.19, "$2,414", 100), (0.0, "$0", 0)] {
+            let mut panel = provider_panel("codex", "Codex", 33, metered, false, Some((0, 100)));
+            panel.windows[0].lifted = true;
+            panel.extra_credits = Some(crate::agents::ExtraCredits::known(None, Some(left), None));
+            let rows = metered_bar_rows(&theme, &panel);
+            assert_eq!(rows.len(), if metered { 2 } else { 1 });
+            if metered {
+                assert!(rows[0].to_string().starts_with("7d"));
+            }
+            let row = rows.last().unwrap();
+            let text = row.to_string();
+            assert!(text.starts_with(if metered { "ex" } else { "api" }));
+            assert!(text.ends_with(expected));
+            assert_eq!(text.contains('▰'), left > 0.0);
+            assert_eq!(text.contains('▱'), left == 0.0);
+            let (label, bar, _) = bar_row_facts(row);
+            assert_eq!(
+                label,
+                mana_style(&theme, percentage, &Default::default()).fg
+            );
+            assert_eq!(bar, label);
+        }
+    }
+}
+
+#[test]
+fn unknown_extra_credit_uses_disabled_rows_and_small_balances_keep_one_cell() {
+    let theme = Theme::fixed(false);
+    for usage in [(100, 40), (25, 100)] {
+        let mut panel = provider_panel("claude", "Claude", 173, true, false, Some(usage));
+        panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+        let disabled = metered_bar_rows(&theme, &panel);
+        for credits in [
+            None,
+            Some(crate::agents::ExtraCredits::known(None, None, Some(50.0))),
+        ] {
+            panel.extra_credits = credits;
+            assert_eq!(metered_bar_rows(&theme, &panel), disabled);
+        }
+        panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+            None,
+            Some(0.2),
+            Some(50.0),
+        ));
+        let rows = metered_bar_rows(&theme, &panel);
+        let extra = rows[1].to_string();
+        assert!(extra.starts_with("ex"));
+        assert!(extra.ends_with("$0.20"));
+        assert_eq!(extra.matches('▰').count(), 1);
+    }
 }
 
 #[test]

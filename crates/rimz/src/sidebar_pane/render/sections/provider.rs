@@ -6,6 +6,7 @@ use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::render::labels::value_seam;
 use crate::store::snapshot::{RedeemForecast, RemoteControlBadge, SidebarProviderPanel};
+use crate::theme::fmt::dollars_left;
 use crate::{SpendTally, SpendWindow};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
@@ -58,8 +59,6 @@ const PROVIDER_LABEL_WIDTH: usize = 3;
 const PROVIDER_VALUE_WIDTH: usize = 8;
 const PROVIDER_BAR_ROW_FRAME_WIDTH: usize = 13;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
-const PROVIDER_RESET_MARKER_PAD: usize =
-    PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
 const RESET_RED_H: f64 = 24.0;
 const RESET_AMBER_H: f64 = 48.0;
 const RESET_YELLOW_H: f64 = 72.0;
@@ -1165,6 +1164,8 @@ fn provider_token_detail(
 /// row per definition-declared placeholder, or one anonymous fallback row when
 /// the shape is unknown; an unmetered account shows one `api` budget row, full
 /// with `∞` when uncapped.
+/// Reported extra usage follows the longest spent window; unknown or disabled
+/// extra usage keeps the included-window pair instead.
 /// Model-scoped sub-caps partition their parent window's bar without another row.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
 /// aligns front and back within `region`, so they line up across providers too.
@@ -1193,13 +1194,9 @@ fn provider_bar_rows(
             region,
         )];
     }
+    let credits = CreditDisplay::classify(panel.extra_credits.as_ref());
     if !panel.metered {
-        return vec![api_credits_bar_row(
-            theme,
-            panel.extra_credits.as_ref(),
-            region,
-            zones,
-        )];
+        return vec![extra_credits_bar_row(theme, "api", credits, region, zones)];
     }
     if panel.windows.is_empty() {
         if panel.window_placeholders.is_empty() {
@@ -1215,7 +1212,7 @@ fn provider_bar_rows(
         .windows
         .iter()
         .partition(|window| window.scope.is_some() && window.duration_mins.is_some());
-    select_provider_bars(panel, &windows)
+    select_provider_bars(credits, &windows)
         .into_iter()
         .map(|bar| match bar {
             ProviderBar::Window(window) => metered_bar_row(
@@ -1227,9 +1224,7 @@ fn provider_bar_rows(
                 zones,
                 now,
             ),
-            ProviderBar::Extra => {
-                extra_credits_bar_row(theme, "ex", panel.extra_credits.as_ref(), region, zones)
-            }
+            ProviderBar::Extra => extra_credits_bar_row(theme, "ex", credits, region, zones),
         })
         .collect()
 }
@@ -1240,8 +1235,43 @@ enum ProviderBar<'a> {
     Extra,
 }
 
+#[derive(Clone, Copy)]
+enum CreditDisplay {
+    Off,
+    Missing,
+    Unknown,
+    Unlimited,
+    Balance(f64),
+    Drain { left: f64, percentage: u8 },
+}
+
+impl CreditDisplay {
+    fn classify(credits: Option<&ExtraCredits>) -> Self {
+        let Some(credits) = credits else {
+            return Self::Missing;
+        };
+        if credits.is_disabled() {
+            return Self::Off;
+        }
+        if let Some(left) = credits.remaining_usd_left() {
+            return match credits.remaining_percentage() {
+                Some(percentage) => Self::Drain {
+                    left,
+                    percentage: percentage.max(u8::from(left > 0.0)),
+                },
+                None => Self::Balance(left),
+            };
+        }
+        if credits.limit_usd().is_some() {
+            Self::Unknown
+        } else {
+            Self::Unlimited
+        }
+    }
+}
+
 fn select_provider_bars<'a>(
-    panel: &SidebarProviderPanel,
+    credits: CreditDisplay,
     windows: &[&'a RateLimitWindow],
 ) -> Vec<ProviderBar<'a>> {
     if windows.iter().any(|window| window.scope.is_some()) {
@@ -1252,18 +1282,6 @@ fn select_provider_bars<'a>(
     };
     let last = windows.last().copied().unwrap_or(first);
     let first_and_last = || provider_window_pair(first, last);
-    let extra_disabled = panel
-        .extra_credits
-        .as_ref()
-        .is_some_and(ExtraCredits::is_disabled);
-    let extra_usable = panel
-        .extra_credits
-        .as_ref()
-        .is_none_or(ExtraCredits::is_usable);
-    let extra_known_usable = panel
-        .extra_credits
-        .as_ref()
-        .is_some_and(ExtraCredits::is_usable);
 
     if let Some(longest_spent) = windows
         .iter()
@@ -1271,20 +1289,14 @@ fn select_provider_bars<'a>(
         .filter(|window| window.is_spent())
         .max_by_key(|window| window.duration_mins.unwrap_or(0))
     {
-        if !std::ptr::eq(first, longest_spent) {
-            if extra_disabled {
-                return provider_window_pair(first, longest_spent);
-            }
-            if extra_known_usable {
-                return vec![ProviderBar::Extra, ProviderBar::Window(last)];
-            }
+        if matches!(
+            credits,
+            CreditDisplay::Unlimited | CreditDisplay::Balance(_) | CreditDisplay::Drain { .. }
+        ) {
             return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
         }
-        if extra_known_usable {
-            return vec![ProviderBar::Extra, ProviderBar::Window(last)];
-        }
-        if extra_usable {
-            return vec![ProviderBar::Window(first), ProviderBar::Extra];
+        if !std::ptr::eq(first, longest_spent) {
+            return provider_window_pair(first, longest_spent);
         }
     }
     first_and_last()
@@ -1471,83 +1483,34 @@ fn pad_countdown(countdown: &str) -> String {
     }
 }
 
+/// Paid budget: dollars left over a draining bar with a limit, or a full bar
+/// for a positive uncapped balance. Unlimited usage shares the window `∞`.
 fn extra_credits_bar_row(
     theme: &Theme,
     label: &str,
-    credits: Option<&ExtraCredits>,
+    credits: CreditDisplay,
     region: usize,
     zones: &BudgetBarConfig,
 ) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
-    let remaining = credits.and_then(ExtraCredits::remaining_percentage);
-    let label_style = remaining
-        .map(|remaining| mana_style(theme, remaining, zones))
-        .unwrap_or_else(|| theme.muted());
-    let bar = if let Some(remaining) = remaining {
-        mana_bar_spans(theme, remaining, bar_width, zones, &[])
-    } else {
-        unknown_mana_bar_spans(theme, bar_width)
+    let (remaining, value) = match credits {
+        CreditDisplay::Unknown => return unknown_bar_row(theme, label, region),
+        CreditDisplay::Missing | CreditDisplay::Unlimited => (100, unlimited_value_spans(theme)),
+        CreditDisplay::Off => (0, money_value_spans(theme, "$0")),
+        CreditDisplay::Balance(left) => (
+            if left > 0.0 { 100 } else { 0 },
+            money_value_spans(theme, &dollars_left(left)),
+        ),
+        CreditDisplay::Drain { left, percentage } => {
+            (percentage, money_value_spans(theme, &dollars_left(left)))
+        }
     };
-    bar_row(label, label_style, bar, extra_value_spans(theme, credits))
-}
-
-fn api_credits_bar_row(
-    theme: &Theme,
-    credits: Option<&ExtraCredits>,
-    region: usize,
-    zones: &BudgetBarConfig,
-) -> Vec<Span<'static>> {
-    let bar_width = provider_bar_width(region);
-    if let Some(remaining) = credits.and_then(ExtraCredits::remaining_percentage) {
-        let value = credits
-            .and_then(ExtraCredits::remaining_usd_left)
-            .map(dollars_compact)
-            .map_or_else(blank_value_spans, |value| money_value_spans(theme, &value));
-        return bar_row(
-            "api",
-            mana_style(theme, remaining, zones),
-            mana_bar_spans(theme, remaining, bar_width, zones, &[]),
-            value,
-        );
-    }
-    if credits
-        .is_some_and(|credits| credits.limit_usd().is_some() || credits.remaining_usd().is_some())
-    {
-        let value = credits
-            .and_then(ExtraCredits::remaining_usd)
-            .map(dollars_compact)
-            .map_or_else(blank_value_spans, |value| money_value_spans(theme, &value));
-        return bar_row(
-            "api",
-            theme.muted(),
-            unknown_mana_bar_spans(theme, bar_width),
-            value,
-        );
-    }
     bar_row(
-        "api",
-        mana_style(theme, 100, zones),
-        mana_bar_spans(theme, 100, bar_width, zones, &[]),
-        unlimited_value_spans(theme),
+        label,
+        mana_style(theme, remaining, zones),
+        mana_bar_spans(theme, remaining, bar_width, zones, &[]),
+        value,
     )
-}
-
-fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<'static>> {
-    let value = match credits {
-        Some(ExtraCredits::Disabled) => "off".to_owned(),
-        Some(credits) => extra_value_label(theme, credits),
-        None => theme.glyph(GlyphRole::ChromeInfinity).to_owned(),
-    };
-    if value == theme.glyph(GlyphRole::ChromeInfinity) {
-        return vec![
-            Span::raw(" ".repeat(PROVIDER_RESET_MARKER_PAD)),
-            Span::styled(value, theme.money_style(Modifier::BOLD)),
-            Span::raw(
-                " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(PROVIDER_RESET_MARKER_PAD + 1)),
-            ),
-        ];
-    }
-    money_value_spans(theme, &value)
 }
 
 fn money_value_spans(theme: &Theme, value: &str) -> Vec<Span<'static>> {
@@ -1557,29 +1520,6 @@ fn money_value_spans(theme: &Theme, value: &str) -> Vec<Span<'static>> {
         Span::raw(" ".repeat(pad)),
         Span::styled(clipped, theme.money_style(Modifier::BOLD)),
     ]
-}
-
-fn extra_value_label(theme: &Theme, credits: &ExtraCredits) -> String {
-    let infinity = theme.glyph(GlyphRole::ChromeInfinity);
-    if let Some(limit) = credits.limit_usd() {
-        return dollars_compact(limit.round());
-    }
-    credits
-        .remaining_usd()
-        .or_else(|| credits.used_usd())
-        .map_or_else(|| infinity.to_owned(), dollars_compact)
-}
-
-fn dollars_compact(usd: f64) -> String {
-    let usd = usd.max(0.0);
-    if usd >= 1_000.0 {
-        return format!("${:.0}k", usd / 1_000.0);
-    }
-    if (usd.fract()).abs() < f64::EPSILON {
-        format!("${usd:.0}")
-    } else {
-        format!("${usd:.2}")
-    }
 }
 
 /// The bar's cell width inside a provider `region`: the region less the label,

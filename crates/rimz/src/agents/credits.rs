@@ -368,29 +368,6 @@ impl ExtraCredits {
         matches!(self, Self::Disabled)
     }
 
-    /// Whether this extra paid budget is known to be exhausted.
-    fn is_exhausted(&self) -> bool {
-        match self {
-            Self::Disabled => true,
-            Self::Known {
-                used_usd,
-                remaining_usd,
-                limit_usd,
-            } => {
-                remaining_usd.is_some_and(|remaining| remaining <= 0.0)
-                    || used_usd
-                        .zip(*limit_usd)
-                        .is_some_and(|(used, limit)| limit > 0.0 && used >= limit)
-            }
-        }
-    }
-
-    /// Whether extra paid usage may be available. Unknown values count as usable
-    /// because no source has proven the budget is exhausted.
-    pub(crate) fn is_usable(&self) -> bool {
-        !self.is_disabled() && !self.is_exhausted()
-    }
-
     /// Remaining percentage for a draining bar, when enough data is known.
     pub(crate) fn remaining_percentage(&self) -> Option<u8> {
         match self {
@@ -424,20 +401,6 @@ impl ExtraCredits {
                     .zip(*used_usd)
                     .map(|(limit, used)| (limit - used).max(0.0))
             }),
-        }
-    }
-
-    pub(crate) fn used_usd(&self) -> Option<f64> {
-        match self {
-            Self::Known { used_usd, .. } => *used_usd,
-            Self::Disabled => None,
-        }
-    }
-
-    pub(crate) fn remaining_usd(&self) -> Option<f64> {
-        match self {
-            Self::Known { remaining_usd, .. } => *remaining_usd,
-            Self::Disabled => Some(0.0),
         }
     }
 
@@ -820,15 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_credits_exhaustion_and_remaining_percentage() {
-        // Exhausted when disabled, when the remaining balance is zero, or when
-        // used has reached the limit; unknown values count as still usable.
-        assert!(ExtraCredits::Disabled.is_exhausted());
-        assert!(ExtraCredits::known(None, Some(0.0), None).is_exhausted());
-        assert!(ExtraCredits::known(Some(50.0), None, Some(50.0)).is_exhausted());
-        assert!(!ExtraCredits::known(Some(12.0), None, Some(50.0)).is_exhausted());
-        assert!(ExtraCredits::known(None, None, None).is_usable());
-
+    fn extra_credits_remaining_percentage() {
         // Remaining percentage works from either a used or a remaining figure,
         // and is None when neither pins the balance against the limit.
         assert_eq!(

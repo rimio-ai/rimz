@@ -1013,7 +1013,13 @@ upward-dependencies = ["agents"]
 # The reset-credit expiry label sits beside the reset countdown.
 # `Palette::budget_tone` is the one zone-to-tone mapping the sidebar bar and `rimz providers` read (+1).
 # `Palette::pace_tone` shares the burn-rate bands across the sidebar and CLI (+1).
-surface-budget = 33
+# `fmt::dollars_left` gives provider credit rows one floored money vocabulary (+1).
+surface-budget = 34
+
+[[verdict]]
+kind = "item"
+key = "theme::fmt::dollars_left"
+reason = "Provider extra and API credit rows share a floored, fixed-width dollars-left formatter."
 
 [[module]]
 path = "crates/rimz/src/transcript.rs"
