@@ -1240,11 +1240,18 @@ impl AgentSpec {
 
     /// Whether a process `comm`/argv0 basename belongs to this agent: one of
     /// its declared process names (its own binary plus any launcher), including
-    /// a declared name under a target-triple release-binary suffix.
+    /// a declared name under a target-triple release-binary suffix. A name
+    /// ending in `<version>` opts into a numeric version prefix, including
+    /// the kernel's truncated process name.
     pub fn runs_as(&self, name: &str) -> bool {
         self.process_names
             .iter()
-            .any(|program| program_names_kind(name, program))
+            .any(|program| match program.strip_suffix("<version>") {
+                Some(prefix) => name
+                    .strip_prefix(prefix)
+                    .is_some_and(|version| version.starts_with(|ch: char| ch.is_ascii_digit())),
+                None => program_names_kind(name, program),
+            })
     }
 
     /// Whether a command basename launches this agent. This is distinct from

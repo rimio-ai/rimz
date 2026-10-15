@@ -1,0 +1,1 @@
+{"cwd":"<ROOT>/project","hook_event_name":"PreToolUse","session_id":"model-session","turn_id":"model-turn","tool_name":"shell","tool_use_id":"model_tool_1","tool_input":{"command":"printf model"}}

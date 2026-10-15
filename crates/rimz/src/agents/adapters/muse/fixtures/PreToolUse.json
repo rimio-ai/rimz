@@ -1,0 +1,1 @@
+{"cwd":"<ROOT>/project","hook_event_name":"PreToolUse","model":"unknown","permission_mode":"default","session_id":"01a1409c-9126-7773-b622-3ca05a6fac2f","tool_input":{"command":"touch <ROOT>/project/probe-approval"},"tool_name":"shell","tool_use_id":"user_shell_01a1409c-932b-7b53-840a-e68ea5ac85a6","transcript_path":null,"turn_id":"01a1409c-932b-7b53-840a-e68ea5ac85a6"}
