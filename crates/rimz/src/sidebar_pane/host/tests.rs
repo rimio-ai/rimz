@@ -1084,3 +1084,29 @@ fn room_reload_words_and_envelopes_request_the_host_not_the_panes() {
         assert_eq!(pane.inbox.try_recv(), Err(Empty));
     }
 }
+
+#[test]
+fn open_file_target_caps_at_hard_and_never_lowers() {
+    assert_eq!(open_file_soft_target(1_024, 1_073_741_816, 65_536), 65_536);
+    assert_eq!(open_file_soft_target(1_024, 4_096, 65_536), 4_096);
+    assert_eq!(open_file_soft_target(1_024, 1_024, 65_536), 1_024);
+    assert_eq!(
+        open_file_soft_target(200_000, nix::libc::RLIM_INFINITY, 65_536),
+        200_000
+    );
+}
+
+// nextest runs each test in its own process, so lowering this process's
+// limit reaches no other test.
+#[test]
+fn host_startup_raises_a_default_open_file_limit() {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    let (_, hard) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+    if hard < 2_048 {
+        return;
+    }
+    setrlimit(Resource::RLIMIT_NOFILE, 1_024, hard).unwrap();
+    raise_open_file_limit();
+    let (soft, _) = getrlimit(Resource::RLIMIT_NOFILE).unwrap();
+    assert_eq!(soft, open_file_soft_target(1_024, hard, OPEN_FILE_TARGET));
+}

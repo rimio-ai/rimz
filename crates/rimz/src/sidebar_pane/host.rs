@@ -44,6 +44,57 @@ const EVICT_WAIT: Duration = Duration::from_secs(2);
 /// lock until its panes have let go.
 const SUCCESSION_WAIT: Duration = Duration::from_secs(12);
 const MAX_ATTACHMENTS: usize = 512;
+/// The descriptor soft limit the host asks for. Each attachment holds about
+/// six descriptors for its lifetime and its mux commands add pipes briefly,
+/// so a room of a few hundred panes outgrows the common 1,024 default.
+const OPEN_FILE_TARGET: nix::libc::rlim_t = 65_536;
+/// macOS refuses a soft limit above `OPEN_MAX` even when the hard limit is
+/// unlimited, so a refused raise retries at this floor.
+const OPEN_FILE_FALLBACK: nix::libc::rlim_t = 10_240;
+
+/// Raise this process's descriptor soft limit toward its hard limit. Headroom
+/// is enrichment: a refused raise warns and the host serves under the
+/// inherited limit.
+fn raise_open_file_limit() {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    let (soft, hard) = match getrlimit(Resource::RLIMIT_NOFILE) {
+        Ok(limits) => limits,
+        Err(err) => {
+            warn!(%err, "sidebar host: cannot read the open-file limit");
+            return;
+        }
+    };
+    let mut last_err = None;
+    for target in [OPEN_FILE_TARGET, OPEN_FILE_FALLBACK] {
+        let wanted = open_file_soft_target(soft, hard, target);
+        if wanted <= soft {
+            return;
+        }
+        match setrlimit(Resource::RLIMIT_NOFILE, wanted, hard) {
+            Ok(()) => {
+                debug!(
+                    from = soft,
+                    to = wanted,
+                    "sidebar host: raised open-file limit"
+                );
+                return;
+            }
+            Err(err) => last_err = Some(err),
+        }
+    }
+    if let Some(err) = last_err {
+        warn!(%err, soft, hard, "sidebar host: cannot raise the open-file limit; a large room may exhaust descriptors");
+    }
+}
+
+/// The soft limit to request: `target` capped by `hard`, never below `soft`.
+fn open_file_soft_target(
+    soft: nix::libc::rlim_t,
+    hard: nix::libc::rlim_t,
+    target: nix::libc::rlim_t,
+) -> nix::libc::rlim_t {
+    target.min(hard).max(soft)
+}
 
 /// Paint a session's sidebar panes until none is left. `template` is the
 /// configuration every pane shares; each hello supplies the pane's own
@@ -54,6 +105,7 @@ pub fn run(template: ServeConfig) -> Result<(), SidebarAppErr> {
     // controlling one and closing that pane signals nothing here. Already
     // leading a session is the same outcome.
     let _ = nix::unistd::setsid();
+    raise_open_file_limit();
     let runtime = RuntimePaths::for_workspace(template.workspace_id.clone())?;
     let state = crate::StatePaths::for_workspace(template.workspace_id.clone())?;
     if crate::Store::open_existing(state, runtime.clone()).is_none() {
