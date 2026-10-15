@@ -495,7 +495,7 @@ pub fn drain_through(
         }
         if let Some(lifetime) = WorkspaceLock::try_acquire(&lifetime_path)? {
             request.through = inline_through;
-            let mut drain = Drainer::default();
+            let mut drain = Drainer::new(store);
             drain.drain(store, &lifetime, None, Some(deadline), |drain| {
                 request.epoch = Some(drain.position(&request).0);
                 let lock =
@@ -661,7 +661,7 @@ pub fn run(store: &Store) -> Result<(), HookDrainErr> {
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let socket_guard = OwnedSocket::new(socket.clone())?;
-    let mut drain = Drainer::default();
+    let mut drain = Drainer::new(store);
     let mut clients = Vec::new();
     if drain_clients(
         &mut drain,
@@ -814,15 +814,35 @@ struct CachedReply {
     at: Instant,
 }
 
-#[derive(Default)]
 struct Drainer {
     applied: u64,
     epoch: EventId,
     replies: HashMap<EventId, CachedReply>,
     completed: HashMap<EventId, (u64, Instant)>,
+    diag: crate::diag::DiagSink,
 }
 
 impl Drainer {
+    fn new(store: &Store) -> Self {
+        let diag = crate::workspace::record::read(&store.paths().workspace_record)
+            .map(|record| {
+                crate::diag::DiagSink::under(
+                    store.paths().root.clone(),
+                    store.paths().workspace_id.clone(),
+                    record.session_name,
+                    None,
+                )
+            })
+            .unwrap_or_else(|_| crate::diag::DiagSink::disabled());
+        Self {
+            applied: 0,
+            epoch: EventId::default(),
+            replies: HashMap::new(),
+            completed: HashMap::new(),
+            diag,
+        }
+    }
+
     fn drain(
         &mut self,
         store: &Store,
@@ -847,8 +867,13 @@ impl Drainer {
             let (cursor, frames, identity) = {
                 let lock = workspace_lock()?;
                 let cursor = ingress::read_cursor(store.paths())?;
-                let frames =
-                    ingress::repair_and_read(store.paths(), cursor.applied, &lock, remaining())?;
+                let frames = ingress::repair_and_read(
+                    store.paths(),
+                    cursor.applied,
+                    &lock,
+                    remaining(),
+                    &self.diag,
+                )?;
                 let identity = fs::metadata(&store.paths().hook_ingress_log)
                     .ok()
                     .map(|metadata| (metadata.dev(), metadata.ino()));
@@ -918,15 +943,13 @@ impl Drainer {
                 if lag > jiff::SignedDuration::from_secs(10)
                     && let Ok(metadata) = fs::metadata(&store.paths().hook_ingress_log)
                 {
-                    crate::diag::hook_drain::append(
-                        store.paths(),
-                        crate::diag::hook_drain::HookDrainEvent::Lag {
+                    self.diag
+                        .emit(crate::diag::record::DiagEvent::HookDrainLag {
                             ingress: frame.event_id.clone(),
                             hook_event: frame.event.clone(),
-                            lag_ms: lag.as_millis(),
+                            lag_ms: u64::try_from(lag.as_millis()).unwrap_or(u64::MAX),
                             pending_bytes: metadata.len().saturating_sub(expected.applied),
-                        },
-                    );
+                        });
                 }
                 let reply = match processor(
                     store,
@@ -938,13 +961,11 @@ impl Drainer {
                     Ok(reply) => reply,
                     Err(error) => {
                         tracing::warn!(ingress = %frame.event_id, %error, "hook ingress apply failed");
-                        crate::diag::hook_drain::append(
-                            store.paths(),
-                            crate::diag::hook_drain::HookDrainEvent::ApplyFailed {
+                        self.diag
+                            .emit(crate::diag::record::DiagEvent::HookApplyFailed {
                                 ingress: frame.event_id.clone(),
                                 error: format!("{error:#}"),
-                            },
-                        );
+                            });
                         HookReply::Silent
                     }
                 };
@@ -1148,7 +1169,7 @@ mod tests {
             let before = crate::store::event_log::testkit::bytes_read_under(log_dir);
             let lifetime =
                 WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
-            let mut drain = Drainer::default();
+            let mut drain = Drainer::new(&store);
             drain
                 .drain(&store, &lifetime, None, None, |_| Ok(false))
                 .unwrap();
@@ -1193,7 +1214,7 @@ mod tests {
             ingress::write_cursor(store.paths(), &cursor, &lock).unwrap();
         }
         let lifetime = WorkspaceLock::acquire(&store.runtime_paths().hook_drainer_lock()).unwrap();
-        Drainer::default()
+        Drainer::new(&store)
             .drain(&store, &lifetime, None, None, |_| Ok(false))
             .unwrap();
         let calls = CALLS.lock().unwrap();
@@ -1219,6 +1240,7 @@ mod tests {
             epoch: None,
             stop: false,
         };
-        assert_eq!(Drainer::default().receipt(&request, None).applied, 0);
+        let (_dir, store, _) = fixture(1);
+        assert_eq!(Drainer::new(&store).receipt(&request, None).applied, 0);
     }
 }

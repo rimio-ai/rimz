@@ -2,6 +2,38 @@ use super::*;
 use crate::ids::MuxName;
 
 #[test]
+fn hook_diagnostics_round_trip_with_distinct_failure_and_room_lag_identities() {
+    let ingress = crate::ids::EventId::new();
+    for (wire, identity) in [
+        (
+            serde_json::json!({"kind": "hook_drain_lag", "ingress": ingress, "hook_event": "Stop", "lag_ms": 60_000, "pending_bytes": 123}),
+            "hook_drain_lag".to_owned(),
+        ),
+        (
+            serde_json::json!({"kind": "hook_apply_failed", "ingress": ingress, "error": "bad payload"}),
+            format!("hook_apply_failed:{ingress}"),
+        ),
+        (
+            serde_json::json!({"kind": "hook_ingress_skipped", "start": 12, "end": 34, "error": "corrupt"}),
+            "hook_ingress_skipped:12:34".to_owned(),
+        ),
+        (
+            serde_json::json!({"kind": "hook_ingress_truncated", "start": 34, "end": 56}),
+            "hook_ingress_truncated:34:56".to_owned(),
+        ),
+    ] {
+        let decoded = serde_json::from_value::<DiagEvent>(wire.clone());
+        assert!(decoded.is_ok(), "hook diagnostic must decode: {decoded:?}");
+        let event = decoded.unwrap();
+        assert_eq!(event.severity(), DiagSeverity::Warn);
+        assert_eq!(event.kind_name(), wire["kind"].as_str().unwrap());
+        assert_eq!(event.identity_key(), identity);
+        assert!(!event.summary().is_empty());
+        assert_eq!(serde_json::to_value(event).unwrap(), wire);
+    }
+}
+
+#[test]
 fn recovery_child_ends_are_informational_session_diagnostics() {
     let wire = r#"{"kind":"recovery_child_ended","agent_kind":"codex","agent_id":"child"}"#;
     let decoded = serde_json::from_str::<DiagEvent>(wire);
