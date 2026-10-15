@@ -93,7 +93,7 @@ A status in a receipt comes from the agent's last recorded state and does not pr
 
 `--after` and `--when` hold a parked message until something happens to another agent. Both are repeatable, and every condition must be met. They combine with each other, `--schedule`, `--force`, and a fan-out recipient. Both conflict with `--steer`, `--wait`, and `--create`. `rimz message steer <id>` delivers past unmet conditions.
 
-**`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn keeps it waiting under `--on done` and releases it under `--on any`; a `paused` agent keeps it waiting under both.
+**`--after <ADDR>`** waits until that agent has finished its ready queued work: its status opens the message's `--on` gate and it has no undelivered message that is due. A failed turn keeps it waiting under `--on done` and releases it under `--on any`; a `paused` agent keeps it waiting under both. An agent whose kind reports no turn boundaries (a launch-only kind such as Trae) is refused as an `--after` target, since its card never finishes a turn RimZ can see.
 
 | Rule | Behaviour |
 | --- | --- |

@@ -101,6 +101,57 @@ fn sweep_keeps_launch_only_boundary_records_pending_but_delivers_to_claude() {
 }
 
 #[test]
+fn after_condition_on_a_launch_only_card_refuses() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    for (kind, name, pane) in [
+        ("trae", "coder", Some(TRACE_PANE)),
+        ("claude", "planner", None),
+    ] {
+        env.store()
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked(kind),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: format!("launch_{name}").into(),
+                    launch_id: None,
+                    agent_name: name.to_owned(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: pane.map(|pane| PaneId::from_parts(MuxName::Zellij, pane)),
+                    runtime_owner: None,
+                    worktree_path: Some(env.project_root.display().to_string()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    }
+    let panes = env.write_pane_fixture(&[agent_pane(&env, "traecli")]);
+    let log = env.project_root.join("trae-after.log");
+    let output = traced_rimz(&env, &log)
+        .env("RIMZ_TEST_PANE_LIST", &panes)
+        .args(["message", "@planner", "--after", "@coder", "next task"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--after `@coder` can never be met")
+            && stderr.contains("no turn boundaries"),
+        "{stderr}"
+    );
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
+#[test]
 fn launch_only_boundary_refuses_in_any_status_but_steer_delivers() {
     for running in [false, true] {
         let env = Env::new();

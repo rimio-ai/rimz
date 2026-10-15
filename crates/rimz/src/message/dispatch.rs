@@ -164,6 +164,11 @@ pub enum ConditionErr {
     },
     #[error("after condition names the message recipient")]
     RecipientSelfReference { address: String },
+    #[error("after condition target `{address}` reports no turn boundaries: {reason}")]
+    TurnLifecycleUnsupported {
+        address: String,
+        reason: &'static str,
+    },
     #[error("cannot resolve condition target `{address}`: {source}")]
     Target {
         kind: ConditionKind,
@@ -720,6 +725,16 @@ fn resolve_after(
             }) {
                 return Err(ConditionErr::RecipientSelfReference {
                     address: address.clone(),
+                }
+                .into());
+            }
+            if let Some(spec) = crate::agents::spec_by_kind(agent.kind.as_str())
+                && let crate::agents::ConcernCoverage::Unsupported { reason } =
+                    spec.coverage.turn_lifecycle
+            {
+                return Err(ConditionErr::TurnLifecycleUnsupported {
+                    address: address.clone(),
+                    reason,
                 }
                 .into());
             }

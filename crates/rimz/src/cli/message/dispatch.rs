@@ -349,6 +349,9 @@ fn map_condition_err(err: ConditionErr) -> anyhow::Error {
         ConditionErr::RecipientSelfReference { address } => anyhow::anyhow!(
             "--after `{address}` names the message recipient; use --on to gate on the recipient's turn"
         ),
+        ConditionErr::TurnLifecycleUnsupported { address, reason } => anyhow::anyhow!(
+            "--after `{address}` can never be met: its agent reports no turn boundaries ({reason})"
+        ),
         ConditionErr::Target {
             address, source, ..
         } => map_queue_target_err(&address, *source),
