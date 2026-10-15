@@ -2518,6 +2518,15 @@ fn agent_shell_validation_refuses_what_the_wrapper_cannot_run_under() {
                 shell.display()
             )
         );
+        let blocker = crate::blocker::Blocker::from(err);
+        assert!(
+            blocker.fixes.iter().any(|fix| {
+                fix.command.as_deref()
+                    == Some("rimz config set agents.shell \"$(command -v bash)\"")
+                    && fix.surface == crate::blocker::Surface::Plain
+            }),
+            "{blocker:?}"
+        );
     }
     for name in ["bash", "fish"] {
         validate_agent_shell(&shell_file(dir.path(), name)).expect("accepted shell");
