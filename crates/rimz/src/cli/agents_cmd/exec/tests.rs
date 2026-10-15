@@ -55,6 +55,136 @@ fn a_session_bound_to_another_pane_supersedes_the_exiting_wrapper() {
     );
 }
 
+const OWN_PANE: &str = "tmux:%1";
+
+fn pane_ref(id: &str) -> rimz::pane::PaneRef {
+    rimz::pane::PaneRef::from_id(rimz::ids::PaneId::parse(id).expect("normalized pane id"))
+}
+
+/// A codex row stamped on `pane`, last touched `activity_secs` after the epoch.
+fn pane_row(
+    session: &str,
+    launch: Option<&str>,
+    pane: &str,
+    activity_secs: i64,
+    ended: bool,
+) -> rimz::agents::AgentState {
+    let at = jiff::Timestamp::from_second(activity_secs).expect("timestamp");
+    let mut agent = rimz::testkit::agent_state("codex", session, at);
+    agent.name = Some(format!("name-{session}"));
+    agent.launch_id = launch.map(AgentSessionId::from);
+    agent.pane = Some(pane_ref(pane));
+    agent.ended_at = ended.then_some(at);
+    agent
+}
+
+fn exit_request(launch: Option<&str>, resume: Option<&str>) -> ExecRequest {
+    let mut request = bare_exec_args();
+    request.identity.launch_id = launch.map(ToOwned::to_owned);
+    if let Some(session) = resume {
+        request.action = ExecAction::Resume {
+            session_id: session.to_owned(),
+            extra_args: Vec::new(),
+        };
+    }
+    request
+}
+
+fn ends(agents: &[rimz::agents::AgentState], request: &ExecRequest) -> Option<String> {
+    let own = rimz::ids::PaneId::parse(OWN_PANE).expect("normalized pane id");
+    exit_end_target(agents, Some(&own), request).map(|ended| ended.agent_id.to_string())
+}
+
+/// The incident: the reaper ends an earlier occupant just after the resume
+/// stamped its row, so the earlier occupant is the pane's most recently
+/// touched row. The wrapper still ends the session it resumed.
+#[test]
+fn a_resumed_wrapper_ends_its_launch_row_not_a_later_touched_earlier_occupant() {
+    let agents = [
+        pane_row("resumed", Some("launch_a"), OWN_PANE, 10, false),
+        pane_row("earlier", Some("launch_b"), OWN_PANE, 20, true),
+    ];
+    let request = exit_request(Some("launch_a"), Some("resumed"));
+    assert_eq!(ends(&agents, &request).as_deref(), Some("resumed"));
+}
+
+#[test]
+fn a_fresh_wrapper_ends_its_launch_row_not_a_later_touched_earlier_occupant() {
+    let agents = [
+        pane_row("fresh", Some("launch_a"), OWN_PANE, 10, false),
+        pane_row("earlier", Some("launch_b"), OWN_PANE, 20, true),
+    ];
+    let request = exit_request(Some("launch_a"), None);
+    assert_eq!(ends(&agents, &request).as_deref(), Some("fresh"));
+}
+
+/// A superseded wrapper's launch row is bound to the replacement's pane, so
+/// it ends nothing, not even the older row still stamped on its own pane.
+#[test]
+fn a_superseded_wrapper_ends_no_older_row_on_its_own_pane() {
+    let agents = [
+        pane_row("moved", Some("launch_a"), "tmux:%2", 30, false),
+        pane_row("older", Some("launch_b"), OWN_PANE, 20, true),
+    ];
+    let request = exit_request(Some("launch_a"), Some("moved"));
+    assert_eq!(ends(&agents, &request), None);
+    assert_eq!(
+        exit_end_target(&agents, None, &request),
+        None,
+        "no pane of its own: any binding supersedes"
+    );
+}
+
+#[test]
+fn a_wrapper_with_no_launch_id_and_no_resume_target_ends_no_pane_occupant() {
+    let agents = [pane_row("occupant", Some("launch_b"), OWN_PANE, 20, false)];
+    assert_eq!(ends(&agents, &exit_request(None, None)), None);
+}
+
+/// A fork-on-resume successor inherits the launch id and replaces the
+/// resumed row, which the wrapper's resume target still names.
+#[test]
+fn a_wrapper_ends_the_live_successor_of_its_resume_target() {
+    let agents = [
+        pane_row("original", Some("launch_a"), OWN_PANE, 10, true),
+        pane_row("successor", Some("launch_a"), OWN_PANE, 15, false),
+    ];
+    let request = exit_request(Some("launch_a"), Some("original"));
+    assert_eq!(ends(&agents, &request).as_deref(), Some("successor"));
+}
+
+/// An exact-id resume of a cleared conversation gives one launch two live
+/// rows in two panes; each wrapper ends the one on its own pane.
+#[test]
+fn each_wrapper_of_a_launch_live_in_two_panes_ends_its_own_row() {
+    for (here_secs, there_secs) in [(10, 20), (20, 10)] {
+        let agents = [
+            pane_row("here", Some("launch_a"), OWN_PANE, here_secs, false),
+            pane_row("there", Some("launch_a"), "tmux:%2", there_secs, false),
+        ];
+        let request = exit_request(Some("launch_a"), Some("here"));
+        assert_eq!(ends(&agents, &request).as_deref(), Some("here"));
+    }
+}
+
+#[test]
+fn a_wrapper_still_ends_its_launch_row_after_the_reaper_ended_it() {
+    let agents = [
+        pane_row("resumed", Some("launch_a"), OWN_PANE, 10, true),
+        pane_row("earlier", Some("launch_b"), OWN_PANE, 20, true),
+    ];
+    let request = exit_request(Some("launch_a"), Some("resumed"));
+    let own = rimz::ids::PaneId::parse(OWN_PANE).expect("normalized pane id");
+    assert_eq!(
+        exit_end_target(&agents, Some(&own), &request),
+        Some(EndedSession {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: AgentSessionId::from("resumed"),
+            name: Some("name-resumed".to_owned()),
+        })
+    );
+}
+
 /// The reporter's workspace, scoped to a fixture's own tempdir.
 pub(super) fn test_workspace(root: &std::path::Path) -> rimz::ResolvedWorkspace {
     rimz::ResolvedWorkspace {

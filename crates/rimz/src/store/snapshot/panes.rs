@@ -163,30 +163,6 @@ impl<'a> PaneBindingIndex<'a> {
             .min_by(|left, right| left.compare_same_pane_owner(right))
     }
 
-    fn stamped_agent_for_ambient_pane(&self, pane: &PaneRef) -> Option<&'a AgentState> {
-        let candidates = self
-            .stamped_by_pane
-            .get(&pane.pane_id)?
-            .iter()
-            .filter_map(|index| self.agents.get(*index))
-            .filter(|agent| !agent.is_provider_subagent())
-            .filter(|agent| {
-                agent
-                    .pane
-                    .as_ref()
-                    .is_some_and(|stamped| pane_start_matches_agent_stamp(stamped, pane))
-            });
-        candidates
-            .clone()
-            .filter(|agent| agent.parent_agent_id.is_none())
-            .min_by(|left, right| left.compare_same_pane_owner(right))
-            .or_else(|| {
-                candidates
-                    .filter(|agent| agent.is_launched_child())
-                    .min_by(|left, right| left.compare_same_pane_owner(right))
-            })
-    }
-
     pub(super) fn live_foreign_owner(
         &self,
         evidence: PaneBindingEvidence<'_>,
@@ -418,17 +394,6 @@ pub(super) fn pane_binding_evidence(pane: &PaneRef) -> PaneBindingEvidence<'_> {
         process_start: pane.pane_process_start,
         resumed_session_id: pane.resumed_session_id.as_ref(),
     }
-}
-
-/// The root agent durably stamped on this ambient pane id and compatible pane
-/// process incarnation, regardless of whether another row already bound it.
-/// Unlike live-pane binding, this exit-time lookup has no command or hosted-
-/// process evidence and therefore does not apply those checks.
-pub fn stamped_agent_for_pane<'a>(
-    pane: &PaneRef,
-    agents: &'a [AgentState],
-) -> Option<&'a AgentState> {
-    PaneBindingIndex::new(agents).stamped_agent_for_ambient_pane(pane)
 }
 
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
@@ -678,33 +643,6 @@ mod tests {
             pane_start_matches_agent_stamp(&stamped, &live),
             "old floor-era agent stamps still attach to the now-exact live process"
         );
-    }
-
-    #[test]
-    fn pane_lookup_uses_the_same_owner_order_for_launched_children() {
-        let mut dead = agent("codex", "conversation-a", AgentStatus::Running, 1_000)
-            .worktree("/repo/main")
-            .in_pane("%1")
-            .active_ago(120)
-            .overloaded_turn_error(110, "server_overloaded");
-        dead.launch_id = Some(AgentSessionId::from("launch_coder"));
-        dead.parent_agent_id = Some(AgentSessionId::from("parent"));
-        dead.launch_depth = Some(1);
-        dead.registered_at = Some(ago(600));
-        let mut successor = agent("codex", "conversation-b", AgentStatus::Success, 2_000)
-            .worktree("/repo/main")
-            .in_pane("%1")
-            .active_ago(5);
-        successor.launch_id = Some(AgentSessionId::from("launch_coder"));
-        successor.parent_agent_id = Some(AgentSessionId::from("parent"));
-        successor.launch_depth = Some(1);
-        successor.registered_at = Some(ago(60));
-        let pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"));
-        let agents = [dead, successor];
-
-        let owner = stamped_agent_for_pane(&pane, &agents).expect("launched pane owner");
-
-        assert_eq!(owner.agent_id.as_str(), "conversation-b");
     }
 
     #[test]
