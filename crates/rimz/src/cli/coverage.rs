@@ -394,7 +394,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "omp"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -549,6 +550,19 @@ mod tests {
             ["answer", "bg", "bgsh", "tools", "remote"]
         );
 
+        let omp = agent_cells(&matrix, "omp");
+        assert_eq!(count(&omp, MatrixCellState::Ok), 10);
+        assert_eq!(count(&omp, MatrixCellState::Partial), 3);
+        assert_eq!(count(&omp, MatrixCellState::Absent), 6);
+        assert_eq!(
+            agent_labels(&matrix, "omp", MatrixCellState::Partial),
+            ["idle", "live$", "spend"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "omp", MatrixCellState::Absent),
+            ["plan", "answer", "sub", "bg", "bgsh", "remote"]
+        );
+
         let antigravity = agent_cells(&matrix, "antigravity");
         assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
         assert_eq!(count(&antigravity, MatrixCellState::Partial), 7);
@@ -595,7 +609,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "omp"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -617,6 +632,7 @@ mod tests {
                 MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Ok,      // omp
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -638,6 +654,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Absent,  // omp
             ]
         );
 
@@ -658,6 +675,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Partial, // grok
+                MatrixCellState::Absent,  // omp
             ]
         );
     }

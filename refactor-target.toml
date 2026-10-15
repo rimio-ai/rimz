@@ -297,6 +297,11 @@ path = "crates/rimz/src/agents/adapters/pi"
 surface-budget = 1
 
 [[module]]
+path = "crates/rimz/src/agents/adapters/omp"
+# OmpAdapter is the sole registry-facing item.
+surface-budget = 1
+
+[[module]]
 path = "crates/rimz/src/agents/adapters/plugin"
 surface-budget = 15
 
@@ -3457,6 +3462,11 @@ reason = "Registry registration is the only outside-provider interface; database
 kind = "item"
 key = "agents::adapters::grok::GrokAdapter"
 reason = "Registry registration is the only outside-provider interface; the hook catalog and its install constants, context refresh, paths, transcript folding and spend stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::omp::OmpAdapter"
+reason = "The registry consumes only OmpAdapter; the extension, payloads, install paths, and session parsers remain adapter-local."
 
 [[verdict]]
 kind = "item"

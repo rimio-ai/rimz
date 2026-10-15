@@ -71,6 +71,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| OMP | ◐ | ◐ | ◐ | ◐ | ◐ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -220,6 +221,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| OMP | `--approval-mode always-ask` | `--approval-mode write` | `--approval-mode always-ask` | `--approval-mode yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
