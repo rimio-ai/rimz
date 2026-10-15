@@ -99,6 +99,23 @@ enum HooksSubcmd {
 }
 
 impl HooksArgs {
+    #[cfg(unix)]
+    pub(super) fn restore_owner_env(&self) -> io::Result<()> {
+        use std::os::unix::process::CommandExt;
+
+        let HooksSubcmd::Feed { source, .. } = &self.command else {
+            return Ok(());
+        };
+        let Some(env) = rimz::agents::definition::hook_owner_env(source)? else {
+            return Ok(());
+        };
+        Err(std::process::Command::new(std::env::current_exe()?)
+            .args(std::env::args_os().skip(1))
+            .env_clear()
+            .envs(env)
+            .exec())
+    }
+
     /// The low-cardinality command label and the agent it acts on — the hook
     /// `source` for `feed`, the named agent for install/uninstall — for the
     /// Sentry command scope.

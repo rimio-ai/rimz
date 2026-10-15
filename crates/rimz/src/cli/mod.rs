@@ -146,6 +146,27 @@ pub fn complete_env() {
     .complete();
 }
 
+#[cfg(unix)]
+pub fn restore_hook_environment() {
+    // Avoid a second CLI parse for ordinary commands; clap below verifies the feed.
+    if !std::env::args_os().skip(1).any(|arg| arg == "feed") {
+        return;
+    }
+    let Ok(Cli {
+        subcommand: Some(Subcmd::Hooks(args)),
+        ..
+    }) = Cli::try_parse()
+    else {
+        return;
+    };
+    if let Err(error) = args.restore_owner_env() {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: cannot restore hook owner environment: {error}; continuing with hook environment"
+        );
+    }
+}
+
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
     hooks::register_drainer();

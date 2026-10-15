@@ -216,7 +216,8 @@ upward-dependencies = ["address"]
 # empty_dir::rows shares the machine-wide account/provider collection (+1).
 # empty_dir::Decision and decide replace the public prepare entry point (+1 net).
 # standing_successor, molt_stands, and yields_molt_seat share molt standing and role eligibility (+3).
-surface-budget = 1082
+# HookCapability::hook_inherits_env and definition::hook_owner_env restore scrubbed hook runners before path resolution (+2).
+surface-budget = 1084
 
 [[verdict]]
 kind = "item"
@@ -232,6 +233,16 @@ reason = "Address and live-pane routing share supersession and failed-successor 
 kind = "item"
 key = "agents::state::standing_successor"
 reason = "One molt standing predicate shared by launch reservation, role routing, and idle-stop policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::HookCapability::hook_inherits_env"
+reason = "Adapters declare whether the hook runner scrubs the launch environment; existing adapters inherit by default."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::hook_owner_env"
+reason = "The binary's early hook-feed bootstrap restores a verified owner's env without widening proc::environ or loading path-dependent process plugins."
 
 [[verdict]]
 kind = "item"
