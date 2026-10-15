@@ -42,10 +42,12 @@ The default agent directory is `~/.omp/agent`. The following paths assume the de
 | `OMP_PROFILE`, legacy `PI_PROFILE` | `OMP_PROFILE` wins when defined, including an empty value. Empty, whitespace, and `default` select the default profile. |
 | `PI_CONFIG_DIR` | Changes the user config root name, normally `.omp`. |
 | `PI_CODING_AGENT_DIR` | Overrides agent-directory consumers in the default profile. Named profiles ignore it. Generic config lookup still uses its own base root. See [configuration lookup][config]. |
-| Linux `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Relocate classified paths under `omp/`. For example, sessions use `$XDG_DATA_HOME/omp/sessions`. Run `omp config migrate` to move existing data before relying on XDG roots. |
+| Linux/macOS `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` | Relocate classified paths when the target `omp/` directory exists. Named profiles require the corresponding `omp/profiles/<name>` directory. Custom agent-directory overrides bypass this relocation for agent state. |
 | `PI_CODING_AGENT_SESSION_DIR` | Sets the initial session directory. `--session-dir` overrides it. |
 | `--config <file>` | Adds a settings overlay. Repeatable. |
 | Native settings | User `config.yml`, with `config.yaml` fallback. Project `.omp/config.yml` and legacy `.omp/settings.json` also supply settings. |
+
+The pinned path comments describe migration, but `omp config init-xdg` only creates directories. It does not move existing data. The accepted config actions contain no `migrate` action. See the [config command][config-command] and [XDG initialization][init-xdg] implementations.
 
 Native extension discovery scans `<cwd>/.omp/extensions` and `<agentDir>/extensions`, plus legacy settings entries. The project extension root is cwd-only. It does not walk ancestors. `.pi/extensions` is not a native extension root. See [extension loading][loading] and the [native discovery provider][native].
 
@@ -79,7 +81,8 @@ Extension events, session subscription events, and RPC frames are separate surfa
 | `session_shutdown` | Teardown notification. |
 | `input` | Submission interception. Its coverage depends on the transport. Print and ACP input are outside the documented interception contract. |
 | `before_agent_start` | Transformed prompt, images, and `systemPrompt: string[]`. Also runs for dequeued batches containing user messages, possibly without another `agent_start`. |
-| `agent_start`, `agent_end` | Agent-loop notifications. `agent_end` alone does not prove session quiescence. |
+| `agent_start` | Agent-loop start notification. |
+| `agent_end` | Messages and optional `willContinue` and `awaitingAsyncWork`. `willContinue` marks scheduled continuation or possible background restart. `awaitingAsyncWork` distinguishes background waiting. |
 | `session_stop` | Awaited main-session stop decision. Return `{ continue: true, additionalContext }` or `{ decision: "block", reason }` to prevent stopping and request more model work. It does not fire for task/subagent sessions. |
 | `turn_start`, `turn_end` | Turn notifications. |
 | `message_start`, `message_update`, `message_end` | Message notifications. `message_end` receives a detached snapshot. |
@@ -92,6 +95,8 @@ Extension events, session subscription events, and RPC frames are separate surfa
 | `before_subagent_spawn` | Agent name, `invocationKind: task\|eval`, role, model patterns, and optional spawn key. Can block or replace model patterns. No return leaves that handler neutral. |
 
 Handler returns carry decisions. An extension that invokes a helper must read and apply the helper's answer itself. There is no shell-hook stdout decision contract in this extension interface. Returning nothing from `tool_call` leaves it unblocked by that handler, but native approval policy still applies. See the [extension runner][runner] and [tool wrapper][wrapper].
+
+The inspected extension union has no dedicated final-settlement event equivalent to RPC `session_settled`. Its closest notification is `agent_end`, with the flags listed above. Equivalence between those flags and the complete RPC quiescence predicate has not been verified. See [shared event types][shared-events] and the [RPC settlement implementation][settle].
 
 The inspected extension union has no Pi-style `ui_prompt_start` or `ui_prompt_end` event. Tool approvals and plan reviews have dedicated events, listed above. Generic extension dialogs still need transport-specific verification. See [extension types][extension-types].
 
@@ -111,7 +116,7 @@ The runner defaults to a 30-second handler budget, with 2 seconds for `session_s
 
 ## Session files and durable history
 
-Default file sessions use `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<sessionId>.jsonl`. The bucket derives from canonical cwd, so symlink aliases share it. Home-relative and temporary paths use shortened encodings. Other paths use an encoded absolute form. Resolve the actual root with the [path helpers][dirs], including profile and Linux XDG rules. See [session storage][session].
+Default file sessions use `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<sessionId>.jsonl`. The bucket derives from canonical cwd, so symlink aliases share it. Home-relative and temporary paths use shortened encodings. Other paths use an encoded absolute form. Resolve the actual root with the [path helpers][dirs], including profile and XDG rules. See [session storage][session].
 
 | Record | Contract |
 | --- | --- |
@@ -177,10 +182,12 @@ A yield ends the agent's current work, while background results can still restar
 | `usage` | `input`, `output`, `cacheRead`, `cacheWrite`, `totalTokens`, and `cost` with per-bucket values and `total`. |
 | Optional usage | Authoritative `contextTokens`, provider orchestration tokens, premium requests, reasoning tokens, server-tool counts, and credit meters. |
 | `model_usage` entries | Non-conversation model calls, with purpose, optional role, provider/model/API, usage, and stop reason. Late accounting can identify its `activeLeafId`. |
-| `get_session_stats` | Message/tool counts, token totals, cost, premium requests, optional credits, routed models, and context usage. |
+| `get_session_stats` | Active-window message/tool counts, token totals, cost, premium requests, optional credits, routed models, and context usage. |
 | Thinking records | `thinking_level_change` can retain both effective `thinkingLevel` and the configured selector, including `auto`. |
 
 These shapes come from [catalog usage types][usage], [session entries][entries], [session statistics types][stats-types], and [context calculation][stats]. Reasoning tokens are a subset of output tokens. An absent reasoning count means unknown, not zero. A stored cost field is OMP's accounting value, not proof of a provider invoice or subscription debit.
+
+`get_session_stats` sums current agent messages, task-result usage, and `model_usage` entries in the active transcript window. Reset, compaction, and branch navigation can exclude earlier spend. Its totals are not monotonic lifetime-session counters. See the [statistics implementation][stats].
 
 Model discovery combines bundled metadata, native `models.yml`, cached or live discovery, and extensions. Availability checks configuration rather than validating credentials. Provider-specific context, price, and billing behavior requires that provider's contract. See [providers][providers] and [models][models].
 
@@ -199,7 +206,17 @@ These facts are defined by the [agent store][agent-store], [SQLite credential st
 
 OMP exposes account limits through `omp usage` and interactive `/usage`. The optional broker offers `/v1/usage` and `/v1/usage/history`. Provider support and units vary. See [CLI usage][cli], [providers][providers], and [broker endpoints][broker].
 
-Provider key precedence is: runtime override, custom-provider `models.yml` key, stored OAuth, login-sourced API key, extension config fallback, then provider environment variables. Custom keys can intentionally override stored OAuth for a custom endpoint. See [credential precedence and provider-specific fallbacks][providers].
+Provider key precedence follows this order ([credential cascade][cascade]):
+
+1. Runtime override.
+2. Custom-provider `models.yml` key.
+3. Stored OAuth.
+4. Login-sourced API key.
+5. Extension config fallback.
+6. Provider environment variables.
+7. Stored API keys without `source: "login"`.
+
+Custom keys can intentionally override stored OAuth for a custom endpoint. The pinned [provider documentation][providers] omits the final stored-key fallback, which the source implements.
 
 Project trust and extension authority are defined under [configuration roots and extension discovery](#configuration-roots-and-extension-discovery).
 
@@ -233,6 +250,7 @@ The [upstream README][readme] documents macOS, Linux, and Windows installation. 
 | --- | --- |
 | Process detection and containment | Observe Bun and prebuilt process identity. No native sandbox or delegation-lockdown flag contract was verified. |
 | Published artifact parity | Compare the installed or unpacked `18.11.0` artifact with the pinned source. Version equality alone is insufficient. |
+| Extension-only settlement | Verify whether extension `agent_end` flags and context queries can reproduce the complete RPC quiescence predicate. No dedicated settled event exists in the inspected extension union. |
 | Actual lifecycle order | Capture native interactive, print, RPC, retry, cancellation, compaction, and background-child sessions. Static event unions do not prove observed order. |
 | Blocking asks | Exercise native approval, plan review, ask dialogs, cancellation, and headless defaults on each intended transport. |
 | Durable history | Capture title-slot updates, forks, branch navigation, blob references, and crash recovery. No real transcript was inspected here. |
@@ -289,3 +307,7 @@ The [upstream README][readme] documents macOS, Linux, and Windows installation. 
 [settings]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/docs/settings.md
 
 [eval-tool]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/docs/tools/eval.md
+
+[cascade]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/ai/src/auth/cascade.ts
+[config-command]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/commands/config.ts
+[init-xdg]: https://github.com/can1357/oh-my-pi/blob/13a3d52ea5cc8a2a210e4881e22bbe473ec9ed74/packages/coding-agent/src/cli/commands/init-xdg.ts

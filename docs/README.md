@@ -53,4 +53,4 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 ## How it works
 
-[DESIGN.md](../DESIGN.md) states the attention problem, the design pillars, and the invariants; [ARCHITECTURE.md](../ARCHITECTURE.md) is the runtime shape and the on-disk state; the [internals](./internals/README.md) document each subsystem in depth. To work on RimZ itself, start at [CONTRIBUTING.md](../CONTRIBUTING.md). The [upstream protocol references](./externals/README.md) support adapter development.
+[DESIGN.md](../DESIGN.md) states the attention problem, design pillars, and invariants. [ARCHITECTURE.md](../ARCHITECTURE.md) describes the runtime shape and on-disk state. The [internals](./internals/README.md) document each subsystem in depth. To contribute, start at [CONTRIBUTING.md](../CONTRIBUTING.md). The [upstream protocol references](./externals/README.md) support adapter development.

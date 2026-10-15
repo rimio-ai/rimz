@@ -1,8 +1,8 @@
 # RimZ externals
 
-These pages mirror the upstream surfaces RimZ binds to: each coding agent's hooks, transcripts, and launch modes, and each multiplexer's control API. They record what upstream ships, pinned to source URLs and a refresh baseline, so a contributor can implement against it and check it for drift when upstream moves. They make no claim about what RimZ supports.
+These pages record upstream surfaces for adapter development: each coding agent's hooks, transcripts, and launch modes, and each multiplexer's control API. They record what upstream ships, pinned to source URLs and a refresh baseline, so a contributor can implement against it and check it for drift when upstream moves. They make no claim about what RimZ supports.
 
-The RimZ side of each surface is in the [internals](../internals/README.md): an external page says what upstream does, and its internals page says how RimZ maps it onto its own types. Per-agent support status is in [agent-support.md](../reference/agent-support.md). To use RimZ rather than change it, start at the [user documentation](../README.md).
+Available RimZ mappings are in the [internals](../internals/README.md): an external page says what upstream does, and its internals page says how RimZ maps it onto its own types. Per-agent support status is in [agent-support.md](../reference/agent-support.md). To use RimZ rather than change it, start at the [user documentation](../README.md).
 
 ## Keeping a mirror current
 
