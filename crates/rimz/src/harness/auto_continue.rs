@@ -354,7 +354,7 @@ fn capacity_recovered(
 }
 
 /// Whether the row's displayed turn error is a provider limit: the one
-/// definition of "stopped on a limit" auto-continue and auto-redeem share.
+/// definition of "stopped on a limit" auto-continue and park-notice share.
 pub(crate) fn limit_marker_active(agent: &AgentState) -> bool {
     agent
         .displayed_turn_error()

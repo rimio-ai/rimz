@@ -1059,8 +1059,23 @@ impl RuntimePaths {
             .join(format!("auto_redeem_rate.{key}.json"))
     }
 
-    pub(crate) fn shared_auto_redeem_lock(&self, key: &crate::ids::LoginKey) -> PathBuf {
-        self.shared_root.join(format!("auto_redeem.{key}.lock"))
+    pub(crate) fn shared_auto_redeem_lock(
+        &self,
+        key: &crate::ids::LoginKey,
+        account_key: Option<&str>,
+    ) -> PathBuf {
+        let identity = account_key.map_or_else(
+            || key.to_string(),
+            |account| {
+                format!(
+                    "{}.{}",
+                    key.kind,
+                    hex::encode(Sha256::digest(account.as_bytes()))
+                )
+            },
+        );
+        self.shared_root
+            .join(format!("auto_redeem.{identity}.lock"))
     }
 
     pub fn shared_provider_spending_path(&self) -> PathBuf {

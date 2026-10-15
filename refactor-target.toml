@@ -209,7 +209,7 @@ upward-dependencies = ["address"]
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
-surface-budget = 1069 # Shared credits-cache read schema, freshness rule, and model sub-cap veto (+7).
+surface-budget = 1070 # Shared credits-cache reads, model sub-cap veto, and prepared fresh offer (+8).
 
 [[verdict]]
 kind = "item"
@@ -691,7 +691,7 @@ path = "crates/rimz/src/harness"
 # RefaultHelperRequest, its runner, wake_request and the focus timestamp cross the CLI seam (+4).
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
 # hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
-surface-budget = 857 # Shared spend ladder and read-only reset-policy seams (+11).
+surface-budget = 859 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 
 [[verdict]]
 kind = "item"
@@ -5185,6 +5185,21 @@ reason = "One cached-facts constructor excludes display-only balances."
 kind = "item"
 key = "harness::spend_ladder::SpendFacts::step"
 reason = "One model-aware decision orders subscription, paid, and reset capacity."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendFacts::from_offer"
+reason = "The helper and manual preview share the provider's fresh capacity and credits."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendFacts::redemption"
+reason = "Producer, helper, and forecast share expiry rescue and the next reset step."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::PreparedRedemption::offer"
+reason = "Manual previews evaluate the same fresh-offer spend facts as the helper."
 
 [[verdict]]
 kind = "item"

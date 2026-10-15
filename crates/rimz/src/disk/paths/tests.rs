@@ -977,9 +977,10 @@ fn production_runtime_paths_persist_shared_data_and_keep_locks_runtime() {
         persistent_shared_root.join("auto_redeem_rate.codex@default.json")
     );
     assert_eq!(
-        paths.shared_auto_redeem_lock(&crate::ids::LoginKey::default_for(
-            crate::ids::AgentKind::new_unchecked("codex")
-        )),
+        paths.shared_auto_redeem_lock(
+            &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
+            None
+        ),
         runtime_root
             .join("rimz")
             .join("shared")

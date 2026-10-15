@@ -755,6 +755,10 @@ impl<T> PreparedRedemption<T> {
         }
     }
 
+    pub(crate) fn offer(&self) -> &ResetCreditOffer {
+        &self.offer
+    }
+
     pub(crate) fn hold(&self) -> Option<&RedeemHold> {
         self.offer.hold.as_ref()
     }
@@ -817,7 +821,7 @@ pub struct ResetCreditResult {
 /// that must precede [`PreparedRedemption::consume`].
 pub fn prepare_reset_credit_redemption<T>(
     kind: &str,
-    decide: impl FnOnce(Option<&ProviderCapacity>, &super::ResetCredits) -> Option<T>,
+    decide: impl FnOnce(&ResetCreditOffer) -> Option<T>,
     login_env: &std::collections::BTreeMap<String, String>,
 ) -> Result<Option<PreparedRedemption<T>>, String> {
     let offer = super::find_definition(kind)
@@ -825,7 +829,7 @@ pub fn prepare_reset_credit_redemption<T>(
         .prepare_reset_credit(login_env)?;
     let capacity = offer.capacity.clone();
     let credits = offer.credits.clone();
-    let Some(decision) = decide(capacity.as_ref(), &credits) else {
+    let Some(decision) = decide(&offer) else {
         return Ok(None);
     };
     Ok(Some(PreparedRedemption {

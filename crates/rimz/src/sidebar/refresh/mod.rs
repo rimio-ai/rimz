@@ -295,7 +295,6 @@ pub(super) fn refresh_heavy_lanes(
     crate::harness::auto_redeem::redeem_credits(
         &panels.providers,
         &credits::idle_reset_credits(runtime, &logins),
-        &base.agents,
         runtime,
         &logins,
         &config.resume,

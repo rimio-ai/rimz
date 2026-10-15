@@ -737,7 +737,6 @@ fn auto_redeem_rescues_an_idle_codex_account_and_records_its_login() {
         login: "codex@spare".parse().expect("login key"),
         reason: rimz::harness::auto_redeem::RedeemReason::ExpiryRescue,
         request_id: uuid::Uuid::now_v7(),
-        limit_paused: false,
     };
     let output = env
         .rimz()
