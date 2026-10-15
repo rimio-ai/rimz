@@ -1146,6 +1146,8 @@ fn launch_members<'a>(
 /// Accepts a reusable borrowed row view, including a layered rollup.
 ///
 /// - Live rows win by pane-owner order.
+/// - A live row that holds `id` now beats a live row that held it before a
+///   revive, so a successor still running on the id keeps its own launch.
 /// - An ended launch keeps its latest-active row.
 /// - Attach rest certificates before selecting among live rows.
 pub fn launch_row<'a>(
@@ -1153,7 +1155,22 @@ pub fn launch_row<'a>(
     kind: &AgentKind,
     id: &AgentSessionId,
 ) -> Option<&'a AgentState> {
-    launch_occupant(&launch_members(agents, kind, id))
+    let members = launch_members(agents, kind, id);
+    let live_holders: Vec<_> = members
+        .iter()
+        .copied()
+        .filter(|agent| {
+            agent.ended_at.is_none()
+                && (&agent.agent_id == id
+                    || agent.launch_id.as_ref() == Some(id)
+                    || !agent.prior_launch_ids.contains(id))
+        })
+        .collect();
+    launch_occupant(if live_holders.is_empty() {
+        &members
+    } else {
+        &live_holders
+    })
 }
 
 /// Whether `agent` is its launch's current row, as [`launch_row`] selects it.
