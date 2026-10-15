@@ -43,6 +43,9 @@ const EXPIRY_RESCUE_LEAD: Duration = Duration::from_secs(30 * 60);
 const MIN_HOLD: Duration = Duration::from_secs(24 * 60 * 60);
 const ATTEMPT_COOLDOWN: Duration = Duration::from_secs(10 * 60);
 const POST_SUCCESS_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+/// How long a helper may hold a reservation before the ladder stops reading it
+/// as a redeem in flight.
+const RESERVATION_GRACE: Duration = Duration::from_secs(2 * 60);
 const RATE_HALF_LIFE: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 const RATE_FLOOR: f64 = 0.5;
 const T_MIN: Duration = Duration::from_secs(6 * 60 * 60);
@@ -104,7 +107,7 @@ impl RedeemReason {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct RateStamp {
+pub(super) struct RateStamp {
     window_resets_at: Timestamp,
     last_used_pct: u8,
     last_observed_at: Timestamp,
@@ -112,7 +115,7 @@ struct RateStamp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct RedeemStamp {
+pub(super) struct RedeemStamp {
     attempted_at: Timestamp,
     request_id: String,
     reason: RedeemReason,
@@ -299,7 +302,7 @@ fn consume_manual_redemption(
 /// needs the user's opt-in and the gate: a spent window with a future reset
 /// and an agent of this room stopped on it. What follows depends on what a
 /// redemption does to the window's reset.
-fn redeem_verdict(
+pub(super) fn redeem_verdict(
     capacity: Option<&ProviderCapacity>,
     credits: &ResetCredits,
     rate_pct_per_day: Option<f64>,
@@ -531,11 +534,25 @@ fn stamp_allows_attempt(stamp: Option<&RedeemStamp>, now: Timestamp) -> bool {
     now.as_second() - stamp.attempted_at.as_second() >= duration_seconds(cooldown)
 }
 
-fn read_stamp(path: &Path) -> Option<RedeemStamp> {
+/// Whether the last attempt failed inside the attempt cooldown. A reservation
+/// still without an outcome past `RESERVATION_GRACE` counts as failed: its
+/// helper declined, errored, or died, and none of those settles the stamp.
+pub(super) fn failed_attempt_cooling_down(stamp: Option<&RedeemStamp>, now: Timestamp) -> bool {
+    stamp.is_some_and(|stamp| {
+        let age = now.as_second() - stamp.attempted_at.as_second();
+        let failed = match stamp.outcome.as_deref() {
+            Some(outcome) => outcome != "reset",
+            None => age >= duration_seconds(RESERVATION_GRACE),
+        };
+        failed && age < duration_seconds(ATTEMPT_COOLDOWN)
+    })
+}
+
+pub(super) fn read_stamp(path: &Path) -> Option<RedeemStamp> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-fn read_rate_stamp(path: &Path) -> Option<RateStamp> {
+pub(super) fn read_rate_stamp(path: &Path) -> Option<RateStamp> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
@@ -582,7 +599,7 @@ fn update_rate_stamp(prior: Option<&RateStamp>, window: &RateLimitWindow) -> Opt
     })
 }
 
-fn cached_rate(stamp: Option<&RateStamp>) -> Option<f64> {
+pub(super) fn cached_rate(stamp: Option<&RateStamp>) -> Option<f64> {
     stamp
         .map(|stamp| stamp.rate_pct_per_day)
         .filter(|rate| rate.is_finite() && *rate >= RATE_FLOOR)

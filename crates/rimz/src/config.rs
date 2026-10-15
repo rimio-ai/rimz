@@ -113,8 +113,8 @@ pub(crate) use notifications::{NotificationTrigger, NotifyCondition, NotifyHandl
 pub(crate) use pets::PetsGlyphMode;
 pub use pets::{CellAspect, PetsConfig};
 pub(crate) use remote_control::RemoteControlConfig;
-pub use resume::ResumeConfig;
 use resume::parse_auto_redeem_min_gain;
+pub use resume::{ResumeConfig, SpendOrder};
 #[cfg(test)]
 pub(crate) use scheme::parse_scheme_text;
 pub(crate) use scheme::{

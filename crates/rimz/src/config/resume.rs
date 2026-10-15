@@ -28,6 +28,15 @@ const AUTO_REDEEM_DURATION_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
+/// Which capacity follows the included subscription windows.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpendOrder {
+    #[default]
+    CreditsFirst,
+    ResetsFirst,
+}
+
 /// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
 /// — detected by boot id, or by boot time where the boot id is unreadable — or
 /// after a mux crash with positive lost-agent markers, RimZ offers to re-seed
@@ -72,6 +81,8 @@ pub struct ResumeConfig {
     /// and a Codex agent in this room is stopped on it. Expiry rescue remains
     /// enabled independently of this opt-in.
     pub auto_redeem: bool,
+    /// Prefer paid usage or a useful banked reset after the subscription is spent.
+    pub spend_order: SpendOrder,
     /// Minimum blocked time an automatic redemption must recover. A credit that
     /// keeps the window's schedule (not a Codex credit) and would expire shortly
     /// after the natural reset redeems regardless.
@@ -94,6 +105,7 @@ impl Default for ResumeConfig {
             auto_continue_max_retries: DEFAULT_AUTO_CONTINUE_MAX_RETRIES,
             auto_continue_text: DEFAULT_AUTO_CONTINUE_TEXT.to_owned(),
             auto_redeem: false,
+            spend_order: SpendOrder::default(),
             auto_redeem_min_gain: DEFAULT_AUTO_REDEEM_MIN_GAIN.to_owned(),
         }
     }
@@ -138,6 +150,22 @@ pub(super) fn parse_auto_redeem_min_gain(value: &str) -> Result<Duration, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spend_order_defaults_to_credits_first_and_rejects_unknown_values() {
+        let config: ResumeConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["spend_order"],
+            "credits_first"
+        );
+        let error = toml::from_str::<ResumeConfig>("spend_order = 'typo'");
+        assert!(error.is_err(), "unknown spend order must be refused");
+        let error = error.unwrap_err().to_string();
+        assert!(
+            error.contains("credits_first") && error.contains("resets_first"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn overload_backoff_expands_then_repeats_the_last_step() {

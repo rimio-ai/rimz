@@ -382,7 +382,12 @@ impl ProviderCapacity {
         model: Option<&str>,
     ) -> bool {
         self.duration_windows()
-            .chain(self.model_windows(model))
+            .any(|window| window_spent_unreset(window, now))
+            || self.model_exhausted(now, model)
+    }
+
+    pub(crate) fn model_exhausted(&self, now: Timestamp, model: Option<&str>) -> bool {
+        self.model_windows(model)
             .any(|window| window_spent_unreset(window, now))
     }
 
@@ -764,6 +769,7 @@ impl<T> PreparedRedemption<T> {
 pub struct ResetCreditOffer {
     pub capacity: Option<ProviderCapacity>,
     pub credits: super::ResetCredits,
+    pub extra_credits: Option<super::ExtraCredits>,
     pub hold: Option<RedeemHold>,
     action: Box<dyn ResetCreditAction>,
 }
@@ -778,11 +784,13 @@ impl ResetCreditOffer {
     pub fn new(
         capacity: Option<ProviderCapacity>,
         credits: super::ResetCredits,
+        extra_credits: Option<super::ExtraCredits>,
         action: impl ResetCreditAction + 'static,
     ) -> Self {
         Self {
             capacity,
             credits,
+            extra_credits,
             hold: None,
             action: Box::new(action),
         }

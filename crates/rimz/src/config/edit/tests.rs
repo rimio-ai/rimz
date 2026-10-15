@@ -2,6 +2,29 @@ use super::*;
 use crate::config::MachineConfigFileKind as Kind;
 
 #[test]
+fn spend_order_round_trips_with_config_set_and_get() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    for value in ["credits_first", "resets_first"] {
+        let result = editor.set("resume.spend_order", value);
+        assert!(result.is_ok(), "spend order must be editable: {result:?}");
+        assert_eq!(
+            editor.get(Some("resume.spend_order")).unwrap().as_str(),
+            Some(value)
+        );
+    }
+    assert!(editor.set("resume.spend_order", "typo").is_err());
+    assert!(
+        Kind::Core
+            .template()
+            .contains("spend_order = \"credits_first\"")
+    );
+}
+
+#[test]
 fn model_aliases_round_trip_with_config_set() {
     let dir = tempfile::tempdir().unwrap();
     let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
@@ -183,6 +206,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "resume.auto_continue_max_retries",
     "resume.auto_continue_text",
     "resume.auto_redeem",
+    "resume.spend_order",
     "resume.auto_redeem_min_gain",
     "remote_control.claude",
     "remote_control.codex",
@@ -358,6 +382,7 @@ fn validates_config_key_read_and_write_surfaces() {
         "resume.auto_continue_max_retries",
         "resume.auto_continue_text",
         "resume.auto_redeem",
+        "resume.spend_order",
         "resume.auto_redeem_min_gain",
         "notifications.title",
         "notifications.body",

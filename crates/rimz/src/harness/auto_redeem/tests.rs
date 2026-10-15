@@ -780,6 +780,7 @@ fn manual_consume_refuses_held_offers_before_locking_or_reserving() {
         let mut offer = ResetCreditOffer::new(
             None,
             credits(ts(1_700_000_000), None),
+            None,
             Action(consumed.clone()),
         );
         let hold = RedeemHold {

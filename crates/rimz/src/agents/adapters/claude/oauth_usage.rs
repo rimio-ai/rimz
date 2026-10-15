@@ -338,6 +338,7 @@ pub(super) fn prepare_reset_credit(
     let mut offer = ResetCreditOffer::new(
         capacity,
         credits,
+        usage.extra_credits,
         ClaudeResetCreditAction {
             usage_url,
             claim_url,

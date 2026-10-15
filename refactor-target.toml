@@ -209,7 +209,7 @@ upward-dependencies = ["address"]
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
-surface-budget = 1068 # Shared credits-cache read schema and freshness rule (+6).
+surface-budget = 1069 # Shared credits-cache read schema, freshness rule, and model sub-cap veto (+7).
 
 [[verdict]]
 kind = "item"
@@ -377,7 +377,7 @@ upward-dependencies = [
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
-surface-budget = 200
+surface-budget = 201 # SpendOrder shares typed capacity ordering with harness and CLI.
 
 [[verdict]]
 kind = "item"
@@ -691,7 +691,7 @@ path = "crates/rimz/src/harness"
 # RefaultHelperRequest, its runner, wake_request and the focus timestamp cross the CLI seam (+4).
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
 # hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
-surface-budget = 846 # agent_check::replay rebuilds a held judge's record from its decline without starting a process.
+surface-budget = 857 # Shared spend ladder and read-only reset-policy seams (+11).
 
 [[verdict]]
 kind = "item"
@@ -1223,7 +1223,7 @@ surface-budget = 20
 [[module]]
 path = "crates/rimz/src/config/resume.rs"
 allowed-dependencies = ["utils::time"]
-surface-budget = 4
+surface-budget = 5 # SpendOrder is shared with the spend ladder.
 
 [[module]]
 path = "crates/rimz/src/config/sidebar.rs"
@@ -5155,6 +5155,76 @@ reason = "Claude's claim idempotency is unverified: serialize and send once thro
 kind = "item"
 key = "harness::auto_redeem::ManualRedeem::hold"
 reason = "The binary shows held offers and exits with their provider code before confirmation or reservation."
+
+[[verdict]]
+kind = "item"
+key = "config::resume::SpendOrder"
+reason = "Typed policy orders paid and reset credit for every spend consumer."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder"
+reason = "Read-only spend policy belongs below routing, redemption, and CLI views."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendStep"
+reason = "The public JSON vocabulary shares a login's capacity step."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendFacts"
+reason = "One set of provider evidence feeds all spend decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendFacts::read"
+reason = "One cached-facts constructor excludes display-only balances."
+
+[[verdict]]
+kind = "item"
+key = "harness::spend_ladder::SpendFacts::step"
+reason = "One model-aware decision orders subscription, paid, and reset capacity."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ProviderCapacity::model_exhausted"
+reason = "A model sub-cap veto survives otherwise usable paid or reset credit."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::RedeemStamp"
+reason = "Read-only spend facts distinguish settled failures from pending reservations."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::RateStamp"
+reason = "The spend ladder shares the existing burn-rate cache without writing it."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::redeem_verdict"
+reason = "The shared ladder reuses the reset policy rather than duplicating its rules."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::read_stamp"
+reason = "The shared ladder reads the per-login attempt history."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::read_rate_stamp"
+reason = "The shared ladder reads the per-login burn-rate history."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::cached_rate"
+reason = "One validity rule serves redemption and cached spend facts."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_redeem::failed_attempt_cooling_down"
+reason = "Only a settled recent failure closes routing's reset step."
 
 [[verdict]]
 kind = "item"

@@ -505,6 +505,30 @@ impl ExtraCredits {
         matches!(self, Self::Disabled)
     }
 
+    /// Whether this extra paid budget is known to be exhausted.
+    fn is_exhausted(&self) -> bool {
+        match self {
+            Self::Unlimited => false,
+            Self::Disabled => true,
+            Self::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+            } => {
+                remaining_usd.is_some_and(|remaining| remaining <= 0.0)
+                    || used_usd
+                        .zip(*limit_usd)
+                        .is_some_and(|(used, limit)| limit > 0.0 && used >= limit)
+            }
+        }
+    }
+
+    /// Whether extra paid usage may be available. Unknown values count as usable
+    /// because no source has proven the budget is exhausted.
+    pub(crate) fn is_usable(&self) -> bool {
+        !self.is_disabled() && !self.is_exhausted()
+    }
+
     /// Remaining percentage for a draining bar, when enough data is known.
     pub(crate) fn remaining_percentage(&self) -> Option<u8> {
         match self {
@@ -1002,6 +1026,16 @@ mod tests {
             credits.with_limit_if_missing(Some(25.0)),
             ExtraCredits::Unlimited
         );
+    }
+
+    #[test]
+    fn extra_credits_usable_until_proven_exhausted() {
+        assert!(!ExtraCredits::Disabled.is_usable());
+        assert!(!ExtraCredits::known(None, Some(0.0), None).is_usable());
+        assert!(!ExtraCredits::known(Some(50.0), None, Some(50.0)).is_usable());
+        assert!(ExtraCredits::known(Some(12.0), None, Some(50.0)).is_usable());
+        assert!(ExtraCredits::known(None, None, None).is_usable());
+        assert!(ExtraCredits::Unlimited.is_usable());
     }
 
     #[test]
