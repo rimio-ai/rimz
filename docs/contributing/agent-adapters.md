@@ -154,7 +154,7 @@ Conformance, definition validation, and registry uniqueness tests enroll the ada
 ## Step 10 — Ship the documentation
 
 - Write `docs/internals/agents/adapter_<kind>.md` on the per-kind skeleton — *Hooks and lifecycle* (the native event → signal table is its core), *Context and transcript*, *Account and balance*, *Cost* — with [adapter_pi.md](../internals/agents/adapter_pi.md) as the small template and [adapter_claude.md](../internals/agents/adapter_claude.md) showing where marker subsections earn their place.
-- Link it everywhere the existing kinds are linked: the per-kind list in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), the root [AGENTS.md](../../AGENTS.md) documentation map, and the [internals index](../internals/README.md).
+- Link it everywhere the existing kinds are linked: the per-kind list in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), and the [internals index](../internals/README.md), which the root [AGENTS.md](../../AGENTS.md) documentation map links.
 - Update [agent-support.md](../reference/agent-support.md): a row in the six-capability compatibility matrix, a row in the wiring matrix, a per-agent detail section, and removal from *Agents not yet supported*.
 - Update the [README](../../README.md) agent compatibility matrix with the same six marks. The `published_matrices_match_the_declared_capabilities` integration test reads both published tables against `rimz coverage --json`, so a hand-edited cell that drifts from the declaration fails CI.
 - Correct every count the new kind raises. A census by a sibling's name (`rg -i kiro`) cannot reach a sentence that states only a total, so grep the old total word and the sibling count derived from it as well: with thirteen built-ins before the change, `rg -n -i '\b(thirteen|twelve siblings|eleven siblings)\b' AGENTS.md README.md docs crates --no-ignore-dot`, then skip the hits that count something else.
@@ -179,7 +179,7 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
-- [ ] `docs/internals/agents/adapter_<kind>.md` + links in the module contract, the providers table, and the root documentation map
+- [ ] `docs/internals/agents/adapter_<kind>.md` + links in the module contract, the providers table, and the internals index
 - [ ] Every agent and sibling count raised, found by grepping the old number words as well as a sibling's name
 - [ ] `agent-support.md` detail section and wiring-matrix row · the six-capability row in `agent-support.md` and the README, kept true by the `published_matrices_match_the_declared_capabilities` integration test
 - [ ] `cargo xtask gate` green · `rimz coverage` capability marks honest · `rimz coverage --wiring` mechanism grids honest · `rimz doctor` reporting
