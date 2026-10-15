@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use crate::agents::{
     ParkDemotion, TurnPhase,
 };
 use crate::diag::record::{DiagEvent, LocalSessionBindRejectReason};
-use crate::ids::{AgentKind, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
     LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
@@ -78,6 +78,8 @@ impl SidebarSnapshot {
                 ),
             })
             .collect();
+        let mut session_panes = LocalSessionPaneIndex::new(panes, &pane_facts, &binding_index);
+        let live_panes: HashSet<_> = panes.iter().map(|pane| &pane.pane_id).collect();
 
         for (observation_index, observation) in observations.iter().enumerate() {
             // A hook-bound session already carries stronger identity than a
@@ -85,15 +87,14 @@ impl SidebarSnapshot {
             // exact live pane with the same `(kind, session id)`. Use that
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
-            let stamped = panes.iter().enumerate().find(|(index, pane)| {
-                binding_index.stamped_agent(pane).is_some_and(|agent| {
-                    agent.kind == observation.kind
-                        && agent.agent_id == observation.session_id
-                        && pane_facts[*index].matches(observation)
-                        && !used_panes.contains(&pane.pane_id)
-                })
-            });
-            if let Some((_, pane)) = stamped {
+            let key = (
+                observation.kind.clone(),
+                observation.session_id.clone(),
+                observation.workspace.clone(),
+            );
+            if let Some(pane) =
+                take_unused_pane(session_panes.stamped.get_mut(&key), panes, &used_panes)
+            {
                 diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // Exact durable identity consumes both sides before lifecycle
                 // freshness is considered, so a stale provider fold cannot
@@ -102,21 +103,15 @@ impl SidebarSnapshot {
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
-            if let Some((_, pane)) = panes.iter().enumerate().find(|(index, pane)| {
-                pane.resumed_session_id.as_ref() == Some(&observation.session_id)
-                    && pane_facts[*index].matches(observation)
-                    && !used_panes.contains(&pane.pane_id)
-            }) {
+            if let Some(pane) =
+                take_unused_pane(session_panes.resumed.get_mut(&key), panes, &used_panes)
+            {
                 used_panes.insert(pane.pane_id.clone());
                 bindings.push((observation_index, pane.clone()));
                 continue;
             }
-            if let Some((_, pane)) = panes.iter().enumerate().find(|(index, pane)| {
-                binding_index
-                    .stamped_agent_for_session(pane, &observation.kind, &observation.session_id)
-                    .is_some()
-                    && pane_facts[*index].matches(observation)
-            }) {
+            if let Some(index) = session_panes.co_resident.get(&key) {
+                let pane = &panes[*index];
                 diagnostics.extend(ghost_session_bind(&binding_index, pane, observation));
                 // This durable identity is co-resident but does not own the
                 // pane. Keep it out of cwd fallback without consuming the pane
@@ -143,7 +138,7 @@ impl SidebarSnapshot {
                 .root_index(&observation.kind, &observation.session_id)
                 .and_then(|index| binding_index.agent(index))
                 && let Some(stamped) = agent.pane.as_ref()
-                && !panes.iter().any(|pane| pane.pane_id == stamped.pane_id)
+                && !live_panes.contains(&stamped.pane_id)
             {
                 continue;
             }
@@ -510,6 +505,71 @@ fn ghost_session_bind(
 struct LocalPaneFacts {
     kinds: BTreeSet<AgentKind>,
     workspace: Option<PathBuf>,
+}
+
+type SessionPaneKey = (AgentKind, AgentSessionId, PathBuf);
+
+#[derive(Default)]
+struct LocalSessionPaneIndex {
+    stamped: HashMap<SessionPaneKey, VecDeque<usize>>,
+    resumed: HashMap<SessionPaneKey, VecDeque<usize>>,
+    co_resident: HashMap<SessionPaneKey, usize>,
+}
+
+impl LocalSessionPaneIndex {
+    fn new(panes: &[PaneRef], facts: &[LocalPaneFacts], bindings: &PaneBindingIndex<'_>) -> Self {
+        let mut index = Self::default();
+        for (pane_index, (pane, facts)) in panes.iter().zip(facts).enumerate() {
+            let Some(workspace) = &facts.workspace else {
+                continue;
+            };
+            let key = |kind: &AgentKind, session: &AgentSessionId| {
+                (kind.clone(), session.clone(), workspace.clone())
+            };
+            if let Some(owner) = bindings.stamped_agent(pane)
+                && facts.kinds.contains(&owner.kind)
+            {
+                index
+                    .stamped
+                    .entry(key(&owner.kind, &owner.agent_id))
+                    .or_default()
+                    .push_back(pane_index);
+            }
+            if let Some(session) = &pane.resumed_session_id {
+                for kind in &facts.kinds {
+                    index
+                        .resumed
+                        .entry(key(kind, session))
+                        .or_default()
+                        .push_back(pane_index);
+                }
+            }
+            for agent in bindings.stamped_agents(pane) {
+                if facts.kinds.contains(&agent.kind) {
+                    index
+                        .co_resident
+                        .entry(key(&agent.kind, &agent.agent_id))
+                        .or_insert(pane_index);
+                }
+            }
+        }
+        index
+    }
+}
+
+fn take_unused_pane<'a>(
+    candidates: Option<&mut VecDeque<usize>>,
+    panes: &'a [PaneRef],
+    used: &HashSet<PaneId>,
+) -> Option<&'a PaneRef> {
+    let candidates = candidates?;
+    while let Some(index) = candidates.pop_front() {
+        let pane = &panes[index];
+        if !used.contains(&pane.pane_id) {
+            return Some(pane);
+        }
+    }
+    None
 }
 
 impl LocalPaneFacts {
