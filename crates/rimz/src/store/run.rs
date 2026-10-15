@@ -387,6 +387,8 @@ impl RunRecord {
         }
     }
 
+    // `harness::fleet::FleetRunIndex` mirrors these branches as `RunMatchKey`
+    // hash keys; a new matching branch here changes that index too.
     pub fn matches_agent(&self, agent: &crate::agents::AgentState) -> bool {
         if self.kind != agent.kind {
             return false;
@@ -598,6 +600,9 @@ pub(super) fn run_path(runs_dir: &Path, run_id: &RunId) -> PathBuf {
     runs_dir.join(format!("{run_id}.json"))
 }
 
+// `RunListingCache::refresh` reuses a listing while the directory stamp is
+// unchanged, which is safe only because every runs-dir writer publishes by
+// sibling rename (or deletes). An in-place writer would serve stale listings.
 #[must_use = "durability barrier; check the result"]
 pub(crate) fn write(runs_dir: &Path, record: &RunRecord) -> Result<()> {
     write_temp_then_rename(&run_path(runs_dir, &record.run_id), record)?;

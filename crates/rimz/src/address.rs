@@ -1120,6 +1120,8 @@ fn launch_occupant<'a>(group: &[&'a AgentState]) -> Option<&'a AgentState> {
         })
 }
 
+// `harness::fleet::LaunchRows` mirrors this membership rule as hash keys; a
+// change here changes that index too.
 fn launch_members<'a>(
     agents: impl IntoIterator<Item = &'a AgentState> + Clone,
     kind: &AgentKind,
