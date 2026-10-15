@@ -711,6 +711,49 @@ pub(crate) fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
     None
 }
 
+/// Open a provider's controlling pty without consuming input or acquiring a controlling terminal.
+#[expect(
+    dead_code,
+    reason = "The next hibernation step wires this probe into focus dwell"
+)]
+pub(crate) fn input_tty(provider_pid: u32) -> Option<std::fs::File> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let stat = std::fs::read_to_string(format!("/proc/{provider_pid}/stat")).ok()?;
+        let flags = nix::fcntl::OFlag::O_NOCTTY
+            | nix::fcntl::OFlag::O_NONBLOCK
+            | nix::fcntl::OFlag::O_CLOEXEC;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(flags.bits())
+            .open(input_tty_path(&stat)?)
+            .ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = provider_pid;
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn input_tty_path(stat: &str) -> Option<PathBuf> {
+    let tty: i32 = stat
+        .rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(4)?
+        .parse()
+        .ok()?;
+    let device = u64::from(tty.cast_unsigned());
+    let major = nix::sys::stat::major(device);
+    let minor = nix::sys::stat::minor(device);
+    (136..=143)
+        .contains(&major)
+        .then(|| PathBuf::from(format!("/dev/pts/{}", (major - 136) * 256 + minor)))
+}
+
 /// Parse a `/proc/<pid>/stat` line into `StatMetrics`. The same
 /// `rsplit_once(')')` anchor as [`parse_starttime_ticks`] — `comm` may carry
 /// spaces and parens — then, indexed past the closing paren: state 0, utime 11,
@@ -1016,6 +1059,39 @@ pub fn clk_tck() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn input_tty_path_decodes_pts_and_rejects_non_pts() {
+        let stat = |major, minor| {
+            let device = u32::try_from(nix::sys::stat::makedev(major, minor)).unwrap();
+            format!(
+                "123 (provider (worker)) S 1 2 3 {} -1 0",
+                i32::from_ne_bytes(device.to_ne_bytes())
+            )
+        };
+        for (major, minor, index) in [
+            (136, 42, 42),
+            (137, 7, 263),
+            (143, 255, 2047),
+            (136, 600_000, 600_000),
+        ] {
+            assert_eq!(
+                input_tty_path(&stat(major, minor)),
+                Some(PathBuf::from(format!("/dev/pts/{index}")))
+            );
+        }
+        for line in [
+            stat(0, 0),
+            stat(4, 1),
+            stat(128, 1),
+            stat(144, 0),
+            "bad stat".into(),
+            "1 (sh) S 1 2 3 nope".into(),
+        ] {
+            assert_eq!(input_tty_path(&line), None);
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

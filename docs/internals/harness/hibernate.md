@@ -52,6 +52,8 @@ Enrichment attaches the record without changing lifecycle or displayed status. F
 
 ## Wake and recovery
 
+`crates/rimz/src/proc/mod.rs::input_tty` is an optional Linux input-queue probe. It resolves the provider's controlling terminal from `tty_nr` in `/proc/<pid>/stat`, mapping Unix98 slave device numbers to `/dev/pts/N` without relying on the provider's dumpability or backend-specific tty discovery. It opens read-only with `O_NOCTTY | O_NONBLOCK | O_CLOEXEC`; zero or non-pts devices, unreadable stat files, and open failures yield no handle, as does every other platform. `FIONREAD` counts queued bytes without reading or consuming pane content, so it is not a pane read.
+
 `crates/rimz/src/harness/hibernate/wake.rs::wake_pane` thaws every recorded scope for the pane before withdrawing its entry. A missing scope is already gone; other thaw failures retain the record and stop the input path. Scope paths must resolve beneath the current user's `app.slice` with an agent-unit name. `wake_pane_at` supplies the same operation to paths-only callers without opening or creating a store; raw pane sends outside managed rooms remain ordinary mux input.
 
 A failed locked thaw saves `wake_error` on the retained entry before returning the error. The field defaults to absent for older version-1 entries. Show appends `, wake failed: <error>` to its hibernation detail and exposes the same field in JSON; a successful retry withdraws the entry and its error. Detached focus-helper failures therefore remain visible without changing the sidebar status.

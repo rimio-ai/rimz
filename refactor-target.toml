@@ -837,7 +837,13 @@ upward-dependencies = [
 # Timeout wake uses the injected-root workspace thaw entry point (+1).
 # Native Linux boot identity serves provider PID record validation (+1).
 # MemoryStat and memory_stat share anonymous-memory and refault readings with hibernation (+2).
-surface-budget = 136
+# input_tty provides the detached focus helper's non-consuming pty probe (+1).
+surface-budget = 137
+
+[[verdict]]
+kind = "item"
+key = "proc::input_tty"
+reason = "The detached focus helper opens the provider's pty for a non-consuming queue-length probe."
 
 [[verdict]]
 kind = "item"
