@@ -732,7 +732,7 @@ pub(crate) fn account_marker_legend(
         let words = match layer {
             Deciding::Room => "this room",
             Deciding::Project => "this project",
-            Deciding::Machine => "new rooms",
+            Deciding::Machine => "machine default",
         };
         let kinds = if layers.len() > 1 {
             format!(

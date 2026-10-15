@@ -160,7 +160,7 @@ $ rimz accounts list
 ●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  -        -       shared   ~/.rimz/accounts/claude/work
 
 ●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   -        -       -        ~/.codex
-●  this room (claude)   ●  new rooms (codex)   ○  new rooms
+●  this room (claude)   ●  machine default (codex)   ○  new rooms
 pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
 RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
 ```
@@ -169,14 +169,14 @@ RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (Sessi
 
 `○` marks the machine's `[accounts.use]` selection or `default` when the machine selects nothing for the kind, on every kind where that is not the `●` account. This is the default for new rooms without a project selection or explicit pin, and for existing rooms following the machine default. When no account of a kind carries `●`, the machine-default account still carries `○`.
 
-The legend line under the table names every layer that decides `●` among the kinds shown, in the order `this room`, `this project`, `new rooms`. With multiple deciding layers, each names its provider kinds:
+The legend line under the table names every layer that decides `●` among the kinds shown, in the order `this room`, `this project`, `machine default`. With multiple deciding layers, each names its provider kinds:
 
 | Legend | `●` is decided by |
 | --- | --- |
 | `●  this room   ○  new rooms` | Room pins decide all displayed `●` markers. An unpinned kind follows project and machine defaults live. |
 | `●  this project   ○  new rooms` | Trusted project selections decide all displayed `●` markers. |
-| `●  new rooms` | Machine selections or provider defaults decide all displayed `●` markers. An account carries `○` only where a kind has no `●`, and `   ○  new rooms` follows the legend then. |
-| `●  this room (codex)   ●  new rooms (claude)   ○  new rooms` | Codex is pinned; Claude follows the machine default or its own home. |
+| `●  machine default` | Machine selections or provider defaults decide all displayed `●` markers. An account carries `○` only where a kind has no `●`, and `   ○  new rooms` follows the legend then. |
+| `●  this room (codex)   ●  machine default (claude)   ○  new rooms` | Codex is pinned; Claude follows the machine default or its own home. |
 | `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
 
 `5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md). `CREDITS` is the banked reset-credit count: `-` at zero, or the faint unknown cell without a login or a reading.

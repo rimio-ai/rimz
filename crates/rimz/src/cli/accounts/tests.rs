@@ -383,7 +383,7 @@ fn table(text: &str) -> Vec<&str> {
         .take_while(|line| {
             line.is_empty() || line.starts_with("   ") || line.starts_with(['●', '○'])
         })
-        .filter(|line| !line.starts_with("●  this") && !line.starts_with("●  new"))
+        .filter(|line| !line.starts_with("●  this") && !line.starts_with("●  machine"))
         .filter(|line| !line.starts_with("○  new rooms"))
         .collect()
 }
@@ -415,7 +415,7 @@ fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
         !text.contains('○'),
         "each kind's ● is its machine default: {text}"
     );
-    assert_eq!(lines[6], "●  new rooms", "{text}");
+    assert_eq!(lines[6], "●  machine default", "{text}");
     assert!(
         lines.iter().all(|line| line.trim_end() == *line),
         "{text:?}"
@@ -468,7 +468,7 @@ fn list_marks_unknown_agent_counts_and_undeclared_selections() {
         "{text}"
     );
     assert!(
-        text.contains("\n●  new rooms   ○  new rooms\n"),
+        text.contains("\n●  machine default   ○  new rooms\n"),
         "claude follows the machine layer, and codex shows its unmarked default: {text}"
     );
     let gone = serde_json::to_value(gone).unwrap();
@@ -505,7 +505,8 @@ fn markers_and_legend_name_the_layer_that_decides() {
         None,
     );
     assert!(
-        project.contains("\n●  this project (claude)   ●  new rooms (codex)   ○  new rooms\n"),
+        project
+            .contains("\n●  this project (claude)   ●  machine default (codex)   ○  new rooms\n"),
         "{project}"
     );
     for row in &mut rows {
