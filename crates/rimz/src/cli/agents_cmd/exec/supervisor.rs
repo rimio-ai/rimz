@@ -489,6 +489,8 @@ fn run_loop(
     let mut spawned_at = Instant::now()
         .checked_sub(Duration::from_millis(age_ms as u64))
         .unwrap_or_else(Instant::now);
+    // The duty reads only the seed's child and session, which no reseed changes.
+    let parent_seed = state.watchdog.clone();
     let mut parent_watchdog = {
         #[cfg(unix)]
         let _worker_mask = rimz::child_process::CleanupSignalMask::block()?;
@@ -562,11 +564,29 @@ fn run_loop(
                 relaunches,
             });
         }
+        let confirmed_end = std::cell::Cell::new(false);
         let parent_ended = || {
-            outcome
-                .parent_watchdog
+            confirmed_end.get()
+                || outcome
+                    .parent_watchdog
+                    .as_ref()
+                    .is_some_and(|watchdog| watchdog.parent_ended())
+        };
+        // Asked at a relaunch deadline: an end the watchdog has not probed yet
+        // still cancels.
+        let confirm_parent_end = || {
+            if parent_ended() {
+                return Some(true);
+            }
+            let seed = parent_seed
                 .as_ref()
-                .is_some_and(|watchdog| watchdog.parent_ended())
+                .filter(|_| outcome.parent_watchdog.is_some())?;
+            let ended = matches!(
+                duty::confirm(&workspace.workspace_id, seed, false),
+                rimz::harness::parent_watch::ProbeConfirm::Ended
+            );
+            confirmed_end.set(ended);
+            Some(ended)
         };
         // Asked fresh each time: the answer is the consumer's, read at the
         // moment it would spawn.
@@ -603,7 +623,8 @@ fn run_loop(
         } else {
             CHILD_WAIT_POLL
         };
-        let mut verdict = startup_relaunch_at(grace_ends, evidence_poll, &mut relaunch);
+        let mut verdict =
+            startup_relaunch_at(grace_ends, evidence_poll, &mut relaunch, confirm_parent_end);
         if verdict == rimz::harness::run::StartupRelaunch::Due {
             // A provider killed mid-setup can leave the pane raw, where
             // Ctrl-C is a byte and the announced cancel never arrives.
@@ -612,7 +633,8 @@ fn run_loop(
             let retry_at = Instant::now()
                 .checked_add(relaunch_wait)
                 .context("invalid park relaunch wait")?;
-            verdict = startup_relaunch_at(retry_at, evidence_poll, &mut relaunch);
+            verdict =
+                startup_relaunch_at(retry_at, evidence_poll, &mut relaunch, confirm_parent_end);
         }
         match verdict {
             rimz::harness::run::StartupRelaunch::Due => {}
@@ -1132,17 +1154,29 @@ fn supervise_child(
 
 /// The relaunch answer as it stands at `deadline`, or `No` as soon as it is
 /// `No`: a late first hook, a stop, an ended parent, or a settled run ends the
-/// wait at once, and the last ask is the one the spawn follows.
+/// wait at once, and the last ask is the one the spawn follows. A deadline
+/// answer other than `No` asks `parent_end_confirmed` once, since the
+/// watchdog's flag lags its probe cadence: a confirmed end (`Some(true)`) turns
+/// it to `No`, and an unconfirmed one (`Some(false)`) asks `relaunch` again, so
+/// a stop that landed while the confirmation ran still cancels. `None` means no
+/// confirmation ran.
 fn startup_relaunch_at(
     deadline: Instant,
     poll: Duration,
     mut relaunch: impl FnMut() -> rimz::harness::run::StartupRelaunch,
+    parent_end_confirmed: impl FnOnce() -> Option<bool>,
 ) -> rimz::harness::run::StartupRelaunch {
     loop {
         let answer = relaunch();
-        let left = deadline.saturating_duration_since(Instant::now());
-        if answer == rimz::harness::run::StartupRelaunch::No || left.is_zero() {
+        if answer == rimz::harness::run::StartupRelaunch::No {
             return answer;
+        }
+        if deadline <= Instant::now() {
+            return match parent_end_confirmed() {
+                Some(true) => rimz::harness::run::StartupRelaunch::No,
+                Some(false) => relaunch(),
+                None => answer,
+            };
         }
         std::thread::sleep(poll);
     }
