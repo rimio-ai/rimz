@@ -652,6 +652,7 @@ fn apply_barrier(
     })
 }
 
+/// Connects once the drainer's listener is bound; proves neither an accept nor its ownership guard.
 #[track_caller]
 fn drainer_connection(
     store: &rimz::Store,
