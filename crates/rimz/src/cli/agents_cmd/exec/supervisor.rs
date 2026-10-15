@@ -573,8 +573,12 @@ fn run_loop(
                     .is_some_and(|watchdog| watchdog.parent_ended())
         };
         // Asked at a relaunch deadline: an end the watchdog has not probed yet
-        // still cancels.
+        // still cancels. An awaited probe pass refreshes the watchdog's latch
+        // first, and the audit confirmation covers what its tail misses.
         let confirm_parent_end = || {
+            if let Some(watchdog) = outcome.parent_watchdog.as_ref() {
+                watchdog.probe_now();
+            }
             if parent_ended() {
                 return Some(true);
             }
