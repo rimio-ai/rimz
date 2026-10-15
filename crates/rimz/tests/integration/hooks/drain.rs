@@ -1497,12 +1497,24 @@ fn drainer_exits_without_unlinking_a_replacement_socket() {
     let env = Env::new();
     env.record(&env.project_root);
     let store = env.store();
-    let mut drainer = drain_command(&env).spawn().unwrap();
-    let lease = drainer_connection(&store, Some(&mut drainer));
+    let barrier_path = store.runtime_paths().sock_dir.join("drain-test.sock");
+    let barrier = std::os::unix::net::UnixListener::bind(&barrier_path).unwrap();
+    let mut drainer = drain_command(&env)
+        .env("RIMZ_TEST_HOOK_DRAIN_BEFORE_POLL_CLIENTS", &barrier_path)
+        .spawn()
+        .unwrap();
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut drainer),
+        &barrier,
+        "drainer did not reach its serve loop",
+    );
     let socket = store.runtime_paths().hook_drainer_socket_path();
+    let lease = std::os::unix::net::UnixStream::connect(&socket).unwrap();
     std::fs::remove_file(&socket).unwrap();
     let _replacement = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     drop(lease);
+    release.write_all(&[1]).unwrap();
     let stopped = drainer_stops(&mut drainer);
     assert!(
         stopped,
