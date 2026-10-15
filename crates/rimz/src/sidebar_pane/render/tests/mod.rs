@@ -1102,9 +1102,7 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let ui = UiState {
         selected_index: Some(0),
         scroll_offset: 99,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..UiState::default()
     };
     let theme = Theme::for_sidebar(&snapshot.theme);

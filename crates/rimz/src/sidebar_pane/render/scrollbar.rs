@@ -2,7 +2,8 @@
 //!
 //! In the default `auto` mode ([`crate::config::ScrollbarMode`]) the bar shows
 //! only while the viewport is moving — a wheel scroll, the selection-driven
-//! auto-follow, a clamp shift — then hides once the view settles. Like the
+//! reveal, or jump — then hides once the view settles. Anchor corrections
+//! translate the baseline without stamping activity. Like the
 //! odometer's [`super::odometer::Roll`], motion is driven purely by the
 //! wall-clock animation phase ([`super::UiState::animation_phase`]): every
 //! draw [`observe`](ScrollbarFade::observe)s the visible viewport offset, a
@@ -33,6 +34,12 @@ pub(in crate::sidebar_pane) struct ScrollbarFade {
 }
 
 impl ScrollbarFade {
+    pub(super) fn shift(&mut self, correction: isize) {
+        self.last_offset = self
+            .last_offset
+            .map(|offset| offset.saturating_add_signed(correction));
+    }
+
     /// Fold in the visible offset a draw resolved: a change from the last draw
     /// stamps scroll activity at `phase`. Called at the draw write-back, beside
     /// `scroll_offset` and `scroll_ease`.

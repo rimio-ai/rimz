@@ -203,6 +203,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
 pub(super) struct RenderedBlock {
     pub(super) lines: Vec<Line<'static>>,
     pub(super) interactions: FrameInteractions,
+    pub(super) card_starts: Vec<(usize, usize)>,
 }
 
 impl RenderedBlock {
@@ -215,6 +216,7 @@ impl RenderedBlock {
         let mut block = Self {
             lines: Vec::with_capacity(lines.len()),
             interactions: FrameInteractions::default(),
+            card_starts: Vec::new(),
         };
         for (line, row) in lines.into_iter().zip(row_by_line) {
             match row {
@@ -279,6 +281,13 @@ impl RenderedBlock {
     }
 
     pub(super) fn append(&mut self, other: Self) {
+        let offset = self.lines.len();
+        self.card_starts.extend(
+            other
+                .card_starts
+                .into_iter()
+                .map(|(ordinal, line)| (ordinal, line + offset)),
+        );
         self.interactions.append(other.interactions);
         self.lines.extend(other.lines);
         self.assert_shape();
@@ -291,6 +300,12 @@ impl RenderedBlock {
         let block = Self {
             lines: self.lines,
             interactions: self.interactions.windowed(start, len),
+            card_starts: self
+                .card_starts
+                .into_iter()
+                .filter(|&(_, line)| (start..end).contains(&line))
+                .map(|(ordinal, line)| (ordinal, line - start))
+                .collect(),
         };
         block.assert_shape();
         block

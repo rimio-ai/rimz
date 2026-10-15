@@ -127,9 +127,6 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
     let mut ui = UiState {
         selected_index: Some(1),
         selected_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_10")),
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
         ..Default::default()
     };
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
@@ -139,7 +136,6 @@ fn search_edits_select_first_match_and_commit_focuses_it() {
     let top = PaneId::from_parts(MuxName::Zellij, "terminal_9");
     assert_eq!(ui.selected_pane, Some(top.clone()));
     assert_eq!(ui.selected_index, Some(0));
-    assert_eq!(ui.manual_scroll, None);
     assert_eq!(ui.browse, None);
     assert_eq!(ui.visible_roster(&snapshot).len(), 1);
     reconcile_selection(

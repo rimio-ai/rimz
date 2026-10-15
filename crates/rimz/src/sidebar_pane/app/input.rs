@@ -26,7 +26,7 @@ pub(in crate::sidebar_pane) enum Wakeup {
         row: u16,
     },
     /// A mouse wheel tick. Scrolls the agent-cards viewport without moving the
-    /// selection; the next selection change snaps the viewport back to it.
+    /// selection; the view then stays anchored to the cards it shows.
     Scroll {
         down: bool,
     },

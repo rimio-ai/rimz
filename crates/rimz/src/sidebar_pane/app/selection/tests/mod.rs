@@ -10,6 +10,12 @@ mod input;
 mod reconcile;
 mod tabs;
 
+fn paint(ui: &mut UiState, snapshot: &SidebarSnapshot, height: u16) {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(54, height)).unwrap();
+    render::draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
+}
+
 /// A browse pick of `pane`, begun while the derived baseline was `baseline`.
 fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
     Browse {

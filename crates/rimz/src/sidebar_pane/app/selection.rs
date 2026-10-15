@@ -7,7 +7,7 @@ use crate::mux::WidthAdjust;
 use crate::store::snapshot::{SidebarSnapshot, triage_key};
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, HitTarget, ManualScroll, UiState, active_dashboard_tab,
+    BodyFilter, Browse, DashboardTab, HitTarget, UiState, active_dashboard_tab,
     dashboard_tab_of_kind, dashboard_tabbed, dashboard_tabs, selected_agent_kind,
 };
 use crate::sidebar_pane::view::{BodyLens, VisibleRoster};
@@ -320,7 +320,6 @@ pub(super) fn finish_search(
     }
     if !changed {
         // The draft narrowed the body; ending it widens the roster back to the unchanged lens.
-        ui.manual_scroll = None;
         anchor_selection(ui, snapshot);
         return InputOutcome::redraw();
     }
@@ -381,7 +380,8 @@ pub(super) fn handle_mouse_click(
             }
         }
         Some(HitTarget::UnreadBanner) => {
-            pin_manual_scroll(ui);
+            ui.offset_authoritative = true;
+            ui.scroll_ease.cancel();
             ui.scroll_offset = 0;
             InputOutcome::redraw()
         }
@@ -407,13 +407,12 @@ pub(super) fn handle_mouse_click(
     }
 }
 
-/// A wheel tick: move the viewport, never the selection. The first tick pins a
-/// [`ManualScroll`] capturing the selection it began over — the clear condition
-/// — and later ticks only move the window, so a long peek keeps one anchor.
+/// A wheel tick: move the viewport, never the selection. The next paint takes
+/// this offset as authoritative, then anchors the cards in its target window.
 /// Clamp to the last drawn range so queued ticks can reverse at the bottom
 /// without an intervening paint. The draw still resolves geometry changes.
 pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
-    pin_manual_scroll(ui);
+    ui.offset_authoritative = true;
     ui.scroll_ease.arm();
     ui.scroll_offset = if down {
         ui.scroll_offset
@@ -425,27 +424,13 @@ pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
     InputOutcome::redraw()
 }
 
-/// Pin the viewport against auto-follow, capturing the current selection as the
-/// snap-back condition. A pin already held keeps its original anchor.
-fn pin_manual_scroll(ui: &mut UiState) {
-    if ui.manual_scroll.is_none() {
-        ui.manual_scroll = Some(ManualScroll {
-            selection_at_start: ui.selected_pane.clone(),
-        });
-    }
-}
-
 fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key: String) {
     if !ui.expanded_groups.remove(&group_key) {
         ui.expanded_groups.insert(group_key);
     }
     anchor_selection(ui, snapshot);
-    // A toggle reshapes the body below the clicked line, so hold the viewport
-    // instead of snapping back to the selected card. Capture the post-toggle
-    // selection because collapsing a selected group can clear it.
-    ui.manual_scroll = Some(ManualScroll {
-        selection_at_start: ui.selected_pane.clone(),
-    });
+    ui.offset_authoritative = true;
+    ui.scroll_ease.cancel();
 }
 
 /// A header click sets the section open or closed for the renderer's life. A
@@ -456,9 +441,8 @@ fn set_delegation_open(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: Str
     }
     ui.delegation_overrides.insert(row_id, open);
     anchor_selection(ui, snapshot);
-    ui.manual_scroll = Some(ManualScroll {
-        selection_at_start: ui.selected_pane.clone(),
-    });
+    ui.offset_authoritative = true;
+    ui.scroll_ease.cancel();
 }
 
 fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_id: String) {
@@ -476,16 +460,14 @@ fn toggle_delegation_history(ui: &mut UiState, snapshot: &SidebarSnapshot, row_i
             .insert(row_id, agent.user_turn_started_at);
     }
     anchor_selection(ui, snapshot);
-    ui.manual_scroll = Some(ManualScroll {
-        selection_at_start: ui.selected_pane.clone(),
-    });
+    ui.offset_authoritative = true;
+    ui.scroll_ease.cancel();
 }
 
 /// Flip the make-up filter a bucket click asked for: the active bucket clears
 /// back to show-all, any other becomes the pick. A pure toggle — no captured
 /// baseline, unlike [`DashboardTab`], because there is no derived default to
-/// fall back to. The body reshapes, so the explicit pick ends any viewport pin
-/// (the [`select_row`] discipline) and the selection re-anchors at once: a
+/// fall back to. The body reshapes and the selection re-anchors at once: a
 /// highlight whose row the filter hides drops to a clamped index, re-seated by
 /// the held baseline when the filter clears.
 fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
@@ -510,7 +492,6 @@ pub(super) fn set_make_up_filter(
         return false;
     }
     ui.make_up_filter = lens;
-    ui.manual_scroll = None;
     anchor_selection(ui, snapshot);
     true
 }
@@ -540,14 +521,13 @@ fn select_adjacent_worktree(
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
 /// arrow-key browse; focus actions resolve their target through the active
-/// roster instead and never move the highlight. An explicit pick ends any
-/// viewport pin, so the viewport snaps back to following the selection.
+/// roster instead and never move the highlight. A changed pick reveals on the
+/// next draw only if no line of its card is visible.
 fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_pane = roster.pane_at_ordinal(index);
     ui.selected_index = (ui.selected_pane.is_some()
         || (ui.search_draft.is_some() && index < roster.len()))
     .then_some(index);
-    ui.manual_scroll = None;
 }
 
 /// The id and unread bit of the visible agent row at `index` — the read/unread
@@ -692,12 +672,6 @@ fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) 
             ui.browse = None;
         }
         anchor_selection_in(ui, &roster);
-    }
-
-    if let Some(manual) = &ui.manual_scroll
-        && ui.selected_pane != manual.selection_at_start
-    {
-        ui.manual_scroll = None;
     }
 }
 

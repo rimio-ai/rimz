@@ -637,13 +637,17 @@ fn focus_stranded_ignores_a_fresh_automatic_repair_overlay() {
 
 fn applied_focus_anchor(
     pane_id: PaneId,
-    _viewport_row: usize,
+    viewport_row: isize,
     stamp_ms: u64,
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
 ) -> crate::mux::focus_anchor::FocusAnchor {
     crate::mux::focus_anchor::FocusAnchor {
         nonce: crate::ids::FocusNonce::new(),
         session_name: "rimz-test".to_owned(),
+        placement: Some(crate::mux::focus_anchor::FocusPlacement {
+            row_id: pane_id.to_string(),
+            viewport_row,
+        }),
         pane_id,
         origin: crate::mux::focus_anchor::FocusOrigin::User,
         repair_generation: None,
@@ -651,18 +655,17 @@ fn applied_focus_anchor(
         applied_at_ms: Some(stamp_ms),
         state: crate::mux::focus_anchor::FocusIntentState::Applied,
         pre_action: Vec::new(),
-        placement: None,
         order,
     }
 }
 
 fn requested_focus_anchor(
     pane_id: PaneId,
-    offset: usize,
+    viewport_row: isize,
     stamp_ms: u64,
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
 ) -> crate::mux::focus_anchor::FocusAnchor {
-    let mut anchor = applied_focus_anchor(pane_id, offset, stamp_ms, order);
+    let mut anchor = applied_focus_anchor(pane_id, viewport_row, stamp_ms, order);
     anchor.applied_at_ms = None;
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Requested;
     anchor
@@ -723,6 +726,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.state.ui.selected_pane = Some(old.pane_id.clone());
     rig.state.ui.scroll_offset = 2;
     rig.state.apply_focus_anchor();
+    assert_eq!(rig.state.ui.focus_placement, old.placement);
     assert_eq!(
         rig.state.ui.scroll_offset, 2,
         "apply the fold's anchor against this pane's selection"
@@ -751,6 +755,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.state.fold_inputs = None;
     rig.state.ui.selected_pane = Some(new.pane_id.clone());
     rig.state.apply_focus_anchor();
+    assert_eq!(rig.state.ui.focus_placement, new.placement);
     assert_eq!(
         rig.state.ui.scroll_offset, 2,
         "the event path reads the newer live anchor"
@@ -911,14 +916,13 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
-    crate::mux::focus_anchor::store(
-        &rig.runtime,
-        &applied_focus_anchor(target.clone(), 7, stamp_ms, None),
-    )
-    .expect("store anchor");
+    let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
+    let order = order_hold::capture_order(&snapshot, &rig.state.ui);
+    let mut anchor = applied_focus_anchor(target.clone(), 7, stamp_ms, Some(order.clone()));
+    anchor.placement = None;
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
     rig.state.ui.scroll_offset = 2;
 
-    let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target));
@@ -928,6 +932,7 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
         "a rowless anchor preserves external-focus group reveal"
     );
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
+    assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
 }
 
 #[test]
@@ -962,6 +967,8 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
 
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.state.ui.focus_placement, anchor.placement);
+    assert!(!rig.state.ui.focus_group_reveal);
     assert_eq!(
         rig.state.current.worktree_groups[0]
             .rows
@@ -979,9 +986,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     );
 
     rig.state.ui.scroll_offset = 4;
-    rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
-        selection_at_start: Some(target.clone()),
-    });
+    rig.state.ui.focus_placement = None;
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(crate::utils::time::unix_now_ms());
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("apply anchor");
@@ -989,12 +994,12 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.scroll_offset, 4);
-    assert!(rig.state.ui.manual_scroll.is_some());
+    assert!(rig.state.ui.focus_placement.is_none());
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
 
 #[test]
-fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
+fn fresh_child_focus_anchor_selects_parent_and_queues_placement_and_hold() {
     let mut rig = Rig::new();
     let parent = zellij("terminal_2");
     let first = zellij("terminal_1");
@@ -1014,11 +1019,9 @@ fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
         ],
         visible: HashSet::from([parent.to_string()]),
     };
-    crate::mux::focus_anchor::store(
-        &rig.runtime,
-        &requested_focus_anchor(child.clone(), 7, stamp_ms, Some(order.clone())),
-    )
-    .unwrap();
+    let mut anchor = requested_focus_anchor(child.clone(), 7, stamp_ms, Some(order.clone()));
+    anchor.placement.as_mut().unwrap().row_id = parent.to_string();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     let mut snapshot = snapshot_with_focused_pane(&rig.ws, parent.clone());
     let row = std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -1038,6 +1041,7 @@ fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
     rig.fold(snapshot, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.selected_pane, Some(parent));
     assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert_eq!(rig.state.ui.focus_placement, anchor.placement);
     assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
@@ -1056,16 +1060,15 @@ fn focus_anchor_stamp_applies_once() {
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert!(rig.state.ui.focus_placement.is_some());
 
     rig.state.ui.scroll_offset = 4;
-    rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
-        selection_at_start: Some(target.clone()),
-    });
+    rig.state.ui.focus_placement = None;
     let snapshot = snapshot_with_focused_pane(&rig.ws, target);
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.scroll_offset, 4);
-    assert!(rig.state.ui.manual_scroll.is_some());
+    assert!(rig.state.ui.focus_placement.is_none());
 }
 
 #[test]

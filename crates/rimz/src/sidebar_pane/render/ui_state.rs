@@ -12,6 +12,7 @@ use std::rc::Rc;
 use super::theme::Theme;
 use super::{CostRolls, FrameInteractions, ScrollEase, ScrollbarFade, TallyAnim};
 
+use crate::mux::focus_anchor::FocusPlacement;
 pub(in crate::sidebar_pane) use crate::mux::focus_anchor::{FrozenOrder, FrozenRow};
 
 #[derive(Clone, Debug, Default)]
@@ -72,30 +73,42 @@ pub(in crate::sidebar_pane) struct UiState {
     /// rank and cap live.
     pub(in crate::sidebar_pane) order_hold: Option<OrderHold>,
     /// Target first scroll-zone content line of the agent-cards viewport.
-    /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
-    /// selected card stays in view unless a [`ManualScroll`] pin holds it —
-    /// and written back as a byproduct of the draw, like frame interactions.
+    /// Resolved around the previous target window's selected or topmost card,
+    /// clamped to the zone, and written back like frame interactions. A changed
+    /// off-screen selection reveals once; visible cards never trigger reveal.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
     pub(in crate::sidebar_pane) scroll_offset: usize,
     /// The wheel glide from the last shown line toward `scroll_offset`: armed
-    /// by a wheel tick, observed at every draw's write-back, snapped by any
-    /// other target change.
+    /// by a wheel tick, observed at every draw's write-back, translated by card
+    /// corrections, and snapped by selection changes and explicit jumps.
     pub(in crate::sidebar_pane) scroll_ease: ScrollEase,
     /// Maximum offset in the last drawn frame, absent before the first draw.
     pub(in crate::sidebar_pane) drawn_scroll_max: Option<usize>,
+    /// Visible cards' own first lines in absolute pane rows, signed when clipped above the zone.
+    pub(in crate::sidebar_pane) painted_rows: Vec<(String, isize)>,
+    /// Previous target-window placements, independent of the wheel's painted position.
+    pub(in crate::sidebar_pane) anchored_rows: Vec<(String, isize)>,
+    /// Row id the last draw treated as selected; a different id is a selection change.
+    pub(in crate::sidebar_pane) drawn_selection: Option<String>,
+    /// Absolute pane row of the last draw's scroll-zone top.
+    pub(in crate::sidebar_pane) scroll_zone_top: usize,
+    /// The last draw's anchor correction hit the offset clamp, so the card moved.
+    pub(in crate::sidebar_pane) anchor_clamped: bool,
+    /// The last draw showed the `↑ N need you` banner.
+    pub(in crate::sidebar_pane) banner_shown: bool,
+    /// Wheel, banner, and toggles bypass anchoring and reveal for one paint.
+    pub(in crate::sidebar_pane) offset_authoritative: bool,
+    /// A fresh shared click placement for the next draw to land, then consumed.
+    pub(in crate::sidebar_pane) focus_placement: Option<FocusPlacement>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so
     /// its later acceptance cannot seed the viewport a second time. `0` before
     /// any jump handoff.
     pub(in crate::sidebar_pane) last_focus_anchor_ms: u64,
     /// Armed for one paint when a fold adopts an external focus change — a tab
     /// switch, or the first focused pane learned on attach. The next draw
-    /// scrolls the focused card's worktree header into view alongside the card,
-    /// then consumes the flag. A sidebar-initiated jump clears it in
-    /// `apply_focus_anchor`, because the fresh anchor freezes the clicked row.
+    /// reveals the focused card with its worktree header only if no card line
+    /// is visible, then consumes the flag. A fresh shared placement clears it.
     pub(in crate::sidebar_pane) focus_group_reveal: bool,
-    /// The transient viewport pin riding above the auto-follow, or `None`
-    /// while the viewport follows the selection (see [`ManualScroll`]).
-    pub(in crate::sidebar_pane) manual_scroll: Option<ManualScroll>,
     /// The row id a manual mark-unread just reopened while it is the focused
     /// pane. While armed, focus-read auto-clear skips that row; moving focus
     /// off it releases the guard so a later revisit clears normally.
@@ -255,16 +268,6 @@ pub(in crate::sidebar_pane) struct DashboardTab {
 pub(in crate::sidebar_pane) struct Browse {
     pub(in crate::sidebar_pane) pane: PaneId,
     pub(in crate::sidebar_pane) baseline_at_start: Option<PaneId>,
-}
-
-/// Holds the viewport window against selection auto-follow, anchored on the
-/// selection at pin time. Wheel scroll, an unread-banner jump, and a group
-/// toggle write the pin; a genuine selection change ends it and resumes
-/// following the selected card. The browse twin, one layer down: browse pins
-/// *which card*, this pins *which window*.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::sidebar_pane) struct ManualScroll {
-    pub(in crate::sidebar_pane) selection_at_start: Option<PaneId>,
 }
 
 /// Renderer-local order hold that keeps rows and groups stable while the user

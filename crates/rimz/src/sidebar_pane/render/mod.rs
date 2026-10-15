@@ -45,7 +45,7 @@ pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState};
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
+    Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, OrderHold,
 };
 pub(in crate::sidebar_pane) use crate::sidebar_pane::view::BodyFilter;
 use odometer::CLICK_PHASES;
@@ -100,11 +100,6 @@ fn draw_into(
     // the geometry of the frame the user is actually looking at.
     prune_expanded_groups(snapshot, ui);
     prune_delegation_state(snapshot, ui);
-    // Selection-follow and focus anchors snap, even onto the target a wheel
-    // flight was already heading for.
-    if ui.manual_scroll.is_none() {
-        ui.scroll_ease.cancel();
-    }
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
     let composed = compose_lines_with_meter(
@@ -120,13 +115,23 @@ fn draw_into(
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
     ui.interactions = composed.interactions;
+    ui.scrollbar.shift(composed.correction);
     ui.scrollbar
         .observe(composed.visible_scroll_offset, ui.animation_phase);
+    ui.scroll_ease = composed.scroll_ease;
     ui.scroll_ease.observe(composed.scroll_offset, ui.frame_ms);
     ui.scroll_offset = composed.scroll_offset;
     ui.drawn_scroll_max = Some(composed.scroll_max);
+    ui.painted_rows = composed.painted_rows;
+    ui.anchored_rows = composed.anchored_rows;
+    ui.drawn_selection = composed.drawn_selection;
+    ui.scroll_zone_top = top_height;
+    ui.banner_shown = composed.banner_shown;
+    ui.anchor_clamped = composed.anchor_clamped;
+    ui.offset_authoritative = false;
+    ui.focus_placement = None;
     // One paint consumes the focus reveal; later folds with unchanged selection
-    // leave the viewport free to follow the card or scroll by hand.
+    // leave the viewport anchored to the card or scroll by hand.
     ui.focus_group_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);

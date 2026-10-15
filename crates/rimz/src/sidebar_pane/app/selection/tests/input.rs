@@ -262,13 +262,8 @@ fn delegation_line_click_toggles_entries_without_focus() {
     click_delegation_header(&mut ui, &snapshot, collapsed.interactions, &row_id, true);
     assert_eq!(ui.selected_pane, Some(other.clone()));
     assert_eq!(ui.selected_index, Some(1));
-    assert_eq!(
-        ui.manual_scroll,
-        Some(ManualScroll {
-            selection_at_start: Some(other.clone())
-        })
-    );
     let opened = compose(&ui);
+    assert_eq!(opened.scroll_offset, collapsed.scroll_offset);
     assert!(shows(&opened.lines, "live-child"));
     assert!(shows(&opened.lines, "+1 older"));
     assert!(!shows(&opened.lines, "old-child"));
@@ -478,7 +473,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(ui.expanded_groups.contains(&group_key));
-    assert!(ui.manual_scroll.is_some(), "the toggle pins the viewport");
+    assert_eq!(ui.scroll_offset, 0);
     assert_eq!(
         roster_len(&snapshot, &BodyLens::default(), &ui.expanded_groups),
         9,
@@ -504,7 +499,7 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
 }
 
 #[test]
-fn group_toggle_preserves_a_wheel_pin_and_offset() {
+fn group_toggle_preserves_the_wheel_offset() {
     let ws = workspace();
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
     let panes = (0..9)
@@ -528,16 +523,15 @@ fn group_toggle_preserves_a_wheel_pin_and_offset() {
 
     assert!(ui.expanded_groups.contains(&group_key));
     assert_eq!(ui.scroll_offset, offset);
+    paint(&mut ui, &snapshot, 13);
     assert_eq!(
-        ui.manual_scroll,
-        Some(ManualScroll {
-            selection_at_start: Some(selected),
-        })
+        ui.scroll_offset, offset,
+        "the selection above does not pull the toggle viewport"
     );
 }
 
 #[test]
-fn group_toggle_installs_a_pin_that_ends_on_selection_change() {
+fn group_toggle_preserves_the_viewport_through_a_selection_fold() {
     let ws = workspace();
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_0");
     let next = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -558,18 +552,15 @@ fn group_toggle_installs_a_pin_that_ends_on_selection_change() {
 
     handle_mouse_click(0, more_line, &mut ui, &snapshot);
 
-    assert_eq!(
-        ui.manual_scroll,
-        Some(ManualScroll {
-            selection_at_start: Some(selected),
-        })
-    );
+    paint(&mut ui, &snapshot, 64);
+    assert_eq!(ui.scroll_offset, 0);
     reconcile_selection(&mut ui, &snapshot, Some(next));
-    assert_eq!(ui.manual_scroll, None);
+    paint(&mut ui, &snapshot, 64);
+    assert_eq!(ui.scroll_offset, 0);
 }
 
 #[test]
-fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
+fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
     let ws = workspace();
     let selected = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let mut snapshot = snapshot_with_panes(
@@ -606,18 +597,12 @@ fn collapsing_the_selected_group_pins_on_the_cleared_selection() {
 
     assert!(!ui.expanded_groups.contains(&group_key));
     assert_eq!(ui.selected_pane, None);
-    assert_eq!(
-        ui.manual_scroll,
-        Some(ManualScroll {
-            selection_at_start: None,
-        })
-    );
+    paint(&mut ui, &snapshot, 64);
+    assert_eq!(ui.scroll_offset, 0);
     reconcile_selection(&mut ui, &snapshot, Some(selected));
     assert_eq!(ui.selected_pane, None);
-    assert!(
-        ui.manual_scroll.is_some(),
-        "the fold keeps the viewport pin"
-    );
+    paint(&mut ui, &snapshot, 64);
+    assert_eq!(ui.scroll_offset, 0);
 }
 
 #[test]
@@ -808,17 +793,13 @@ fn wheel_scroll_clamps_to_the_drawn_range_before_reversing() {
 }
 
 #[test]
-fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
-    // The wheel moves the window, never the selection: each tick steps the
-    // offset and the first tick pins a ManualScroll anchored on the selection
-    // it began over.
+fn wheel_scroll_steps_the_offset_without_moving_selection() {
     let mut ui = UiState::default();
 
     let outcome = handle_scroll(true, &mut ui);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.scroll_offset, SCROLL_STEP);
-    assert!(ui.manual_scroll.is_some());
     assert_eq!(
         ui.selected_index, None,
         "the wheel never moves the selection"
@@ -832,14 +813,10 @@ fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {
     handle_scroll(false, &mut ui);
     handle_scroll(false, &mut ui);
     assert_eq!(ui.scroll_offset, 0);
-    assert!(
-        ui.manual_scroll.is_some(),
-        "the pin outlives the round trip"
-    );
 }
 
 #[test]
-fn banner_click_scrolls_to_top_and_pins_without_focusing() {
+fn banner_click_scrolls_to_top_without_focusing() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
@@ -857,43 +834,50 @@ fn banner_click_scrolls_to_top_and_pins_without_focusing() {
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.scroll_offset, 0);
-    assert!(
-        ui.manual_scroll.is_some(),
-        "banner click pins the scroll-to-top position"
-    );
+    paint(&mut ui, &snapshot, 20);
+    assert_eq!(ui.scroll_offset, 0);
     assert_eq!(outcome.effects, Vec::new());
 }
 #[test]
-fn selection_change_snaps_a_wheel_pin_back() {
-    // The pin holds across folds that keep the selection, and ends the moment
-    // the selection genuinely changes — the viewport snaps back to following
-    // the selected card.
+fn selection_change_reveals_an_offscreen_card_after_a_wheel_peek() {
     let ws = workspace();
-    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_0");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(
         &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
+        (0..20)
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .collect(),
     );
     let mut ui = UiState::default();
+    ui.expanded_groups
+        .insert(snapshot.worktree_groups[0].key.clone());
     reconcile_selection(&mut ui, &snapshot, Some(first.clone()));
-    handle_scroll(true, &mut ui);
+    paint(&mut ui, &snapshot, 14);
+    for _ in 0..4 {
+        handle_scroll(true, &mut ui);
+    }
+    paint(&mut ui, &snapshot, 14);
+    ui.frame_ms += 100;
+    paint(&mut ui, &snapshot, 14);
+    let offset = ui.scroll_offset;
 
     // An unchanged selection keeps the peek.
     reconcile_selection(&mut ui, &snapshot, Some(first));
-    assert!(ui.manual_scroll.is_some());
+    paint(&mut ui, &snapshot, 14);
+    assert_eq!(
+        ui.scroll_offset, offset,
+        "unchanged selection leaves the peek alone"
+    );
 
     // A genuine selection move ends it.
     reconcile_selection(&mut ui, &snapshot, Some(second));
-    assert_eq!(ui.manual_scroll, None);
+    paint(&mut ui, &snapshot, 14);
+    assert!(ui.scroll_offset < offset);
+    assert!(ui.interactions.line_for_row(1).is_some());
 }
 #[test]
-fn arrow_browse_ends_a_wheel_pin() {
-    // ↑/↓ are explicit picks: the wheel peek ends and the viewport resumes
-    // following the selection.
+fn arrow_browse_reveals_an_offscreen_pick() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(
         &ws,
@@ -904,11 +888,15 @@ fn arrow_browse_ends_a_wheel_pin() {
     );
     let mut ui = UiState::default();
     handle_scroll(true, &mut ui);
-    assert!(ui.manual_scroll.is_some());
 
     handle_key(KeyAction::Down, &mut ui, &snapshot);
 
-    assert_eq!(ui.manual_scroll, None);
+    paint(&mut ui, &snapshot, 20);
+    assert!(
+        ui.interactions
+            .line_for_row(ui.selected_index.unwrap())
+            .is_some()
+    );
 }
 #[test]
 fn help_key_opens_without_touching_the_viewport() {
@@ -916,9 +904,7 @@ fn help_key_opens_without_touching_the_viewport() {
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
         scroll_offset: 6,
-        manual_scroll: Some(ManualScroll {
-            selection_at_start: None,
-        }),
+        offset_authoritative: true,
         ..Default::default()
     };
 
@@ -926,10 +912,6 @@ fn help_key_opens_without_touching_the_viewport() {
 
     assert!(ui.help_visible);
     assert_eq!(ui.scroll_offset, 6);
-    assert!(
-        ui.manual_scroll.is_some(),
-        "opening help no longer resets card scroll state"
-    );
 }
 
 #[test]

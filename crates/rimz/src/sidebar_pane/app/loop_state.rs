@@ -948,13 +948,14 @@ impl LoopState {
                     .saturating_add(duration_millis(FOCUS_STRANDED_EVENT_TTL))
             }),
         };
+        let placement = self.focus_placement(&target);
         spawn_pane_focus(
             target,
             &self.config.session_name,
             self.runtime.clone(),
             crate::mux::focus_anchor::FocusOrigin::AutomaticRepair,
             expected,
-            (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+            (placement, Some(self.ui.last_order.clone())),
             Some(dispatch),
         );
         true
@@ -1184,13 +1185,14 @@ impl LoopState {
         for effect in applied.effects {
             match effect {
                 InputEffect::Focus(pane) => {
+                    let placement = self.focus_placement(&pane);
                     spawn_pane_focus(
                         pane,
                         &self.config.session_name,
                         self.runtime.clone(),
                         crate::mux::focus_anchor::FocusOrigin::User,
                         None,
-                        (self.ui.scroll_offset, Some(self.ui.last_order.clone())),
+                        (placement, Some(self.ui.last_order.clone())),
                         None,
                     );
                 }
@@ -1994,6 +1996,18 @@ impl LoopState {
         anchor
     }
 
+    fn focus_placement(&self, pane: &PaneId) -> Option<crate::mux::focus_anchor::FocusPlacement> {
+        let row = self.current.row_owning_pane(pane)?;
+        self.ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &row.id)
+            .map(|(id, y)| crate::mux::focus_anchor::FocusPlacement {
+                row_id: id.clone(),
+                viewport_row: y - self.ui.scroll_zone_top as isize,
+            })
+    }
+
     fn apply_focus_anchor(&mut self) {
         let Some(anchor) = self.focus_anchor() else {
             return;
@@ -2008,6 +2022,11 @@ impl LoopState {
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
             && crate::mux::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {
+            if let Some(placement) = anchor.placement {
+                self.ui.focus_placement = Some(placement);
+                self.ui.scroll_ease.cancel();
+                self.ui.focus_group_reveal = false;
+            }
             if let Some(order) = anchor.order {
                 order_hold::adopt_shared_hold(
                     &mut self.ui,
@@ -2277,7 +2296,10 @@ fn spawn_pane_focus(
     runtime: crate::disk::paths::RuntimePaths,
     origin: crate::mux::focus_anchor::FocusOrigin,
     expected_pre_action: Option<Vec<crate::pane::ClientPaneView>>,
-    presentation: (usize, Option<crate::mux::focus_anchor::FrozenOrder>),
+    presentation: (
+        Option<crate::mux::focus_anchor::FocusPlacement>,
+        Option<crate::mux::focus_anchor::FrozenOrder>,
+    ),
     repair: Option<FocusRepairDispatch>,
 ) {
     let session_name = session_name.to_owned();
@@ -2303,7 +2325,7 @@ fn spawn_pane_focus(
                         origin,
                         repair_generation,
                         expected_pre_action: expected_pre_action.as_deref(),
-                        placement: None,
+                        placement: presentation.0.clone(),
                         order: presentation.1.clone(),
                     },
                 )

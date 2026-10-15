@@ -242,7 +242,11 @@ A room with no agents has no make-up line:
 
 ## The agent cards
 
-The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The view follows the selection: selecting a card brings all of it into view, and a card taller than the view is pinned by its first line. A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. Selection changes, the unread-banner click, and jumps still land in one frame, and the next selection change brings the view back.
+The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. At the top or bottom, when there is no room to absorb a change, the card moves.
+
+Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card brings it into view with the least motion; a card taller than the view lands by its first line. A focus from outside the sidebar brings the group header too, but only if the card is off-screen. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection.
+
+A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
 ### The card
 
