@@ -13,6 +13,73 @@ use sha2::{Digest, Sha256};
 use super::lifecycle::{AskKind, LifecycleSignalKind};
 use super::{LaunchPreset, PresetArgMatcher, PresetErr, PresetField};
 
+#[cfg(unix)]
+const HOOK_ENV_RESTORED: &str = "RIMZ_HOOK_ENV_RESTORED";
+
+/// Resolve a scrubbed hook's owner environment before any RimZ paths are read.
+/// Only built-ins can declare this process contract; loading process plugins
+/// would itself resolve the RimZ home before the environment is restored.
+#[cfg(unix)]
+pub fn hook_owner_env(source: &str) -> std::io::Result<Option<Vec<(String, String)>>> {
+    let Some(definition) = super::registry::BUILTINS.iter().find(|definition| {
+        definition.spec().kind == source || definition.spec().aliases.contains(&source)
+    }) else {
+        return Ok(None);
+    };
+    hook_owner_env_with(
+        definition.core,
+        std::env::var("RIMZ_AGENT_PID").ok().as_deref(),
+        std::env::var_os(HOOK_ENV_RESTORED).is_some(),
+        crate::proc::comm,
+        crate::proc::environ,
+    )
+}
+
+#[cfg(unix)]
+fn hook_owner_env_with(
+    hook: &dyn super::capabilities::HookCapability,
+    owner_pid: Option<&str>,
+    restored: bool,
+    mut comm: impl FnMut(u32) -> Option<String>,
+    environ: impl FnOnce(u32) -> Option<Vec<(String, String)>>,
+) -> std::io::Result<Option<Vec<(String, String)>>> {
+    if hook.hook_inherits_env() || restored {
+        return Ok(None);
+    }
+    let raw_pid = owner_pid.ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing RIMZ_AGENT_PID")
+    })?;
+    let pid = raw_pid
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 1)
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid RIMZ_AGENT_PID")
+        })?;
+    if !comm(pid).is_some_and(|name| hook.spec().runs_as(&name)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "hook owner process does not match the source",
+        ));
+    }
+    let mut env = environ(pid).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "unreadable hook owner environment",
+        )
+    })?;
+    if !comm(pid).is_some_and(|name| hook.spec().runs_as(&name)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "hook owner process changed while reading its environment",
+        ));
+    }
+    env.retain(|(key, _)| key != "RIMZ_AGENT_PID" && key != HOOK_ENV_RESTORED);
+    env.push(("RIMZ_AGENT_PID".to_owned(), raw_pid.to_owned()));
+    env.push((HOOK_ENV_RESTORED.to_owned(), "1".to_owned()));
+    Ok(Some(env))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
@@ -1334,6 +1401,146 @@ mod tests {
     use super::{CompactCommand, CompactInstruction, LaunchSpec, PromptStyle, program_names_kind};
     use crate::agents::AskKind;
     use crate::agents::registry::BUILTINS;
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_owner_env_restores_only_a_declared_verified_owner_once() {
+        use super::{HOOK_ENV_RESTORED, hook_owner_env, hook_owner_env_with};
+        use crate::agents::capabilities::{CoreCapability, HookCapability};
+
+        struct ScrubbedHook;
+        impl CoreCapability for ScrubbedHook {
+            fn spec(&self) -> &'static super::AgentSpec {
+                crate::agents::spec_by_kind("codex").unwrap()
+            }
+        }
+        impl HookCapability for ScrubbedHook {
+            fn hook_inherits_env(&self) -> bool {
+                false
+            }
+        }
+        struct InheritingHook;
+        impl CoreCapability for InheritingHook {
+            fn spec(&self) -> &'static super::AgentSpec {
+                ScrubbedHook.spec()
+            }
+        }
+        impl HookCapability for InheritingHook {}
+
+        let owner_env = || {
+            [
+                ("RIMZ_HOME", "/isolated/rimz"),
+                ("XDG_RUNTIME_DIR", "/isolated/runtime"),
+                ("RIMZ_PROJECT_ROOT", "/project"),
+                ("RIMZ_WORKSPACE_ID", "workspace"),
+                ("RIMZ_RUN_ID", "run"),
+                ("TMUX_PANE", "%9"),
+                ("RIMZ_AGENT_PID", "stale"),
+                (HOOK_ENV_RESTORED, "stale"),
+            ]
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .to_vec()
+        };
+        for comm in ["codex", "node", "codex-aarch64-unknown-linux-gnu"] {
+            let restored = hook_owner_env_with(
+                &ScrubbedHook,
+                Some("42"),
+                false,
+                |pid| {
+                    assert_eq!(pid, 42);
+                    Some(comm.to_owned())
+                },
+                |pid| {
+                    assert_eq!(pid, 42);
+                    Some(owner_env())
+                },
+            )
+            .unwrap();
+            assert!(
+                restored.is_some(),
+                "a declaring hook must restore its owner env"
+            );
+            let restored = restored.unwrap();
+            let mut expected = owner_env();
+            expected.retain(|(key, _)| key != "RIMZ_AGENT_PID" && key != HOOK_ENV_RESTORED);
+            expected.push(("RIMZ_AGENT_PID".to_owned(), "42".to_owned()));
+            expected.push((HOOK_ENV_RESTORED.to_owned(), "1".to_owned()));
+            assert_eq!(restored, expected);
+        }
+
+        assert!(hook_owner_env("unregistered").unwrap().is_none());
+        assert!(
+            hook_owner_env_with(
+                &InheritingHook,
+                Some("42"),
+                false,
+                |_| panic!("inheriting hooks must not probe an owner"),
+                |_| panic!("inheriting hooks must not read an owner env"),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            hook_owner_env_with(
+                &ScrubbedHook,
+                Some("42"),
+                true,
+                |_| panic!("restored hooks must not probe again"),
+                |_| panic!("restored hooks must not read an owner env"),
+            )
+            .unwrap()
+            .is_none()
+        );
+        for pid in [None, Some("bad"), Some("0"), Some("1")] {
+            assert!(
+                hook_owner_env_with(
+                    &ScrubbedHook,
+                    pid,
+                    false,
+                    |_| panic!("invalid pids must not be probed"),
+                    |_| panic!("invalid pids must not read an owner env"),
+                )
+                .is_err()
+            );
+        }
+        for comm in [None, Some("zsh".to_owned())] {
+            assert!(
+                hook_owner_env_with(
+                    &ScrubbedHook,
+                    Some("42"),
+                    false,
+                    |_| comm.clone(),
+                    |_| { panic!("unverified owners must not supply an env") }
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            hook_owner_env_with(
+                &ScrubbedHook,
+                Some("42"),
+                false,
+                |_| Some("codex".to_owned()),
+                |_| None,
+            )
+            .is_err()
+        );
+        let mut probes = 0;
+        assert!(
+            hook_owner_env_with(
+                &ScrubbedHook,
+                Some("42"),
+                false,
+                |_| {
+                    probes += 1;
+                    Some(if probes == 1 { "codex" } else { "zsh" }.to_owned())
+                },
+                |_| Some(owner_env()),
+            )
+            .is_err(),
+            "an owner that changed during the env read must not be restored"
+        );
+    }
 
     #[test]
     fn every_descriptor_keeps_editing_a_subset_of_mutating() {

@@ -23,6 +23,9 @@ fn main() -> std::process::ExitCode {
     // Completion runs before observability and build-id startup: every TAB is
     // latency-sensitive, and clap_complete owns stdout for this request.
     cli::complete_env();
+    // Reporting can read the RimZ home, so restore scrubbed hooks before startup.
+    #[cfg(unix)]
+    cli::restore_hook_environment();
     // Background workers must not consume a signal pending across the exec handoff.
     #[cfg(unix)]
     let startup_mask = match rimz::child_process::CleanupSignalMask::block() {
