@@ -37,6 +37,7 @@ pub(super) use fold::{
     catch_up_rollup, catch_up_with_pending, load_full_agent, prune_carryover,
     reseed_rollup_cache_for_rotation, stage_carryover_for_rotation,
 };
+pub use panes::SidebarOwnView;
 pub use panes::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,
@@ -44,7 +45,6 @@ pub use panes::{
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
-pub use panes::{SidebarOwnView, stamped_agent_for_pane};
 /// Pane binding calls this classifier directly; the re-export exists for the
 /// sidebar's pane-field fixtures.
 #[cfg(test)]

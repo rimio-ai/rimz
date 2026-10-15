@@ -1557,37 +1557,59 @@ fn resolve_own_agent_end_trace(
     let mut projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit projection for agent exit end stamp")?;
-    if let Some(pane_id) = own_pane.clone() {
+    if request.identity.launch_id.is_some() {
         rimz::store::agent_context::attach_rest_certificates(
             store.runtime_paths(),
             &mut projection.agents,
         );
-        let pane = rimz::pane::PaneRef::from_id(pane_id);
-        let owner = rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents);
-        if let Some(launch_id) = request.identity.launch_id.as_deref() {
-            let launch_id = AgentSessionId::from(launch_id);
-            if let Some(agent) = owner
-                && agent.kind == request.kind
-                && agent.launch_id.as_ref() == Some(&launch_id)
-                && !agent.agent_id.is_empty()
-            {
-                return Ok(Some(EndedSession {
-                    kind: agent.kind.clone(),
-                    agent_id: agent.agent_id.clone(),
-                    name: agent.name.clone(),
-                }));
-            }
+    }
+    Ok(exit_end_target(
+        &projection.agents,
+        own_pane.as_ref(),
+        request,
+    ))
+}
+
+/// The row the exiting wrapper ends: its launch's current row, ended or not,
+/// else its resume target. A pane outlives its occupants, so the pane's own
+/// ranking never names the row. A row bound to another pane means a
+/// replacement already took over, and the superseded wrapper ends nothing.
+fn exit_end_target(
+    agents: &[rimz::agents::AgentState],
+    own_pane: Option<&rimz::ids::PaneId>,
+    request: &rimz::harness::launch::ExecRequest,
+) -> Option<EndedSession> {
+    // One launch can hold two live rows in two panes (an exact-id resume of a
+    // cleared conversation), so the launch's live row on this pane wins first.
+    let launch_row = request.identity.launch_id.as_deref().and_then(|launch_id| {
+        let launch_id = AgentSessionId::from(launch_id);
+        let live_here = agents.iter().filter(|agent| {
+            agent.ended_at.is_none()
+                && agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|bound| Some(&bound.pane_id) == own_pane)
+        });
+        rimz::address::launch_row(live_here, &request.kind, &launch_id)
+            .or_else(|| rimz::address::launch_row(agents, &request.kind, &launch_id))
+    });
+    if let Some(row) = launch_row {
+        let bound_elsewhere = row
+            .pane
+            .as_ref()
+            .is_some_and(|bound| Some(&bound.pane_id) != own_pane);
+        if bound_elsewhere {
+            return None;
         }
-        if let Some(agent) = owner
-            && !agent.agent_id.is_empty()
-        {
-            return Ok(Some(EndedSession {
-                kind: agent.kind.clone(),
-                agent_id: agent.agent_id.clone(),
-                name: agent.name.clone(),
-            }));
+        if !row.agent_id.is_empty() {
+            return Some(EndedSession {
+                kind: row.kind.clone(),
+                agent_id: row.agent_id.clone(),
+                name: row.name.clone(),
+            });
         }
     }
+    let attach_target = exec_attach_target(request);
     // A resumed pane owns the resumed session and can safely fall back to the
     // same argv identity used by its pre-start attach — unless the store now
     // binds that session to a different pane. A same-session `agents restart`
@@ -1595,19 +1617,16 @@ fn resolve_own_agent_end_trace(
     // (`record_own_resume_pane`) before it spawns its provider, so a wrapper
     // that sees the session bound elsewhere has been superseded, and ending it
     // would mark a live agent dead and retire the rows it is still listening on.
-    let Some((kind, session)) = attach_target else {
-        return Ok(None);
-    };
-    if session_bound_to_another_pane(&projection.agents, &kind, &session, own_pane.as_ref()) {
-        return Ok(None);
+    let (kind, session) = attach_target?;
+    if session_bound_to_another_pane(agents, &kind, &session, own_pane) {
+        return None;
     }
-    let name = find_agent(&projection.agents, kind.as_str(), &session)
-        .and_then(|agent| agent.name.clone());
-    Ok(Some(EndedSession {
+    let name = find_agent(agents, kind.as_str(), &session).and_then(|agent| agent.name.clone());
+    Some(EndedSession {
         kind,
         agent_id: session,
         name,
-    }))
+    })
 }
 
 /// Whether `agents` binds `(kind, session)` to a pane that is not `own_pane`.

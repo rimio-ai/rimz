@@ -2112,7 +2112,7 @@ fn newest_cmp(
 /// retires old stamps, so an unstamped durable candidate remains resumable and
 /// dedupes by provider session identity. One pane hosts one agent: a relaunch
 /// that re-used a pane id collapses to its newest stamp — the same rule the live
-/// sidebar binds by (`stamped_agent_for_pane`, in `store::snapshot::panes`) —
+/// sidebar binds by (`PaneBindingIndex`, in `store::snapshot::panes`) —
 /// while distinct sessions without stamps each remain candidates.
 /// The environment one resume plan is built against: where the room lives, what
 /// binary its panes re-enter through, how many panes it may seed, and the

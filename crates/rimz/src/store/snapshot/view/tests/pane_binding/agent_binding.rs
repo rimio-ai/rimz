@@ -354,7 +354,7 @@ fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
     // (`assemble.rs`). A persistent in-process fork shares the primary's daemon
     // owner pid, so the same-pane supersession reaper must spare the primary
     // instead of collapsing it as a relaunch — otherwise
-    // `stamped_agent_for_pane` never sees the primary and the card flips to the
+    // `PaneBindingIndex` never sees the primary and the card flips to the
     // fork.
     let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
