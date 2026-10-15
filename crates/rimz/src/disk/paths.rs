@@ -943,7 +943,7 @@ impl RuntimePaths {
     }
 
     /// The workspace's last jump scroll anchor: the pane a jump focused plus the
-    /// viewport offset that keeps its card where the user clicked. Renderers read
+    /// optional card placement that keeps it where the user clicked. Renderers read
     /// it on the fold that adopts the focus, so a cross-tab jump lands the card at
     /// the same on-screen row. Display-only runtime state, TTL-gated.
     pub(crate) fn focus_anchor_path(&self) -> PathBuf {

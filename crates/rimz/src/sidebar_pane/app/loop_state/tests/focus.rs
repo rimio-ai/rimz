@@ -151,7 +151,7 @@ fn fenced_request(
             origin: FocusOrigin::AutomaticRepair,
             repair_generation: Some(3),
             expected_pre_action: Some(expected),
-            offset: 0,
+            placement: None,
             order: None,
         },
         || Ok(sample),
@@ -637,7 +637,7 @@ fn focus_stranded_ignores_a_fresh_automatic_repair_overlay() {
 
 fn applied_focus_anchor(
     pane_id: PaneId,
-    offset: usize,
+    _viewport_row: usize,
     stamp_ms: u64,
     order: Option<crate::sidebar_pane::render::FrozenOrder>,
 ) -> crate::mux::focus_anchor::FocusAnchor {
@@ -651,7 +651,7 @@ fn applied_focus_anchor(
         applied_at_ms: Some(stamp_ms),
         state: crate::mux::focus_anchor::FocusIntentState::Applied,
         pre_action: Vec::new(),
-        offset,
+        placement: None,
         order,
     }
 }
@@ -683,7 +683,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
         nonce: anchor.nonce,
     });
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
 
     rig.deliver(FetchUpdate::Shared {
         update: Box::new(FetchUpdate::Snapshot {
@@ -701,7 +701,7 @@ fn older_shared_inputs_do_not_undo_a_consumed_focus_intent() {
         Some(target),
         "an older shared cut must not rewind an already consumed focus intent"
     );
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
     assert_eq!(
         crate::mux::focus_anchor::load(&rig.runtime).unwrap().nonce,
         anchor.nonce
@@ -724,7 +724,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.state.ui.scroll_offset = 2;
     rig.state.apply_focus_anchor();
     assert_eq!(
-        rig.state.ui.scroll_offset, 7,
+        rig.state.ui.scroll_offset, 2,
         "apply the fold's anchor against this pane's selection"
     );
 
@@ -752,7 +752,7 @@ fn shared_anchor_keeps_selection_and_fresh_nonce_pane_local() {
     rig.state.ui.selected_pane = Some(new.pane_id.clone());
     rig.state.apply_focus_anchor();
     assert_eq!(
-        rig.state.ui.scroll_offset, 9,
+        rig.state.ui.scroll_offset, 2,
         "the event path reads the newer live anchor"
     );
 }
@@ -775,7 +775,7 @@ fn shared_focus_cut_converges_missed_intents_and_confirmation() {
         }),
     );
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
 
     anchor.state = crate::mux::focus_anchor::FocusIntentState::Applied;
     anchor.applied_at_ms = Some(stamp);
@@ -907,7 +907,7 @@ fn older_shared_inputs_preserve_a_consumed_native_focus_event() {
 }
 
 #[test]
-fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
+fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
     let mut rig = Rig::new();
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
@@ -917,19 +917,15 @@ fn fresh_focus_anchor_seeds_scroll_on_matching_fold() {
     )
     .expect("store anchor");
     rig.state.ui.scroll_offset = 2;
-    rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {
-        selection_at_start: Some(zellij("terminal_1")),
-    });
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target));
-    assert_eq!(rig.state.ui.scroll_offset, 7);
-    assert_eq!(rig.state.ui.manual_scroll, None);
+    assert_eq!(rig.state.ui.scroll_offset, 2);
     assert!(
-        !rig.state.ui.focus_group_reveal,
-        "a sidebar jump's fresh anchor suppresses external-focus group reveal"
+        rig.state.ui.focus_group_reveal,
+        "a rowless anchor preserves external-focus group reveal"
     );
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
@@ -965,7 +961,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     rig.fold(snapshot, SnapshotSource::Produced);
 
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
     assert_eq!(
         rig.state.current.worktree_groups[0]
             .rows
@@ -1041,7 +1037,7 @@ fn fresh_child_focus_anchor_selects_parent_and_seeds_scroll_and_hold() {
     snapshot.focused_pane = Some(child);
     rig.fold(snapshot, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.selected_pane, Some(parent));
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
     assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
@@ -1059,7 +1055,7 @@ fn focus_anchor_stamp_applies_once() {
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
-    assert_eq!(rig.state.ui.scroll_offset, 7);
+    assert_eq!(rig.state.ui.scroll_offset, 0);
 
     rig.state.ui.scroll_offset = 4;
     rig.state.ui.manual_scroll = Some(crate::sidebar_pane::render::ManualScroll {

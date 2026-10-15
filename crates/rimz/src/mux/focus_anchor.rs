@@ -22,7 +22,7 @@ use crate::pane::ClientPaneView;
 /// older anchor is a stale jump and is ignored.
 pub(crate) const FOCUS_ANCHOR_FRESH: Duration = Duration::from_millis(2500);
 
-const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v3";
+const FOCUS_ANCHOR_VERSION: &str = "rimz.focus-anchor.v4";
 
 #[cfg(test)]
 thread_local! {
@@ -62,7 +62,8 @@ pub struct FocusAnchor {
     pub state: FocusIntentState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_action: Vec<ClientPaneView>,
-    pub offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) placement: Option<FocusPlacement>,
     #[serde(default)]
     pub(crate) order: Option<FrozenOrder>,
 }
@@ -105,8 +106,15 @@ pub(crate) struct FocusActionRequest<'a> {
     pub origin: FocusOrigin,
     pub repair_generation: Option<u64>,
     pub expected_pre_action: Option<&'a [ClientPaneView]>,
-    pub offset: usize,
+    pub placement: Option<FocusPlacement>,
     pub order: Option<FrozenOrder>,
+}
+
+/// A card's own first line relative to the source pane's scroll-zone top; negative when clipped above it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FocusPlacement {
+    pub(crate) row_id: String,
+    pub(crate) viewport_row: isize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -189,14 +197,17 @@ pub fn load(runtime: &RuntimePaths) -> Option<FocusAnchor> {
             return None;
         }
     };
-    let file: FocusAnchorFile = match serde_json::from_slice(&bytes) {
+    let mut file: FocusAnchorFile = match serde_json::from_slice(&bytes) {
         Ok(file) => file,
         Err(err) => {
             debug!(path = %path.display(), error = %err, "sidebar focus anchor invalid");
             return None;
         }
     };
-    if file.v != FOCUS_ANCHOR_VERSION {
+    // Upgrade compatibility; remove the v3 reader after the next release.
+    if file.v == "rimz.focus-anchor.v3" {
+        file.anchor.placement = None;
+    } else if file.v != FOCUS_ANCHOR_VERSION {
         debug!(
             path = %path.display(),
             version = file.v,
@@ -249,7 +260,7 @@ fn request_action_with_client_sample(
         origin,
         repair_generation,
         expected_pre_action,
-        offset,
+        placement,
         order,
     } = request;
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
@@ -276,7 +287,7 @@ fn request_action_with_client_sample(
         applied_at_ms: None,
         state: FocusIntentState::Requested,
         pre_action,
-        offset,
+        placement,
         order,
     };
     store(runtime, &anchor)?;
@@ -350,7 +361,7 @@ pub fn execute_action(
             origin: FocusOrigin::User,
             repair_generation: None,
             expected_pre_action: None,
-            offset: 0,
+            placement: None,
             order: None,
         },
     )?;
@@ -492,7 +503,7 @@ mod tests {
             applied_at_ms: Some(stamp_ms),
             state: FocusIntentState::Applied,
             pre_action: Vec::new(),
-            offset: 7,
+            placement: None,
             order: None,
         }
     }
@@ -544,6 +555,41 @@ mod tests {
         });
         snapshot.client_views = client_views;
         snapshot
+    }
+
+    #[test]
+    fn v4_round_trip_preserves_optional_placement_without_offset() {
+        let (_dir, runtime) = runtime();
+        for placement in [
+            serde_json::Value::Null,
+            serde_json::json!({
+                "row_id": "row-2", "viewport_row": -2,
+            }),
+        ] {
+            let mut value = serde_json::to_value(anchor(1_000)).unwrap();
+            value["placement"] = placement.clone();
+            let anchor: FocusAnchor = serde_json::from_value(value).unwrap();
+            store(&runtime, &anchor).unwrap();
+            let file: serde_json::Value =
+                serde_json::from_slice(&fs::read(runtime.focus_anchor_path()).unwrap()).unwrap();
+            assert_eq!(file["v"], "rimz.focus-anchor.v4");
+            assert!(file.get("offset").is_none());
+            assert_eq!(file["placement"], placement);
+            assert_eq!(load(&runtime), Some(anchor));
+        }
+    }
+
+    #[test]
+    fn v3_offset_loads_without_placement() {
+        let (_dir, runtime) = runtime();
+        let mut value = serde_json::to_value(anchor(1_000)).unwrap();
+        value["v"] = "rimz.focus-anchor.v3".into();
+        value["offset"] = 7.into();
+        value["placement"] = serde_json::json!({"row_id": "ignored", "viewport_row": 3});
+        atomic::write_temp_then_rename_cache(&runtime.focus_anchor_path(), &value).unwrap();
+        let loaded = serde_json::to_value(load(&runtime).expect("v3 anchor")).unwrap();
+        assert!(loaded.get("offset").is_none());
+        assert!(loaded.get("placement").is_none());
     }
 
     #[test]
@@ -645,7 +691,7 @@ mod tests {
                 origin: FocusOrigin::User,
                 repair_generation: None,
                 expected_pre_action: None,
-                offset: 7,
+                placement: None,
                 order: None,
             },
             || Ok(Vec::new()),
@@ -683,7 +729,7 @@ mod tests {
                 origin: FocusOrigin::AutomaticRepair,
                 repair_generation: Some(3),
                 expected_pre_action: Some(&expected),
-                offset: 0,
+                placement: None,
                 order: None,
             },
             || Ok(observed.clone()),

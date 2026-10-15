@@ -244,7 +244,7 @@ mod tests {
             applied_at_ms: Some(stamp_ms),
             state: crate::mux::focus_anchor::FocusIntentState::Applied,
             pre_action: Vec::new(),
-            offset: 0,
+            placement: None,
             order: None,
         }
     }
