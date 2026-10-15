@@ -394,7 +394,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "muse"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -549,6 +550,15 @@ mod tests {
             ["answer", "bg", "bgsh", "tools", "remote"]
         );
 
+        let muse = agent_cells(&matrix, "muse");
+        assert_eq!(count(&muse, MatrixCellState::Ok), 4);
+        assert_eq!(count(&muse, MatrixCellState::Partial), 0);
+        assert_eq!(count(&muse, MatrixCellState::Absent), 15);
+        assert_eq!(
+            agent_labels(&matrix, "muse", MatrixCellState::Ok),
+            ["turn", "perm", "end", "install"]
+        );
+
         let antigravity = agent_cells(&matrix, "antigravity");
         assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
         assert_eq!(count(&antigravity, MatrixCellState::Partial), 7);
@@ -595,7 +605,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "muse"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -617,6 +628,7 @@ mod tests {
                 MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Ok,      // muse
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -638,6 +650,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Absent,  // muse
             ]
         );
 
@@ -658,6 +671,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Partial, // grok
+                MatrixCellState::Absent,  // muse
             ]
         );
     }

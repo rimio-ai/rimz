@@ -402,6 +402,7 @@ pub enum HookIngressIgnoreReason {
     ClaudeRemoteControl,
     CodexInternalAppServer,
     DroidStockTui,
+    MuseChildThread,
 }
 
 impl HookIngressIgnoreReason {
@@ -410,6 +411,7 @@ impl HookIngressIgnoreReason {
             Self::ClaudeRemoteControl => "claude_remote_control",
             Self::CodexInternalAppServer => "codex_internal_app_server",
             Self::DroidStockTui => "droid_stock_tui",
+            Self::MuseChildThread => "muse_child_thread",
         }
     }
 }

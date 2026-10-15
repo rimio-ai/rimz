@@ -2,6 +2,89 @@ use super::*;
 use crate::harness::launch_reminders::{TempFiles, subagent_reminder, wrap};
 
 #[test]
+fn muse_managed_hook_passthrough_covers_host_and_sandbox_launch_environment() {
+    let adapter = crate::agents::find_definition("muse");
+    assert!(adapter.is_some(), "Muse must be a built-in adapter");
+    let adapter = adapter.unwrap();
+    let mut invocation = request(
+        "muse",
+        ExecAction::Launch {
+            prompt: None,
+            extra_args: Vec::new(),
+        },
+    );
+    invocation.run_id = Some(crate::ids::RunId::new());
+    invocation.identity.name = Some("muse-probe".into());
+    invocation.identity.params = crate::agents::LaunchParams {
+        channel: Some("probe".into()),
+        model: Some("echo".into()),
+        ..Default::default()
+    };
+    let mut inherited = crate::disk::paths::runtime_domain_env();
+    inherited.extend(env(&[
+        ("RIMZ_WORKSPACE_ID", "ws-probe"),
+        ("RIMZ_PROJECT_ROOT", "/project"),
+        ("TMUX_PANE", "%1"),
+        ("ZELLIJ_PANE_ID", "1"),
+    ]));
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = crate::disk::paths::StatePaths::under(id, root.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    for isolation in [
+        crate::config::Isolation::Host,
+        crate::config::Isolation::Sandbox,
+    ] {
+        let plan =
+            crate::harness::launch_plan::compile(crate::harness::launch_plan::LaunchPlanInputs {
+                request: &invocation,
+                cwd: root.path(),
+                project_root: root.path(),
+                rimz_bin: Path::new("/bin/rimz"),
+                runtime: &runtime,
+                state: &state,
+                effective: None,
+                commands: &machine.agents.commands,
+                accounts: &machine.accounts,
+                bwrap: (isolation == crate::config::Isolation::Sandbox)
+                    .then_some(Path::new("/bin/bwrap")),
+                agents: Ok(&[]),
+                ambient_env: &inherited,
+                agent_shell: None,
+                hibernate: false,
+                recorded_system_prompt_digest: None,
+            })
+            .unwrap();
+        let process = plan.process();
+        let mut composed = inherited.clone();
+        composed.extend(process.env.clone());
+        for key in &process.unset {
+            composed.remove(key);
+        }
+        assert_eq!(
+            composed[crate::config::Isolation::ENV],
+            isolation.to_string()
+        );
+        assert_eq!(
+            plan.sandbox.is_some(),
+            isolation == crate::config::Isolation::Sandbox
+        );
+        for key in composed.keys().filter(|key| {
+            key.starts_with("RIMZ_")
+                || crate::harness::hook_drain::HOOK_ENV_NAMES.contains(&key.as_str())
+                || key.starts_with("XDG_")
+                || key.as_str() == "HOME"
+        }) {
+            assert!(
+                adapter.hook_env_keys().contains(&key.as_str()),
+                "managed hooks lose {key}"
+            );
+        }
+    }
+}
+
+#[test]
 fn copilot_ask_refuses_nonmanual_defaults_without_gating_other_modes() {
     let root = tempfile::tempdir().unwrap();
     let settings = root.path().join("settings.json");

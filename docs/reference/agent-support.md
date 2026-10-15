@@ -71,6 +71,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| Muse | ● | ✗ | ✗ | ✗ | ◐ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -220,6 +221,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| Muse | `--permission-profile :ask-me` | `--permission-profile :auto-review` | `--permission-profile :read-only` | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
@@ -337,6 +339,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Muse | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -383,6 +386,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Muse | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `Interrupt` | `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | `PermissionRequest` | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
