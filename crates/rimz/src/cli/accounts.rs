@@ -1293,6 +1293,12 @@ pub struct AccountFlag {
     name: LoginName,
 }
 
+impl std::fmt::Display for AccountFlag {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}={}", self.kind, self.name)
+    }
+}
+
 pub(crate) fn parse_account_flag(raw: &str) -> std::result::Result<AccountFlag, String> {
     let Some((kind, name)) = raw.split_once('@').or_else(|| raw.split_once('=')) else {
         return Err(format!("expected `<kind>@<name>`, got `{raw}`"));

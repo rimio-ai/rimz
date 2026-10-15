@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use rimz::blocker::Blocker;
+use rimz::blocker::{Blocker, Surface};
 use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
@@ -221,7 +221,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
     rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
     if let Some(shell) = &machine.agents.shell {
-        rimz::harness::launch::validate_agent_shell(shell)?;
+        rimz::harness::launch::validate_agent_shell(shell).map_err(Blocker::from)?;
     }
     validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
@@ -232,7 +232,8 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
-    let admission = rimz::harness::hibernate::admit(&machine.agents.hibernate)?;
+    let admission =
+        rimz::harness::hibernate::admit(&machine.agents.hibernate).map_err(Blocker::from)?;
     rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
@@ -297,7 +298,7 @@ pub(crate) fn ensure_workspace_room_detached(
     let machine = crate::cli::machine_config();
     rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
     if let Some(shell) = &machine.agents.shell {
-        rimz::harness::launch::validate_agent_shell(shell)?;
+        rimz::harness::launch::validate_agent_shell(shell).map_err(Blocker::from)?;
     }
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
@@ -873,22 +874,25 @@ fn preflight_machine_config(errors: Vec<ConfigErr>) -> Result<()> {
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {
     match entry {
-        RoomEntry::Start { workspace, .. } | RoomEntry::StartDetached { workspace, .. } => {
+        RoomEntry::Start {
+            workspace, args, ..
+        } => {
             rimz_socket_environment_preflight(&workspace.project_root)?;
-            mux_environment_preflight(mux, &workspace.session_name)
+            let rerun = start_under(mux.other(), &workspace.project_root, &args.account);
+            mux_environment_preflight(mux, &workspace.session_name, Some(rerun))
         }
-        RoomEntry::AttachCwd { workspace, .. } => {
+        RoomEntry::StartDetached { workspace, .. } | RoomEntry::AttachCwd { workspace, .. } => {
             rimz_socket_environment_preflight(&workspace.project_root)?;
-            mux_environment_preflight(mux, &workspace.session_name)
+            mux_environment_preflight(mux, &workspace.session_name, None)
         }
         RoomEntry::WebSession { record, .. } => {
             rimz_socket_environment_preflight(&record.project_root)?;
-            mux_environment_preflight(mux, &record.session_name)
+            mux_environment_preflight(mux, &record.session_name, None)
         }
         RoomEntry::AttachSession {
             session, record, ..
         } => {
-            mux_environment_preflight(mux, session)?;
+            mux_environment_preflight(mux, session, None)?;
             if let Ok(Some(record)) = record {
                 rimz_socket_environment_preflight(&record.project_root)?;
             }
@@ -1132,25 +1136,61 @@ pub(in crate::cli) fn birth_socket_preflight(
     Ok(())
 }
 
-fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
+/// The `rimz start` that births the same room, under the same accounts, on
+/// `mux`; it names the room by its absolute root so it holds from any cwd.
+fn start_under(
+    mux: MuxName,
+    project_root: &Path,
+    accounts: &[crate::cli::accounts::AccountFlag],
+) -> String {
+    let mux = mux.to_string();
+    let root = project_root.to_string_lossy();
+    let accounts: Vec<String> = accounts.iter().map(ToString::to_string).collect();
+    crate::cli::usage::shell_command(
+        ["rimz", "start", "--mux", mux.as_str(), &root]
+            .into_iter()
+            .chain(
+                accounts
+                    .iter()
+                    .flat_map(|flag| ["--account", flag.as_str()]),
+            ),
+    )
+}
+
+/// The fix that runs this room under the other multiplexer. `rerun` is the
+/// whole command when the user typed a `rimz start`; any other entry names
+/// the flag to add.
+fn other_mux_fix(blocker: Blocker, other: MuxName, rerun: Option<String>) -> Blocker {
+    blocker.with_fix(
+        format!("Run this room under {other} (`--mux {other}`)"),
+        rerun,
+        Surface::Plain,
+    )
+}
+
+fn mux_environment_preflight(
+    mux: MuxName,
+    session_name: &str,
+    rerun: Option<String>,
+) -> Result<()> {
     match mux {
         MuxName::Zellij => {
             rimz::mux::zellij::socket_preflight(session_name)?;
-            mux_responsive_preflight(mux)?;
-            zellij_version_preflight()?;
+            mux_responsive_preflight(mux, rerun.clone())?;
+            zellij_version_preflight(rerun)?;
         }
         // tmux sockets live under its own short per-user socket directory; the
         // RimZ session name does not participate in an AF_UNIX path budget.
         MuxName::Tmux => {
-            mux_responsive_preflight(mux)?;
+            mux_responsive_preflight(mux, rerun.clone())?;
             let caps = rimz::mux::tmux::capabilities().context("checking tmux version")?;
-            tmux_version_preflight(&caps)?;
+            tmux_version_preflight(&caps, rerun)?;
         }
     }
     Ok(())
 }
 
-fn mux_responsive_preflight(mux: MuxName) -> Result<()> {
+fn mux_responsive_preflight(mux: MuxName, rerun: Option<String>) -> Result<()> {
     let backend = rimz::mux::backend_for(mux);
     if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) =
         backend.list_sessions_within(session_probe_timeout())
@@ -1165,7 +1205,7 @@ fn mux_responsive_preflight(mux: MuxName) -> Result<()> {
             )?;
         }
         if let Err(err @ rimz::mux::MuxErr::Timeout { .. }) = backend.list_sessions_within(retry) {
-            bail!("{}", mux_not_responding_message(mux, retry, &err));
+            return Err(mux_not_responding_message(mux, retry, &err, rerun).into());
         }
     }
     Ok(())
@@ -1175,19 +1215,29 @@ fn mux_not_responding_message(
     mux: MuxName,
     timeout: std::time::Duration,
     err: &rimz::mux::MuxErr,
-) -> String {
-    let (reset, fallback) = match mux {
-        MuxName::Zellij => ("zellij kill-all-sessions", "rimz --tmux"),
-        MuxName::Tmux => ("tmux kill-server", "rimz --zellij"),
+    rerun: Option<String>,
+) -> Blocker {
+    let (summary, reset) = match mux {
+        MuxName::Zellij => (
+            "End every Zellij session",
+            "zellij kill-all-sessions".into(),
+        ),
+        MuxName::Tmux => (
+            "End every RimZ tmux room on that server",
+            crate::cli::usage::shell_command([
+                "tmux",
+                "-S",
+                &rimz::mux::tmux::managed_server_socket_path().to_string_lossy(),
+                "kill-server",
+            ]),
+        ),
     };
-    format!(
-        "{mux} is not responding: `{mux} list-sessions` hung for {} and was killed.\n\
-         Recover with:\n    {reset}\n\
-         Or run this room under {}:\n    {fallback}\n\n\
-         detail: {err}",
+    let blocker = Blocker::new(format!(
+        "{mux} is not responding after {}: {err}",
         duration_label(timeout),
-        mux.other(),
-    )
+    ))
+    .with_fix(summary, Some(reset), Surface::Plain);
+    other_mux_fix(blocker, mux.other(), rerun)
 }
 
 fn duration_label(duration: std::time::Duration) -> String {
@@ -1199,39 +1249,53 @@ fn duration_label(duration: std::time::Duration) -> String {
     }
 }
 
-fn zellij_version_preflight() -> Result<()> {
+fn zellij_version_preflight(rerun: Option<String>) -> Result<()> {
     let caps = rimz::mux::zellij::capabilities().context("checking Zellij version")?;
     if caps.meets_min_version {
         return Ok(());
     }
     let (maj, min, patch) = rimz::mux::zellij::MIN_ZELLIJ_VERSION;
-    let found = caps.binary_version.trim();
-    anyhow::bail!(
-        "Zellij {found} is below RimZ's floor; upgrade Zellij to >= {maj}.{min}.{patch}, or run this room with `--mux tmux`."
+    let raw = caps.binary_version.trim();
+    let found = raw.strip_prefix("zellij ").unwrap_or(raw);
+    let blocker = Blocker::new(format!("Zellij {found} is below RimZ's floor")).with_fix(
+        format!("Upgrade Zellij to >= {maj}.{min}.{patch}"),
+        None,
+        Surface::Plain,
     );
+    Err(other_mux_fix(blocker, MuxName::Tmux, rerun).into())
 }
 
-fn tmux_version_preflight(caps: &rimz::mux::tmux::TmuxCapabilities) -> Result<()> {
+fn tmux_version_preflight(
+    caps: &rimz::mux::tmux::TmuxCapabilities,
+    rerun: Option<String>,
+) -> Result<()> {
     if caps.meets_min_version {
         return Ok(());
     }
     let (maj, min, patch) = rimz::mux::tmux::MIN_TMUX_VERSION;
     let raw = caps.binary_version.trim();
-    if caps.parsed_version.is_none() {
-        bail!(
-            "`tmux -V` output {raw:?} was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
-        );
-    }
-    let found = raw.strip_prefix("tmux ").unwrap_or(raw);
-    bail!(
-        "tmux {found} is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
+    let problem = if caps.parsed_version.is_none() {
+        format!("`tmux -V` output {raw:?} was not recognised")
+    } else {
+        let found = raw.strip_prefix("tmux ").unwrap_or(raw);
+        format!("tmux {found} is below RimZ's floor")
+    };
+    let blocker = Blocker::new(problem).with_fix(
+        format!("Install a tmux release build >= {maj}.{min}.{patch}"),
+        None,
+        Surface::Plain,
     );
+    Err(other_mux_fix(blocker, MuxName::Zellij, rerun).into())
 }
 
 fn rimz_socket_environment_preflight(project_root: &Path) -> Result<()> {
-    RuntimePaths::for_project_root(project_root)
-        .map(|_| ())
-        .context("checking RimZ runtime socket budget")
+    match RuntimePaths::for_project_root(project_root) {
+        Ok(_) => Ok(()),
+        Err(rimz::disk::paths::PathErr::SocketBudgetExceeded(error)) => {
+            Err(Blocker::from(error).into())
+        }
+        Err(other) => Err(anyhow::Error::new(other).context("checking RimZ runtime socket budget")),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

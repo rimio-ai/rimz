@@ -414,7 +414,7 @@ fn zellij_start_fails_fast_when_selected_session_probe_wedges() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("zellij is not responding") && stderr.contains("rimz --tmux"),
+        stderr.contains("zellij is not responding") && stderr.contains("rimz start --mux tmux"),
         "stderr should explain recovery, got: {stderr}",
     );
 }
