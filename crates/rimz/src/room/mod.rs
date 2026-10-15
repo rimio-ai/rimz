@@ -174,6 +174,7 @@ pub struct RoomContext {
     runtime: RuntimePaths,
     birth_owner: BirthOwner,
     birth_logins: Option<crate::ids::RoomLogins>,
+    birth_remote_control_off: Option<std::collections::BTreeSet<crate::ids::AgentKind>>,
     birth_admission: Option<birth::BirthAdmission>,
 }
 
@@ -299,6 +300,7 @@ impl RoomContext {
             runtime,
             birth_owner: BirthOwner::Preserve,
             birth_logins: None,
+            birth_remote_control_off: None,
             birth_admission: None,
         })
     }
@@ -314,6 +316,26 @@ impl RoomContext {
             .record_room_bin(&self.workspace, staged.path.clone(), staged.build.clone())
             .context("recording room binary")?;
         self.rimz_bin = room_bin;
+        Ok(())
+    }
+
+    /// The remote-control hosts this birth runs without, as the user chose at an
+    /// interactive refusal. Birth records the set, empty included, so a later
+    /// start asks again.
+    pub fn waive_remote_control(&mut self, off: std::collections::BTreeSet<crate::ids::AgentKind>) {
+        self.birth_remote_control_off = Some(off);
+    }
+
+    fn record_remote_control_off(
+        &self,
+        off: std::collections::BTreeSet<crate::ids::AgentKind>,
+    ) -> Result<()> {
+        let paths = StatePaths::for_project_root(&self.workspace.project_root)
+            .context("preparing store paths")?;
+        let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
+        store
+            .set_remote_control_off(&self.workspace, off)
+            .context("recording run-only remote-control choice")?;
         Ok(())
     }
 

@@ -690,6 +690,58 @@ fn start_rejects_old_or_unrecognised_tmux_before_room_state() {
     }
 }
 
+/// A run-only waiver is the user's choice for the run they started; a detached
+/// birth of the stopped room (here a scheduled loop check) cannot ask, so a
+/// blocked host refuses it rather than inheriting the earlier waiver.
+#[test]
+fn detached_birth_of_a_stopped_room_refuses_a_waived_blocked_host() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let record_path = env.state_path_for(&env.project_root).workspace_record;
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&record_path).expect("read record"))
+            .expect("record json");
+    record["remote_control_off"] = serde_json::json!(["claude"]);
+    std::fs::write(&record_path, record.to_string()).expect("write waiver");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[remote_control]\nclaude = true\n",
+    )
+    .expect("machine config");
+    let settings = env.home_root.join("claude-settings.json");
+    std::fs::write(&settings, r#"{ "disableRemoteControl": true }"#).expect("claude settings");
+    let bin_dir = env.home_root.join("claude-bin");
+    std::fs::create_dir_all(&bin_dir).expect("claude bin");
+    let claude = bin_dir.join("claude");
+    std::fs::write(&claude, "#!/bin/sh\nexit 1\n").expect("claude shim");
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod claude shim");
+    let added = env
+        .rimz()
+        .args(["loop", "add", "probe", "--check", "true", "--every", "1h"])
+        .output()
+        .expect("add loop");
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "loop", "run", "probe"])
+        .env("PATH", path_with_front(&bin_dir))
+        .env("RIMZ_CLAUDE_SETTINGS", &settings)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.0")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .bounded_output()
+        .expect("run loop");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("disableRemoteControl"), "{stderr}");
+}
+
 #[test]
 fn start_rejects_invalid_notifications_before_room_state() {
     let env = Env::new();

@@ -2,6 +2,7 @@
 
 mod attach_exec;
 mod resume;
+mod start_gate;
 mod start_notice;
 #[cfg(test)]
 mod tests;
@@ -595,28 +596,25 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
     }
 
+    let mut remote_control_off = std::collections::BTreeSet::new();
     let background_view = if let Some(logins) = logins.as_ref().filter(|_| starting) {
         // Fail-fast precondition for installed agents: fixable host misconfiguration
         // aborts the launch here with the fix, before session side effects, and
         // after account resolution so each host is judged in the home it will run
-        // under. An enabled host whose agent is not installed is an inert toggle,
-        // skipped here so the room still starts; `rimz doctor` surfaces it.
+        // under. An attended start of a stopped room may instead run a blocked host
+        // off for this run. An enabled host whose agent is not installed is an inert
+        // toggle, skipped here so the room still starts; `rimz doctor` surfaces it.
         let envs =
             rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
-        // A live room, or a detached start that cannot ask, keeps the host
-        // waivers the user chose at an earlier attended start.
-        let waivers_apply = was_live || matches!(entry, RoomEntry::StartDetached { .. });
-        let remote_control = match birth_root.map(rimz::StatePaths::for_project_root) {
-            Some(Ok(state)) if waivers_apply => rimz::remote_control::room_config_at(
-                &machine_config.remote_control,
-                &state.workspace_record,
-            ),
-            _ => machine_config.remote_control.clone(),
+        let gate = start_gate::Gate {
+            envs: &envs,
+            project_root: birth_root,
+            live: was_live,
+            offers_choice: !was_live
+                && start_attended()
+                && matches!(entry, RoomEntry::Start { .. }),
         };
-        rimz::remote_control::prepare_hosts(&remote_control, &envs);
-        let readiness =
-            rimz::remote_control::ReadinessSnapshot::probe(&remote_control, &envs, birth_root);
-        readiness.start_gate()?;
+        let readiness = gate.run(&mut machine_config, &mut remote_control_off)?;
         Some(readiness)
     } else {
         None
@@ -663,6 +661,15 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     let ready = if let Some(source) = source {
         let mut context =
             RoomContext::prepare_birth(source, machine_config.clone(), mux, Some(&requested))?;
+        // Every birth of a stopped room records its own choice, so a waiver
+        // from an earlier run never outlives a detached birth gated without it.
+        if matches!(
+            entry,
+            RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
+        ) && !was_live
+        {
+            context.waive_remote_control(remote_control_off);
+        }
         let cwd = match source {
             RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
             RoomBirthSource::Recorded(record) => record.project_root.clone(),
