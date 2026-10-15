@@ -132,7 +132,8 @@ fn collect_fresh_sidebars(
 }
 
 /// Re-stat immediately before send to close the heartbeat-read/renderer-exit
-/// window. Future mtimes remain fresh, matching the content timestamp policy.
+/// window. This re-stat accepts a future mtime, while the content check in
+/// `collect_fresh_sidebars` before it rejects a future `last_seen`.
 fn heartbeat_still_fresh(path: &Path) -> bool {
     let meta = match fs::metadata(path) {
         Ok(meta) => meta,
