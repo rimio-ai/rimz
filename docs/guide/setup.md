@@ -62,6 +62,8 @@ What the write does depends on the agent. Most are a merge: RimZ adds its entrie
 
 Codex also gets a marked `rules/rimz.rules` file for [routine coordination commands](./configuration.md#routine-rimz-commands). Those rules let matching commands run without a permission prompt or command sandbox; the dry run shows them separately from the reporting hooks. An unmarked file at that path is left alone; your own rules still apply.
 
+MiniMax Code gets a native `rimz@local` plugin under its data directory's `plugins/rimz`, without changing your other plugins or settings; uninstall removes that directory.
+
 `rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
 
 ```sh
@@ -70,7 +72,7 @@ rimz hooks install claude       # one agent kind
 rimz hooks uninstall            # remove every RimZ-managed hook and restore any wrapped statusline
 ```
 
-With no agent named, install covers the seventeen built-in adapters whose binaries RimZ finds here, skipping any whose install preconditions fail; naming one attempts that kind and reports any refusal. Muse needs a readable version of at least 1.4.9 even for an explicit install. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
+With no agent named, install covers the eighteen built-in adapters whose binaries RimZ finds here, skipping any whose install preconditions fail; naming one attempts that kind and reports any refusal. Muse needs a readable version of at least 1.4.9 even for an explicit install. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
 
 Some agents gate a newly installed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them.
 
