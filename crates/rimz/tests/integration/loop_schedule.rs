@@ -17,10 +17,9 @@ use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::schedule::arming::Arming;
 use rimz::harness::schedule::run_log::{LoopRunMode, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
-use rimz::ids::{AgentKind, AgentSessionId, MuxName, SidebarInstanceId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
 use rimz::store::message::{AutoCompact, MessageStatus};
 use rimz::store::run::{RunRecord, RunStatus};
-use rimz::wakeup::heartbeat::SidebarHeartbeat;
 
 use crate::common::{Env, ScrubSessionEnvExt, canonical};
 #[path = "loop_list.rs"]
@@ -4509,21 +4508,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     let prior = Timestamp::now() - SignedDuration::from_mins(2);
     write_loop_fire_state(&env, BTreeMap::from([("open-root".to_owned(), prior)]));
     let runtime = env.runtime_paths();
-    runtime.ensure_dirs().expect("runtime dirs");
-    let instance_id = SidebarInstanceId::new();
-    let heartbeat = SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        instance_id.clone(),
-        MuxName::Tmux,
-        "rimz-test",
-        runtime.sock_dir.join("sidebar.sock"),
-        None,
-    );
-    std::fs::write(
-        runtime.sidebar_heartbeat_path(&instance_id),
-        serde_json::to_vec(&heartbeat).expect("heartbeat json"),
-    )
-    .expect("heartbeat");
+    crate::common::room::seed_sidebar_heartbeat(&runtime, MuxName::Tmux, "rimz-test", "sidebar");
 
     loop_ok(&env, &["loop", "tick"]);
 
@@ -6988,22 +6973,12 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
             Timestamp::now() - SignedDuration::from_secs(16 * 60),
         )]),
     );
-    let runtime = env.runtime_paths();
-    runtime.ensure_dirs().unwrap();
-    let instance_id = SidebarInstanceId::new();
-    let heartbeat = SidebarHeartbeat::new(
-        env.workspace_id.clone(),
-        instance_id.clone(),
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
         MuxName::Tmux,
         "rimz-test",
-        runtime.sock_dir.join("sidebar.sock"),
-        None,
+        "sidebar",
     );
-    std::fs::write(
-        runtime.sidebar_heartbeat_path(&instance_id),
-        serde_json::to_vec(&heartbeat).unwrap(),
-    )
-    .unwrap();
     let list = loop_ok(&env, &["loop", "list"]);
     assert!(
         list.lines()
