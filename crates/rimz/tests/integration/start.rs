@@ -94,7 +94,14 @@ fn start_refuses_sandbox_without_bwrap() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
     assert!(stderr.contains("bubblewrap"), "{stderr}");
-    assert!(stderr.contains("host"), "{stderr}");
+    assert!(
+        stderr.contains("rimz config set agents.isolation host"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("[security; RimZ won't change this]"),
+        "{stderr}"
+    );
     assert_eq!(std::fs::read_to_string(agents_path).unwrap(), seed);
     assert!(
         !config_dir.join("theme.toml").exists(),

@@ -12,6 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
+use rimz::blocker::Blocker;
 use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
@@ -217,7 +218,7 @@ fn start_attended() -> bool {
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
-    rimz::sandbox::preflight(machine.agents.isolation)?;
+    rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
     rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
     if let Some(shell) = &machine.agents.shell {
         rimz::harness::launch::validate_agent_shell(shell)?;
@@ -294,7 +295,7 @@ pub(crate) fn ensure_workspace_room_detached(
 ) -> Result<RoomContext> {
     refuse_legacy_only_home()?;
     let machine = crate::cli::machine_config();
-    rimz::sandbox::preflight(machine.agents.isolation)?;
+    rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
     if let Some(shell) = &machine.agents.shell {
         rimz::harness::launch::validate_agent_shell(shell)?;
     }

@@ -899,7 +899,7 @@ reason = "The shared domain toggle persists machine intent for config and attend
 
 [[module]]
 path = "crates/rimz/src/sandbox"
-allowed-dependencies = ["agents", "child_process", "config", "disk", "ids", "mux", "utils"]
+allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", "ids", "mux", "utils"]
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
 # The launch compile site maps the owner's temp unit to what the agent sees.
@@ -1460,6 +1460,7 @@ path = "crates/rimz/src/harness/launch.rs"
 allowed-dependencies = [
     "agents",
     "agents::capabilities",
+    "blocker",
     "config",
     "disk::atomic",
     "disk::paths",

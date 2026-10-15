@@ -268,6 +268,30 @@ pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
     Err(SandboxErr::UnsupportedOs)
 }
 
+impl From<SandboxErr> for crate::blocker::Blocker {
+    fn from(error: SandboxErr) -> Self {
+        use crate::blocker::Surface;
+        let blocker = match error {
+            SandboxErr::UnsupportedOs => Self::new("sandbox isolation requires Linux"),
+            SandboxErr::MissingBwrap => Self::new("sandbox isolation needs bwrap on PATH")
+                .with_fix("Install bubblewrap", None, Surface::Plain),
+            SandboxErr::ProbeFailed { status, stderr } => {
+                Self::new(format!("bubblewrap probe failed ({status}): {stderr}")).with_fix(
+                    "Check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy",
+                    None,
+                    Surface::Plain,
+                )
+            }
+            other => return Self::new(other.to_string()),
+        };
+        blocker.with_fix(
+            "Use host isolation",
+            Some("rimz config set agents.isolation host".into()),
+            Surface::Security,
+        )
+    }
+}
+
 pub fn diagnose() -> SandboxDiagnostic {
     #[cfg(target_os = "linux")]
     return linux::diagnose();
@@ -684,6 +708,27 @@ mod tests {
             "bubblewrap probe failed (exit status: 1): namespace denied; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy, or set agents.isolation = \"host\"",
         ]
         "###);
+    }
+
+    #[test]
+    fn start_blockers_keep_host_isolation_a_user_run_security_fix() {
+        for error in [
+            SandboxErr::UnsupportedOs,
+            SandboxErr::MissingBwrap,
+            SandboxErr::ProbeFailed {
+                status: "exit status: 1".into(),
+                stderr: "namespace denied".into(),
+            },
+        ] {
+            let blocker = crate::blocker::Blocker::from(error);
+            assert!(
+                blocker.fixes.iter().any(|fix| {
+                    fix.command.as_deref() == Some("rimz config set agents.isolation host")
+                        && fix.surface == crate::blocker::Surface::Security
+                }),
+                "{blocker:?}"
+            );
+        }
     }
 
     #[test]

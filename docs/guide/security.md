@@ -96,7 +96,7 @@ An unattended run changes who is watching, not what can execute. The run still d
 
 An agent pane runs with everything your user account has: your whole home directory, the host's `/tmp` shared with every other process on the machine, and the provider's native skill discovery, subject to [host skill lists](./configuration.md#skills) on Claude and Codex. For a narrower view on Linux, `rimz config set agents.isolation sandbox` gives each agent pane a bubblewrap mount view.
 
-Inside the view the agent sees its own `/tmp` instead of the host's, and the RimZ skill library merged into its provider's skill root. When the profile carries a [skills list](./configuration.md#skills), only the skills you named stay callable by the model; the rest become skills you invoke by name. RimZ probes bubblewrap before writing the setting, and `rimz start` refuses rather than launching a degraded surface when bubblewrap is missing or unusable.
+Inside the view the agent sees its own `/tmp` instead of the host's, and the RimZ skill library merged into its provider's skill root. When the profile carries a [skills list](./configuration.md#skills), only the skills you named stay callable by the model; the rest become skills you invoke by name. RimZ probes bubblewrap before writing the setting, and `rimz start` refuses rather than launching a degraded surface when bubblewrap is missing or unusable. The refusal lists what to fix and prints `rimz config set agents.isolation host` as a security change you may choose to run yourself. RimZ never applies it for you or offers to bypass sandbox isolation for one run.
 
 This is a mount view, not containment. What it does not do:
 
