@@ -7,6 +7,7 @@ use crate::sidebar_pane::view::BodyFilter;
 use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
 
+mod displacement;
 mod fetch;
 mod focus;
 mod hidden;

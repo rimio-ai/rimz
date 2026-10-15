@@ -119,7 +119,7 @@ An attachment whose own pane never appears in the frame would keep holding its s
 
 Tmux graphics capability probes share a plane-owned ten-second sample of the rendering clients, process ancestry, version, and per-pane passthrough options. A session-wide pane listing preserves each pane's permission; a pane born after the sample, or an unavailable listing, uses a targeted query. Passthrough escalation and fd-derived cell aspect remain pane-local. Zellij keeps its previous capabilities, as before.
 
-With diagnostics enabled, the fetch worker extracts one shared observation signature before local projection and the writer detects common anomalies once; attachments detect only their own committed roster. With no writer, no observation signature is built. Attribution and evidence scope are in [diagnostics](../diagnostics.md#the-commit-point).
+With diagnostics enabled, the fetch worker extracts one shared observation signature before local projection and the writer detects common anomalies once; attachments detect their own committed roster and clicked-card displacement after paints. With no writer, commit signatures are skipped. Attribution and evidence scope are in [diagnostics](../diagnostics.md#the-commit-point).
 
 ### The attach wire
 

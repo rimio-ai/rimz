@@ -1207,6 +1207,14 @@ fn classify_diagnostic(
 ) -> (model::DoctorState, model::DoctorImpact) {
     use rimz::diag::record::{DiagEvent, HostedCarryDropReason, RendererExitCause};
     let state = match event {
+        DiagEvent::FrameAnomaly {
+            anomaly:
+                rimz::diag::record::AnomalyKind::ClickedRowDisplaced {
+                    cause: rimz::diag::record::ClickedRowDisplacementCause::NoRoomClamp,
+                    ..
+                },
+            ..
+        } => model::DoctorState::Expected,
         DiagEvent::ModelCatalogRefreshFailed { rung, .. } => match rung {
             rimz::diag::record::ModelCatalogFallback::CachedCatalog => {
                 model::DoctorState::Contained

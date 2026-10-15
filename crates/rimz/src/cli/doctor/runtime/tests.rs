@@ -826,6 +826,32 @@ fn diagnostic_classification_requires_complete_positive_evidence() {
 
 #[test]
 fn diagnostic_classification_covers_retained_and_reason_sensitive_events() {
+    for cause in [
+        "no_room_clamp",
+        "hold_expired",
+        "banner_toggled",
+        "selection_changed",
+        "height_above_changed",
+    ] {
+        let event = serde_json::from_value::<DiagEvent>(serde_json::json!({
+            "kind": "frame_anomaly",
+            "anomaly": {"detector": "clicked_row_displaced", "row_id": "a", "from_y": 2, "to_y": 1, "dt_ms": 100, "cause": cause},
+            "frame": {"produced_at_ms": 13000, "rows": 2, "agents": 2, "processes": 0},
+            "events_recent": {"pane_closed": [], "pane_opened": []},
+            "gate_reject_streak": 0, "health_failure_streak": 0, "dropped_msgs": 0
+        }));
+        assert!(
+            event.is_ok(),
+            "clicked-row diagnostic must decode: {event:?}"
+        );
+        let event = event.unwrap();
+        let expected = if cause == "no_room_clamp" {
+            (model::DoctorState::Expected, model::DoctorImpact::Info)
+        } else {
+            (model::DoctorState::Investigate, model::DoctorImpact::Warn)
+        };
+        assert_eq!(classify_diagnostic(&event, event.severity()), expected);
+    }
     let catalog_failed = |rung| DiagEvent::ModelCatalogRefreshFailed {
         agent_kind: rimz::ids::AgentKind::new_unchecked("codex"),
         login: rimz::agents::ProviderLogin::default_for(rimz::ids::AgentKind::new_unchecked(

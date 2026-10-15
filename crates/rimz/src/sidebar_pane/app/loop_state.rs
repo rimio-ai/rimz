@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::diag::focus_trace::FocusTraceEvent;
-use crate::diag::record::{RendererExitCause, SidebarWidthControlTrigger as WidthControlTrigger};
+use crate::diag::record::{
+    AnomalyKind, ClickedRowDisplacementCause, RendererExitCause,
+    SidebarWidthControlTrigger as WidthControlTrigger,
+};
 use crate::ids::{FocusNonce, PaneId};
 use crate::mux::focus_anchor::{
     FocusActionError, FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
@@ -20,7 +23,9 @@ use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
-use crate::sidebar::timing::{FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, TAB_READ_DWELL};
+use crate::sidebar::timing::{
+    FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, REORDER_HOLD, TAB_READ_DWELL,
+};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
@@ -90,6 +95,16 @@ struct PendingFocusRepair {
     sent_at_ms: u64,
 }
 
+struct ClickedRowWatch {
+    row_id: String,
+    y: isize,
+    clicked_at: Instant,
+    selection: Option<String>,
+    banner_shown: bool,
+    /// A wheel glide was in flight at the baseline, so the next paint's motion is the user's own.
+    gliding: bool,
+}
+
 pub(super) struct LoopState {
     #[cfg(test)]
     pub(super) content_applications: u64,
@@ -125,6 +140,8 @@ pub(super) struct LoopState {
     pending_focus_repair: Option<PendingFocusRepair>,
     confirmed_focus_intent_ms: u64,
     observer: observe::OwnObserver,
+    clicked_row: Option<ClickedRowWatch>,
+    hold_expired_since_paint: bool,
     observe_tx: SyncSender<ObserveMsg>,
     pub(super) health: Health,
     gate: GateState,
@@ -268,6 +285,8 @@ impl LoopState {
             pending_focus_repair: None,
             confirmed_focus_intent_ms: 0,
             observer: observe::OwnObserver::default(),
+            clicked_row: None,
+            hold_expired_since_paint: false,
             observe_tx,
             health: Health::default(),
             gate: GateState::default(),
@@ -593,6 +612,8 @@ impl LoopState {
             caps_refresh_deadline: _,
             width_control: _,
             observer: _,
+            clicked_row: _,
+            hold_expired_since_paint: _,
             optimistic_watch_until: _,
             // Maintenance stamps and reminders, read against `current`.
             fetched_at: _,
@@ -1256,6 +1277,12 @@ impl LoopState {
                 &self.nav_keys.1,
                 alert_active,
             );
+            self.clicked_row = None;
+            for effect in &applied.effects {
+                if let InputEffect::Focus(pane) = effect {
+                    self.arm_clicked_row(pane, Instant::now());
+                }
+            }
             if applied.redraw && !wheel {
                 self.ui.scroll_ease.cancel();
             }
@@ -1286,6 +1313,7 @@ impl LoopState {
                 self.health.alert.as_ref(),
                 &mut self.ui,
             )?;
+            self.observe_paint(Instant::now());
             let now = Instant::now();
             let interval = render::animation_interval(
                 &self.current,
@@ -1568,6 +1596,7 @@ impl LoopState {
                 self.health.alert.as_ref(),
                 &mut self.ui,
             )?;
+            self.observe_paint(Instant::now());
             self.dirty = false;
         }
         self.next_frame = next_frame_after(
@@ -1884,7 +1913,9 @@ impl LoopState {
             self.ui.selected_pane.as_ref(),
         );
         let interacted = cleared || self.ui.selected_pane != prev_selected || acted;
+        let held = self.ui.order_hold.is_some();
         order_hold::apply_order_hold(&mut self.ui, &mut self.current, interacted, now_ms);
+        self.hold_expired_since_paint |= held && self.ui.order_hold.is_none();
         self.ui.last_order = order_hold::capture_order(&self.current, &self.ui);
     }
 
@@ -2156,6 +2187,86 @@ impl LoopState {
         );
         self.observer
             .observe_into(sig, &self.observe_tx, &self.config.instance_id);
+    }
+
+    fn arm_clicked_row(&mut self, pane: &PaneId, now: Instant) {
+        self.clicked_row = self.current.row_owning_pane(pane).and_then(|row| {
+            self.ui
+                .painted_rows
+                .iter()
+                .find(|(id, _)| id == &row.id)
+                .map(|(id, y)| ClickedRowWatch {
+                    row_id: id.clone(),
+                    y: *y,
+                    clicked_at: now,
+                    selection: self.ui.drawn_selection.clone(),
+                    banner_shown: self.ui.banner_shown,
+                    gliding: self.ui.scroll_ease.in_flight(),
+                })
+        });
+    }
+
+    fn observe_paint(&mut self, now: Instant) {
+        let hold_expired = std::mem::take(&mut self.hold_expired_since_paint);
+        let Some(mut watch) = self.clicked_row.take() else {
+            return;
+        };
+        let elapsed = now.saturating_duration_since(watch.clicked_at);
+        if elapsed >= REORDER_HOLD {
+            return;
+        }
+        let to_y = self
+            .ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &watch.row_id)
+            .map(|(_, y)| *y);
+        let cause = if self.ui.anchor_clamped {
+            ClickedRowDisplacementCause::NoRoomClamp
+        } else if hold_expired {
+            ClickedRowDisplacementCause::HoldExpired
+        } else if watch.banner_shown != self.ui.banner_shown {
+            ClickedRowDisplacementCause::BannerToggled
+        } else if watch.selection != self.ui.drawn_selection {
+            ClickedRowDisplacementCause::SelectionChanged
+        } else {
+            ClickedRowDisplacementCause::HeightAboveChanged
+        };
+        watch.banner_shown = self.ui.banner_shown;
+        watch.selection = self.ui.drawn_selection.clone();
+        let glided = std::mem::replace(&mut watch.gliding, self.ui.scroll_ease.in_flight());
+        let kind = (!glided && to_y != Some(watch.y)).then(|| AnomalyKind::ClickedRowDisplaced {
+            row_id: watch.row_id.clone(),
+            from_y: watch.y,
+            to_y,
+            dt_ms: duration_millis(elapsed),
+            cause,
+        });
+        if let Some(y) = to_y {
+            watch.y = y;
+            self.clicked_row = Some(watch);
+        }
+        let Some(kind) = kind else {
+            return;
+        };
+        let sig = observe::OwnFrameSig::extract(
+            &self.current,
+            (
+                self.last_pulled_rows,
+                self.observation
+                    .as_ref()
+                    .and_then(|sig| sig.pulled_panes_produced_at_ms),
+            ),
+            &self.events(),
+            self.gate.reject_streak,
+            self.health.failure_streak,
+            crate::utils::time::unix_now_ms(),
+        );
+        self.observer.send_draft(
+            observe::AnomalyDraft::from_own_sig(&sig, kind, Some(duration_millis(REORDER_HOLD))),
+            &self.observe_tx,
+            &self.config.instance_id,
+        );
     }
 }
 
