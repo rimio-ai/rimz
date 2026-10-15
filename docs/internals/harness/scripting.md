@@ -181,7 +181,7 @@ Both loops need a blocking run, so both refuse `--bg` and `--output-format strea
 
 | Format | Prints |
 | --- | --- |
-| `text` (default) | the final assistant message on stdout, and nothing else |
+| `text` (default) | the run's answer (`last_message`, every turn of a [parked run](#parked-runs) in order) on stdout, and nothing else |
 | `json` | the full run record, pretty-printed |
 | `stream-json` | NDJSON `RunStreamEvent`s as the turn runs: `message` per new assistant message, `status` when the live card changes, and one `end` with the status and last message |
 
