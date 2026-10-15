@@ -22,35 +22,32 @@ mod ttyd;
 
 pub use gate::{GateAuth, RelayTarget};
 
-const TTYD_AMBIENT_CONTEXT_ENV: [&str; 23] = [
-    crate::workspace::ENV_WORKSPACE_ID,
-    crate::workspace::ENV_PROJECT_ROOT,
-    crate::harness::launch::ENV_RUN_ID,
-    crate::harness::launch::ENV_AGENT_KIND,
-    crate::harness::launch::ENV_AGENT_NAME,
-    crate::harness::launch::ENV_AGENT_PROFILE,
-    crate::harness::launch::ENV_AGENT_ROLE,
-    crate::harness::launch::ENV_TEAM,
-    crate::harness::launch::ENV_LAUNCH_GROUP,
-    crate::harness::launch::ENV_LAUNCH_ORDINAL,
-    crate::workspace::ENV_WORKTREE_PATH,
-    crate::workspace::ENV_CHANNEL,
-    crate::harness::launch::ENV_AGENT_MODEL,
-    crate::harness::launch::ENV_AGENT_EFFORT,
-    crate::harness::launch::ENV_AGENT_BUDGET,
-    crate::mux::CLIENT_SIZE_ENV,
-    crate::remote::REMOTE_RECONNECT_ENV,
-    crate::remote::ATTACH_MARK_ENV,
-    crate::remote::OUTER_SCROLL_BRACKET_ENV,
-    crate::proc::REMOTE_LINEAGE_ENV,
-    crate::remote::REMOTE_SUPERVISED_ENV,
-    crate::remote::REMOTE_CLIENT_VERSION_ENV,
-    crate::remote::REMOTE_FORCE_VERSION_ENV,
+const TTYD_AMBIENT_CONTEXT_ENV: [&[&str]; 2] = [
+    &[
+        crate::workspace::ENV_WORKSPACE_ID,
+        crate::workspace::ENV_PROJECT_ROOT,
+        crate::harness::launch::ENV_RUN_ID,
+        crate::harness::launch::ENV_AGENT_KIND,
+        crate::harness::launch::ENV_AGENT_NAME,
+        crate::harness::launch::ENV_AGENT_PROFILE,
+        crate::harness::launch::ENV_AGENT_ROLE,
+        crate::harness::launch::ENV_TEAM,
+        crate::harness::launch::ENV_LAUNCH_GROUP,
+        crate::harness::launch::ENV_LAUNCH_ORDINAL,
+        crate::workspace::ENV_WORKTREE_PATH,
+        crate::workspace::ENV_CHANNEL,
+        crate::harness::launch::ENV_AGENT_MODEL,
+        crate::harness::launch::ENV_AGENT_EFFORT,
+        crate::harness::launch::ENV_AGENT_BUDGET,
+    ],
+    &crate::mux::REMOTE_CLIENT_ENV,
 ];
 
 fn without_ttyd_launch_context(spec: CommandSpec) -> CommandSpec {
     TTYD_AMBIENT_CONTEXT_ENV
         .into_iter()
+        .flatten()
+        .copied()
         .fold(spec.without_mux_context(), |spec, key| spec.env_remove(key))
 }
 
@@ -715,7 +712,7 @@ mod tests {
 
         assert!(spec.env_remove.contains("ZELLIJ_SESSION_NAME"));
         assert!(spec.env_remove.contains("RIMZ_AGENT_KIND"));
-        for key in TTYD_AMBIENT_CONTEXT_ENV {
+        for key in TTYD_AMBIENT_CONTEXT_ENV.into_iter().flatten().copied() {
             assert!(spec.env_remove.contains(key), "{key} remains inherited");
         }
         assert!(spec.env_remove.contains("ALREADY_REMOVED"));

@@ -28,32 +28,15 @@ use crate::ids::MuxName;
 use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
 use crate::proc::REMOTE_LINEAGE_ENV;
 
+pub use crate::mux::{
+    ATTACH_MARK_ENV, OUTER_SCROLL_BRACKET_ENV, REMOTE_CLIENT_VERSION_ENV, REMOTE_FORCE_VERSION_ENV,
+    REMOTE_RECONNECT_ENV, REMOTE_SUPERVISED_ENV,
+};
+
 /// Binary override for tests (`tests/fixtures/ssh-trace`), mirroring
 /// `RIMZ_ZELLIJ_BIN` — the single chokepoint every ssh invocation resolves
 /// through.
 const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
-
-/// Marks an SSH attach started by the local reconnect supervisor's retry
-/// loop, so the remote room start uses its unattended posture.
-pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
-
-/// Requests the in-band green attach marker from a compatible remote RimZ.
-pub const ATTACH_MARK_ENV: &str = "RIMZ_ATTACH_MARK";
-
-/// Marks a remote room launch whose SSH parent already owns the terminal's
-/// alternate-scroll bracket.
-pub const OUTER_SCROLL_BRACKET_ENV: &str = "RIMZ_OUTER_SCROLL_BRACKET";
-
-/// Marks a remote attach whose local process will interpret reconnect exit
-/// sentinels.
-pub const REMOTE_SUPERVISED_ENV: &str = "RIMZ_REMOTE_SUPERVISED";
-
-/// Local client version carried to the remote RimZ for launch-time skew
-/// notices.
-pub const REMOTE_CLIENT_VERSION_ENV: &str = "RIMZ_REMOTE_CLIENT_VERSION";
-
-/// Marks a remote attach that may proceed across a minor version mismatch.
-pub const REMOTE_FORCE_VERSION_ENV: &str = "RIMZ_REMOTE_FORCE_VERSION";
 
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";

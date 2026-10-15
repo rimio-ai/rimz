@@ -87,6 +87,8 @@ The probe stream (`probe_stream_spec` in `link.rs`) repairs `PATH` and execs `ri
 
 The exported environment is the whole channel from client to host. The web prep snippet exports a subset, marked in the last column.
 
+The host strips the eight `RIMZ_*` channel names at mux server birth, so room panes never inherit the remote client's attach context ([birth and repair](./multiplexers.md#the-identity-pin)). `TERM` and `COLORTERM` remain pane capabilities, and the host's launching `rimz start` and attach client keep the channel through attach.
+
 | Variable | Carries | Web prep |
 | --- | --- | --- |
 | `RIMZ_REMOTE_LINEAGE` | A stable 16-hex identity for this device plus this room, so a replacement attach can retire its own orphan. | no |

@@ -791,7 +791,8 @@ path = "crates/rimz/src/mux"
 # PaneContentSize, its read, and the winsize repair module, function and outcome serve startup repair (+5).
 # Ambient mux identity and its scrub builder are shared by the birth specs and the web helpers (+2).
 # Captured hook pane values use the existing mux-owned normalization (+1).
-surface-budget = 276
+# Six remote channel constants move below remote, with the shared REMOTE_CLIENT_ENV birth scrub list (+7).
+surface-budget = 283
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
@@ -5220,6 +5221,41 @@ reason = "Pass 24a: representative of every section record the config façade re
 kind = "item"
 key = "config::agents::PromptSource"
 reason = "Pass 24a: the `file` accessor cannot narrow — cli/agents_cmd/fork.rs:397 reads it, which atlas's tables miss for binary-crate readers (E0624)."
+
+[[verdict]]
+kind = "item"
+key = "mux::REMOTE_CLIENT_ENV"
+reason = "Shared remote channel list for mux server birth, tmux global environment repair, and ttyd launch-context removal; attach clients deliberately retain it."
+
+[[verdict]]
+kind = "item"
+key = "mux::REMOTE_RECONNECT_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
+
+[[verdict]]
+kind = "item"
+key = "mux::ATTACH_MARK_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
+
+[[verdict]]
+kind = "item"
+key = "mux::OUTER_SCROLL_BRACKET_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
+
+[[verdict]]
+kind = "item"
+key = "mux::REMOTE_SUPERVISED_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
+
+[[verdict]]
+kind = "item"
+key = "mux::REMOTE_CLIENT_VERSION_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
+
+[[verdict]]
+kind = "item"
+key = "mux::REMOTE_FORCE_VERSION_ENV"
+reason = "Remote channel constant owned below remote for mux birth scrubbing; remote re-exports the existing public CLI contract."
 
 [[verdict]]
 kind = "item"

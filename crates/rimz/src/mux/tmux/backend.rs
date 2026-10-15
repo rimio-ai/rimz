@@ -34,12 +34,16 @@ const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
 impl TmuxBackend {
     pub(super) fn global_mux_context_removal_command(&self) -> CommandSpec {
-        let commands = crate::mux::AMBIENT_MUX_ENV.map(|key| {
-            ["set-environment", "-g", "-r", key]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        });
+        let commands = crate::mux::AMBIENT_MUX_ENV
+            .into_iter()
+            .chain(crate::mux::REMOTE_CLIENT_ENV)
+            .map(|key| {
+                ["set-environment", "-g", "-r", key]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .collect::<Vec<_>>();
         self.batch_spec(&commands)
     }
 
@@ -62,6 +66,9 @@ impl TmuxBackend {
             "-c".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),
         ]);
+        for key in crate::mux::REMOTE_CLIENT_ENV {
+            spec = spec.env_remove(key);
+        }
         // The birth env lands in the session environment at birth (`-e`),
         // so the first window's panes already inherit it — `set-environment`
         // in `ensure_session` would only reach panes created after it runs.

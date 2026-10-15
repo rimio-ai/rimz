@@ -122,7 +122,16 @@ fn new_session_birth_removes_outer_mux_context() {
     let opts = session_options();
     let spec =
         TmuxBackend::with_socket("/test/socket").new_session_command(&opts, &Default::default());
-    for key in crate::mux::AMBIENT_MUX_ENV {
+    for key in crate::mux::AMBIENT_MUX_ENV.into_iter().chain([
+        "RIMZ_REMOTE_CLIENT_VERSION",
+        "RIMZ_REMOTE_LINEAGE",
+        "RIMZ_REMOTE_RECONNECT",
+        "RIMZ_REMOTE_SUPERVISED",
+        "RIMZ_REMOTE_FORCE_VERSION",
+        "RIMZ_ATTACH_MARK",
+        "RIMZ_CLIENT_SIZE",
+        "RIMZ_OUTER_SCROLL_BRACKET",
+    ]) {
         assert!(
             spec.env_remove.contains(key),
             "{key} remains inherited at birth"
@@ -140,7 +149,7 @@ fn existing_session_attach_targets_the_managed_server() {
 }
 
 #[test]
-fn global_mux_context_removal_marks_all_five_names() {
+fn global_mux_context_removal_marks_mux_and_remote_client_names() {
     let spec = TmuxBackend::with_socket("/test/socket").global_mux_context_removal_command();
     let commands = verb_args(&spec).split(|arg| arg == ";").collect::<Vec<_>>();
     let expected = [
@@ -149,6 +158,14 @@ fn global_mux_context_removal_marks_all_five_names() {
         "ZELLIJ",
         "ZELLIJ_PANE_ID",
         "ZELLIJ_SESSION_NAME",
+        "RIMZ_REMOTE_CLIENT_VERSION",
+        "RIMZ_REMOTE_LINEAGE",
+        "RIMZ_REMOTE_RECONNECT",
+        "RIMZ_REMOTE_SUPERVISED",
+        "RIMZ_REMOTE_FORCE_VERSION",
+        "RIMZ_ATTACH_MARK",
+        "RIMZ_CLIENT_SIZE",
+        "RIMZ_OUTER_SCROLL_BRACKET",
     ];
     assert_eq!(commands.len(), expected.len());
     for (command, key) in commands.into_iter().zip(expected) {

@@ -966,6 +966,81 @@ fn a_nested_room_gives_panes_only_its_own_mux_context() {
 }
 
 #[test]
+fn a_remote_room_keeps_client_context_out_of_panes() {
+    let scratch = tempfile::tempdir().expect("scratch");
+    let remote_env = [
+        ("RIMZ_REMOTE_CLIENT_VERSION", env!("CARGO_PKG_VERSION")),
+        ("RIMZ_REMOTE_LINEAGE", "test-remote-lineage"),
+        ("RIMZ_REMOTE_RECONNECT", "1"),
+        ("RIMZ_REMOTE_SUPERVISED", "1"),
+        ("RIMZ_REMOTE_FORCE_VERSION", "1"),
+        ("RIMZ_ATTACH_MARK", "1"),
+        ("RIMZ_CLIENT_SIZE", "120x40"),
+        ("RIMZ_OUTER_SCROLL_BRACKET", "1"),
+    ];
+    let socket_dir = scratch.path().join("sockets");
+    let mut launch_env = remote_env.to_vec();
+    launch_env.push(("ZELLIJ_SOCKET_DIR", socket_dir.to_str().unwrap()));
+    let probe = |mux| {
+        let marker = scratch.path().join(mux);
+        format!(
+            "env > {marker}; printf '|done' >> {marker}; sleep 60",
+            marker = shlex::try_quote(&marker.to_string_lossy()).expect("shell quote marker"),
+        )
+    };
+    let mut failures = Vec::new();
+    let mut check = |mux, env: &Env, tmux_tmpdir: &Path| {
+        let seen = wait_for_marker(&scratch.path().join(mux));
+        let pane_env = seen
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for (key, _) in remote_env {
+            if let Some(value) = pane_env.get(key) {
+                failures.push(format!("{mux} pane inherited {key}={value}"));
+            }
+        }
+        for (key, value) in rimz::workspace::pin_env(&env.workspace_id, &env.project_root) {
+            assert_eq!(
+                pane_env.get(key.as_str()).copied(),
+                Some(value.as_str()),
+                "{mux}: {key}"
+            );
+        }
+        assert_eq!(pane_env.get("TMUX_TMPDIR").copied(), tmux_tmpdir.to_str());
+        assert_eq!(
+            pane_env.get("ZELLIJ_SOCKET_DIR").copied(),
+            socket_dir.to_str()
+        );
+    };
+    if let Some(room) = TmuxRoom::start_with(&launch_env) {
+        let output = tmux_output(
+            &room.env.runtime_root,
+            &["new-window", "-d", "-t", &room.session_name, &probe("tmux")],
+        );
+        assert!(output.status.success(), "{output:?}");
+        check("tmux", &room.env, &room.tmux_tmpdir);
+    }
+    if let Some(room) = ZellijRoom::start_with(&launch_env) {
+        let output = room
+            .zellij()
+            .env("ZELLIJ_SOCKET_DIR", &socket_dir)
+            .args(["--session", &room.session_name, "run", "--", "sh", "-c"])
+            .arg(probe("zellij"))
+            .bounded_output()
+            .expect("zellij run");
+        assert!(output.status.success(), "{output:?}");
+        check("zellij", &room.env, &room.tmux_tmpdir);
+        let _ = room
+            .zellij()
+            .env("ZELLIJ_SOCKET_DIR", &socket_dir)
+            .args(["delete-session", &room.session_name, "--force"])
+            .bounded_output();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn a_room_repairs_outer_mux_context_on_an_existing_tmux_server() {
     use rimz::mux::MuxBackend;
 

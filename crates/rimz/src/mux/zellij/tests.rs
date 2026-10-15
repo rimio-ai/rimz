@@ -319,6 +319,10 @@ fn creating_attach_removes_outer_mux_context() {
         );
     }
     assert!(spec.args.iter().any(|arg| arg == "--create"));
+    assert!(
+        !spec.env_remove.contains("RIMZ_REMOTE_LINEAGE"),
+        "the attach client must keep its lineage for predecessor reaping"
+    );
 }
 
 #[cfg(unix)]
@@ -329,13 +333,25 @@ fn background_session_birth_removes_outer_mux_context() {
         &room.sidebar_options(120),
         std::path::Path::new("/layout.kdl"),
     );
-    for key in crate::mux::AMBIENT_MUX_ENV {
+    for key in crate::mux::AMBIENT_MUX_ENV.into_iter().chain([
+        "RIMZ_REMOTE_CLIENT_VERSION",
+        "RIMZ_REMOTE_LINEAGE",
+        "RIMZ_REMOTE_RECONNECT",
+        "RIMZ_REMOTE_SUPERVISED",
+        "RIMZ_REMOTE_FORCE_VERSION",
+        "RIMZ_ATTACH_MARK",
+        "RIMZ_CLIENT_SIZE",
+        "RIMZ_OUTER_SCROLL_BRACKET",
+    ]) {
         assert!(
             spec.env_remove.contains(key),
             "{key} remains inherited at birth"
         );
     }
     assert!(spec.args.iter().any(|arg| arg == "--create-background"));
+    for (key, value) in crate::workspace::pin_env(&room.workspace_id, room.project_root.path()) {
+        assert_eq!(spec.env.get(&key), Some(&value));
+    }
 }
 
 #[test]
