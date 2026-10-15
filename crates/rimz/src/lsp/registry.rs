@@ -3,9 +3,11 @@
 use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -262,21 +264,49 @@ fn read_entries_at(base: &Path) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for directory in directories {
         let directory = directory?;
-        if !directory.file_type()?.is_dir() || directory.file_name() == "queue" {
-            continue;
+        match read_row(&directory) {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => {}
+            Err(error) => record_unreadable_once(directory.path(), &error),
         }
-        let bytes = match std::fs::read(directory.path().join("entry.json")) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-        let entry: Entry = serde_json::from_slice(&bytes)?;
-        if directory.file_name() != std::ffi::OsStr::new(&key(&entry.root, &entry.server)?) {
-            return Err(LspErr::Protocol("registry key does not match entry".into()));
-        }
-        entries.push(entry);
     }
     Ok(entries)
+}
+
+/// One row's failure stays that row's: a newer build's entry must not break this build's reads.
+fn read_row(directory: &std::fs::DirEntry) -> Result<Option<Entry>> {
+    if !directory.file_type()?.is_dir() || directory.file_name() == "queue" {
+        return Ok(None);
+    }
+    let bytes = match std::fs::read(directory.path().join("entry.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let entry: Entry = serde_json::from_slice(&bytes)?;
+    if directory.file_name() != std::ffi::OsStr::new(&key(&entry.root, &entry.server)?) {
+        return Err(LspErr::Protocol("registry key does not match entry".into()));
+    }
+    Ok(Some(entry))
+}
+
+/// Once per row per process: every query and the memory watchdog re-read the registry.
+fn record_unreadable_once(row: PathBuf, error: &LspErr) {
+    static RECORDED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let recorded = RECORDED.get_or_init(|| Mutex::new(HashSet::new()));
+    let Ok(mut recorded) = recorded.lock() else {
+        return;
+    };
+    if !recorded.insert(row.clone()) {
+        return;
+    }
+    crate::diag::lsp::append(&crate::diag::lsp::Record {
+        at: jiff::Timestamp::now(),
+        root: row,
+        server: String::new(),
+        event: "unreadable_entry".into(),
+        details: serde_json::json!({"error": error.to_string()}),
+    });
 }
 
 pub fn request(
@@ -533,9 +563,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn registry_round_trip_and_kill_order() {
-        let entry = Entry {
+    fn sample_entry() -> Entry {
+        Entry {
             kind: Some(crate::config::LspServerKind::RustAnalyzer),
             editor_check_on_save: Some(false),
             root: "/checkout".into(),
@@ -563,7 +592,89 @@ mod tests {
                 start_token: "lease-start".into(),
                 since_ms: 200,
             }],
+        }
+    }
+
+    #[test]
+    fn unreadable_rows_are_skipped_recorded_once_and_never_swept() {
+        let base = tempfile::tempdir().unwrap();
+        let good = sample_entry();
+        publish_at(
+            &directory_at(base.path(), &good.root, &good.server).unwrap(),
+            &good,
+        )
+        .unwrap();
+        let garbage = base.path().join("garbage");
+        std::fs::create_dir(&garbage).unwrap();
+        std::fs::write(garbage.join("entry.json"), b"not json").unwrap();
+        let mismatched = base.path().join("mismatched");
+        std::fs::create_dir(&mismatched).unwrap();
+        std::fs::write(
+            mismatched.join("entry.json"),
+            serde_json::to_vec(&good).unwrap(),
+        )
+        .unwrap();
+        let newer = Entry {
+            server: "newer".into(),
+            ..sample_entry()
         };
+        let newer_row = directory_at(base.path(), &newer.root, &newer.server).unwrap();
+        std::fs::create_dir(&newer_row).unwrap();
+        let state = serde_json::to_string(&State::Stopped {
+            reason: StopReason::Released,
+            at_ms: 1,
+        })
+        .unwrap()
+        .replace("\"released\"", "\"from a newer build\"");
+        let mut value = serde_json::to_value(&newer).unwrap();
+        value["state"] = serde_json::from_str(&state).unwrap();
+        std::fs::write(newer_row.join("entry.json"), value.to_string()).unwrap();
+        let bad_rows = [garbage, mismatched, newer_row];
+
+        let unreadable = || {
+            crate::diag::lsp::recent()
+                .into_iter()
+                .filter(|record| {
+                    record.event == "unreadable_entry" && record.root.starts_with(base.path())
+                })
+                .map(|record| record.root)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(read_entries_at(base.path()).unwrap(), [good]);
+        let mut recorded = unreadable();
+        recorded.sort();
+        let mut expected = bad_rows.to_vec();
+        expected.sort();
+        assert_eq!(recorded, expected);
+        read_entries_at(base.path()).unwrap();
+        assert_eq!(unreadable().len(), bad_rows.len());
+
+        sweep_at(base.path()).unwrap();
+        for row in &bad_rows {
+            assert!(
+                row.join("entry.json").exists(),
+                "{} was swept",
+                row.display()
+            );
+        }
+    }
+
+    #[test]
+    fn registry_base_errors_stay_fatal() {
+        let base = tempfile::tempdir().unwrap();
+        assert!(
+            read_entries_at(&base.path().join("absent"))
+                .unwrap()
+                .is_empty()
+        );
+        let file = base.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert!(read_entries_at(&file).is_err());
+    }
+
+    #[test]
+    fn registry_round_trip_and_kill_order() {
+        let entry = sample_entry();
         assert_eq!(
             serde_json::from_value::<Entry>(serde_json::to_value(&entry).unwrap()).unwrap(),
             entry

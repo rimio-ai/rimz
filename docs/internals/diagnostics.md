@@ -21,7 +21,7 @@ Diagnostic logs live in persistent state because an investigation starts after t
 | `audit/binding.log.jsonl` | workspace state dir | pane-binding decisions | [sidebar.md](./sidebar/sidebar.md) |
 | `hook-feed.log.jsonl` | machine `~/.rimz/logs/` | returned hook-feed errors, including before workspace resolution | `at`, `source`, nullable `event`, full `error` chain; 4 MiB rotation |
 | `audit/hibernate.log.jsonl` | workspace state dir | `wake` latency, reclaimed bytes and thaw errors, `wake_refault` samples, and `wake_lock_timeout` recovery | [hibernate.md](./harness/hibernate.md#wake-and-recovery) |
-| `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, evictions, and crashes | [lsp.md](./lsp.md#visibility) |
+| `lsp.log.jsonl` | machine `~/.rimz/logs/` | shared-server refusals, queue timeouts, watch errors, kills, evictions, crashes, and unreadable registry rows | [lsp.md](./lsp.md#visibility) |
 | `lanes/topology-writer-conflict.json` | workspace runtime dir | latest Zellij topology writer conflict | [multiplexers.md](./multiplexers.md#the-zellij-presence-plugin) |
 
 The `diag/` module owns the JSONL surfaces, and all of them share the append, decoded-visit, and generation-path helper in [`disk::rotating`](../../crates/rimz/src/disk/rotating.rs). A log rotates to one kept generation (`<name>.1.jsonl`): the workspace logs at the shared 1-MiB cap (`disk::retention::ROTATING_LOG_MAX_BYTES`), the focus-repair log at the assist history's 4 MiB. A failed append logs at debug and the calling path continues. A reader visits the retained generation, then the active file, and skips missing files and malformed lines.
