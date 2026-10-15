@@ -163,13 +163,15 @@ impl Store {
                 remove_file_if_exists(&paths.hook_drain_cursor)?;
             }
 
-            // A reset removes every account pin; subsequent launches inherit.
+            // A reset removes every account pin and every run-only remote-control
+            // waiver; subsequent launches inherit.
             if unfreeze_logins
                 && let Some(mut record) =
                     crate::workspace::record::read_optional(&paths.workspace_record)?
-                && !record.pins.is_empty()
+                && !(record.pins.is_empty() && record.remote_control_off.is_empty())
             {
                 record.pins.clear();
+                record.remote_control_off.clear();
                 crate::workspace::record::write(paths, &record)?;
             }
 

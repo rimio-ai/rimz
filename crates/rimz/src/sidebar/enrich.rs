@@ -622,7 +622,11 @@ fn enrich_core(
         &machine_config,
     )
     .with_agents(&snapshot.agents);
-    let claude_rc_enabled = machine_config.remote_control.enabled_for("claude");
+    let room_remote_control = crate::remote_control::room_config_at(
+        &machine_config.remote_control,
+        &state.workspace_record,
+    );
+    let claude_rc_enabled = room_remote_control.enabled_for("claude");
     let remote_control_health = RemoteControlServerHealth {
         claude_host_serving: frame.map(|frame| {
             let pane_present = crate::daemon_view::claude_host_present(&frame.to_pane_refs());
@@ -712,6 +716,7 @@ fn enrich_core(
         snapshot,
         runtime,
         &machine_config,
+        &room_remote_control,
         &logins,
         remote_control_health,
         lanes,
@@ -886,6 +891,7 @@ fn fold_machine_config(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &crate::config::MachineConfig,
+    room_remote_control: &crate::config::RemoteControlConfig,
     logins: &crate::agents::RoomLoginSet,
     remote_control_health: RemoteControlServerHealth,
     lanes: Option<&crate::sidebar::refresh::RefreshedLanes>,
@@ -906,6 +912,7 @@ fn fold_machine_config(
         accounts,
         &spending.provider.spending.by_login,
         remote_control_health,
+        room_remote_control,
         logins,
         PanelScope::Current,
     );
@@ -939,6 +946,7 @@ pub fn provider_panels_from_caches(
         accounts,
         &provider_spending.spending.by_login,
         RemoteControlServerHealth::default(),
+        &config.remote_control,
         logins,
         PanelScope::Current,
     );
@@ -1004,12 +1012,17 @@ pub(super) enum PanelScope {
 /// Apply the resolved config and already-resolved accounts onto the snapshot:
 /// the per-provider `⇅ rc` flags, the dashboard aggregates for `scope`'s
 /// logins, and each agent row's context-severity verdict.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "machine and room remote-control policy stay separate inputs to the badge"
+)]
 pub(super) fn fold_machine_config_with(
     mut snapshot: SidebarSnapshot,
     config: &crate::config::MachineConfig,
     accounts: BTreeMap<crate::ids::LoginKey, crate::agents::AgentAccount>,
     provider_spending: &BTreeMap<crate::ids::LoginKey, crate::agents::SpendTally>,
     remote_control_health: RemoteControlServerHealth,
+    room_remote_control: &crate::config::RemoteControlConfig,
     logins: &crate::agents::RoomLoginSet,
     scope: PanelScope,
 ) -> SidebarSnapshot {
@@ -1030,7 +1043,8 @@ pub(super) fn fold_machine_config_with(
     let mut remote_control_flags: BTreeMap<String, RemoteControlBadge> = BTreeMap::new();
     for adapter in crate::agents::all_definitions() {
         let definition = adapter.spec();
-        let config_toggle = config.remote_control.enabled_for(definition.kind);
+        let machine_toggle = config.remote_control.enabled_for(definition.kind);
+        let config_toggle = room_remote_control.enabled_for(definition.kind);
         // A kind whose room account cannot be resolved reads no provider setting.
         let pane_auto = definition.capabilities.remote_control.pane_sessions
             && logins.default_login(definition.kind).is_some_and(|login| {
@@ -1041,6 +1055,7 @@ pub(super) fn fold_machine_config_with(
         remote_control_flags.insert(
             definition.kind.to_owned(),
             remote_control_badge(
+                machine_toggle && !config_toggle,
                 config_toggle,
                 pane_auto,
                 remote_control_health.for_kind(definition.kind),
@@ -1068,12 +1083,16 @@ pub(super) fn fold_machine_config_with(
 /// Derive the rc badge from enablement and the managed-server probe. An absent
 /// probe stays healthy to avoid a false red flash before the first pane frame or
 /// reap-cache publish; only a configured server positively observed down is red.
+/// A host the user waived for this room's run is muted, never alarming.
 fn remote_control_badge(
+    waived: bool,
     config_toggle: bool,
     pane_auto: bool,
     server_alive: Option<bool>,
 ) -> RemoteControlBadge {
-    if !config_toggle && !pane_auto {
+    if waived && !pane_auto {
+        RemoteControlBadge::OffForRun
+    } else if !config_toggle && !pane_auto {
         RemoteControlBadge::Hidden
     } else if config_toggle && server_alive == Some(false) {
         RemoteControlBadge::Down

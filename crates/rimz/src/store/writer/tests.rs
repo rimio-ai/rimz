@@ -912,6 +912,52 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
 }
 
 #[test]
+fn remote_control_off_survives_rerecords_and_recovery_but_not_reset() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let workspace = WorkspaceResolver::resolve(&project, None).expect("workspace");
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
+    let store = Store::open(paths.clone(), runtime).expect("open store");
+    let off = BTreeSet::from([AgentKind::new_unchecked("claude")]);
+    let read_off = || {
+        record::read(&paths.workspace_record)
+            .unwrap()
+            .remote_control_off
+    };
+
+    store
+        .set_remote_control_off(&workspace, off.clone())
+        .expect("record waiver");
+    assert_eq!(read_off(), off);
+    store
+        .record_workspace(&workspace)
+        .expect("generic rerecord");
+    assert_eq!(read_off(), off);
+    let bin = dir.path().join("builds/build/rimz");
+    crate::disk::atomic::write_executable_bytes_atomically(&bin, b"build").expect("write build");
+    store
+        .record_room_bin(&workspace, bin, "build".to_owned())
+        .expect("owner rerecord");
+    assert_eq!(read_off(), off);
+    store
+        .reset_records_keeping_logins()
+        .expect("recovery reset");
+    assert_eq!(read_off(), off);
+
+    store.reset_records(false).expect("soft reset");
+    assert!(read_off().is_empty());
+    store
+        .set_remote_control_off(&workspace, off.clone())
+        .expect("record waiver again");
+    store
+        .set_remote_control_off(&workspace, BTreeSet::new())
+        .expect("a later start clears the waiver");
+    assert!(read_off().is_empty());
+}
+
+#[test]
 fn launch_batch_stamps_room_logins_over_caller_values() {
     if account_test_home("store::writer::tests::launch_batch_stamps_room_logins_over_caller_values")
     {

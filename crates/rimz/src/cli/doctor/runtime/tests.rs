@@ -63,6 +63,34 @@ fn remote_control_status_preserves_host_readiness_labels() {
     }
 }
 
+#[test]
+fn a_waived_host_reads_off_for_this_run_and_keeps_its_blocker_visible() {
+    use RemoteControlHost::Claude;
+
+    let home = tempfile::tempdir().unwrap();
+    let login_env = BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        home.path().to_str().unwrap().to_owned(),
+    )]);
+    let rimz::agents::runtime_control::RuntimeControlReadiness::Uninstalled(issue) =
+        rimz::agents::find_definition("codex")
+            .unwrap()
+            .runtime_control_readiness(true, &login_env, None)
+    else {
+        panic!("empty Codex home has no managed install");
+    };
+    let blocked = RuntimeControlReadiness::Blocked(issue);
+
+    let waived = remote_agent(Claude, &blocked, true, None);
+    assert_eq!(waived.detail, "off for this run (chosen at `rimz start`)");
+    assert!(waived.ready);
+    assert!(waived.blocker.is_some());
+
+    let live = remote_agent(Claude, &blocked, false, None);
+    assert_eq!(live.detail, "enabled, blocked");
+    assert!(live.blocker.is_none());
+}
+
 fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
     rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
 }

@@ -1712,6 +1712,38 @@ fn tally_renders_clean_verdict() {
 }
 
 #[test]
+fn a_waived_host_renders_off_for_this_run_without_a_refusal_line() {
+    let out = strip(|w| {
+        let mut tally = Tally::default();
+        render_remote_control(
+            w,
+            &RemoteControl::On {
+                agents: vec![RemoteAgent {
+                    kind: "claude",
+                    detail: "off for this run (chosen at `rimz start`)".to_owned(),
+                    ready: true,
+                    blocker: Some(
+                        "Remote control is blocked.\n  - Unset it: unset DISABLE_GROWTHBOOK"
+                            .to_owned(),
+                    ),
+                }],
+                refusals: Vec::new(),
+                skipped: Vec::new(),
+                advisories: Vec::new(),
+            },
+            &mut tally,
+        )
+    });
+    assert!(
+        out.contains("off for this run (chosen at `rimz start`)"),
+        "{out}"
+    );
+    assert!(out.contains("claude would still refuse"), "{out}");
+    assert!(out.contains("unset DISABLE_GROWTHBOOK"), "{out}");
+    assert!(!out.contains("`rimz start` refuses"), "{out}");
+}
+
+#[test]
 fn remote_agent_fields_render_as_key_and_verdict() {
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -1722,6 +1754,7 @@ fn remote_agent_fields_render_as_key_and_verdict() {
                     kind: "claude",
                     detail: "enabled, blocked".to_owned(),
                     ready: false,
+                    blocker: None,
                 }],
                 refusals: vec!["disableRemoteControl: true".to_owned()],
                 skipped: vec!["managed Codex install is missing".to_owned()],

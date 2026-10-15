@@ -384,7 +384,11 @@ impl RoomContext {
             {
                 Ok(login_env) => crate::agents::runtime_control::ensure(
                     "codex",
-                    self.machine_config.remote_control.enabled_for("codex"),
+                    crate::remote_control::room_config_at(
+                        &self.machine_config.remote_control,
+                        &state.workspace_record,
+                    )
+                    .enabled_for("codex"),
                     &login_env,
                 ),
                 Err(err) => {

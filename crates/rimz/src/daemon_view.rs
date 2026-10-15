@@ -13,6 +13,7 @@
 //!
 //! Internals: `docs/internals/rimzd.md`.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -609,6 +610,7 @@ struct DaemonViewInputsStamp {
 struct DaemonWorkspaceInputs {
     project_root: PathBuf,
     worktree_root: PathBuf,
+    remote_control_off: BTreeSet<crate::ids::AgentKind>,
 }
 
 impl DaemonWorkspaceInputs {
@@ -622,6 +624,7 @@ impl DaemonWorkspaceInputs {
                 .worktree_root
                 .clone()
                 .unwrap_or_else(|| record.project_root.clone()),
+            remote_control_off: record.remote_control_off.clone(),
         }
     }
 }
@@ -750,6 +753,7 @@ impl DaemonRepairTracker {
             }
         };
         let machine = crate::config::MachineConfig::load_lenient();
+        let remote_control = crate::remote_control::room_config(&machine.remote_control, &record);
         let resolved = ResolvedDaemonInputs::read(&record, &state.workspace_record, &machine);
         let workspace_id = self.workspace_id.clone();
         let session_name = self.session_name.clone();
@@ -764,8 +768,8 @@ impl DaemonRepairTracker {
                 // working host over a gap that outlives nothing but this tick.
                 let readiness = match &resolved.host_envs {
                     Ok(envs) => {
-                        crate::remote_control::prepare_hosts(&machine.remote_control, envs);
-                        crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control, envs, Some(&record.project_root))
+                        crate::remote_control::prepare_hosts(&remote_control, envs);
+                        crate::remote_control::ReadinessSnapshot::probe(&remote_control, envs, Some(&record.project_root))
                     }
                     Err(err) => {
                         tracing::warn!(workspace = %workspace_id, error = %err, "daemon host accounts unavailable");

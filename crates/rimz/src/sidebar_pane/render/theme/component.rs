@@ -100,6 +100,8 @@ pub(crate) enum Component {
     RemoteControl,
     /// The `⇅ rc` remote-control flag when its managed server is down.
     RemoteControlDown,
+    /// The `⇅ rc` remote-control flag when the user started the room without it.
+    RemoteControlOff,
     /// Which-key chord text inside the help overlay.
     HelpKey,
     /// The capability-line window token, by size class: a neutral→cool→accent
@@ -155,6 +157,7 @@ impl Component {
         Component::WaitHeader,
         Component::RemoteControl,
         Component::RemoteControlDown,
+        Component::RemoteControlOff,
         Component::HelpKey,
         Component::WindowSmall,
         Component::WindowMedium,
@@ -186,7 +189,7 @@ impl Component {
             RemoteControlDown | WorktreePrClosed | WorktreeCiFailing => palette.alarm,
             Input => palette.expense,
             CacheExpired => palette.cache_expired,
-            WorktreeQualifier | WorktreeMerged | WindowMedium => palette.muted,
+            WorktreeQualifier | WorktreeMerged | WindowMedium | RemoteControlOff => palette.muted,
         })
     }
 }

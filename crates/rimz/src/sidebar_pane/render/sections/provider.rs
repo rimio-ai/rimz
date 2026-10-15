@@ -791,13 +791,19 @@ fn provider_header_line(
         RemoteControlBadge::Hidden => None,
         RemoteControlBadge::Healthy => Some(Component::RemoteControl),
         RemoteControlBadge::Down => Some(Component::RemoteControlDown),
+        RemoteControlBadge::OffForRun => Some(Component::RemoteControlOff),
     };
     if let Some(component) = remote_control {
         if !right.is_empty() {
             right.push(Span::raw("  "));
         }
+        let off = if panel.remote_control == RemoteControlBadge::OffForRun {
+            " off"
+        } else {
+            ""
+        };
         right.push(Span::styled(
-            format!("{} rc", theme.glyph(GlyphRole::ChromeRemoteControl)),
+            format!("{} rc{off}", theme.glyph(GlyphRole::ChromeRemoteControl)),
             theme.styled(component, Modifier::BOLD),
         ));
     }

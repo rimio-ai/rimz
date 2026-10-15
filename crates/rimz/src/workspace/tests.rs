@@ -127,6 +127,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
                 rimz_bin: None,
                 rimz_build: None,
                 pins: Default::default(),
+                remote_control_off: Default::default(),
                 updated_at: jiff::Timestamp::UNIX_EPOCH,
             },
         )
@@ -184,6 +185,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
             rimz_bin: None,
             rimz_build: None,
             pins: Default::default(),
+            remote_control_off: Default::default(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -238,6 +240,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             rimz_bin: None,
             rimz_build: None,
             pins: Default::default(),
+            remote_control_off: Default::default(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )
@@ -260,6 +263,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
             rimz_bin: None,
             rimz_build: None,
             pins: Default::default(),
+            remote_control_off: Default::default(),
             updated_at: jiff::Timestamp::now(),
         },
     )
