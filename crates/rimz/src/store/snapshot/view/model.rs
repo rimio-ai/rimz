@@ -95,8 +95,9 @@ pub enum RedeemForecast {
     Holding,
 }
 
-/// Remote-control badge for this provider: hidden, or shown green/red by
-/// managed-server health (the `⇅ rc` flag).
+/// Remote-control badge for this provider: hidden, shown green/red by
+/// managed-server health, or muted when the user started this room without it
+/// (the `⇅ rc` flag).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteControlBadge {
@@ -104,6 +105,7 @@ pub enum RemoteControlBadge {
     Hidden,
     Healthy,
     Down,
+    OffForRun,
 }
 
 /// One provider's aggregate dashboard block, pinned to the bottom of the

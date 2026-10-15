@@ -27,6 +27,17 @@ impl RemoteControlConfig {
     pub fn enabled_for(&self, kind: &str) -> bool {
         self.enabled.get(kind).copied().unwrap_or(false)
     }
+
+    /// This policy with each named kind turned off.
+    pub(crate) fn without<'a>(&self, kinds: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut config = self.clone();
+        for kind in kinds {
+            if let Some(enabled) = config.enabled.get_mut(kind) {
+                *enabled = false;
+            }
+        }
+        config
+    }
 }
 
 impl<'de> Deserialize<'de> for RemoteControlConfig {

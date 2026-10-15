@@ -40,6 +40,26 @@ pub struct StartBlock {
     pub blocker: crate::blocker::Blocker,
 }
 
+/// The remote-control policy one room runs under: machine intent with the hosts
+/// the user waived at `rimz start` turned off. Every per-room reader of
+/// enablement goes through this.
+pub(crate) fn room_config(
+    config: &RemoteControlConfig,
+    record: &record::WorkspaceRecord,
+) -> RemoteControlConfig {
+    config.without(record.remote_control_off.iter().map(AgentKind::as_str))
+}
+
+/// `room_config` for a reader that holds the record's path. An absent or
+/// unreadable record waives nothing, so every reader, the start gate included,
+/// falls back to machine intent: a host stays on rather than silently off.
+pub fn room_config_at(config: &RemoteControlConfig, record_path: &Path) -> RemoteControlConfig {
+    match record::read_optional(record_path) {
+        Ok(Some(record)) => room_config(config, &record),
+        _ => config.clone(),
+    }
+}
+
 /// The provider environment each remote-control host of one room runs under.
 #[derive(Clone, Debug)]
 pub struct HostLoginEnvs {
@@ -347,12 +367,9 @@ pub fn apply_runtime_toggle(
                     continue;
                 }
             };
-            prepare_hosts(&machine.remote_control, &envs);
-            let readiness = ReadinessSnapshot::probe(
-                &machine.remote_control,
-                &envs,
-                Some(&record.project_root),
-            );
+            let room = room_config(&machine.remote_control, &record);
+            prepare_hosts(&room, &envs);
+            let readiness = ReadinessSnapshot::probe(&room, &envs, Some(&record.project_root));
             let backend = crate::mux::backend_for(mux);
             crate::daemon_view::ensure_daemon_view_with_readiness(
                 backend.as_ref(),

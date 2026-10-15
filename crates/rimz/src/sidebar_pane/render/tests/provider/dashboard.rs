@@ -237,6 +237,23 @@ fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
     assert_eq!(flag.style, theme.alarm(Modifier::BOLD));
 }
 
+#[test]
+fn render_provider_dashboard_mutes_an_rc_host_the_user_waived_for_the_run() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, false, true, None);
+    panel.remote_control = crate::store::snapshot::RemoteControlBadge::OffForRun;
+
+    let lines = Dashboard::stacked(&theme, &[panel]).lines();
+    let flag = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content.contains("⇅ rc"))
+        .expect("remote-control flag");
+
+    assert_eq!(flag.style, theme.muted().add_modifier(Modifier::BOLD));
+    assert!(flag.content.ends_with("rc off"), "{}", flag.content);
+}
+
 /// Regression (`fix(budget): keep daily caps config-armed and quiet`): a cap
 /// that is merely close stays out of the headline, and only a parked account
 /// spells the cap out beside the day's spend.

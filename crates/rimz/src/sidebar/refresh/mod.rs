@@ -224,12 +224,16 @@ pub(super) fn refresh_heavy_lanes(
     )
     .with_agents(&base.agents);
     let store = Store::open_existing(state_paths.clone(), runtime.clone());
+    let room_remote_control = crate::remote_control::room_config_at(
+        &config.remote_control,
+        &state_paths.workspace_record,
+    );
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
         runtime,
         &logins,
         unix_now_ms(),
-        config.remote_control.enabled_for("codex"),
+        room_remote_control.enabled_for("codex"),
     );
 
     let accounts = produce_accounts(base, runtime, &logins);
@@ -249,6 +253,7 @@ pub(super) fn refresh_heavy_lanes(
         &spending.provider.spending.by_login,
         // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
+        &room_remote_control,
         &logins,
         PanelScope::InUse,
     );

@@ -1783,6 +1783,19 @@ fn render_remote_on(
         kv.push(agent.kind, verdict(tally, health, &agent.detail));
     }
     kv.render(w)?;
+    for agent in agents {
+        let Some(blocker) = &agent.blocker else {
+            continue;
+        };
+        detail(
+            w,
+            palette::muted(),
+            &format!("{} would still refuse:", agent.kind),
+        )?;
+        for line in blocker.lines() {
+            detail(w, palette::muted(), line)?;
+        }
+    }
     for refusal in refusals {
         note(tally, w, Health::Alarm, "`rimz start` refuses:")?;
         for line in refusal.lines() {

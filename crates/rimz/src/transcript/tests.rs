@@ -38,6 +38,7 @@ fn workspaces_with_channel_finds_transcript_evidence() {
                 rimz_bin: None,
                 rimz_build: None,
                 pins: Default::default(),
+                remote_control_off: Default::default(),
                 updated_at: Timestamp::UNIX_EPOCH,
             },
         )

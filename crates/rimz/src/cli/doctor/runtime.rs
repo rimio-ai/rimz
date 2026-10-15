@@ -858,6 +858,34 @@ fn remote_control_status(
     }
 }
 
+/// One host's row. A host the user waived at `rimz start` is off for this room
+/// whatever its readiness; the blocker it would still refuse with stays visible.
+fn remote_agent(
+    host: RemoteControlHost,
+    readiness: &RuntimeControlReadiness,
+    waived: bool,
+    liveness: Option<RuntimeControlLiveness>,
+) -> model::RemoteAgent {
+    if waived {
+        return model::RemoteAgent {
+            kind: host.kind(),
+            detail: "off for this run (chosen at `rimz start`)".to_owned(),
+            ready: true,
+            blocker: match readiness {
+                RuntimeControlReadiness::Blocked(issue) => Some(issue.to_string()),
+                _ => None,
+            },
+        };
+    }
+    let (detail, ready) = remote_control_status(host, readiness, liveness);
+    model::RemoteAgent {
+        kind: host.kind(),
+        detail: detail.to_owned(),
+        ready,
+        blocker: None,
+    }
+}
+
 /// Per-machine remote-control auto-launch posture. Doctor separates hard
 /// `rimz start` refusals for installed-agent misconfiguration from enabled
 /// hosts whose agent is not installed; start skips those inert toggles.
@@ -884,6 +912,9 @@ pub(super) fn collect_remote_control(
     let state = project_root
         .and_then(|root| rimz::workspace::WorkspaceResolver::persisted_project_root(root).ok())
         .and_then(|root| StatePaths::for_project_root(&root).ok());
+    let room_config = state
+        .as_ref()
+        .map(|state| rimz::remote_control::room_config_at(config, &state.workspace_record));
     let envs = match state {
         Some(state) => {
             match rimz::remote_control::HostLoginEnvs::for_room(&state.workspace_record, &machine) {
@@ -900,8 +931,13 @@ pub(super) fn collect_remote_control(
     let readiness = rimz::remote_control::ReadinessSnapshot::probe(config, &envs, project_root);
     let advisories = rimz::remote_control::advisories(config, &envs);
     let mut agents = Vec::new();
+    let mut waived = Vec::new();
     for host in hosts {
         let host_readiness = readiness.for_host(host);
+        let is_waived = room_config
+            .as_ref()
+            .is_some_and(|room| !room.enabled_for(host.kind()));
+        waived.extend(is_waived.then_some(host));
         // A ready host is one that *can* start. Whether one is serving right
         // now is a separate question the provider's own record answers, and
         // doctor is the place a stalled host should become visible.
@@ -912,12 +948,7 @@ pub(super) fn collect_remote_control(
                 .map(|env| runtime_control::host_liveness("claude", root, env)),
             _ => None,
         };
-        let (detail, ready) = remote_control_status(host, host_readiness, liveness);
-        agents.push(model::RemoteAgent {
-            kind: host.kind(),
-            detail: detail.to_owned(),
-            ready,
-        });
+        agents.push(remote_agent(host, host_readiness, is_waived, liveness));
     }
 
     let skipped = match readiness.for_host(RemoteControlHost::Codex) {
@@ -927,7 +958,7 @@ pub(super) fn collect_remote_control(
         _ => Vec::new(),
     };
     let refusals = match readiness.for_host(RemoteControlHost::Claude) {
-        RuntimeControlReadiness::Blocked(issue) => {
+        RuntimeControlReadiness::Blocked(issue) if !waived.contains(&RemoteControlHost::Claude) => {
             vec![issue.to_string()]
         }
         _ => Vec::new(),

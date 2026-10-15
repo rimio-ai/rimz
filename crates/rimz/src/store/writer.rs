@@ -363,6 +363,24 @@ impl Store {
         })
     }
 
+    /// Replace the remote-control hosts this room runs without, as the attended
+    /// start that births the room chose. An empty set clears an earlier choice.
+    #[must_use = "durability barrier; check the result"]
+    pub fn set_remote_control_off(
+        &self,
+        workspace: &ResolvedWorkspace,
+        off: BTreeSet<AgentKind>,
+    ) -> Result<()> {
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            record.remote_control_off = off;
+            record::write(txn.paths, &record)?;
+            Ok(())
+        })
+    }
+
     /// Pin one provider's future launches without changing existing agent stamps.
     #[must_use = "durability barrier; check the result"]
     pub fn switch_room_login(
@@ -899,7 +917,7 @@ fn write_workspace_record(
 }
 
 /// A re-record keeps the room state only the owner flows set: the room-owning
-/// binary and the account launch defaults. Everything else is rebuilt from
+/// binary, the account launch defaults, and the hosts the user ran without. Everything else is rebuilt from
 /// the resolved workspace.
 fn workspace_record_preserving_room_state(
     prior: Option<&record::WorkspaceRecord>,
@@ -909,6 +927,9 @@ fn workspace_record_preserving_room_state(
     let mut record = record::WorkspaceRecord::from_resolved(workspace);
     if let Some(prior) = prior {
         record.pins.clone_from(&prior.pins);
+        record
+            .remote_control_off
+            .clone_from(&prior.remote_control_off);
     }
     match rimz_target {
         Some((rimz_bin, rimz_build)) => {

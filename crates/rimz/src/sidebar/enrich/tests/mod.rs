@@ -129,6 +129,7 @@ fn dashboard_shows_only_the_rooms_current_account_per_provider() {
             snapshot.clone(),
             &runtime,
             &config,
+            &config.remote_control,
             logins,
             Default::default(),
             Some(&lanes),
@@ -161,6 +162,7 @@ fn dashboard_shows_only_the_rooms_current_account_per_provider() {
         lanes.accounts.clone(),
         &BTreeMap::new(),
         Default::default(),
+        &config.remote_control,
         &switched,
         PanelScope::InUse,
     );
@@ -364,7 +366,7 @@ fn claude_host_serving_needs_a_pane_the_provider_still_stands_behind() {
 
 #[test]
 fn remote_control_badge_follows_enablement_and_probe_health() {
-    use crate::store::snapshot::RemoteControlBadge::{Down, Healthy, Hidden};
+    use crate::store::snapshot::RemoteControlBadge::{Down, Healthy, Hidden, OffForRun};
 
     let cases = [
         (true, false, Some(true), Healthy, "configured and up"),
@@ -396,11 +398,25 @@ fn remote_control_badge_follows_enablement_and_probe_health() {
 
     for (config_toggle, pane_auto, server_alive, expected, label) in cases {
         assert_eq!(
-            remote_control_badge(config_toggle, pane_auto, server_alive),
+            remote_control_badge(false, config_toggle, pane_auto, server_alive),
             expected,
             "{label}"
         );
     }
+
+    // Machine config on, room waived: muted, whatever the stale probe says.
+    for server_alive in [Some(true), Some(false), None] {
+        assert_eq!(
+            remote_control_badge(true, false, false, server_alive),
+            OffForRun,
+            "waived host, probe {server_alive:?}"
+        );
+    }
+    assert_eq!(
+        remote_control_badge(true, false, true, None),
+        Healthy,
+        "the provider's own pane auto-enable still shows"
+    );
 }
 
 #[test]

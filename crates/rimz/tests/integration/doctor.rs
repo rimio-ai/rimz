@@ -1945,7 +1945,7 @@ fn doctor_json_reports_remote_control_refusals_and_skips() {
         "{refusals}"
     );
     assert!(
-        refusals.contains("[remote_control] claude = false"),
+        refusals.contains("Remove `disableRemoteControl` or set it to false"),
         "{refusals}"
     );
     assert!(

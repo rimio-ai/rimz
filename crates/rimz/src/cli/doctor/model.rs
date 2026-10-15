@@ -632,6 +632,9 @@ pub(super) struct RemoteAgent {
     pub(super) kind: &'static str,
     pub(super) detail: String,
     pub(super) ready: bool,
+    /// The problem and fixes a host waived at `rimz start` would still refuse with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) blocker: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

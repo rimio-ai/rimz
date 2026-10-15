@@ -266,7 +266,7 @@ The human report opens with the RimZ version, OS user, and binary path, then pri
 | `AGENT PLUGINS` | Conditional. Each plugin manifest, its validation result, and its probes. |
 | `LOOP TASKS` | Configured loop tasks with target, trigger, root, room state, and loop timer state. Warns when a live clock task has neither an open room nor an active timer. |
 | `LSP` | Machine-wide shared servers in `rimz lsp list` order, recorded crash exit/stderr, and the last memory refusal or queue timeout. Current-checkout startup checks follow the table, with causes and fixes. |
-| `REMOTE CONTROL` | Remote-control hosts and their readiness, or `off`. |
+| `REMOTE CONTROL` | Remote-control hosts and their readiness, or `off`. A host you started the room without reads `off for this run`, with the blocker it would still refuse under it. |
 | `STORAGE` | RimZ's disk use by area. |
 | `PROTOCOLS` | Conditional on a resolved workspace. Event and sidebar protocol versions, and build drift between writers. |
 | `TRUST` | Conditional on a resolved workspace. `trusted`, `stale`, `untrusted`, or `no project config`. |

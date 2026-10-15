@@ -603,12 +603,19 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         // skipped here so the room still starts; `rimz doctor` surfaces it.
         let envs =
             rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
-        rimz::remote_control::prepare_hosts(&machine_config.remote_control, &envs);
-        let readiness = rimz::remote_control::ReadinessSnapshot::probe(
-            &machine_config.remote_control,
-            &envs,
-            birth_root,
-        );
+        // A live room, or a detached start that cannot ask, keeps the host
+        // waivers the user chose at an earlier attended start.
+        let waivers_apply = was_live || matches!(entry, RoomEntry::StartDetached { .. });
+        let remote_control = match birth_root.map(rimz::StatePaths::for_project_root) {
+            Some(Ok(state)) if waivers_apply => rimz::remote_control::room_config_at(
+                &machine_config.remote_control,
+                &state.workspace_record,
+            ),
+            _ => machine_config.remote_control.clone(),
+        };
+        rimz::remote_control::prepare_hosts(&remote_control, &envs);
+        let readiness =
+            rimz::remote_control::ReadinessSnapshot::probe(&remote_control, &envs, birth_root);
         readiness.start_gate()?;
         Some(readiness)
     } else {

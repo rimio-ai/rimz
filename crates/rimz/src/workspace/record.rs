@@ -8,6 +8,7 @@
 //! the account stamp its exec wrapper resolves instead.
 //! There is no version upgrade path: an incompatible layout is refused.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::disk::atomic::{self, write_temp_then_rename};
 use crate::disk::paths::StatePaths;
-use crate::ids::{RoomLogins, WorkspaceId};
+use crate::ids::{AgentKind, RoomLogins, WorkspaceId};
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +76,13 @@ pub struct WorkspaceRecord {
     /// Generic re-records preserve pins; `rimz reset` clears them.
     #[serde(skip_serializing_if = "RoomLogins::is_empty")]
     pub pins: RoomLogins,
+    /// Remote-control hosts the user waived for this room's life at an
+    /// interactive `rimz start` refusal. Machine config still says on; the
+    /// room's readers apply this through `remote_control::room_config`.
+    /// Omitted when empty. Generic re-records preserve it; the attended start
+    /// that births the room sets it and `rimz reset` clears it.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub remote_control_off: BTreeSet<AgentKind>,
     pub updated_at: Timestamp,
 }
 
@@ -97,6 +105,8 @@ struct WorkspaceRecordRead {
     pins: Option<RoomLogins>,
     #[serde(default)]
     logins: Option<serde_json::Value>,
+    #[serde(default)]
+    remote_control_off: BTreeSet<AgentKind>,
     updated_at: Timestamp,
 }
 
@@ -125,6 +135,7 @@ impl TryFrom<WorkspaceRecordRead> for WorkspaceRecord {
             rimz_bin: record.rimz_bin,
             rimz_build: record.rimz_build,
             pins,
+            remote_control_off: record.remote_control_off,
             updated_at: record.updated_at,
         })
     }
@@ -152,6 +163,7 @@ impl WorkspaceRecord {
             rimz_bin: None,
             rimz_build: None,
             pins: RoomLogins::new(),
+            remote_control_off: BTreeSet::new(),
             updated_at: Timestamp::now(),
         }
     }
@@ -272,6 +284,37 @@ mod tests {
         assert_eq!(loaded.rimz_bin, record.rimz_bin);
         assert_eq!(loaded.rimz_build, record.rimz_build);
         assert_eq!(loaded.pins, record.pins);
+    }
+
+    #[test]
+    fn remote_control_off_round_trips_and_is_omitted_when_empty() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let workspace = WorkspaceResolver::resolve(&project, None).unwrap();
+        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let mut record = WorkspaceRecord::from_resolved(&workspace);
+
+        write(&paths, &record).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&paths.workspace_record).unwrap()).unwrap();
+        assert!(written.get("remote_control_off").is_none());
+        assert!(
+            read(&paths.workspace_record)
+                .unwrap()
+                .remote_control_off
+                .is_empty()
+        );
+
+        record.remote_control_off = BTreeSet::from([AgentKind::new_unchecked("claude")]);
+        write(&paths, &record).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&paths.workspace_record).unwrap()).unwrap();
+        assert_eq!(written["remote_control_off"], serde_json::json!(["claude"]));
+        assert_eq!(
+            read(&paths.workspace_record).unwrap().remote_control_off,
+            record.remote_control_off
+        );
     }
 
     #[test]

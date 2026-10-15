@@ -433,6 +433,7 @@ fn aggregate_values(snapshot: &SidebarSnapshot) -> Vec<(AggregateKey, Option<Str
                         RemoteControlBadge::Hidden => "hidden",
                         RemoteControlBadge::Healthy => "healthy",
                         RemoteControlBadge::Down => "down",
+                        RemoteControlBadge::OffForRun => "off_for_run",
                     }
                     .to_owned(),
                 ),

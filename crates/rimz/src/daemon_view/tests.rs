@@ -550,6 +550,7 @@ fn tracker_stamp(root: &Path, generation: u64) -> DaemonViewInputsStamp {
         workspace: DaemonWorkspaceInputs {
             project_root: root.join("project"),
             worktree_root: root.join("worktree"),
+            remote_control_off: Default::default(),
         },
         rimz_bin: StampedPath::of(&root.join("rimz")),
         claude_bin: Some(StampedPath::of(&root.join("claude"))),
@@ -570,6 +571,7 @@ fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
         rimz_bin: Some(PathBuf::from("/usr/bin/rimz")),
         rimz_build: Some("build".to_owned()),
         pins: Default::default(),
+        remote_control_off: Default::default(),
         updated_at: jiff::Timestamp::from_second(1_750_000_000).unwrap(),
     };
     let inputs = DaemonWorkspaceInputs::from_record(&record);
@@ -580,6 +582,64 @@ fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
 
     record.worktree_root = Some(PathBuf::from("/repo/other"));
     assert_ne!(DaemonWorkspaceInputs::from_record(&record), inputs);
+
+    let inputs = DaemonWorkspaceInputs::from_record(&record);
+    record.remote_control_off = BTreeSet::from([crate::ids::AgentKind::new_unchecked("claude")]);
+    assert_ne!(
+        DaemonWorkspaceInputs::from_record(&record),
+        inputs,
+        "a run-only waiver rebuilds the view"
+    );
+}
+
+#[test]
+fn a_waived_claude_host_gets_no_host_pane_though_machine_config_enables_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let mut record: record::WorkspaceRecord = serde_json::from_value(serde_json::json!({
+        "layout": crate::disk::paths::WORKSPACE_LAYOUT,
+        "workspace_id": workspace_id, "session_name": "rimz-demo", "project_root": dir.path(),
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .unwrap();
+    let machine: crate::config::MachineConfig =
+        toml::from_str("[remote_control]\nclaude = true\n").unwrap();
+    let envs = crate::remote_control::HostLoginEnvs::ambient();
+    let view_for = |record: &record::WorkspaceRecord| {
+        let room = crate::remote_control::room_config(&machine.remote_control, record);
+        let readiness = crate::remote_control::ReadinessSnapshot::probe_with(
+            &room,
+            &envs,
+            Some(&record.project_root),
+            |_, enabled, _, _| {
+                if enabled {
+                    RuntimeControlReadiness::Ready {
+                        host_argv: Some(vec!["claude".to_owned(), "remote-control".to_owned()]),
+                    }
+                } else {
+                    RuntimeControlReadiness::Disabled
+                }
+            },
+        );
+        effective_daemon_view(
+            &workspace_id,
+            "rimz-demo",
+            record,
+            &machine,
+            Path::new("/bin/rimz"),
+            &readiness,
+            false,
+        )
+    };
+
+    assert!(
+        view_for(&record)
+            .hosts
+            .iter()
+            .any(|host| host.argv[0] == "claude")
+    );
+    record.remote_control_off = BTreeSet::from([crate::ids::AgentKind::new_unchecked("claude")]);
+    assert!(view_for(&record).hosts.is_empty());
 }
 
 #[test]

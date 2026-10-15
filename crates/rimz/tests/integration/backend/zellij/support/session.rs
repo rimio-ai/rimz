@@ -100,6 +100,7 @@ pub(in crate::backend::zellij) fn publish_room_bin(state_root: &Path, opts: &Sid
             rimz_bin: Some(state.room_bin.clone()),
             rimz_build: None,
             pins: Default::default(),
+            remote_control_off: Default::default(),
             updated_at: jiff::Timestamp::now(),
         },
     )
