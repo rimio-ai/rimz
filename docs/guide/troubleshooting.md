@@ -65,7 +65,7 @@ HOOKS
   no agent reports to RimZ yet
    AGENT   STATUS
 ✗  claude  not installed
-    · not found on this machine: amp, antigravity, codex, copilot, cursor, droid, grok, hermes, kimi, kiro, opencode, pi, qwen
+    · not found on this machine: amp, antigravity, codex, copilot, cursor, droid, grok, hermes, kimi, kiro, opencode, pi, qoder, qwen
       RimZ offers their hooks as soon as one appears
 
 FOLDER TRUST

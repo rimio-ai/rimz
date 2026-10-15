@@ -145,7 +145,7 @@ A `<kind>-<mode>` cell launches that kind with one permission posture. RimZ rend
 | Cell | Available for | Launch posture |
 | --- | --- | --- |
 | `<kind>-ask` | every kind | the agent asks before tool use |
-| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, Qwen); the default posture otherwise (Codex, Grok, Hermes, Pi, Amp, Kiro, OpenCode) |
+| `<kind>-plan` | every kind | native plan mode where the CLI has a flag for it (Claude, Antigravity, Copilot, Cursor, Droid, Kimi, Qwen, Qoder); the default posture otherwise (Codex, Grok, Hermes, Pi, Amp, Kiro, OpenCode) |
 | `<kind>-auto` | every kind except `opencode`, `amp`, `kiro`, `hermes`, and `pi` | the adapter's automatic-approval flags |
 | `<kind>-yolo` | every kind except `droid`, `amp`, and `pi` | the adapter's bypass flags |
 
@@ -826,6 +826,7 @@ The fork always opens in the source agent's worktree. From a user shell it takes
 | Grok | `grok --resume <id> --fork-session` |
 | Pi | `pi --fork <id>` |
 | Qwen | `qwen --resume <id> --fork-session` |
+| Qoder | `qodercli --resume <id> --fork-session` |
 
 Other kinds, including OpenCode and plugins, cannot fork.
 
@@ -926,7 +927,7 @@ Closing the old pane ends the replaced session, so its session-pinned loop rows 
 | `compacting @handle (msg_...)` | Sent. The command was submitted; compaction may still be running. |
 | `queued compaction for @handle (msg_...) — @handle is <status>; delivers at its next turn boundary` | Queued until the turn ends. |
 
-Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude, Grok, Droid), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
+Without `INSTRUCTION`, the command uses the [`[harness] compact_instruction`](../../guide/configuration.md#smart-compaction) brief. An instruction replaces that brief on adapters that accept trailing text (Claude, Grok, Droid, Qoder), and `""` sends the bare command. Other adapters refuse any instruction, including `""`; rerun without one.
 
 `INSTRUCTION` may start with `-`; a value that is itself one of the command's flags (`-h`, `--help`, or a global flag such as `--color`) needs `--` before it.
 

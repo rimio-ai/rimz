@@ -194,6 +194,7 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
         ("claude", "settings.json"),
         ("codex", "config.toml"),
         ("qwen", "settings.json"),
+        ("qoder", "settings.json"),
         ("grok", "hooks/rimz.json"),
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -238,6 +239,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("droid", ".factory"),
         ("kiro", ".kiro"),
         ("qwen", ".qwen"),
+        ("qoder", ".qoder"),
         ("grok", ".grok"),
         ("hermes", ".hermes"),
     ];
@@ -272,6 +274,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("droid", ".agents/skills", ManualSkill::Frontmatter),
         ("kiro", ".kiro/skills", ManualSkill::Unsupported),
         ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
+        ("qoder", ".qoder/skills", ManualSkill::Frontmatter),
         ("grok", ".agents/skills", ManualSkill::Unsupported),
         ("hermes", ".hermes/skills", ManualSkill::Unsupported),
     ];
@@ -301,6 +304,7 @@ fn builtin_skills_homes_follow_config_homes() {
     for (kind, key, value) in [
         ("claude", "CLAUDE_CONFIG_DIR", " /selected , /archive "),
         ("qwen", "QWEN_HOME", "/selected"),
+        ("qoder", "QODER_CONFIG_DIR", "/selected"),
         ("kiro", "KIRO_HOME", "/selected"),
         ("hermes", "HERMES_HOME", "/selected"),
     ] {
@@ -340,6 +344,7 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("cursor", "CURSOR_CONFIG_DIR", "/selected", "/selected"),
         ("kiro", "KIRO_HOME", "/selected", "/selected"),
         ("qwen", "QWEN_HOME", "/selected", "/selected"),
+        ("qoder", "QODER_CONFIG_DIR", "/selected", "/selected"),
         ("grok", "GROK_HOME", "/selected", "/selected"),
         ("hermes", "HERMES_HOME", "/selected", "/selected"),
     ];
@@ -398,6 +403,7 @@ fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
         ("copilot", "RIMZ_COPILOT_SETTINGS"),
         ("pi", "RIMZ_PI_EXTENSION"),
         ("qwen", "RIMZ_QWEN_SETTINGS"),
+        ("qoder", "RIMZ_QODER_SETTINGS"),
         ("opencode", "RIMZ_OPENCODE_PLUGIN"),
     ] {
         let adapter = BUILTINS
@@ -713,6 +719,13 @@ system-prompt-file-flag = "--system-prompt-file"
     hermes.empty-Effort=Ok([])
     hermes.empty-AutoCompact=Ok([])
     hermes.all=Ok(["--model", "model-x", "--reasoning", "high"])
+    qoder.Model=Ok(["--model", "model-x"])
+    qoder.Effort=Ok(["--reasoning-effort", "high"])
+    qoder.AutoCompact=Err(UnsupportedField { agent: "qoder", field: "auto-compact" })
+    qoder.empty-Model=Ok([])
+    qoder.empty-Effort=Ok([])
+    qoder.empty-AutoCompact=Ok([])
+    qoder.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -775,6 +788,7 @@ fn fast_switch_characterization() {
     qwen: on=agent `qwen` has no fast-mode launch switch; launch without --fast off=Ok([])
     grok: on=agent `grok` has no fast-mode launch switch; launch without --fast off=Ok([])
     hermes: on=agent `hermes` has no fast-mode launch switch; launch without --fast off=Ok([])
+    qoder: on=agent `qoder` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -1747,7 +1761,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 14] = [
+    const AGENTS: [(&str, &str); 15] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1762,6 +1776,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Kimi", "kimi"),
         ("Grok", "grok"),
         ("Hermes", "hermes"),
+        ("Qoder", "qoder"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 

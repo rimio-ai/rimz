@@ -299,7 +299,7 @@ At launch, RimZ also gives each agent this same filtered catalog in its appended
 A child launched through `rimz subagents` is told to complete its assignment itself, and it cannot start further agents:
 
 - RimZ refuses `rimz agents`, `rimz teams`, and `rimz subagents` launches whose caller is a subagent, before any run, pane, or worktree exists.
-- The instruction goes into the provider's appended system prompt where the adapter supports one (Claude, Codex, Qwen, Droid), and onto the end of the user prompt otherwise.
+- The instruction goes into the provider's appended system prompt where the adapter supports one (including Qoder), and onto the end of the user prompt otherwise.
 - Where the provider has a verified switch, its native delegation tool is disabled: Claude's `Agent` tool is denied, Codex's `multi_agent` feature is turned off, and OpenCode's global `subagent` permission is denied (an agent-specific allow can override it). Other providers get the instruction only.
 
 `[agents] max-chain-length` does not apply to subagent launches, since a child cannot extend the chain. It governs successive peer launches through `rimz agents` and `rimz teams`; [`rimz agents molt`](./agents.md#molt) replaces the caller at the same generation instead. Subagents cannot molt.

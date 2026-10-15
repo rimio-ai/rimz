@@ -8,7 +8,7 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build, Hermes Agent | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Qoder, Kimi Code, Grok Build, Hermes Agent | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -16,7 +16,7 @@ RimZ tracks each agent's latest release. Where a feature needs a minimum agent v
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
-The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
+The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes, qoder) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
 ## What the marks mean
 
@@ -69,6 +69,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Amp | ● | ✗ | ✗ | ◐ | ◐ | ✗ |
 | Kiro | ◐ | ◐ | ◐ | ✗ | ◐ | ✗ |
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
+| Qoder | ● | ✗ | ✗ | ✗ | ● | ◐ |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
 | Hermes | ● | ◐ | ✗ | ✗ | ◐ | ◐ |
@@ -140,6 +141,14 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - The main wire distinguishes child-fired turn ends from parent boundaries. A child's compaction still shows on the parent card; cancellation can leave it compacting until the next root signal.
 - Parent live dollars, lifetime spend, and fleet spend include child wires; parent context tokens remain main-only.
 
+### Qoder
+
+- Launches `qodercli` 1.1.72 or newer, with an initial task passed through `-i`. Upgrade with `qodercli update` if RimZ refuses an older release.
+- Permission prompts, plan approvals, and questions reach `rimz asks`; answer them in Qoder's pane. Children nest by agent type, without child tokens or transcript replay.
+- Live context, tokens, dollars, history, and account quota are unavailable. Qoder's local token figures are normally hidden, and Credits have no established dollar conversion.
+- A fresh worktree needs folder trust before hooks can report, and launch warns until it has it. Run `rimz trust grant --agents qoder` there before launching: answering Qoder's trust prompt in the pane saves the decision, but that launch has already lost its session-start hook, so the card stays a launch placeholder.
+- Disabled hooks refuse launch, naming the settings file and fix. Use `QODER_CONFIG_DIR` for a custom home; `--config-dir`, `QODER_CLI_HOME`, and `QODER_CONFIG_DIR_NAME` refuse because the installed hooks would be in a different home.
+
 ### Qwen
 
 - Qwen's quota is scoped to the exact provider account (region and API key), not to the CLI. A fresh supervised or loop launch reads only that account's cached Coding Plan windows: a spent window stops the launch before any pane or run record exists, and another account's window cannot stop it.
@@ -173,6 +182,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Kiro | `~/.kiro` | absolute `KIRO_HOME`, excluding root and ancestors of `HOME` (including itself) | `<home>/skills` | refused | none |
 | Hermes | `~/.hermes` | absolute `HERMES_HOME`, excluding root and ancestors of `HOME` (including itself) | `<home>/skills` | refused | none |
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
+| Qoder | `~/.qoder` | `QODER_CONFIG_DIR` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
 | Process plugin | none | none | none | refused | none |
@@ -208,6 +218,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Amp | Unsupported | Unsupported |
 | Kiro | Partial: `kiro-cli chat --v3 --resume-picker`; card binds at the first prompt | Unsupported |
 | Qwen | `qwen --resume` | Unsupported |
+| Qoder | `qodercli --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
 | Hermes | Unsupported | Unsupported |
@@ -230,6 +241,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Amp | none | none | none | none |
 | Kiro | none | none | none | `--trust-all-tools` |
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
+| Qoder | `--permission-mode default` | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
 | Hermes | none | none | none | `--yolo` |
@@ -271,6 +283,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Amp | `--mode <model>` | refused |
 | Kiro | `--model <model>` | `--effort <level>` |
 | Qwen | `--model <model>` | refused |
+| Qoder | `--model <model>` | `--reasoning-effort <effort>` |
 | Kimi | `--model <model>` | refused |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
 | Hermes | `--model <model>` | `--reasoning <level>`; levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
@@ -305,7 +318,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Pi | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
-| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok | ✗ | no verified replacement flag |
+| OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok, Qoder | ✗ | no verified replacement flag |
 | Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
@@ -350,6 +363,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Kiro | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
+| Qoder | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
 | Hermes | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✗ | ✗ | ✗ | ◐ | ◐ | ✓ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
@@ -397,6 +411,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | `SessionEnd` | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Qoder | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Hermes | `on_session_start`; `on_session_reset` | `pre_llm_call` | `on_session_end` | `post_tool_call` | ◐ `on_human_input_request` | `subagent_start` | `subagent_stop` | ✗ | ✗ | ◐ derived | ◐ derived |
@@ -422,6 +437,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Amp | [adapter_amp.md](../internals/agents/adapter_amp.md) | [amp-reference.md](../externals/agent-adapter/amp-reference.md) |
 | Kiro | [adapter_kiro.md](../internals/agents/adapter_kiro.md) | [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) |
 | Qwen | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
+| Qoder | [adapter_qoder.md](../internals/agents/adapter_qoder.md) | [qoder-reference.md](../externals/agent-adapter/qoder-reference.md) |
 | Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
 | Hermes | [adapter_hermes.md](../internals/agents/adapter_hermes.md) | [hermes-reference.md](../externals/agent-adapter/hermes-reference.md) |

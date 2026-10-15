@@ -26,4 +26,5 @@ pub(super) mod kiro;
 pub(super) mod opencode;
 pub(super) mod pi;
 pub(super) mod plugin;
+pub(super) mod qoder;
 pub(super) mod qwen;
