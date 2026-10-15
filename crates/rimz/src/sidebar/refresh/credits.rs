@@ -4,11 +4,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::RuntimePaths;
 use crate::agents::RoomLoginSet;
+#[cfg(test)]
+use crate::agents::credits::CREDITS_DISPLAY_MAX_AGE;
+pub(super) use crate::agents::credits::{
+    CreditsCache, DirectQueryClaim, ProviderCreditsEntry, entry_is_displayable, read_credits_cache,
+};
 use crate::agents::{
     AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, Entitlement, ExtraCredits,
     ProviderAccountScope, ResetCredits,
@@ -16,53 +20,10 @@ use crate::agents::{
 use crate::config::AccountsConfig;
 use crate::ids::LoginKey;
 use crate::sidebar::timing::{
-    ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, IDLE_OAUTH_USAGE_TTL,
-    OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
+    ACCOUNT_USAGE_CLAIM_TTL, IDLE_OAUTH_USAGE_TTL, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
 };
 use crate::store::snapshot::{SidebarSnapshot, format_plan_label};
 use crate::utils::time::unix_now_ms;
-
-/// Shared provider extra-credits cache, keyed by provider login.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub(super) struct CreditsCache {
-    pub refreshed_at_ms: u64,
-    pub logins: BTreeMap<LoginKey, ProviderCreditsEntry>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub(super) struct ProviderCreditsEntry {
-    #[serde(default)]
-    pub scope: ProviderAccountScope,
-    #[serde(default)]
-    pub entitlement: Entitlement,
-    pub observed_at_ms: u64,
-    /// Last OAuth account-usage attempt. App-server/realtime credit writes
-    /// preserve this stamp and its settled-auth state and never advance the
-    /// OAuth cadence.
-    #[serde(default)]
-    pub oauth_read_at_ms: u64,
-    /// Last OAuth attempt settled as an auth or entitlement rejection: retried on the long TTL
-    /// until the credential source changes.
-    #[serde(default)]
-    pub auth_settled: bool,
-    /// Credential-source stamp at that settled attempt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials_stamp: Option<u64>,
-    /// Stable local OAuth account identifier for the facts cached here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_key: Option<String>,
-    /// Raw provider plan tier from the OAuth usage response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<String>,
-    pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extra_credits: Option<ExtraCredits>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reset_credits: Option<ResetCredits>,
-    /// One cross-workspace direct-query lease. Old cache files omit it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub direct_query_claim: Option<DirectQueryClaim>,
-}
 
 impl ProviderCreditsEntry {
     pub(super) fn invalidate_oauth_read(&mut self) {
@@ -219,28 +180,11 @@ fn fill_missing_display_fields(entry: &mut ProviderCreditsEntry, prior: &Provide
         .or_else(|| prior.reset_credits.clone());
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct DirectQueryClaim {
-    pub nonce: Uuid,
-    pub claimed_at_ms: u64,
-    pub requested_scope: ProviderAccountScope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials_stamp: Option<u64>,
-    /// Cache-derived owner fallback for a probe that could not resolve its
-    /// authoritative account identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preflight_account_key: Option<String>,
-}
-
 #[derive(Debug)]
 pub(super) struct AccountUsageCompletion {
     pub identity: AccountUsageIdentity,
     pub snapshot: Option<AccountUsageSnapshot>,
     pub account_changed: bool,
-}
-
-pub(super) fn read_credits_cache(path: &Path) -> CreditsCache {
-    crate::disk::atomic::read_json_cache(path)
 }
 
 pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
@@ -582,11 +526,6 @@ fn claim_account_key_changed(
         // still prove Some -> None symmetrically in pure claim tests.
         None => identity.credentials_stamp.is_none() && entry.account_key.is_some(),
     }
-}
-
-fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {
-    entry.ok
-        && now_ms.saturating_sub(entry.observed_at_ms) <= CREDITS_DISPLAY_MAX_AGE.as_millis() as u64
 }
 
 /// The cached reset credits of each idle account, for auto-redeem's expiry

@@ -171,12 +171,6 @@ pub(super) const PR_STATE_HOT_TTL: Duration = Duration::from_secs(20);
 /// long enough to avoid a per-frame failing network fork.
 pub(super) const PR_STATE_RETRY_TTL: Duration = Duration::from_secs(30);
 
-/// How long an extra-credits/account-usage reading stays displayable. Paid
-/// usage is a coarse monthly signal; after a day without a refresh, the
-/// dashboard drops the provider-supplied figures rather than showing stale
-/// balance as current.
-pub(super) const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-
 /// Cadence for the authoritative OAuth account-usage probe, independent of the
 /// realtime/app-server credits freshness.
 pub(super) const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);

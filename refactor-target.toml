@@ -209,7 +209,7 @@ upward-dependencies = ["address"]
 # AccountProbeError carries secret-free failed-probe causes to cache and CLI (+1).
 # AgentState::answers_to and set_launch_id keep a revived row answering to its earlier launch ids (+2).
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
-surface-budget = 1062
+surface-budget = 1068 # Shared credits-cache read schema and freshness rule (+6).
 
 [[verdict]]
 kind = "item"
@@ -4468,8 +4468,33 @@ reason = "Not a collapsible pass-through: it pins T for disk::atomic::read_json_
 
 [[verdict]]
 kind = "item"
-key = "sidebar::refresh::credits::read_credits_cache"
+key = "agents::credits::read_credits_cache"
 reason = "Same as read_accounts_cache: the wrapper is the lane's typed read seam for roughly thirty callers, not a forwarder (pass 23c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::CreditsCache"
+reason = "One credits-cache schema serves sidebar publication and harness spend decisions."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::ProviderCreditsEntry"
+reason = "Provider evidence is read below both the sidebar and harness, without a harness-to-sidebar dependency."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::DirectQueryClaim"
+reason = "The shared credits entry includes the publication lease in its unchanged serialized schema."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::entry_is_displayable"
+reason = "Harness and sidebar share the same provider-evidence freshness rule."
+
+[[verdict]]
+kind = "item"
+key = "agents::credits::CREDITS_DISPLAY_MAX_AGE"
+reason = "The shared credits reader owns its evidence lifetime; sidebar tests pin the boundary."
 
 [[verdict]]
 kind = "item"
