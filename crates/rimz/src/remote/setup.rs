@@ -51,7 +51,11 @@ case "$os:$arch" in
 esac
 mkdir -p "$HOME/.local/bin"
 dir="$(mktemp -d "$HOME/.local/bin/.rimz-setup.XXXXXX")"
-trap 'rm -rf "$dir"' EXIT
+cleanup() {{ rm -rf "$dir"; }}
+trap cleanup EXIT
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 cd "$dir"
 base={base}
 download() {{
@@ -95,6 +99,7 @@ mod tests {
             "sha256sum -c --ignore-missing SHA256SUMS",
             "shasum -a 256 -c --ignore-missing SHA256SUMS",
             r#"dir="$(mktemp -d "$HOME/.local/bin/.rimz-setup.XXXXXX")""#,
+            "trap 'cleanup; exit 129' HUP",
             r#"chmod 0755 "${asset%.tar.gz}/rimz""#,
             r#"mv -f "${asset%.tar.gz}/rimz" "$HOME/.local/bin/rimz""#,
             "$HOME/.local/bin/rimz",

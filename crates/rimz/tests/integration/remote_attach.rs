@@ -49,12 +49,13 @@ fn remote_setup_snippet_installs_or_names_latest_under_sh_and_zsh() {
         "ssh",
         r#"for arg; do snippet=$arg; done; exec "$SETUP_TEST_SHELL" -c "$snippet""#,
     );
-    // An empty release directory stands in for an unpublished release. dd copies by read and
-    // write: cp and cat clone, and cloning a just-written file on ZFS waits for a pool sync.
+    // An empty release directory stands in for an unpublished release, and SETUP_TEST_SIGNAL
+    // stands in for an ssh hangup mid-download. dd copies by read and write: cp and cat clone,
+    // and cloning a just-written file on ZFS waits for a pool sync.
     crate::common::write_path_shim(
         &bin,
         "curl",
-        r#"for arg; do url=$arg; done; src="$SETUP_TEST_RELEASE/${url##*/}"; [ -f "$src" ] || exit 22; dd if="$src" of="${url##*/}" 2>/dev/null"#,
+        r#"[ -z "$SETUP_TEST_SIGNAL" ] || kill -s "$SETUP_TEST_SIGNAL" "$PPID"; for arg; do url=$arg; done; src="$SETUP_TEST_RELEASE/${url##*/}"; [ -f "$src" ] || exit 22; dd if="$src" of="${url##*/}" 2>/dev/null"#,
     );
     crate::common::write_path_shim(
         &bin,
@@ -92,18 +93,19 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
     });
     let installed = env.home_root.join(".local/bin");
     for shell in shells {
-        let setup = |release: &Path| {
+        let setup = |release: &Path, signal: &str| {
             env.rimz()
                 .args(["remote", "setup", "dev-box"])
                 .env("RIMZ_SSH_BIN", &ssh)
                 .env("SETUP_TEST_SHELL", shell)
                 .env("SETUP_TEST_RELEASE", release)
+                .env("SETUP_TEST_SIGNAL", signal)
                 .env("PATH", &path)
                 .bounded_output()
                 .expect("run remote setup")
         };
 
-        let out = setup(&published);
+        let out = setup(&published, "");
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(out.status.success(), "{shell}: {stdout}\n{stderr}");
@@ -118,7 +120,7 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
             .mode();
         assert_eq!(mode & 0o777, 0o755, "{shell}");
 
-        let out = setup(&unpublished);
+        let out = setup(&unpublished, "");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{shell}: {stderr}");
         assert!(
@@ -130,16 +132,27 @@ sha256sum rimz-x86_64-unknown-linux-gnu.tar.gz > SHA256SUMS"#,
             "{shell}: {stderr}"
         );
         assert_installed_alone(&installed, shell);
+
+        // A signal that kills the shell must still run the EXIT trap that removes the staging.
+        for (signal, code) in [("HUP", 129), ("INT", 130), ("TERM", 143)] {
+            let out = setup(&published, signal);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.contains(&format!("failed with exit status: {code}")),
+                "{shell} {signal}: {stderr}"
+            );
+            assert_installed_alone(&installed, &format!("{shell} {signal}"));
+        }
     }
 }
 
 /// The snippet stages inside the bin directory, so it must leave nothing there but `rimz`.
-fn assert_installed_alone(bin: &Path, shell: &str) {
+fn assert_installed_alone(bin: &Path, context: &str) {
     let entries: Vec<_> = std::fs::read_dir(bin)
         .expect("read installed bin dir")
         .map(|entry| entry.expect("bin dir entry").file_name())
         .collect();
-    assert_eq!(entries, ["rimz"], "{shell}");
+    assert_eq!(entries, ["rimz"], "{context}");
 }
 
 #[test]
