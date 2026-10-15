@@ -195,25 +195,30 @@ fn a_relaunch_is_asked_again_until_its_wait_ends() {
     use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
 
     assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Due),
+        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Due, || None),
         Due
     );
     assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Spent),
+        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || Spent, || None),
         Spent
     );
     assert_eq!(
-        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || No),
+        startup_relaunch_at(Instant::now(), CHILD_WAIT_POLL, || No, || None),
         No,
         "a zero wait still asks once"
     );
 
     let asked = std::cell::Cell::new(0);
     let started = Instant::now();
-    let answer = startup_relaunch_at(started + Duration::from_secs(60), CHILD_WAIT_POLL, || {
-        asked.set(asked.get() + 1);
-        if asked.get() < 3 { Due } else { No }
-    });
+    let answer = startup_relaunch_at(
+        started + Duration::from_secs(60),
+        CHILD_WAIT_POLL,
+        || {
+            asked.set(asked.get() + 1);
+            if asked.get() < 3 { Due } else { No }
+        },
+        || None,
+    );
     assert_eq!(answer, No, "the answer changed during the wait");
     assert_eq!(asked.get(), 3, "the wait ends at the first refusal");
     assert!(started.elapsed() < Duration::from_secs(10));
@@ -226,9 +231,86 @@ fn a_relaunch_is_asked_again_until_its_wait_ends() {
             asked.set(asked.get() + 1);
             Due
         },
+        || None,
     );
     assert_eq!(answer, Due);
     assert!(asked.get() >= 2, "asked after the wait, not only before it");
+}
+
+#[test]
+fn a_parent_end_is_confirmed_once_at_the_relaunch_deadline() {
+    use rimz::harness::run::StartupRelaunch::{Due, No, Spent};
+
+    for answer in [Due, Spent] {
+        let asked = std::cell::Cell::new(0);
+        let confirmed = std::cell::Cell::new(0);
+        let verdict = startup_relaunch_at(
+            Instant::now() + CHILD_WAIT_POLL * 3,
+            CHILD_WAIT_POLL,
+            || {
+                asked.set(asked.get() + 1);
+                answer
+            },
+            || {
+                confirmed.set(confirmed.get() + 1);
+                Some(true)
+            },
+        );
+        assert_eq!(verdict, No, "a confirmed end cancels {answer:?}");
+        assert!(asked.get() >= 2, "the wait polled before its deadline");
+        assert_eq!(confirmed.get(), 1, "confirmed once, at the deadline only");
+    }
+
+    let confirmed = std::cell::Cell::new(0);
+    let verdict = startup_relaunch_at(
+        Instant::now(),
+        CHILD_WAIT_POLL,
+        || Due,
+        || {
+            confirmed.set(confirmed.get() + 1);
+            Some(false)
+        },
+    );
+    assert_eq!(verdict, Due, "an unconfirmed end leaves the answer");
+    assert_eq!(confirmed.get(), 1);
+
+    let stopped = std::cell::Cell::new(false);
+    let verdict = startup_relaunch_at(
+        Instant::now(),
+        CHILD_WAIT_POLL,
+        || if stopped.get() { No } else { Due },
+        || {
+            stopped.set(true);
+            Some(false)
+        },
+    );
+    assert_eq!(verdict, No, "a stop during the confirmation still cancels");
+
+    let asked = std::cell::Cell::new(0);
+    let verdict = startup_relaunch_at(
+        Instant::now(),
+        CHILD_WAIT_POLL,
+        || {
+            asked.set(asked.get() + 1);
+            Due
+        },
+        || None,
+    );
+    assert_eq!(verdict, Due);
+    assert_eq!(asked.get(), 1, "no confirmation ran, so no second ask");
+
+    let confirmed = std::cell::Cell::new(false);
+    let verdict = startup_relaunch_at(
+        Instant::now() + Duration::from_secs(60),
+        CHILD_WAIT_POLL,
+        || No,
+        || {
+            confirmed.set(true);
+            Some(true)
+        },
+    );
+    assert_eq!(verdict, No);
+    assert!(!confirmed.get(), "an early refusal asks no confirmation");
 }
 
 #[test]
@@ -242,6 +324,7 @@ fn folding_card_evidence_asks_have_a_quarter_second_floor() {
             asks.push(Instant::now());
             Due
         },
+        || None,
     );
     assert!(asks.len() >= 2);
     assert!(

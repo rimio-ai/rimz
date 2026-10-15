@@ -5203,7 +5203,9 @@ fn a_session_registered_during_the_startup_relaunch_wait_is_not_relaunched() {
 }
 
 /// A subagent whose parent ends after a startup death is settled as a parent
-/// end, whether the wrapper sees it in the first-hook grace or in the wait.
+/// end. Ended before launch, the watchdog cannot probe in time, so only the
+/// wrapper's confirmation at the grace's end cancels; ended in the wait, the
+/// watchdog sees it and cancels before the respawn.
 #[cfg(unix)]
 fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
     let env = Env::new();
@@ -5266,8 +5268,16 @@ fn parent_end_after_a_startup_death(parent_ended_before_launch: bool) {
             .env("ZELLIJ_PANE_ID", "4")
             .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
             .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
-            // Slower than the provider's death, inside the first-hook grace.
-            .env("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "250");
+            // Before launch, no probe lands within the test; in the wait,
+            // probes land well before its five minutes end.
+            .env(
+                "RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS",
+                if parent_ended_before_launch {
+                    "60000"
+                } else {
+                    "250"
+                },
+            );
     };
     let stderr = interrupt_the_startup_relaunch_wait(&env, &request, wrapper_env, || {
         parent("SessionEnd", LifecycleSignal::Ended);
