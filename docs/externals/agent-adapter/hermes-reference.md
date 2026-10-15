@@ -77,7 +77,7 @@ Flag effects below describe the classic CLI unless a row names another surface. 
 | `--yolo` | Bypass dangerous-command approval prompts. |
 | `--pass-session-id` | Include the native session ID in the system prompt. |
 | `--ignore-user-config` | Use built-in defaults instead of user configuration. Dotenv credentials still load. Configured integration behavior needs separate checking. |
-| `--ignore-rules` | Skip injected instruction files, memory, and preloaded skills. |
+| `--ignore-rules` | Skip automatic instruction, memory, and skill injection. Explicit `--skills` preloads still apply. |
 | `--max-turns N` | Limit tool-calling iterations per conversation turn. |
 | `--run-budget SECONDS` | Set a wall-clock budget for each conversation run. |
 | `--safe-mode` | Disable customizations, including plugins and MCP servers. This changes the available integration surface. |
@@ -96,6 +96,8 @@ Latest-session lookup defines the workspace as the Git repository root, or the c
 
 The inspected [chat parser][parser] exposes no plan or approval-mode enum flag. Approval policy comes from configuration, with `--yolo` as the bypass switch. Toolset selection is a separate control.
 
+The [classic skill loader][skill-preload] suppresses `skills.auto_load` under `--ignore-rules`, while independently loading explicit `--skills` arguments.
+
 `HERMES_EPHEMERAL_SYSTEM_PROMPT` selects additional system text during classic CLI initialization. The turn builder appends it to the cached system prompt at API time. This differs from `pre_llm_call` context, which enters the user message. See [initialization][system-overlay] and [prompt assembly][system-assembly].
 
 ### Tool names and side effects
@@ -107,13 +109,15 @@ Hermes's static classifications supply candidate names for a later mapping. They
 | Guardrail mutating set | `terminal`, `execute_code`, `write_file`, `patch`, `todo_list`, `memory`, `skill_manage`, `browser_click`, `browser_type`, `browser_press`, `browser_scroll`, `browser_navigate`, `send_message`, `cronjob_manage`, `delegate_task`, `process_manage` |
 | Direct file-edit set | `write_file`, `patch` |
 
-See [guardrail names][tool-classes] and [file-effect classification][file-classes]. `write_file` creates or replaces a whole file. `patch` edits matching text and can accept multi-file patch operations. See [file-tool schemas][file-tools].
+See [guardrail names][tool-classes] and [file-effect classification][file-classes]. `write_file` creates or replaces a whole file. `patch` edits matching text. Its OpenAI-family schema also exposes multi-file patch operations. See [file-tool schemas][file-tools].
 
 The guardrail set includes `send_message`, whose module intentionally does not register it as a model-callable tool. Plugins, MCP servers, toolsets, and availability checks change the runtime catalog. Unknown tools remain effect-capable in the result classifier. Static set membership alone cannot establish runtime coverage. See [message-tool registration][message-tool] and [tool assembly][tool-assembly].
 
 ## Hook registration and delivery
 
-Hermes has separate plugin, shell-hook, and messaging-gateway hook systems. The [plugin API][plugins] accepts `register(ctx)` and `ctx.register_hook(event_name, callback)`. User plugins live under `$HERMES_HOME/plugins/NAME/`, with `plugin.yaml` and `__init__.py`. Configuration must enable them through `plugins.enabled`. Project plugin discovery requires `HERMES_ENABLE_PROJECT_PLUGINS=1`. See [discovery][discovery].
+The [pinned hooks guide][hooks-doc] lists plugin hooks, shell hooks, messaging-gateway hooks, and outbound webhooks. Outbound HTTP delivery through `hooks.outbound` is documentary here. Its wire and delivery behavior remain unchecked.
+
+The [plugin API][plugins] accepts `register(ctx)` and `ctx.register_hook(event_name, callback)`. User plugins live under `$HERMES_HOME/plugins/NAME/`, with `plugin.yaml` and `__init__.py`. Configuration must enable them through `plugins.enabled`. Project plugin discovery requires `HERMES_ENABLE_PROJECT_PLUGINS=1`. See [discovery][discovery].
 
 Shell hooks use `hooks.<event_name>` lists in `config.yaml` and register through the same event machinery. Each entry has these fields, checked by [the shell-hook parser][shell].
 
@@ -247,30 +251,40 @@ Finite `chat -q` runs use the single-query policy, including `-Q` and chat-subco
 | Boundary | Identity behavior |
 | --- | --- |
 | Fresh conversation | Establish a native `session_id`. Fresh-session hooks run after prompt construction. |
-| Resume | Resolve the requested ID or title and load history. A continued identity need not emit a fresh-session hook. |
-| `/new` or `/clear` after confirmation | Switch to a fresh identity and clear the active history. Classic CLI emits separate finalize/reset observations. |
+| Resume | Resolve the requested ID or title and load history. Resolution can select a compression descendant. A continued identity need not emit a fresh-session hook. |
+| `/new`, `/reset`, or `/clear` after confirmation | Switch to a fresh identity and clear the active history. Classic CLI emits separate finalize/reset observations. |
 | Compression, default in-place path | Keep the session ID. Archive summarized rows and publish the replacement active history. |
 | Compression, rotation path | Publish a continuation with the old session as `parent_session_id`, then switch the agent to that ID. |
 | Per-turn completion | Emit the run outcome. The same identity can accept another turn. |
 
 See [session argument resolution][main], [session initialization][conversation], [in-place compression][in-place], and [rotation publication][compression]. A history reader must distinguish compression continuations from branches and delegated children. `parent_session_id` alone does not identify compression.
 
-The classic CLI's [`/new` and `/clear` handlers][session-controls] call `new_session` after destructive-action confirmation. Ordinary native IDs use `YYYYMMDD_HHMMSS_<six random hex digits>`. Other surfaces can use other forms. Treat the ID as opaque. See [ID construction][session-ids].
+`compression.in_place` defaults to `true`. Setting it to `false` selects the rotating path. See [configuration defaults][compression-default] and [mode selection][compression-mode]. Upstream's [SQLite lineage predicates][lineage-predicates] identify compression children by the parent's `end_reason = 'compression'`. Branch classification separately uses a `_branched_from` marker or legacy `branched` endings. These predicates are inputs for fixture validation, not a complete external-reader query.
+
+The [classic resume path][resume-chain] can follow an empty compression-chain head to the descendant holding its messages. Ordinary CLI resume refuses Kanban worker transcripts and selects a fresh ID instead. The active ID can therefore differ from the requested ID. See [the refusal path][resume-refusal].
+
+The classic CLI's [`/new` and `/clear` handlers][session-controls] call `new_session` after destructive-action confirmation. `/reset` aliases `/new` in [the command registry][reset-alias]. Ordinary native IDs use `YYYYMMDD_HHMMSS_<six random hex digits>`. Other surfaces can use other forms. Treat the ID as opaque. See [ID construction][session-ids].
 
 When an agent exists, [classic session reset][classic-reset] emits `on_session_finalize` with the old `session_id`, then `on_session_reset` with the new `session_id`. Neither payload carries the pair. [Gateway reset][gateway-reset] additionally supplies `old_session_id` and `new_session_id`. Event pairing needs transport-specific handling and recorded validation.
+
+Both classic payloads include `platform` and `reason`. Finalize uses `reason: "session_boundary"`, and reset uses `reason: "new_session"`.
 
 | Manual compression command | Effect |
 | --- | --- |
 | `/compress [focus text]` | Request compression, optionally naming what the summary should preserve. `/compact` is an alias. |
-| `/compress here [N]` | Keep the last `N` exchanges verbatim. The default is two. |
+| `/compress here [N]` | Request a verbatim tail of `N` exchanges. The default is two. A degenerate split falls back to full compression. |
 | `/compress --keep N` | Alternate partial form. Also accepts `-k N`, `--keep=N`, and `up to here [N]`. |
 | `/compress --preview` | Preview without changing history. `--dry-run` is an alias. |
 
 Manual compression remains available when automatic compression is disabled. The classic handler does nothing with fewer than four history messages. It refuses `--aggressive` execution. See [command names][session-command-names], [argument parsing][partial-compress], [minimum history][compression-manual], and [manual execution][manual-compress].
 
+Numeric tail counts are clamped to 1 through 100. When no head remains to summarize, or no user turns exist, the split keeps no verbatim tail. Execution then compresses the full history. See [split selection][partial-split] and [manual fallback][compression-fallback].
+
 The [plugin catalog][plugins] has no named compaction hook. The inspected [manual handler][manual-compress] and [rotation publisher][compression] emit no finalize/reset plugin event. A later payload's changed session ID is separate evidence from a lifecycle notification.
 
 Compression marks named `compaction` and `compaction.attempt` use Hermes's Relay telemetry API. Emission requires an instrumented session or turn, called a Relay scope. These marks do not establish an ordinary plugin or shell-hook subscription. See [mark selection][compaction-events] and [Relay emission][relay-compaction]. Compression engine and memory-provider callbacks are also separate interfaces.
+
+The separate [gateway hook catalog][hooks-doc] documents `session:compress`. The [compression callback][gateway-compaction] carries `session_id`, `old_session_id`, `in_place`, and `compression_count`. For in-place compression, `old_session_id` is empty. Gateway-hook availability does not establish a classic CLI plugin or shell-hook event.
 
 Auxiliary calls tagged for compression observe model attempts, which can fail or leave history unchanged. They do not establish a committed compaction. A derivation from those calls needs a separate completion check. See [auxiliary hook contracts][observer-doc] and [committed-mark selection][compaction-events].
 
@@ -363,9 +377,11 @@ The [stop emitter][child-results] runs during result processing, not at the chil
 | Read-only history validation | Correct SQLite queries during concurrent writes, migration, pruning, compression, and recovery. |
 | Delivery and crash tests | No verified hook replay, durable delivery, or process-crash completion guarantee. |
 | Transport captures | Full ACP, gateway RPC, and HTTP/SSE schemas and parity. Their catalog above is documentary. |
+| Outbound webhook traces | Payload schemas, signing, retries, and delivery behavior of `hooks.outbound`. Only its documentary catalog was read. |
 | Home and skill isolation tests | Runtime credential precedence across routed profiles and a complete allow-only skill restriction. |
 | File-edit approval traces | Whether `write_file` or `patch` prompts under each interactive policy. Command approval alone does not establish file-edit gating. |
 | Other attention surfaces | Background-process parking, idle notifications, remote control, and terminal answer keystrokes were not traced in this pass. |
+| Other session controls | `/branch`/`/fork`, `/undo`, `/handoff`, and in-session `/resume` transitions. CLI adoption timing after automatic rotation also remains untraced. |
 
 These gaps constrain later claims. They do not decide whether the eventual integration should use a built-in adapter or a process plugin. The next artifact is the [mapping worksheet](../../contributing/agent-adapters.md#step-2--map-the-protocol-onto-the-model), grounded in the pinned contract and recorded-session evidence.
 
@@ -464,7 +480,7 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 [system-assembly]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/turn_context.py#L1341-L1348
 [tool-classes]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/tool_guardrails.py#L28-L32
 [file-classes]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/tool_result_classification.py#L9-L23
-[file-tools]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/file_tools.py#L1173-L1233
+[file-tools]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/file_tools.py#L1173-L1283
 [message-tool]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/tools/send_message_tool.py#L24-L26
 [tool-assembly]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/model_tools.py#L316-L338
 [session-controls]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_loops_mixin.py#L93-L203
@@ -483,3 +499,14 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 [classic-reset]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_session_mixin.py#L415-L575
 [gateway-reset]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/gateway/slash_commands_session.py#L210-L218
 [compression-manual]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression_manual.py#L14-L20
+[skill-preload]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/cli.py#L1559-L1583
+[partial-split]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/partial_compress.py#L117-L158
+[compression-fallback]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression_manual.py#L95-L105
+[hooks-doc]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/website/docs/user-guide/features/hooks.md#L7-L104
+[compression-default]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/config_defaults.py#L679-L686
+[compression-mode]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression.py#L4149-L4154
+[lineage-predicates]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_state_common.py#L167-L176
+[resume-chain]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_agent_setup_mixin.py#L524-L533
+[resume-refusal]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_agent_setup_mixin.py#L766-L780
+[reset-alias]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/commands.py#L84-L92
+[gateway-compaction]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression.py#L3457-L3469
