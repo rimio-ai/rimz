@@ -7,7 +7,7 @@
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeScope {
@@ -75,18 +75,27 @@ impl RuntimeProjection {
         agents: impl IntoIterator<Item = &'a AgentState>,
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
     ) -> Self {
-        let agents = agents.into_iter().collect::<Vec<_>>();
+        let agents = agents
+            .into_iter()
+            .map(|agent| (agent, agent_is_runtime_visible(agent)))
+            .collect::<Vec<_>>();
         let visible_parents = agents
             .iter()
-            .filter(|agent| agent.parent_agent_id.is_none() && agent_is_runtime_visible(agent))
-            .collect::<Vec<_>>();
+            .filter(|(agent, visible)| agent.parent_agent_id.is_none() && *visible)
+            .flat_map(|(agent, _)| agent.identity_ids().map(move |id| (&agent.kind, id)))
+            .collect::<HashSet<_>>();
         let mut expelled = BTreeSet::new();
         let kept = agents
             .iter()
-            .filter_map(|agent| {
-                let visible = agent_is_runtime_visible(agent)
+            .filter_map(|(agent, independently_visible)| {
+                let visible = *independently_visible
                     || (agent.is_launched_child()
-                        && visible_parents.iter().any(|parent| agent.parent_is(parent)));
+                        && agent.parent_agent_id.as_ref().is_some_and(|id| {
+                            visible_parents.contains(&(
+                                agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind),
+                                id,
+                            ))
+                        }));
                 if !visible && agent.ended_at.is_none() {
                     expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
                 }
@@ -94,7 +103,7 @@ impl RuntimeProjection {
             })
             .collect();
         Self {
-            ended: ended_keys(agents.iter().copied()),
+            ended: ended_keys(agents.iter().map(|(agent, _)| *agent)),
             expelled,
             agents: kept,
             resume_outcomes,
@@ -283,6 +292,64 @@ mod tests {
                 Vec::new(),
             );
             assert!(without_successor.agents.is_empty());
+        }
+    }
+
+    #[test]
+    fn runtime_projection_parent_aliases_are_kind_scoped() {
+        let mut parent = agent(None);
+        parent.launch_id = Some("launch".into());
+        parent.prior_launch_ids = vec!["prior".into()];
+        for id in ["sess-1", "launch", "prior"] {
+            for kind in ["claude", "codex"] {
+                let mut child = agent(None);
+                child.agent_id = "child".into();
+                child.parent_agent_id = Some(id.into());
+                child.parent_agent_kind = Some(AgentKind::new_unchecked(kind));
+                child.launch_depth = Some(1);
+                child.ended_at = Some(Timestamp::UNIX_EPOCH);
+                let projection =
+                    RuntimeProjection::runtime_from_refs([&child, &parent], Vec::new());
+                let expected = if kind == "claude" {
+                    vec![child.clone(), parent.clone()]
+                } else {
+                    vec![parent.clone()]
+                };
+                assert_eq!(projection.agents, expected, "{id}, {kind}");
+                assert_eq!(projection.ended, [(child.kind, child.agent_id)].into());
+                assert!(projection.expelled.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_projection_dead_parent_does_not_hide_a_visible_child() {
+        let mut parent = agent(Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "parent",
+            u32::MAX,
+            None,
+        )));
+        parent.agent_id = "parent".into();
+        let mut child = agent(None);
+        child.parent_agent_id = Some(parent.agent_id.clone());
+        child.launch_depth = Some(1);
+        for visible in [true, false] {
+            child.runtime_owner = if visible {
+                None
+            } else {
+                parent.runtime_owner.clone()
+            };
+            let projection = RuntimeProjection::runtime_from_refs([&parent, &child], Vec::new());
+            assert_eq!(
+                projection.agents,
+                if visible { vec![child.clone()] } else { vec![] }
+            );
+            let mut expelled = BTreeSet::from([(parent.kind.clone(), parent.agent_id.clone())]);
+            if !visible {
+                expelled.insert((child.kind.clone(), child.agent_id.clone()));
+            }
+            assert_eq!(projection.expelled, expelled);
         }
     }
 
