@@ -132,26 +132,130 @@ fn tmux_version_preflight_names_the_floor_and_release_requirement() {
         meets_min_version: false,
         popup_supported: false,
     };
-    assert_eq!(
-        tmux_version_preflight(&caps).unwrap_err().to_string(),
-        format!(
-            "tmux 3.4 is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
-        )
+    let error = tmux_version_preflight(&caps, None).unwrap_err();
+    let blocker = error
+        .downcast_ref::<rimz::blocker::Blocker>()
+        .expect("typed refusal");
+    assert_eq!(blocker.problem, "tmux 3.4 is below RimZ's floor");
+    assert!(
+        blocker
+            .fixes
+            .iter()
+            .any(|fix| fix.summary.contains(&format!(">= {maj}.{min}.{patch}")))
     );
+    assert!(
+        blocker.fixes.iter().any(|fix| fix.command.is_none()
+            && fix.summary == "Run this room under zellij (`--mux zellij`)")
+    );
+    let rerun = "rimz start --mux zellij /w";
     for raw in ["tmux next-3.6", "master", ""] {
         caps.binary_version = raw.to_owned();
         caps.parsed_version = None;
+        let error = tmux_version_preflight(&caps, Some(rerun.into())).unwrap_err();
+        let blocker = error
+            .downcast_ref::<rimz::blocker::Blocker>()
+            .expect("typed refusal");
         assert_eq!(
-            tmux_version_preflight(&caps).unwrap_err().to_string(),
-            format!(
-                "`tmux -V` output {raw:?} was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
-            )
+            blocker.problem,
+            format!("`tmux -V` output {raw:?} was not recognised")
+        );
+        assert!(
+            blocker
+                .fixes
+                .iter()
+                .any(|fix| fix.command.as_deref() == Some(rerun))
         );
     }
     caps.meets_min_version = true;
     caps.parsed_version = Some((maj, min, patch));
     caps.binary_version = format!("tmux {maj}.{min}.{patch}");
-    assert!(tmux_version_preflight(&caps).is_ok());
+    assert!(tmux_version_preflight(&caps, None).is_ok());
+}
+
+#[test]
+fn start_under_reruns_the_same_room_and_accounts_from_any_cwd() {
+    let accounts = [
+        crate::cli::accounts::parse_account_flag("claude=work").unwrap(),
+        crate::cli::accounts::parse_account_flag("codex=home").unwrap(),
+    ];
+    assert_eq!(
+        super::start_under(
+            MuxName::Tmux,
+            std::path::Path::new("/home/u/my room"),
+            &accounts
+        ),
+        "rimz start --mux tmux '/home/u/my room' --account 'claude=work' --account 'codex=home'"
+    );
+}
+
+#[test]
+fn mux_timeout_refusals_name_the_session_wide_reset_and_other_backend() {
+    for (mux, reset, fallback) in [
+        (
+            MuxName::Zellij,
+            "zellij kill-all-sessions",
+            "rimz start --mux tmux /w",
+        ),
+        (
+            MuxName::Tmux,
+            "tmux kill-server",
+            "rimz start --mux zellij /w",
+        ),
+    ] {
+        let blocker = super::mux_not_responding_message(
+            mux,
+            std::time::Duration::from_secs(3),
+            &rimz::mux::MuxErr::Timeout {
+                program: mux.to_string(),
+                args: "list-sessions".into(),
+                seconds: 3,
+            },
+            Some(fallback.into()),
+        );
+        assert!(
+            blocker
+                .fixes
+                .iter()
+                .any(|fix| fix.command.as_deref() == Some(fallback)),
+            "{blocker}"
+        );
+        let fix = blocker
+            .fixes
+            .iter()
+            .find(|fix| fix.summary.starts_with("End every"))
+            .expect("reset warns that it ends every room");
+        let argv = shlex::split(fix.command.as_deref().unwrap()).unwrap();
+        if mux == MuxName::Tmux {
+            assert_eq!(
+                argv,
+                [
+                    "tmux",
+                    "-S",
+                    &rimz::mux::tmux::managed_server_socket_path().to_string_lossy(),
+                    "kill-server"
+                ]
+            );
+        } else {
+            assert_eq!(argv, shlex::split(reset).unwrap());
+        }
+    }
+}
+
+#[test]
+fn socket_budget_blocker_names_the_short_runtime_export() {
+    let blocker = rimz::blocker::Blocker::from(rimz::sock::SocketPathTooLong {
+        path: "/long/runtime/socket".into(),
+        used: 120,
+        limit: 108,
+    });
+    assert!(blocker.problem.contains("120 bytes"));
+    assert!(
+        blocker
+            .fixes
+            .iter()
+            .any(|fix| { fix.command.as_deref() == Some(rimz::sock::XDG_REMEDY) }),
+        "{blocker:?}"
+    );
 }
 
 #[test]

@@ -654,17 +654,10 @@ fn start_rejects_unsupported_account_budget_before_room_state() {
 fn start_rejects_old_or_unrecognised_tmux_before_room_state() {
     let (maj, min, patch) = rimz::mux::tmux::MIN_TMUX_VERSION;
     for (version, message) in [
-        (
-            "tmux 3.4",
-            format!(
-                "tmux 3.4 is below RimZ's floor; upgrade tmux to >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
-            ),
-        ),
+        ("tmux 3.4", "tmux 3.4 is below RimZ's floor".to_owned()),
         (
             "tmux next-3.6",
-            format!(
-                "`tmux -V` output \"tmux next-3.6\" was not recognised; RimZ needs a release build >= {maj}.{min}.{patch}, or run this room with `--mux zellij`."
-            ),
+            "`tmux -V` output \"tmux next-3.6\" was not recognised".to_owned(),
         ),
     ] {
         let env = Env::new();
@@ -691,10 +684,42 @@ fn start_rejects_old_or_unrecognised_tmux_before_room_state() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(&message), "{stderr}");
         assert!(
+            stderr.contains(&format!(">= {maj}.{min}.{patch}")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("rimz start --mux zellij"), "{stderr}");
+        assert!(
             !workspace_state.exists(),
             "tmux version preflight must run before room state is created"
         );
     }
+}
+
+#[test]
+fn start_rejects_old_zellij_with_copyable_backend_alternative() {
+    let env = Env::new();
+    // Started by path from another directory, the copied fix must still name
+    // the same room and account.
+    let output = env
+        .rimz()
+        .current_dir(&env.home_root)
+        .arg("start")
+        .arg(&env.project_root)
+        .args(["--mux", "zellij", "--account", "claude=work"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_VERSION", "0.43.0")
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("zellij.log"))
+        .bounded_output()
+        .expect("run start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("below RimZ's floor"), "{stderr}");
+    let rerun = format!(
+        "rimz start --mux tmux {} --account 'claude=work'",
+        env.project_root.display()
+    );
+    assert!(stderr.contains(&rerun), "{stderr}");
+    assert!(!env.state_path_for(&env.project_root).root.exists());
 }
 
 /// A run-only waiver is the user's choice for the run they started; a detached
