@@ -206,6 +206,122 @@ fn launch_availability_matches_aliases_to_model_sub_caps() {
 }
 
 #[test]
+fn launch_availability_follows_the_spend_ladder() {
+    use crate::agents::{ExtraCredits, RateLimitWindow, RateLimitWindowScope, ResetCredits};
+    use crate::config::SpendOrder;
+
+    let root = tempfile::tempdir().unwrap();
+    let id = crate::WorkspaceId::from_project_root(root.path());
+    let runtime = RuntimePaths::under(id.clone(), root.path()).unwrap();
+    let state = StatePaths::under(id, root.path()).unwrap();
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let reset = now + jiff::SignedDuration::from_hours(72);
+    let week = |used: u8| RateLimitWindow {
+        used_percentage: Some(used),
+        duration_mins: Some(10_080),
+        resets_at: Some(reset),
+        ..Default::default()
+    };
+    let opus_cap = RateLimitWindow {
+        scope: Some(RateLimitWindowScope {
+            id: "model:opus".into(),
+            label: "opus".into(),
+        }),
+        ..week(100)
+    };
+    let banked = ResetCredits {
+        count: 1,
+        soonest_expiry: None,
+        expiries: Vec::new(),
+        effect: crate::agents::RedeemEffect::RestartsWindow,
+    };
+    let usable = ExtraCredits::known(None, Some(2_413.92), None);
+    let seed = |kind: &str,
+                windows: Vec<RateLimitWindow>,
+                extra: ExtraCredits,
+                resets: Option<ResetCredits>| {
+        let key = crate::ids::LoginKey::default_for(AgentKind::new_unchecked(kind));
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_rate_limits_path(),
+            &crate::agents::account::RateLimitsCache {
+                entries: [(
+                    key.clone(),
+                    crate::agents::account::RateLimitCacheEntry {
+                        limits: crate::agents::AgentRateLimits { windows },
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::disk::atomic::write_temp_then_rename_cache(
+            &runtime.shared_credits_path(),
+            &crate::agents::credits::CreditsCache {
+                logins: [(
+                    key,
+                    crate::agents::credits::ProviderCreditsEntry {
+                        ok: true,
+                        observed_at_ms: now.as_millisecond() as u64,
+                        extra_credits: Some(extra),
+                        reset_credits: resets,
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    };
+    let config = |spend_order: SpendOrder, min_gain: &str| {
+        let mut config = MachineConfig::default();
+        config.resume.auto_redeem = true;
+        config.resume.spend_order = spend_order;
+        config.resume.auto_redeem_min_gain = min_gain.into();
+        config
+    };
+    let exhausted = Some(TierSkipReason::Exhausted { until: Some(reset) });
+
+    seed("codex", vec![week(100)], usable.clone(), None);
+    for order in [SpendOrder::CreditsFirst, SpendOrder::ResetsFirst] {
+        let availability = LaunchAvailability::read(&runtime, &state, &config(order, "12h"), now);
+        assert_eq!(availability.unavailable("codex", "sol"), None, "{order:?}");
+    }
+
+    seed(
+        "codex",
+        vec![week(100)],
+        ExtraCredits::Disabled,
+        Some(banked),
+    );
+    for (min_gain, expected) in [("12h", None), ("4d", exhausted.clone())] {
+        let availability = LaunchAvailability::read(
+            &runtime,
+            &state,
+            &config(SpendOrder::CreditsFirst, min_gain),
+            now,
+        );
+        assert_eq!(
+            availability.unavailable("codex", "sol"),
+            expected,
+            "{min_gain}"
+        );
+    }
+
+    let credits_first = config(SpendOrder::CreditsFirst, "12h");
+    seed("claude", vec![week(100)], usable.clone(), None);
+    let availability = LaunchAvailability::read(&runtime, &state, &credits_first, now);
+    assert_eq!(availability.unavailable("claude", "sonnet"), None);
+
+    seed("claude", vec![week(40), opus_cap], usable, None);
+    let availability = LaunchAvailability::read(&runtime, &state, &credits_first, now);
+    assert_eq!(availability.unavailable("claude", "opus"), exhausted);
+    assert_eq!(availability.unavailable("claude", "sonnet"), None);
+}
+
+#[test]
 fn launch_availability_judges_the_pinned_account_not_the_rooms() {
     use crate::agents::account::{
         AccountsCache, ProviderRecord, RateLimitCacheEntry, RateLimitsCache,

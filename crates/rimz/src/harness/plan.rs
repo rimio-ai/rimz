@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use crate::agents::account::{ProviderCapacity, ProviderStatus, read_accounts_cache};
+use crate::agents::account::{ProviderStatus, read_accounts_cache};
 use crate::agents::{PermissionMode, TierSkipReason};
 use crate::config::RoleBinding;
 use crate::disk::paths::{RuntimePaths, StatePaths};
@@ -16,6 +16,7 @@ use crate::harness::ancestry::LaunchAncestry;
 use crate::harness::budget::{BudgetSpec, DailyBudgetScope};
 use crate::harness::prompt_compose::SystemPromptSources;
 use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
+use crate::harness::spend_ladder::{SpendFacts, SpendStep};
 use crate::ids::{AgentKind, AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::{
@@ -23,7 +24,8 @@ use crate::store::{
 };
 
 pub struct LaunchAvailability {
-    capacities: BTreeMap<AgentKind, ProviderCapacity>,
+    spend: BTreeMap<AgentKind, SpendFacts>,
+    resume: crate::config::ResumeConfig,
     logged_out: BTreeSet<AgentKind>,
     daily_caps: BTreeMap<AgentKind, TierSkipReason>,
     model_pins: BTreeMap<AgentKind, BTreeMap<String, String>>,
@@ -77,12 +79,14 @@ impl LaunchAvailability {
             Some(crate::agents::LoginCatalog::room_view(&config.accounts).0),
             crate::agents::ambient_env(),
         );
+        let in_use = selected.keys_in_use();
         let mut result = Self {
-            capacities: ProviderCapacity::read_all(runtime, &selected)
-                .into_iter()
-                .filter(|(key, _)| logins.get(&key.kind) == Some(key))
-                .map(|(key, capacity)| (key.kind, capacity))
+            spend: logins
+                .iter()
+                .filter(|(_, key)| in_use.contains(*key))
+                .map(|(kind, key)| (kind.clone(), SpendFacts::read(runtime, key, now)))
                 .collect(),
+            resume: config.resume.clone(),
             logged_out: Default::default(),
             daily_caps: Default::default(),
             model_pins: config.models.clone(),
@@ -127,8 +131,9 @@ impl LaunchAvailability {
             .get(kind)
             .and_then(|pins| pins.get(model))
             .map_or(model, String::as_str);
-        if let Some(capacity) = self.capacities.get(kind)
-            && capacity.subscription_exhausted_for_model(self.now, Some(model))
+        if let Some(facts) = self.spend.get(kind)
+            && facts.step(&self.resume, Some(model), self.now) == SpendStep::Spent
+            && let Some(capacity) = &facts.capacity
         {
             return Some(TierSkipReason::Exhausted {
                 until: capacity.latest_spent_window_reset_for_model(self.now, Some(model)),
