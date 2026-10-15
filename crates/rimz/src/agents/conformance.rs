@@ -15,8 +15,8 @@ use super::registry::BUILTINS;
 use super::{
     AdapterConformance, AgentDefinition, AgentHookClass, AskReply, CapabilityLevel,
     ClassificationSample, ClassifiedHook, ConcernCoverage, DerivedAskFixture, HookCoverage,
-    IntegrationConcern, LaunchPreset, PresetArgMatcher, PresetField, PriceBook, SpendFixture,
-    SpendFixtureBody, UserCapability,
+    IntegrationConcern, LaunchPreset, PermissionMode, PresetArgMatcher, PresetField, PriceBook,
+    SpendFixture, SpendFixtureBody, UserCapability,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -1724,4 +1724,103 @@ fn native_event_classifies(
                     .class()
                     == AgentHookClass::Lifecycle
         })
+}
+
+#[test]
+fn permission_mode_table_matches_the_declared_arguments() {
+    const DOC: &str = "docs/reference/agent-support.md";
+    const AGENTS: [(&str, &str); 13] = [
+        ("Claude Code", "claude"),
+        ("Codex", "codex"),
+        ("Pi", "pi"),
+        ("OpenCode", "opencode"),
+        ("Antigravity", "antigravity"),
+        ("Copilot", "copilot"),
+        ("Droid", "droid"),
+        ("Cursor", "cursor"),
+        ("Amp", "amp"),
+        ("Kiro", "kiro"),
+        ("Qwen", "qwen"),
+        ("Kimi", "kimi"),
+        ("Grok", "grok"),
+    ];
+    let text = include_str!("../../../../docs/reference/agent-support.md");
+
+    let mut mapped: Vec<&str> = AGENTS.iter().map(|(_, kind)| *kind).collect();
+    let mut builtins: Vec<&str> = BUILTINS.iter().map(|adapter| adapter.spec().kind).collect();
+    mapped.sort_unstable();
+    builtins.sort_unstable();
+    assert_eq!(
+        mapped, builtins,
+        "every built-in needs a label here and a row in {DOC} Permission modes"
+    );
+
+    let cells = |line: &str| -> Vec<String> {
+        let inner = line.trim().trim_start_matches('|').trim_end_matches('|');
+        inner
+            .split('|')
+            .map(|cell| cell.trim().to_owned())
+            .collect()
+    };
+    let rows: Vec<Vec<String>> = text
+        .lines()
+        .skip_while(|line| line.trim() != "### Permission modes")
+        .skip(1)
+        .take_while(|line| !line.starts_with('#'))
+        .filter(|line| line.starts_with('|'))
+        .map(cells)
+        .collect();
+    let (header, body) = rows
+        .split_first()
+        .unwrap_or_else(|| panic!("{DOC} has no Permission modes table"));
+    assert_eq!(
+        header[0], "Agent",
+        "{DOC} Permission modes header: {header:?}"
+    );
+    let modes: Vec<(&str, PermissionMode)> = header[1..]
+        .iter()
+        .map(|label| {
+            let mode = label
+                .to_lowercase()
+                .parse()
+                .unwrap_or_else(|err| panic!("{DOC} Permission modes column {label}: {err}"));
+            (label.as_str(), mode)
+        })
+        .collect();
+    let body: Vec<&Vec<String>> = body
+        .iter()
+        .filter(|row| !row.iter().all(|cell| cell.chars().all(|c| c == '-')))
+        .collect();
+
+    for row in &body {
+        let label = row[0].as_str();
+        assert!(
+            label == "Process plugin" || AGENTS.iter().any(|(display, _)| *display == label),
+            "{DOC} Permission modes has a row for {label}, which is no built-in"
+        );
+    }
+    for (display, kind) in AGENTS {
+        let row = body
+            .iter()
+            .find(|row| row[0] == display)
+            .unwrap_or_else(|| panic!("{DOC} Permission modes has no row for {display}"));
+        let adapter = BUILTINS
+            .iter()
+            .find(|adapter| adapter.spec().kind == kind)
+            .unwrap_or_else(|| panic!("no built-in adapter of kind {kind}"));
+        for (column, (label, mode)) in modes.iter().enumerate() {
+            let args = adapter.spec().launch.permission_args(*mode);
+            let declared = if args.is_empty() {
+                "none".to_owned()
+            } else {
+                format!("`{}`", args.join(" "))
+            };
+            let published = row.get(column + 1).map_or("", String::as_str);
+            assert_eq!(
+                published, declared,
+                "{DOC} Permission modes: {display} {label} publishes {published}; \
+                 the adapter declares {declared}. Update the table or the adapter."
+            );
+        }
+    }
 }

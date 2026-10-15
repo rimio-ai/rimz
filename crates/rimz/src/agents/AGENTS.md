@@ -50,6 +50,8 @@ Golden every stdout shape in the adapter's `tests` module with inline `insta::as
 
 A change to a provider's launch argv or its `--settings` JSON also runs `cargo xtask test -E 'binary(integration) & test(sandbox::)'`: `sandbox::sandbox_skills_under_host_use_provider_switches` pins the rendered Claude settings, and adapter-focused filters miss it.
 
+A change to an adapter's permission arguments updates the `Permission modes` table in [agent-support.md](../../../../docs/reference/agent-support.md#permission-modes), which `conformance.rs` pins cell by cell against `LaunchSpec::permission_args`.
+
 A test for a new typed mapping must fail with that mapping removed: give the payload a fallback input that would classify differently. A shared test that needs an adapter lacking some capability uses an unregistered kind (`"unregistered"`), never a real built-in that may gain it.
 
 A spend parser that counts a new source needs the adapter's live cost push to count it too: the observed-cost merge (`agents/context/record.rs::merge_observed_cost`) writes the incoming total outright, so a settled reconcile that raised the row is pulled back by the next envelope.
