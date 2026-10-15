@@ -278,6 +278,33 @@ pub struct HibernateScheduleErr {
     reason: String,
 }
 
+impl From<HibernateScheduleErr> for crate::blocker::Blocker {
+    fn from(error: HibernateScheduleErr) -> Self {
+        use crate::blocker::Surface;
+        let defaults = HibernateConfig::default();
+        let mut blocker = Self::new(format!(
+            "invalid agents.hibernate.{} `{}`: {}",
+            error.key, error.value, error.reason
+        ))
+        .with_fix(
+            "Use durations from 0s through 24h, with deep_after at least after",
+            None,
+            Surface::Plain,
+        );
+        for (key, value) in [
+            ("after", defaults.after),
+            ("deep_after", defaults.deep_after),
+        ] {
+            blocker = blocker.with_fix(
+                format!("Restore the default agents.hibernate.{key}"),
+                Some(format!("rimz config set agents.hibernate.{key} {value}")),
+                Surface::Plain,
+            );
+        }
+        blocker
+    }
+}
+
 /// Defaults applied by the agent-only `rimz subagents` launch doorway.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]

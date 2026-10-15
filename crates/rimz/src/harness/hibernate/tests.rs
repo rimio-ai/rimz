@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn schedule_blockers_offer_the_built_in_defaults() {
+    for (after, deep_after) in [("invalid", "120m"), ("30m", "25h"), ("3h", "1h")] {
+        let config = HibernateConfig {
+            after: after.into(),
+            deep_after: deep_after.into(),
+            ..Default::default()
+        };
+        let blocker = crate::blocker::Blocker::from(config.schedule().unwrap_err());
+        let defaults = HibernateConfig::default();
+        for (key, value) in [
+            ("after", defaults.after),
+            ("deep_after", defaults.deep_after),
+        ] {
+            let command = format!("rimz config set agents.hibernate.{key} {value}");
+            assert!(
+                blocker.fixes.iter().any(|fix| {
+                    fix.command.as_deref() == Some(command.as_str())
+                        && fix.surface == crate::blocker::Surface::Plain
+                }),
+                "{blocker:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
     use crate::wakeup::events::SidebarEvent;
     for raw in ["tmux:%3", "zellij:terminal_3"] {
