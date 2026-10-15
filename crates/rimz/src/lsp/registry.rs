@@ -162,6 +162,12 @@ impl Entry {
     pub(super) fn broker_is_alive(&self) -> bool {
         crate::proc::process_is_live(self.broker_pid, Some(&self.broker_start_token))
     }
+
+    pub(super) fn has_live_lease_holder(&self) -> bool {
+        self.leases
+            .iter()
+            .any(|lease| crate::proc::process_is_live(lease.pid, Some(&lease.start_token)))
+    }
 }
 
 pub fn key(root: &Path, server: &str) -> Result<String> {
@@ -332,7 +338,7 @@ pub fn sweep() -> Result<Vec<Entry>> {
     sweep_locked()
 }
 
-/// Call under the admission lock; only dead brokers are swept.
+/// Call under the admission lock; retain lost rows while a lease holder lives.
 pub(super) fn sweep_locked() -> Result<Vec<Entry>> {
     sweep_at(&crate::disk::paths::lsp_runtime_dir())
 }
@@ -342,6 +348,9 @@ fn sweep_at(base: &Path) -> Result<Vec<Entry>> {
     for entry in read_entries_at(base)? {
         if is_live_at(base, &entry) || entry.broker_is_alive() {
             live.push(entry);
+            continue;
+        }
+        if entry.has_live_lease_holder() {
             continue;
         }
         match std::fs::remove_dir_all(directory_at(base, &entry.root, &entry.server)?) {

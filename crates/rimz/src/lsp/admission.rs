@@ -399,7 +399,10 @@ fn record_shortfall(event: &str, shortfall: &Shortfall) -> Result<()> {
 
 fn running_holders(entries: &[registry::Entry]) -> Vec<Holder> {
     let mut holders = Vec::new();
-    for entry in entries.iter().filter(|entry| entry.state.is_running()) {
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.state.is_running() && entry.broker_is_alive())
+    {
         let rss_bytes = entry
             .server_pid
             .and_then(crate::proc::tree_totals)
@@ -691,15 +694,19 @@ fn await_startup(
     let started = Instant::now();
     loop {
         match std::fs::read(path) {
-            Ok(bytes) => return Ok(Some(serde_json::from_slice(&bytes)?)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if started.elapsed() >= timeout {
-                    break;
+            Ok(bytes) => {
+                let entry: registry::Entry = serde_json::from_slice(&bytes)?;
+                if entry.broker_is_alive() {
+                    return Ok(Some(entry));
                 }
-                std::thread::sleep(Duration::from_millis(20));
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
+        if started.elapsed() >= timeout {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
     let message = format!(
         "language server {server} did not start within 5s; check the server command, or remove [lsp.servers.{server}]"
@@ -871,6 +878,33 @@ mod tests {
         );
         assert_eq!(result.startup_refused.len(), 1);
         assert!(result.startup_refused[0].contains("language server rust did not start within 5s"));
+        let dead = serde_json::json!({
+            "root": root.path(), "server": "rust", "nonce": "n", "broker_pid": std::process::id(),
+            "broker_start_token": "reused-pid", "server_pid": null, "server_start_token": null,
+            "state": "ready", "started_at_ms": 0, "ready_at_ms": 0, "estimate_bytes": 100,
+            "settings_hash": "s", "request_count": 0, "last_request_at_ms": null,
+            "peak_rss_kb": 0, "leases": []
+        });
+        std::fs::write(&path, serde_json::to_vec(&dead).unwrap()).unwrap();
+        let mut stale_result = Admitted::default();
+        assert!(
+            await_startup(
+                root.path(),
+                "rust",
+                LspPolicy::Optional,
+                &path,
+                Duration::ZERO,
+                &mut stale_result
+            )
+            .unwrap()
+            .is_none(),
+            "a dead publication is not a successful startup"
+        );
+        let dead: registry::Entry = serde_json::from_value(dead).unwrap();
+        assert!(
+            running_holders(&[dead]).is_empty(),
+            "a lost row must not report a stale server as a memory holder"
+        );
         let error = await_startup(
             root.path(),
             "rust",

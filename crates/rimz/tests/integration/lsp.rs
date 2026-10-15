@@ -2347,6 +2347,64 @@ fn lsp_crash_preserves_exit_and_stderr_in_status_and_diagnostics() {
     assert!(broker.wait().unwrap().success());
 }
 
+fn lost_stub_broker(
+    env: &Env,
+) -> (
+    std::path::PathBuf,
+    rimz::lsp::admission::ServeRequest,
+    Value,
+) {
+    std::fs::write(env.project_root.join("Cargo.toml"), "").unwrap();
+    let (mut broker, directory, request) = start_stub_broker(env, env.project_root.clone());
+    let holder = env.agent_owner_pid();
+    assert_eq!(
+        editor_rpc(
+            &directory,
+            json!({"op":"lease", "pid":holder, "start_token":rimz::proc::process_start_token(holder).unwrap()})
+        )["ok"],
+        true
+    );
+    let entry = editor_rpc(&directory, json!({"op":"status"}));
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+    (directory, request, entry)
+}
+
+#[test]
+fn lsp_attach_adopts_lost_broker_leases() {
+    let env = Env::new();
+    let (directory, _, previous) = lost_stub_broker(&env);
+    let mut editor = env
+        .rimz()
+        .args(["lsp", "attach", "--server", "rust", "--stdio"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    rimz::lsp::protocol::write_frame(&mut editor.stdin.take().unwrap(), &json!({"jsonrpc":"2.0", "id":1, "method":"initialize", "params":{"rootUri":url::Url::from_directory_path(&env.project_root).unwrap().to_string()}})).unwrap();
+    editor.wait_with_output().unwrap().assert().success();
+    let entry = editor_rpc(&directory, json!({"op":"status"}));
+    assert!(
+        entry["leases"]
+            .as_array()
+            .unwrap()
+            .contains(&previous["leases"][0]),
+        "admission must preserve the earlier holder's lease: {entry}"
+    );
+    assert_ne!(entry["broker_pid"], previous["broker_pid"]);
+    let records = lsp_records(&env, "revived");
+    assert_eq!(records.len(), 1);
+    for field in ["broker_pid", "state", "last_crash"] {
+        assert_eq!(records[0]["details"][field], previous[field]);
+    }
+    assert_eq!(records[0]["details"]["leases"], 1);
+    editor_rpc(
+        &directory,
+        json!({"op":"stop", "reason":"checkout removed"}),
+    );
+}
+
 fn lsp_records(env: &Env, event: &str) -> Vec<Value> {
     std::fs::read_to_string(env.rimz_home().join("logs/lsp.log.jsonl"))
         .unwrap_or_default()
@@ -2573,10 +2631,38 @@ fn lsp_sweep_removes_reused_pid_but_keeps_live_broker() {
     assert_eq!(entries, std::slice::from_ref(&entry));
     assert!(live_dir.exists());
     assert!(!dead_dir.exists());
+    let mut lost = dead.clone();
+    lost.server = "lost".into();
+    lost.leases.push(registry::Lease {
+        launch_id: None,
+        pid,
+        start_token: entry.broker_start_token.clone(),
+        since_ms: 0,
+    });
+    let lost_dir = runtime
+        .path()
+        .join(registry::key(&lost.root, &lost.server).unwrap());
+    registry::testkit::publish(runtime.path(), &lost).unwrap();
+    let lost_bytes = std::fs::read(lost_dir.join("entry.json")).unwrap();
     assert_eq!(
         registry::testkit::sweep(runtime.path()).unwrap(),
         [entry],
         "an unavailable socket must not orphan a live broker"
+    );
+    assert!(
+        lost_dir.exists(),
+        "a dead broker's live lease holder must retain its row"
+    );
+    assert_eq!(
+        std::fs::read(lost_dir.join("entry.json")).unwrap(),
+        lost_bytes
+    );
+    lost.leases[0].start_token = "reused-holder-pid".into();
+    registry::testkit::publish(runtime.path(), &lost).unwrap();
+    registry::testkit::sweep(runtime.path()).unwrap();
+    assert!(
+        !lost_dir.exists(),
+        "a dead holder's reused pid must not retain a row"
     );
 }
 

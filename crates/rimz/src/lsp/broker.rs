@@ -214,7 +214,7 @@ fn serve_inner(
     nix::unistd::setsid().map_err(std::io::Error::from)?;
     let pid = std::process::id();
     let kind = request.config.resolved_kind();
-    let entry = Entry {
+    let mut entry = Entry {
         kind: Some(kind),
         editor_check_on_save: request.config.editor_check_on_save.then_some(false),
         root: root.clone(),
@@ -249,6 +249,37 @@ fn serve_inner(
     let directory = registry::directory(&root, &request.server)?;
     crate::disk::paths::ensure_private_runtime_dir(&directory)?;
     let path = directory.join("sock");
+    let previous = match std::fs::read(directory.join("entry.json")) {
+        Ok(bytes) => Some(serde_json::from_slice::<Entry>(&bytes)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(previous) = previous {
+        if previous.root != root || previous.server != request.server {
+            return Err(LspErr::Protocol("registry key does not match entry".into()));
+        }
+        if !previous.broker_is_alive() {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            crate::diag::lsp::append(&crate::diag::lsp::Record {
+                at: jiff::Timestamp::now(),
+                root: root.clone(),
+                server: request.server.clone(),
+                event: "revived".into(),
+                details: json!({
+                    "broker_pid": previous.broker_pid,
+                    "state": previous.state,
+                    "last_crash": previous.last_crash,
+                    "leases": previous.leases.len(),
+                    "has_live_lease_holder": previous.has_live_lease_holder(),
+                }),
+            });
+            entry.leases = previous.leases;
+        }
+    }
     let listener = UnixListener::bind(&path)?;
     let _socket = crate::sock::SocketGuard::new(path.clone());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
