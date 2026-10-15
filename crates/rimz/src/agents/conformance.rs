@@ -208,6 +208,7 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
         ("qwen", "settings.json"),
         ("qoder", "settings.json"),
         ("grok", "hooks/rimz.json"),
+        ("minimax", "plugins/rimz/hooks/rimz.json"),
     ] {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
@@ -258,6 +259,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("hermes", ".hermes"),
         ("omp", ".omp/agent"),
         ("muse", ".config/muse"),
+        ("minimax", ".minimax"),
     ];
     assert_eq!(defaults.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -278,23 +280,32 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
 #[test]
 fn builtin_skills_homes_follow_config_homes() {
     let table = [
-        ("claude", ".claude/skills", ManualSkill::Frontmatter),
-        ("codex", ".agents/skills", ManualSkill::OpenAiPolicy),
-        ("amp", ".agents/skills", ManualSkill::Unsupported),
-        ("copilot", ".agents/skills", ManualSkill::Frontmatter),
-        ("kimi", ".agents/skills", ManualSkill::Frontmatter),
-        ("pi", ".agents/skills", ManualSkill::Frontmatter),
-        ("opencode", ".agents/skills", ManualSkill::Unsupported),
-        ("antigravity", ".agents/skills", ManualSkill::Unsupported),
-        ("cursor", ".agents/skills", ManualSkill::Frontmatter),
-        ("droid", ".agents/skills", ManualSkill::Frontmatter),
-        ("kiro", ".kiro/skills", ManualSkill::Unsupported),
-        ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
-        ("qoder", ".qoder/skills", ManualSkill::Frontmatter),
-        ("grok", ".agents/skills", ManualSkill::Unsupported),
-        ("hermes", ".hermes/skills", ManualSkill::Unsupported),
-        ("omp", ".omp/agent/skills", ManualSkill::Frontmatter),
-        ("muse", ".config/muse/skills", ManualSkill::Unsupported),
+        ("claude", Some(".claude/skills"), ManualSkill::Frontmatter),
+        ("codex", Some(".agents/skills"), ManualSkill::OpenAiPolicy),
+        ("amp", Some(".agents/skills"), ManualSkill::Unsupported),
+        ("copilot", Some(".agents/skills"), ManualSkill::Frontmatter),
+        ("kimi", Some(".agents/skills"), ManualSkill::Frontmatter),
+        ("pi", Some(".agents/skills"), ManualSkill::Frontmatter),
+        ("opencode", Some(".agents/skills"), ManualSkill::Unsupported),
+        (
+            "antigravity",
+            Some(".agents/skills"),
+            ManualSkill::Unsupported,
+        ),
+        ("cursor", Some(".agents/skills"), ManualSkill::Frontmatter),
+        ("droid", Some(".agents/skills"), ManualSkill::Frontmatter),
+        ("kiro", Some(".kiro/skills"), ManualSkill::Unsupported),
+        ("qwen", Some(".qwen/skills"), ManualSkill::Frontmatter),
+        ("qoder", Some(".qoder/skills"), ManualSkill::Frontmatter),
+        ("grok", Some(".agents/skills"), ManualSkill::Unsupported),
+        ("hermes", Some(".hermes/skills"), ManualSkill::Unsupported),
+        ("omp", Some(".omp/agent/skills"), ManualSkill::Frontmatter),
+        (
+            "muse",
+            Some(".config/muse/skills"),
+            ManualSkill::Unsupported,
+        ),
+        ("minimax", None, ManualSkill::Unsupported),
     ];
     assert_eq!(table.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -305,7 +316,7 @@ fn builtin_skills_homes_follow_config_homes() {
             let env = std::collections::BTreeMap::from([("HOME".into(), home.into())]);
             assert_eq!(
                 adapter.skills_home(&env),
-                Some(Path::new(home).join(suffix)),
+                suffix.map(|suffix| Path::new(home).join(suffix)),
                 "{kind}"
             );
         }
@@ -365,6 +376,7 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("qoder", "QODER_CONFIG_DIR", "/selected", "/selected"),
         ("grok", "GROK_HOME", "/selected", "/selected"),
         ("hermes", "HERMES_HOME", "/selected", "/selected"),
+        ("minimax", "MINIMAX_DATA_DIR", "/selected", "/selected"),
     ];
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
@@ -759,6 +771,13 @@ system-prompt-file-flag = "--system-prompt-file"
     muse.empty-Effort=Ok([])
     muse.empty-AutoCompact=Ok([])
     muse.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
+    minimax.Model=Ok(["--model", "model-x"])
+    minimax.Effort=Err(UnsupportedField { agent: "minimax", field: "effort" })
+    minimax.AutoCompact=Err(UnsupportedField { agent: "minimax", field: "auto-compact" })
+    minimax.empty-Model=Ok([])
+    minimax.empty-Effort=Ok([])
+    minimax.empty-AutoCompact=Ok([])
+    minimax.all=Err(UnsupportedField { agent: "minimax", field: "effort" })
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -824,6 +843,7 @@ fn fast_switch_characterization() {
     qoder: on=agent `qoder` has no fast-mode launch switch; launch without --fast off=Ok([])
     omp: on=agent `omp` has no fast-mode launch switch; launch without --fast off=Ok([])
     muse: on=agent `muse` has no fast-mode launch switch; launch without --fast off=Ok([])
+    minimax: on=agent `minimax` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -1796,7 +1816,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 17] = [
+    const AGENTS: [(&str, &str); 18] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1814,6 +1834,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Qoder", "qoder"),
         ("OMP", "omp"),
         ("Muse", "muse"),
+        ("MiniMax Code", "minimax"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 
