@@ -16,6 +16,8 @@ pub(crate) enum WakeEvent<'a> {
         trigger: &'a str,
         thaw_ms: u64,
         focus_to_thaw_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dwell: Option<&'a str>,
         error: Option<&'a str>,
     },
     WakeRefault {

@@ -27,9 +27,9 @@ fn focus_consumer_wakes_both_backends_and_paces_repeated_events() {
             focus_wake_targets(&event, &entries, &pacing, 10_000),
             std::slice::from_ref(&pane)
         );
-        pacing.insert(pane.clone(), 5_001);
+        pacing.insert(pane.clone(), 8_001);
         assert!(focus_wake_targets(&event, &entries, &pacing, 10_000).is_empty());
-        pacing.insert(pane.clone(), 5_000);
+        pacing.insert(pane.clone(), 8_000);
         assert_eq!(
             focus_wake_targets(&event, &entries, &pacing, 10_000),
             std::slice::from_ref(&pane)
@@ -727,65 +727,82 @@ fn decision_does_not_refreeze_a_recorded_session() {
 #[test]
 #[cfg(target_os = "linux")]
 fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
-    let (_dir, store, agent, _policy, scope) = decision_fixture();
-    let mut config = MachineConfig::default();
-    config.agents.hibernate.enabled = Some(true);
-    let pane: PaneId = "tmux:%3".parse().unwrap();
-    let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
-        store.paths().workspace_id.clone(),
-        vec![agent.clone()],
-        jiff::Timestamp::from_second(1_180).unwrap(),
-    );
-    snapshot.focused_pane = Some(pane.clone());
-    let mut wakes = Vec::new();
-    let mut produce = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
+    for raw in ["tmux:%3", "zellij:terminal_3"] {
+        let (_dir, store, agent, _policy, scope) = decision_fixture();
+        let mut config = MachineConfig::default();
+        config.agents.hibernate.enabled = Some(true);
+        let pane: PaneId = raw.parse().unwrap();
+        let mut snapshot = crate::store::snapshot::SidebarSnapshot::build_with_agents(
+            store.paths().workspace_id.clone(),
+            vec![agent.clone()],
+            jiff::Timestamp::from_second(1_180).unwrap(),
+        );
+        snapshot.focused_pane = Some(pane.clone());
+        let mut wakes = Vec::new();
+        let mut produce = |snapshot: &crate::store::snapshot::SidebarSnapshot| {
+            hibernate_idle_agents_with(
+                snapshot,
+                store.paths(),
+                store.runtime_paths(),
+                &config,
+                &KeepWarmPolicy::default(),
+                |_| panic!("focused pane must not freeze"),
+                |pane| wakes.push(pane.clone()),
+            );
+        };
+        produce(&snapshot);
+        crate::store::hibernate::record(
+            store.paths(),
+            crate::store::hibernate::Entry {
+                kind: agent.kind,
+                agent_id: agent.agent_id,
+                pane_id: pane.clone(),
+                scope: scope.scope.unwrap().as_path().into(),
+                provider_pid: 10,
+                frozen_at: snapshot.now,
+                anon_at_freeze: 0,
+                step: 0,
+                wake_error: None,
+                reclaimed_bytes: 0,
+            },
+        )
+        .unwrap();
+        produce(&snapshot);
+        produce(&snapshot);
+        snapshot.now = jiff::Timestamp::from_second(1_181).unwrap();
+        produce(&snapshot);
+        snapshot.now = jiff::Timestamp::from_second(1_182).unwrap();
+        produce(&snapshot);
+        config.agents.hibernate.enabled = Some(false);
+        snapshot.now = jiff::Timestamp::from_second(1_184).unwrap();
         hibernate_idle_agents_with(
-            snapshot,
+            &snapshot,
             store.paths(),
             store.runtime_paths(),
             &config,
             &KeepWarmPolicy::default(),
-            |_| panic!("focused pane must not freeze"),
+            |_| panic!("disabled hibernation must not freeze"),
             |pane| wakes.push(pane.clone()),
         );
-    };
-    produce(&snapshot);
-    crate::store::hibernate::record(
-        store.paths(),
-        crate::store::hibernate::Entry {
-            kind: agent.kind,
-            agent_id: agent.agent_id,
-            pane_id: pane.clone(),
-            scope: scope.scope.unwrap().as_path().into(),
-            provider_pid: 10,
-            frozen_at: snapshot.now,
-            anon_at_freeze: 0,
-            step: 0,
-            wake_error: None,
-            reclaimed_bytes: 0,
-        },
-    )
-    .unwrap();
-    produce(&snapshot);
-    produce(&snapshot);
-    snapshot.now = jiff::Timestamp::from_second(1_185).unwrap();
-    produce(&snapshot);
-    config.agents.hibernate.enabled = Some(false);
-    snapshot.now = jiff::Timestamp::from_second(1_190).unwrap();
-    hibernate_idle_agents_with(
-        &snapshot,
-        store.paths(),
-        store.runtime_paths(),
-        &config,
-        &KeepWarmPolicy::default(),
-        |_| panic!("disabled hibernation must not freeze"),
-        |pane| wakes.push(pane.clone()),
-    );
-    assert_eq!(
-        wakes,
-        [pane.clone(), pane.clone(), pane],
-        "pulled focus must repair a missing event or a record published after focus, with pacing"
-    );
+        assert_eq!(
+            wakes,
+            [pane.clone(), pane.clone(), pane.clone()],
+            "pulled focus repairs missing events and late records every two seconds"
+        );
+        snapshot.focused_pane = None;
+        snapshot.now = jiff::Timestamp::from_second(1_185).unwrap();
+        hibernate_idle_agents_with(
+            &snapshot,
+            store.paths(),
+            store.runtime_paths(),
+            &config,
+            &KeepWarmPolicy::default(),
+            |_| panic!("disabled"),
+            |_| panic!("unfocused pane needs no wake"),
+        );
+        let trail = read_focus_trail(store.runtime_paths());
+        assert_eq!(trail.departed.get(&pane), Some(&snapshot.now));
+    }
 }
 
 #[test]
