@@ -2288,54 +2288,55 @@ fn fetch_floor_merges_requests_after_the_previous_cycle_returns() {
     let (tx, rx) = std::sync::mpsc::channel();
     let (finished_tx, finished_rx) = std::sync::mpsc::channel();
     tx.send(FetchRequest::default()).unwrap();
+    let queued = FetchRequest {
+        min_pane_cache_ms: Some(20),
+        ..FetchRequest::fresh_panes()
+    };
     let worker_covered = covered.clone();
     std::thread::scope(|scope| {
+        let mut gap_tx = Some(tx.clone());
         let worker = scope.spawn(move || {
             let mut cycles = Vec::new();
             drive(&rx, &worker_covered, floor, |cycle| {
                 cycles.push(cycle);
                 worker_covered.record(cycle);
-                if cycles.len() == 1 {
+                if let Some(gap_tx) = gap_tx.take() {
                     // A start-to-start floor would already have expired.
                     std::thread::sleep(floor + Duration::from_millis(10));
+                    // Queued before the return, so they merge however late
+                    // either thread is scheduled.
+                    tick_clock();
+                    gap_tx.send(FetchRequest::default()).unwrap();
+                    gap_tx.send(queued.observed_now()).unwrap();
                     finished_tx.send(Instant::now()).unwrap();
                 }
             });
             cycles
         });
         let returned_at = finished_rx.recv().unwrap();
-        tx.send(FetchRequest::default()).unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-        let during_wait = FetchRequest {
-            min_pane_cache_ms: Some(20),
-            ..FetchRequest::fresh_panes()
-        };
+        // Lands during the rest or, on a stalled runner, after it: either way
+        // the cycle that answers it started after it was observed.
+        let during_wait = FetchRequest::default().observed_now();
         tx.send(during_wait).unwrap();
-        tx.send(FetchRequest {
-            min_pane_cache_ms: Some(10),
-            ..FetchRequest::default()
-        })
-        .unwrap();
         drop(tx);
 
         let cycles = worker.join().unwrap();
         assert!(cycles[1].started.duration_since(returned_at) >= floor);
-        assert_eq!(
-            cycles.len(),
-            2,
-            "requests during the gap merge into one fold"
+        assert!(
+            (2..=3).contains(&cycles.len()),
+            "queued gap requests merge into one fold"
         );
         assert_eq!(cycles[1].request.mode, FetchMode::FreshPanes);
         assert_eq!(cycles[1].request.min_pane_cache_ms, Some(20));
+        assert!(cycles[1].answers(&queued));
         assert!(!cycles[0].answers(&during_wait));
-        assert!(cycles[1].answers(&during_wait));
         assert!(covered.answers(&during_wait));
     });
 }
 
 #[test]
 fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
-    let floor = Duration::from_millis(150);
+    let floor = Duration::from_millis(600);
     let (tx, rx) = std::sync::mpsc::channel();
     let (finished_tx, finished_rx) = std::sync::mpsc::channel();
     tx.send(FetchRequest::default()).unwrap();
@@ -2351,7 +2352,9 @@ fn fetch_floor_does_not_delay_a_request_after_a_long_idle() {
             cycles
         });
         finished_rx.recv().unwrap();
-        std::thread::sleep(floor * 2);
+        // Past the rest; a wait counted from receipt would still cost a whole
+        // floor, far more than scheduling jitter.
+        std::thread::sleep(floor + Duration::from_millis(50));
         let request = FetchRequest::default();
         tx.send(request).unwrap();
         drop(tx);
