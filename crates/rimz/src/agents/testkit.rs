@@ -106,6 +106,10 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
         LifecycleSignal::Compacting,
         LifecycleSignal::Ended,
         LifecycleSignal::Lost,
+        LifecycleSignal::AskResolved { native_key: None },
+        LifecycleSignal::AskResolved {
+            native_key: Some("ask-call".to_owned()),
+        },
     ];
     for kind in [
         AskKind::Permission,

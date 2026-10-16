@@ -172,6 +172,14 @@ pub enum LifecycleSignal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         native_key: Option<String>,
     },
+    /// The native prompt behind a waiting row was answered (Hermes
+    /// `on_human_input_resolved`). It closes the wait whose key it carries and
+    /// is no proof of activity: on any status but `Waiting` it is ignored, so a
+    /// close that arrives after its turn settled leaves the row settled.
+    AskResolved {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_key: Option<String>,
+    },
     /// The agent began compacting its context window (Claude `PreCompact`,
     /// Codex `PreCompact`). A transient head over the status it interrupts. It
     /// resolves one status it would otherwise carry: compaction runs only after
@@ -241,7 +249,9 @@ impl LifecycleSignal {
             Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
             Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
             Self::ToolUsed { .. } => LifecycleSignalKind::ToolUsed,
-            Self::AwaitingInput { .. } => LifecycleSignalKind::AwaitingInput,
+            Self::AwaitingInput { .. } | Self::AskResolved { .. } => {
+                LifecycleSignalKind::AwaitingInput
+            }
             Self::Compacting => LifecycleSignalKind::Compacting,
             Self::CompactionEnded { .. } => LifecycleSignalKind::CompactionEnded,
             Self::Ended => LifecycleSignalKind::Ended,
@@ -266,6 +276,7 @@ impl LifecycleSignal {
             Self::SubagentStopped { .. } => "subagent_stopped",
             Self::ToolUsed { .. } => "tool_used",
             Self::AwaitingInput { .. } => "awaiting_input",
+            Self::AskResolved { .. } => "ask_resolved",
             Self::Compacting => "compacting",
             Self::CompactionEnded { .. } => "compaction_ended",
             Self::Ended => "ended",
@@ -437,14 +448,22 @@ pub(crate) fn step(
     // `Lost` is kept as an ignored marker for backward-compatible log replay.
     let ignored = if matches!(signal, LifecycleSignal::Lost) {
         Some("session lost (legacy replay marker)")
+    } else if let LifecycleSignal::AskResolved { native_key } = signal {
+        stale_ask_close(prior_status, open_ask_key, native_key.as_deref())
     } else {
         stale_turn_report(signal, prior_status, turn_ids)
     };
     if let Some(reason) = ignored {
+        let status = prior_status.unwrap_or(AgentStatus::Idle);
         return Transition {
             next: LifecycleState {
-                status: prior_status.unwrap_or(AgentStatus::Idle),
-                phase: prior_phase,
+                status,
+                // A valid prior already rests at `Idle` outside `Running`.
+                phase: if status == AgentStatus::Running {
+                    prior_phase
+                } else {
+                    TurnPhase::Idle
+                },
                 compacting: was_compacting,
             },
             kind: TransitionKind::Ignored { reason },
@@ -530,6 +549,20 @@ fn stale_turn_report(
     .then_some("turn cancel after its turn already reported")
 }
 
+/// Why an ask close must not touch the row: only a waiting row has an ask to
+/// close, and a keyed close for another ask leaves the open one waiting.
+fn stale_ask_close(
+    prior_status: Option<AgentStatus>,
+    open_ask_key: Option<&str>,
+    native_key: Option<&str>,
+) -> Option<&'static str> {
+    if prior_status != Some(AgentStatus::Waiting) {
+        return Some("ask resolved outside a waiting row");
+    }
+    (open_ask_key.is_some() && native_key.is_some() && open_ask_key != native_key)
+        .then_some("ask resolved for another open ask")
+}
+
 fn opened_turn(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
@@ -579,6 +612,8 @@ fn map_status(
             _ => AgentStatus::Running,
         },
         LifecycleSignal::AwaitingInput { .. } => AgentStatus::Waiting,
+        // `stale_ask_close` returned early for every other prior state.
+        LifecycleSignal::AskResolved { .. } => AgentStatus::Running,
         // A finished child resolves to a terminal verdict, so the parent's
         // expanded list reads `✓`/`!` instead of a resting `○`.
         LifecycleSignal::SubagentStopped { errored } => {
@@ -726,6 +761,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         // completed tool is visible work (acting): a phase that left reasoning
         // never re-arms mid-turn, and a parked turn that runs a tool is
         // visibly back at work.
+        LifecycleSignal::AskResolved { .. } => TurnPhase::Acting,
         LifecycleSignal::ToolUsed { edits, .. } => {
             if !edits && prior_phase == TurnPhase::Reasoning {
                 TurnPhase::Reasoning
