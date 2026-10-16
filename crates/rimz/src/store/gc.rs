@@ -11,6 +11,7 @@
 //! record is unreadable but still holds history is kept and reported, never
 //! deleted — durable history stays the correctness source.
 //! It also sweeps orphan empty-dir trees left by rooms removed now or earlier, applying the per-agent owned grace and removing each room directory once empty.
+//! Every sweep over the workspaces area (the dead-workspace prune, orphan empty-dir sweep, and per-room class sweep) isolates I/O errors per entry, so one bad entry is skipped rather than disabling machine GC; the prune also reports a workspace it cannot remove as a failed row.
 
 use std::collections::BTreeSet;
 use std::fs::ReadDir;
@@ -30,7 +31,9 @@ pub(crate) fn collect_runtime_claims(runtime: &paths::RuntimePaths) -> Result<()
     collect::collect_claims(runtime)
 }
 
-pub use prune::{OrphanEmptyTree, PruneReason, RemovedWorkspace, WorkspacePruneReport};
+pub use prune::{
+    FailedWorkspace, OrphanEmptyTree, PruneReason, RemovedWorkspace, WorkspacePruneReport,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GcErr {

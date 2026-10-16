@@ -1159,7 +1159,8 @@ path = "crates/rimz/src/store"
 # gc::prune::OrphanEmptyTree, the trunk's orphan empty-dir report, takes the slack the workflow budget assumed (+1).
 # AgentCard::open_ask shares the displayed-wait gate with the sidebar (+1).
 # RuntimeProjection::runtime_from_refs lets address tests project molt chains so supersession is computed, not asserted in (+1).
-surface-budget = 454
+# FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
+surface-budget = 455
 
 [[verdict]]
 kind = "item"
@@ -1467,7 +1468,8 @@ allowed-dependencies = [
 ]
 # Room-scoped class and orphan-temp entry points complement the machine sweeps.
 # OrphanEmptyTree reports orphan empty-dir retention alongside pruned workspaces (+1).
-surface-budget = 18
+# FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
+surface-budget = 19
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -6397,6 +6399,11 @@ reason = "Machine GC and StatePaths resolve the empty root under the same explic
 kind = "item"
 key = "store::gc::prune::OrphanEmptyTree"
 reason = "Machine GC reports orphan empty-dir removals and grace retention to CLI consumers."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::prune::FailedWorkspace"
+reason = "Machine GC reports per-workspace removal failures to CLI and assist consumers."
 
 [[verdict]]
 kind = "item"

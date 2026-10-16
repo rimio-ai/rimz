@@ -711,6 +711,7 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         .iter()
         .any(|tree| tree.files_removed > 0 || tree.bytes > 0);
     let acted = removed > 0 || empty_removed;
+    let failed = out.prune.failed.len();
     let unreadable = out.prune.retained_unreadable.len();
     let outcome = if empty_removed && removed == 0 {
         format!(
@@ -731,6 +732,8 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
                 fmt_bytes(out.prune.bytes_removed())
             )
         }
+    } else if failed > 0 {
+        plural(failed, "removal failed", "removals failed")
     } else if unreadable > 0 {
         format!(
             "{} kept with unreadable record — history preserved",
@@ -743,6 +746,8 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     };
     let verdict = if acted {
         RowVerdict::Acted
+    } else if failed > 0 {
+        RowVerdict::Alarm
     } else if unreadable > 0 {
         RowVerdict::Warn
     } else {
@@ -755,6 +760,13 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             w,
             palette::muted(),
             &format!("{action}: {}", removed_workspace_detail(removed)),
+        )?;
+    }
+    for failed in &out.prune.failed {
+        render_subline(
+            w,
+            palette::alarm(),
+            &format!("✗ failed: {} — {}", failed.dir_name, failed.error),
         )?;
     }
     for tree in &out.prune.empty_dirs {
@@ -992,7 +1004,10 @@ fn problem_count(out: &GcOutcome) -> usize {
         StoreMaintenance::Done { repaired, .. } if repaired.truncated() => 1,
         _ => 0,
     };
-    worktree_problems + out.prune.retained_unreadable.len() + event_log_problems
+    worktree_problems
+        + out.prune.failed.len()
+        + out.prune.retained_unreadable.len()
+        + event_log_problems
 }
 
 fn skipped_area_count(out: &GcOutcome) -> usize {
@@ -1147,6 +1162,7 @@ impl From<&WorktreeSweepStatus> for JsonWorktrees {
 struct JsonWorkspaces {
     skipped: Option<&'static str>,
     removed: Vec<JsonRemovedWorkspace>,
+    failed: Vec<JsonFailedWorkspace>,
     retained_unreadable: Vec<JsonRetainedWorkspace>,
     kept: usize,
     empty_dirs: Vec<JsonOrphanEmptyTree>,
@@ -1160,6 +1176,14 @@ impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
                 .removed
                 .iter()
                 .map(JsonRemovedWorkspace::from)
+                .collect(),
+            failed: report
+                .failed
+                .iter()
+                .map(|workspace| JsonFailedWorkspace {
+                    dir_name: workspace.dir_name.clone(),
+                    error: workspace.error.clone(),
+                })
                 .collect(),
             retained_unreadable: report
                 .retained_unreadable
@@ -1179,6 +1203,12 @@ impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
                 .collect(),
         }
     }
+}
+
+#[derive(Serialize)]
+struct JsonFailedWorkspace {
+    dir_name: String,
+    error: String,
 }
 
 #[derive(Serialize)]
@@ -1415,6 +1445,10 @@ mod tests {
     #[test]
     fn gc_json_and_assist_report_classes() {
         let mut outcome = GcOutcome::default();
+        outcome.prune.failed.push(gc::FailedWorkspace {
+            dir_name: "bad-abcd".into(),
+            error: "cannot access /x: boom".into(),
+        });
         outcome.budget_ledgers.ledgers = 2;
         outcome.runtime.rooms.push(gc::RoomReport {
             name: "test-abcd".to_owned(),
@@ -1447,6 +1481,8 @@ mod tests {
         assert_eq!(json["class_bytes"]["audit"], 12);
         assert_eq!(json["files_removed"], 2);
         assert_eq!(json["scope"], "room");
+        assert_eq!(json["problems"], 1);
+        assert!(json["error"].is_null());
     }
 
     #[test]
@@ -1462,6 +1498,7 @@ mod tests {
         let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
         assert_eq!(json["scope"], "room");
         assert_eq!(json["workspaces"]["skipped"], "room_scope");
+        assert_eq!(json["workspaces"]["failed"], serde_json::json!([]));
         assert_eq!(json["workspaces"]["empty_dirs"], serde_json::json!([]));
     }
 
@@ -1603,11 +1640,39 @@ mod tests {
         assert!(out.contains("· 1 problem"));
         assert!(out.contains("✗ worktrees       1 removal failed"));
         assert!(out.contains("✗ failed: /bad — boom"));
+
+        let mut outcome = GcOutcome::default();
+        outcome.prune.failed.push(gc::FailedWorkspace {
+            dir_name: "bad-abcd".into(),
+            error: "cannot access /x: boom".into(),
+        });
+        let out = strip_report(&outcome);
+        assert!(out.contains("· 1 problem"), "{out}");
+        assert!(out.contains("✗ workspaces      1 removal failed"));
+        assert!(out.contains("✗ failed: bad-abcd — cannot access /x: boom"));
+        outcome.prune.removed = full_outcome(false).prune.removed;
+        let out = strip_report(&outcome);
+        assert!(out.contains("✦ workspaces"));
+        assert!(out.contains("✗ failed: bad-abcd — cannot access /x: boom"));
+        outcome.prune.removed.clear();
+        outcome.prune.failed.push(outcome.prune.failed[0].clone());
+        assert!(strip_report(&outcome).contains("✗ workspaces      2 removals failed"));
     }
 
     #[test]
     fn json_report_serializes_gc_schema() {
-        let value = serde_json::to_value(JsonReport::from(&full_outcome(false))).unwrap();
+        let mut outcome = full_outcome(false);
+        outcome.prune.failed.push(gc::FailedWorkspace {
+            dir_name: "bad-abcd".into(),
+            error: "cannot access /x: boom".into(),
+        });
+        let value = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
+        assert_eq!(
+            value["workspaces"]["failed"],
+            serde_json::json!([
+                {"dir_name": "bad-abcd", "error": "cannot access /x: boom"}
+            ])
+        );
 
         assert_eq!(value["dry_run"], false);
         assert_eq!(value["scope"], "machine");
@@ -1642,6 +1707,7 @@ mod tests {
         assert_eq!(value["store_maintenance"], "done");
 
         let dry_run = serde_json::to_value(JsonReport::from(&full_outcome(true))).unwrap();
+        assert_eq!(dry_run["workspaces"]["failed"], serde_json::json!([]));
         assert!(dry_run["repair"].is_null());
         assert!(dry_run["worktrees"]["removed"][0]["branch_deleted"].is_null());
         assert_eq!(dry_run["store_maintenance"], "skipped_dry_run");
@@ -1750,6 +1816,7 @@ mod tests {
                     project_root: Some(PathBuf::from("/gone")),
                 }],
                 kept: 0,
+                failed: Vec::new(),
                 retained_unreadable: Vec::new(),
                 empty_dirs: Vec::new(),
             },
