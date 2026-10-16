@@ -761,6 +761,47 @@ fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
     );
 }
 
+#[test]
+fn focus_push_paints_on_arrival_or_records_the_inline_hold() {
+    for held in [false, true] {
+        let (mut snapshot, sidebar, first, target) = focus_fixture();
+        let mut rig = Rig::with_own_pane(sidebar);
+        snapshot.focused_pane = Some(first);
+        snapshot.viewed_panes.clear();
+        rig.fold(snapshot, SnapshotSource::Produced);
+        if held {
+            rig.state
+                .paint_hold
+                .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        }
+        let mut anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
+        anchor.placement = None;
+        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+        if held {
+            assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+            assert_eq!(
+                rig.state
+                    .pending_focus_push
+                    .as_ref()
+                    .unwrap()
+                    .peer
+                    .blocked_by,
+                Some(PushBlock::PaintHold),
+                "the handler must run the existing paint gates"
+            );
+            rig.state.pending_focus_push.as_mut().unwrap().until = Instant::now();
+            rig.paint(true);
+            assert_push_report(&ack, &rig, PushVerdict::Expired, true);
+        } else {
+            assert_push_report(&ack, &rig, PushVerdict::Painted, true);
+            assert!(rig.state.pending_focus_push.is_none());
+        }
+    }
+}
+
 fn assert_foreign_focus_anchor_is_ignored(shared: bool) {
     let mut rig = Rig::new();
     let first = zellij("terminal_1");

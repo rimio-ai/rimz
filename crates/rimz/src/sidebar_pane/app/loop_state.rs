@@ -691,10 +691,7 @@ impl LoopState {
         wakeup: Wakeup,
     ) -> Result<()> {
         match wakeup {
-            Wakeup::FocusPush(push) => {
-                self.on_focus_push(*push, fetch, terminal);
-                Ok(())
-            }
+            Wakeup::FocusPush(push) => self.on_focus_push(*push, fetch, terminal),
             Wakeup::Snapshot => {
                 self.on_snapshot(fetch);
                 Ok(())
@@ -863,8 +860,8 @@ impl LoopState {
         &mut self,
         mut push: FocusPush,
         fetch: &mut FetchDispatcher,
-        terminal: &Terminal<PaneBackend>,
-    ) {
+        terminal: &mut Terminal<PaneBackend>,
+    ) -> Result<()> {
         let arrived = Instant::now();
         push.peer.received_ms = Some(push.elapsed_ms());
         if self.last_folded_focus_intent != Some(push.anchor.nonce) {
@@ -877,25 +874,26 @@ impl LoopState {
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
             push.finish(PushVerdict::NotDestination);
-            return;
+            return Ok(());
         }
         if self.should_exit {
             if let Some(pending) = self.pending_focus_push.take() {
                 pending.finish(PushVerdict::Exiting);
             }
             push.finish(PushVerdict::Exiting);
-            return;
+            return Ok(());
         }
         if self.focus_push_size_matches(&push, terminal) {
             self.paint_hold.release();
         }
         if self.painted_focus_matches(&push) {
             push.finish(PushVerdict::Painted);
-            return;
+            return Ok(());
         }
         if let Some(pending) = self.pending_focus_push.replace(push) {
             pending.finish(PushVerdict::Superseded);
         }
+        self.paint_frame_if_due(terminal, true)
     }
 
     pub(super) fn on_event(
