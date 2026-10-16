@@ -100,7 +100,7 @@ fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPre
         }
         entries
             .as_array_mut()
-            .ok_or_else(config_refusal)?
+            .ok_or_else(|| config_refusal(path))?
             .push(json!({"command":COMMAND,"timeout":10}));
     }
     Ok(HookInstallPreview {
@@ -111,7 +111,7 @@ fn preview_at(path: &Path, version: Option<CliVersion>) -> Result<HookInstallPre
             candidate: match &original {
                 // Hermes re-emits `hooks` in its own layout; equal values keep those bytes.
                 Some(text) if config.hooks == wired => text.clone(),
-                _ => config.render(original.as_deref().unwrap_or_default())?,
+                _ => config.render(original.as_deref().unwrap_or_default(), path)?,
             },
             original,
         }],
@@ -147,7 +147,7 @@ fn uninstall_at(path: &Path) -> Result<HookUninstallReport> {
         provider_file::write_bytes(
             path,
             config
-                .render(original.as_deref().unwrap_or_default())?
+                .render(original.as_deref().unwrap_or_default(), path)?
                 .as_bytes(),
         )?;
     }
@@ -215,13 +215,19 @@ fn owned(entry: &Value) -> bool {
         .is_some_and(|command| command.contains(OWNER))
 }
 
-fn config_refusal() -> AgentErr {
-    AgentErr::Install {agent:"hermes",reason:"cannot safely edit this YAML; edit config.yaml in the Hermes home (default ~/.hermes) by hand: add the RimZ hooks shown by rimz hooks install hermes --dry-run (use a block-mapping root and no anchors, aliases, or tags inside hooks)".into()}
+fn config_refusal(path: &Path) -> AgentErr {
+    AgentErr::Install {
+        agent: "hermes",
+        reason: format!(
+            "cannot safely edit this YAML; edit {} by hand: add the RimZ hooks shown by rimz hooks install hermes --dry-run (use a block-mapping root and no anchors, aliases, or tags inside hooks)",
+            path.display()
+        ),
+    }
 }
 
 fn read_config(path: &Path) -> Result<(Option<String>, Config)> {
     let original = read_optional_file("hermes", path)?;
-    let config = Config::parse(original.as_deref().unwrap_or_default())?;
+    let config = Config::parse(original.as_deref().unwrap_or_default(), path)?;
     Ok((original, config))
 }
 
@@ -232,19 +238,20 @@ struct Config {
 }
 
 impl Config {
-    fn parse(text: &str) -> Result<Self> {
-        let root: Value = serde_saphyr::from_str(text).map_err(|_| config_refusal())?;
+    fn parse(text: &str, path: &Path) -> Result<Self> {
+        let refusal = || config_refusal(path);
+        let root: Value = serde_saphyr::from_str(text).map_err(|_| refusal())?;
         let hooks = match root.get("hooks") {
             Some(Value::Object(hooks)) => hooks.clone(),
             None | Some(Value::Null) => Map::new(),
-            _ => return Err(config_refusal()),
+            _ => return Err(refusal()),
         };
         for (event, entries) in &hooks {
             if matches!(event.as_str(), "output_spill" | "outbound") {
                 continue;
             }
             if !entries.is_null() && !entries.is_array() {
-                return Err(config_refusal());
+                return Err(refusal());
             }
         }
         let mut depth = 0;
@@ -256,7 +263,7 @@ impl Config {
         let mut indent = 0;
         let mut styles = Vec::new();
         for item in Parser::new_from_str(text) {
-            let (event, span) = item.map_err(|_| config_refusal())?;
+            let (event, span) = item.map_err(|_| refusal())?;
             let offset = |marker: serde_saphyr::granit_parser::Marker| {
                 marker.byte_offset().unwrap_or_else(|| {
                     text.char_indices()
@@ -272,13 +279,13 @@ impl Config {
                     _ => false,
                 };
             if inside && forbidden {
-                return Err(config_refusal());
+                return Err(refusal());
             }
             match event {
                 Event::DocumentStart(..) => {
                     documents += 1;
                     if documents > 1 {
-                        return Err(config_refusal());
+                        return Err(refusal());
                     }
                 }
                 Event::MappingStart(style, anchor, tag)
@@ -289,7 +296,7 @@ impl Config {
                             || tag.is_some()
                             || !root.is_object()
                         {
-                            return Err(config_refusal());
+                            return Err(refusal());
                         }
                         indent = span.start.col();
                     }
@@ -318,7 +325,7 @@ impl Config {
                             || tag.is_some()
                             || span.start.line() != span.end.line()
                         {
-                            return Err(config_refusal());
+                            return Err(refusal());
                         }
                         let offset = offset(span.start);
                         start = Some(text[..offset].rfind('\n').map_or(0, |index| index + 1));
@@ -343,7 +350,7 @@ impl Config {
                 .lines()
                 .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
         {
-            return Err(config_refusal());
+            return Err(refusal());
         }
         let range = start.map(|start| {
             // Consume only the value's final line, not the following comments.
@@ -381,14 +388,15 @@ impl Config {
         removed
     }
 
-    fn render(&self, original: &str) -> Result<String> {
+    fn render(&self, original: &str, path: &Path) -> Result<String> {
         let mut block = String::new();
         if !self.hooks.is_empty() {
             let indent = " ".repeat(self.indent);
             block.push_str(&format!("{indent}hooks:\n"));
             // JSON is a YAML flow mapping. It preserves all accepted values
             // without enabling a second serializer or rewriting unrelated keys.
-            let json = serde_json::to_string_pretty(&self.hooks).map_err(|_| config_refusal())?;
+            let json =
+                serde_json::to_string_pretty(&self.hooks).map_err(|_| config_refusal(path))?;
             for line in json.lines() {
                 block.push_str(&format!("{indent}  {line}\n"));
             }
