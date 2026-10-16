@@ -358,6 +358,30 @@ fn entitlement_turn_death_is_a_typed_actionable_failure() {
 }
 
 #[test]
+fn server_error_turn_death_pauses_whatever_the_label_says() {
+    assert_eq!(
+        TurnErrorClass::classify_label(Some("API Error")),
+        TurnErrorClass::Failed
+    );
+    assert_eq!(
+        super::super::statusline::classify_api_error(Some("server_error"), None, Some("API Error")),
+        TurnErrorClass::PausedOverloaded
+    );
+    let marker = hook_output(
+        &ClaudeAdapter,
+        "StopFailure",
+        &json!({
+            "session_id": "sess-1", "error": "server_error",
+            "last_assistant_message": "API Error"
+        }),
+    )
+    .turn_error()
+    .cloned()
+    .unwrap();
+    assert_eq!(marker.class, TurnErrorClass::PausedOverloaded);
+}
+
+#[test]
 fn transcript_usage_absent_reports_zero_or_unknown() {
     let dir = tempfile::tempdir().unwrap();
 
