@@ -110,6 +110,7 @@ An install without `AGENT` handles agents one at a time and stops at the first f
 ```sh
 rimz trust [status|grant|revoke] [--json]
 rimz trust grant --agents [KIND,...] [--json]
+rimz trust grant --empty-dir [--agents KIND,...] [--json]
 ```
 
 A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tasks, env, and accounts, and each of those can run a command. RimZ hashes every command-running field into the executable surface and applies the project config only while this machine holds a grant for that exact hash. The list of hashed fields is in [security and trust](../../guide/security.md#project-trust). Trust is per project root, as resolved from the current directory or [`--root`](../cli.md#global-flags).
@@ -117,7 +118,7 @@ A repository's `.rimz/config.toml` can declare agents, profiles, teams, loop tas
 | Verb | What it does |
 | --- | --- |
 | `status` (the default) | Reads only. Re-hashes the live config and prints the state. |
-| `grant` | Pins the current hash and surface on this machine, and clears declined project and folder-trust birth prompts. When it replaces a grant for a different hash, it prints the surface diff. With no project config it creates no project grant and prints `no project config`; agent folder trust can still be granted. |
+| `grant` | Pins the current hash and surface on this machine, and clears declined project and folder-trust birth prompts. When it replaces a grant for a different hash, it prints the surface diff. With no project config it creates no project grant and prints `no project config`; agent folder trust can still be granted. With `--empty-dir`, grants only machine-wide empty-directory folder trust, without pinning the project or clearing declined prompts. |
 | `revoke` | Deletes the project grant, leaving the project `untrusted` (or `no project config`). Does not modify agent configuration or revoke provider folder trust. |
 
 All three exit 0 whatever the state, and 1 when configuration or a grant record cannot be read or parsed. An agent grant also exits 1 if a requested kind is unknown or undetected, or a write fails; it attempts the remaining selected kinds first. `--json` works on each verb; previews, questions, and grant notices go to stderr.
@@ -131,6 +132,14 @@ After the project grant, `rimz trust grant` on a terminal shows proposed provide
 Restricted rows are never offered a grant or selected by bare `--agents`. Explicitly naming a Restricted kind writes nothing for it and exits 1: RimZ does not change a saved untrusted decision. `rimz start` prints its fix on every start without adding it to the grant question or remembered declines.
 
 The grant covers the main repository root, including its worktrees, in the room's selected account home for each provider. Codex accounts linked to the same `config.toml` share the grant; Claude's `.claude.json` stays per account. Outside Git, the provider's folder rules apply. An unreadable or malformed file is not overwritten; the fix names what to repair. A provider file changed since the preview causes a refusal to overwrite it. Undo a provider grant in that provider's configuration; `rimz trust revoke` only controls RimZ project config. See [folder trust for agents](../../guide/security.md#folder-trust-for-agents) for what these grants enable.
+
+### Empty-directory folder trust
+
+Profiles with [`empty-dir: true`](../definitions.md) can start outside the project's instruction files. `rimz trust grant --empty-dir` grants folder trust on `~/.rimz/empty` for every declared account of each detected provider that models folder trust, including `default`. It needs no workspace. `--agents KIND,...` limits the provider kinds; absent or empty selects every undecided account. The command previews provider-file diffs and writes through the same guarded grant path as project-folder grants, without an interactive question. It never changes a saved-untrusted decision.
+
+Claude needs this grant; Codex outside Git needs none. Non-grantable accounts show their reason instead. `rimz start` neither checks nor offers this grant. [`rimz doctor`](./getting-started.md#diagnose-with-doctor) identifies profiles whose accounts fall back to the parent's directory and reports stray files in the empty root.
+
+Status adds an `empty-dir:` heading after the project's agent rows, naming the empty root and each declared account's decision. JSON adds `empty_dir`, an array with the same row shape as `agents`. The machine-wide grant's JSON contains only `empty_dir`.
 
 ### Trust states
 
@@ -165,7 +174,7 @@ trust: stale — executable surface changed since last grant
       + cargo test && ./deploy.sh
 ```
 
-The hash and grant lines appear only when they have a value. `--json` prints one object with every key present:
+The hash and grant lines appear only when they have a value. For project commands, `--json` prints one object with every key present:
 
 | Field | Value |
 | --- | --- |
@@ -176,6 +185,7 @@ The hash and grant lines appear only when they have a value. `--json` prints one
 | `granted_hash`, `granted_at` | The grant's hash and RFC 3339 time, or `null` with no grant |
 | `surface_diff` | `null`, or an array of `{kind, path, granted, current}` where `kind` is `added`, `removed`, or `changed`, `path` is an array of segments, and `granted` or `current` is omitted when that side has no value |
 | `agents` | Folder-trust rows: `kind`, `login`, `state` (`decided`, `undecided`, or `restricted`); undecided rows add `key`, `path`, and `fix`; restricted rows add `key` and `fix` |
+| `empty_dir` | Machine-wide empty-directory folder-trust rows for detected providers and every declared login, with the same shape as `agents` |
 
 `surface_diff` is set on `status` for a `stale` project, and on `grant` when the grant replaced one with a different hash.
 

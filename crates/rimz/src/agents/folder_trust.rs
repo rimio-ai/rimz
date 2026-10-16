@@ -31,10 +31,10 @@ pub struct FolderTrustPreview {
 }
 
 impl FolderTrustGap {
-    pub fn fix(&self, kind: &str) -> String {
+    pub fn fix(&self, kind: &str, subject: &str) -> String {
         match &self.grant {
             Ok(_) => format!(
-                "run `rimz trust grant --agents {kind}` in `{}`, or answer {kind}'s folder-trust prompt once there",
+                "run `{subject} --agents {kind}` in `{}`, or answer {kind}'s folder-trust prompt once there",
                 self.key.display()
             ),
             Err(reason) => format!(

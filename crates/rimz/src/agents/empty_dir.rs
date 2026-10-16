@@ -5,7 +5,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use super::{AgentState, FolderTrust};
+use super::{AgentState, FolderTrust, FolderTrustRow, RoomLoginSet};
 use crate::disk::paths::StatePaths;
 use crate::ids::AgentKind;
 
@@ -92,9 +92,38 @@ fn verdict_at(
     if !enabled {
         return Verdict::NotApplicable;
     }
-    let Some(adapter) = super::find_definition(kind.as_str()) else {
-        return Verdict::Applies;
-    };
+    match trust_at(root, kind, login_env) {
+        None | Some(FolderTrust::Decided) => Verdict::Applies,
+        Some(trust) => Verdict::Fallback(trust),
+    }
+}
+
+/// Machine-wide folder-trust rows for detected providers and every declared login.
+pub fn rows(logins: &RoomLoginSet) -> Vec<FolderTrustRow> {
+    let root = crate::disk::paths::empty_dir_root();
+    super::all_definitions()
+        .filter(|adapter| super::locate_binary(adapter.spec()).is_some())
+        .flat_map(|adapter| {
+            let kind = adapter.spec().kind;
+            let root = &root;
+            logins.declared(kind).into_iter().filter_map(move |login| {
+                let trust = trust_at(root, login.kind(), &logins.env(&login))?;
+                Some(FolderTrustRow {
+                    kind,
+                    login: login.name().clone(),
+                    trust,
+                })
+            })
+        })
+        .collect()
+}
+
+fn trust_at(
+    root: &Path,
+    kind: &AgentKind,
+    login_env: &BTreeMap<String, String>,
+) -> Option<FolderTrust> {
+    let adapter = super::find_definition(kind.as_str())?;
     // A grant can precede directory creation. Probe Git at the nearest existing ancestor.
     let repo_root = root
         .ancestors()
@@ -109,10 +138,7 @@ fn verdict_at(
                 .success()
                 .then(|| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
         });
-    match adapter.folder_trust(root, repo_root.as_deref(), login_env) {
-        None | Some(FolderTrust::Decided) => Verdict::Applies,
-        Some(trust) => Verdict::Fallback(trust),
-    }
+    adapter.folder_trust(root, repo_root.as_deref(), login_env)
 }
 
 /// Check both instruction-bearing parent levels; the agent's own contents are its own.

@@ -45,7 +45,10 @@ fn codex_preview_preserves_config_and_uses_main_root() {
         Some("trusted")
     );
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-    assert!(gap.fix("codex").contains("rimz trust grant --agents codex"));
+    assert!(
+        gap.fix("codex", "rimz trust grant")
+            .contains("rimz trust grant --agents codex")
+    );
 }
 
 #[test]

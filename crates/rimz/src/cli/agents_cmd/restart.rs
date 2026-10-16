@@ -94,6 +94,7 @@ pub(in crate::cli) fn restart_resolved(
     provider_login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
     crate::cli::folder_trust::preflight(
         agent.kind.as_str(),
+        &cwd,
         adapter.folder_trust(
             &cwd,
             agent

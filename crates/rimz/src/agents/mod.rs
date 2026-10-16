@@ -1137,11 +1137,16 @@ pub fn preflight_launch_dir(
     if !adapter.headless_requires_folder_trust() {
         return Ok(());
     }
+    let subject = if cwd.starts_with(crate::disk::paths::empty_dir_root()) {
+        "rimz trust grant --empty-dir"
+    } else {
+        "rimz trust grant"
+    };
     match adapter.folder_trust(cwd, repo_root, login_env) {
         Some(FolderTrust::Undecided(gap)) => Err(LaunchDirUntrusted {
             kind: adapter.spec().kind,
             dir: cwd.to_path_buf(),
-            fix: gap.fix(adapter.spec().kind),
+            fix: gap.fix(adapter.spec().kind, subject),
             reason: "has no trust decision and would stop at its trust prompt",
         }.into()),
         Some(FolderTrust::Restricted { key }) if mode == LaunchDirMode::Supervised => {

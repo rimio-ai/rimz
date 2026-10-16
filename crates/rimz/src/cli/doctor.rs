@@ -117,6 +117,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
                 error: error.to_string(),
             },
         }),
+        empty_dir: agents::collect_empty_dir(ws),
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
         history_cleared_at,
         messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),

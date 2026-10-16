@@ -15,6 +15,132 @@ use crate::common::{Env, exec_args};
 const CLAUDE_HOOK_CONFIG: &str =
     "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n";
 
+#[test]
+fn empty_dir_grant_is_machine_wide_and_preserves_project_trust() {
+    let env = Env::new();
+    env.rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .assert()
+        .success();
+    env.write_config(&env.project_root, CLAUDE_HOOK_CONFIG);
+    let dismissal = env
+        .rimz_home()
+        .join("trust")
+        .join(rimz::WorkspaceId::from_project_root(&env.project_root).as_str())
+        .join("folder-trust-prompt.toml");
+    std::fs::create_dir_all(dismissal.parent().unwrap()).unwrap();
+    std::fs::write(&dismissal, "declined").unwrap();
+    let bin = write_env_dump_shim(&env, "claude");
+    let command = || {
+        let mut cmd = env.rimz();
+        crate::common::hermetic_providers(&env, &mut cmd).env("PATH", &bin);
+        cmd
+    };
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rows = report["empty_dir"]
+        .as_array()
+        .expect("machine-wide empty-dir rows");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["state"], "undecided");
+        assert_eq!(row["key"], env.rimz_home().join("empty").to_str().unwrap());
+        assert!(
+            row["fix"]
+                .as_str()
+                .unwrap()
+                .contains("rimz trust grant --empty-dir --agents claude")
+        );
+    }
+    command()
+        .current_dir(&env.home_root)
+        .args(["trust", "grant", "--empty-dir"])
+        .assert()
+        .success();
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["state"], "untrusted");
+    for row in report["empty_dir"].as_array().unwrap() {
+        assert_eq!(row["state"], "decided");
+    }
+    assert_eq!(std::fs::read_to_string(dismissal).unwrap(), "declined");
+    assert!(
+        !env.rimz_home()
+            .join("trust")
+            .join(rimz::WorkspaceId::from_project_root(&env.project_root).as_str())
+            .join("trust.toml")
+            .exists()
+    );
+    command()
+        .args(["trust"])
+        .assert()
+        .success()
+        .stdout(contains("empty-dir:"));
+}
+
+#[test]
+fn empty_dir_grant_kind_filter_does_not_write_claude() {
+    let env = Env::new();
+    let bin = write_env_dump_shim(&env, "codex");
+    write_env_dump_shim(&env, "claude");
+    let mut cmd = env.rimz();
+    crate::common::hermetic_providers(&env, &mut cmd).env("PATH", bin);
+    cmd.current_dir(&env.home_root)
+        .args([
+            "trust",
+            "grant",
+            "--empty-dir",
+            "--agents",
+            "codex",
+            "--json",
+        ])
+        .assert()
+        .success();
+    assert!(!env.home_root.join(".claude.json").exists());
+    assert!(!env.home_root.join(".codex/config.toml").exists());
+}
+
+#[test]
+fn empty_dir_grant_writes_shared_account_file_once() {
+    let env = Env::new();
+    env.rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .assert()
+        .success();
+    let bin = write_env_dump_shim(&env, "claude");
+    let command = || {
+        let mut cmd = env.rimz();
+        crate::common::hermetic_providers(&env, &mut cmd)
+            .env("PATH", &bin)
+            .env(
+                "CLAUDE_CONFIG_DIR",
+                env.rimz_home().join("accounts/claude/work"),
+            );
+        cmd
+    };
+    let output = command()
+        .args(["trust", "grant", "--empty-dir", "--agents", "claude"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .matches("trusted →")
+            .count(),
+        1
+    );
+    let output = command().args(["trust", "--json"]).output().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rows = report["empty_dir"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row["state"] == "decided"), "{report}");
+}
+
 fn exec_request(kind: &str, action: ExecAction) -> ExecRequest {
     ExecRequest {
         isolation_default: None,

@@ -22,6 +22,95 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 #[test]
+fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() {
+    let env = Env::new();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["empty_dir"]["rows"], json!([]));
+    crate::common::write_definition(
+        &env,
+        "subagents",
+        "research",
+        "description: Research\nagent: claude\ntools: [Read]\nempty-dir: true",
+        "Research.",
+    );
+    env.rimz()
+        .args(["accounts", "add", "claude", "work"])
+        .output()
+        .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let rows = report["empty_dir"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{report}");
+    for row in rows {
+        assert_eq!(row["kind"], "claude");
+        assert_eq!(row["profiles"], json!(["research"]));
+        assert_eq!(row["state"], "undecided");
+        assert!(
+            row["fix"]
+                .as_str()
+                .unwrap()
+                .contains("rimz trust grant --empty-dir --agents claude")
+        );
+    }
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("EMPTY-DIR") && text.contains("parent's directory instead"),
+        "{text}"
+    );
+    let bin = crate::common::write_env_dump_shim(&env, "claude");
+    env.rimz()
+        .env("PATH", crate::common::path_with_front(&bin))
+        .args(["trust", "grant", "--empty-dir"])
+        .output()
+        .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["empty_dir"]["rows"], json!([]));
+}
+
+#[test]
+fn doctor_empty_dir_reports_dirty_root_without_workspace() {
+    let env = Env::new();
+    let root = env.rimz_home().join("empty");
+    std::fs::create_dir_all(&root).unwrap();
+    let stray = root.join("CLAUDE.md");
+    std::fs::write(&stray, "instructions").unwrap();
+    let report = doctor_json(
+        &env.rimz()
+            .current_dir(&env.home_root)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let error = report["empty_dir"]["check"]["unavailable"]["error"]
+        .as_str()
+        .expect("dirty-root diagnostic");
+    assert!(
+        error.contains(stray.to_str().unwrap()) && error.contains("remove it"),
+        "{error}"
+    );
+    let output = env
+        .rimz()
+        .current_dir(&env.home_root)
+        .arg("doctor")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&output.stdout).contains(stray.to_str().unwrap()));
+    std::fs::remove_file(stray).unwrap();
+    let paths = env.store().paths().clone();
+    std::fs::create_dir_all(paths.empty_room_dir()).unwrap();
+    let stray = paths.empty_room_dir().join("CLAUDE.md");
+    std::fs::write(&stray, "instructions").unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let error = report["empty_dir"]["check"]["unavailable"]["error"]
+        .as_str()
+        .expect("dirty-room diagnostic");
+    assert!(
+        error.contains(stray.to_str().unwrap()) && error.contains("remove it"),
+        "{error}"
+    );
+}
+
+#[test]
 fn doctor_reports_installed_but_disabled_copilot_hooks() {
     let env = Env::new();
     env.install_agent_hooks("copilot");

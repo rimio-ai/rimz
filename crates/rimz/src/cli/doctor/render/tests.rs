@@ -473,6 +473,11 @@ fn report_fixture() -> DoctorReport {
             checks: Vec::new(),
         },
         folder_trust: None,
+        empty_dir: super::super::model::EmptyDir {
+            rows: Vec::new(),
+            check: Probe::Ready(()),
+            profiles_error: None,
+        },
         schema: "rimz.doctor.v1",
         lsp: Probe::Ready(super::super::model::Lsp {
             checks: vec![],

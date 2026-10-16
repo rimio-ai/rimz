@@ -1242,6 +1242,12 @@ fn subagent_empty_dir_preserves_root_lane_and_recreates_on_restart() {
 
 #[cfg(unix)]
 #[test]
+fn subagent_empty_dir_revoked_grant_restart_names_machine_grant() {
+    assert_subagent_checkout_case(false, false, None, None, Some("revoked"));
+}
+
+#[cfg(unix)]
+#[test]
 fn subagent_empty_dir_preserves_named_lane() {
     assert_subagent_checkout_case(false, false, None, None, Some("named"));
 }
@@ -1363,7 +1369,7 @@ fn assert_subagent_checkout_case(
     empty: Option<&str>,
 ) {
     let env = Env::new();
-    let checkout = if empty == Some("root") {
+    let checkout = if matches!(empty, Some("root" | "revoked")) {
         env.project_root.clone()
     } else if repo_subdir {
         let git = Command::new("git")
@@ -1392,7 +1398,7 @@ fn assert_subagent_checkout_case(
     )
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
-    let kind = if matches!(empty, Some("fallback" | "dirty")) {
+    let kind = if matches!(empty, Some("fallback" | "dirty" | "revoked")) {
         env.install_agent_hooks("claude");
         "claude"
     } else {
@@ -1453,6 +1459,19 @@ fn assert_subagent_checkout_case(
         }
     }
     let agent_bin = write_failing_agent_shim(&env, kind, 1);
+    if empty == Some("revoked") {
+        let output = env
+            .rimz()
+            .args(["trust", "grant", "--empty-dir", "--agents", "claude"])
+            .env("PATH", path_with_front(&agent_bin))
+            .bounded_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve_under(
         &env.project_root,
@@ -1632,7 +1651,7 @@ fn assert_subagent_checkout_case(
         checkout.to_str()
     );
     let lane_path = if cwd.is_some() { foreign } else { checkout };
-    let applied = matches!(empty, Some("root" | "named"));
+    let applied = matches!(empty, Some("root" | "named" | "revoked"));
     let checkout = if applied {
         let child = agents
             .iter()
@@ -1644,7 +1663,7 @@ fn assert_subagent_checkout_case(
             path.parent(),
             Some(store.paths().empty_room_dir().as_path())
         );
-        assert_eq!(child.root_lane, empty == Some("root"));
+        assert_eq!(child.root_lane, matches!(empty, Some("root" | "revoked")));
         assert_eq!(
             child.channel.as_deref(),
             (empty == Some("named")).then_some("parent-checkout")
@@ -1768,11 +1787,32 @@ fn assert_subagent_checkout_case(
                 .map(|channel| format!("#{channel}"))
                 .unwrap_or_default()
         );
+        if empty == Some("revoked") {
+            let config = env.home_root.join(".claude.json");
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+            value["projects"]
+                .as_object_mut()
+                .unwrap()
+                .remove(empty_root.to_str().unwrap());
+            std::fs::write(config, serde_json::to_vec(&value).unwrap()).unwrap();
+        }
         let output = env.rimz()
             .args(["--mux", "zellij", "agents", "restart", &address])
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
             .bounded_output().unwrap();
+        if empty == Some("revoked") {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("rimz trust grant --empty-dir --agents claude"),
+                "{stderr}"
+            );
+            assert!(
+                !stderr.contains("rimz trust grant --agents claude"),
+                "{stderr}"
+            );
+        }
         assert!(
             output.status.success(),
             "restart: {}",

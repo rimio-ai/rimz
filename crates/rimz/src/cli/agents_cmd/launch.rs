@@ -1185,6 +1185,7 @@ fn preflight_cell(
     {
         crate::cli::folder_trust::preflight(
             cell.kind.as_str(),
+            cwd,
             adapter.folder_trust(
                 cwd,
                 (prepared.is_none() && cell.launch.checkout.is_none())

@@ -939,6 +939,7 @@ fn warn_restricted_folder_trust(rows: &[rimz::agents::FolderTrustRow]) -> Result
         if let rimz::agents::FolderTrust::Restricted { key } = &row.trust {
             crate::cli::folder_trust::preflight(
                 row.kind,
+                key,
                 Some(rimz::agents::FolderTrust::Restricted { key: key.clone() }),
                 None,
             )?;
@@ -975,13 +976,13 @@ fn prompt_folder_trust(
                     "rimz: {} has no trust decision for `{}`; {}",
                     row.kind,
                     gap.key.display(),
-                    gap.fix(row.kind)
+                    gap.fix(row.kind, "rimz trust grant")
                 )?;
             }
         }
         return Ok(());
     }
-    let kinds = crate::cli::folder_trust::preview(&rows)?;
+    let kinds = crate::cli::folder_trust::preview(&rows, "rimz trust grant")?;
     if !asks {
         rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &declined_kinds)?;
         return Ok(());
@@ -998,7 +999,7 @@ fn prompt_folder_trust(
             .filter(|row| kinds.iter().any(|kind| kind == row.kind))
             .collect();
         rimz::trust::clear_folder_trust_dismissal(&workspace.project_root)?;
-        crate::cli::folder_trust::grant(&grantable, "rimz")?;
+        crate::cli::folder_trust::grant(&grantable, "rimz", "rimz trust grant")?;
     } else {
         rimz::trust::dismiss_folder_trust_prompt(&workspace.project_root, &declined_kinds)?;
         writeln!(

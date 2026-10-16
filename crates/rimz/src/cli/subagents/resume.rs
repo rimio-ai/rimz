@@ -110,6 +110,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     if child.checkout.is_some() {
         crate::cli::folder_trust::preflight(
             child.kind.as_str(),
+            &cwd,
             adapter.folder_trust(
                 &cwd,
                 None,
