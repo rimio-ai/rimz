@@ -218,6 +218,63 @@ mod tests {
     }
 
     #[test]
+    fn singleton_finished_fleet_folds_120_sessions_with_a_warm_memo() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        let transcript = dir.path().join("opencode.db");
+        let connection = crate::testkit::opencode::OpenCodeDb::new(&transcript, false, false);
+        let mut agents = Vec::new();
+        let mut groups = Vec::new();
+        for index in 0..120 {
+            let id = format!("seat-{index}");
+            let data = serde_json::json!({
+                "cost": 0.25, "model": {"id": "gpt", "providerID": "openai"},
+                "time": {"created": 1_780_394_400_000_u64},
+                "tokens": {"input": 10, "output": 2, "cache": {"read": 3, "write": 4}}
+            })
+            .to_string();
+            connection.message(&id, &id, "assistant", 1_780_394_400_000, &data);
+            let mut agent = AgentState::stub("opencode", &id, AgentStatus::Success);
+            agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+            agents.push(agent);
+            let mut row = activity_row(
+                true,
+                Some(AgentStatus::Success),
+                jiff::Timestamp::UNIX_EPOCH,
+                dir.path(),
+            );
+            row.id = id.clone();
+            let mut group = worktree_group(dir.path(), vec![row]);
+            group.key = id;
+            group.finished = true;
+            groups.push(group);
+        }
+        drop(connection);
+        let agents = agents.iter().collect::<Vec<_>>();
+        let mut memo = EffortParseMemo::default();
+        for _pass in ["cold", "warm"] {
+            let computed = compute_cohort_effort(
+                &groups,
+                &agents,
+                &runtime,
+                jiff::Timestamp::UNIX_EPOCH,
+                180,
+                &crate::agents::PriceBook::default(),
+                &mut memo,
+            );
+            assert_eq!(computed.len(), 120);
+            assert!(computed.values().all(|effort| effort.cost_usd == Some(0.25)
+                && effort.tokens.input == 10
+                && effort.seats.len() == 1));
+        }
+    }
+
+    #[test]
     fn collapsed_group_folds_audit_slots_with_one_transcript_memo() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = crate::WorkspaceId::from_project_root(dir.path());

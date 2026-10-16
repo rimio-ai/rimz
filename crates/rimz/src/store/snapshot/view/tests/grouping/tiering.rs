@@ -162,6 +162,59 @@ fn clean_success_group_leads_merged_success_group() {
 }
 
 #[test]
+fn finished_partition_follows_archived_unfinished_and_precedes_external() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("done", "/repo/done", AgentStatus::Success, 1_000),
+        agent_in("old", "/repo/old", AgentStatus::Idle, 2_000).active_ago(25 * 60 * 60),
+        agent("claude", "outside", AgentStatus::Waiting, 3_000),
+    ]);
+    for group in std::sync::Arc::make_mut(&mut snapshot.worktree_groups) {
+        if group.label == "done" {
+            group.clean = Some(true);
+            group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(labels(&snapshot), ["old", "done", "external"]);
+    assert!(snapshot.worktree_groups[0].rows[0].archived);
+    assert!(snapshot.worktree_groups[1].finished);
+}
+
+#[test]
+fn native_child_attention_keeps_merged_success_unfinished_and_expanded() {
+    for status in [AgentStatus::Failed, AgentStatus::Waiting] {
+        let mut snapshot = room_with_agent_panes(vec![
+            agent_in("parent", "/repo/merged", AgentStatus::Success, 1_000),
+            child_state("parent", "child", status, 0),
+            agent_in("idle", "/repo/idle", AgentStatus::Idle, 2_000),
+        ]);
+        let merged = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+            .iter_mut()
+            .find(|group| group.label == "merged")
+            .expect("merged group present");
+        merged.clean = Some(true);
+        merged.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        assert_eq!(merged.rows.len(), 1);
+        assert_eq!(merged.rows[0].status(), Some(AgentStatus::Success));
+        assert_eq!(merged.rows[0].attention_status(), Some(status));
+
+        snapshot.sort_groups_for_presentation();
+
+        let merged = snapshot
+            .worktree_groups
+            .iter()
+            .find(|group| group.label == "merged")
+            .expect("merged group present");
+        assert!(!merged.finished, "native {status:?} blocks finish");
+        assert!(
+            !merged.collapses(),
+            "an actionable singleton stays expanded"
+        );
+        assert_eq!(labels(&snapshot), ["merged", "idle"]);
+    }
+}
+
+#[test]
 fn merged_success_archives_immediately_and_attention_revives_it() {
     let mut snapshot = ranked_snapshot(vec![
         agent_in("done", "/repo/done", AgentStatus::Success, 1_000).active_ago(5 * 60),

@@ -523,8 +523,14 @@ fn finished_roster_pins_the_member_cost() {
             .any(|line| line.contains("✓ sidecar-only  ✓ absent"))
     );
     assert!(
+        texts.iter().any(|line| line.trim_end().ends_with("$2.00")),
+        "before cohort effort arrives the receipt sums session costs: {texts:?}"
+    );
+    no_cost.cohort_effort = Some(Default::default());
+    let (texts, _, _) = render_group(&no_cost, false);
+    assert!(
         texts.iter().all(|line| !line.contains('$')),
-        "missing cohort cost never falls back to live sidecars: {texts:?}"
+        "published effort wins even without a known cost: {texts:?}"
     );
 }
 
@@ -740,9 +746,9 @@ fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
 }
 
 #[test]
-fn lone_finished_row_stays_visible_and_header_jumps_to_it() {
+fn lone_finished_agent_collapses_but_process_stays_visible() {
     for (kind, row, identity) in [
-        ("agent", agent_row("solo", AgentStatus::Success), "✓ solo"),
+        ("agent", agent_row_with_cost("solo", 1.25), "✓ solo"),
         ("process", process_row("shell"), "○ zsh"),
     ] {
         let mut finished = group(vec![row]);
@@ -754,6 +760,29 @@ fn lone_finished_row_stays_visible_and_header_jumps_to_it() {
             texts.iter().any(|line| line.contains(identity)),
             "lone finished {kind} keeps its natural card identity: {texts:?}"
         );
+        if kind == "agent" {
+            assert!(
+                texts
+                    .iter()
+                    .any(|line| line.contains("▸ ✓ solo") && line.trim_end().ends_with("$1.25")),
+                "{texts:?}"
+            );
+            assert!(
+                map.iter().all(Option::is_none),
+                "receipt has no row ordinal: {map:?}"
+            );
+            for line in 0..texts.len() {
+                assert!(
+                    hits.iter().any(|hit| hit.rows.contains(&line)
+                        && hit.target == HitTarget::ToggleGroup(finished.key.clone())),
+                    "header and receipt toggle: {hits:?}"
+                );
+            }
+            let (expanded, map, _) = render_group(&finished, true);
+            assert!(map.contains(&Some(0)), "{expanded:?}");
+            assert!(expanded.iter().all(|line| !line.contains('▸')));
+            continue;
+        }
         assert!(
             texts.iter().all(|line| !line.contains('▸')),
             "lone finished {kind} emits no receipt: {texts:?}"
