@@ -152,6 +152,27 @@ impl TmuxBackend {
 }
 
 impl MuxBackend for TmuxBackend {
+    fn lagging_views(&self, session: &str) -> Result<Option<crate::mux::LaggingViews>> {
+        self.read_lagging_views(session)
+    }
+
+    fn lagging_view(
+        &self,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<Option<crate::mux::LaggingView>> {
+        self.read_lagging_view(session, pane)
+    }
+
+    fn fit_view(
+        &self,
+        view: &crate::ids::ViewId,
+        target: crate::mux::ViewSize,
+        sidebar_cols: std::num::NonZeroU16,
+    ) -> Result<Option<HashMap<PaneId, crate::mux::FittedPane>>> {
+        self.fit_hidden_view(view, target, sidebar_cols)
+    }
+
     fn pane_content_size(
         &self,
         pane: &PaneId,

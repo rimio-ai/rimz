@@ -14,6 +14,7 @@ macro_rules! require_tmux {
 
 mod agent_lifecycle;
 mod containment;
+mod hidden_geometry;
 mod large_paste;
 mod layout;
 mod pane_io;

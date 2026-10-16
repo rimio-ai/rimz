@@ -344,6 +344,34 @@ pub struct PaneContentSize {
     pub cols: u16,
 }
 
+/// Client-sized rectangle to apply to a hidden view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewSize {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Laid-out rows and, only when explicitly reasserted, sidebar columns from a fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FittedPane {
+    pub rows: u16,
+    pub cols: Option<u16>,
+}
+
+/// Hidden views that lag the attached session's current view, most recent first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaggingViews {
+    pub target: ViewSize,
+    pub views: Vec<crate::ids::ViewId>,
+}
+
+/// A jump destination that needs fitting before it is revealed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaggingView {
+    pub view: crate::ids::ViewId,
+    pub target: ViewSize,
+}
+
 /// The freshest pane roster a backend push channel has cached without a
 /// control-plane command.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -951,6 +979,26 @@ pub enum SessionLiveness {
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
+    /// Read hidden, non-manual views lagging the current attached view.
+    fn lagging_views(&self, _session: &str) -> Result<Option<LaggingViews>> {
+        Ok(None)
+    }
+
+    /// Freshly check whether a jump destination needs fitting.
+    fn lagging_view(&self, _session: &str, _pane: &PaneId) -> Result<Option<LaggingView>> {
+        Ok(None)
+    }
+
+    /// Fit one view and its sidebar, preserving autosize policy. `None` means skipped.
+    fn fit_view(
+        &self,
+        _view: &crate::ids::ViewId,
+        _target: ViewSize,
+        _sidebar_cols: std::num::NonZeroU16,
+    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
+        Ok(None)
+    }
+
     fn name(&self) -> MuxName;
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()>;
     fn attach_command(&self, name: &str, config: &crate::config::MultiplexerConfig) -> CommandSpec;

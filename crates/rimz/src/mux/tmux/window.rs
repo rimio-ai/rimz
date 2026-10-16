@@ -19,6 +19,11 @@ use super::parse::parse_new_window_ids;
 const RENAME_OBSERVED_OPTION: &str = "@rimz_rename_observed";
 const RENAME_TARGET_OPTION: &str = "@rimz_rename_target";
 
+// A host's ignore-size control client must not turn a detached room into a
+// client-sized one. Client loops retain the target session's format context.
+const SIZING_CLIENT: &str = "#{!=:#{L:#{?#{&&:#{==:#{client_session},#{session_name}},#{==:#{m:*ignore-size*,#{client_flags}},0}},1,}},}";
+const WINDOW_GEOMETRY: &str = "#{window_id} #{window_active} #{window_width} #{window_height} #{window_stack_index} #{window-size}";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TmuxPaneGeometry {
     pub(super) pane_id: String,
@@ -122,6 +127,151 @@ pub(super) fn window_name_arg(raw: &str) -> String {
 }
 
 impl TmuxBackend {
+    pub(super) fn read_lagging_views(
+        &self,
+        session: &str,
+    ) -> Result<Option<crate::mux::LaggingViews>> {
+        let format = format!("{WINDOW_GEOMETRY} {SIZING_CLIENT}");
+        let output = self
+            .cmd()
+            .args(["list-windows", "-t", session, "-F", &format])
+            .run()?;
+        select_lagging_views(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    pub(super) fn read_lagging_view(
+        &self,
+        session: &str,
+        pane: &PaneId,
+    ) -> Result<Option<crate::mux::LaggingView>> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        let format = format!("#{{session_id}} {WINDOW_GEOMETRY} {SIZING_CLIENT}");
+        let output = self
+            .batch_spec(&[session, pane.raw()].map(|target| {
+                ["display-message", "-p", "-t", target, &format]
+                    .map(str::to_owned)
+                    .into()
+            }))
+            .run()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut lines = text.lines();
+        let (source_session, current) = lines
+            .next()
+            .and_then(|line| line.split_once(' '))
+            .ok_or_else(geometry_error)?;
+        let (target_session, target) = lines
+            .next()
+            .and_then(|line| line.split_once(' '))
+            .ok_or_else(geometry_error)?;
+        if lines.next().is_some() {
+            return Err(geometry_error());
+        }
+        if source_session != target_session {
+            return Ok(None);
+        }
+        Ok(
+            select_lagging_views(&format!("{current}\n{target}"))?.and_then(|lag| {
+                lag.views
+                    .into_iter()
+                    .next()
+                    .map(|view| crate::mux::LaggingView {
+                        view,
+                        target: lag.target,
+                    })
+            }),
+        )
+    }
+
+    pub(super) fn fit_hidden_view(
+        &self,
+        view: &crate::ids::ViewId,
+        target: crate::mux::ViewSize,
+        sidebar_cols: std::num::NonZeroU16,
+    ) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
+        let window = view.as_str();
+        window
+            .strip_prefix('@')
+            .and_then(|id| id.parse::<u32>().ok())
+            .ok_or_else(geometry_error)?;
+        let before = self
+            .batch_spec(&[
+                ["show-options", "-wqv", "-t", window, "window-size"]
+                    .map(str::to_owned)
+                    .into(),
+                [
+                    "list-panes",
+                    "-t",
+                    window,
+                    "-F",
+                    "#{pane_id} #{==:#{pane_title},rimz-sidebar}",
+                ]
+                .map(str::to_owned)
+                .into(),
+            ])
+            .run()?;
+        let before = String::from_utf8_lossy(&before.stdout);
+        let mut lines = before.lines().peekable();
+        let local = match lines.peek().copied() {
+            Some("latest" | "largest" | "smallest" | "manual") => lines.next().unwrap_or_default(),
+            _ => "",
+        };
+        let mut sidebars = Vec::new();
+        let mut panes = 0;
+        for line in lines {
+            let mut fields = line.split_whitespace();
+            let pane = fields.next().ok_or_else(geometry_error)?;
+            pane.strip_prefix('%')
+                .and_then(|id| id.parse::<u32>().ok())
+                .ok_or_else(geometry_error)?;
+            match fields.next() {
+                Some("1") => sidebars.push(pane),
+                Some("0") => (),
+                _ => return Err(geometry_error()),
+            }
+            if fields.next().is_some() {
+                return Err(geometry_error());
+            }
+            panes += 1;
+        }
+        let sidebar_guard = "#{&&:#{==:#{window_zoomed_flag},0},#{&&:#{>:#{window_panes},1},#{==:#{P:#{?#{==:#{pane_title},rimz-sidebar},1,}},1}}}";
+        let sidebar_resize = match sidebars.as_slice() {
+            [pane] if panes > 1 => format!(
+                "if-shell -F -t {window} '{sidebar_guard}' 'resize-pane -t {pane} -x {sidebar_cols} ; display-message -p \"sidebar {pane} {sidebar_cols}\"' ; "
+            ),
+            _ => String::new(),
+        };
+        let restore = match local {
+            "" => format!("set-window-option -u -t {window} window-size"),
+            option @ ("latest" | "largest" | "smallest" | "manual") => {
+                format!("set-window-option -t {window} window-size {option}")
+            }
+            _ => return Err(geometry_error()),
+        };
+        // Selection may change while a paced queue is pending. Recheck in
+        // tmux at the mutation, without another read subprocess per step.
+        let guard = format!(
+            "#{{&&:#{{&&:#{{==:#{{window_active}},0}},#{{!=:#{{window-size}},manual}}}},{SIZING_CLIENT}}}"
+        );
+        let commands = format!(
+            "resize-window -t {window} -x {} -y {} ; {sidebar_resize}{restore} ; list-panes -t {window} -F '#{{pane_id}} #{{pane_height}}'",
+            target.cols, target.rows
+        );
+        let output = self
+            .batch_spec(&[[
+                "if-shell",
+                "-F",
+                "-t",
+                window,
+                &guard,
+                &commands,
+                "display-message -p skipped",
+            ]
+            .map(str::to_owned)
+            .into()])
+            .run()?;
+        parse_fitted_panes(&String::from_utf8_lossy(&output.stdout))
+    }
+
     pub(super) fn companion_geometry(
         &self,
         anchor: &PaneId,
@@ -1359,4 +1509,180 @@ fn parse_tmux_pane_cell(line: &str) -> Option<TmuxPaneCell> {
         height: fields.next()?.parse().ok()?,
     };
     fields.next().is_none().then_some(cell)
+}
+
+struct WindowGeometry {
+    view: crate::ids::ViewId,
+    current: bool,
+    size: crate::mux::ViewSize,
+    stack: usize,
+    manual: bool,
+    attached: bool,
+}
+
+fn geometry_error() -> MuxErr {
+    MuxErr::Output {
+        program: "tmux".to_owned(),
+        reason: "invalid hidden-window geometry".to_owned(),
+    }
+}
+
+fn parse_window_geometry(line: &str) -> Option<WindowGeometry> {
+    let mut fields = line.split_whitespace();
+    let view = fields.next()?;
+    view.strip_prefix('@')?.parse::<u32>().ok()?;
+    let current = match fields.next()? {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    let cols = fields.next()?.parse().ok().filter(|cols| *cols > 0)?;
+    let rows = fields.next()?.parse().ok().filter(|rows| *rows > 0)?;
+    let stack = fields.next()?.parse().ok()?;
+    let manual = match fields.next()? {
+        "manual" => true,
+        "latest" | "largest" | "smallest" => false,
+        _ => return None,
+    };
+    let attached = match fields.next()? {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    fields.next().is_none().then(|| WindowGeometry {
+        view: crate::ids::ViewId::new_unchecked(view),
+        current,
+        size: crate::mux::ViewSize { cols, rows },
+        stack,
+        manual,
+        attached,
+    })
+}
+
+fn parse_fitted_panes(
+    output: &str,
+) -> Result<Option<std::collections::HashMap<PaneId, crate::mux::FittedPane>>> {
+    if output.trim() == "skipped" {
+        return Ok(None);
+    }
+    let mut panes = std::collections::HashMap::new();
+    let mut sidebar = None;
+    for line in output.lines() {
+        let reasserted = line.strip_prefix("sidebar ");
+        let mut fields = reasserted.unwrap_or(line).split_whitespace();
+        let pane = fields.next().ok_or_else(geometry_error)?;
+        pane.strip_prefix('%')
+            .and_then(|id| id.parse::<u32>().ok())
+            .ok_or_else(geometry_error)?;
+        let extent = fields
+            .next()
+            .and_then(|extent| extent.parse().ok())
+            .filter(|extent| *extent > 0)
+            .ok_or_else(geometry_error)?;
+        if fields.next().is_some() {
+            return Err(geometry_error());
+        }
+        let pane = PaneId::from_parts(MuxName::Tmux, pane);
+        if reasserted.is_some() {
+            if sidebar.replace((pane, extent)).is_some() || !panes.is_empty() {
+                return Err(geometry_error());
+            }
+            continue;
+        }
+        panes.insert(
+            pane,
+            crate::mux::FittedPane {
+                rows: extent,
+                cols: None,
+            },
+        );
+    }
+    if let Some((pane, cols)) = sidebar {
+        panes.get_mut(&pane).ok_or_else(geometry_error)?.cols = Some(cols);
+    }
+    Ok(Some(panes))
+}
+
+fn select_lagging_views(output: &str) -> Result<Option<crate::mux::LaggingViews>> {
+    let windows = output
+        .lines()
+        .map(|line| parse_window_geometry(line).ok_or_else(geometry_error))
+        .collect::<Result<Vec<_>>>()?;
+    let current = windows
+        .iter()
+        .find(|window| window.current)
+        .ok_or_else(geometry_error)?;
+    if !current.attached {
+        return Ok(None);
+    }
+    let target = current.size;
+    let mut hidden: Vec<_> = windows
+        .into_iter()
+        .filter(|window| !window.current && !window.manual && window.size != target)
+        .collect();
+    hidden.sort_by_key(|window| {
+        if window.stack == 0 {
+            usize::MAX
+        } else {
+            window.stack
+        }
+    });
+    Ok(Some(crate::mux::LaggingViews {
+        target,
+        views: hidden.into_iter().map(|window| window.view).collect(),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::ViewId;
+    use crate::mux::{LaggingViews, ViewSize};
+
+    #[test]
+    fn declined_fit_is_skipped_not_fitted_rows() {
+        assert!(matches!(parse_fitted_panes("skipped\n"), Ok(None)));
+        assert_eq!(
+            parse_fitted_panes("%1 65\n").unwrap(),
+            Some(std::collections::HashMap::from([(
+                PaneId::from_parts(MuxName::Tmux, "%1"),
+                crate::mux::FittedPane {
+                    rows: 65,
+                    cols: None
+                }
+            ),]))
+        );
+        assert!(parse_fitted_panes("skipped\n%1 65\n").is_err());
+    }
+
+    #[test]
+    fn lagging_selection_orders_mru_and_excludes_current_manual_and_equal() {
+        let output = "@0 1 200 60 0 latest 1\n@1 0 180 50 0 latest 1\n@2 0 180 50 2 largest 1\n@3 0 180 50 1 smallest 1\n@4 0 180 50 3 manual 1\n@5 0 200 60 4 latest 1\n";
+        assert_eq!(
+            select_lagging_views(output).unwrap(),
+            Some(LaggingViews {
+                target: ViewSize {
+                    cols: 200,
+                    rows: 60
+                },
+                views: ["@3", "@2", "@1"].map(ViewId::new_unchecked).into(),
+            })
+        );
+    }
+
+    #[test]
+    fn detached_views_are_not_fitted_and_malformed_rows_are_rejected() {
+        assert_eq!(
+            select_lagging_views("@0 1 200 60 0 latest 0\n@1 0 180 50 1 latest 0").unwrap(),
+            None
+        );
+        for output in [
+            "@0 1 wide 60 0 latest 1",
+            "@0 1 200 60 0 latest 1 extra",
+            "@0 1 200 60 0 unknown 1",
+            "not-a-view 1 200 60 0 latest 1",
+        ] {
+            assert!(select_lagging_views(output).is_err(), "{output}");
+        }
+    }
 }
