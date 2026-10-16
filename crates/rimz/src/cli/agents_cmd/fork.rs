@@ -354,6 +354,12 @@ fn validate_fork_source(
             mode: agent.mode,
             isolation: agent.isolation,
             channel: agent.channel.clone(),
+            // The fork continues the source's place in an agent-launch
+            // chain: it copies the source's generation, whoever runs the
+            // command, so a fork never restarts the chain at 0. It is not a
+            // peer launch, so it neither counts a new generation nor names a
+            // launcher.
+            launch_depth: agent.launch_depth,
             ..rimz::agents::LaunchParams::default()
         },
     })
@@ -622,5 +628,23 @@ mod tests {
         assert_eq!(seed.launch.role, None);
         assert_eq!(seed.launch.model, None);
         assert_eq!(seed.launch.effort, None);
+        assert_eq!(seed.launch.launch_depth, None);
+    }
+
+    #[test]
+    fn fork_validation_inherits_the_source_chain_generation() {
+        let mut agent = source("session-1");
+        agent.launch_depth = Some(3);
+        agent.launched_by = Some(rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launcher"),
+        });
+
+        let seed = validate_fork_source(&agent, &NO_LOGINS, &NO_ACCOUNTS, |_| true, |_| true)
+            .expect("valid fork");
+
+        assert_eq!(seed.launch.launch_depth, Some(3));
+        assert_eq!(seed.launch.launched_by, None);
+        assert_eq!(seed.launch.parent_agent_id, None);
     }
 }
