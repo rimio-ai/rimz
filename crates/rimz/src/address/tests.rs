@@ -2569,6 +2569,7 @@ fn an_ended_molt_intermediate_does_not_restore_its_predecessors_role() {
     successor.molted_from = intermediate.launch_id.clone();
     successor.ended_at = None;
     successor.status = AgentStatus::Running;
+    // reap_stale_sessions collapses paneless same-kind sessions sharing a worktree, hiding this bug.
     successor.pane = Some(PaneRef::from_id(PaneId::from_parts(
         MuxName::Zellij,
         "terminal_66",

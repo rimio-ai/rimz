@@ -54,6 +54,7 @@ fn stage_wake_crosses_an_ended_molt_intermediate() {
         );
         observation.agent_name = Some(name.to_owned());
         observation.launch.molted_from = predecessor.map(AgentSessionId::from);
+        // reap_stale_sessions collapses paneless same-kind sessions sharing a worktree, hiding this bug.
         observation.pane_id = Some(PaneId::from_parts(
             MuxName::Zellij,
             match name {
