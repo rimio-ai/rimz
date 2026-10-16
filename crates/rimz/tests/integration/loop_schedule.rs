@@ -8893,6 +8893,65 @@ fn loop_add_persists_machine_and_project_signal_triggers() {
     assert_ne!(stale.current_hash.as_deref(), Some(trusted_hash.as_str()));
 }
 
+#[cfg(unix)]
+#[test]
+fn loop_add_from_an_empty_dir_caller_anchors_at_its_checkout() {
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store().record_workspace(&workspace).unwrap();
+    let caller_cwd = env.store().paths().empty_agent_dir("caller");
+    std::fs::create_dir_all(&caller_cwd).unwrap();
+    let mut observation = rimz::agents::AgentLifecycleObservation::new(
+        Some("caller".into()),
+        rimz::agents::LifecycleSignal::Registered,
+    );
+    observation.worktree_path = Some(caller_cwd.display().to_string());
+    observation.launch.checkout = Some(env.project_root.display().to_string());
+    env.store()
+        .append_event(&rimz::store::event::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let output = calling_loop(&env, "caller")
+        .current_dir(&caller_cwd)
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &env.project_root,
+        ))
+        .args([
+            "loop",
+            "add",
+            "from-empty",
+            "--check",
+            "true",
+            "--every",
+            "1h",
+        ])
+        .output()
+        .expect("rimz loop add");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let machine: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
+            .expect("parse loop config");
+    let task = &machine.tasks.0["from-empty"];
+    assert_eq!(
+        canonical(&task.resolved_root()),
+        canonical(&env.project_root)
+    );
+    assert_eq!(
+        task.dir, None,
+        "the task must not run in the caller's empty dir"
+    );
+}
+
 #[test]
 fn loop_add_rejects_agent_signal_self_waits() {
     let env = Env::new();

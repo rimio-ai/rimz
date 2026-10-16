@@ -154,7 +154,7 @@ The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout
 | `--budget-per-day <AMOUNT>` | `--agent` with `--budget` | Daily dollar cap for the task; see [budgets](#budgets). |
 | `--surplus <RATIO>`, `--surplus-after <DUR>` | `--agent`, `--wait` | Fire only while the provider window has headroom; see [the surplus gate](#the-surplus-gate). |
 | `--throttle on\|off` | `--agent` | `off` exempts the task from [the start throttle](#the-start-throttle). Default `on`. |
-| `--root <PATH>` | all | Project whose room hosts the task. Default `.`. |
+| `--root <PATH>` | all | Project whose room hosts the task. Default `.`; inside an `empty-dir` agent's directory, the default is the checkout that agent was launched from. |
 | `--project` | `--agent`, check-only | Write the task to the project's `.rimz/config.toml`; see [project tasks](#project-tasks). |
 
 `--mode`, `--effort`, `--fast`, `--no-fast`, `--account`, `--system-prompt-file`, `--budget`, and `--budget-per-day` are refused on `--wait` and check-only tasks, and `--worktree` on check-only tasks.
