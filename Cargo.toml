@@ -33,6 +33,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# Workflow schemas are derived from the same types as the TOML loader.
+schemars = "1"
 syn = { version = "3", features = ["full", "visit"] }
 # Atlas consumes rust-analyzer's batch SCIP export so reference evidence is
 # exact and generated once per working-tree snapshot rather than queried live.
