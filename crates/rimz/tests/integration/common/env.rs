@@ -492,6 +492,7 @@ impl Env {
             "qwen" => self.home_root.join(".qwen").join("settings.json"),
             "grok" => self.home_root.join(".grok/hooks/rimz.json"),
             "kiro" => self.home_root.join(".kiro/hooks/rimz.json"),
+            "hermes" => self.home_root.join(".hermes/config.yaml"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -530,6 +531,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
+            "hermes" => text.contains("rimz hooks feed --source hermes"),
             "claude" | "pi" | "qwen" | "grok" | "kiro" => text.contains("_rimz_managed"),
             "copilot" => {
                 text.contains("_rimz_managed")

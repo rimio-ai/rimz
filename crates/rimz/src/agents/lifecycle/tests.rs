@@ -64,6 +64,7 @@ fn terminal_disposition_table_pins_every_signal() {
             },
             None,
         ),
+        (LifecycleSignal::AskResolved { native_key: None }, None),
         (LifecycleSignal::Compacting, None),
         (
             LifecycleSignal::CompactionEnded {
@@ -430,6 +431,67 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
 }
 
 #[test]
+fn ask_resolved_closes_only_its_own_waiting_ask() {
+    let resolved = |key: &str| LifecycleSignal::AskResolved {
+        native_key: Some(key.to_owned()),
+    };
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let answered = step(
+        Some(&waiting),
+        Some("ask-call"),
+        PriorTurnIds::default(),
+        &resolved("ask-call"),
+    );
+    assert_eq!(answered.next.status, AgentStatus::Running);
+    assert_eq!(answered.kind, TransitionKind::Normal);
+    assert!(answered.waiting_cleared);
+    assert!(!answered.opened_turn);
+
+    let other = step(
+        Some(&waiting),
+        Some("ask-call"),
+        PriorTurnIds::default(),
+        &resolved("other-call"),
+    );
+    assert_eq!(
+        (other.next, other.kind, other.waiting_cleared),
+        (
+            waiting,
+            TransitionKind::Ignored {
+                reason: "ask resolved for another open ask",
+            },
+            false,
+        )
+    );
+
+    let settled = [AgentStatus::Success, AgentStatus::Idle, AgentStatus::Failed]
+        .map(|status| Some(state(status, TurnPhase::Idle, false)));
+    for prev in settled.into_iter().chain([None]) {
+        let transition = step(
+            prev.as_ref(),
+            None,
+            PriorTurnIds::default(),
+            &resolved("ask-call"),
+        );
+        assert_eq!(
+            (
+                transition.next.status,
+                transition.kind,
+                transition.opened_turn
+            ),
+            (
+                prev.map_or(AgentStatus::Idle, |state| state.status),
+                TransitionKind::Ignored {
+                    reason: "ask resolved outside a waiting row",
+                },
+                false,
+            ),
+            "{prev:?}"
+        );
+    }
+}
+
+#[test]
 fn activity_evidence_reconciles_only_running_and_resting_states() {
     let cases = [
         (Some(AgentStatus::Running), AgentStatus::Running, None),
@@ -457,6 +519,19 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                     edits: false,
                     name: None,
                     native_key: None,
+                    turn_id: None,
+                },
+                "tool used outside a running turn",
+                "tool used before session registered",
+            ),
+            // The unnamed, non-mutating keyed shape Claude, Qwen, Grok, Copilot,
+            // and Pi emit still proves activity and recovers a missed start.
+            (
+                LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                    name: None,
+                    native_key: Some("ask-call".to_owned()),
                     turn_id: None,
                 },
                 "tool used outside a running turn",
@@ -884,6 +959,12 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
             },
             "awaiting_input",
         ),
+        (
+            LifecycleSignal::AskResolved {
+                native_key: Some("ask-call".to_owned()),
+            },
+            "ask_resolved",
+        ),
         (LifecycleSignal::SubagentStarted, "subagent_started"),
         (
             LifecycleSignal::SubagentStopped { errored: true },
@@ -930,6 +1011,10 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
     assert_legacy(
         serde_json::json!({ "signal": "tool_used", "mutates": true }),
         tool(false),
+    );
+    assert_eq!(
+        serde_json::to_value(LifecycleSignal::AskResolved { native_key: None }).unwrap(),
+        serde_json::json!({ "signal": "ask_resolved" })
     );
     assert_legacy(
         serde_json::json!({ "signal": "subagent_stopped" }),

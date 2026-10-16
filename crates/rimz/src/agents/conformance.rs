@@ -239,6 +239,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("kiro", ".kiro"),
         ("qwen", ".qwen"),
         ("grok", ".grok"),
+        ("hermes", ".hermes"),
     ];
     assert_eq!(defaults.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -272,6 +273,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("kiro", ".kiro/skills", ManualSkill::Unsupported),
         ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
         ("grok", ".agents/skills", ManualSkill::Unsupported),
+        ("hermes", ".hermes/skills", ManualSkill::Unsupported),
     ];
     assert_eq!(table.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -300,6 +302,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("claude", "CLAUDE_CONFIG_DIR", " /selected , /archive "),
         ("qwen", "QWEN_HOME", "/selected"),
         ("kiro", "KIRO_HOME", "/selected"),
+        ("hermes", "HERMES_HOME", "/selected"),
     ] {
         let adapter = BUILTINS
             .iter()
@@ -338,6 +341,7 @@ fn builtin_config_homes_honor_provider_overrides() {
         ("kiro", "KIRO_HOME", "/selected", "/selected"),
         ("qwen", "QWEN_HOME", "/selected", "/selected"),
         ("grok", "GROK_HOME", "/selected", "/selected"),
+        ("hermes", "HERMES_HOME", "/selected", "/selected"),
     ];
     for adapter in BUILTINS {
         let kind = adapter.spec().kind;
@@ -702,6 +706,13 @@ system-prompt-file-flag = "--system-prompt-file"
     grok.empty-Effort=Ok([])
     grok.empty-AutoCompact=Ok([])
     grok.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
+    hermes.Model=Ok(["--model", "model-x"])
+    hermes.Effort=Ok(["--reasoning", "high"])
+    hermes.AutoCompact=Err(UnsupportedField { agent: "hermes", field: "auto-compact" })
+    hermes.empty-Model=Ok([])
+    hermes.empty-Effort=Ok([])
+    hermes.empty-AutoCompact=Ok([])
+    hermes.all=Ok(["--model", "model-x", "--reasoning", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -763,6 +774,7 @@ fn fast_switch_characterization() {
     kiro: on=agent `kiro` has no fast-mode launch switch; launch without --fast off=Ok([])
     qwen: on=agent `qwen` has no fast-mode launch switch; launch without --fast off=Ok([])
     grok: on=agent `grok` has no fast-mode launch switch; launch without --fast off=Ok([])
+    hermes: on=agent `hermes` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -773,6 +785,14 @@ fn strings(values: &[&str]) -> Vec<String> {
 
 #[test]
 fn turn_start_control_blocks_never_become_prompts() {
+    // Hermes nests the turn's prompt under `extra.user_message`.
+    fn set_prompt(payload: &mut serde_json::Value, prompt: &str) {
+        payload["prompt"] = serde_json::json!(prompt);
+        payload["submitted_prompt"] = serde_json::json!(prompt);
+        if payload["extra"].is_object() {
+            payload["extra"]["user_message"] = serde_json::json!(prompt);
+        }
+    }
     let root = tempfile::tempdir().unwrap();
     let plugin_dir = root.path().join("fixturebot");
     fs::create_dir(&plugin_dir).unwrap();
@@ -799,8 +819,7 @@ fn turn_start_control_blocks_never_become_prompts() {
                     return true;
                 }
                 let mut payload = sample.payload.clone();
-                payload["prompt"] = serde_json::json!("a real request");
-                payload["submitted_prompt"] = serde_json::json!("a real request");
+                set_prompt(&mut payload, "a real request");
                 adapter
                     .decode_hook(sample.event_name, &payload)
                     .unwrap()
@@ -812,9 +831,7 @@ fn turn_start_control_blocks_never_become_prompts() {
             .unwrap_or_else(|| panic!("{kind}: no turn-start fixture"));
         for tag in super::CONTROL_TAG_PREFIXES {
             let mut payload = sample.payload.clone();
-            let prompt = serde_json::json!(format!("{tag}synthetic control text"));
-            payload["prompt"] = prompt.clone();
-            payload["submitted_prompt"] = prompt;
+            set_prompt(&mut payload, &format!("{tag}synthetic control text"));
             let decoded = adapter.decode_hook(sample.event_name, &payload).unwrap();
             let observation = decoded.lifecycle().unwrap();
             assert_eq!(observation.signal.kind(), LifecycleSignalKind::TurnStarted);
@@ -1730,7 +1747,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 13] = [
+    const AGENTS: [(&str, &str); 14] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1744,6 +1761,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Qwen", "qwen"),
         ("Kimi", "kimi"),
         ("Grok", "grok"),
+        ("Hermes", "hermes"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 

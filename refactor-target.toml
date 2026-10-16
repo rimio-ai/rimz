@@ -220,7 +220,8 @@ upward-dependencies = ["address"]
 # WorkflowAttemptRef/Role and HeadlessError/Kind share workflow identity and typed headless failures (+4).
 # AgentState::is_child_session shares child eligibility between resume guards and exit hints (+1).
 # account::cached_usage_read_at shares cache timestamps with doctor without a CLI codec (+1).
-surface-budget = 1089
+# SignalSet::ASK_RESOLVED lets adapters declare the Hermes ask-close lifecycle signal (+1).
+surface-budget = 1090
 
 [[verdict]]
 kind = "item"
@@ -315,6 +316,11 @@ surface-budget = 1
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/kiro"
+surface-budget = 1
+
+[[module]]
+path = "crates/rimz/src/agents/adapters/hermes"
+# HermesAdapter is the registry's only provider-facing item.
 surface-budget = 1
 
 [[module]]
@@ -3727,6 +3733,11 @@ reason = "Registry registration is the only outside-provider interface; custom-m
 kind = "item"
 key = "agents::adapters::kiro::KiroAdapter"
 reason = "Registry registration is the only outside-provider interface; the global-hook install and the local session store stay adapter-local (pass 21c)."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::hermes::HermesAdapter"
+reason = "Registry registration is the only outside-provider interface; shell payloads, YAML editing, and consent reporting stay adapter-local."
 
 [[verdict]]
 kind = "item"

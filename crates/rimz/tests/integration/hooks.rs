@@ -20,6 +20,178 @@ use crate::common::{
 
 mod drain;
 
+#[cfg(target_os = "linux")]
+#[test]
+fn hermes_hook_attributes_only_a_hermes_parent() {
+    use std::io::{BufRead as _, BufReader};
+
+    for comm in ["hermes", "python3"] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let payload = env.home_root.join("hook.json");
+        std::fs::write(&payload, json!({"hook_event_name":"on_session_start","session_id":"parent","cwd":env.project_root,"extra":{}}).to_string()).unwrap();
+        let base = env.rimz();
+        let mut command = Command::new("sh");
+        for (key, value) in base.get_envs() {
+            match value {
+                Some(value) => {
+                    command.env(key, value);
+                }
+                None => {
+                    command.env_remove(key);
+                }
+            }
+        }
+        let mut parent = command
+            .current_dir(&env.project_root)
+            .env_remove("RIMZ_AGENT_PID")
+            .args(["-c", "printf '%s' \"$1\" > /proc/$$/comm; \"$2\" hooks feed --source hermes < \"$3\" || exit; echo ready; read release", "hermes-parent", comm])
+            .arg(env.rimz_bin())
+            .arg(payload)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(parent.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        let drain = env
+            .rimz()
+            .args(["hooks", "drain", "--project-root"])
+            .arg(&env.project_root)
+            .arg("--once")
+            .output()
+            .unwrap();
+        assert!(drain.status.success(), "{drain:?}");
+        let snapshot = env.store().snapshot().unwrap();
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() == "parent")
+            .unwrap();
+        let owner_pid = agent.runtime_owner.as_ref().map(|owner| owner.pid);
+        let parent_pid = parent.id();
+        parent
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"release\n")
+            .unwrap();
+        let output = parent.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(owner_pid, (comm == "hermes").then_some(parent_pid));
+    }
+}
+
+#[test]
+fn hermes_child_stop_for_an_unknown_session_does_not_create_a_row() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    for (event, extra) in [
+        ("on_session_start", json!({})),
+        (
+            "subagent_stop",
+            json!({"child_session_id":"unknown","child_status":"completed"}),
+        ),
+        (
+            "subagent_start",
+            json!({"child_session_id":"child","child_goal":"task"}),
+        ),
+        (
+            "subagent_stop",
+            json!({"child_session_id":"child","child_status":"completed"}),
+        ),
+    ] {
+        let output = env.run_hook("hermes", &json!({"hook_event_name":event,"session_id":"parent","cwd":env.project_root,"extra":extra}).to_string());
+        assert_hook_succeeded_neutral("hermes", output);
+    }
+    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%1", "hermes", &env.project_root)]);
+    let rows = snapshot["agents"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{snapshot}");
+    assert!(
+        rows.iter()
+            .any(|row| row["agent_id"] == "child" && row["status"] == "success"),
+        "{snapshot}"
+    );
+    assert!(
+        !rows.iter().any(|row| row["agent_id"] == "unknown"),
+        "{snapshot}"
+    );
+}
+
+#[test]
+fn hermes_install_is_xdg_independent_and_blocked_detection_keeps_other_agents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = Env::new();
+    let home = env.home_root.join("hermes-home");
+    let bin = env.home_root.join("hermes-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("hermes");
+    std::fs::write(&stub, "#!/bin/sh\necho 'Hermes Agent v0.21.9'\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let other = bin.join("claude");
+    std::fs::write(&other, "#!/bin/sh\necho '2.1.0 (Claude Code)'\n").unwrap();
+    std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Only the stubs: a host agent CLI on PATH would hide a detection that finds nothing.
+    let path = bin.display().to_string();
+    let old = env
+        .rimz()
+        .env("PATH", &path)
+        .env("HERMES_HOME", &home)
+        .args(["hooks", "install", "hermes"])
+        .output()
+        .unwrap();
+    assert!(!old.status.success());
+    assert!(
+        String::from_utf8_lossy(&old.stderr).contains("older than 0.22.2"),
+        "{old:?}"
+    );
+    let detected = env
+        .rimz()
+        .env("PATH", &path)
+        .env("HERMES_HOME", &home)
+        .args(["hooks", "install", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(detected.status.success(), "{detected:?}");
+    assert!(
+        String::from_utf8_lossy(&detected.stdout).contains("claude"),
+        "{detected:?}"
+    );
+    assert!(!home.join("config.yaml").exists());
+    std::fs::write(&stub, "#!/bin/sh\necho 'Hermes Agent v0.22.2'\n").unwrap();
+    let install = env
+        .rimz()
+        .env("PATH", &path)
+        .env("HERMES_HOME", &home)
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["hooks", "install", "hermes"])
+        .output()
+        .unwrap();
+    assert!(install.status.success(), "{install:?}");
+    assert!(home.join("config.yaml").exists());
+    let after = env
+        .rimz()
+        .env("PATH", &path)
+        .env("HERMES_HOME", &home)
+        .env("XDG_CONFIG_HOME", env.home_root.join(".config"))
+        .args(["hooks", "install", "hermes"])
+        .output()
+        .unwrap();
+    assert!(after.status.success(), "{after:?}");
+    assert!(
+        String::from_utf8_lossy(&after.stdout).contains("hooks up to date"),
+        "{after:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&after.stdout).contains("launch hermes in a terminal"),
+        "{after:?}"
+    );
+}
+
 #[test]
 fn failed_hook_feed_records_one_machine_diagnostic_without_changing_exit() {
     let env = Env::new();

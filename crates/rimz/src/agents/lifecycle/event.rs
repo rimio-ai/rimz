@@ -109,6 +109,7 @@ impl SignalSet {
     pub const COMPACTION_ENDED: Self = Self(1 << 9);
     pub const ENDED: Self = Self(1 << 10);
     pub const LOST: Self = Self(1 << 11);
+    pub const ASK_RESOLVED: Self = Self(1 << 12);
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -124,6 +125,7 @@ impl SignalSet {
             LifecycleSignal::SubagentStopped { .. } => Self::SUBAGENT_STOPPED.0,
             LifecycleSignal::ToolUsed { .. } => Self::TOOL_USED.0,
             LifecycleSignal::AwaitingInput { .. } => Self::AWAITING_INPUT.0,
+            LifecycleSignal::AskResolved { .. } => Self::ASK_RESOLVED.0,
             LifecycleSignal::Compacting => Self::COMPACTING.0,
             LifecycleSignal::CompactionEnded { .. } => Self::COMPACTION_ENDED.0,
             LifecycleSignal::Ended => Self::ENDED.0,

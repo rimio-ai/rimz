@@ -14,6 +14,7 @@ use super::adapters::copilot::CopilotAdapter;
 use super::adapters::cursor::CursorAdapter;
 use super::adapters::droid::DroidAdapter;
 use super::adapters::grok::GrokAdapter;
+use super::adapters::hermes::HermesAdapter;
 use super::adapters::kimi::KimiAdapter;
 use super::adapters::kiro::KiroAdapter;
 use super::adapters::opencode::OpencodeAdapter;
@@ -39,6 +40,7 @@ static DROID: AgentDefinition = AgentDefinition::new(&DroidAdapter);
 static KIRO: AgentDefinition = AgentDefinition::new(&KiroAdapter);
 static QWEN: AgentDefinition = AgentDefinition::new(&QwenAdapter);
 static GROK: AgentDefinition = AgentDefinition::new(&GrokAdapter);
+static HERMES: AgentDefinition = AgentDefinition::new(&HermesAdapter);
 
 /// Every built-in definition, in stable display order.
 pub(super) static BUILTINS: &[&AgentDefinition] = &[
@@ -55,6 +57,7 @@ pub(super) static BUILTINS: &[&AgentDefinition] = &[
     &KIRO,
     &QWEN,
     &GROK,
+    &HERMES,
 ];
 
 /// Every built-in and valid machine-tier plugin definition, in display order.
@@ -375,6 +378,8 @@ mod tests {
             ("agy", Some("antigravity")),
             ("kiro-cli-chat", Some("kiro")),
             ("node", None),
+            ("hermes", Some("hermes")),
+            ("python3", None),
             ("bun", None),
             ("zsh", None),
         ] {
