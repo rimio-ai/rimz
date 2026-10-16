@@ -117,7 +117,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `+127 -43` | lines added and removed against the trunk |
 | `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
 | `▸` | a collapsed finished group |
-| `↓` / `↑` (`worktree.landed_closed` / `worktree.landed_open`) | show / hide the landed groups; both glyph sets use these arrows |
+| `▸` / `▾` (`worktree.landed_closed` / `worktree.landed_open`) | the landed chip, closed / open; both glyph sets use these shapes |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
 ### Pipeline glyphs
@@ -245,7 +245,7 @@ A room with no agents has no make-up line:
 
 The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. If collapsing a previous selection would move the newly selected visible card, the previous card stays open until its collapse fits. Only data or configuration changes with no room to absorb them still move the card at the top or bottom.
 
-Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card brings it into view with the least motion; a card taller than the view lands by its first line. A focus from outside the sidebar brings the group header too, but only if the card is off-screen. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection.
+Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card brings it into view with the least motion; a card taller than the view lands by its first line. A focus from outside the sidebar brings the group header too, but only if the card is off-screen. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip is the one toggle that scrolls, and only far enough to show the first receipt it reveals.
 
 A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
@@ -540,16 +540,16 @@ The first line lists the team name when the members share one, each member's fin
 
 Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
-Finished groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed line replaces their headers and receipts:
+Finished groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed chip replaces their headers and receipts:
 
 ```
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ↓ 3 landed ↓ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-Click anywhere on the line to open it; a second click in the same place closes it without moving your selection or viewport. The choice is local to this sidebar, starts closed, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
+Click anywhere on the chip's line to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Click the chip again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice is local to this sidebar, starts closed, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
 
 ```
- ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ↑ 3 landed ↑ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 
  ↩ landed-b
  ▸ ✓ landed-b
@@ -561,7 +561,7 @@ Click anywhere on the line to open it; a second click in the same place closes i
  ▸ ○ landed-a
 ```
 
-The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed line without changing the count; process-only groups also stay visible. A filter or search suppresses the line and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there still count in the cockpit; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the line and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there still count in the cockpit; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
 
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -827,7 +827,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click either line of a subagent entry | focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |
 | click a finished group's header or receipt | show or collapse its cards |
-| click `↓ N landed ↓` / `↑ N landed ↑` | show or hide landed receipts in this sidebar, keeping the viewport |
+| click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts in this sidebar; opening scrolls to the first receipt it reveals |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |

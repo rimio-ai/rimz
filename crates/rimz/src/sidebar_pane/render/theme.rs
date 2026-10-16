@@ -264,7 +264,7 @@ impl Theme {
         }
     }
 
-    /// A selected chip whose `no_color` fallback marks the same cells with
+    /// A chip that stays marked under `no_color`, covering the same cells with
     /// reverse video.
     pub(crate) fn picked_chip(&self, bg: Color, modifier: Modifier) -> Style {
         let chip = self.chip(bg, modifier);
