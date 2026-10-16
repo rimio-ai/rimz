@@ -3,6 +3,73 @@
 use super::support::*;
 
 #[test]
+fn close_pane_on_exit_overrides_only_the_target_pane() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-pane-retention";
+    ensure_rimz_session(&server, session, Some((120, 40)));
+    server.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    server.tmux(&["set-option", "-w", "-t", session, "remain-on-exit", "on"]);
+    let mut panes = Vec::new();
+    for cue in ["pinned-exit", "retained-exit"] {
+        let command = shlex::try_join([
+            "tmux",
+            "-S",
+            server.socket.to_str().expect("socket path"),
+            "wait-for",
+            cue,
+        ])
+        .expect("quote exit cue");
+        panes.push(server.stdout(&[
+            "split-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            session,
+            &command,
+        ]));
+    }
+    let pinned = &panes[0];
+    let retained = &panes[1];
+    server.tmux(&["set-option", "-p", "-t", pinned, "remain-on-exit", "on"]);
+    server
+        .backend
+        .close_pane_on_exit(&PaneId::from_parts(MuxName::Tmux, pinned))
+        .unwrap();
+    server.tmux(&["wait-for", "-S", "pinned-exit"]);
+    server.tmux(&["wait-for", "-S", "retained-exit"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining =
+            server.stdout(&["list-panes", "-t", session, "-F", "#{pane_id} #{pane_dead}"]);
+        if !remaining
+            .lines()
+            .any(|line| line.starts_with(&format!("{pinned} ")))
+            && remaining
+                .lines()
+                .any(|line| line == format!("{retained} 1"))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pinned pane must close, sibling must stay dead: {remaining}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        server.stdout(&["show-options", "-gv", "remain-on-exit"]),
+        "on"
+    );
+    assert_eq!(
+        server.stdout(&["show-options", "-wv", "-t", session, "remain-on-exit"]),
+        "on"
+    );
+}
+
+#[test]
 fn tab_injects_env_into_every_column_and_row() {
     require_tmux!();
     let server = TmuxServer::new();

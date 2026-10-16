@@ -152,6 +152,21 @@ impl TmuxBackend {
 }
 
 impl MuxBackend for TmuxBackend {
+    fn close_pane_on_exit(&self, pane: &PaneId) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        self.cmd()
+            .args([
+                "set-option",
+                "-p",
+                "-t",
+                pane.raw(),
+                "remain-on-exit",
+                "off",
+            ])
+            .run()
+            .map(|_| ())
+    }
+
     fn lagging_views(&self, session: &str) -> Result<Option<crate::mux::LaggingViews>> {
         self.read_lagging_views(session)
     }
@@ -906,7 +921,7 @@ impl MuxBackend for TmuxBackend {
         // left, so the window is born `sidebar | content`. Daemon hosts, when
         // present, split into a right column sized with the same width verdict
         // as the sidebar. Extra content panes stack inside the middle column.
-        // Each process exits with its pane, so no `remain-on-exit`.
+        // Daemon panes follow the user's `remain-on-exit`; the sidebar pins its own pane.
         let Some((first_content, rest_content)) = opts.view.content.split_first() else {
             return Err(MuxErr::Output {
                 program: "tmux".to_owned(),

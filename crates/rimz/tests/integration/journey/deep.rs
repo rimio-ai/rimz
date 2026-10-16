@@ -528,6 +528,174 @@ fn tmux_sidebar_keeps_width_when_work_pane_closes() {
     );
 }
 
+fn tmux_self_close_setup(
+    env: &Env,
+    rimz: &Path,
+    server_dir: &Path,
+    runtime: &Path,
+    socket: &Path,
+    retain: bool,
+) -> (String, String) {
+    let fake_codex = fake_codex_bin(server_dir);
+    let codex_command = shlex::try_join([
+        "sh",
+        "-c",
+        "trap '' HUP TERM; exec \"$1\" 60",
+        "rimz-lingering-root",
+        fake_codex.to_str().expect("codex path"),
+    ])
+    .expect("quote lingering root command");
+    tmux(
+        socket,
+        &[
+            "new-session",
+            "-d",
+            "-s",
+            "room",
+            "-x",
+            "120",
+            "-y",
+            "40",
+            "-c",
+            &env.project_root.display().to_string(),
+            &codex_command,
+        ],
+    );
+    if retain {
+        tmux(socket, &["set-option", "-g", "remain-on-exit", "on"]);
+        tmux(
+            socket,
+            &["set-option", "-w", "-t", "room", "remain-on-exit", "on"],
+        );
+        tmux(socket, &["new-window", "-d", "-t", "room", "sleep 600"]);
+    }
+    let codex_pane = tmux_capture(socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
+    let codex_pid = tmux_capture(
+        socket,
+        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
+    );
+    let serve = sidebar_serve_line(env, rimz, runtime, "tmux", "room", &[]);
+    tmux(socket, &["split-window", "-h", "-t", &codex_pane, &serve]);
+
+    // A rendered agent row proves the producer has seen the working sibling.
+    env.install_agent_hooks("codex");
+    let hook_env = [
+        ("TMUX_PANE", codex_pane.as_str()),
+        ("RIMZ_AGENT_PID", codex_pid.as_str()),
+        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
+        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex-coder"),
+    ];
+    let out = env.run_installed_hook_in_pane(
+        "codex",
+        &session_start_at(
+            "sess-1",
+            "GPT-5.5",
+            "high",
+            env.project_root.display().to_string(),
+            Some("main"),
+        )
+        .to_string(),
+        &hook_env,
+    );
+    assert!(
+        out.status.success(),
+        "codex hook failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let latched = capture_until(socket, "room", |s| s.contains("coder"), CAPTURE_BUDGET);
+    assert!(
+        latched.contains("coder"),
+        "the sidebar must render its sibling before we test self-close:\n{latched}"
+    );
+    (codex_pane, codex_pid)
+}
+
+#[test]
+fn tmux_sidebar_self_closes_under_user_remain_on_exit() {
+    if which::which("tmux").is_err() {
+        crate::common::skip("tmux not on PATH");
+        return;
+    }
+    let Some(rimz) = rimz_bin() else {
+        return;
+    };
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.record(&env.project_root);
+    let server_dir = TempDir::new().expect("tmux socket dir");
+    let runtime = tempfile::Builder::new()
+        .prefix("rz")
+        .rand_bytes(6)
+        .tempdir()
+        .expect("short runtime dir");
+    let socket = managed_socket(runtime.path());
+    let _server = TmuxServerGuard::new(socket.clone());
+    let (codex_pane, codex_pid) = tmux_self_close_setup(
+        &env,
+        &rimz,
+        server_dir.path(),
+        runtime.path(),
+        &socket,
+        true,
+    );
+    let (sidebar, _) = tmux_current_pane(&socket, "room");
+    let window = tmux_capture(
+        &socket,
+        &["display-message", "-p", "-t", &sidebar, "#{window_id}"],
+    );
+    assert_eq!(
+        tmux_capture(&socket, &["show-options", "-gv", "remain-on-exit"]),
+        "on"
+    );
+    assert_eq!(
+        tmux_capture(
+            &socket,
+            &["show-options", "-wv", "-t", &window, "remain-on-exit"]
+        ),
+        "on"
+    );
+    assert_eq!(
+        tmux_capture(
+            &socket,
+            &["display-message", "-p", "-t", &sidebar, "#{remain-on-exit}"]
+        ),
+        "off",
+        "serving sidebar must pin its own retention"
+    );
+    tmux(&socket, &["kill-pane", "-t", &codex_pane]);
+    let deadline = Instant::now() + CAPTURE_BUDGET;
+    loop {
+        let panes = tmux_capture(&socket, &["list-panes", "-a", "-F", "#{pane_id}"]);
+        if !panes.lines().any(|pane| pane == sidebar) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidebar must disappear, not remain dead: {panes}"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let windows = tmux_capture(
+        &socket,
+        &["list-windows", "-t", "room", "-F", "#{window_id}"],
+    );
+    assert!(
+        !windows.lines().any(|id| id == window),
+        "emptied window must disappear: {windows}"
+    );
+    let dead = tmux_capture(&socket, &["list-panes", "-a", "-F", "#{pane_dead}"]);
+    assert!(
+        !dead.lines().any(|value| value == "1"),
+        "no dead chrome: {dead}"
+    );
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(codex_pid.parse().expect("codex pid")),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}
+
 /// tmux: prove the sidebar self-closes when its last sibling dies *without*
 /// flashing to the freed full width on the way out.
 ///
@@ -569,71 +737,13 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         .expect("short runtime dir");
     let socket = managed_socket(runtime.path());
     let _server = TmuxServerGuard::new(socket.clone());
-    let fake_codex = fake_codex_bin(server_dir.path());
-    let codex_command = shlex::try_join([
-        "sh",
-        "-c",
-        "trap '' HUP TERM; exec \"$1\" 60",
-        "rimz-lingering-root",
-        fake_codex.to_str().expect("codex path"),
-    ])
-    .expect("quote lingering root command");
-
-    tmux(
+    let (codex_pane, codex_pid) = tmux_self_close_setup(
+        &env,
+        &rimz,
+        server_dir.path(),
+        runtime.path(),
         &socket,
-        &[
-            "new-session",
-            "-d",
-            "-s",
-            "room",
-            "-x",
-            "120",
-            "-y",
-            "40",
-            "-c",
-            &env.project_root.display().to_string(),
-            &codex_command,
-        ],
-    );
-    let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
-    let codex_pid = tmux_capture(
-        &socket,
-        &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
-    );
-    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[]);
-    tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
-
-    // Drive a real agent until its row renders. That row means a snapshot
-    // enumerated the live panes, so the self-close latch has seen its sibling
-    // (the codex pane). Now an empty tab means teardown.
-    env.install_agent_hooks("codex");
-    let hook_env = [
-        ("TMUX_PANE", codex_pane.as_str()),
-        ("RIMZ_AGENT_PID", codex_pid.as_str()),
-        (rimz::harness::launch::ENV_AGENT_ROLE, "coder"),
-        (rimz::harness::launch::ENV_AGENT_PROFILE, "codex-coder"),
-    ];
-    let out = env.run_installed_hook_in_pane(
-        "codex",
-        &session_start_at(
-            "sess-1",
-            "GPT-5.5",
-            "high",
-            env.project_root.display().to_string(),
-            Some("main"),
-        )
-        .to_string(),
-        &hook_env,
-    );
-    assert!(
-        out.status.success(),
-        "codex hook failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let latched = capture_until(&socket, "room", |s| s.contains("coder"), CAPTURE_BUDGET);
-    assert!(
-        latched.contains("coder"),
-        "the sidebar must render its sibling before we test self-close:\n{latched}"
+        false,
     );
 
     // The active pane is the sidebar split. Record its id and pre-close width;
