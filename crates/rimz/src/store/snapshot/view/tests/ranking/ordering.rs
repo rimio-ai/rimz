@@ -169,13 +169,13 @@ fn hot_band_score_interleaves_attention_by_overdue_heat() {
 }
 
 #[test]
-fn warm_band_decay_can_sink_old_attention_below_recent_calm() {
+fn old_attention_holds_above_recent_calm() {
     let snapshot = room_with_agent_panes(vec![
         agent_in("old-ask", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(20 * 60 * 60),
         agent_in("recent-done", "/repo/main", AgentStatus::Success, 2_000).active_ago(2 * 60 * 60),
     ]);
 
-    assert!(row(&snapshot, "old-ask").inactive);
+    assert!(!row(&snapshot, "old-ask").inactive);
     assert!(row(&snapshot, "recent-done").inactive);
     assert!(!row(&snapshot, "old-ask").archived);
     let order = snapshot.worktree_groups[0]
@@ -185,13 +185,13 @@ fn warm_band_decay_can_sink_old_attention_below_recent_calm() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["recent-done", "old-ask"],
-        "warm decay favors recent finished work over a much older ask"
+        vec!["old-ask", "recent-done"],
+        "an unanswered ask never cools"
     );
 }
 
 #[test]
-fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
+fn archive_band_parks_calm_rows_but_not_attention() {
     let snapshot = room_with_agent_panes(vec![
         agent_in("warm-idle", "/repo/main", AgentStatus::Idle, 1_000).active_ago(23 * 60 * 60),
         agent_in("archived-idle", "/repo/main", AgentStatus::Idle, 2_000).active_ago(25 * 60 * 60),
@@ -200,7 +200,7 @@ fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
     ]);
 
     assert!(!row(&snapshot, "warm-idle").archived);
-    assert!(row(&snapshot, "archived-ask").archived);
+    assert!(!row(&snapshot, "archived-ask").archived);
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
@@ -208,8 +208,8 @@ fn archive_band_parks_rows_below_warm_and_keeps_attention_above_idle() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["warm-idle", "archived-ask", "archived-idle"],
-        "archive rows never compete with warm rows, but attention still leads inside archive"
+        vec!["archived-ask", "warm-idle", "archived-idle"],
+        "an unanswered ask stays hot past archive"
     );
 }
 
@@ -246,13 +246,13 @@ fn read_state_never_changes_the_band() {
 }
 
 #[test]
-fn stale_attention_sinks_below_live_work_then_leads_inactive() {
+fn stale_attention_leads_live_work_while_parks_cool() {
     let snapshot = room_with_agent_panes(vec![
-        // Fresh idle work: live, so it outranks any stale card.
         agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 3_000),
-        // An 8h-stale ask and an 8h-stale result: both cross into inactive.
-        agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000)
-            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        agent_in("fresh-run", "/repo/main", AgentStatus::Running, 4_000),
+        agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000).active_ago(22 * 3_600),
+        agent_in("older-wait", "/repo/main", AgentStatus::Waiting, 500).active_ago(23 * 3_600),
+        agent_in("old-park", "/repo/main", AgentStatus::Paused, 5_000).active_ago(22 * 3_600),
         agent_in("old-done", "/repo/main", AgentStatus::Success, 2_000)
             .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
     ]);
@@ -262,8 +262,8 @@ fn stale_attention_sinks_below_live_work_then_leads_inactive() {
         "fresh work stays live"
     );
     assert!(
-        row(&snapshot, "old-wait").inactive,
-        "a stale ask sinks like any stale card — attention no longer pins it live"
+        !row(&snapshot, "old-wait").inactive,
+        "a stale ask stays hot even after being read"
     );
     assert!(row(&snapshot, "old-done").inactive);
     let order = snapshot.worktree_groups[0]
@@ -273,8 +273,15 @@ fn stale_attention_sinks_below_live_work_then_leads_inactive() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["fresh-idle", "old-wait", "old-done"],
-        "live idle leads the stale ask; within the inactive band the ask leads the result"
+        vec![
+            "older-wait",
+            "old-wait",
+            "fresh-run",
+            "fresh-idle",
+            "old-done",
+            "old-park"
+        ],
+        "held asks lead fresh calm work, with the older ask first; parks still cool"
     );
 }
 
@@ -572,18 +579,18 @@ fn team_blocks_rank_by_derived_state_and_stay_contiguous() {
 }
 
 #[test]
-fn inactive_cohort_stays_sunk_when_a_member_is_unread() {
+fn old_ask_lifts_its_whole_cohort_regardless_of_read_state() {
     let mut snapshot = room_with_agent_panes(vec![
-        agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000),
+        agent_in("fresh-run", "/repo/main", AgentStatus::Running, 1_000),
         cohort_agent(
             "old-a",
-            AgentStatus::Success,
+            AgentStatus::Waiting,
             2_000,
             "launch_group_1",
             Some(0),
             "%1",
         )
-        .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        .active_ago(22 * 3_600),
         cohort_agent(
             "old-b",
             AgentStatus::Idle,
@@ -593,13 +600,22 @@ fn inactive_cohort_stays_sunk_when_a_member_is_unread() {
             "%2",
         )
         .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        cohort_agent(
+            "old-c",
+            AgentStatus::Idle,
+            4_000,
+            "launch_group_1",
+            Some(2),
+            "%3",
+        )
+        .active_ago(22 * 3_600),
     ]);
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["fresh-idle", "old-a", "old-b"]);
+    assert_eq!(order, vec!["old-a", "old-b", "old-c", "fresh-run"]);
 
     row_mut(&mut snapshot, "old-b").unread = true;
     snapshot.sort_groups_for_presentation();
@@ -610,7 +626,7 @@ fn inactive_cohort_stays_sunk_when_a_member_is_unread() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["fresh-idle", "old-a", "old-b"],
+        vec!["old-a", "old-b", "old-c", "fresh-run"],
         "read state never changes the band"
     );
 }
@@ -728,10 +744,17 @@ fn listing_roster_uses_the_same_group_activity_rung() {
 
 fn stamp_lifted_attention(row: &mut SidebarRow) {
     let age_secs = super::super::super::score::age_secs(epoch(), row.last_activity);
-    row.inactive = !row.is_process() && age_secs > 100;
-    row.archived = !row.is_process() && age_secs > 101;
-    row.attention_score =
-        super::super::super::score::attention_score(row.status(), age_secs, 100, 101);
+    (row.inactive, row.archived, row.attention_score) = super::super::super::score::attention_facts(
+        row.attention_status(),
+        age_secs,
+        super::super::super::aggregate::AttentionWindows {
+            stalled_after_secs: 1,
+            tool_repeat_attention_after: 20,
+            inactive_after_secs: 100,
+            archive_after_secs: 101,
+        },
+        row.is_process(),
+    );
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {

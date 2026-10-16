@@ -36,12 +36,12 @@ pub struct SidebarRow {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unread: bool,
     /// Producer-stamped staleness: this row's latest activity has aged past the
-    /// inactive window, sinking it beneath every live row whatever its status.
-    /// Unread state does not change this sink.
+    /// inactive window, sinking calm and parked rows beneath hot work.
+    /// Actionable and process rows are exempt; unread does not change this sink.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inactive: bool,
     /// Producer-stamped archive sink: this row has aged past the archive
-    /// window, so it parks below hot and warm rows. Process rows are exempt.
+    /// window, so it parks below hot and warm rows. Actionable and process rows are exempt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
     /// Producer-stamped fixed-point attention score in milli-units for every

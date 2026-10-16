@@ -2,6 +2,8 @@
 
 use crate::agents::AgentStatus;
 
+use super::aggregate::AttentionWindows;
+
 const MILLI: u32 = 1_000;
 
 pub(super) fn age_secs(now: jiff::Timestamp, last_activity: jiff::Timestamp) -> u32 {
@@ -31,25 +33,25 @@ pub(super) fn status_weight_opt(status: Option<AgentStatus>) -> u32 {
 }
 
 /// Time curve in milli-units:
-/// hot attention ramps 1.0→2.0 until the inactive boundary, calm hot work stays
-/// flat, warm work decays 1.0→0.0 until archive, and archived work is flat
-/// because the archive band already parked it.
-pub(super) fn time_factor_milli(
+/// Hot attention ramps 1.0→2.0, holding there for actionable rows. Warm work
+/// decays 1.0→0.0 until archive, where the band has already parked it.
+fn time_factor_milli(
     status: Option<AgentStatus>,
     age_secs: u32,
     inactive_after_secs: u32,
     archive_after_secs: u32,
+    inactive: bool,
+    archived: bool,
 ) -> u32 {
-    let inactive_after_secs = inactive_after_secs.max(1);
-    let archive_after_secs = archive_after_secs.max(inactive_after_secs.saturating_add(1));
-    if age_secs <= inactive_after_secs {
+    if !inactive {
         if status.is_some_and(AgentStatus::is_attention) {
             MILLI
-                + ((u64::from(MILLI) * u64::from(age_secs)) / u64::from(inactive_after_secs)) as u32
+                + ((u64::from(MILLI) * u64::from(age_secs.min(inactive_after_secs)))
+                    / u64::from(inactive_after_secs)) as u32
         } else {
             MILLI
         }
-    } else if age_secs <= archive_after_secs {
+    } else if !archived {
         let span = archive_after_secs
             .saturating_sub(inactive_after_secs)
             .max(1);
@@ -60,15 +62,33 @@ pub(super) fn time_factor_milli(
     }
 }
 
-pub(super) fn attention_score(
+/// The age-derived sinks and score shared by sidebar rows and the CLI roster.
+pub(super) fn attention_facts(
     status: Option<AgentStatus>,
     age_secs: u32,
-    inactive_after_secs: u32,
-    archive_after_secs: u32,
-) -> u32 {
+    windows: AttentionWindows,
+    is_process: bool,
+) -> (bool, bool, u32) {
+    if is_process {
+        return (false, false, 0);
+    }
+    let held = status.is_some_and(AgentStatus::is_actionable);
+    let inactive = !held && age_secs > windows.inactive_after_secs;
+    let archived = !held && age_secs > windows.archive_after_secs;
     let weight = status_weight_opt(status);
-    let factor = time_factor_milli(status, age_secs, inactive_after_secs, archive_after_secs);
-    ((u64::from(weight) * u64::from(factor)) / u64::from(MILLI)) as u32
+    let factor = time_factor_milli(
+        status,
+        age_secs,
+        windows.inactive_after_secs,
+        windows.archive_after_secs,
+        inactive,
+        archived,
+    );
+    (
+        inactive,
+        archived,
+        ((u64::from(weight) * u64::from(factor)) / u64::from(MILLI)) as u32,
+    )
 }
 
 /// Recover the stamped time factor for derived team-state scoring. Integer
@@ -125,19 +145,46 @@ mod tests {
 
     const INACTIVE: u32 = 3_600;
     const ARCHIVE: u32 = 86_400;
+    const WINDOWS: AttentionWindows = AttentionWindows {
+        stalled_after_secs: 1_800,
+        tool_repeat_attention_after: 20,
+        inactive_after_secs: INACTIVE,
+        archive_after_secs: ARCHIVE,
+    };
 
     #[test]
     fn attention_heat_ramps_across_hot_window() {
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Waiting), 0, INACTIVE, ARCHIVE),
+            time_factor_milli(
+                Some(AgentStatus::Waiting),
+                0,
+                INACTIVE,
+                ARCHIVE,
+                false,
+                false
+            ),
             1_000
         );
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Waiting), INACTIVE, INACTIVE, ARCHIVE),
+            time_factor_milli(
+                Some(AgentStatus::Waiting),
+                INACTIVE,
+                INACTIVE,
+                ARCHIVE,
+                false,
+                false
+            ),
             2_000
         );
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Running), INACTIVE, INACTIVE, ARCHIVE),
+            time_factor_milli(
+                Some(AgentStatus::Running),
+                INACTIVE,
+                INACTIVE,
+                ARCHIVE,
+                false,
+                false
+            ),
             1_000,
             "calm hot work stays flat"
         );
@@ -146,28 +193,91 @@ mod tests {
     #[test]
     fn warm_window_decays_to_archive_boundary() {
         assert!(
-            time_factor_milli(Some(AgentStatus::Waiting), INACTIVE + 1, INACTIVE, ARCHIVE,) < 1_000,
+            time_factor_milli(
+                Some(AgentStatus::Paused),
+                INACTIVE + 1,
+                INACTIVE,
+                ARCHIVE,
+                true,
+                false
+            ) < 1_000,
             "warm band starts decaying immediately after the hot boundary"
         );
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Waiting), ARCHIVE, INACTIVE, ARCHIVE),
+            time_factor_milli(
+                Some(AgentStatus::Paused),
+                ARCHIVE,
+                INACTIVE,
+                ARCHIVE,
+                true,
+                false
+            ),
             0
         );
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Running), ARCHIVE, INACTIVE, ARCHIVE),
+            time_factor_milli(
+                Some(AgentStatus::Running),
+                ARCHIVE,
+                INACTIVE,
+                ARCHIVE,
+                true,
+                false
+            ),
             0
         );
     }
 
     #[test]
     fn archive_band_is_flat() {
+        for status in [AgentStatus::Paused, AgentStatus::Running] {
+            assert_eq!(
+                time_factor_milli(Some(status), ARCHIVE + 1, INACTIVE, ARCHIVE, true, true),
+                1_000
+            );
+            assert_eq!(
+                attention_facts(Some(status), ARCHIVE + 1, WINDOWS, false).2,
+                status_weight(status)
+            );
+        }
+    }
+
+    #[test]
+    fn actionable_heat_holds_past_both_windows() {
+        for age in [INACTIVE + 1, ARCHIVE, ARCHIVE + 1] {
+            for status in [AgentStatus::Waiting, AgentStatus::Failed] {
+                assert_eq!(
+                    time_factor_milli(Some(status), age, INACTIVE, ARCHIVE, false, false),
+                    2_000
+                );
+                assert_eq!(
+                    attention_facts(Some(status), age, WINDOWS, false),
+                    (false, false, status_weight(status) * 2)
+                );
+            }
+            for status in [AgentStatus::Paused, AgentStatus::Running] {
+                let expected = if age == INACTIVE + 1 {
+                    999
+                } else if age == ARCHIVE {
+                    0
+                } else {
+                    1_000
+                };
+                assert_eq!(
+                    time_factor_milli(
+                        Some(status),
+                        age,
+                        INACTIVE,
+                        ARCHIVE,
+                        true,
+                        age == ARCHIVE + 1
+                    ),
+                    expected
+                );
+            }
+        }
         assert_eq!(
-            time_factor_milli(Some(AgentStatus::Waiting), ARCHIVE + 1, INACTIVE, ARCHIVE),
-            1_000
-        );
-        assert_eq!(
-            attention_score(Some(AgentStatus::Waiting), ARCHIVE + 1, INACTIVE, ARCHIVE),
-            status_weight(AgentStatus::Waiting)
+            recovered_time_factor_milli(Some(AgentStatus::Waiting), 1_200),
+            2_000
         );
     }
 

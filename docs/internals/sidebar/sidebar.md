@@ -161,9 +161,9 @@ Within a group, agent cards lead and process rows form the tail. Rows order by t
 
 | Band | Membership | Score inside the band |
 |---|---|---|
-| hot | `last_activity` inside `[agents.attention] inactive_after_secs` (default one hour) | attention rows (`waiting`, `failed`, `paused`) heat from 1.0x to 2.0x across the window, so an older failure can outrank a fresh ask; calm rows (`success`, `running`, `idle`) stay flat and keep pane creation order |
-| warm | past the inactive window, inside `archive_after_secs` (default 24 hours) | decays from 1.0x to 0.0x, so stale asks lead stale calm rows without competing with current work |
-| archive | past the archive window | flat; archived asks sit above archived calm rows |
+| hot | every alive `waiting`/`failed` row, plus other rows with `last_activity` inside `[agents.attention] inactive_after_secs` (default one hour) | attention rows (`waiting`, `failed`, `paused`) heat from 1.0x to 2.0x across the window; `waiting`/`failed` hold 2.0x afterward; calm rows stay flat and keep pane creation order |
+| warm | calm and `paused` rows past the inactive window, inside `archive_after_secs` (default 24 hours) | decays from 1.0x to 0.0x without competing with hot work |
+| archive | calm and `paused` rows past the archive window | flat status weight |
 
 The score is status weight times that time factor, both fixed-point ([`score.rs`](../../../crates/rimz/src/store/snapshot/view/score.rs)). The weights are spaced so the lowest attention state outranks the highest calm state; why each status weighs what it does is [model.md](../agents/model.md#status-and-phase). Process rows sit outside the bands: their clock is the foreground process start, so an idle shell stays live and seats below every agent card. A `paused` row resumes on its own through [auto-continue](../agents/providers.md#auto-continue).
 

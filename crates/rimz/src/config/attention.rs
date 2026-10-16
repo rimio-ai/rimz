@@ -2,11 +2,11 @@ use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
 
-/// Default `[agents.attention] inactive_after_secs`: a row with no activity for
+/// Default `[agents.attention] inactive_after_secs`: a calm or parked row with no activity for
 /// this long sinks into the inactive partition, beneath every live row.
 const DEFAULT_INACTIVE_AFTER_SECS: u32 = crate::agents::ATTENTION_AGE_CEILING_SECS as u32;
 
-/// Default `[agents.attention] archive_after_secs`: a row with no activity for
+/// Default `[agents.attention] archive_after_secs`: a calm or parked row with no activity for
 /// this long stops competing with hot or warm work and parks in the archive
 /// partition.
 const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
@@ -42,12 +42,11 @@ pub struct AttentionConfig {
     pub tool_repeat_warn_after: NonZeroU32,
     /// Consecutive identical tool calls before the sidebar routes attention.
     pub tool_repeat_attention_after: NonZeroU32,
-    /// Seconds a row may record no activity before the sidebar treats it as
-    /// inactive and sinks it beneath every live row, whatever its status — one
-    /// hour by default, the boundary the agent's own prompt cache crosses, so a
-    /// card that has gone cold reads as cold.
+    /// Seconds a calm or parked row may record no activity before the sidebar
+    /// sinks it beneath hot work. Asks and failures stay hot while alive.
+    /// Defaults to one hour, the agent's prompt-cache window.
     pub inactive_after_secs: NonZeroU32,
-    /// Seconds a row may record no activity before the sidebar parks it in the
+    /// Seconds a calm or parked row may record no activity before the sidebar parks it in the
     /// archive partition, below hot and warm work. Values at or below
     /// `inactive_after_secs` are lifted at projection time because this is a
     /// display preference, not a store invariant.
