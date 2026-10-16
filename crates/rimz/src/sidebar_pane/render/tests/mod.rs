@@ -30,6 +30,7 @@ mod capping;
 mod fleet;
 mod fuzz;
 mod gallery;
+mod landed;
 mod link;
 mod presence;
 mod process;

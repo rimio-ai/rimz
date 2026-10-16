@@ -448,6 +448,108 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
 }
 
 #[test]
+fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
+    let mut snapshot = filterable_snapshot(&workspace());
+    let template = snapshot.worktree_groups[0].clone();
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    for index in 0..6 {
+        let mut group = template.clone();
+        group.key = format!("open-{index}");
+        group.label = group.key.clone();
+        group.rows = vec![filter_row(
+            true,
+            &format!("open-{index}"),
+            "claude",
+            Some(crate::agents::AgentStatus::Running),
+            &format!("terminal_open_{index}"),
+            "/repo/main",
+        )]
+        .into();
+        groups.push(group);
+    }
+    let selected = groups.last().unwrap().rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let mut finished = template;
+    finished.key = "landed".to_owned();
+    finished.label = "landed".to_owned();
+    finished.finished = true;
+    finished.rows = vec![filter_row(
+        true,
+        "done",
+        "claude",
+        Some(crate::agents::AgentStatus::Success),
+        "terminal_done",
+        "/repo/landed",
+    )]
+    .into();
+    groups.push(finished);
+    let mut ui = UiState {
+        scroll_offset: usize::MAX,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, Some(selected));
+    paint(&mut ui, &snapshot, 24);
+    let offset = ui.scroll_offset;
+    assert!(offset > 0);
+    let selection = ui.selected_index;
+    let row_ids = ui
+        .visible_roster(&snapshot)
+        .rows()
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let (column, line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleLanded)
+        .expect("landed fold click");
+    for open in [true, false] {
+        assert_eq!(
+            handle_mouse_click(column, line, &mut ui, &snapshot),
+            InputOutcome::redraw()
+        );
+        assert_eq!(ui.landed_open, open);
+        paint(&mut ui, &snapshot, 24);
+        assert_eq!(ui.scroll_offset, offset);
+        assert_eq!(ui.selected_index, selection);
+        assert_eq!(
+            ui.interactions.line_for_target(&HitTarget::ToggleLanded),
+            Some((column, line)),
+            "a second click under the cursor closes it"
+        );
+        assert_eq!(
+            ui.visible_roster(&snapshot)
+                .rows()
+                .iter()
+                .map(|row| row.id.clone())
+                .collect::<Vec<_>>(),
+            row_ids
+        );
+    }
+    ui.landed_open = true;
+    ui.scroll_offset = usize::MAX;
+    ui.offset_authoritative = true;
+    paint(&mut ui, &snapshot, 24);
+    let (_, header) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup("landed".to_owned()))
+        .expect("singleton header/receipt hit");
+    handle_mouse_click(0, header, &mut ui, &snapshot);
+    assert!(ui.expanded_groups.contains("landed"));
+    paint(&mut ui, &snapshot, 24);
+    let (_, header) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup("landed".to_owned()))
+        .unwrap();
+    handle_mouse_click(0, header, &mut ui, &snapshot);
+    assert!(!ui.expanded_groups.contains("landed"));
+}
+
+#[test]
 fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let ws = workspace();
     let panes = (0..9)

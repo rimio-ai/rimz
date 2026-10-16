@@ -220,6 +220,8 @@
 ## reconciling = "⟳"
 ## expand = "▸"
 ## dotted = "┄"
+## landed_closed = "↓"
+## landed_open = "↑"
 ## channel_hash = "#"
 
 [theme.glyphs.unicode.pipeline]
@@ -347,6 +349,8 @@
 ## reconciling = ""
 ## expand = "▸"
 ## dotted = "┄"
+## landed_closed = "↓"
+## landed_open = "↑"
 ## channel_hash = ""
 
 [theme.glyphs.nerd_font.pipeline]

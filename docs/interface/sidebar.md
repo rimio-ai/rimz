@@ -117,6 +117,7 @@ Each token marker keeps one color everywhere: `◇` blue, `↘` deep red, `↗` 
 | `+127 -43` | lines added and removed against the trunk |
 | `⟳` `✓` `✕` `⇉` `⑃` `≡` `⑂` before the trunk name | where the work stands; see [worktree headers](#worktree-headers) |
 | `▸` | a collapsed finished group |
+| `↓` / `↑` (`worktree.landed_closed` / `worktree.landed_open`) | show / hide the landed groups; both glyph sets use these arrows |
 | `+3 more` / `− less` | hidden idle rows; click to expand or collapse |
 
 ### Pipeline glyphs
@@ -539,6 +540,29 @@ The first line lists the team name when the members share one, each member's fin
 
 Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
+Finished groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed line replaces their headers and receipts:
+
+```
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ↓ 3 landed ↓ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+```
+
+Click anywhere on the line to open it; a second click in the same place closes it without moving your selection or viewport. The choice is local to this sidebar, starts closed, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
+
+```
+ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ↑ 3 landed ↑ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+
+ ↩ landed-b
+ ▸ ✓ landed-b
+
+ ↩ landed-c
+ ▸ ✓ landed-c
+
+ ↩ landed-a
+ ▸ ○ landed-a
+```
+
+The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed line without changing the count; process-only groups also stay visible. A filter or search suppresses the line and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there still count in the cockpit; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the line and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 
 ```
@@ -803,6 +827,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click either line of a subagent entry | focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |
 | click a finished group's header or receipt | show or collapse its cards |
+| click `↓ N landed ↓` / `↑ N landed ↑` | show or hide landed receipts in this sidebar, keeping the viewport |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |

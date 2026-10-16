@@ -12,7 +12,7 @@ use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState};
-use crate::store::snapshot::SidebarSnapshot;
+use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
 
 /// The focused row leaving the attention class or entering `Running` is the
 /// user acting on that agent in its own pane -- answering its ask or submitting
@@ -127,10 +127,14 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         .collect();
 
     std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(|group| {
-        group_pos
-            .get(group.key.as_str())
-            .copied()
-            .unwrap_or(usize::MAX)
+        (
+            group.kind == SidebarWorktreeKind::External,
+            group.finished,
+            group_pos
+                .get(group.key.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
     });
     for group in std::sync::Arc::make_mut(&mut current.worktree_groups) {
         std::sync::Arc::make_mut(&mut group.rows)

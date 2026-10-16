@@ -1433,6 +1433,22 @@ fn step_attention_index_reverses_the_inbox_walk() {
     unread_success.unread = true;
     unread_success.last_activity = snapshot.now - Duration::from_secs(900);
 
+    let mut landed = snapshot.worktree_groups[0].clone();
+    landed.key = "/repo/landed".to_owned();
+    landed.label = "landed".to_owned();
+    landed.finished = true;
+    landed.rows = vec![filter_row(
+        true,
+        "landed-unread",
+        "claude",
+        Some(AgentStatus::Success),
+        "terminal_landed",
+        "/repo/landed",
+    )]
+    .into();
+    std::sync::Arc::make_mut(&mut landed.rows)[0].unread = true;
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups).push(landed);
+
     // The forward triage order is [unread success @1, read failed @2]; reverse
     // inverts every step and enters at the last row from outside the list.
     assert_eq!(

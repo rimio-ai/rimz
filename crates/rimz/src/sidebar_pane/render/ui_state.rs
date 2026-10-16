@@ -154,6 +154,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
+    /// Attachment-local visibility of finished groups' collapsed receipts.
+    pub(in crate::sidebar_pane) landed_open: bool,
     /// Renderer-local open/closed choice for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
     /// (open under selection or `expanded` density) in both directions, stays

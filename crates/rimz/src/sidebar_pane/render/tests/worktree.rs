@@ -313,7 +313,21 @@ fn render_pipeline_folded_stage() {
     for row in std::sync::Arc::make_mut(&mut group.rows) {
         row.as_agent_mut().unwrap().status = AgentStatus::Success;
     }
-    let rendered = snapshot_to_screen(&snapshot, 54, 20);
+    let closed = snapshot_to_screen(&snapshot, 54, 20);
+    assert!(
+        closed.contains("↓ 1 landed ↓") && !closed.contains("forge · Done"),
+        "{closed}"
+    );
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            landed_open: true,
+            ..Default::default()
+        },
+        54,
+        20,
+    );
     assert!(rendered.contains("forge · Done"), "{rendered}");
     assert!(!rendered.contains('●'));
     let theme = Theme::fixed(false);

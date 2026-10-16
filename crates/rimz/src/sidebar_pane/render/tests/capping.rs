@@ -416,9 +416,18 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
     live.label = "live-pod".to_owned();
 
     let mut snapshot = snapshot_with(Vec::new());
-    snapshot.worktree_groups = vec![finished, live].into();
+    snapshot.worktree_groups = vec![live, finished].into();
 
-    let screen = snapshot_to_screen(&snapshot, 54, 30);
+    let screen = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            landed_open: true,
+            ..Default::default()
+        },
+        54,
+        30,
+    );
     assert!(
         screen.contains("merged-pod"),
         "finished header remains:\n{screen}"
