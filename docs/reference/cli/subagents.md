@@ -58,7 +58,9 @@ Run `rimz subagents launch --help` for the exact spellings. The global flags are
 
 The complete launch prompt is capped at 120 KiB (122,880 bytes), counting any instruction text RimZ adds to the prompt for providers without an appended system prompt. `--prompt-file` keeps the brief out of the shell command, but the provider still receives its contents as one argument. An oversized prompt is refused before any run record exists, and the error names the limit; put supporting detail in a file the child is told to read.
 
-The child works in the parent's checkout, the directory the parent itself was launched in, whatever directory the launch command runs from, unless `--cwd` names another directory. By default it joins the parent's lane; with `--cwd`, its lane follows that directory's basename. When the parent's checkout no longer exists, the launch refuses instead of starting the child elsewhere. Restart and child resume reuse the child's recorded directory.
+The child works in the parent's checkout, whatever directory the launch command runs from, unless `--cwd` names another directory or its profile applies [`empty-dir`](../definitions.md#agent-and-subagent-keys). By default it joins the parent's lane; with `--cwd`, its lane follows that directory's basename. When the parent's checkout no longer exists, the launch refuses instead of starting the child elsewhere. Restart and child resume reuse the child's recorded directory.
+
+An `empty-dir: true` profile starts in its own directory under `~/.rimz/empty/<workspace-dir>/<handle>/` when its account needs no folder-trust prompt there. It keeps the parent's lane and temp directory. Without the required trust decision it starts in the parent's checkout and prints an `empty-dir ignored` notice. `--cwd` silently overrides the profile setting. A file or hidden entry beside the workspace or agent directories refuses the launch and names what to remove; files inside the agent's own directory are its own. Restart and follow-up resume recreate that directory if missing, never switch back to the checkout, and do not delete it when the child finishes.
 
 A launch refuses before it writes a run record or opens a pane when:
 
@@ -270,7 +272,7 @@ A provider that registers before its first turn, such as Claude, initially repor
 
 A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended; rimz message @<handle> resumes it`. The parent resends with `rimz message @<handle>`, which resumes the child.
 
-Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory, conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
+Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory (recreated when an empty-dir child's directory is missing), conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 
 Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.
 

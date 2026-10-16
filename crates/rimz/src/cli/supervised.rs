@@ -70,10 +70,10 @@ fn anchor_subagent_workspace(
     caller: Option<&rimz::agents::AgentState>,
     globals: &GlobalFlags,
 ) -> Result<rimz::ResolvedWorkspace> {
-    let Some(parent) = caller.filter(|_| request.subagent) else {
+    let Some(parent) = caller.filter(|parent| request.subagent || parent.checkout.is_some()) else {
         return Ok(workspace);
     };
-    let Some(path) = parent.worktree_path.as_deref() else {
+    let Some(path) = parent.lane_path() else {
         tracing::debug!("subagent parent has no recorded checkout; keeping invoking cwd");
         return Ok(workspace);
     };

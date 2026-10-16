@@ -119,7 +119,10 @@ fn decode_exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
         .windows(2)
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
         .expect("exec request payload");
-    crate::harness::launch::decode_exec_request(&argv[3], None, payload)
+    let worktree = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(&pair[1])));
+    crate::harness::launch::decode_exec_request(&argv[3], worktree, payload)
         .expect("decode exec request")
 }
 

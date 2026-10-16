@@ -210,6 +210,9 @@ fn resume_selected(
                 .filter(|path| !path.is_empty())
                 .map(Path::new)
                 .with_context(|| format!("cannot resume @{name}: no saved working directory"))?;
+            if agent.checkout.is_some() {
+                rimz::agents::empty_dir::prepare_reentry(store.paths(), cwd)?;
+            }
             (&agent.kind, cwd, agent.channel.as_deref())
         }
         ResumeSource::Provider(observation, _) => {
@@ -330,7 +333,10 @@ fn resume_selected(
         kind.as_str(),
         adapter.folder_trust(
             &tab.cwd,
-            Some(workspace.launch_repo_root()),
+            match source {
+                ResumeSource::Recorded(agent) if agent.checkout.is_some() => None,
+                _ => Some(workspace.launch_repo_root()),
+            },
             &login.env(&rimz::agents::ambient_env()),
         ),
         None,
@@ -450,28 +456,69 @@ pub(super) fn resume_lane(
 
     let cwd = match &action {
         LaneResumeAction::SplitClosed { cwd, .. } | LaneResumeAction::RestoreClosed { cwd, .. } => {
-            crate::cli::lsp_admission::admit(cwd, &machine_config)?;
             cwd.as_path()
         }
         LaneResumeAction::List { .. } | LaneResumeAction::Focus { .. } => {
             workspace.worktree_root.as_path()
         }
     };
+    let mut admitted = std::collections::HashSet::new();
+    let restored_agents = action.agents_needing_preflight(&projection.agents);
     for kind in action.agent_kinds_needing_preflight() {
-        rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), cwd)?;
-        let login = logins.login(kind, &machine_config.accounts)?;
-        login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
-        let adapter = rimz::agents::find_definition(kind.as_str())
-            .with_context(|| format!("unknown agent kind `{kind}`"))?;
-        crate::cli::folder_trust::preflight(
-            kind.as_str(),
-            adapter.folder_trust(
+        let empty_agents = restored_agents
+            .iter()
+            .filter(|agent| {
+                &agent.kind == kind
+                    && agent.checkout.is_some()
+                    && agent.lane_path().map(Path::new) == Some(cwd)
+            })
+            .collect::<Vec<_>>();
+        let mut targets = Vec::new();
+        for agent in &empty_agents {
+            let path = Path::new(
+                agent
+                    .worktree_path
+                    .as_deref()
+                    .context("empty-dir agent has no recorded working directory")?,
+            );
+            rimz::agents::empty_dir::prepare_reentry(store.paths(), path)?;
+            targets.push((
+                path,
+                None,
+                rimz::agents::session_login(kind, agent.login.as_ref(), &machine_config.accounts)?,
+            ));
+        }
+        if empty_agents.is_empty()
+            || restored_agents.iter().any(|agent| {
+                &agent.kind == kind
+                    && agent.checkout.is_none()
+                    && agent.lane_path().map(Path::new) == Some(cwd)
+            })
+        {
+            targets.push((
                 cwd,
                 Some(workspace.launch_repo_root()),
-                &login.env(&rimz::agents::ambient_env()),
-            ),
-            None,
-        )?;
+                logins.login(kind, &machine_config.accounts)?,
+            ));
+        }
+        for (cwd, repo_root, login) in targets {
+            if admitted.insert(cwd) {
+                crate::cli::lsp_admission::admit(cwd, &machine_config)?;
+            }
+            rimz::harness::launch::preflight_agent_kind(
+                &workspace.project_root,
+                kind.as_str(),
+                cwd,
+            )?;
+            login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+            let adapter = rimz::agents::find_definition(kind.as_str())
+                .with_context(|| format!("unknown agent kind `{kind}`"))?;
+            crate::cli::folder_trust::preflight(
+                kind.as_str(),
+                adapter.folder_trust(cwd, repo_root, &login.env(&rimz::agents::ambient_env())),
+                None,
+            )?;
+        }
     }
 
     match action {

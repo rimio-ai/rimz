@@ -15,6 +15,73 @@ fn empty_dir_lane_listing_uses_checkout_instead_of_process_cwd() {
 }
 
 #[test]
+fn empty_dir_lane_resume_keeps_missing_process_cwd() {
+    let mut closed = agent("claude", "searcher", "/empty/room/searcher", 1);
+    closed.checkout = Some("/repo".into());
+    closed.root_lane = true;
+    let action = LaneCase::new(
+        LaneResumeSelector::Scope("#main".into()),
+        std::slice::from_ref(&closed),
+    )
+    .current_root("/repo")
+    .path_exists(|path| path == Path::new("/repo"))
+    .run();
+    assert!(
+        action.is_ok(),
+        "missing empty-dir cwd must not skip the lane: {action:?}"
+    );
+    let action = action.unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected restore")
+    };
+    let RecoveryEntry::Flat(tab) = &plan.recovery.entries[0] else {
+        panic!("expected flat tab")
+    };
+    let request = decode_exec_request(&tab.tab.layout.columns[0].panes[0].argv);
+    assert_eq!(
+        request.worktree_path.as_deref(),
+        Some(Path::new("/empty/room/searcher"))
+    );
+    assert_eq!(request.identity.params.checkout.as_deref(), Some("/repo"));
+}
+
+#[test]
+fn mixed_lane_resume_uses_checkout_for_tab_and_each_panes_recorded_cwd() {
+    let mut empty = agent("claude", "searcher", "/empty/room/searcher", 1);
+    empty.checkout = Some("/repo".into());
+    empty.root_lane = true;
+    let mut ordinary = agent("claude", "coder", "/repo", 10);
+    ordinary.root_lane = true;
+    let agents = [empty, ordinary];
+    let action = LaneCase::new(LaneResumeSelector::Scope("#main".into()), &agents)
+        .current_root("/repo")
+        .run()
+        .unwrap();
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected restore")
+    };
+    let RecoveryEntry::Flat(tab) = &plan.recovery.entries[0] else {
+        panic!("expected flat tab")
+    };
+    assert_eq!(tab.tab.cwd, Path::new("/repo"));
+    let panes = &tab.tab.layout.columns[0].panes;
+    assert_eq!(panes.len(), 2);
+    for (pane, expected) in panes.iter().zip(["/empty/room/searcher", "/repo"]) {
+        let request = decode_exec_request(&pane.argv);
+        assert_eq!(
+            request.worktree_path.as_deref().unwrap_or(&tab.tab.cwd),
+            Path::new(expected)
+        );
+        if expected == "/repo" {
+            assert!(
+                request.worktree_path.is_none(),
+                "ordinary resumes must not enter worktree drop-to-shell mode"
+            );
+        }
+    }
+}
+
+#[test]
 fn discovered_sessions_carry_the_account_they_were_discovered_under() {
     let mut observation = local_session("claude", "local", 1, 2);
     observation.login = Some("work".parse().expect("login name"));

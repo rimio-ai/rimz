@@ -123,6 +123,8 @@ Every agent gets one temp unit, `~/.rimz/ws/<workspace-dir>/tmp/<handle>/`, crea
 
 The room's `shared/` (`StatePaths.room_shared_dir`) is the one directory every agent in the room reaches, named by `$RIMZ_SHARED` at its host path in both modes. RimZ's result files live in the state `out/` class and are printed as host paths.
 
+An applied `empty-dir` profile moves only the process cwd to its directory under `~/.rimz/empty/`. It does not change the temp-unit owner or `RIMZ_SHARED`; the child's unit still comes from its parent's durable row, not either process cwd. `RIMZ_WORKTREE_PATH` carries the recorded checkout for lane-aware commands, while provider argv, sandbox `--chdir`, hooks, and language-server leases use the process cwd.
+
 For an explicit launch `--cwd`, `--system-prompt-file`, or `--append-system-prompt-file`, `cli::caller_host_path` reverses the calling process's view: `/tmp/...` and `/var/tmp/...` map to the caller's own unit. The caller's `RIMZ_ISOLATION`, not machine policy, selects this mapping; a host shell keeps host paths. The prompt files need it because the exec wrapper reads them in the new pane, outside the caller's view. Relative paths resolve against the calling process's cwd before mapping and canonicalization. Launch records and pane placement use the host path; only the sandbox provider's `--chdir` is lowered back through the launched agent's `TmpView::agent_path`. `sandbox::TmpView` holds that one mapping, the owner's unit to `/tmp` and back, and nothing prints a result path through it.
 
 A sandboxed child of a host parent gets the same `/tmp` reminder line as any child, so a bare `/tmp/x` in its report names the unit only as the child sees it; the host parent finds the file under the unit's host path.

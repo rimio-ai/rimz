@@ -85,6 +85,61 @@ fn plan_from_rollup(h: &Harness) -> rimz::harness::resume::ResumePlan {
     )
 }
 
+#[test]
+fn empty_dir_missing_cwd_is_still_resumable_on_rebirth() {
+    let h = Harness::new();
+    let mut observation = registered(
+        "empty-session",
+        "researcher",
+        "terminal_2",
+        "/missing/empty/researcher",
+        "main",
+    );
+    observation.launch.checkout = Some("/repo".into());
+    h.store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            h.workspace_id.clone(),
+            "room",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap();
+    let plan = rimz::harness::resume::plan_resume(
+        &projection.agents,
+        &projection.ended,
+        rimz::harness::resume::ResumeContext {
+            in_place: false,
+            project_root: Some(Path::new("/repo")),
+            workspace_id: &h.workspace_id,
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: h.store.runtime_paths(),
+            profiles: &rimz::config::ProfilesConfig::default(),
+            max: 10,
+            logins: &rimz::agents::RoomAccounts::default(),
+            catalog: &rimz::agents::LoginCatalog::default(),
+        },
+        |_| false,
+        |_| true,
+    );
+    assert_eq!(
+        plan.tabs.len(),
+        1,
+        "missing empty-dir cwd must be recreated, not retired"
+    );
+    assert!(plan.agents_to_end.is_empty());
+    assert_eq!(plan.tabs[0].cwd, Path::new("/repo"));
+    let request = decode_exec_request(&single_column(&plan.tabs[0])[0]);
+    assert_eq!(
+        request.worktree_path.as_deref(),
+        Some(Path::new("/missing/empty/researcher"))
+    );
+}
+
 fn resume_argv(h: &Harness, kind: &str, id: &str, name: &str) -> Vec<String> {
     rimz::harness::launch::exec_argv(
         Path::new("/bin/rimz"),
@@ -124,7 +179,10 @@ fn decode_exec_request(argv: &[String]) -> ExecRequest {
         .windows(2)
         .find_map(|pair| (pair[0] == "--request").then_some(pair[1].as_str()))
         .expect("exec request payload");
-    rimz::harness::launch::decode_exec_request(&argv[3], None, payload)
+    let worktree = argv
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--worktree-path").then(|| Path::new(&pair[1])));
+    rimz::harness::launch::decode_exec_request(&argv[3], worktree, payload)
         .expect("decode exec request")
 }
 
@@ -418,6 +476,55 @@ mod agent_ref {
             assert_eq!(request.identity.params.model.as_deref(), Some("sonnet"));
             assert!(request.close_pane_on_exit);
         }
+    }
+
+    #[test]
+    fn lane_resume_ignores_ended_empty_dir_child_with_removed_login() {
+        let fixture = Fixture::new(LaunchParams::default(), false, None);
+        let store = fixture.env.store();
+        let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+        let cwd = store.paths().empty_agent_dir("old-child");
+        let mut child = registered(
+            "old-child",
+            "old-child",
+            "terminal_9",
+            cwd.to_str().unwrap(),
+            "main",
+        );
+        child.launch.checkout = Some(fixture.cwd.display().to_string());
+        child.launch.channel = Some("saved".into());
+        child.launch.login = Some("removed".parse().unwrap());
+        child.launch.parent_agent_id = Some(SESSION.into());
+        child.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionStart",
+                &child,
+            ))
+            .unwrap();
+        child.signal = LifecycleSignal::Ended;
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id,
+                &workspace.session_name,
+                "claude",
+                "SessionEnd",
+                &child,
+            ))
+            .unwrap();
+        let output = fixture.output("#saved");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !cwd.exists(),
+            "a child not being resumed must not have its directory recreated"
+        );
     }
 
     #[test]

@@ -46,6 +46,13 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let snapshot = ctx.alive_snapshot()?;
     let focus = LaunchFocus::resolve(args.bg, resolve_caller(&snapshot.agents).as_ref());
     let source = resolve_fork_source(store, workspace, ctx.runtime(), &snapshot, &args.reference)?;
+    if source.checkout.is_some() {
+        let cwd = source
+            .worktree_path
+            .as_deref()
+            .context("empty-dir agent has no recorded working directory")?;
+        rimz::agents::empty_dir::prepare_reentry(store.paths(), Path::new(cwd))?;
+    }
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
         Some(&workspace.project_root),
@@ -139,7 +146,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         seed.kind.as_str(),
         adapter.folder_trust(
             &seed.cwd,
-            Some(workspace.launch_repo_root()),
+            seed.launch
+                .checkout
+                .is_none()
+                .then(|| workspace.launch_repo_root()),
             &login.env(&rimz::agents::ambient_env()),
         ),
         None,
@@ -234,7 +244,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             sidebar,
             identity_env: rimz::room::pane_identity_env(
                 workspace,
-                &seed.cwd,
+                source.lane_path().map(Path::new).unwrap_or(&seed.cwd),
                 channel.as_deref(),
                 false,
             ),

@@ -2670,6 +2670,7 @@ fn resume_command_can_return_to_the_existing_shell() {
         None,
         &ResumeLaunchPosture::default(),
         false,
+        None,
     );
     assert!(!exec_request(&argv).close_pane_on_exit);
 }

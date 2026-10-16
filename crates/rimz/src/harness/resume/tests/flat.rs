@@ -490,6 +490,7 @@ fn resume_command_replays_launch_identity() {
         agent.channel.as_deref(),
         &crate::harness::plan::ResumeLaunchPosture::default(),
         true,
+        None,
     );
     assert_eq!(&argv[..4], [RIMZ_BIN, "agents", "exec", "claude"]);
     let request = decode_exec_request(&argv);

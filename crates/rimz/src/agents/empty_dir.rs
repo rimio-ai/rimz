@@ -42,6 +42,38 @@ pub struct Prepared {
     pub name: String,
 }
 
+#[derive(Debug)]
+pub enum Decision {
+    Applied(Prepared),
+    Fallback(String),
+    Skip,
+}
+
+/// Decide a fresh launch's cwd only after its account and placement are known.
+pub fn decide(
+    paths: &StatePaths,
+    agents: &[AgentState],
+    requested: Option<&str>,
+    kind: &AgentKind,
+    login: &super::ProviderLogin,
+    enabled: bool,
+) -> Result<Decision, EmptyDirErr> {
+    if !enabled {
+        return Ok(Decision::Skip);
+    }
+    check(paths)?;
+    match verdict(true, kind, &login.env(&super::ambient_env())) {
+        Verdict::Applies => {
+            prepare(paths, &agents.iter().collect::<Vec<_>>(), requested).map(Decision::Applied)
+        }
+        Verdict::Fallback(_) => Ok(Decision::Fallback(format!(
+            "empty-dir ignored: not trusted for {kind} account {} (see rimz doctor)",
+            login.name()
+        ))),
+        Verdict::NotApplicable => Ok(Decision::Skip),
+    }
+}
+
 pub fn verdict(enabled: bool, kind: &AgentKind, login_env: &BTreeMap<String, String>) -> Verdict {
     verdict_at(
         &crate::disk::paths::empty_dir_root(),
@@ -129,7 +161,7 @@ fn check_level(path: &Path) -> Result<(), EmptyDirErr> {
 }
 
 /// Prepare a fresh cwd from retained room rows. Use a requested name as explicit at the mint, otherwise use the returned candidate as soft.
-pub fn prepare(
+fn prepare(
     paths: &StatePaths,
     agents: &[&AgentState],
     requested: Option<&str>,

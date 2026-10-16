@@ -1385,6 +1385,7 @@ pub(super) fn resume_command(
     fallback_channel: Option<&str>,
     posture: &ResumeLaunchPosture,
     close_pane_on_exit: bool,
+    cwd: Option<&Path>,
 ) -> Vec<String> {
     let channel = identity
         .channel
@@ -1417,6 +1418,7 @@ pub(super) fn resume_command(
         runtime,
         &crate::harness::launch::ExecRequest {
             close_pane_on_exit,
+            worktree_path: cwd.map(Path::to_path_buf),
             identity: crate::harness::launch::ExecIdentity {
                 resume_model_override: posture.resume_model_override,
                 name: identity.name.clone(),
@@ -1512,6 +1514,7 @@ pub fn compile_layout_panes(
                                         params.fallback_channel,
                                         &ResumeLaunchPosture::from(cell),
                                         !params.in_place,
+                                        agent.checkout.as_ref().and(agent.worktree_path.as_deref()).map(Path::new),
                                     )
                                 },
                                 Some(CohortSeed::Fresh) | None => {

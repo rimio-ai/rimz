@@ -78,6 +78,181 @@ fn fresh_exec(kind: &str, prompt: Option<&str>) -> ExecRequest {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn empty_dir_solo_keeps_root_lane_and_batch_ignores_with_notice() {
+    assert_empty_dir_launch(false, false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_dir_batch_ignores_with_notice() {
+    assert_empty_dir_launch(true, false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_dir_explicit_cwd_overrides_solo_and_batch_silently() {
+    for multi in [false, true] {
+        assert_empty_dir_launch(multi, true, false);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn solo_launch_from_empty_dir_caller_uses_callers_checkout() {
+    assert_empty_dir_launch(false, false, true);
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_dir_exec_moves_only_cwd_not_parent_temp_unit() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let store = env.store();
+    let cwd = store.paths().empty_agent_dir("researcher");
+    let mut request = fresh_exec("codex", None);
+    request.identity.name = Some("researcher".into());
+    request.identity.params.checkout = Some(env.project_root.display().to_string());
+    request.identity.params.parent_agent_id = Some("launch-session".into());
+    request.identity.params.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    request.identity.params.isolation = Some(rimz::config::Isolation::Host);
+    request.worktree_path = Some(cwd.clone());
+    let shim = write_env_dump_shim(&env, "codex");
+    let dump = env.home_root.join("empty-exec.env");
+    env.rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", "/definitely/not/a/shell")
+        .env("PATH", path_with_front(&shim))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert_success_within_timeout("empty-dir exec");
+    let dumped = std::fs::read_to_string(&dump).unwrap();
+    for (key, value) in [
+        ("PWD", cwd),
+        ("TMPDIR", store.paths().temp_unit_dir(Some("planner"))),
+        ("RIMZ_SHARED", store.paths().room_shared_dir.clone()),
+        ("RIMZ_WORKTREE_PATH", env.project_root.clone()),
+    ] {
+        let expected = format!("{key}={}", value.display());
+        assert!(
+            dumped.lines().any(|line| line == expected),
+            "missing {expected}: {dumped}"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_empty_dir_launch(multi: bool, explicit_cwd: bool, empty_caller: bool) {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "researcher",
+        "description: Research\nagent: codex\ntools: [Read]\nempty-dir: true",
+        "",
+    );
+    let shim = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store().record_workspace(&workspace).unwrap();
+    let caller_cwd = env.store().paths().empty_agent_dir("caller");
+    if empty_caller {
+        std::fs::create_dir_all(&caller_cwd).unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some("caller".into()), LifecycleSignal::Registered);
+        observation.worktree_path = Some(caller_cwd.display().to_string());
+        observation.launch.checkout = Some(env.project_root.display().to_string());
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let trace = env.home_root.join("empty-launch.log");
+    let mut command = env.rimz();
+    if empty_caller {
+        command
+            .current_dir(&caller_cwd)
+            .envs(rimz::workspace::pin_env(
+                &workspace.workspace_id,
+                &env.project_root,
+            ))
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "caller");
+    }
+    let output = command
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            if multi {
+                "researcher,researcher"
+            } else {
+                "researcher"
+            },
+            "--bg",
+            "--new-tab",
+        ])
+        .args(explicit_cwd.then_some("--cwd"))
+        .args(explicit_cwd.then_some(&env.project_root))
+        .env("PATH", path_with_front(&shim))
+        .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let store = env.store();
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents
+        .into_iter()
+        .filter(|agent| agent.agent_id != "caller")
+        .collect::<Vec<_>>();
+    assert_eq!(agents.len(), if multi { 2 } else { 1 });
+    assert_eq!(
+        stderr.contains("empty-dir ignored"),
+        multi && !explicit_cwd,
+        "{stderr}"
+    );
+    for agent in agents {
+        assert!(agent.root_lane, "{agent:?}");
+        assert_eq!(
+            agent.checkout.as_deref(),
+            (!multi && !explicit_cwd).then(|| env.project_root.to_str().unwrap())
+        );
+        if multi || explicit_cwd {
+            assert_eq!(agent.worktree_path.as_deref(), env.project_root.to_str());
+        } else {
+            let cwd = std::path::Path::new(agent.worktree_path.as_deref().unwrap());
+            assert_eq!(cwd.parent(), Some(store.paths().empty_room_dir().as_path()));
+            assert!(cwd.is_dir());
+        }
+    }
+    if multi && !explicit_cwd {
+        assert!(stderr.contains("single-agent"), "{stderr}");
+    }
+}
+
 #[test]
 fn saved_untrusted_warns_for_agents_and_refuses_teams() {
     for team in [false, true] {

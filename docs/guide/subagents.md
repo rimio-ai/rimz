@@ -21,7 +21,9 @@ A parent's `rimz subagents codex "map the auth call path"` uses the supervised b
 
 Nothing else moves. The child's session file lands where its CLI always writes it, and `rimz agents show @calm-fox` and `rimz transcript @calm-fox` read the run back after the pane is gone.
 
-Children share their parent's checkout by default. No worktree separates their edits from each other or from the parent, so give an editing child files no one else is touching, or have the parent use `rimz agents -p --worktree` ([choose the right tool](#choose-the-right-tool)). To validate an agent without the project's instruction files, create a clean directory outside the project and pass [`--cwd <DIR>`](../reference/cli/subagents.md#launch-one-child); the child stays in the same room.
+Children share their parent's checkout by default. No worktree separates their edits from each other or from the parent, so give an editing child files no one else is touching, or have the parent use `rimz agents -p --worktree` ([choose the right tool](#choose-the-right-tool)).
+
+A researcher may need no project instructions at all. Set `empty-dir: true` in its definition to give it a directory of its own under `~/.rimz/empty/`, keeping it in the parent's channel. RimZ uses that directory only when the child's account needs no folder-trust prompt there; otherwise it prints a notice and uses the parent's checkout. The directory survives the child's exit and is reused for follow-ups. For an explicit one-off directory, pass [`--cwd <DIR>`](../reference/cli/subagents.md#launch-one-child), which overrides the profile setting. The child stays in the same room either way.
 
 ## Give your agents children to launch
 

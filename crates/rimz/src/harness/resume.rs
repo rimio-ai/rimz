@@ -221,6 +221,7 @@ pub enum LaneResumeAction {
         warnings: Vec<String>,
         live_labels: Vec<String>,
         preflight_kinds: Vec<AgentKind>,
+        resumed: BTreeSet<(AgentKind, AgentSessionId)>,
     },
     RestoreClosed {
         lane_label: String,
@@ -230,6 +231,19 @@ pub enum LaneResumeAction {
 }
 
 impl LaneResumeAction {
+    /// Recorded sessions this action actually restores, excluding historical and skipped rows.
+    pub fn agents_needing_preflight<'a>(&self, agents: &'a [AgentState]) -> Vec<&'a AgentState> {
+        let resumed = match self {
+            Self::SplitClosed { resumed, .. } => resumed.clone(),
+            Self::RestoreClosed { plan, .. } => plan.recovery.resumed_keys(),
+            Self::List { .. } | Self::Focus { .. } => return Vec::new(),
+        };
+        agents
+            .iter()
+            .filter(|agent| resumed.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+            .collect()
+    }
+
     /// Provider kinds callers validate before any mux or durable allocation.
     pub fn agent_kinds_needing_preflight(&self) -> &[AgentKind] {
         match self {
@@ -1502,11 +1516,8 @@ fn plan_discovered_lane(
         .iter()
         .filter_map(ResumeCandidate::from_observation)
         .collect::<Vec<_>>();
-    let preflight_kinds = candidates
-        .iter()
-        .map(|candidate| candidate.identity.kind.clone())
-        .collect();
     let flat = plan_resume_candidates_detailed(candidates, request.context(profiles), path_exists);
+    let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
     if flat.tabs.is_empty() {
         return Err(LaneResumeError::Nothing {
             scope: lane.display.clone(),
@@ -1565,11 +1576,7 @@ fn plan_live_lane_split(
         .iter()
         .map(|agent| crate::address::agent_handle(agent, &peers, true))
         .collect();
-    let preflight_kinds = closed
-        .iter()
-        .filter(|agent| supports_agent_resume(agent) && session_backed(agent))
-        .map(|agent| agent.kind.clone())
-        .collect();
+    let preflight_kinds = flat.resumed.iter().map(|(kind, _)| kind.clone()).collect();
     let channel = lane
         .channel
         .clone()
@@ -1584,6 +1591,7 @@ fn plan_live_lane_split(
         warnings: flat.warnings,
         live_labels,
         preflight_kinds,
+        resumed: flat.resumed,
     })
 }
 
@@ -1685,12 +1693,7 @@ fn plan_closed_lane(
         .flat_map(|planned| planned.layout.agent_kinds())
         .map(AgentKind::new_unchecked)
         .collect::<Vec<_>>();
-    preflight_kinds.extend(
-        flat_agents
-            .iter()
-            .filter(|agent| !request.fresh && supports_agent_resume(agent) && session_backed(agent))
-            .map(|agent| agent.kind.clone()),
-    );
+    preflight_kinds.extend(flat.resumed.iter().map(|(kind, _)| kind.clone()));
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display,
         cwd: lane.path,
@@ -2229,7 +2232,7 @@ fn plan_resume_candidates_detailed(
             }
         });
         let label = build_label(&candidate.identity.kind, lane_label, &candidate.cwd);
-        if !worktree_exists(&candidate.cwd) {
+        if candidate.identity.checkout.is_none() && !worktree_exists(&candidate.cwd) {
             plan.agents_to_end.push((
                 candidate.identity.kind.clone(),
                 candidate.identity.session_id.clone(),
@@ -2300,6 +2303,11 @@ fn plan_resume_candidates_detailed(
             channel.as_deref(),
             &posture.launch,
             !ctx.in_place,
+            candidate
+                .identity
+                .checkout
+                .as_ref()
+                .map(|_| candidate.cwd.as_path()),
         );
         let lane_path = candidate.lane_path();
         let tab_label = channel_label(channel.as_deref(), lane_path);
@@ -2330,7 +2338,7 @@ fn plan_resume_candidates_detailed(
             let env = tab_pin_env(
                 ctx.workspace_id,
                 ctx.project_root,
-                &candidate.cwd,
+                candidate.lane_path(),
                 channel.as_deref(),
             );
             tabs.push(PlannedResumeTab {
@@ -2338,7 +2346,7 @@ fn plan_resume_candidates_detailed(
                 isolations: vec![isolation],
                 tab: ResumeTab {
                     label: tab_label,
-                    cwd: candidate.cwd,
+                    cwd: candidate.lane_path().to_path_buf(),
                     env,
                     layout: crate::mux::LayoutPanes {
                         columns: vec![crate::mux::LayoutColumn {
@@ -2787,7 +2795,10 @@ fn cohort_candidates<'a>(
     agents
         .iter()
         .filter(|agent| cohort_admits(agent, liveness))
-        .filter(|agent| agent_worktree(agent).is_some_and(|path| worktree_exists(&path)))
+        .filter(|agent| {
+            agent.checkout.is_some()
+                || agent_worktree(agent).is_some_and(|path| worktree_exists(&path))
+        })
         .collect()
 }
 

@@ -54,6 +54,9 @@ pub(in crate::cli) fn restart_resolved(
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
+    if agent.checkout.is_some() {
+        rimz::agents::empty_dir::prepare_reentry(store.paths(), &cwd)?;
+    }
     let machine_config = crate::cli::machine_config();
     let posture = restart_posture(agent, workspace, &machine_config)?;
     let adapter = rimz::agents::find_definition(agent.kind.as_str())
@@ -93,7 +96,10 @@ pub(in crate::cli) fn restart_resolved(
         agent.kind.as_str(),
         adapter.folder_trust(
             &cwd,
-            Some(workspace.launch_repo_root()),
+            agent
+                .checkout
+                .is_none()
+                .then(|| workspace.launch_repo_root()),
             &provider_login.env(&rimz::agents::ambient_env()),
         ),
         unattended,
@@ -135,7 +141,12 @@ pub(in crate::cli) fn restart_resolved(
         store.runtime_paths(),
         &invocation,
     )?;
-    let env = rimz::room::pane_identity_env(workspace, &cwd, agent.channel.as_deref(), false);
+    let env = rimz::room::pane_identity_env(
+        workspace,
+        agent.lane_path().map(Path::new).unwrap_or(&cwd),
+        agent.channel.as_deref(),
+        false,
+    );
     let backend = rimz::mux::backend_for(old_pane.mux());
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))

@@ -2054,12 +2054,14 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
     request.identity.name = Some("fox".to_owned());
     request.identity.params.parent_agent_id = Some("parent-session".into());
     request.identity.params.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+    request.identity.params.checkout = Some("/parent-checkout".to_owned());
+    let empty_cwd = project.path().join("empty-agent");
     let ambient = BTreeMap::from([("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".to_owned())]);
     let compile_with = |agents: Result<&[crate::agents::AgentState], &str>| {
         compile(LaunchPlanInputs {
             recorded_system_prompt_digest: None,
             request: &request,
-            cwd: project.path(),
+            cwd: &empty_cwd,
             project_root: project.path(),
             rimz_bin: Path::new("/bin/rimz"),
             runtime: &runtime,
@@ -2082,6 +2084,18 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
     };
 
     let plan = compile_with(Ok(std::slice::from_ref(&parent)));
+    assert_eq!(plan.cwd, empty_cwd);
+    assert_eq!(
+        plan.process()
+            .env
+            .get(crate::workspace::ENV_WORKTREE_PATH)
+            .map(String::as_str),
+        Some("/parent-checkout")
+    );
+    assert_eq!(
+        plan.process().env.get("RIMZ_SHARED").map(PathBuf::from),
+        Some(state.room_shared_dir.clone())
+    );
     assert_eq!(
         plan.process().env.get("TMPDIR").map(PathBuf::from),
         Some(state.temp_unit_dir(Some("otter")))

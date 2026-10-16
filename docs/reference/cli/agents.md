@@ -57,7 +57,7 @@ A channel scopes the lookup. Without an explicit target channel, commands use no
 
 | Form | Matches |
 | --- | --- |
-| `#main` | The root lane: an agent with no stamped channel whose stored worktree path is the project root. Addresses and listing filters accept it, the project directory's basename, and the root path. Root agents always display `main`. Also matches a lane literally named `main`; the name is not reserved, so that lane shares the displayed name and handles disambiguate its agents. |
+| `#main` | The root lane: an agent with no stamped channel whose checkout is the project root, including an empty-dir agent working elsewhere. Addresses and listing filters accept it, the project directory's basename, and the root path. Root agents always display `main`. Also matches a lane literally named `main`; the name is not reserved, so that lane shares the displayed name and handles disambiguate its agents. |
 | `#design` | A lane agents were launched into with `--channel design`. |
 | `#auth-refresh` | A worktree lane, by branch, generated worktree name, or directory basename. The flag spelling is `--worktree auth-refresh`. |
 | `#query-engine/forge` | The team `forge` launched in place from the `query-engine` directory. |
@@ -198,6 +198,8 @@ Isolation resolves as recorded `--isolation` flag, then the profile's `isolation
 ### Channel, worktree, and placement
 
 A launch runs in the current directory's checkout by default. These flags choose its directory and channel:
+
+A solo [`empty-dir: true` profile](../definitions.md#agent-and-subagent-keys) instead uses its own directory under `~/.rimz/empty/<workspace-dir>/<handle>/` when its account needs no folder-trust prompt there, while keeping the checkout's lane. Otherwise it keeps the checkout and prints an `empty-dir ignored` notice. `--cwd`, `--worktree`, and `--from-pr` silently override the setting. Multi-cell layouts ignore it with a notice. Restart, resume, rebirth, and fork reuse the recorded directory and recreate it when missing; its contents survive agent exit. The [child launch reference](./subagents.md#launch-one-child) describes the parent-directory cleanliness check.
 
 | Flag | Effect |
 | --- | --- |
