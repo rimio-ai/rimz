@@ -1,0 +1,184 @@
+---
+source: crates/rimz/src/harness/workflow/tests.rs
+expression: value
+---
+{
+  "$defs": {
+    "Check": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "prompt-file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Header": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on": {
+          "$ref": "#/$defs/HeaderEdges"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScopeKind"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "start"
+      ],
+      "type": "object"
+    },
+    "HeaderEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "deadline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScopeKind": {
+      "enum": [
+        "worktree",
+        "project"
+      ],
+      "type": "string"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "max-visits": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "on": {
+          "$ref": "#/$defs/StepEdges"
+        },
+        "prompt-file": {
+          "type": "string"
+        },
+        "takeover": {
+          "default": false,
+          "type": "boolean"
+        },
+        "then": {
+          "type": "string"
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent",
+        "prompt-file",
+        "then"
+      ],
+      "type": "object"
+    },
+    "StepEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "asked": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cap": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "checks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Check"
+      },
+      "type": "object"
+    },
+    "steps": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Step"
+      },
+      "type": "object"
+    },
+    "workflow": {
+      "$ref": "#/$defs/Header"
+    }
+  },
+  "required": [
+    "workflow"
+  ],
+  "title": "WorkflowSpec",
+  "type": "object"
+}

@@ -520,7 +520,8 @@ allowed-dependencies = [
 # Queue writers and the host share RuntimePaths::message_wake_path (+1).
 # Empty-dir root, room and candidate paths stay in the disk path boundary (+3).
 # Machine GC resolves empty roots under explicit homes (+1).
-surface-budget = 247
+# WorkflowPaths, its accessors, definition paths, and run discovery share the classed path boundary (+9).
+surface-budget = 256
 
 [[verdict]]
 kind = "item"
@@ -739,7 +740,8 @@ path = "crates/rimz/src/harness"
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
 # hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
-surface-budget = 860 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
+# workflow::{schema, validate, Validation, SpecErr} and report vocabulary cross the CLI boundary (+6).
+surface-budget = 866 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 
 [[verdict]]
 kind = "item"
@@ -1151,7 +1153,9 @@ path = "crates/rimz/src/store"
 # Store::rearm_message_wake replaces the lock-free wake read without surface growth.
 # Store::cancel_unbound_molt_launch makes the prescribed stuck-successor stop durable (+1).
 # Store::begin_agent_launch_replacement excludes the replaced row from molt rivalry (+1).
-surface-budget = 428
+# workflow::{RunRecord, JournalEntry, JournalEvent} and locked codecs serve the engine and inspection (+23).
+# gc::prune::OrphanEmptyTree, the trunk's orphan empty-dir report, takes the slack the workflow budget assumed (+1).
+surface-budget = 452
 
 [[verdict]]
 kind = "item"
@@ -1467,7 +1471,8 @@ allowed-dependencies = [
 # The hook ingress and drain cursor codec module (+1).
 # The CLI reads a scoped handle's hook ingress id to key assistant transcripts (+1).
 # The durable hibernation record module (+1).
-surface-budget = 37
+# The durable `workflow` record and journal module (+1).
+surface-budget = 38
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
@@ -6407,3 +6412,293 @@ reason = "Sidebar groups and CLI row consumers share checkout-first lane routing
 kind = "item"
 key = "store::snapshot::row::PaneAgent::lane_path"
 reason = "Live-pane addressing preserves the checkout lane while retaining the actual process cwd."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths::signs"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths::claim"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::workflow"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::workflow_runs"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workflows_dir_under"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workflows_dir"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workflow_spec_file"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::workflow_runs_under"
+reason = "Workflow definitions, run-owned files, and cross-room discovery share the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::WorkflowStoreErr"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Result"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::ScopeKind"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Scope"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunState"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunState::is_terminal"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::ParkReason"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Park"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Key"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::StepVisits"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::KeyVisits"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::AttemptKind"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Host"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::LiveAttempt"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::AttemptOutcome"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::PreviousAttempt"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Wait"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::RunRecord"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::JournalEntry"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::JournalEvent"
+reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::load"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::initialize"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::write"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::append"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::journal"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::list"
+reason = "Workflow codecs share lock-free reads and caller-locked durable writes; the engine owns transition ordering."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::WorkflowSpec"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Header"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::HeaderEdges"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::StepEdges"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Check"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Step"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::SpecErr"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::load"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::schema"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Edge"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::NodeRow"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Issue"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Validation"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::validate"
+reason = "The workflow CLI and subsequent engine share the strict spec model, derived schema, and structured validation report."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::validate::validate_spec"
+reason = "Run admission validates the same parsed specification bytes it seals, reusing the CLI validator without re-reading the definition."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::confined_file"
+reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::resolve_argv"
+reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::parse_deadline"
+reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::spec::parse_window"
+reason = "Workflow-local input parsers serve validation and execution without widening the shared scheduler grammar."
+
+[[verdict]]
+kind = "item"
+key = "cli::workflow::WorkflowArgs"
+reason = "The parent CLI dispatch owns workflow argument parsing and presentation only."
+
+[[verdict]]
+kind = "item"
+key = "cli::workflow::run"
+reason = "The parent CLI dispatch owns workflow argument parsing and presentation only."

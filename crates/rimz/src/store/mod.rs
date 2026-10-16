@@ -52,6 +52,7 @@ pub(crate) mod session_death;
 pub(crate) mod sidecar;
 pub mod snapshot;
 pub mod subagent_context;
+pub mod workflow;
 pub mod writer;
 
 use std::io;

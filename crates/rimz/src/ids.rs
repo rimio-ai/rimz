@@ -432,6 +432,7 @@ fn validate_uuid_id(
 }
 
 uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
+uuid_v7_id!(WorkflowRunId, "wf", "Per-workflow-run identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
     SidebarInstanceId,

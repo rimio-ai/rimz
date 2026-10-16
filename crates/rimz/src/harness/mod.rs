@@ -38,5 +38,6 @@ pub mod stall_notice;
 pub mod subagent_policy;
 pub mod team_prompt;
 pub mod team_stage;
+pub mod workflow;
 
 pub use auto_continue::{AutoContinueRequest, park_demotion};

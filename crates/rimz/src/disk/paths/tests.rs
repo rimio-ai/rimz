@@ -1220,3 +1220,62 @@ fn sidebar_host_paths_are_per_session_and_fit_the_socket_budget() {
         runtime.sidebar_host_spawn_lock(MuxName::Tmux, session)
     );
 }
+
+#[test]
+fn workflow_paths_and_cross_room_discovery() {
+    use crate::ids::WorkflowRunId;
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(Path::new("/project"), home.path()).unwrap();
+    let id = WorkflowRunId::new();
+    let paths = state.workflow(&id);
+    assert_eq!(
+        paths.home,
+        state.root.join("owned/workflows").join(id.as_str())
+    );
+    assert_eq!(paths.record, paths.home.join("record.json"));
+    assert_eq!(paths.journal, paths.home.join("journal.jsonl"));
+    assert_eq!(paths.spec, paths.home.join("workflow.toml"));
+    assert_eq!(paths.work, paths.home.join("work"));
+    assert_eq!(paths.context, paths.work.join("context.json"));
+    assert_eq!(
+        paths.signs(Some("build")),
+        paths.work.join("signs/build.md")
+    );
+    assert_eq!(paths.claim(7), paths.work.join("7.claim.json"));
+    assert_eq!(
+        workflows_dir_under(home.path()),
+        home.path().join("workflows")
+    );
+    assert_eq!(
+        workflow_spec_file(home.path()),
+        home.path().join("workflow.toml")
+    );
+    std::fs::create_dir_all(&paths.home).unwrap();
+    std::fs::write(&paths.record, b"{}").unwrap();
+    std::fs::write(
+        &state.workspace_record,
+        serde_json::to_vec(&serde_json::json!({"workspace_id": state.workspace_id})).unwrap(),
+    )
+    .unwrap();
+    let found = workflow_runs_under(home.path()).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0.workspace_id, state.workspace_id);
+    assert_eq!(found[0].1.home, paths.home);
+    let broken = StatePaths::for_project_root_under(Path::new("/broken"), home.path()).unwrap();
+    std::fs::create_dir_all(&broken.root).unwrap();
+    std::fs::write(
+        &broken.workspace_record,
+        serde_json::to_vec(&serde_json::json!({"workspace_id":broken.workspace_id})).unwrap(),
+    )
+    .unwrap();
+    let broken_home = broken.workflow(&WorkflowRunId::new()).home;
+    let runs_dir = broken_home.parent().unwrap();
+    std::fs::create_dir_all(runs_dir.parent().unwrap()).unwrap();
+    std::fs::write(runs_dir, "not a directory").unwrap();
+    let found = workflow_runs_under(home.path());
+    assert!(
+        found.is_ok(),
+        "one unreadable room must not hide other rooms' runs: {found:?}"
+    );
+    assert_eq!(found.unwrap()[0].1.home, paths.home);
+}

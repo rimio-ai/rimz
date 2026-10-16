@@ -56,6 +56,7 @@ mod update;
 mod usage;
 mod wait;
 mod web;
+mod workflow;
 mod workspace;
 mod worktree;
 mod worktree_protection;
@@ -183,6 +184,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Asks(args)) => asks::run(args, &globals),
         Some(Subcmd::Answer(args)) => answer::run(args, &globals),
         Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
+        Some(Subcmd::Workflow(args)) => workflow::run(args),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
@@ -737,6 +739,8 @@ enum Subcmd {
     /// Runs from the room's sidebar host.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
+    /// Validate workflow definitions and inspect their schema.
+    Workflow(workflow::WorkflowArgs),
     /// Reload running sidebars in place.
     ///
     /// Picks up a freshly-installed build.
