@@ -283,6 +283,8 @@ pub struct RunRecord {
     pub terminal_at: Option<Timestamp>,
     #[serde(default)]
     pub check_retry: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_retry_context: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

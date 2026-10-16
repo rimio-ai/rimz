@@ -77,7 +77,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Show { id, json } => show(&id, json),
         Command::Cancel { id } => {
             let (state, _) = locate(&id)?;
-            let changed = workflow::cancel(&state, &id)?;
+            let changed = workflow::cancel(&state, &id, &PendingHost)?;
             writeln!(
                 render::out(),
                 "{id}: {}",
@@ -97,7 +97,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { id: Some(id), .. } => {
             let (state, _) = locate(&id)?;
-            Ok(workflow::advance(&state, &id)?)
+            Ok(workflow::advance(&state, &id, &PendingHost)?)
         }
         Command::Advance {
             wake_signal: Some(signal),
@@ -109,6 +109,55 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
         Command::Validate { dir, json } => validate(dir, json),
+    }
+}
+
+// Task 3 supplies the CLI lifecycle implementation of the engine's host seam.
+struct PendingHost;
+
+impl workflow::AttemptHost for PendingHost {
+    fn occupancy(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+    ) -> Result<workflow::Occupancy, workflow::WorkflowErr> {
+        Err(workflow::WorkflowErr::Refused(
+            "workflow agent hosting is not wired yet".into(),
+        ))
+    }
+
+    fn evict(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+    ) -> Result<Vec<String>, workflow::WorkflowErr> {
+        Err(workflow::WorkflowErr::Refused(
+            "workflow agent hosting is not wired yet".into(),
+        ))
+    }
+
+    fn launch(
+        &self,
+        _: workflow::StepLaunch,
+    ) -> Result<Result<records::AttemptRun, workflow::LaunchFailure>, workflow::WorkflowErr> {
+        Err(workflow::WorkflowErr::Refused(
+            "workflow agent hosting is not wired yet".into(),
+        ))
+    }
+
+    fn observe(
+        &self,
+        _: &records::AttemptRun,
+    ) -> Result<workflow::Observed, workflow::WorkflowErr> {
+        Err(workflow::WorkflowErr::Refused(
+            "workflow agent hosting is not wired yet".into(),
+        ))
+    }
+
+    fn stop(&self, _: &records::AttemptRun) -> Result<records::Children, workflow::WorkflowErr> {
+        Err(workflow::WorkflowErr::Refused(
+            "workflow agent hosting is not wired yet".into(),
+        ))
     }
 }
 

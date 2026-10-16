@@ -32,12 +32,9 @@ fn success(output: std::process::Output) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn start(env: &Env, stub: Option<&str>) -> String {
+fn start(env: &Env) -> String {
     let mut cmd = env.rimz();
     cmd.args(["workflow", "run", "review", "--prompt", "Review this"]);
-    if let Some(stub) = stub {
-        cmd.env("RIMZ_TEST_WORKFLOW_STEP", stub);
-    }
     let output = success(cmd.output().unwrap());
     output
         .split_whitespace()
@@ -98,7 +95,7 @@ fn happy_path_context_and_cross_directory_lookup() {
         "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = 'next'\n[checks.next]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"
     );
     let (env, _) = fixture(&spec, &evaluation_script("ok"));
-    let id = start(&env, None);
+    let id = start(&env);
     let value = settled(&env, &id, "done");
     assert_eq!(events(&value, "evaluation").len(), 2);
     assert_eq!(events(&value, "terminal").len(), 1);
@@ -127,7 +124,7 @@ fn happy_path_context_and_cross_directory_lookup() {
 #[test]
 fn list_skips_unreadable_homes_but_named_commands_fail() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let bad_ids = unreadable_homes(&env, &value);
     let output = command(&env, &["workflow", "list", "--json"]);
@@ -152,7 +149,7 @@ fn list_skips_unreadable_homes_but_named_commands_fail() {
 #[test]
 fn unreadable_homes_do_not_block_run_creation() {
     let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     success(command(&env, &["workflow", "cancel", &id]));
     unreadable_homes(&env, &value);
@@ -195,7 +192,7 @@ fn unreadable_homes(env: &Env, value: &Value) -> Vec<rimz::ids::WorkflowRunId> {
 fn wait_is_merged_clamped_and_cleared_by_signal() {
     let script = format!("printf x >> \"$RIMZ_WORKFLOW_DIR/count\"\n{PENDING}");
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), &script);
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"]["count"] == 1);
     let recheck: jiff::Timestamp = value["record"]["recheck_at"]
         .as_str()
@@ -285,7 +282,7 @@ fn signal_wake_skips_a_bad_sealed_spec_and_continues() {
     fs::create_dir_all(second_dir.join("checks")).unwrap();
     fs::write(second_dir.join("workflow.toml"), &spec).unwrap();
     fs::write(second_dir.join("checks/pr.sh"), PENDING).unwrap();
-    let first = start(&env, None);
+    let first = start(&env);
     let receipt = success(command(&env, &["workflow", "run", "another"]));
     let second = receipt.lines().next().unwrap();
     let first_value = until(&env, &first, |v| v["record"]["wait"].is_object());
@@ -343,7 +340,7 @@ fn signal_wakes_every_run_without_waiting_for_another_script() {
     fs::create_dir_all(second_dir.join("checks")).unwrap();
     fs::write(second_dir.join("workflow.toml"), spec).unwrap();
     fs::write(second_dir.join("checks/pr.sh"), PENDING).unwrap();
-    let first = start(&env, None);
+    let first = start(&env);
     let receipt = success(command(&env, &["workflow", "run", "another"]));
     let second = receipt.lines().next().unwrap();
     for id in [first.as_str(), second] {
@@ -381,7 +378,7 @@ fn sealed_spec_live_scripts_and_hot_loop_guard() {
         "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non = {{ again = 'next', pause = '@wait' }}\ntimeout = '1h'\n[checks.next]\nrun = 'sh checks/pr.sh'\non.again = 'pr'\n"
     );
     let (env, dir) = fixture(&spec, &evaluation_script("again"));
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| {
         events(v, "evaluation").len() == 2 && v["record"]["attempt"].is_null()
     });
@@ -415,7 +412,7 @@ fn malformed_and_unrouted_objects_are_invalid() {
         );
         let (env, dir) = fixture(&spec, body);
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-        let id = start(&env, None);
+        let id = start(&env);
         let value = settled(&env, &id, "done");
         assert_eq!(context(&value)["input"]["outcome"], "invalid", "{body}");
         assert_eq!(events(&value, "route")[0]["outcome"], "invalid");
@@ -426,7 +423,7 @@ fn malformed_and_unrouted_objects_are_invalid() {
 #[test]
 fn invalid_defaults_park_and_deleted_script_is_invalid() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     fs::remove_file(dir.join("checks/pr.sh")).unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
@@ -447,48 +444,11 @@ fn steps_spec(cap: &str) -> String {
 }
 
 #[test]
-fn step_cap_input_default_and_visit_extension() {
-    let (env, _) = fixture(&steps_spec(""), &evaluation_script("work"));
-    let id = start(&env, Some("true"));
-    let value = settled(&env, &id, "parked");
-    assert_eq!(value["record"]["park"]["reason"], "cap");
-    assert_eq!(
-        value["record"]["input"],
-        json!({"outcome":"cap","step":"build","visits":1,"max":1})
-    );
-    assert_eq!(events(&value, "attempt").len(), 1);
-    success(
-        env.rimz()
-            .args(["workflow", "resume", &id, "--extend", "visits=+1"])
-            .env("RIMZ_TEST_WORKFLOW_STEP", "true")
-            .output()
-            .unwrap(),
-    );
-    let value = until(&env, &id, |v| {
-        v["record"]["state"] == "parked" && v["record"]["visit_grant"] == 1
-    });
-    assert_eq!(value["record"]["visits"]["build"]["total"], 2);
-    assert_eq!(events(&value, "attempt").len(), 2);
-
-    let spec = format!(
-        "{}[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n",
-        steps_spec("on.cap = 'report'")
-    );
-    let (env, dir) = fixture(&spec, &evaluation_script("work"));
-    fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-    let id = start(&env, Some("true"));
-    let value = settled(&env, &id, "done");
-    assert_eq!(context(&value)["input"]["outcome"], "cap");
-    assert_eq!(events(&value, "attempt").len(), 1);
-}
-
-#[test]
 fn cap_only_self_cycle_is_refused_before_launch() {
     let (env, dir) = fixture(&steps_spec("on.cap = 'build'"), &evaluation_script("work"));
     let output = env
         .rimz()
         .args(["workflow", "run", "review"])
-        .env("RIMZ_TEST_WORKFLOW_STEP", "true")
         .output()
         .unwrap();
     assert_eq!(
@@ -501,93 +461,12 @@ fn cap_only_self_cycle_is_refused_before_launch() {
 }
 
 #[test]
-fn key_inheritance_and_step_context_shape() {
-    let spec = format!(
-        "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.work = 'relay'\n[checks.relay]\nrun = 'sh checks/relay.sh'\non.work = 'build'\n[checks.after]\nrun = 'sh checks/after.sh'\non = {{ again = 'pr', done = '@done' }}\n[steps.build]\nagent = 'claude'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 4\n"
-    );
-    let body = "if test -f \"$RIMZ_WORKFLOW_DIR/new-key\"; then key=8; else key=7; fi\nprintf '{\"outcome\":\"work\",\"key\":%s}\\n' \"$key\"\n";
-    let (env, dir) = fixture(&spec, body);
-    fs::write(dir.join("checks/relay.sh"), evaluation_script("work")).unwrap();
-    fs::write(dir.join("checks/after.sh"), "if test -f \"$RIMZ_WORKFLOW_DIR/new-key\"; then printf '%s' '{\"outcome\":\"done\"}'; else touch \"$RIMZ_WORKFLOW_DIR/new-key\"; printf '%s' '{\"outcome\":\"again\"}'; fi\n").unwrap();
-    fs::write(dir.join("stub.sh"), "dd if=\"$RIMZ_WORKFLOW_DIR/context.json\" of=\"$RIMZ_WORKFLOW_DIR/step-context.json\" 2>/dev/null\n").unwrap();
-    let stub = shlex::try_join(["sh", dir.join("stub.sh").to_str().unwrap()]).unwrap();
-    let id = start(&env, Some(&stub));
-    let value = settled(&env, &id, "done");
-    let work = Path::new(value["dir"].as_str().unwrap());
-    let ctx: Value =
-        serde_json::from_slice(&fs::read(work.join("step-context.json")).unwrap()).unwrap();
-    assert_eq!(ctx["key"], 8);
-    assert_eq!(ctx["input"], json!({"outcome":"work","key":8}));
-    assert_eq!(ctx["visit"], 1, "a new key starts at visit one");
-    assert_eq!(ctx["visits"], 2);
-    assert_eq!(ctx["prev_attempt"]["outcome"], "ended");
-    assert_eq!(ctx["prev_attempt"]["visit"], 1);
-    for key in [
-        "handle",
-        "run_id",
-        "head_start",
-        "head_end",
-        "children",
-        "output_path",
-    ] {
-        let source = if key == "output_path" {
-            &ctx
-        } else {
-            &ctx["prev_attempt"]
-        };
-        assert_eq!(source.get(key), Some(&Value::Null), "{key}");
-    }
-    let keys: Vec<_> = ctx
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            "input",
-            "key",
-            "node",
-            "output_path",
-            "prev_attempt",
-            "prompt",
-            "run",
-            "seq",
-            "signs_path",
-            "visit",
-            "visits"
-        ]
-    );
-    assert!(
-        ctx["signs_path"]
-            .as_str()
-            .unwrap()
-            .ends_with("/signs/build.md")
-    );
-    assert!(
-        ctx["prev_attempt"]["claim_path"]
-            .as_str()
-            .unwrap()
-            .ends_with(".claim.json")
-    );
-    assert_eq!(events(&value, "attempt").len(), 2);
-    let mut pinned = ctx.clone();
-    pinned["run"] = json!("<run>");
-    pinned["signs_path"] = json!("<work>/signs/build.md");
-    pinned["prev_attempt"]["claim_path"] = json!("<work>/3.claim.json");
-    pinned["prev_attempt"]["started_at"] = json!("<time>");
-    pinned["prev_attempt"]["ended_at"] = json!("<time>");
-    insta::assert_json_snapshot!("step_context", pinned);
-}
-
-#[test]
 fn deadline_routes_once_and_can_be_rearmed() {
     let spec = format!(
         "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2000-01-01T00:00:00Z'\non.deadline = 'report'\n{WAIT}[checks.report]\nrun = 'sh checks/pr.sh'\non = {{ pending = '@wait', done = '@done' }}\ntimeout = '1h'\n"
     );
     let (env, dir) = fixture(&spec, PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     assert_eq!(
         context(&value)["input"],
@@ -631,7 +510,7 @@ fn timeout_kills_script_and_routes_or_parks() {
             "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
         );
         fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-        let id = start(&env, None);
+        let id = start(&env);
         let value = settled(&env, &id, if edge.is_empty() { "parked" } else { "done" });
         let input = if edge.is_empty() {
             value["record"]["input"].clone()
@@ -657,78 +536,9 @@ fn timeout_kills_script_and_routes_or_parks() {
 }
 
 #[test]
-fn step_timeout_follows_then_and_dead_host_keeps_its_visit() {
-    use std::os::unix::net::UnixListener;
-    for die in [false, true] {
-        let spec = if die {
-            steps_spec("")
-        } else {
-            steps_spec("").replace("max-visits = 1", "max-visits = 1\ntimeout = '1s'")
-        };
-        let body = "if test -f \"$RIMZ_WORKFLOW_DIR/started\"; then printf '%s' '{\"outcome\":\"done\"}'; else printf '%s' '{\"outcome\":\"work\"}'; fi";
-        let (env, dir) = fixture(&spec, body);
-        fs::write(
-            dir.join("stub.sh"),
-            if die {
-                "touch \"$RIMZ_WORKFLOW_DIR/started\""
-            } else {
-                "touch \"$RIMZ_WORKFLOW_DIR/started\"\nexec sleep 60"
-            },
-        )
-        .unwrap();
-        let stub = shlex::try_join(["sh", dir.join("stub.sh").to_str().unwrap()]).unwrap();
-        let socket = env.runtime_root.join("step-gate.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let mut cmd = env.rimz();
-        cmd.args(["workflow", "run", "review"])
-            .env("RIMZ_TEST_WORKFLOW_STEP", &stub);
-        if die {
-            cmd.env("RIMZ_TEST_WORKFLOW_STEP_RESULT_GATE", &socket);
-        }
-        let output = success(cmd.output().unwrap());
-        let id = output
-            .split_whitespace()
-            .find(|s| s.starts_with("wf_"))
-            .unwrap();
-        if die {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let _stream = loop {
-                if let Ok((stream, _)) = listener.accept() {
-                    break stream;
-                }
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(10));
-            };
-            let pid = show(&env, id)["record"]["attempt"]["host"]["pid"]
-                .as_u64()
-                .unwrap() as u32;
-            nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid as i32),
-                nix::sys::signal::Signal::SIGKILL,
-            )
-            .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while rimz::proc::process_is_live(pid, None) {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            success(command(&env, &["workflow", "advance", id]));
-        }
-        let value = settled(&env, id, "done");
-        assert_eq!(value["record"]["visits"]["build"]["total"], 1);
-        assert_eq!(
-            context(&value)["prev_attempt"]["outcome"],
-            if die { "canceled" } else { "timeout" }
-        );
-        assert_eq!(events(&value, "attempt").len(), 1);
-    }
-}
-
-#[test]
 fn waiting_timeout_and_live_deadline_use_original_clock() {
     let (env, _) = fixture(&format!("{HEADER}{}", WAIT.replace("1h", "1s")), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     std::thread::sleep(Duration::from_millis(1100));
     success(command(&env, &["workflow", "advance", &id]));
@@ -736,7 +546,7 @@ fn waiting_timeout_and_live_deadline_use_original_clock() {
     let spec = "[workflow]\nscope = 'worktree'\nstart = 'pr'\ndeadline = '2099-01-01T00:00:00Z'\non.deadline = 'report'\n[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n[checks.report]\nrun = 'sh checks/report.sh'\non.ok = '@done'\n";
     let (env, dir) = fixture(spec, "exec sleep 60");
     fs::write(dir.join("checks/report.sh"), evaluation_script("ok")).unwrap();
-    let id = start(&env, None);
+    let id = start(&env);
     until(&env, &id, |v| v["record"]["attempt"].is_object());
     let deadline = jiff::Timestamp::now()
         .checked_add(Duration::from_secs(1))
@@ -763,7 +573,7 @@ fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
         &spec,
         "echo $$ > \"$RIMZ_WORKFLOW_DIR/script.pid\"\nexec sleep 60\n",
     );
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| {
         Path::new(v["dir"].as_str().unwrap())
             .join("script.pid")
@@ -809,7 +619,7 @@ fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
             "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"
         );
         let (env, _) = fixture(&spec, "exec sleep 60\n");
-        let id = start(&env, None);
+        let id = start(&env);
         let value = until(&env, &id, |value| {
             value["record"]["attempt"]["child"]["pid"].is_number()
         });
@@ -864,7 +674,7 @@ fn concurrent_advance_does_not_mutate_live_attempt() {
         &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
         "exec sleep 60",
     );
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["attempt"]["child"].is_object());
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(
@@ -1014,7 +824,7 @@ fn restart_between_evaluation_and_transition_reruns_check_free() {
 #[test]
 fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     until(&env, &id, |v| v["record"]["wait"].is_object());
     let duplicate = command(&env, &["workflow", "run", "review"]);
     assert_eq!(duplicate.status.code(), Some(1));
@@ -1027,14 +837,12 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     success(command(&env, &["workflow", "cancel", &id]));
     fs::write(
         dir.join("workflow.toml"),
-        format!(
-            "{HEADER}[checks.pr]\nagent = 'claude'\nprompt-file = 'prompt.md'\non.ok = '@done'\n"
-        ),
+        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
     )
     .unwrap();
     let agent = command(&env, &["workflow", "run", "review"]);
     assert_eq!(agent.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&agent.stderr).contains("pr"));
+    assert!(String::from_utf8_lossy(&agent.stderr).contains("scope = project"));
     fs::write(dir.join("workflow.toml"), format!("{HEADER}{WAIT}")).unwrap();
     let empty = Env::new();
     let missing = empty
@@ -1050,7 +858,7 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
 #[test]
 fn human_show_wait_and_journal_are_readable() {
     let (env, dir) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
-    let id = start(&env, None);
+    let id = start(&env);
     let value = until(&env, &id, |v| v["record"]["wait"].is_object());
     let text = success(command(&env, &["workflow", "show", &id]));
     assert_eq!(text.lines().next().unwrap(), value["dir"].as_str().unwrap());

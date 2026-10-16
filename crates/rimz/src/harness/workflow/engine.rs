@@ -4,9 +4,11 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde_json::json;
 
+use super::{AttemptHost, Occupancy};
 use super::{WorkflowSpec, script, spec, state::Transition};
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
+use crate::harness::schedule::when::WindowReadings;
 use crate::ids::WorkflowRunId;
 use crate::store::workflow::{
     self, AttemptKind, AttemptOutcome, Host, JournalEvent, KeyVisits, LiveAttempt, ParkReason,
@@ -32,6 +34,8 @@ pub enum WorkflowErr {
 }
 
 type Result<T> = std::result::Result<T, WorkflowErr>;
+
+mod agent;
 
 pub fn create(
     state: &StatePaths,
@@ -115,6 +119,7 @@ pub fn create(
         prev_attempt: None,
         terminal_at: None,
         check_retry: 0,
+        check_retry_context: None,
     };
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
@@ -139,18 +144,6 @@ fn admit(spec: &WorkflowSpec) -> Result<()> {
         return Err(WorkflowErr::Refused(
             "this build does not run scope = project yet".into(),
         ));
-    }
-    if let Some((name, _)) = spec.checks.iter().find(|(_, c)| c.agent.is_some()) {
-        return Err(WorkflowErr::Refused(format!(
-            "check {name}: this build does not run agent checks yet"
-        )));
-    }
-    if script::step_stub().is_none()
-        && let Some(name) = spec.steps.keys().next()
-    {
-        return Err(WorkflowErr::Refused(format!(
-            "step {name}: this build does not run steps yet"
-        )));
     }
     Ok(())
 }
@@ -179,22 +172,103 @@ fn persist(t: &Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     Ok(())
 }
 
+fn window_matches(
+    raw: &str,
+    scope: &Path,
+    provider: &crate::ids::AgentKind,
+    account: Option<&crate::ids::LoginName>,
+    windows: &WindowReadings<'_>,
+) -> Result<bool> {
+    Ok(crate::harness::schedule::when::evaluate(
+        &spec::parse_window(raw)?,
+        scope,
+        None,
+        Some(provider),
+        account,
+        windows,
+    )
+    .ok)
+}
+
+fn window_open(
+    record: &RunRecord,
+    profile: &str,
+    raw: &str,
+    windows: &WindowReadings<'_>,
+) -> Result<bool> {
+    let workspace = crate::workspace::WorkspaceResolver::resolve(
+        &record.scope.path,
+        Some(record.project_root.clone()),
+    )
+    .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let login = crate::store::writer::LaunchLogin::RoomDefault;
+    let resolved = crate::harness::plan::resolve_single_agent_launch(profile, &workspace, &login)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let state = StatePaths::for_project_root(&record.project_root)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let runtime = crate::disk::paths::RuntimePaths::for_state(&state)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    let login = crate::harness::schedule::runner::task_login(&login, resolved.kind(), &runtime)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    window_matches(
+        raw,
+        &record.scope.path,
+        &crate::ids::AgentKind::new_unchecked(resolved.kind()),
+        login.as_ref().map(|login| login.key().name).as_ref(),
+        windows,
+    )
+}
+
 enum Decision {
     Stop,
     Again,
     Evaluate(Box<RunRecord>),
+    Launch(Box<(RunRecord, std::result::Result<String, String>)>),
+    End(Box<RunRecord>),
+    Evict(Box<RunRecord>),
 }
 
-pub fn advance(state: &StatePaths, id: &WorkflowRunId) -> Result<()> {
+pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<()> {
+    let runtime = crate::disk::paths::RuntimePaths::for_state(state)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let paths = state.workflow(id);
     let spec = spec::load(&paths.home)?;
     let mut seen = BTreeSet::new();
+    let mut eviction_failure = None;
     loop {
-        let decision = prepare(state, &paths, &spec, &mut seen)?;
+        let windows = WindowReadings::new(Some(&runtime), Timestamp::now());
+        let decision = prepare(
+            state,
+            &paths,
+            &spec,
+            &mut seen,
+            host,
+            &windows,
+            &mut eviction_failure,
+        )?;
         let record = match decision {
             Decision::Stop => return Ok(()),
             Decision::Again => continue,
             Decision::Evaluate(record) => record,
+            Decision::Evict(record) => {
+                if let Err(error) = host.evict(&record.scope.path, &record.project_root) {
+                    eviction_failure = Some((record.node, error.to_string()));
+                }
+                continue;
+            }
+            Decision::Launch(launch) => {
+                let (record, prompt) = *launch;
+                if agent::launch(state, &paths, &spec, &record, prompt, host)? {
+                    continue;
+                }
+                return Ok(());
+            }
+            Decision::End(record) => {
+                if agent::finish(state, &paths, &spec, &record, host, None)? {
+                    continue;
+                }
+                return Ok(());
+            }
         };
         // prepare publishes an attempt before returning Evaluate.
         let seq = record
@@ -206,11 +280,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId) -> Result<()> {
         crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_CONTEXT_GATE");
         let result = script::evaluate(state, &paths, &spec, &record);
         #[cfg(feature = "testkit")]
-        crate::testkit::rendezvous(if spec.steps.contains_key(&record.node) {
-            "RIMZ_TEST_WORKFLOW_STEP_RESULT_GATE"
-        } else {
-            "RIMZ_TEST_WORKFLOW_RESULT_GATE"
-        });
+        crate::testkit::rendezvous("RIMZ_TEST_WORKFLOW_RESULT_GATE");
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
         let mut t = Transition {
             record: workflow::load(&paths)?,
@@ -224,28 +294,45 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId) -> Result<()> {
         }
         let mut recheck_woken = false;
         if !t.bound()? {
-            if spec.steps.contains_key(&t.record.node) {
-                t.finish_step(result.step_outcome, result.digests)?;
+            let woken = t
+                .record
+                .attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.woken);
+            let retry = if record
+                .attempt
+                .as_ref()
+                .is_some_and(|a| a.kind == AttemptKind::Judge)
+            {
+                t.finish_judge(seq, result)?
             } else {
-                let woken = t
-                    .record
-                    .attempt
-                    .as_ref()
-                    .is_some_and(|attempt| attempt.woken);
                 t.finish_check(seq, result.object, result.digests, result.stderr_tail)?;
-                if woken && let Some(wait) = &mut t.record.wait {
-                    wait.recheck_at = None;
-                    t.record.recheck_at = None;
-                    seen.remove(&record.node);
-                    recheck_woken = true;
-                }
+                false
+            };
+            if retry {
+                seen.remove(&record.node);
+            }
+            if woken && let Some(wait) = &mut t.record.wait {
+                wait.recheck_at = None;
+                t.record.recheck_at = None;
+                seen.remove(&record.node);
+                recheck_woken = true;
             }
         } else {
             for entry in &mut t.entries {
-                if let JournalEvent::Evaluation { digests, .. }
-                | JournalEvent::Attempt { digests, .. } = &mut entry.event
+                if let JournalEvent::Evaluation {
+                    digests,
+                    cost_usd,
+                    retry,
+                    ..
+                } = &mut entry.event
                 {
                     *digests = result.digests.clone();
+                    *cost_usd = result.cost_usd;
+                    *retry = record
+                        .attempt
+                        .as_ref()
+                        .and_then(|attempt| attempt.retry.clone());
                 }
             }
         }
@@ -261,6 +348,9 @@ fn prepare(
     paths: &WorkflowPaths,
     spec: &WorkflowSpec,
     seen: &mut BTreeSet<String>,
+    host: &dyn AttemptHost,
+    windows: &WindowReadings<'_>,
+    eviction_failure: &mut Option<(String, String)>,
 ) -> Result<Decision> {
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
@@ -272,6 +362,13 @@ fn prepare(
     };
     if t.record.state != RunState::Active {
         return Ok(Decision::Stop);
+    }
+    if t.record
+        .attempt
+        .as_ref()
+        .is_some_and(|a| a.kind == AttemptKind::Agent)
+    {
+        return agent::prepare_end(&mut t, host, &guard);
     }
     if t.bound()? {
         persist(&t, &guard)?;
@@ -287,11 +384,7 @@ fn prepare(
         if crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref()) {
             return Ok(Decision::Stop);
         }
-        if spec.steps.contains_key(&t.record.node) {
-            t.finish_step(AttemptOutcome::Canceled, BTreeMap::new())?;
-        } else {
-            t.abandon_check("canceled");
-        }
+        t.abandon_check("canceled");
         persist(&t, &guard)?;
         return Ok(Decision::Again);
     }
@@ -323,12 +416,33 @@ fn prepare(
             persist(&t, &guard)?;
             return Ok(Decision::Again);
         }
-        if script::step_stub().is_none() {
-            return Err(WorkflowErr::Refused(format!(
-                "step {}: this build does not run steps yet",
-                t.record.node
-            )));
+        if let Some(raw) = &step.window
+            && !window_open(&t.record, &step.agent, raw, windows)?
+        {
+            t.step_wait("window");
+            persist(&t, &guard)?;
+            return Ok(Decision::Stop);
         }
+        let failed_eviction = eviction_failure
+            .as_ref()
+            .is_some_and(|(node, _)| *node == t.record.node);
+        if !failed_eviction {
+            match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
+                Occupancy::Free => {}
+                Occupancy::Blocked(_) => {
+                    t.step_wait("takeover");
+                    persist(&t, &guard)?;
+                    return Ok(Decision::Stop);
+                }
+                Occupancy::Occupied(_) if !step.takeover => {
+                    t.step_wait("occupied");
+                    persist(&t, &guard)?;
+                    return Ok(Decision::Stop);
+                }
+                Occupancy::Occupied(_) => return Ok(Decision::Evict(Box::new(t.record))),
+            }
+        }
+        t.close_wait();
         seen.clear();
         let visits = t.record.visits.entry(t.record.node.clone()).or_default();
         visits.total += 1;
@@ -342,6 +456,22 @@ fn prepare(
         }
         t.record.entered_at = t.now;
     } else if spec.checks.contains_key(&t.record.node) {
+        let check = &spec.checks[&t.record.node];
+        if let (Some(raw), Some(profile)) = (&check.window, &check.agent)
+            && !window_open(&t.record, profile, raw, windows)?
+        {
+            t.step_wait("window");
+            persist(&t, &guard)?;
+            return Ok(Decision::Stop);
+        }
+        if check.window.is_some()
+            && t.record
+                .wait
+                .as_ref()
+                .is_some_and(|wait| wait.outcome == "window")
+        {
+            t.close_wait();
+        }
         if !seen.insert(t.record.node.clone()) {
             return Ok(Decision::Stop);
         }
@@ -353,25 +483,47 @@ fn prepare(
     }
     let seq = t.record.next_seq;
     t.record.next_seq += 1;
+    let step = spec.steps.get(&t.record.node);
+    let kind = if step.is_some() {
+        AttemptKind::Agent
+    } else if spec.checks[&t.record.node].agent.is_some() {
+        AttemptKind::Judge
+    } else {
+        AttemptKind::Script
+    };
+    let mut digests = BTreeMap::new();
+    let prompt = step.map(|step| {
+        agent::compose(&t.record, paths, step, &mut digests).map_err(|error| error.to_string())
+    });
+    let head_start = if kind == AttemptKind::Script {
+        None
+    } else {
+        agent::head(&t.record.scope.path)
+    };
     t.record.attempt = Some(LiveAttempt {
-        kind: AttemptKind::Script,
+        kind,
         seq,
         node: t.record.node.clone(),
         started_at: t.now,
-        host: Host {
-            pid: std::process::id(),
-            start: crate::proc::process_start_token(std::process::id()),
-        },
+        host: agent::identity(),
         woken: false,
         child: None,
         run: None,
-        head_start: None,
-        digests: BTreeMap::new(),
+        head_start,
+        digests,
         ending: None,
-        retry: None,
+        retry: t.record.check_retry_context.clone(),
     });
     persist(&t, &guard)?;
     write_context(&t.record, paths, spec)?;
+    if let Some(mut prompt) = prompt {
+        if let Some((node, reason)) = eviction_failure.take()
+            && node == t.record.node
+        {
+            prompt = Err(reason);
+        }
+        return Ok(Decision::Launch(Box::new((t.record, prompt))));
+    }
     Ok(Decision::Evaluate(Box::new(t.record)))
 }
 
@@ -382,7 +534,8 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
         .as_ref()
         .expect("context belongs to a recorded attempt");
     let step = spec.steps.contains_key(&record.node);
-    let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":null, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
+    let output_path = (attempt.kind == AttemptKind::Judge).then(|| paths.check_output(attempt.seq));
+    let mut context = json!({"run":record.id, "prompt":record.prompt, "node":record.node, "seq":attempt.seq, "key":record.key, "input":record.input, "output_path":output_path, "retry":attempt.retry, "signs_path":paths.signs(step.then_some(record.node.as_str())), "prev_attempt":record.prev_attempt});
     if step {
         let visits = &record.visits[&record.node];
         context["visits"] = json!(visits.total);
@@ -398,7 +551,7 @@ fn write_context(record: &RunRecord, paths: &WorkflowPaths, spec: &WorkflowSpec)
     Ok(())
 }
 
-pub fn cancel(state: &StatePaths, id: &WorkflowRunId) -> Result<bool> {
+pub fn cancel(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -> Result<bool> {
     let paths = state.workflow(id);
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let record = workflow::load(&paths)?;
@@ -414,11 +567,42 @@ pub fn cancel(state: &StatePaths, id: &WorkflowRunId) -> Result<bool> {
         entries: Vec::new(),
     };
     t.close_wait();
-    if spec.steps.contains_key(&t.record.node) {
-        t.end_step(AttemptOutcome::Canceled, BTreeMap::new());
-    } else {
-        t.abandon_check("canceled");
+    if let Some(attempt) = &t.record.attempt
+        && attempt.kind == AttemptKind::Agent
+    {
+        let busy = (attempt.ending.is_some() || attempt.run.is_none())
+            && crate::proc::process_is_live(attempt.host.pid, attempt.host.start.as_deref());
+        if busy
+            && attempt
+                .ending
+                .as_ref()
+                .is_some_and(|ending| ending.cause == workflow::EndCause::Cancel)
+        {
+            return Ok(true);
+        }
+        let observed = match &attempt.run {
+            Some(run) => host.observe(run)?,
+            None => agent::empty_observation(),
+        };
+        t.stage_agent_end(
+            workflow::Ending {
+                outcome: AttemptOutcome::Canceled,
+                cause: workflow::EndCause::Cancel,
+            },
+            &observed,
+        );
+        if !busy {
+            t.record.attempt.as_mut().expect("agent cancel").host = agent::identity();
+        }
+        persist(&t, &guard)?;
+        let record = t.record;
+        drop(guard);
+        if !busy {
+            agent::finish(state, &paths, &spec, &record, host, None)?;
+        }
+        return Ok(true);
     }
+    t.abandon_check("canceled");
     t.record.state = RunState::Canceled;
     t.record.terminal_at = Some(t.now);
     t.push(None, JournalEvent::Cancel);
@@ -496,6 +680,8 @@ pub fn resume(
                 t.record.node = node.into();
             }
             t.record.entered_at = t.now;
+            t.record.check_retry = 0;
+            t.record.check_retry_context = None;
             t.record.park = None;
             t.record.state = RunState::Active;
         }
@@ -551,6 +737,12 @@ pub fn wake(state: &StatePaths, signal: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn wake_run(project_root: &Path, id: &WorkflowRunId) -> Result<()> {
+    let state = StatePaths::for_project_root(project_root)
+        .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
+    spawn(&workflow::load(&state.workflow(id))?)
 }
 
 #[cfg(test)]

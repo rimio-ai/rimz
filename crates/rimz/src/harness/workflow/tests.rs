@@ -1,6 +1,95 @@
 use super::*;
 use crate::config::definitions::LoadedDefinitions;
+use crate::store::run::RunStatus;
+use crate::store::workflow::{AttemptRun, Children};
+use std::cell::{Cell, RefCell};
 use std::fs;
+use std::rc::Rc;
+
+pub(super) struct FakeHost {
+    occupancy: RefCell<Occupancy>,
+    launched: RefCell<Vec<StepLaunch>>,
+    observed: Rc<RefCell<Observed>>,
+    failure: RefCell<Option<LaunchFailure>>,
+    evict_error: Cell<bool>,
+    stops: Cell<usize>,
+    evictions: Cell<usize>,
+    on_stop: RefCell<Option<Box<dyn Fn()>>>,
+    on_launch: RefCell<Option<Box<dyn Fn()>>>,
+}
+
+impl FakeHost {
+    pub(super) fn new() -> Self {
+        Self {
+            occupancy: RefCell::new(Occupancy::Free),
+            launched: RefCell::new(Vec::new()),
+            observed: Rc::new(RefCell::new(Observed {
+                status: RunStatus::Running,
+                ask: None,
+                limited: None,
+                children: Children::default(),
+                cost_usd: Some(0.25),
+            })),
+            failure: RefCell::new(None),
+            evict_error: Cell::new(false),
+            stops: Cell::new(0),
+            evictions: Cell::new(0),
+            on_stop: RefCell::new(None),
+            on_launch: RefCell::new(None),
+        }
+    }
+}
+
+impl AttemptHost for FakeHost {
+    fn occupancy(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+    ) -> Result<Occupancy, WorkflowErr> {
+        Ok(match &*self.occupancy.borrow() {
+            Occupancy::Free => Occupancy::Free,
+            Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
+            Occupancy::Blocked(blockers) => Occupancy::Blocked(blockers.clone()),
+        })
+    }
+
+    fn evict(&self, _: &std::path::Path, _: &std::path::Path) -> Result<Vec<String>, WorkflowErr> {
+        self.evictions.set(self.evictions.get() + 1);
+        if self.evict_error.get() {
+            return Err(WorkflowErr::Refused("occupant did not stop".into()));
+        }
+        *self.occupancy.borrow_mut() = Occupancy::Free;
+        Ok(vec!["sweeper".into()])
+    }
+
+    fn launch(&self, step: StepLaunch) -> Result<Result<AttemptRun, LaunchFailure>, WorkflowErr> {
+        self.launched.borrow_mut().push(step);
+        if let Some(check) = &*self.on_launch.borrow() {
+            check();
+        }
+        Ok(match self.failure.borrow_mut().take() {
+            Some(failure) => Err(failure),
+            None => Ok(AttemptRun {
+                run_id: crate::ids::RunId::new(),
+                handle: "@builder".into(),
+            }),
+        })
+    }
+
+    fn observe(&self, _: &AttemptRun) -> Result<Observed, WorkflowErr> {
+        Ok(self.observed.borrow().clone())
+    }
+
+    fn stop(&self, _: &AttemptRun) -> Result<Children, WorkflowErr> {
+        if let Some(check) = &*self.on_stop.borrow() {
+            check();
+        }
+        self.stops.set(self.stops.get() + 1);
+        Ok(self.observed.borrow().children.clone())
+    }
+}
+
+mod attempts;
 
 const VALID: &str = r#"
 [workflow]
