@@ -280,6 +280,8 @@ Lifecycle records inherit from the rollup instead of repeating themselves. High-
 
 Resident loop launches stamp `LaunchParams.loop_task` on the prompt leader before opening its pane. The reducer carries it into `AgentState.loop_task`, through provisional adoption, subsequent observations and event-log rotation, like the team identity. Registration reads that durable task name to arm subscriptions, not the launch ledger. The additive field defaults to absent in old records; snapshot version 32 and rollup-cache version 26 rebuild pre-field caches.
 
+Molt successors stamp `LaunchParams.molted_from` with the predecessor's launch id (session id for a legacy row). The additive optional field changes no event schema version. Snapshot version 40 and rollup-cache version 31 invalidate pre-field caches so they cannot hide the succession link. The fold carries it onto the registered session and through sparse observations and session rotation. `agents::state::standing_successor` recognizes an unended successor unless it is Failed with a still-provisional id: startup failure yields the place back, but a registered session's failed turn does not.
+
 ### Crash recovery
 
 Only the trailing frame can be in flight when a process dies, because each append is one `write()` under the workspace lock.

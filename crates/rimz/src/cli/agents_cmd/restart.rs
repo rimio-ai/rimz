@@ -283,6 +283,7 @@ pub(in crate::cli) fn relaunch_request(
     });
     let restart_params = rimz::agents::LaunchParams {
         checkout: agent.checkout.clone(),
+        molted_from: agent.molted_from.clone(),
         record: posture.launch.record.clone(),
         parent_agent_id: agent.parent_agent_id.clone(),
         parent_agent_kind: agent.parent_agent_kind.clone(),
@@ -482,6 +483,7 @@ fn append_fresh_launch(
     request.launch.loop_task = agent.loop_task.clone();
     request.launch.launch_group = agent.launch_group.clone();
     request.launch.launch_ordinal = agent.launch_ordinal;
+    request.launch.molted_from = agent.molted_from.clone();
     request.launch.channel = agent.channel.clone();
     let batch = store.begin_agent_launch_batch(
         &requests,

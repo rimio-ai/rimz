@@ -122,6 +122,8 @@ pub struct LaunchParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub molted_from: Option<AgentSessionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<Box<LaunchRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<Box<TierStamp>>,

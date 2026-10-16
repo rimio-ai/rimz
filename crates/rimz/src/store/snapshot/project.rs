@@ -700,6 +700,7 @@ fn carried_base(
         state.effective_isolation = prior.effective_isolation;
         state.launch_group = prior.launch_group.clone();
         state.launch_ordinal = prior.launch_ordinal;
+        state.molted_from.clone_from(&prior.molted_from);
         state.pane = prior.pane.clone();
         state.runtime_owner = prior.runtime_owner.clone();
         state.parent_agent_id = prior.parent_agent_id.clone();
@@ -734,6 +735,9 @@ fn carried_base(
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(predecessor) = &launch.molted_from {
+        state.molted_from = Some(predecessor.clone());
+    }
     if let Some(record) = &launch.record {
         state.record = Some(record.clone());
     }
@@ -991,6 +995,7 @@ fn inherit_launch_identity(
     successor.loop_task.clone_from(&predecessor.loop_task);
     successor.launch_group.clone_from(&predecessor.launch_group);
     successor.launch_ordinal = predecessor.launch_ordinal;
+    successor.molted_from.clone_from(&predecessor.molted_from);
     successor.channel.clone_from(&predecessor.channel);
     successor.launch_depth = predecessor.launch_depth;
     successor.launched_by.clone_from(&predecessor.launched_by);

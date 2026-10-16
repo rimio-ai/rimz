@@ -122,6 +122,46 @@ fn launch_event(kind: &str, payload: AgentLaunchPayload) -> EventEnvelope {
 }
 
 #[test]
+fn molt_link_survives_launch_registration_rotation_and_sparse_observations() {
+    let mut payload = launch_payload("launch_new", "coder");
+    payload.launch_id = Some("launch_new".into());
+    payload.runtime_owner = Some(RuntimeOwner::new(
+        RuntimeOwnerKind::Agent,
+        "launch_new",
+        100,
+        Some("agent-start".into()),
+    ));
+    payload.launch.molted_from = Some("launch_old".into());
+    payload.pane_id = Some(PaneId::parse("tmux:%1").unwrap());
+    let events = [
+        launch_event("codex", payload),
+        same_process_registration("registered", "coder", 1, "tmux:%1", 100),
+        same_process_registration("rotated", "coder", 2, "tmux:%1", 100),
+        raw_lifecycle_at(
+            "codex",
+            3,
+            json!({
+                "agent_id": "rotated", "signal": { "signal": "turn_started" }
+            }),
+        ),
+    ];
+    for end in 1..=events.len() {
+        let agents = reduce_agent_states(&events[..end]);
+        let agent = agents
+            .iter()
+            .find(|agent| {
+                agent.agent_id == events[end - 1].params_value()["agent_id"].as_str().unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            agent.molted_from.as_deref(),
+            Some("launch_old"),
+            "prefix {end}"
+        );
+    }
+}
+
+#[test]
 fn system_prompt_digest_survives_attach_and_absent_launch_values() {
     let digest = "a".repeat(64);
     let launch = |digest: Option<&str>| {
