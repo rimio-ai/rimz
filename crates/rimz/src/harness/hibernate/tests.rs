@@ -575,6 +575,7 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
     );
     let pane: PaneId = "tmux:%3".parse().unwrap();
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: agent.kind.clone(),
         kind_ordinal: None,

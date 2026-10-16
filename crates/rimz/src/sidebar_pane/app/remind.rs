@@ -175,6 +175,7 @@ mod tests {
 
     fn row(raw: &str, status: AgentStatus, unread: bool) -> SidebarRow {
         SidebarRow {
+            checkout: None,
             id: raw.to_owned(),
             name: "claude".to_owned(),
             pane: Some(pane(raw, "tab_0", false)),

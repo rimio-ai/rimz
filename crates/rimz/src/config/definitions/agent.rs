@@ -28,6 +28,7 @@ pub(super) fn empty_profile(kind: &str) -> Profile {
         model_tier: None,
         tier_stamp: None,
         isolation: None,
+        empty_dir: None,
         skills: None,
         allowed_tools: None,
         description: None,
@@ -519,6 +520,7 @@ impl Resolver<'_> {
         )?;
         let defaults = agents::definition_defaults(kind, fm.model.as_deref());
         profile.isolation = fm.isolation;
+        profile.empty_dir = fm.empty_dir;
         profile.mode = fm.mode.or(defaults.mode);
         profile.model = fm.model.clone();
         profile.effort = fm.effort.clone().or_else(|| {

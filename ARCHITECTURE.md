@@ -92,6 +92,10 @@ workspace store         ~/.rimz/ws/<basename>-<hex>/
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
 
+empty agent directories ~/.rimz/empty/<workspace-dir>/<candidate-handle>/
+  persistent agent cwd, separate from temp units; retained session rows keep it
+  after exit, and room GC removes unrecorded directories past the owned grace
+
 per-workspace runtime   $XDG_RUNTIME_DIR/rimz/ws/<basename>-<hex>/  (or /tmp/rimz-<uid>/…)
   sock/, live/, lanes/ group disposable coordination by lifetime;
   reset and teardown clear all three; lanes have no age sweep

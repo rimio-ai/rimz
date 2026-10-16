@@ -1065,7 +1065,7 @@ impl std::fmt::Display for FocusNonce {
 }
 
 /// Compose a routing channel for read-side fallback. A launch-stamped lane
-/// wins; otherwise the worktree directory basename is the fallback for agents
+/// wins; otherwise the lane-path directory basename is the fallback for agents
 /// not launched by this RimZ binary.
 pub(crate) fn compose_channel(
     explicit: Option<&str>,

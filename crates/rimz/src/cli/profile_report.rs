@@ -638,6 +638,7 @@ mod tests {
 
     fn profile(agent: &str) -> rimz::config::Profile {
         rimz::config::Profile {
+            empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,

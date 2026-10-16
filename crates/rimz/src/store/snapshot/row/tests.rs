@@ -41,6 +41,7 @@ fn subagent_context_window_round_trips_and_accepts_legacy_json() {
 #[test]
 fn serde_keeps_cards_flat_with_row_kind_key() {
     let agent = SidebarRow {
+        checkout: None,
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -128,6 +129,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
     );
 
     let process = SidebarRow {
+        checkout: None,
         id: "process:%1".to_owned(),
         name: "cargo".to_owned(),
         pane: None,
@@ -162,6 +164,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
     );
 
     let unread = SidebarRow {
+        checkout: None,
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -188,6 +191,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
 #[test]
 fn own_last_activity_falls_back_to_the_row_clock_and_stays_off_an_untouched_card() {
     let mut row = SidebarRow {
+        checkout: None,
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -221,6 +225,7 @@ fn own_last_activity_falls_back_to_the_row_clock_and_stays_off_an_untouched_card
 #[test]
 fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
     let mut agent = SidebarRow {
+        checkout: None,
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -247,6 +252,7 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
     assert_eq!(agent.display_name(), "claude");
 
     let process = SidebarRow {
+        checkout: None,
         id: "process:%1".to_owned(),
         name: "cargo".to_owned(),
         pane: None,

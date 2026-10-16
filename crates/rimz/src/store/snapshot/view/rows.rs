@@ -14,6 +14,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
         name: agent.kind.to_string(),
         pane: agent.pane.clone(),
         worktree_path: agent.worktree_path.clone(),
+        checkout: agent.checkout.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         channel: agent.channel.clone(),
         unread: false,

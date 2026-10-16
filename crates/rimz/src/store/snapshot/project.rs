@@ -764,6 +764,9 @@ fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
     if let Some(isolation) = launch.isolation {
         state.isolation = Some(isolation);
     }
+    if let Some(checkout) = &launch.checkout {
+        state.checkout = Some(checkout.clone());
+    }
     if let Some(role) = &launch.role {
         state.role = Some(role.clone());
     }
@@ -981,6 +984,7 @@ fn inherit_launch_identity(
     successor.record.clone_from(&predecessor.record);
     successor.mode = predecessor.mode;
     successor.isolation = predecessor.isolation;
+    successor.checkout.clone_from(&predecessor.checkout);
     successor.effective_isolation = predecessor.effective_isolation;
     successor.role.clone_from(&predecessor.role);
     successor.team.clone_from(&predecessor.team);

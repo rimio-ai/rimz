@@ -104,8 +104,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
 
 pub(super) fn cohort_live(agent: &AgentState) -> bool {
     agent
-        .worktree_path
-        .as_deref()
+        .lane_path()
         .and_then(|root| super::scratch::board_stage(Path::new(root)))
         .is_none_or(|stage| stage.name != crate::config::DONE_STAGE)
 }
@@ -463,6 +462,7 @@ mod tests {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
         std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
+            checkout: None,
             root_lane: false,
             kind: candidate.kind.clone(),
             kind_ordinal: None,
@@ -607,6 +607,7 @@ mod tests {
         let mut snapshot =
             SidebarSnapshot::build_with_agents(workspace_id, vec![seat.clone()], ts(3_540));
         std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
+            checkout: None,
             root_lane: false,
             kind: seat.kind.clone(),
             kind_ordinal: None,

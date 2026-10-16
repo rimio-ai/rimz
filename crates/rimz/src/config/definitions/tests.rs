@@ -528,6 +528,92 @@ fn model_tiers_seats_use_the_role_tier_over_the_root_family() {
 }
 
 #[test]
+fn empty_dir_inherits_on_agents_and_subagents_but_not_team_seats() {
+    for scope in ["agents", "subagents"] {
+        let root = fixture();
+        definition(
+            root.path(),
+            &format!("{scope}/searcher.md"),
+            "agent: claude\nempty-dir: true\ntools: [Read]",
+            "Search.",
+        );
+        definition(
+            root.path(),
+            &format!("{scope}/child.md"),
+            "agent: searcher",
+            "Child.",
+        );
+        definition(
+            root.path(),
+            &format!("{scope}/local.md"),
+            "agent: searcher\nempty-dir: false",
+            "Local.",
+        );
+        let loaded = load_checked(root.path());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let profiles = if scope == "agents" {
+            &loaded.agent_profiles
+        } else {
+            &loaded.subagent_profiles
+        };
+        for (name, expected) in [("searcher", true), ("child", true), ("local", false)] {
+            assert_eq!(
+                serde_json::to_value(&profiles.0[name]).unwrap()["empty-dir"],
+                expected
+            );
+            assert_eq!(
+                crate::harness::spec::resolve_profile(name, profiles)
+                    .unwrap()
+                    .empty_dir,
+                Some(expected)
+            );
+        }
+        if scope != "agents" {
+            continue;
+        }
+        assert!(
+            serde_saphyr::from_str::<frontmatter::RoleFrontmatter>(
+                "agent: searcher\nempty-dir: true"
+            )
+            .is_err()
+        );
+        for selected in ["searcher", "child"] {
+            team_definition(
+                root.path(),
+                TEAM_STAGES,
+                &format!(
+                    "  - agent: {selected}\n    role: lead\n    owns: [Plan, Implement]\n  - agent: local\n    role: judge\n    owns: [Review]"
+                ),
+                "Pipeline.",
+            );
+            let loaded = load_checked(root.path());
+            assert!(
+                loaded.errors.iter().any(|err| {
+                    let message = err.to_string();
+                    message.contains(selected)
+                        && message.contains("empty-dir")
+                        && message.contains("share")
+                }),
+                "{:?}",
+                loaded.errors
+            );
+        }
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            "  - agent: local\n    role: lead\n    owns: [Plan, Implement]\n  - agent: local\n    role: judge\n    owns: [Review]",
+            "Pipeline.",
+        );
+        let loaded = load_checked(root.path());
+        assert!(
+            loaded.errors.is_empty(),
+            "false clears inherited empty-dir for teams: {:?}",
+            loaded.errors
+        );
+    }
+}
+
+#[test]
 fn isolation_defaults_inherit_but_roles_cannot_set_them() {
     let root = fixture();
     definition(

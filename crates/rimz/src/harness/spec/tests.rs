@@ -48,6 +48,7 @@ fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
 
 fn profile(agent: &str) -> Profile {
     Profile {
+        empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
         model_tier: None,
@@ -808,6 +809,7 @@ fn cross_kind_override_replaces_provider_fields_and_carries_portable_fields() {
     let profiles = profiles([(
         "planner",
         Profile {
+            empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,
@@ -2211,6 +2213,35 @@ fn team_roles_accept_implicit_builtin_profiles() {
                 && profile.as_deref() == Some("codex")
                 && role.as_deref() == Some("coder")
     ));
+}
+
+#[test]
+fn team_roles_allow_clearing_inherited_empty_dir() {
+    let profiles = profiles([
+        (
+            "searcher",
+            Profile {
+                empty_dir: Some(true),
+                ..profile("claude")
+            },
+        ),
+        (
+            "local",
+            Profile {
+                empty_dir: Some(false),
+                ..profile("searcher")
+            },
+        ),
+    ]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![role("planner", "local")]),
+    )]));
+    let result = resolve_spec(Some("forge"), &profiles, &no_commands(), &teams);
+    assert!(
+        result.is_ok(),
+        "false clears inherited empty-dir for teams: {result:?}"
+    );
 }
 
 #[test]

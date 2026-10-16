@@ -174,9 +174,10 @@ fn pane_agent_from_idle(
     // A wired pane carries only its kind and pane — no session, pet name, or
     // ordinal until a lifecycle hook binds one.
     PaneAgent {
+        checkout: row.checkout.clone(),
         root_lane: AgentState::is_root_lane(
             row.channel.as_deref(),
-            row.worktree_path.as_deref().map(std::path::Path::new),
+            row.lane_path().map(std::path::Path::new),
             project_root,
         ),
         kind: AgentKind::new_unchecked(row.name.clone()),
@@ -230,9 +231,13 @@ fn pane_agent_from_agent_with_worktree(
     project_root: Option<&std::path::Path>,
 ) -> PaneAgent {
     PaneAgent {
+        checkout: agent.checkout.clone(),
         root_lane: AgentState::is_root_lane(
             agent.channel.as_deref(),
-            worktree_path.as_deref().map(std::path::Path::new),
+            agent
+                .lane_path()
+                .or(worktree_path.as_deref())
+                .map(std::path::Path::new),
             project_root,
         ),
         kind: agent.kind.clone(),

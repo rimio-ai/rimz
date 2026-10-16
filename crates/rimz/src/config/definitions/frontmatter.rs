@@ -16,6 +16,7 @@ pub(super) struct AgentFrontmatter {
     _name: Option<String>,
     pub agent: Option<String>,
     pub isolation: Option<crate::config::Isolation>,
+    pub empty_dir: Option<bool>,
     pub description: Option<String>,
     pub model: Option<String>,
     pub tier: Option<String>,
@@ -56,6 +57,7 @@ impl AgentFrontmatter {
         }
         inherit!(
             isolation,
+            empty_dir,
             mode,
             effort,
             fast,

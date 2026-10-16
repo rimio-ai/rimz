@@ -75,11 +75,8 @@ impl LaneLifetimes {
     }
 
     pub fn common_since(&self, roots: &[&AgentState]) -> Option<Timestamp> {
-        let path = roots.first()?.worktree_path.as_deref()?;
-        if !roots
-            .iter()
-            .all(|root| root.worktree_path.as_deref() == Some(path))
-        {
+        let path = roots.first()?.lane_path()?;
+        if !roots.iter().all(|root| root.lane_path() == Some(path)) {
             return None;
         }
         match self.by_path.get(Path::new(path)) {
@@ -89,7 +86,7 @@ impl LaneLifetimes {
     }
 
     fn admits(&self, record: &AgentState) -> bool {
-        let Some(path) = record.worktree_path.as_deref() else {
+        let Some(path) = record.lane_path() else {
             return true;
         };
         match self.by_path.get(Path::new(path)) {

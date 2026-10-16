@@ -736,6 +736,7 @@ fn producer_spawns_for_a_due_request_paces_and_leaves_the_record_alone() {
         );
         if pane {
             std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
+                checkout: None,
                 root_lane: false,
                 kind: agent.kind.clone(),
                 kind_ordinal: None,

@@ -109,7 +109,7 @@ fn resume_worktree_name<'a>(
     agent: &'a AgentState,
 ) -> Option<&'a str> {
     use rimz::utils::path::normalize_path_lexical;
-    let recorded = agent.worktree_path.as_deref()?;
+    let recorded = agent.lane_path()?;
     let name = Path::new(recorded).file_name()?.to_str()?;
     let path = normalize_path_lexical(Path::new(recorded));
     let mapped = rimz::worktree::worktree_path(

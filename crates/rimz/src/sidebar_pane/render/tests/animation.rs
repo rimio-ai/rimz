@@ -177,6 +177,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         pipeline: None,
         status_counts: Vec::new(),
         rows: vec![crate::store::snapshot::SidebarRow {
+            checkout: None,
             id: "claude-1".to_owned(),
             name: "claude".to_owned(),
             pane: None,
@@ -985,6 +986,7 @@ fn selected_pet_action_follows_process_cards() {
     )]);
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows =
         vec![crate::store::snapshot::SidebarRow {
+            checkout: None,
             id: "process-1".to_owned(),
             name: "cargo".to_owned(),
             pane: None,

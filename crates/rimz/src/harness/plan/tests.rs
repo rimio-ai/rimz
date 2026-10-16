@@ -534,6 +534,7 @@ fn child_isolation_cap_respects_parent_and_request_source() {
 #[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -553,6 +554,7 @@ fn cell_posture_projection_covers_every_agent_cell_field() {
         },
     };
     let AgentCell {
+        empty_dir: _,
         resume_model_override,
         isolation_default,
         kind: _,
@@ -621,6 +623,7 @@ fn role_binding(role: &str) -> RoleBinding {
 
 fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -702,6 +705,7 @@ fn exec_request(argv: &[String]) -> crate::harness::launch::ExecRequest {
 
 fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked(kind),
@@ -749,6 +753,7 @@ fn configured_profile(
     args: Option<&str>,
 ) -> Profile {
     Profile {
+        empty_dir: None,
         definition_renders: None,
         model_tier: None,
         tier_stamp: None,
@@ -1780,6 +1785,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         .permission_args(PermissionMode::Auto);
     let cell = |args, mode| {
         Cell::Agent(AgentCell {
+            empty_dir: None,
             resume_model_override: false,
             isolation_default: None,
             kind: AgentKind::new_unchecked("codex"),
@@ -1876,6 +1882,7 @@ fn launch_options_apply_without_overwriting_spec_identity() {
 #[test]
 fn codex_launch_leaves_native_default_unset_and_preserves_explicit_model() {
     let explicit = Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -2260,6 +2267,7 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
 #[test]
 fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("codex"),
@@ -2838,6 +2846,7 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),
@@ -2948,6 +2957,7 @@ fn pane_command_resume_keeps_prior_identity_and_replays_cell_posture() {
     )
     .expect("runtime");
     let cell = Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         isolation_default: None,
         kind: AgentKind::new_unchecked("claude"),

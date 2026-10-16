@@ -576,7 +576,7 @@ pub fn protection_set_from_runtime(
                 handle: crate::address::agent_handle(agent, &peers, true),
                 pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
                 liveness,
-                stored_path: agent.worktree_path.as_deref().map(PathBuf::from),
+                stored_path: agent.lane_path().map(PathBuf::from),
                 process_cwd: match liveness {
                     AgentLiveness::Live { pid } => crate::proc::cwd(pid),
                     AgentLiveness::Dead | AgentLiveness::Unknown => None,
@@ -1821,10 +1821,7 @@ pub(crate) fn linked_worktree(cwd: &Path) -> Option<LinkedWorktree> {
 /// Resolve current lane lifetimes once from a report's full record set.
 pub fn lane_lifetimes<'a>(records: impl IntoIterator<Item = &'a AgentState>) -> LaneLifetimes {
     let mut by_path = HashMap::new();
-    for path in records
-        .into_iter()
-        .filter_map(|record| record.worktree_path.as_deref())
-    {
+    for path in records.into_iter().filter_map(|record| record.lane_path()) {
         let path = Path::new(path);
         if by_path.contains_key(path) {
             continue;

@@ -165,7 +165,7 @@ impl SidebarSnapshot {
             self,
             rows.iter().map(|row| GroupEntry {
                 channel: row.channel.as_deref(),
-                path: row.worktree_path.as_deref(),
+                path: row.lane_path(),
                 branch: row.worktree_branch.as_deref(),
             }),
         );
@@ -175,7 +175,7 @@ impl SidebarSnapshot {
         for row in rows {
             let identity = resolver.resolve(GroupEntry {
                 channel: row.channel.as_deref(),
-                path: row.worktree_path.as_deref(),
+                path: row.lane_path(),
                 branch: row.worktree_branch.as_deref(),
             });
             by_group
@@ -276,6 +276,7 @@ mod tests {
     /// An idle agent row whose only activity was `age_secs` before `now`.
     fn row_aged(age_secs: i64) -> SidebarRow {
         SidebarRow {
+            checkout: None,
             id: "r".into(),
             name: "r".into(),
             pane: None,
@@ -359,6 +360,7 @@ mod tests {
         let aged = now() - std::time::Duration::from_secs(7_200);
         let mut rows = vec![
             SidebarRow {
+                checkout: None,
                 id: "agent".into(),
                 name: "agent".into(),
                 pane: None,
@@ -376,6 +378,7 @@ mod tests {
                 })),
             },
             SidebarRow {
+                checkout: None,
                 id: "process".into(),
                 name: "process".into(),
                 pane: None,

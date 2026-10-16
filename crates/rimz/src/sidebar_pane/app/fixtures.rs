@@ -106,6 +106,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
         rows: panes
             .into_iter()
             .map(|pane| crate::store::snapshot::SidebarRow {
+                checkout: None,
                 id: pane.pane_id.to_string(),
                 name: pane.command.clone().unwrap_or_else(|| "process".to_owned()),
                 pane: Some(pane),
@@ -147,6 +148,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
     let row = crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
         pane: Some(pane("terminal_9", "tab_0", false)),

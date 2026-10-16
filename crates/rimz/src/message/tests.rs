@@ -586,6 +586,7 @@ fn pane(
     raw: &str,
 ) -> PaneAgent {
     PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,

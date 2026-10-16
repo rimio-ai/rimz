@@ -263,6 +263,7 @@ fn catalog_projects_cohort_observability_by_worktree() {
         }))
         .unwrap();
         std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
+            checkout: None,
             id: agent.agent_id.to_string(),
             name: lane.into(),
             pane: None,
@@ -444,6 +445,7 @@ fn catalog_reports_no_pull_request_for_a_trunk_lane() {
         "the trunk group must carry the CI verdict this test is about"
     );
     std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
+        checkout: None,
         id: agent.agent_id.to_string(),
         name: "main".into(),
         pane: None,

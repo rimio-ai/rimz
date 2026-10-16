@@ -51,6 +51,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
     let mut snapshot = snapshot(ws);
     snapshot.panes_produced_at_ms = Some(1);
     let agent = crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: "agent-1".to_owned(),
         name: "claude".to_owned(),
         pane: Some(pane("terminal_9", "tab_0", false)),
@@ -79,6 +80,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         )),
     };
     let process = crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: "terminal_10".to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane("terminal_10", "tab_0", false)),
@@ -205,6 +207,7 @@ fn filter_row(
     worktree: &str,
 ) -> crate::store::snapshot::SidebarRow {
     crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: name.to_owned(),
         pane: Some(pane(pane_name, "tab_0", false)),

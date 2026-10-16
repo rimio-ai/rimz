@@ -212,7 +212,7 @@ impl FoldCarryover {
         for agent in &mut self.agents {
             agent.root_lane = AgentState::is_root_lane(
                 agent.channel.as_deref(),
-                agent.worktree_path.as_deref().map(Path::new),
+                agent.lane_path().map(Path::new),
                 project_root,
             );
         }
@@ -447,7 +447,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// Bump when [`RollupCache`]'s shape, a reducer's semantics, or
 /// [`FoldCarryover::trimmed`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 29;
+const ROLLUP_CACHE_VERSION: u32 = 30;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.
@@ -919,7 +919,7 @@ fn catch_up_from(
     {
         agent.root_lane = AgentState::is_root_lane(
             agent.channel.as_deref(),
-            agent.worktree_path.as_deref().map(Path::new),
+            agent.lane_path().map(Path::new),
             project_root,
         );
     }

@@ -498,6 +498,21 @@ fn lsp_default_trust_hash_is_unchanged() {
 
 #[test]
 fn hash_covers_every_documented_surface_field() {
+    // `empty-dir` shapes placement, not executable configuration.
+    for section in ["profiles", "subagents.profiles"] {
+        let base: ProjectConfig =
+            toml::from_str(&format!("[{section}.x]\nagent = 'claude'\n")).unwrap();
+        for enabled in [true, false] {
+            let configured: ProjectConfig = toml::from_str(&format!(
+                "[{section}.x]\nagent = 'claude'\nempty-dir = {enabled}\n"
+            ))
+            .unwrap();
+            assert_eq!(
+                executable_surface_hash(&base),
+                executable_surface_hash(&configured)
+            );
+        }
+    }
     // One config per documented executable-surface field. Any two must
     // hash to distinct values; if a future refactor drops a field from
     // `ExecutableSurface`, two cases collide and this test fires. A field

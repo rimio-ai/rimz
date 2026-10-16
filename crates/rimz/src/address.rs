@@ -23,7 +23,7 @@
 //!
 //! The channel is the workspace segment the room groups by — an explicit named
 //! lane, else a worktree name, else an in-place named team stamped at launch as
-//! `<dir>/<team>`, else a directory basename. Callers pass the *current*
+//! `<dir>/<team>`, else the lane-path basename (checkout before process cwd). Callers pass the *current*
 //! channel; an explicit `#name`, `--channel name`, or `--worktree name` overrides it. A
 //! `None` current channel means **all
 //! channels** — it never silently narrows to "only worktree-less agents", so
@@ -273,7 +273,7 @@ impl<'a> Candidate<'a> for &'a AgentState {
         (!self.agent_id.is_provisional()).then(|| self.agent_id.as_str())
     }
     fn worktree_path(self) -> Option<&'a str> {
-        self.worktree_path.as_deref()
+        self.lane_path()
     }
     fn pane_id(self) -> Option<&'a PaneId> {
         self.pane.as_ref().map(|pane| &pane.pane_id)
@@ -335,7 +335,7 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
         self.agent_id.as_ref().map(|id| id.as_str())
     }
     fn worktree_path(self) -> Option<&'a str> {
-        self.worktree_path.as_deref()
+        self.lane_path()
     }
     fn pane_id(self) -> Option<&'a PaneId> {
         Some(&self.pane_id)
@@ -402,7 +402,7 @@ pub(crate) fn resolve_agents<'a>(
         candidates
             .iter()
             .filter(|agent| agent.root_lane)
-            .find_map(|agent| agent.worktree_path.as_deref().map(Path::new)),
+            .find_map(|agent| agent.lane_path().map(Path::new)),
     )
 }
 

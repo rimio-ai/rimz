@@ -200,6 +200,7 @@ pub struct CohortResumePlan {
 /// Durable identity projected by resume planning for argv compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ResumeLaunchIdentity {
+    pub checkout: Option<String>,
     pub record: Option<Box<crate::agents::LaunchRecord>>,
     pub kind: crate::ids::AgentKind,
     pub login: Option<crate::ids::LoginName>,
@@ -222,6 +223,7 @@ pub(super) struct ResumeLaunchIdentity {
 impl From<&crate::agents::AgentState> for ResumeLaunchIdentity {
     fn from(agent: &crate::agents::AgentState) -> Self {
         Self {
+            checkout: agent.checkout.clone(),
             record: agent.record.clone(),
             kind: agent.kind.clone(),
             login: agent.login.clone(),
@@ -1390,6 +1392,7 @@ pub(super) fn resume_command(
         .filter(|channel| !channel.is_empty())
         .or_else(|| fallback_channel.filter(|channel| !channel.is_empty()));
     let params = crate::agents::LaunchParams {
+        checkout: identity.checkout.clone(),
         login: identity.login.clone(),
         launch_depth: identity.launch_depth,
         launched_by: identity.launched_by.clone().map(Box::new),

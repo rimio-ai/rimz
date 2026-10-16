@@ -6,6 +6,7 @@ fn agent(id: &str) -> AgentState {
 
 fn card_row(card: AgentCard) -> SidebarRow {
     SidebarRow {
+        checkout: None,
         id: "card".into(),
         name: "codex".into(),
         pane: None,
@@ -181,6 +182,7 @@ fn card_projection_model_keeps_versioned_provider_display_names() {
 
 fn pane_agent(id: &str, pane: &str) -> PaneAgent {
     PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: AgentKind::new_unchecked("codex"),
         kind_ordinal: None,
@@ -313,6 +315,7 @@ fn projected_row_status_wins_and_rowless_error_falls_back_to_failed() {
     });
     state.context = Some(context);
     let row = SidebarRow {
+        checkout: None,
         id: "status".to_owned(),
         name: "codex".to_owned(),
         pane: None,
@@ -411,6 +414,7 @@ fn report_cost_includes_delegated_spend() {
         ..rimz::agents::AgentCost::default()
     });
     let row = SidebarRow {
+        checkout: None,
         id: "spend".to_owned(),
         name: "codex".to_owned(),
         pane: None,
@@ -482,6 +486,7 @@ fn full_entry_has_a_stable_projection() {
     });
     state.context = Some(context.clone());
     let row = SidebarRow {
+        checkout: None,
         id: "full".to_owned(),
         name: "codex".to_owned(),
         pane: None,

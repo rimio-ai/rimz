@@ -211,7 +211,9 @@ upward-dependencies = ["address"]
 # RuntimeControlIssue shares its structured blocker with the remote-control gate (+1).
 # Shared credits-cache reads, model sub-cap veto, and prepared fresh offer (+8).
 # AgentState::identity_ids shares those identity keys with fleet joins and runtime projection (+1).
-surface-budget = 1071
+# Empty-dir preparation and lane-path routing share the agent library surface (+5).
+# LaunchDirRefusal carries the HOME refusal alongside folder-trust failures (+1).
+surface-budget = 1077
 
 [[verdict]]
 kind = "item"
@@ -498,7 +500,8 @@ allowed-dependencies = [
 # IncrementalFold and its constructor/refresh share rotating-log cursors (+3).
 # Session-role segments share the provider cursor's durable root (+2).
 # Queue writers and the host share RuntimePaths::message_wake_path (+1).
-surface-budget = 243
+# Empty-dir root, room and candidate paths stay in the disk path boundary (+3).
+surface-budget = 246
 
 [[verdict]]
 kind = "item"
@@ -6229,3 +6232,83 @@ reason = "After mirror types and duplicate bookkeeping are deleted, the ordered 
 kind = "item"
 key = "agents::account::AccountProbeError"
 reason = "Provider adapters publish typed, secret-free failure causes through the account cache for CLI reporting."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir"
+reason = "One library boundary owns empty-dir trust, cleanliness and cwd preparation for CLI launch and diagnostics."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::Verdict"
+reason = "Launch and diagnostics share the per-account applicability and provider-owned fallback reason."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::EmptyDirErr"
+reason = "CLI consumers render typed dirty-path, name-reservation and preparation failures."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::Prepared"
+reason = "Fresh launch carries the prepared process cwd and candidate name to the existing identity mint."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::verdict"
+reason = "Launch and machine diagnostics must use the same provider verdict at the empty root."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::check"
+reason = "Applied launch and re-entry reject instruction-bearing entries at both parent levels."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::check_root"
+reason = "Machine diagnostics can check the shared parent without resolving a workspace."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::prepare"
+reason = "CLI fresh-launch paths share private cwd creation and retained-row name reservations."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::prepare_reentry"
+reason = "Every recorded empty-dir re-entry recreates the same missing cwd without clearing surviving files."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::AgentState::lane_path"
+reason = "Addressing, grouping, lane recovery and checkout protection prefer the durable checkout over process cwd."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::empty_dir_root"
+reason = "Machine trust and diagnostics locate the empty root through the classed-path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::empty_dir_root"
+reason = "Directory preparation uses the StatePaths home, including isolated test homes."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::empty_room_dir"
+reason = "Preparation and GC share the room-owned empty-directory root outside temp units."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::StatePaths::empty_agent_dir"
+reason = "Candidate handles map to cwd paths only within the classed-path boundary."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::SidebarRow::lane_path"
+reason = "Sidebar groups and CLI row consumers share checkout-first lane routing."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::PaneAgent::lane_path"
+reason = "Live-pane addressing preserves the checkout lane while retaining the actual process cwd."

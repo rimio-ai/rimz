@@ -64,7 +64,7 @@ fn compute_pipelines(
             .rows
             .iter()
             .filter(|row| row.team() == Some(name))
-            .filter_map(|row| row.worktree_path.as_deref())
+            .filter_map(|row| row.lane_path())
             .filter(|path| !path.is_empty())
             .map(|path| normalize_path_lexical(Path::new(path)))
             .collect::<BTreeSet<_>>();

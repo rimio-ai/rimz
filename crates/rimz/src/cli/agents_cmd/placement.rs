@@ -118,6 +118,7 @@ fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: boo
 pub(super) fn resume_outside_launch_dir(
     channel: Option<&str>,
     cwd: &Path,
+    lane_path: &Path,
     project_root: &Path,
     worktree_root: &Path,
     launch_dir: Option<&Path>,
@@ -126,7 +127,7 @@ pub(super) fn resume_outside_launch_dir(
     if launch_dir.is_some_and(|dir| rimz::utils::path::normalize_path_lexical(dir) == target) {
         return false;
     }
-    channel.is_some() || (cwd != project_root && cwd != worktree_root)
+    channel.is_some() || (lane_path != project_root && lane_path != worktree_root)
 }
 
 pub(super) struct PlacementRequest {
@@ -315,6 +316,7 @@ mod tests {
         assert!(!resume_outside_launch_dir(
             Some("single-card"),
             worktree,
+            worktree,
             project,
             worktree,
             Some(worktree),
@@ -324,6 +326,7 @@ mod tests {
         assert!(resume_outside_launch_dir(
             Some("single-card"),
             worktree,
+            worktree,
             project,
             project,
             Some(project),
@@ -331,9 +334,28 @@ mod tests {
         assert!(resume_outside_launch_dir(
             Some("single-card"),
             worktree,
+            worktree,
             project,
             worktree,
             None,
+        ));
+
+        let empty = Path::new("/rimz/empty/room/searcher");
+        assert!(!resume_outside_launch_dir(
+            None,
+            empty,
+            project,
+            project,
+            project,
+            Some(project)
+        ));
+        assert!(!resume_outside_launch_dir(
+            Some("single-card"),
+            empty,
+            worktree,
+            project,
+            project,
+            Some(empty)
         ));
     }
 
@@ -345,6 +367,7 @@ mod tests {
 
         assert!(!resume_outside_launch_dir(
             Some("single-card"),
+            worktree,
             worktree,
             project,
             worktree,

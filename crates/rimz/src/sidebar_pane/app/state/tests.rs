@@ -88,6 +88,7 @@ fn row_snapshot_at(
         pipeline: None,
         status_counts: vec![SidebarStatusCount { status, count: 1 }],
         rows: vec![crate::store::snapshot::SidebarRow {
+            checkout: None,
             id: "sess-1".to_owned(),
             name: "claude".to_owned(),
             pane: Some(crate::pane::PaneRef::from_id(pane_id.clone())),
@@ -201,6 +202,7 @@ fn snapshot_in_group(
         crate::pane::PaneRef::from_id(PaneId::from_parts(crate::MuxName::Zellij, pane));
     pane_ref.cwd = cwd.map(ToOwned::to_owned);
     let row = crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: pane.to_owned(),
         name: pane.to_owned(),
         pane: Some(pane_ref),

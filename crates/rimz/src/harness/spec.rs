@@ -93,6 +93,7 @@ pub struct Column {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentCell {
+    pub empty_dir: Option<bool>,
     pub resume_model_override: bool,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
@@ -124,6 +125,7 @@ impl Cell {
     #[cfg(test)]
     pub(super) fn agent(kind: AgentKind) -> Self {
         Self::Agent(AgentCell {
+            empty_dir: None,
             resume_model_override: false,
             kind,
             args: Vec::new(),
@@ -165,6 +167,7 @@ impl Cell {
 /// A profile chain flattened to the concrete adapter kind that can be executed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
+    pub empty_dir: Option<bool>,
     pub isolation_default: Option<crate::config::Isolation>,
     pub kind: AgentKind,
     pub layers: Vec<String>,
@@ -191,6 +194,7 @@ impl ResolvedProfile {
     fn bare(kind: &str) -> Self {
         Self {
             kind: AgentKind::new_unchecked(kind),
+            empty_dir: None,
             layers: Vec::new(),
             launch: crate::agents::LaunchParams::default(),
             auto_compact: None,
@@ -205,6 +209,7 @@ impl ResolvedProfile {
     }
 
     fn fill_missing(&mut self, layer: &Profile) {
+        self.empty_dir = self.empty_dir.or(layer.empty_dir);
         self.isolation_default = self.isolation_default.or(layer.isolation);
         if self.skills.is_none() {
             self.skills.clone_from(&layer.skills);
@@ -366,6 +371,8 @@ pub enum LayoutErr {
         role: String,
         profile: String,
     },
+    #[error("team profile `{definition}` sets empty-dir; teams share the worktree")]
+    TeamEmptyDir { definition: String },
     #[error(
         "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `/`, `:`, or `#`; stage owners must also omit control characters and parentheses"
     )]
@@ -1055,6 +1062,11 @@ fn compile_team_layout(
 /// Resolve a role binding: its profile chain, then the binding's own overrides on top.
 pub fn resolve_role(binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
     let mut resolved = resolve_profile(&binding.profile, profiles)?;
+    if resolved.empty_dir == Some(true) {
+        return Err(LayoutErr::TeamEmptyDir {
+            definition: binding.profile.clone(),
+        });
+    }
     resolved.apply_role(binding);
     Ok(resolved)
 }
@@ -1487,6 +1499,7 @@ fn agent_cell_from(
 ) -> AgentCell {
     AgentCell {
         resume_model_override: false,
+        empty_dir: resolved.empty_dir,
         kind: resolved.kind.clone(),
         isolation_default: resolved.isolation_default,
         args,
@@ -1957,6 +1970,11 @@ fn prepare_team<'a>(
         let mut resolved = resolve_role(binding, profiles)?;
         normalize_auto_compact(&mut resolved.auto_compact, &binding.profile)?;
         let resolved = rebase_onto(resolved, base_override);
+        if resolved.empty_dir == Some(true) {
+            return Err(LayoutErr::TeamEmptyDir {
+                definition: binding.profile.clone(),
+            });
+        }
         if team_prompt_declared && resolved.system_prompt_file.is_none() {
             return Err(LayoutErr::TeamPromptWithoutBase {
                 team: name.to_owned(),
@@ -2066,6 +2084,7 @@ fn rebase_onto(mut original: ResolvedProfile, base: Option<&ResolvedProfile>) ->
     }
     // Keep the role-field merge aligned with ResolvedProfile::fill_missing.
     original.isolation_default = original.isolation_default.or(base.isolation_default);
+    original.empty_dir = original.empty_dir.or(base.empty_dir);
     original.launch.mode = original.launch.mode.or(base.launch.mode);
     if original.launch.budget.is_none() {
         original.launch.budget.clone_from(&base.launch.budget);

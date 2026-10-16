@@ -936,6 +936,7 @@ fn render_make_up_filter_narrows_the_body() {
         .find(|group| group.label == "main")
         .expect("the fixture groups by worktree");
     std::sync::Arc::make_mut(&mut main_group.rows).push(crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: "%9".to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),

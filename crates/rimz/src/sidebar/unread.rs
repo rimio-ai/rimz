@@ -341,7 +341,7 @@ pub(super) fn opened_unread(row: &SidebarRow, episode_ms: i64, silent: bool) -> 
         worktree: row_worktree(row),
         task: row.task().map(str::to_owned),
         pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-        root: row.worktree_path.clone(),
+        root: row.lane_path().map(ToOwned::to_owned),
         status,
         episode_ms,
         focused: false,
@@ -377,7 +377,7 @@ pub fn row_label(row: &SidebarRow) -> String {
 fn row_worktree(row: &SidebarRow) -> Option<String> {
     row.worktree_branch
         .clone()
-        .or_else(|| row.worktree_path.clone())
+        .or_else(|| row.lane_path().map(ToOwned::to_owned))
 }
 
 fn trim_label(value: &str) -> String {
@@ -425,6 +425,7 @@ mod tests {
 
     fn row(id: &str, status: AgentStatus, last_activity: i64) -> SidebarRow {
         SidebarRow {
+            checkout: None,
             id: id.to_owned(),
             name: "claude".to_owned(),
             pane: Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"))),

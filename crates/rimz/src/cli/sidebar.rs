@@ -1269,7 +1269,7 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
             worktree: row
                 .worktree_branch
                 .clone()
-                .or_else(|| row.worktree_path.clone()),
+                .or_else(|| row.lane_path().map(ToOwned::to_owned)),
             pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
             cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
                 .as_str()
@@ -1429,10 +1429,10 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
             worktree: row
                 .worktree_branch
                 .clone()
-                .or_else(|| row.worktree_path.clone()),
+                .or_else(|| row.lane_path().map(ToOwned::to_owned)),
             task: row.task().map(str::to_owned),
             pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-            root: row.worktree_path.clone(),
+            root: row.lane_path().map(ToOwned::to_owned),
             ask_id: None,
             new_status: row.status(),
         })

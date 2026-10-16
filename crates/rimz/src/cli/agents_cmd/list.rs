@@ -356,18 +356,14 @@ fn channel_group_is_worktree_backed(
     let Some(project_root) = snapshot.project_root.as_deref() else {
         return false;
     };
-    let Some(first) = group
-        .agents
-        .first()
-        .and_then(|agent| agent.worktree_path.as_deref())
-    else {
+    let Some(first) = group.agents.first().and_then(|agent| agent.lane_path()) else {
         return false;
     };
     Path::new(first) != project_root
         && group
             .agents
             .iter()
-            .all(|agent| agent.worktree_path.as_deref() == Some(first))
+            .all(|agent| agent.lane_path() == Some(first))
 }
 
 /// A named scope that selects no live agent: fail when it is no lane at all,
@@ -638,6 +634,7 @@ mod tests {
             test_pane_agent("sess-one", "terminal_1"),
             test_pane_agent("sess-two", "terminal_2"),
             PaneAgent {
+                checkout: None,
                 root_lane: false,
                 kind: AgentKind::new_unchecked("codex"),
                 kind_ordinal: None,
@@ -826,6 +823,7 @@ mod tests {
         }))
         .unwrap();
         std::sync::Arc::make_mut(&mut group.rows).push(SidebarRow {
+            checkout: None,
             id: "linked".to_owned(),
             name: "codex".to_owned(),
             pane: None,
@@ -861,6 +859,7 @@ mod tests {
 
     fn test_pane_agent(agent_id: &str, pane: &str) -> PaneAgent {
         PaneAgent {
+            checkout: None,
             root_lane: false,
             kind: AgentKind::new_unchecked("codex"),
             kind_ordinal: None,

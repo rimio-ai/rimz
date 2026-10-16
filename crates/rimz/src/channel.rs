@@ -57,8 +57,7 @@ pub fn admit_worktree_name(agents: &[AgentState], name: &str) -> Result<()> {
         agent.ended_at.is_none()
             && agent.channel.as_deref() == Some(name)
             && agent
-                .worktree_path
-                .as_deref()
+                .lane_path()
                 .and_then(|path| std::path::Path::new(path).file_name())
                 != Some(std::ffi::OsStr::new(name))
             && agent_liveness(agent) != AgentLiveness::Dead

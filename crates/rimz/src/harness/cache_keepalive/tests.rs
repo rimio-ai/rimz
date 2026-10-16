@@ -243,6 +243,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
         panic!("no live pane")
     });
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: agent.kind.clone(),
         kind_ordinal: None,
@@ -685,6 +686,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     let mut snapshot =
         SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(3540));
     std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(crate::store::snapshot::PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: agent.kind.clone(),
         kind_ordinal: None,

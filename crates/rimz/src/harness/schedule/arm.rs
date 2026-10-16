@@ -463,8 +463,7 @@ pub fn default_signal_matches(
     match default_signal_match_key(selector, matches) {
         Some("path") => {
             let path = scope
-                .worktree_path
-                .as_deref()
+                .lane_path()
                 .map(std::path::Path::new)
                 .unwrap_or(&workspace.worktree_root);
             if path == workspace.project_root {

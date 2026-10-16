@@ -1948,6 +1948,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "claude-plan".to_owned(),
         Profile {
+            empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,
@@ -1973,6 +1974,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.profiles.0.insert(
         "codex-code".to_owned(),
         Profile {
+            empty_dir: None,
             allowed_tools: None,
             definition_renders: None,
             model_tier: None,

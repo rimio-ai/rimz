@@ -8,6 +8,7 @@ use crate::store::snapshot::{
 
 fn row(id: &str, raw_pane: &str) -> SidebarRow {
     SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: id.to_owned(),
         pane: Some(pane(raw_pane, "tab_0", false)),

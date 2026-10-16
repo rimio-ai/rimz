@@ -221,9 +221,14 @@ fn resume_selected(
     let room =
         RoomContext::from_resolved(workspace, machine.clone(), mux, RoomSizing::OrdinaryTab)?;
     let focus = LaunchFocus::resolve(args.cohort.bg, resolve_caller(&snapshot.agents).as_ref());
+    let lane_path = match source {
+        ResumeSource::Recorded(agent) => agent.lane_path().map(Path::new).unwrap_or(cwd),
+        ResumeSource::Provider(..) => cwd,
+    };
     let outside_launch_dir = placement::resume_outside_launch_dir(
         channel,
         cwd,
+        lane_path,
         &workspace.project_root,
         &workspace.worktree_root,
         std::env::current_dir().ok().as_deref(),

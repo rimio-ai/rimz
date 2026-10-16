@@ -111,7 +111,13 @@ impl LaunchedLayout {
             return Ok(());
         }
         let paths = store.paths();
-        let lane_label = launched_lane_label(self.channel.as_deref(), &self.cwd, project_root);
+        let lane_path = self
+            .identities
+            .first()
+            .and_then(|identity| identity.launch.checkout.as_deref())
+            .map(Path::new)
+            .unwrap_or(&self.cwd);
+        let lane_label = launched_lane_label(self.channel.as_deref(), lane_path, project_root);
         if self.pick_session {
             return write_picker_receipt(
                 w,
@@ -772,8 +778,17 @@ pub(in crate::cli) fn launch_resolved<'a>(
             write_picker_receipt(
                 &mut render::out(),
                 launch_batch.identities()[0].kind.as_str(),
-                launched_lane_label(room_channel.as_deref(), &cwd, &workspace.project_root)
-                    .as_deref(),
+                launched_lane_label(
+                    room_channel.as_deref(),
+                    launch_batch.identities()[0]
+                        .launch
+                        .checkout
+                        .as_deref()
+                        .map(Path::new)
+                        .unwrap_or(&cwd),
+                    &workspace.project_root,
+                )
+                .as_deref(),
             )?;
         }
         super::placement::execute(
@@ -1223,9 +1238,19 @@ fn launch_resume_layout(
     if let Some(team) = team {
         rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
     }
+    let lane_path = plan
+        .seeds
+        .iter()
+        .find_map(|seed| match seed {
+            rimz::harness::plan::CohortSeed::Resume(agent) => {
+                agent.checkout.as_deref().map(Path::new)
+            }
+            rimz::harness::plan::CohortSeed::Fresh => None,
+        })
+        .unwrap_or(&cwd);
     let channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
-        &cwd,
+        lane_path,
         team_name.as_deref(),
         plan.channel.as_deref(),
     );
@@ -1233,6 +1258,7 @@ fn launch_resume_layout(
     let scoped_resume = resume_outside_launch_dir(
         channel.as_deref(),
         &cwd,
+        lane_path,
         &workspace.project_root,
         &workspace.worktree_root,
         std::env::current_dir().ok().as_deref(),
@@ -1306,7 +1332,7 @@ fn launch_resume_layout(
     )?;
     panes.focused_pane = team_leader_pane(&layout, team);
     let leader = team.and_then(|team| team.leader.as_deref());
-    let lane_label = launched_lane_label(channel.as_deref(), &cwd, &workspace.project_root);
+    let lane_label = launched_lane_label(channel.as_deref(), lane_path, &workspace.project_root);
     let write_receipt = || {
         write_resume_receipt(
             &mut render::out(),
@@ -1405,7 +1431,7 @@ fn team_leader_pane(layout: &LayoutSpec, team: Option<&rimz::config::Team>) -> u
 }
 
 fn agent_matches_worktree_filter(agent: &AgentState, target: &Path) -> bool {
-    agent.worktree_path.as_deref().is_some_and(|worktree| {
+    agent.lane_path().is_some_and(|worktree| {
         rimz::utils::path::normalize_path_lexical(Path::new(worktree)) == target
     })
 }

@@ -88,6 +88,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         AgentLaunchPayload {
             launch_id: Some(AgentSessionId::from("launch_coder")),
             launch: LaunchParams {
+                checkout: Some("/repo".to_owned()),
                 role: Some("coder".to_owned()),
                 isolation: Some(crate::config::Isolation::Host),
                 ..LaunchParams::default()
@@ -215,6 +216,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         Some("launch_coder")
     );
     assert_eq!(continuation_state.role.as_deref(), Some("coder"));
+    assert_eq!(continuation_state.checkout.as_deref(), Some("/repo"));
     assert_eq!(
         predecessor_state.isolation,
         Some(crate::config::Isolation::Sandbox)
@@ -230,6 +232,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
         .iter()
         .find(|agent| agent.agent_id == "continuation")
         .unwrap();
+    assert_eq!(continuation_state.checkout.as_deref(), Some("/repo"));
     assert_eq!(
         continuation_state.isolation,
         Some(crate::config::Isolation::Sandbox)
