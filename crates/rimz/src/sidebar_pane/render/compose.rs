@@ -22,7 +22,7 @@ use super::sections::{
     fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, unread_worktree_total,
     worktree_group_lines_projected,
 };
-use super::theme::Theme;
+use super::theme::{Component, Theme};
 use super::{
     Alert, BodyFilter, DashboardMode, FrameInteractions, HitRegion, HitTarget, RenderedBlock,
     ScrollEase, UiState, active_dashboard_tab, cockpit_spend_target, dashboard_mode,
@@ -56,7 +56,8 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// anchored to the selected or topmost surviving card from the previous target
 /// window, then clamped to the zone. A changed selection reveals only when no
 /// card line is visible; an external-focus reveal includes its group header.
-/// Wheel, banner, and toggle inputs make the offset authoritative once. The unread
+/// Wheel, banner, and toggle inputs make the offset authoritative once; opening
+/// the landed chip also reveals its first newly shown receipt. The unread
 /// banner decides from the target; the cards, scrollbar, and hit geometry use
 /// the visible row from `UiState::scroll_ease`, clamped to that viewport. Both
 /// offsets are returned for the caller to write back, a draw byproduct like the
@@ -99,7 +100,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // the same frame the cards carry (see `with_gutter`).
     let roster = ui.visible_roster(snapshot);
     let mut top = top_lines(snapshot, ui, cells, theme);
-    let mut scroll = scroll_lines(
+    let (mut scroll, mut landed_span) = scroll_lines(
         snapshot,
         ui,
         &roster,
@@ -125,20 +126,21 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         .sum::<usize>()
         .min(height);
 
-    let plan_scroll = |scroll: &RenderedBlock| {
+    let plan_scroll = |scroll: &RenderedBlock, landed_span| {
         plan_zones(ZoneInputs {
             snapshot,
             ui,
             roster: &roster,
             scroll_map: scroll.interactions.row_map(),
             card_starts: &scroll.card_starts,
+            landed_span,
             scroll_len: scroll.lines.len(),
             top_len: top.lines.len(),
             height,
             bottom_height,
         })
     };
-    let mut layout = plan_scroll(&scroll);
+    let mut layout = plan_scroll(&scroll, landed_span);
     let selected_id = ui
         .selected_index
         .and_then(|index| roster.row(index))
@@ -158,7 +160,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
                 .is_some_and(|placement| &placement.row_id == id)
     });
     if !held_expansions.is_empty() && layout.resolution.clamped && selected_target {
-        scroll = scroll_lines(
+        (scroll, landed_span) = scroll_lines(
             snapshot,
             ui,
             &roster,
@@ -167,7 +169,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
             theme,
             meter_pixels.as_deref_mut(),
         );
-        layout = plan_scroll(&scroll);
+        layout = plan_scroll(&scroll, landed_span);
     } else {
         held_expansions.clear();
     }
@@ -258,6 +260,7 @@ struct ZoneInputs<'a, 'snapshot> {
     roster: &'a VisibleRoster<'snapshot>,
     scroll_map: &'a [Option<usize>],
     card_starts: &'a [(usize, usize)],
+    landed_span: Option<(usize, usize)>,
     scroll_len: usize,
     top_len: usize,
     height: usize,
@@ -607,6 +610,16 @@ fn resolve_scroll_offset(
         snap: false,
     };
     if ui.offset_authoritative {
+        if ui.landed_reveal
+            && let Some((chip, last)) = input.landed_span
+        {
+            resolved.offset = if last - chip + 1 > viewport {
+                chip
+            } else {
+                nudge_into_view(chip, last, resolved.offset, viewport)
+            }
+            .min(max_offset);
+        }
         return resolved;
     }
     let selected = ui.selected_index.and_then(|index| input.roster.row(index));
@@ -768,10 +781,14 @@ pub(super) fn auto_scroll_reveal_group(
     if bottom < top || bottom - top + 1 > viewport {
         return auto_scroll_to_selection(map, selected, offset, viewport);
     }
-    if top < offset {
-        top
-    } else if bottom >= offset + viewport {
+    nudge_into_view(top, bottom, offset, viewport)
+}
+
+fn nudge_into_view(top: usize, bottom: usize, offset: usize, viewport: usize) -> usize {
+    if bottom >= offset + viewport {
         bottom + 1 - viewport
+    } else if top < offset {
+        top
     } else {
         offset
     }
@@ -1000,8 +1017,9 @@ pub(super) fn scroll_lines(
     width: usize,
     theme: &Theme,
     mut meter_pixels: Option<&mut MeterPixels>,
-) -> RenderedBlock {
+) -> (RenderedBlock, Option<(usize, usize)>) {
     let mut block = RenderedBlock::default();
+    let mut landed_span = None;
 
     if roster.len() == 0
         && ui
@@ -1011,7 +1029,7 @@ pub(super) fn scroll_lines(
             .is_some_and(|query| !query.is_empty())
     {
         block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
-        return block;
+        return (block, None);
     }
 
     if !snapshot.worktree_groups.is_empty() {
@@ -1046,19 +1064,19 @@ pub(super) fn scroll_lines(
             .iter()
             .filter(|group| group.finished)
             .count();
-        let mut landed_drawn = false;
+        let mut landed_chip = None;
         let mut emitted = false;
         for group in roster.groups() {
             if group.source().finished && !filtered {
-                if !landed_drawn {
+                if landed_chip.is_none() {
                     if emitted {
                         block.push_inert(Line::from(""));
                     }
+                    landed_chip = Some(block.lines.len());
                     block.push_target(
                         pad_chrome(landed_line(theme, width, landed_count, ui.landed_open)),
                         HitTarget::ToggleLanded,
                     );
-                    landed_drawn = true;
                     emitted = true;
                 }
                 if !ui.landed_open && group.is_empty() {
@@ -1078,19 +1096,26 @@ pub(super) fn scroll_lines(
                 group,
                 meter_pixels: meter_pixels.as_deref_mut(),
             }));
+            if landed_span.is_none()
+                && group.source().finished
+                && group.is_empty()
+                && let Some(chip) = landed_chip
+            {
+                landed_span = Some((chip, block.lines.len() - 1));
+            }
         }
     }
 
-    block
+    (block, landed_span)
 }
 
 fn landed_line(theme: &Theme, width: usize, count: usize, open: bool) -> Line<'static> {
-    let arrow = theme.glyph(if open {
+    let glyph = theme.glyph(if open {
         GlyphRole::WorktreeLandedOpen
     } else {
         GlyphRole::WorktreeLandedClosed
     });
-    let label = format!("{arrow} {count} landed {arrow}");
+    let label = format!("[ {glyph} {count} landed ]");
     let width = content_width(width);
     let spare = width.saturating_sub(text_width(&label));
     let left = spare / 2;
@@ -1103,7 +1128,10 @@ fn landed_line(theme: &Theme, width: usize, count: usize, open: bool) -> Line<'s
             theme.faint(),
         ));
     }
-    spans.push(Span::styled(label, theme.muted()));
+    spans.push(Span::styled(
+        label,
+        theme.picked_chip(theme.component(Component::LandedChip), Modifier::empty()),
+    ));
     if right > 0 {
         spans.push(Span::styled(
             format!(" {}", dotted.repeat(right - 1)),

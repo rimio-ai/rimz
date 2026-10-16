@@ -315,7 +315,7 @@ fn render_pipeline_folded_stage() {
     }
     let closed = snapshot_to_screen(&snapshot, 54, 20);
     assert!(
-        closed.contains("↓ 1 landed ↓") && !closed.contains("forge · Done"),
+        closed.contains("[ ▸ 1 landed ]") && !closed.contains("forge · Done"),
         "{closed}"
     );
     let rendered = snapshot_to_screen_with_alert_and_ui(

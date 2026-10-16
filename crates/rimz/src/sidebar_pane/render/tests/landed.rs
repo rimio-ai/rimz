@@ -52,6 +52,7 @@ fn body(snapshot: &SidebarSnapshot, ui: &UiState, width: usize) -> RenderedBlock
         &Theme::fixed(true),
         None,
     )
+    .0
 }
 
 #[test]
@@ -61,7 +62,7 @@ fn closed_landed_line_replaces_receipts_before_external() {
     let texts = line_texts(&block.lines);
     let fold = texts
         .iter()
-        .position(|line| line.contains("↓ 3 landed ↓"))
+        .position(|line| line.contains("[ ▸ 3 landed ]"))
         .expect("closed fold line");
     assert!(texts[fold - 1].is_empty());
     assert!(texts[..fold].iter().any(|line| line.contains("open-b")));
@@ -75,12 +76,19 @@ fn closed_landed_line_replaces_receipts_before_external() {
         "{texts:?}"
     );
     assert_eq!(block.interactions.row_at_line(fold), None);
+    let chip = block.lines[fold]
+        .spans
+        .iter()
+        .find(|span| span.content == "[ ▸ 3 landed ]")
+        .unwrap();
+    assert!(chip.style.add_modifier.contains(Modifier::REVERSED));
     for column in [0, 27, 53] {
         assert_eq!(
             block.interactions.target_at(column, fold as u16),
             Some(HitTarget::ToggleLanded)
         );
     }
+    assert_snapshot("landed_closed", snapshot_to_screen(&snapshot, 54, 42));
 }
 
 #[test]
@@ -97,7 +105,7 @@ fn open_landed_line_lists_collapsed_receipts_with_group_gaps() {
     let texts = line_texts(&block.lines);
     let fold = texts
         .iter()
-        .position(|line| line.contains("↑ 3 landed ↑"))
+        .position(|line| line.contains("[ ▾ 3 landed ]"))
         .expect("open fold line");
     for name in ["landed-a", "landed-b", "landed-c"] {
         let header = texts.iter().position(|line| line.contains(name)).unwrap();
@@ -134,7 +142,7 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
     snapshot.focused_pane = Some(pane);
     let focused = line_texts(&body(&snapshot, &UiState::default(), 54).lines).join("\n");
     assert!(
-        focused.contains("↓ 3 landed ↓") && focused.contains("landed-a"),
+        focused.contains("[ ▸ 3 landed ]") && focused.contains("landed-a"),
         "{focused}"
     );
     assert!(!focused.contains("landed-b"));
@@ -151,7 +159,7 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
         .lines,
     )
     .join("\n");
-    assert!(expanded.contains("↓ 3 landed ↓") && expanded.contains("landed-a"));
+    assert!(expanded.contains("[ ▸ 3 landed ]") && expanded.contains("landed-a"));
     let held = std::collections::HashSet::from([snapshot
         .worktree_groups
         .iter()
@@ -174,9 +182,10 @@ fn closed_landed_line_keeps_focused_held_and_expanded_groups() {
         54,
         &Theme::fixed(true),
         None,
-    );
+    )
+    .0;
     let text = line_texts(&block.lines).join("\n");
-    assert!(text.contains("↓ 3 landed ↓") && text.contains("landed-a"));
+    assert!(text.contains("[ ▸ 3 landed ]") && text.contains("landed-a"));
 }
 
 #[test]
@@ -202,10 +211,7 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
         )
         .join("\n");
         assert!(text.contains("landed-a"), "{text}");
-        assert!(
-            !text.contains("landed ↓") && !text.contains("landed ↑") && !text.contains('▸'),
-            "{text}"
-        );
+        assert!(!text.contains("landed ]") && !text.contains('▸'), "{text}");
     }
     let text = line_texts(
         &body(
@@ -233,13 +239,13 @@ fn lenses_and_queries_reach_matching_landed_rows_without_the_fold() {
         .lines,
     )
     .join("\n");
-    assert!(text.contains("landed-a") && !text.contains("landed ↓"));
+    assert!(text.contains("landed-a") && !text.contains("landed ]"));
 }
 
 #[test]
 fn landed_label_keeps_its_width_before_rules_and_trims_only_when_needed() {
     let snapshot = landed_snapshot();
-    let label = "↓ 3 landed ↓";
+    let label = "[ ▸ 3 landed ]";
     let label_width = super::super::layout::text_width(label);
     for inner in [
         label_width - 1,
@@ -250,13 +256,13 @@ fn landed_label_keeps_its_width_before_rules_and_trims_only_when_needed() {
         let texts = line_texts(&body(&snapshot, &UiState::default(), inner + 2).lines);
         let line = texts
             .iter()
-            .find(|line| line.contains('↓'))
+            .find(|line| line.contains('▸'))
             .expect("fold label");
         assert!(super::super::layout::text_width(line) <= inner + 1);
         if inner >= label_width {
             assert!(line.contains(label), "{inner}: {line}");
         } else {
-            assert_eq!(line.trim(), "↓ 3 landed");
+            assert_eq!(line.trim(), "[ ▸ 3 landed");
         }
     }
 }
@@ -267,7 +273,7 @@ fn expanded_frame_opens_landed_and_every_card() {
     let mut ansi = Vec::new();
     render_expanded_line_ansi(&mut ansi, &snapshot, 54).unwrap();
     let text = String::from_utf8(ansi).unwrap();
-    assert!(text.contains("↑ 3 landed ↑"), "{text}");
+    assert!(text.contains("[ ▾ 3 landed ]"), "{text}");
     for name in ["landed-a", "landed-b", "landed-c"] {
         assert!(text.contains(&format!("task-{name}")));
     }

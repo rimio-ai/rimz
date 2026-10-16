@@ -149,7 +149,7 @@ Glyphs are grouped by where they appear as you read the sidebar down the column.
 | `meter` | the drawn gauges, bars, and scrollbar |
 | `clock` | the last-activity age faces |
 | `value` | compact value qualifiers, such as the active-time `approx` marker, and the `seam` separator between values (`·`) |
-| `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state |
+| `worktree` | the group header's git story: branch and merge, ahead and behind, trunk state, PR and CI state; a collapsed finished group's `expand`; the `dotted` rule that seals the selected header, draws the `external` divider, and flanks the landed chip; and the landed chip's `landed_closed` / `landed_open` |
 | `pipeline` | a team's stage dots |
 | `card` | the agent card body: subagents, waits, parked background |
 | `process` | the CPU, memory, and IO row |

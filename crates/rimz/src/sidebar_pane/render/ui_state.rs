@@ -101,8 +101,12 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) anchor_clamped: bool,
     /// The last draw showed the `↑ N need you` banner.
     pub(in crate::sidebar_pane) banner_shown: bool,
-    /// Wheel, banner, and toggles bypass anchoring and reveal for one paint.
+    /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
+    /// paint; opening the landed chip can still nudge its first receipt into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
+    /// Armed only by opening the landed chip. The next draw reveals its first
+    /// newly shown receipt while keeping the chip visible, then consumes it.
+    pub(in crate::sidebar_pane) landed_reveal: bool,
     /// A fresh shared click placement for the next draw to land, then consumed.
     pub(in crate::sidebar_pane) focus_placement: Option<FocusPlacement>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so

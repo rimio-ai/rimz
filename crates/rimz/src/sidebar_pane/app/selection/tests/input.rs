@@ -447,12 +447,11 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
     );
 }
 
-#[test]
-fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
+fn landed_click_snapshot(open_groups: usize) -> (SidebarSnapshot, PaneId) {
     let mut snapshot = filterable_snapshot(&workspace());
     let template = snapshot.worktree_groups[0].clone();
     let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
-    for index in 0..6 {
+    for index in 0..open_groups {
         let mut group = template.clone();
         group.key = format!("open-{index}");
         group.label = group.key.clone();
@@ -477,6 +476,10 @@ fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
     finished.key = "landed".to_owned();
     finished.label = "landed".to_owned();
     finished.finished = true;
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
+        active_secs: Some(60),
+        ..Default::default()
+    });
     finished.rows = vec![filter_row(
         true,
         "done",
@@ -487,6 +490,12 @@ fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
     )]
     .into();
     groups.push(finished);
+    (snapshot, selected)
+}
+
+#[test]
+fn landed_click_reveals_first_receipt_and_preserves_selection_and_row_ordinals() {
+    let (snapshot, selected) = landed_click_snapshot(6);
     let mut ui = UiState {
         scroll_offset: usize::MAX,
         offset_authoritative: true,
@@ -503,23 +512,27 @@ fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    let (column, line) = ui
-        .interactions
-        .line_for_target(&HitTarget::ToggleLanded)
-        .expect("landed fold click");
+    let selected_pane = ui.selected_pane.clone();
     for open in [true, false] {
+        let (column, line) = ui
+            .interactions
+            .line_for_target(&HitTarget::ToggleLanded)
+            .expect("landed chip click");
         assert_eq!(
             handle_mouse_click(column, line, &mut ui, &snapshot),
             InputOutcome::redraw()
         );
         assert_eq!(ui.landed_open, open);
         paint(&mut ui, &snapshot, 24);
-        assert_eq!(ui.scroll_offset, offset);
+        assert_eq!(ui.scroll_offset, offset + if open { 4 } else { 0 });
+        assert_eq!(Some(ui.scroll_offset), ui.drawn_scroll_max);
         assert_eq!(ui.selected_index, selection);
-        assert_eq!(
-            ui.interactions.line_for_target(&HitTarget::ToggleLanded),
-            Some((column, line)),
-            "a second click under the cursor closes it"
+        assert_eq!(ui.selected_pane, selected_pane);
+        assert!(
+            ui.interactions
+                .line_for_target(&HitTarget::ToggleLanded)
+                .is_some(),
+            "the chip stays on screen"
         );
         assert_eq!(
             ui.visible_roster(&snapshot)
@@ -547,6 +560,56 @@ fn landed_click_twice_preserves_viewport_selection_and_row_ordinals() {
         .unwrap();
     handle_mouse_click(0, header, &mut ui, &snapshot);
     assert!(!ui.expanded_groups.contains("landed"));
+}
+
+#[test]
+fn landed_click_keeps_viewport_when_first_receipt_already_fits() {
+    let (mut snapshot, _) = landed_click_snapshot(0);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
+    let mut ui = UiState {
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    paint(&mut ui, &snapshot, 24);
+    assert_eq!(ui.scroll_offset, 0);
+    let (column, line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleLanded)
+        .unwrap();
+    handle_mouse_click(column, line, &mut ui, &snapshot);
+    paint(&mut ui, &snapshot, 24);
+    assert_eq!(ui.scroll_offset, 0);
+    assert_eq!(ui.drawn_scroll_max, Some(0));
+    assert_eq!(
+        ui.interactions.line_for_target(&HitTarget::ToggleLanded),
+        Some((column, line))
+    );
+}
+
+#[test]
+fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
+    let (snapshot, selected) = landed_click_snapshot(6);
+    let mut ui = UiState {
+        scroll_offset: usize::MAX,
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    reconcile_selection(&mut ui, &snapshot, Some(selected));
+    let theme = ui.theme(&snapshot.theme);
+    let frame = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 24);
+    let height = (frame.top_height + frame.bottom_height + 4) as u16;
+    paint(&mut ui, &snapshot, height);
+    let (column, line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleLanded)
+        .unwrap();
+    handle_mouse_click(column, line, &mut ui, &snapshot);
+    paint(&mut ui, &snapshot, height);
+    let (_, chip) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleLanded)
+        .unwrap();
+    assert_eq!(usize::from(chip), ui.scroll_zone_top);
 }
 
 #[test]
