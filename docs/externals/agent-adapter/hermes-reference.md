@@ -31,6 +31,8 @@ A provider in Hermes means an inference provider, selected with `--provider`. A 
 
 At this pin, classic `hermes chat --cli` calls `cli.main`, constructs `HermesCLI`, and runs the agent from a worker thread. The worker calls `self.agent.run_conversation` and binds native approval, secret, and sudo callbacks. The classic terminal owns those prompts. See [chat dispatch][main], [CLI construction][cli-main], and [the worker][worker].
 
+The shell launcher execs Python, but [`_set_process_title`][process-title] names the process `hermes` on Linux through `prctl(PR_SET_NAME)`. Shell hooks are direct children of that process ([spawn][shell]). Whether the rename precedes the first hook still needs live verification; matching arbitrary `python3` processes would not identify Hermes.
+
 `hermes --tui` selects the Ink UI through a separate launcher. The launcher passes the profile environment to the UI. The [pinned integration guide][integration-doc] assigns native prompt requests to the attached UI through `tui_gateway/server.py`. Panel behavior and process identity need separate TUI validation. See [the TUI launcher][tui-launch].
 
 General plugins default to `plugins.isolation: in_process`. With `host`, third-party plugins run in a separate host per profile. Bundled plugins remain in-process. A plugin callback's PID therefore need not identify the terminal process. The [isolation contract][isolation] also lists host-only restrictions, including unavailable approval-transport registration.
@@ -84,6 +86,8 @@ Flag effects below describe the classic CLI unless a row names another surface. 
 
 Interactive query seeding requires both `sys.stdin.isatty()` and `sys.stdout.isatty()`. `--oneshot`, quiet mode, or non-TTY stdio takes the finite query path. The seed is submitted literally, without slash-command interpretation. See [the predicate][cli] and [single-query dispatch][single-query]. The [chat parser][parser] has no positional prompt argument. Pass initial text through `-q` or `--query-file`.
 
+For text beginning with `-`, use one joined `--query=<text>` argument. The [argparse definition][parser] accepts `--query` as the long form of `-q`; a separate leading-dash value can instead be parsed as an option.
+
 The JSONL emitter writes `system` with subtype `init`, `text`, `tool_use`, `tool_result`, and terminal `result` records. Diagnostics use stderr. The protocol is distinct from hook stdin. See [the emitter][stream-json].
 
 Latest-session lookup defines the workspace as the Git repository root, or the current directory outside Git. Bare `-c` and `--resume latest` can therefore choose different sessions. `--in DIR` sets the lookup location but does not remove the global fallback. See [resume selection][main].
@@ -98,7 +102,7 @@ The inspected [chat parser][parser] exposes no plan or approval-mode enum flag. 
 
 The [classic skill loader][skill-preload] suppresses `skills.auto_load` under `--ignore-rules`, while independently loading explicit `--skills` arguments.
 
-`HERMES_EPHEMERAL_SYSTEM_PROMPT` selects additional system text during classic CLI initialization. The turn builder appends it to the cached system prompt at API time. This differs from `pre_llm_call` context, which enters the user message. See [initialization][system-overlay] and [prompt assembly][system-assembly].
+`HERMES_EPHEMERAL_SYSTEM_PROMPT` selects additional system text during classic CLI initialization. A nonempty value replaces the configured overlay: [`resolve_ephemeral_system_prompt`][personality-overlay] otherwise selects `display.personality` or `agent.system_prompt`. The turn builder appends the selected overlay to the cached system prompt at API time. Setting the env is therefore not additive to the user's personality or system text. This differs from `pre_llm_call` context, which enters the user message. See [initialization][system-overlay] and [prompt assembly][system-assembly].
 
 ### Tool names and side effects
 
@@ -120,6 +124,8 @@ The [pinned hooks guide][hooks-doc] lists plugin hooks, shell hooks, messaging-g
 The [plugin API][plugins] accepts `register(ctx)` and `ctx.register_hook(event_name, callback)`. User plugins live under `$HERMES_HOME/plugins/NAME/`, with `plugin.yaml` and `__init__.py`. Configuration must enable them through `plugins.enabled`. Project plugin discovery requires `HERMES_ENABLE_PROJECT_PLUGINS=1`. See [discovery][discovery].
 
 Shell hooks use `hooks.<event_name>` lists in `config.yaml` and register through the same event machinery. Each entry has these fields, checked by [the shell-hook parser][shell].
+
+The parser warns and skips unknown events and Python-only `transform_api_error_classification`; these are not fatal config errors. It reserves `hooks.output_spill` and `hooks.outbound` as non-event subsections. The [managed-scope overlay][managed-overlay] is an admin layer, deep-merged with managed values winning at each leaf, not a user hook drop-in.
 
 | Field | Default and meaning |
 | --- | --- |
@@ -213,6 +219,8 @@ Only `pre_tool_call` belongs to `_BLOCKING_EVENTS` at this pin. `fail_closed` do
 The shell parser also accepts a `pre_verify` continuation response. That requests more work, while the blocking table above governs tool execution. See [reply parsing][shell].
 
 Consent is per `(event, command)`, recorded in `$HERMES_HOME/shell-hooks-allowlist.json`. Editing a script's contents does not change that consent key. `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true` can accept unseen commands. Top-level `-z` sets `HERMES_ACCEPT_HOOKS=1` automatically. This reference installs nothing. See [consent handling][shell], [the parser][parser], and [one-shot setup][oneshot-setup].
+
+The allowlist root is `{"approvals": [...]}`; each entry holds `event`, `command`, `approved_at`, and `script_mtime_at_approval`. Matching uses the exact event and command strings only. Without blanket acceptance, an unseen pair is skipped on non-TTY stdin, or asks `Allow this hook to run? [y/N]:` in a terminal. [`hermes hooks`][hooks-cli] exposes `list`, `test`, `revoke`, and `doctor`, but no approve command. Consent comes from that terminal prompt or a blanket accept.
 
 ## Native prompts and permissions
 
@@ -324,6 +332,8 @@ Request usage, session totals, and context occupancy are different measurements.
 See [API usage normalization][api-hooks], [usage schema][schema], [the status-bar snapshot][status-bar], and [pricing semantics][pricing]. The status bar clamps occupancy to the context window and marks estimated display sources. Its display anchoring does not replace the compressor's real last-request usage for compression decisions.
 
 The ordinary `post_api_request` payload carries both `usage` and `context_length`. Shell hooks receive them as `extra.usage` and `extra.context_length`. Request `usage.prompt_tokens` measures that request's input occupancy, not cumulative session tokens or the status bar's anchored display. Missing usage or capacity leaves the gauge incomplete. See [the emitter][post-api] and [shell serialization][shell].
+
+The same [emitter][post-api] supplies `session_id`, `turn_id`, `api_request_id`, `model`, `provider`, `base_url`, and `api_mode`. These identify the request and model independently of the sensitive `response` and `assistant_message` fields.
 
 The usage keys are `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `request_count`, `prompt_tokens`, and `total_tokens`. The same event includes `response` and `assistant_message`, which can contain sensitive text and tool calls. Consumers need an explicit payload-size and redaction policy. See [usage projection][api-hooks] and [the response payload][post-api].
 
@@ -509,4 +519,8 @@ These gaps constrain later claims. They do not decide whether the eventual integ
 [resume-chain]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_agent_setup_mixin.py#L524-L533
 [resume-refusal]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/cli_agent_setup_mixin.py#L766-L780
 [reset-alias]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/commands.py#L84-L92
+[process-title]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/main.py#L210-L235
+[personality-overlay]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/personality.py#L118-L124
+[managed-overlay]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/config.py#L2261-L2277
+[hooks-cli]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/hooks.py#L1-L30
 [gateway-compaction]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/agent/conversation_compression.py#L3457-L3469
