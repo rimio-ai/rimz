@@ -41,6 +41,7 @@ expression: value
   "spec_digest": "abc",
   "spec_dir": "/definitions/review",
   "state": "active",
+  "task": null,
   "terminal_at": null,
   "version": 1,
   "visit_grant": 0,

@@ -185,6 +185,7 @@ impl Transition<'_> {
                 None,
                 JournalEvent::Wait {
                     outcome: wait.outcome,
+                    detail: wait.detail,
                     first: wait.first,
                     last: wait.last,
                     count: wait.count,
@@ -223,6 +224,7 @@ impl Transition<'_> {
             let wait = self.record.wait.get_or_insert_with(|| Wait {
                 node: self.record.node.clone(),
                 outcome,
+                detail: None,
                 first: self.now,
                 last: self.now,
                 count: 0,
@@ -303,7 +305,7 @@ impl Transition<'_> {
         self.route(target, object, reason)
     }
 
-    pub(super) fn step_wait(&mut self, outcome: &str) {
+    pub(super) fn step_wait(&mut self, outcome: &str, detail: Option<String>) {
         if self
             .record
             .wait
@@ -315,6 +317,7 @@ impl Transition<'_> {
         let wait = self.record.wait.get_or_insert_with(|| Wait {
             node: self.record.node.clone(),
             outcome: outcome.into(),
+            detail: None,
             first: self.now,
             last: self.now,
             count: 0,
@@ -322,6 +325,7 @@ impl Transition<'_> {
         });
         wait.last = self.now;
         wait.count += 1;
+        wait.detail = detail;
     }
 
     pub(super) fn stage_agent_end(&mut self, ending: Ending, observed: &super::Observed) {

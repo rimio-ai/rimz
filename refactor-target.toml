@@ -751,7 +751,8 @@ path = "crates/rimz/src/harness"
 # Workflow AttemptHost, StepLaunch, Occupancy, Observed, LaunchFailure and wake_run cross the CLI seam (+6).
 # Agent identity/head/compose/prepare_end/launch/finish and judge evaluate share private orchestration;
 # Transition finish_judge/stage_agent_end/settle_agent/step_wait replace the old step/stub helpers (+5 net).
-surface-budget = 892
+# workflow::advance_args shares detached argv; WhenExpr::blocking_evidence formats typed window readings (+2).
+surface-budget = 894
 
 [[verdict]]
 kind = "item"
@@ -7062,3 +7063,13 @@ reason = "Only workflow dispatch constructs the CLI-private attempt host."
 kind = "item"
 key = "agents::account::ProviderCapacity::latest_spent_window_reset_for_model"
 reason = "Workflow observations reuse the model-aware reset policy already used by auto-continue."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::advance_args"
+reason = "Run and room-signal helpers share workflow advance argv with the scheduler ticker."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenExpr::blocking_evidence"
+reason = "Workflow waits retain typed comparison readings without reparsing rendered conditions."

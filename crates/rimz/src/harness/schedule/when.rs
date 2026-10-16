@@ -347,6 +347,26 @@ impl Op {
 }
 
 impl WhenTerm {
+    fn comparison_evidence(&self, reading: Option<&str>) -> String {
+        let op = if reading.is_none() || self.matches(reading) {
+            self.op.token()
+        } else {
+            match self.op {
+                Op::In => "!=",
+                Op::Ge => "<",
+                Op::Le => ">",
+                Op::Gt => "<=",
+                Op::Lt => ">=",
+            }
+        };
+        format!(
+            "{}={}{op}{}",
+            self.key,
+            reading.unwrap_or("unknown"),
+            self.values.join(",")
+        )
+    }
+
     pub fn matches(&self, reading: Option<&str>) -> bool {
         let Some(reading) = reading else {
             return false;
@@ -391,6 +411,12 @@ pub struct WhenError {
 }
 
 impl WhenExpr {
+    pub(crate) fn blocking_evidence(&self, verdict: &Verdict) -> String {
+        let (term, negated) = self.0.blocking_term(&verdict.readings, true);
+        let evidence = term.comparison_evidence(verdict.readings[&term.key].as_deref());
+        format!("{}{evidence}", if negated { "!" } else { "" })
+    }
+
     pub fn parse(clauses: &[String]) -> Result<Self, WhenError> {
         Self::parse_with_stages(clauses, None)
     }
@@ -481,6 +507,24 @@ impl fmt::Display for WhenExpr {
 }
 
 impl Node {
+    fn blocking_term(
+        &self,
+        readings: &BTreeMap<String, Option<String>>,
+        expected: bool,
+    ) -> (&WhenTerm, bool) {
+        match self {
+            Self::Term(term) => (term, !expected),
+            Self::Not(node) => node.blocking_term(readings, !expected),
+            Self::And(left, right) | Self::Or(left, right) => {
+                if left.matches(readings) != expected {
+                    left.blocking_term(readings, expected)
+                } else {
+                    right.blocking_term(readings, expected)
+                }
+            }
+        }
+    }
+
     fn terms<'a>(&'a self, terms: &mut Vec<&'a WhenTerm>) {
         match self {
             Self::Term(term) => terms.push(term),

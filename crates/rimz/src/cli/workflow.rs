@@ -169,6 +169,7 @@ fn start(
         &scope,
         &ctx.workspace.project_root,
         prompt,
+        None,
     )?;
     writeln!(
         render::out(),
@@ -199,19 +200,24 @@ fn state_word(record: &RunRecord) -> &'static str {
 
 fn waiting(record: &RunRecord) -> Option<String> {
     record.wait.as_ref().map(|w| {
+        let zone = jiff::tz::TimeZone::system();
+        let detail = match w.outcome.as_str() {
+            "window" => w
+                .detail
+                .as_ref()
+                .map_or_else(|| "window".into(), |detail| format!("window {detail}")),
+            "takeover" | "occupied" => w.outcome.clone(),
+            _ => format!("said {}", w.outcome),
+        };
+        let recheck = w
+            .recheck_at
+            .map(|at| format!(", recheck {}", at.to_zoned(zone.clone()).strftime("%H:%M")))
+            .unwrap_or_default();
         format!(
-            "waiting: {}, {}{}, since {}, ×{}, recheck {}",
+            "waiting: {}, {detail}, since {}, ×{}{recheck}",
             w.node,
-            if matches!(w.outcome.as_str(), "window" | "takeover" | "occupied") {
-                ""
-            } else {
-                "said "
-            },
-            w.outcome,
-            w.first,
+            w.first.to_zoned(zone).strftime("%H:%M"),
             w.count,
-            w.recheck_at
-                .map_or_else(|| "next wake".into(), |at| at.to_string())
         )
     })
 }

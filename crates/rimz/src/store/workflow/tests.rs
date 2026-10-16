@@ -17,6 +17,34 @@ fn record() -> RunRecord {
 }
 
 #[test]
+fn provenance_and_window_evidence_survive_record_and_journal_round_trips() {
+    let legacy = serde_json::to_value(record()).unwrap();
+    let mut value = legacy.clone();
+    value["task"] = json!("babysit-pr");
+    value["wait"] = json!({
+        "node":"pr", "outcome":"window", "detail":"5h.left=12<42",
+        "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z",
+        "count":2, "recheck_at":null
+    });
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(encoded["task"], value["task"]);
+    assert_eq!(encoded["wait"]["detail"], value["wait"]["detail"]);
+    let event = json!({
+        "event":"wait", "seq":null, "at":"2026-01-01T00:00:00Z", "node":"pr",
+        "outcome":"window", "detail":"5h.left=12<42", "count":2,
+        "first":"2026-01-01T00:00:00Z", "last":"2026-01-01T00:00:00Z", "recheck_at":null
+    });
+    let decoded: JournalEntry = serde_json::from_value(event.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap()["detail"],
+        event["detail"]
+    );
+    let decoded: RunRecord = serde_json::from_value(legacy).unwrap();
+    assert!(serde_json::to_value(decoded).unwrap()["task"].is_null());
+}
+
+#[test]
 fn durable_record_round_trip_and_json_shape() {
     let home = tempfile::tempdir().unwrap();
     let state =

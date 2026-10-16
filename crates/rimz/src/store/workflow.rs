@@ -248,6 +248,8 @@ pub struct PreviousAttempt {
 pub struct Wait {
     pub node: String,
     pub outcome: String,
+    #[serde(default)]
+    pub detail: Option<String>,
     pub first: Timestamp,
     pub last: Timestamp,
     pub count: u64,
@@ -259,6 +261,8 @@ pub struct RunRecord {
     pub version: u32,
     pub id: WorkflowRunId,
     pub workflow: String,
+    #[serde(default)]
+    pub task: Option<String>,
     pub spec_dir: PathBuf,
     pub spec_digest: String,
     pub prompt: Option<String>,
@@ -340,6 +344,8 @@ pub enum JournalEvent {
     },
     Wait {
         outcome: String,
+        #[serde(default)]
+        detail: Option<String>,
         first: Timestamp,
         last: Timestamp,
         count: u64,

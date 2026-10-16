@@ -17,6 +17,7 @@ pub(super) struct FakeHost {
     evictions: Cell<usize>,
     on_stop: RefCell<Option<Box<dyn Fn()>>>,
     on_launch: RefCell<Option<Box<dyn Fn()>>>,
+    pub(super) on_occupancy: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl FakeHost {
@@ -38,6 +39,7 @@ impl FakeHost {
             evictions: Cell::new(0),
             on_stop: RefCell::new(None),
             on_launch: RefCell::new(None),
+            on_occupancy: RefCell::new(None),
         }
     }
 }
@@ -48,6 +50,9 @@ impl AttemptHost for FakeHost {
         _: &std::path::Path,
         _: &std::path::Path,
     ) -> Result<Occupancy, WorkflowErr> {
+        if let Some(check) = &*self.on_occupancy.borrow() {
+            check();
+        }
         if self.stale_after_evict.get() && self.evictions.get() > 0 {
             return Ok(Occupancy::Blocked(vec![(
                 "stale occupant".into(),
@@ -98,6 +103,35 @@ impl AttemptHost for FakeHost {
 }
 
 mod attempts;
+
+#[test]
+fn advance_arguments_address_a_run_or_a_room_signal_without_shell_parsing() {
+    let root = std::path::Path::new("/project with spaces");
+    let id = crate::ids::WorkflowRunId::new();
+    let expected: Vec<std::ffi::OsString> = [
+        "--root",
+        "/project with spaces",
+        "workflow",
+        "advance",
+        id.as_str(),
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    assert_eq!(advance_args(root, Some(&id), None), expected);
+    let expected: Vec<std::ffi::OsString> = [
+        "--root",
+        "/project with spaces",
+        "workflow",
+        "advance",
+        "--wake-signal",
+        "pr.ready",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    assert_eq!(advance_args(root, None, Some("pr.ready")), expected);
+}
 
 const VALID: &str = r#"
 [workflow]
