@@ -811,7 +811,44 @@ path = "crates/rimz/src/mux"
 # Captured hook pane values use the existing mux-owned normalization (+1).
 # Six remote channel constants move below remote, with the shared REMOTE_CLIENT_ENV birth scrub list (+7).
 # FocusPlacement carries the optional card-relative presentation shared between renderers (+1).
-surface-budget = 284
+# ViewSize, LaggingViews, LaggingView and the three backend verbs share hidden-view geometry (+6).
+# FittedPane carries per-pane rows and proven sidebar columns across the fit/push seam (+1).
+surface-budget = 291
+
+[[verdict]]
+kind = "item"
+key = "mux::ViewSize"
+reason = "Hidden-view sweep and jump fitting share the current view's target rectangle."
+
+[[verdict]]
+kind = "item"
+key = "mux::FittedPane"
+reason = "Only a fit that reasserted legit sidebar columns can bypass the destination's held-grow hold."
+
+[[verdict]]
+kind = "item"
+key = "mux::LaggingViews"
+reason = "The host consumes one backend-owned MRU snapshot per settled sweep."
+
+[[verdict]]
+kind = "item"
+key = "mux::LaggingView"
+reason = "Cross-tab jumps freshly decide whether their destination needs fitting."
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::lagging_views"
+reason = "Hidden-view geometry stays adapter-owned with no-op defaults for uniform-size backends."
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::lagging_view"
+reason = "The focus decision needs fresh target geometry rather than a watch hint."
+
+[[verdict]]
+kind = "item"
+key = "mux::MuxBackend::fit_view"
+reason = "Both paced sweep and immediate jump fitting preserve backend-local sizing policy."
 
 [[module]]
 path = "crates/rimz/src/mux/zellij"
