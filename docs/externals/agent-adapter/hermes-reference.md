@@ -1,6 +1,6 @@
 # Hermes Agent protocol reference
 
-Hermes Agent is Nous Research's coding agent. This page records its upstream terminal, hook, session, and account surfaces for contributors preparing an integration. It makes no claim that RimZ supports Hermes. The [adapter playbook](../../contributing/agent-adapters.md#step-1--land-the-protocol-reference-first) owns the integration sequence. The [externals index](../README.md) lists other upstream contracts.
+Hermes Agent is Nous Research's coding agent. This page records its upstream terminal, hook, session, and account surfaces for contributors working on the integration. It records what upstream ships; what RimZ maps and claims lives in the [Hermes adapter](../../internals/agents/adapter_hermes.md). The [externals index](../README.md) lists other upstream contracts.
 
 ## Baseline and evidence
 
@@ -250,7 +250,7 @@ The [pinned security guide][security-doc] defines `approvals.mode` as `smart` (d
 
 Finite `chat -q` runs use the single-query policy, including `-Q` and chat-subcommand `--oneshot`. Top-level `-z PROMPT` enables approval bypass and accepts unseen configured shell hooks. Interactive `-q` seeding remains an interactive session. See [query dispatch][single-query] and [one-shot setup][oneshot-setup].
 
-`--yolo` and top-level `-z` bypass approvals. `--accept-hooks` accepts hook commands. None is a neutral substitute for ordinary interactive permissions. This reference defines no mapping onto RimZ permission modes.
+`--yolo` and top-level `-z` bypass approvals. `--accept-hooks` accepts hook commands. None is a neutral substitute for ordinary interactive permissions. The [Hermes adapter](../../internals/agents/adapter_hermes.md#launch-and-resume) owns the mapping onto RimZ permission modes.
 
 ## Session identity and history
 
@@ -393,7 +393,7 @@ The [stop emitter][child-results] runs during result processing, not at the chil
 | Other attention surfaces | Background-process parking, idle notifications, remote control, and terminal answer keystrokes were not traced in this pass. |
 | Other session controls | `/branch`/`/fork`, `/undo`, `/handoff`, and in-session `/resume` transitions. CLI adoption timing after automatic rotation also remains untraced. |
 
-These gaps constrain later claims. They do not decide whether the eventual integration should use a built-in adapter or a process plugin. The next artifact is the [mapping worksheet](../../contributing/agent-adapters.md#step-2--map-the-protocol-onto-the-model), grounded in the pinned contract and recorded-session evidence.
+These gaps constrain RimZ's claims. The [Hermes adapter](../../internals/agents/adapter_hermes.md#known-gaps) records which of them its coverage narrows around.
 
 [parser]: https://github.com/NousResearch/hermes-agent/blob/d923a5eb487a17c0a68801bba9ef0f56c81040a8/hermes_cli/_parser.py#L144-L325
 

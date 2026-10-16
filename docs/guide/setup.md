@@ -56,7 +56,7 @@ Install or refresh reporting hooks? [Y/n]
 
 Enter or `y` installs for every agent listed; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks are already current is not listed at all.
 
-What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON or TOML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, and Pi instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
+What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, and Pi instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
 
 `rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
 
@@ -66,7 +66,7 @@ rimz hooks install claude       # one agent kind
 rimz hooks uninstall            # remove every RimZ-managed hook and restore any wrapped statusline
 ```
 
-With no agent named, install covers every one of the thirteen built-in adapters whose binary RimZ finds here; naming one installs that kind whether or not its binary is present. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
+With no agent named, install covers every one of the fourteen built-in adapters whose binary RimZ finds here; naming one installs that kind whether or not its binary is present. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
 
 Some agents gate a newly installed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them.
 

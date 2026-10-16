@@ -22,7 +22,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [cursor-reference.md](./agent-adapter/cursor-reference.md) | Cursor CLI | 2026.10.01-e373342 (2026-10-01) | [adapter_cursor.md](../internals/agents/adapter_cursor.md) |
 | [droid-reference.md](./agent-adapter/droid-reference.md) | Factory Droid CLI | 0.239.1 (JSON-RPC: `@factory/droid-sdk` 0.9.1) | [adapter_droid.md](../internals/agents/adapter_droid.md) |
 | [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 1.0.52 (2026-10-11; source at sync commit `2bdd1d6a`, 2026-09-29) | [adapter_grok.md](../internals/agents/adapter_grok.md) |
-| [hermes-reference.md](./agent-adapter/hermes-reference.md) | Hermes Agent | v0.22.2 (2026-10-15, commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`) | Reference only, mapping undecided |
+| [hermes-reference.md](./agent-adapter/hermes-reference.md) | Hermes Agent | v0.22.2 (2026-10-15, commit `d923a5eb487a17c0a68801bba9ef0f56c81040a8`) | [adapter_hermes.md](../internals/agents/adapter_hermes.md) |
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 2.1.1 (tag `@moonshot-ai/kimi-code@2.1.1`, 2026-09-24) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.30.0 (2026-10-12; engine `@kiro/agent` 0.66.33; turn-order captures: 2.12.1 and 2.21.4) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
