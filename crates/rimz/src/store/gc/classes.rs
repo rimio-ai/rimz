@@ -209,6 +209,19 @@ fn collect_owned(
             sweep.remove_tree(&home.home, files, report)?;
         }
     }
+    // A run home without its record is a crash during `initialize`, which runs
+    // under the workspace lock held here, so no creation is in flight; every
+    // reader skips it, so it goes once the home itself is past the grace.
+    for home in paths.workflow_runs()? {
+        let recordless = !home.record.try_exists().map_err(|source| GcErr::Io {
+            path: home.record.clone(),
+            source,
+        })?;
+        if recordless && super::collect::is_older_than(&home.home, retention::OWNED_GRACE)? {
+            let files = sweep.files_under(&home.home)?.len();
+            sweep.remove_tree(&home.home, files, report)?;
+        }
+    }
     Ok(())
 }
 
@@ -743,6 +756,13 @@ mod tests {
             }
             homes.push(home);
         }
+        let orphan = paths.workflow(&crate::ids::WorkflowRunId::new());
+        fs::create_dir_all(&orphan.work).unwrap();
+        fs::write(&orphan.spec, "spec").unwrap();
+        fs::File::open(&orphan.home)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
         let mut preview = GcReport::default();
         let collected = collect_owned(
             &paths,
@@ -755,10 +775,10 @@ mod tests {
             "unreadable workflow homes must not block GC: {collected:?}"
         );
         assert_eq!(
-            preview.sidecar_files_removed, 6,
-            "old terminal workflow homes must be collected together"
+            preview.sidecar_files_removed, 7,
+            "old terminal and old recordless workflow homes must be collected together"
         );
-        assert!(homes.iter().all(|p| p.home.exists()));
+        assert!(homes.iter().all(|p| p.home.exists()) && orphan.home.exists());
         let mut actual = GcReport::default();
         collect_owned(
             &paths,
@@ -770,6 +790,7 @@ mod tests {
         assert_eq!(actual, preview);
         assert!(homes[..3].iter().all(|p| !p.home.exists()));
         assert!(homes[3..].iter().all(|p| p.home.exists()));
+        assert!(!orphan.home.exists(), "an old recordless home must go");
     }
 
     #[test]

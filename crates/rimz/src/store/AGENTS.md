@@ -27,7 +27,7 @@ Store folds the agent model, so `store` imports `agents` and nothing under `agen
 - The rollup catch-up, rebuild, carryover staging and lifecycle-follow seeds under [`snapshot/`](./snapshot/mod.rs) are this module's own read choreography and stay inside it; the snapshot's crate-wide surface is the view model the renderer decodes, beside the pane classifiers and lazy-pairing helpers the sidebar's producer reads.
 - [`disk/single_flight.rs`](../disk/single_flight.rs) stays the lock-and-poll election alone and imports no store-writer module. The sidebar depends on it, and the read-only grep matches files under `src/sidebar/` rather than this one, so the boundary holds only where a change here holds it.
 
-Workflow record and journal codecs live in `workflow.rs`; the harness owns every workflow transition under the workspace lock. Workflow homes use the owned lifetime: soft reset retains them, hard reset removes them, and terminal-record GC removes the whole home after the owned grace.
+Workflow record and journal codecs live in `workflow.rs`; the harness owns every workflow transition under the workspace lock. Workflow homes use the owned lifetime: soft reset retains them, hard reset removes them, and terminal-record GC removes the whole home after the owned grace, and so does a home left without its record past the same grace.
 
 ## Tests
 

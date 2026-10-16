@@ -41,7 +41,7 @@ work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
 ```
 
-The engine-owned record, sealed spec, and history are outside the node-writable work directory so a later sandbox write bind needs only one subtree. Future notes, signs, and claims live under `work/`; the engine does not read claims. Soft reset retains workflow homes. Hard reset removes them, unlike supervised-run records. Class GC removes a terminal workflow's entire home when its record mtime is older than the seven-day owned grace; active, parked, and recent terminal records stay.
+The engine-owned record, sealed spec, and history are outside the node-writable work directory so a later sandbox write bind needs only one subtree. Future notes, signs, and claims live under `work/`; the engine does not read claims. Soft reset retains workflow homes. Hard reset removes them, unlike supervised-run records. Class GC removes a terminal workflow's entire home when its record mtime is older than the seven-day owned grace; active, parked, and recent terminal records stay. A home without `record.json`, left by a crash during creation and skipped by every reader, goes once the home directory's own mtime passes the same grace.
 
 The record stores scope, project root, sealed-spec digest and original definition directory, prompt, current node and entry clock, state and park, routed input and key, open wait and recheck time, per-step totals and per-key visits, grants, deadline state, sequence allocator, live host identity, previous attempt, and terminal time. Keys preserve integer versus string identity.
 
