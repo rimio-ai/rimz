@@ -14,6 +14,7 @@ pub(super) fn render_entry_for_log_entry(
         source: LineSource::Log {
             kind: entry.entry,
             agent: entry_key(entry),
+            id: entry.id.clone(),
             opener_hidden: false,
         },
         chat: chat_entry_for_log_entry(entry, identities, include_channel, root_channel),
@@ -231,11 +232,7 @@ pub(super) fn render_display_chat_to(
 ) -> Result<()> {
     write_header(out, channel)?;
     let grouped = channel.is_some();
-    let rendered = entries
-        .iter()
-        .map(|display| display.entry.clone())
-        .collect::<Vec<_>>();
-    let folded = pair_answers(&rendered);
+    let folded = pair_answers(entries);
     let mut brands = BrandColors::default();
     for display in entries {
         let entry = &display.entry;
@@ -387,6 +384,31 @@ fn write_entry_content(
         write_stage_line(out, stage, entry, continuation, tz, prose, width)
     } else if entry.kind() == Some(TranscriptKind::Ask) {
         write_ask_card(out, entry, answer, !suppress_ask_context, prose, width)
+    } else if entry.kind() == Some(TranscriptKind::Answer)
+        && entry.chat.answers.iter().any(|answer| {
+            answer
+                .question
+                .as_deref()
+                .is_some_and(|question| !question.trim().is_empty())
+        })
+    {
+        let questions = entry
+            .chat
+            .answers
+            .iter()
+            .map(|answer| AskQuestion {
+                question: answer.question.clone().unwrap_or_default(),
+                options: Vec::new(),
+                multi_select: false,
+                has_option_previews: false,
+            })
+            .collect::<Vec<_>>();
+        super::ask_card::write_structured_ask_card_with_answers(
+            out,
+            &questions,
+            &entry.chat.answers,
+            Some(&entry.chat.from),
+        )
     } else if entry.chat.error {
         write_body_lines_with(
             out,
@@ -467,35 +489,11 @@ pub(super) struct AnswerPairs {
     suppressed_answers: BTreeSet<usize>,
 }
 
-pub(super) fn pair_answers(entries: &[RenderEntry]) -> AnswerPairs {
+pub(super) fn pair_answers(entries: &[DisplayEntry]) -> AnswerPairs {
     let mut folded = AnswerPairs::default();
-    let mut open_by_agent: HashMap<AgentKey, Vec<usize>> = HashMap::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let Some(agent) = entry.agent() else {
-            continue;
-        };
-        match entry.kind() {
-            Some(TranscriptKind::Ask) => {
-                open_by_agent.entry(agent.clone()).or_default().push(index);
-            }
-            Some(TranscriptKind::Answer) => {
-                let mut by_agent = || {
-                    let stack = open_by_agent.get_mut(agent)?;
-                    while let Some(ask) = stack.pop() {
-                        if !folded.answer_by_ask.contains_key(&ask) {
-                            return Some(ask);
-                        }
-                    }
-                    None
-                };
-                let ask = by_agent();
-                if let Some(ask) = ask {
-                    folded.answer_by_ask.insert(ask, index);
-                    folded.suppressed_answers.insert(index);
-                }
-            }
-            _ => {}
-        }
+    for (answer, ask) in display_answer_asks(entries) {
+        folded.answer_by_ask.insert(ask, answer);
+        folded.suppressed_answers.insert(answer);
     }
     folded
 }

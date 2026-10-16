@@ -264,6 +264,7 @@ fn render_entry(
         source: LineSource::Log {
             kind,
             agent: agent_key(),
+            id: None,
             opener_hidden: false,
         },
         chat: ChatLine {
@@ -786,7 +787,7 @@ fn parked_exchange_keeps_messages_and_flips_in_time_order() {
 #[test]
 fn answers_do_not_split_threads_and_forward_parents_stay_unattached() {
     let entries = vec![
-        linked(entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
+        linked(ask_entry("2026-06-28T04:00:00Z", "first"), Some(1), &[]),
         linked(
             render_entry(
                 TranscriptKind::Message,
@@ -2566,19 +2567,372 @@ fn card_lines_wrap_with_spine_and_option_hanging_indent() {
     );
 }
 
+fn identified_ask_entry(kind: TranscriptKind, at: &str, text: &str, id: u64) -> RenderEntry {
+    let mut log = TranscriptEntry::new(ts(at), agent_key().0, agent_key().1, kind, text.to_owned());
+    log.id = Some(rimz::ids::AskId::parse(&format!("ask_{id:016x}")).unwrap());
+    if kind == TranscriptKind::Answer {
+        log.from = Some("user".to_owned());
+    }
+    render_entry_for_log_entry(&log, &HashMap::new(), false, None)
+}
+
+fn recorded_answer_question(mut answer: RenderEntry, question: &str) -> RenderEntry {
+    answer.chat.answers = vec![rimz::transcript::AskAnswer {
+        question: Some(question.to_owned()),
+        chosen: vec![answer.chat.text.clone()],
+        note: None,
+    }];
+    answer
+}
+
+fn interleaved_ask_view() -> RenderedChat {
+    let mut opener = linked(entry("2026-06-28T04:00:00Z", "open A"), Some(1), &[]);
+    opener.chat.to = Some("@claude#alpha".to_owned());
+    let mut ask = linked(
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:01:00Z",
+            "A question?",
+            1,
+        ),
+        None,
+        &[1],
+    );
+    ask.chat.from = "@claude#alpha".to_owned();
+    let mut other = with_agent(
+        linked(entry("2026-06-28T04:02:00Z", "open B"), Some(2), &[]),
+        agent_key_for("codex", "sess-2"),
+    );
+    other.chat.to = Some("@codex#beta".to_owned());
+    let mut reply = with_agent(
+        linked(
+            assistant_entry("2026-06-28T04:03:00Z", "B reply"),
+            None,
+            &[2],
+        ),
+        agent_key_for("codex", "sess-2"),
+    );
+    reply.chat.from = "@codex#beta".to_owned();
+    let mut answer = identified_ask_entry(
+        TranscriptKind::Answer,
+        "2026-06-28T04:04:00Z",
+        "safe result",
+        1,
+    );
+    answer.chat.to = Some("@claude#alpha".to_owned());
+    follow_view(vec![opener, ask, other, reply, answer])
+}
+
+fn rendered_view(view: &RenderedChat) -> String {
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_lines_to(&mut out, view, &TimeZone::UTC, Prose::Raw).unwrap();
+    String::from_utf8(out.into_inner()).unwrap()
+}
+
 #[test]
-fn answer_without_matching_agent_ask_stays_plain() {
+fn multi_lane_answer_stays_inside_its_ask_block() {
+    let view = interleaved_ask_view();
+    let display = entries_for_view(&view);
+    let ask = display
+        .iter()
+        .find(|entry| entry.source_index == 1)
+        .unwrap();
+    let answer = display
+        .iter()
+        .find(|entry| entry.source_index == 4)
+        .unwrap();
+    assert_eq!(answer.block, ask.block);
+    assert_eq!(answer.lane, ask.lane);
+    let out = rendered_view(&view);
+    assert_eq!(out.matches("safe result").count(), 1, "{out}");
+    assert!(out.contains("│ │ ● safe result — user"), "{out}");
+    assert!(
+        out.find("safe result").unwrap() < out.find("open B").unwrap(),
+        "{out}"
+    );
+}
+
+#[test]
+fn tail_cut_keeps_or_drops_the_ask_and_answer_together() {
+    let mut view = interleaved_ask_view();
+    view.last = Some(2);
+    let out = rendered_view(&view);
+    assert!(
+        !out.contains("A question?") && !out.contains("safe result"),
+        "{out}"
+    );
+    assert_eq!(
+        selected_chat_lines(&view)
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        ["open B", "B reply"]
+    );
+    view.last = Some(3);
+    let out = rendered_view(&view);
+    assert!(out.contains("│ │ ● safe result — user"), "{out}");
+    assert_eq!(selected_chat_lines(&view).len(), 5);
+}
+
+#[test]
+fn tail_counts_a_folded_pair_as_one_card() {
+    let mut view = follow_view(vec![
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:00:00Z",
+            "Counted question?",
+            1,
+        ),
+        identified_ask_entry(
+            TranscriptKind::Answer,
+            "2026-06-28T04:01:00Z",
+            "counted choice",
+            1,
+        ),
+        entry("2026-06-28T04:02:00Z", "later prompt"),
+    ]);
+    view.last = Some(2);
+    assert!(rendered_view(&view).contains("│ ● counted choice — user"));
+    assert_eq!(selected_chat_lines(&view).len(), 3);
+}
+
+#[test]
+fn default_hint_counts_cards_not_folded_answer_rows() {
+    let mut view = interleaved_ask_view();
+    view.last = Some(2);
+    assert_eq!(
+        default_bound_hint(&view, None).as_deref(),
+        Some("⋯ last 2 of 4 entries · -n 0 for all")
+    );
+}
+
+#[test]
+fn answer_archive_flag_follows_its_ask() {
+    let mut view = interleaved_ask_view();
+    view.archive_prefix = 2;
+    let entries = entries_for_view(&view);
+    assert!(
+        entries
+            .iter()
+            .find(|entry| entry.source_index == 4)
+            .unwrap()
+            .archived
+    );
+    let out = rendered_view(&view);
+    assert!(
+        out.find("safe result").unwrap() < out.find("Live ·").unwrap(),
+        "{out}"
+    );
+}
+
+#[test]
+fn follow_answer_reprints_the_answered_ask_card() {
+    let view = interleaved_ask_view();
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_selected_lines_to(&mut out, &view, &[4], &TimeZone::UTC, Prose::Raw).unwrap();
+    let out = String::from_utf8(out.into_inner()).unwrap();
+    assert!(
+        out.contains("A question?") && out.contains("│ │ ● safe result — user"),
+        "{out}"
+    );
+    assert!(!out.contains("open A") && !out.contains("open B"), "{out}");
+}
+
+#[test]
+fn answer_id_selects_its_ask_instead_of_the_latest_question() {
+    let view = follow_view(vec![
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:00:00Z",
+            "First question?",
+            1,
+        ),
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:01:00Z",
+            "Second question?",
+            2,
+        ),
+        identified_ask_entry(
+            TranscriptKind::Answer,
+            "2026-06-28T04:02:00Z",
+            "first choice",
+            1,
+        ),
+    ]);
+    let out = rendered_view(&view);
+    assert!(
+        out.find("first choice").unwrap() < out.find("Second question?").unwrap(),
+        "{out}"
+    );
+    assert_eq!(out.matches("first choice").count(), 1, "{out}");
+}
+
+#[test]
+fn idless_answers_choose_the_latest_earlier_unanswered_ask() {
+    let view = follow_view(vec![
+        ask_entry("2026-06-28T04:00:00Z", "First question?"),
+        ask_entry("2026-06-28T04:01:00Z", "Second question?"),
+        answer_entry("2026-06-28T04:02:00Z", "second choice"),
+        answer_entry("2026-06-28T04:03:00Z", "first choice"),
+    ]);
+    let out = rendered_view(&view);
+    assert!(
+        out.find("first choice").unwrap() < out.find("Second question?").unwrap(),
+        "{out}"
+    );
+    assert!(
+        out.find("second choice").unwrap() > out.find("Second question?").unwrap(),
+        "{out}"
+    );
+}
+
+#[test]
+fn unmatched_answer_id_renders_its_own_recorded_question() {
+    let view = follow_view(vec![
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:00:00Z",
+            "Available question?",
+            1,
+        ),
+        recorded_answer_question(
+            identified_ask_entry(
+                TranscriptKind::Answer,
+                "2026-06-28T04:01:00Z",
+                "orphan choice",
+                99,
+            ),
+            "Missing question?",
+        ),
+    ]);
+    let out = rendered_view(&view);
+    assert!(
+        out.contains("│ Available question?\n│ ◌ unanswered"),
+        "{out}"
+    );
+    assert!(
+        out.contains(" user  → @claude")
+            && out.contains("│ Missing question?\n│ ● orphan choice — user"),
+        "{out}"
+    );
+}
+
+#[test]
+fn answer_never_pairs_with_a_future_ask_or_another_id() {
+    let view = follow_view(vec![
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:00:00Z",
+            "Available question?",
+            1,
+        ),
+        identified_ask_entry(
+            TranscriptKind::Answer,
+            "2026-06-28T04:01:00Z",
+            "early choice",
+            2,
+        ),
+        identified_ask_entry(
+            TranscriptKind::Ask,
+            "2026-06-28T04:02:00Z",
+            "Future question?",
+            2,
+        ),
+    ]);
+    let out = rendered_view(&view);
+    assert_eq!(out.matches("◌ unanswered").count(), 2, "{out}");
+    assert!(out.contains("\nearly choice"), "{out}");
+}
+
+#[test]
+fn threading_a_future_ask_earlier_does_not_make_it_an_answer_target() {
+    let view = follow_view(vec![
+        linked(entry("2026-06-28T04:00:00Z", "open A"), Some(1), &[]),
+        with_agent(
+            entry("2026-06-28T04:01:00Z", "open B"),
+            agent_key_for("codex", "sess-2"),
+        ),
+        answer_entry("2026-06-28T04:02:00Z", "early choice"),
+        linked(
+            ask_entry("2026-06-28T04:03:00Z", "Future question?"),
+            None,
+            &[1],
+        ),
+    ]);
+    let out = rendered_view(&view);
+    assert!(
+        out.contains("│ │ Future question?\n│ │ ◌ unanswered"),
+        "{out}"
+    );
+    assert!(out.contains("\nearly choice"), "{out}");
+}
+
+#[test]
+fn flat_tail_renders_the_cut_answers_recorded_question() {
+    let mut view = interleaved_ask_view();
+    view.entries[4] = recorded_answer_question(view.entries[4].clone(), "A question?");
+    view.flat = true;
+    view.last = Some(1);
+    let out = rendered_view(&view);
+    assert!(
+        out.contains("│ A question?\n│ ● safe result — user"),
+        "{out}"
+    );
+    assert!(!out.contains("open A") && !out.contains("open B"), "{out}");
+}
+
+#[test]
+fn user_flip_after_an_answer_stays_with_the_live_conversation() {
+    let mut view = interleaved_ask_view();
+    view.entries.push(flip_entry(
+        "2026-06-28T04:05:00Z",
+        "user",
+        Some("Plan"),
+        "Implement",
+        None,
+    ));
+    let entries = entries_for_view(&view);
+    let flip = entries
+        .iter()
+        .find(|entry| entry.source_index == 5)
+        .unwrap();
+    let live = entries
+        .iter()
+        .find(|entry| entry.source_index == 2)
+        .unwrap();
+    assert_eq!(flip.block, live.block);
+    let out = rendered_view(&view);
+    assert!(
+        out.find("⇢ Plan → Implement").unwrap() > out.find("open B").unwrap(),
+        "{out}"
+    );
+}
+
+#[test]
+fn answer_without_matching_agent_ask_renders_a_card() {
     let ask = ask_entry("2026-06-28T18:00:00Z", "Native question?");
     let mut answer = with_agent(
         answer_entry("2026-06-28T18:01:00Z", "allow"),
         agent_key_for("codex", "sess-2"),
     );
     answer.chat.to = Some("@codex".to_owned());
+    answer = recorded_answer_question(answer, "Lost question?");
 
-    let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
+    let out = rendered_view(&follow_view(vec![ask, answer]));
 
     assert!(out.contains("│ Native question?\n│ ◌ unanswered"), "{out}");
     assert!(out.contains(" user  → @codex"), "{out}");
+    assert!(out.contains("│ Lost question?\n│ ● allow — user"), "{out}");
+}
+
+#[test]
+fn answer_without_recorded_question_stays_plain() {
+    let out = rendered_view(&follow_view(vec![answer_entry(
+        "2026-06-28T18:01:00Z",
+        "allow",
+    )]));
+    assert!(out.contains(" user  → @claude"), "{out}");
     assert!(out.contains("\nallow"), "{out}");
 }
 

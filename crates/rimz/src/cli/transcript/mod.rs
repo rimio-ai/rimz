@@ -12,8 +12,8 @@ use serde::Serialize;
 use super::{GlobalFlags, current_channel};
 use crate::cli::render;
 use crate::cli::render::prose::Prose;
-use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::transcript::{AskOption, EntryOrigin, TranscriptEntry, TranscriptKind};
+use rimz::ids::{AgentKind, AgentSessionId, AskId};
+use rimz::transcript::{AskOption, AskQuestion, EntryOrigin, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 const DEFAULT_TAIL_ENTRIES: usize = 20;
@@ -130,6 +130,7 @@ enum LineSource {
     Log {
         kind: TranscriptKind,
         agent: AgentKey,
+        id: Option<AskId>,
         /// The turn's latest-opener fallback pointed at a hidden harness
         /// opener, so no older visible opener may stand in for it.
         opener_hidden: bool,
@@ -349,8 +350,12 @@ fn default_bound_hint(view: &RenderedChat, last: Option<usize>) -> Option<String
     if last.is_some() {
         return None;
     }
-    let total = thread::assemble_threads(&view.entries, view.archive_prefix, view.flat).len();
-    let shown = entries_for_view(view).len();
+    let total = display_count(&thread::assemble_threads(
+        &view.entries,
+        view.archive_prefix,
+        view.flat,
+    ));
+    let shown = display_count(&entries_for_view(view));
     (shown < total).then(|| format!("⋯ last {shown} of {total} entries · -n 0 for all"))
 }
 
@@ -627,11 +632,18 @@ fn chat_view_with_mode(
     let (shown, archive_prefix) = if show_archive {
         (entries, split)
     } else {
-        archived_hidden = split;
-        newest_archived_at = split
-            .checked_sub(1)
-            .and_then(|index| entries[index].chat.arrived_at());
-        let current = entries.split_off(split);
+        let answers = answer_asks(entries.iter().enumerate());
+        let mut current = Vec::new();
+        for (index, entry) in entries.into_iter().enumerate() {
+            if answers.get(&index).copied().unwrap_or(index) < split {
+                archived_hidden += 1;
+                if index < split {
+                    newest_archived_at = newest_archived_at.max(entry.chat.arrived_at());
+                }
+            } else {
+                current.push(entry);
+            }
+        }
         (current, 0)
     };
 
@@ -676,7 +688,12 @@ fn render_selected_lines_to(
     tz: &TimeZone,
     prose: Prose,
 ) -> Result<()> {
-    let source_indexes: HashSet<_> = source_indexes.iter().copied().collect();
+    let mut source_indexes: HashSet<_> = source_indexes.iter().copied().collect();
+    for (answer, ask) in answer_asks(view.entries.iter().enumerate()) {
+        if source_indexes.contains(&answer) {
+            source_indexes.insert(ask);
+        }
+    }
     let entries = entries_for_view(view)
         .into_iter()
         .filter(|entry| source_indexes.contains(&entry.source_index))
@@ -702,6 +719,66 @@ fn archive_prefix(entries: &[RenderEntry], boundary: Option<jiff::Timestamp>) ->
             .count(),
         None => entries.len(),
     }
+}
+
+fn answer_asks<'a>(
+    entries: impl IntoIterator<Item = (usize, &'a RenderEntry)>,
+) -> HashMap<usize, usize> {
+    let mut by_id = HashMap::new();
+    let mut open_by_agent = HashMap::<&AgentKey, Vec<usize>>::new();
+    let mut answered = HashSet::new();
+    let mut pairs = HashMap::new();
+    for (index, entry) in entries {
+        let LineSource::Log {
+            kind, agent, id, ..
+        } = &entry.source
+        else {
+            continue;
+        };
+        match kind {
+            TranscriptKind::Ask => {
+                open_by_agent.entry(agent).or_default().push(index);
+                if let Some(id) = id {
+                    by_id.insert(id, index);
+                }
+            }
+            TranscriptKind::Answer => {
+                let ask = if let Some(id) = id {
+                    by_id.get(id).copied().filter(|ask| !answered.contains(ask))
+                } else {
+                    open_by_agent.get_mut(agent).and_then(|open| {
+                        while let Some(ask) = open.pop() {
+                            if !answered.contains(&ask) {
+                                return Some(ask);
+                            }
+                        }
+                        None
+                    })
+                };
+                if let Some(ask) = ask {
+                    answered.insert(ask);
+                    pairs.insert(index, ask);
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs
+}
+
+fn display_answer_asks(entries: &[thread::DisplayEntry]) -> HashMap<usize, usize> {
+    // Thread placement may move asks past one another; resolve in source order.
+    let mut ordered = entries.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(_, display)| display.source_index);
+    answer_asks(
+        ordered
+            .into_iter()
+            .map(|(index, display)| (index, &display.entry)),
+    )
+}
+
+fn display_count(entries: &[thread::DisplayEntry]) -> usize {
+    entries.len() - display_answer_asks(entries).len()
 }
 
 fn write_empty_chat(json: bool, message: &str) -> Result<()> {

@@ -70,7 +70,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | `[TARGET]` | What to read; see [Choose what to read](#choose-what-to-read). |
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
 | `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; `0` reads all entries. The human view defaults to `20`; JSON has no default bound. See [Tail with `--last`](#tail-with---last). |
-| `-f, --follow` | Print the first view, then every entry that enters the view after it once, in view order, including across an agent restart, checking once a second. Conflicts with `--all`. |
+| `-f, --follow` | Print the first view, then new entries in view order, including across an agent restart, checking once a second. An answer reprints its ask card. Conflicts with `--all`. |
 | `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
 | `--flat` | Print entries in arrival order instead of grouping replies into threads. |
 | `--json` | Emit JSON; see [JSON output](#json-output). |
@@ -131,6 +131,8 @@ On a styled terminal, bodies render markdown (headings, emphasis, links, lists, 
 
 A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — user`. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
 
+An answer stays with its ask, even when another channel's conversation intervenes. If the question is no longer in the log, the answer prints as its own card under a `user → @agent  HH:MM` header, with the recorded question and `● <chosen> — user`. An answer without recorded question text prints as a plain body instead. Following reprints the ask card when its answer arrives.
+
 ### Stage flips
 
 A [`rimz teams flip`](./teams.md#flip-the-board-to-the-next-stage) prints inside the channel's conversation as a flip line:
@@ -141,7 +143,7 @@ A [`rimz teams flip`](./teams.md#flip-the-board-to-the-next-stage) prints inside
 ⇢ Plan → Implement  14:13
 ```
 
-The transition prints in the accent tone and the note faint, with further note lines hanging beneath. A flip continues its flipper's most recent line in the same channel when that line is within 5 minutes and belongs to the latest conversation, adding its own `HH:MM`; otherwise it opens a block under its own header. A flip with no prior stage reads `⇢ Plan · opened`, and a flip to the current stage reads `⇢ Plan · re-opened`. Flips come from the [`team.stage` signal](./teams.md#the-teamstage-signal) in the active event log, so flips older than the last event-log rotation do not print.
+The transition prints in the accent tone and the note faint, with further note lines hanging beneath. A flip continues its flipper's most recent non-answer line in the same channel when that line is within 5 minutes and belongs to the latest conversation, adding its own `HH:MM`; otherwise it opens a block under its own header. A flip with no prior stage reads `⇢ Plan · opened`, and a flip to the current stage reads `⇢ Plan · re-opened`. Flips come from the [`team.stage` signal](./teams.md#the-teamstage-signal) in the active event log, so flips older than the last event-log rotation do not print.
 
 ## What the human view hides
 
@@ -157,7 +159,7 @@ Each hidden entry takes with it the agent's replies and error output in the turn
 
 ## Tail with `--last`
 
-Without `-n`, the human view keeps the last `20` entries in display order, after hidden entries are removed. This bound also applies with `--all`, `--flat`, and to the first view when following. `-n 0` reads every entry; `-n N` chooses another bound. One entry is one message, however many lines its body takes, and an answer folded into an ask card still counts as one. When the cut lands inside a thread, the tail widens back to the displayed thread's first line so the conversation keeps its opener.
+Without `-n`, the human view keeps the last `20` entries in display order, after hidden entries are removed. This bound also applies with `--all`, `--flat`, and to the first view when following. `-n 0` reads every entry; `-n N` chooses another bound. One entry is one message, however many lines its body takes; an ask card and its folded answer together count as one. An answer goes with its ask: a tail that drops an old ask also drops its answer, however recent. An answer to an archived ask likewise stays in the archive. The JSON tail keeps or drops the same pair. When the cut lands inside a thread, the tail widens back to the displayed thread's first line so the conversation keeps its opener. `--flat` keeps arrival order instead, so a cut that leaves an answer without its ask uses the answer-card fallback.
 
 When the default bound hides entries, a separate faint line on stderr counts the displayed entries before and after the cut:
 
