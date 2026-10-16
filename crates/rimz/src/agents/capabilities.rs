@@ -46,6 +46,11 @@ pub trait CoreCapability: Send + Sync {
 
 #[doc(hidden)]
 pub trait HookCapability: CoreCapability {
+    /// Whether hook children inherit the agent's launch environment.
+    fn hook_inherits_env(&self) -> bool {
+        true
+    }
+
     /// Recognize an unambiguous native envelope without decoding it or reading provider state.
     fn recognizes_hook_payload(&self, _payload: &Value) -> bool {
         false

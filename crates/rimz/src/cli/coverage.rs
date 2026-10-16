@@ -394,7 +394,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "minimax"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -563,6 +564,21 @@ mod tests {
                 "plan", "answer", "compact", "remind", "bgsh", "spend", "remote"
             ]
         );
+
+        let minimax = agent_cells(&matrix, "minimax");
+        assert_eq!(count(&minimax, MatrixCellState::Ok), 7);
+        assert_eq!(count(&minimax, MatrixCellState::Partial), 2);
+        assert_eq!(count(&minimax, MatrixCellState::Absent), 10);
+        assert_eq!(
+            agent_labels(&matrix, "minimax", MatrixCellState::Partial),
+            ["idle", "rich"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "minimax", MatrixCellState::Absent),
+            [
+                "plan", "ask", "answer", "sub", "bg", "bgsh", "usage", "live$", "spend", "remote"
+            ]
+        );
     }
 
     #[test]
@@ -595,7 +611,8 @@ mod tests {
                 "droid",
                 "kiro",
                 "qwen",
-                "grok"
+                "grok",
+                "minimax"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -617,6 +634,7 @@ mod tests {
                 MatrixCellState::Ok,      // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Ok,      // minimax
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -638,6 +656,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Ok,      // grok
+                MatrixCellState::Absent,  // minimax
             ]
         );
 
@@ -658,6 +677,7 @@ mod tests {
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
                 MatrixCellState::Partial, // grok
+                MatrixCellState::Absent,  // minimax
             ]
         );
     }

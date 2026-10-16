@@ -22,6 +22,7 @@ pub(super) mod grok;
 mod install_report;
 pub(super) mod kimi;
 pub(super) mod kiro;
+pub(super) mod minimax;
 pub(super) mod opencode;
 pub(super) mod pi;
 pub(super) mod plugin;

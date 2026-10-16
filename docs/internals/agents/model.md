@@ -24,7 +24,7 @@ Everything on this page is provider-neutral. An integration that emits well-form
 
 | Term | Meaning |
 | --- | --- |
-| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
+| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `minimax`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
 | session | Identity: the id the agent's own hooks report. Every durable fact attaches to a session, keyed `(kind, agent_id)`. |
 | agent instance | Presence: a live local pane running a known agent right now, read from the multiplexer on every snapshot. Joining instances to sessions is [instances.md](./instances.md). |
 | rollup entry | The one `AgentState` per session that store replay derives. The sidebar enriches and renders it. |

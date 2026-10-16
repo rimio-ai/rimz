@@ -340,7 +340,7 @@ fn resolve_provider_panels(
 }
 
 /// Order two panels by the registry's canonical display order — each kind's slot
-/// in [`known_kinds`](crate::agents::known_kinds) (`claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok`),
+/// in [`known_kinds`](crate::agents::known_kinds) (`claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, minimax`),
 /// an unregistered kind sorting last by name. The default dashboard and `all`
 /// expansion both use this, so the row reads in the canonical agent order rather
 /// than an alphabetical accident; an explicit `provider_list` overrides it.

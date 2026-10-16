@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ has a built-in adapter for thirteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
+RimZ has a built-in adapter for fourteen coding agents. Each adapter reads the agent's verified hooks, transcripts, or local files, and turns the available signals into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
 Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
@@ -8,7 +8,7 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build, MiniMax Code | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -71,6 +71,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| MiniMax Code | ◐ | ◐ | ✗ | ✗ | ◐ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -145,6 +146,15 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Idle notifications rest the card only when their timestamp is newer than its last activity.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
 
+### MiniMax Code
+
+- Launch with `minimax` or its alias `mcode`; RimZ runs the stock `mcode` CLI. Normal turns, root tool activity, and the selected model reach the card. Failed or cancelled turns leave it working until another prompt or session end.
+- Root tool approvals raise Waiting and route you to MiniMax's pane. Answer there; child approvals, native questions, and plan approvals are not reported, and `rimz answer` is unsupported.
+- Context gauges, token counts, dollars, conversation history, account usage, and separate native child cards are unavailable.
+- RimZ adds no permission-mode flags. MiniMax keeps the mode in its `config.yaml` (default `auto`); change it with `/permission` or Alt+M. Plan Mode has no verified launch switch.
+- If the plugin was disabled in MiniMax, run `mcode plugin enable rimz@local` in the same data-directory environment. RimZ checks installed files, not MiniMax's private disabled-plugin setting.
+- Launch prompts starting with `-` use a separator. Prompts equal to MiniMax subcommands, such as `exec`, still dispatch those commands instead of submitting text.
+
 ## Config homes and skills
 
 Each built-in agent keeps its settings, sessions, and credentials in a config home. RimZ reads from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation).
@@ -164,11 +174,12 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
+| MiniMax Code | `~/.minimax` | nonempty `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR` | none | refused | none |
 | Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
 
-Claude Code and Codex also run under named accounts: RimZ sets the override variable to a separate config home per account when a room launches that provider. Other agents always use their default home. See [provider accounts](../guide/accounts.md).
+A named provider account sets the adapter's home override to a separate directory when a room launches it. MiniMax uses `MINIMAX_DATA_DIR`, relocating configuration, credentials, sessions, and plugins together; an explicit data-directory variable also disables MiniMax's Git auto-configuration. See [provider accounts](../guide/accounts.md).
 
 Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host Claude makes unlisted skills user-only; host Codex hides them, including explicit invocation. Other host providers warn and run unrestricted. Duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
@@ -199,6 +210,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Qwen | `qwen --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
+| MiniMax Code | `mcode --session` | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
@@ -220,6 +232,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| MiniMax Code | none | none | none | none |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
@@ -260,6 +273,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Qwen | `--model <model>` | refused |
 | Kimi | `--model <model>` | refused |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
+| MiniMax Code | `--model <provider/model[#variant]>` | refused |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
@@ -291,6 +305,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Pi | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
+| MiniMax Code | ✗ | launch reminders append through `--append-system-prompt`; native replacement flags require raw `args` |
 | OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok | ✗ | no verified replacement flag |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
@@ -337,6 +352,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| MiniMax Code | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✗ | ✗ | ◐ | ✓ | ✗ | ✓ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -383,6 +399,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| MiniMax Code | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ✗ | ✗ | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
@@ -407,6 +424,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Qwen | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
+| MiniMax Code | [adapter_minimax.md](../internals/agents/adapter_minimax.md) | [minimax-reference.md](../externals/agent-adapter/minimax-reference.md) |
 
 ## Agents not yet supported
 
