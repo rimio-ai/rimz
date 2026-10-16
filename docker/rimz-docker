@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+here="$(pwd -P)"
+checkout="$(git rev-parse --show-toplevel 2>/dev/null || printf '%s' "$here")"
+repo="$checkout"
+common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+case "$common" in
+    */.git) repo="${common%/.git}" ;;
+esac
+worktrees="${repo}-worktrees"
+if ! mkdir -p "$worktrees" 2>/dev/null; then
+    printf 'rimz-docker: cannot create %s; worktrees made in the container stay inside it.\n' "$worktrees" >&2
+    worktrees=
+fi
+
+zone="${TZ-}"
+if [ "${TZ+x}" != x ]; then
+    localtime="$(readlink /etc/localtime || true)"
+    case "$localtime" in
+        */zoneinfo/*) zone="${localtime#*/zoneinfo/}" ;;
+        *)
+            if [ -r /etc/timezone ]; then
+                IFS= read -r zone </etc/timezone || true
+            fi
+            ;;
+    esac
+fi
+
+author_name="$(git config --get user.name || true)"
+author_email="$(git config --get user.email || true)"
+mode="${1:-shell}"
+image="${RIMZ_DOCKER_IMAGE:-ghcr.io/rimio-ai/rimz}"
+set -- "$image" "$@"
+if [ "$mode" = web ]; then
+    set -- -p 127.0.0.1:8200:8200 "$@"
+fi
+if [ -n "$author_name" ] && [ -n "$author_email" ]; then
+    set -- -e "GIT_AUTHOR_NAME=$author_name" -e "GIT_AUTHOR_EMAIL=$author_email" \
+        -e "GIT_COMMITTER_NAME=$author_name" -e "GIT_COMMITTER_EMAIL=$author_email" "$@"
+fi
+if [ -n "$zone" ]; then
+    set -- -e "TZ=$zone" "$@"
+fi
+case "$checkout/" in
+    "$repo/"*) ;;
+    "$worktrees/"*) [ -n "$worktrees" ] || set -- -v "$checkout:$checkout" "$@" ;;
+    *) set -- -v "$checkout:$checkout" "$@" ;;
+esac
+if [ -n "$worktrees" ]; then
+    set -- -v "$worktrees:$worktrees" "$@"
+fi
+set -- -v "$repo:$repo" -v rimz-home:/home/rimz \
+    -w "$here" -e TERM=xterm-256color -e COLORTERM "$@"
+if [ -t 0 ]; then
+    set -- -it "$@"
+fi
+exec docker run --rm --init "$@"
