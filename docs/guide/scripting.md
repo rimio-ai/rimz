@@ -11,13 +11,13 @@ rimz agents claude -p "Summarize what changed on this branch."   # the claude -p
 rimz agents codex -p "Prepare the release checklist."            # the same grammar, any agent
 ```
 
-Two things have to be true before the first run. RimZ's reporting hooks must be installed and trusted for that agent, because the hook is how a run learns its turn ended; `rimz doctor` reports their state, and [set up your machine](./setup.md#install-agent-hooks) walks the one-time consent. And a Codex run must not stop at a folder-trust screen: trust the project in Codex before starting a supervised run. A saved-untrusted folder shows Folder access on every launch, so RimZ refuses it without changing that decision. A projectless folder without a saved decision passes.
+Three things have to be true before the first run. RimZ's reporting hooks must be installed and trusted for that agent, because the hook is how a run learns its turn ended; `rimz doctor` reports their state, and [set up your machine](./setup.md#install-agent-hooks) walks the one-time consent. And a Codex run must not stop at a folder-trust screen: trust the project in Codex before starting a supervised run. A saved-untrusted folder shows Folder access on every launch, so RimZ refuses it without changing that decision. A projectless folder without a saved decision passes. And the run must not start in your home directory (`$HOME`), for any agent: nobody is there to answer a folder-trust prompt, so run it from a project directory or pass `--cwd <DIR>`.
 
 ## What a run does on your machine
 
 `-p` adds no engine of its own. It sequences pieces RimZ already has, in this order:
 
-1. It checks the preconditions: the agent's hooks installed and trusted, Codex's directory trust, and the provider's command resolving on your `PATH` after your shell starts. A failure here stops the command before the multiplexer is touched.
+1. It checks the preconditions: the agent's hooks installed and trusted, Codex's directory trust, a working directory other than your home directory, and the provider's command resolving on your `PATH` after your shell starts. A failure here stops the command before the multiplexer is touched.
 2. It checks your dollar caps and the provider account's quota window, then writes a durable run record, a JSON file under `~/.rimz/ws/<workspace-dir>/owned/runs/`.
 3. It opens one pane in your Zellij or tmux running the agent's own CLI with your prompt: a split beside you when you run it inside the room, a new tab when the caller is outside it. This is the same launch as an interactive `rimz agents <kind>`.
 4. It blocks until the work ends, then prints the answer, exits with the run's code, and closes the pane.
