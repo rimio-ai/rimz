@@ -610,6 +610,12 @@ fn landed_click_pins_chip_when_receipt_outgrows_viewport() {
         .line_for_target(&HitTarget::ToggleLanded)
         .unwrap();
     assert_eq!(usize::from(chip), ui.scroll_zone_top);
+    let painted = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, height);
+    assert_eq!(
+        painted.top_height + painted.bottom_height + 4,
+        usize::from(height),
+        "the scroll zone must stay 4 rows, shorter than chip plus receipt"
+    );
 }
 
 #[test]
