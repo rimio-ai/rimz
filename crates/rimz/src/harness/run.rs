@@ -409,12 +409,37 @@ fn update_record<T>(
     run_id: &RunId,
     update: impl FnOnce(&mut RunRecord, Timestamp) -> Result<RecordMutation<T>>,
 ) -> Result<(RunRecord, T)> {
-    let guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let (record, outcome, newly_terminal) = write_record(paths, run_id, update)?;
+    if newly_terminal {
+        wake_workflow(paths, &record);
+    }
+    Ok((record, outcome))
+}
+
+fn wake_workflow(paths: &StatePaths, record: &RunRecord) {
+    let Some(attempt) = &record.workflow else {
+        return;
+    };
+    let wake = (|| {
+        let workflow = crate::store::workflow::load(&paths.workflow(&attempt.run))?;
+        crate::harness::workflow::wake_run(&workflow.project_root, &attempt.run)
+    })();
+    if let Err(error) = wake {
+        tracing::warn!(run_id = %record.run_id, %error, "could not wake workflow attempt");
+    }
+}
+
+fn write_record<T>(
+    paths: &StatePaths,
+    run_id: &RunId,
+    update: impl FnOnce(&mut RunRecord, Timestamp) -> Result<RecordMutation<T>>,
+) -> Result<(RunRecord, T, bool)> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut record = load(paths, run_id)?;
     let was_terminal = record.status.is_terminal();
     let now = Timestamp::now();
     match update(&mut record, now)? {
-        RecordMutation::Keep(outcome) => Ok((record, outcome)),
+        RecordMutation::Keep(outcome) => Ok((record, outcome, false)),
         RecordMutation::Write(outcome) => {
             record.updated_at = now;
             // Waiters read the record unlocked, so a terminal record must imply its file.
@@ -430,20 +455,8 @@ fn update_record<T>(
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
             }
             crate::store::run::write(&paths.runs_dir, &record)?;
-            drop(guard);
-            if !was_terminal
-                && record.status.is_terminal()
-                && let Some(attempt) = &record.workflow
-            {
-                let wake = (|| {
-                    let workflow = crate::store::workflow::load(&paths.workflow(&attempt.run))?;
-                    crate::harness::workflow::wake_run(&workflow.project_root, &attempt.run)
-                })();
-                if let Err(error) = wake {
-                    tracing::warn!(run_id = %record.run_id, %error, "could not wake workflow attempt");
-                }
-            }
-            Ok((record, outcome))
+            let newly_terminal = !was_terminal && record.status.is_terminal();
+            Ok((record, outcome, newly_terminal))
         }
     }
 }
@@ -843,9 +856,11 @@ fn mark_terminal(
 ///
 /// Returns `Some(record)` only when this observation newly makes the run
 /// terminal, so callers can send exactly one wakeup datagram.
+/// The caller also owes the workflow wake after settling spend; hook callers
+/// should use [`settle_lifecycle`] to perform both.
 ///
 /// The owed callback runs only for a root observation classified Completed,
-/// before `update_record` takes the workspace lock; its lock-free reads must
+/// before the writer takes the workspace lock; its lock-free reads must
 /// never run inside that lock.
 pub fn record_lifecycle(
     paths: &StatePaths,
@@ -869,7 +884,7 @@ pub fn record_lifecycle(
     } else {
         None
     };
-    let (record, transition) = update_record(paths, run_id, |record, now| {
+    let (record, transition, _) = write_record(paths, run_id, |record, now| {
         Ok(
             match fold_lifecycle(record, kind, observation, last_message, now, owed) {
                 LifecycleFold::Ignored => RecordMutation::Keep(LifecycleFold::Ignored),
@@ -910,6 +925,7 @@ pub fn settle_lifecycle(
     Ok(record.map(|record| {
         // Spend is session-cumulative, so it would overstate a later peer turn.
         if record.peer.is_some() {
+            wake_workflow(store.paths(), &record);
             return record;
         }
         let cost_usd = record
@@ -933,7 +949,7 @@ pub fn settle_lifecycle(
                     &prices,
                 )
             });
-        record_spend(
+        let record = record_spend(
             store.paths(),
             &record.run_id,
             cost_usd,
@@ -943,7 +959,9 @@ pub fn settle_lifecycle(
         .unwrap_or_else(|err| {
             tracing::warn!(run_id = %record.run_id, error = %err, "could not record supervised run spend");
             record
-        })
+        });
+        wake_workflow(store.paths(), &record);
+        record
     }))
 }
 
