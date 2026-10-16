@@ -404,6 +404,10 @@ criteria = "safe-to-run"
 version = "1.0.5"
 criteria = "safe-to-run"
 
+[[exemptions.dyn-clone]]
+version = "1.0.20"
+criteria = "safe-to-deploy"
+
 [[exemptions.encode_unicode]]
 version = "1.0.0"
 criteria = "safe-to-run"
@@ -1036,6 +1040,14 @@ criteria = "safe-to-run"
 version = "0.5.2"
 criteria = "safe-to-run"
 
+[[exemptions.ref-cast]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+
+[[exemptions.ref-cast-impl]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+
 [[exemptions.regex]]
 version = "1.12.4"
 criteria = "safe-to-deploy"
@@ -1116,6 +1128,14 @@ criteria = "safe-to-deploy"
 version = "0.1.29"
 criteria = "safe-to-run"
 
+[[exemptions.schemars]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.schemars_derive]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.scip]]
 version = "0.9.0"
 criteria = "safe-to-run"
@@ -1154,6 +1174,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.serde-saphyr]]
 version = "1.2.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.serde_derive_internals]]
+version = "0.30.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.serde_ignored]]

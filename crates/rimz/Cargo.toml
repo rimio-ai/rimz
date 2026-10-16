@@ -175,6 +175,7 @@ serde.workspace = true
 serde-saphyr.workspace = true
 serde_ignored.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
 flate2.workspace = true
 tar.workspace = true
 foldhash.workspace = true
