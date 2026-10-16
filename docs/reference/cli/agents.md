@@ -714,7 +714,7 @@ A stopped agent's history stays readable while its provider transcript exists. P
 | `--all` | Every lane in the room. |
 | `--branch <BRANCH>` | Credit only agents observed on `BRANCH`. Default: the selected checkout's current branch. With `--all`, detached HEAD, or a scope spanning several checkouts, no branch filter applies unless you pass this flag. |
 | `--md` | Emit a collapsed `<details>` block for a pull-request body. |
-| `--json` | Emit the schema 7 document. Conflicts with `--md`. |
+| `--json` | Emit the schema 8 document. Conflicts with `--md`. |
 
 Which agents count:
 
@@ -729,11 +729,11 @@ Which agents count:
 The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted.
 
 - `effort` is active time and cost. Active time includes the seat and the pane-backed children it launched. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
-- `subagents` breaks that spend down by task as `{count} × {task}, … · {cost}`; the cost is already inside `effort`. Tasks come from provider-reported types and launch profiles, and missing or description-like types group as `other`.
+- `subagents` opens a block with `{n} runs · {subagent cost} of {member cost}`, followed by one row per kind as `{kind}  {count} × · {duration} active · {cost}`. Unavailable time or cost parts are omitted; one run reads `1 run`. Rows sort by cost, highest first (unpriced last), then count, then kind name. The breakdown is a share of `effort`, never added to it. Kinds come from provider-reported types and launch profiles, and missing or description-like types group as `other`. Per-kind active time sums retained sidecars across the pane-backed children's sessions only; native children contribute no separate time.
 - `activity` leads with asks, then tool calls.
 - `messages` reads `{n} from you · {n} from teammates · {n} to teammates`, excluding RimZ automation. Sent messages are credited by handle, so a message sent by an excluded session still credits the handle a counted session holds.
 
-A `Models` section follows the members: one row per model id the transcripts named (`unknown` where none), each `{cost} · {token split}`. It splits the same all-in spend by model, subagents included, so a member's heading model (its latest session's) can differ from the rows. Rows sort by cost, highest first (unpriced last), then by tokens, then by model id. A `Total` line ends the panel, except that a lone team group omits it because its caption already carries the totals.
+A `Models` section follows the members: one row per model id the transcripts named (`unknown` where none), each `{cost} · {token split} · {N} tok/s`, with throughput omitted when timing is unavailable. It splits the same all-in spend by model, subagents included, so a member's heading model (its latest session's) can differ from the rows. Throughput counts only this report's agents, dividing summed timed output by summed response durations per model, not averaging member rates. Rows sort by cost, highest first (unpriced last), then by tokens, then by model id. A `Total` line ends the panel, except that a lone team group omits it because its caption already carries the totals.
 
 ```console
 $ rimz agents attribution
@@ -742,16 +742,18 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
       effort:    17m active · $9.66
-      subagents: 2 × explorer, 1 × designer · $3.51
+      subagents: 3 runs · $3.51 of $9.66
+                 explorer  2 × · $2.40
+                 designer  1 × · $1.11
       activity:  46 tool calls
       messages:  1 from you · 3 from teammates · 7 to teammates
       tokens:    469.5k input, 83.9k output, 142.1k cache write, 7.6m cache read
 [...]
 ```
 
-`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} `` (with `unknown` outside the code span). Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
+`--md` emits the panel's figures and wording as a collapsed `<details>` block: a totals summary that links RimZ to its repository, member bullets under `**Agents**` as `` - **`{role or @handle}`** — {provider} `{model}@{effort}` ``, and model bullets under `**Models**` as `` - `{model id}` — {cost} · {token split} · {N} tok/s `` (with `unknown` outside the code span and throughput omitted without timing). A `subagents` bullet carries the run count and cost share, with nested kind bullets as `{kind}: {count} × · {duration} active · {cost}`, omitting unavailable parts. Multiple groups have captions as `` **`{team}` team** `` or `**Other agents**`. Identities, team names, and model ids sit in code spans so those names never mention a GitHub user in a pasted footnote. It omits the `branch` and `since` labels, and an empty scope emits nothing.
 
-The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time or cost figure is `null`, never zero or wall-clock time. Lists arrive in rendered order.
+The `--json` document has the keys `schema` (`8`), `generated_at`, `rimz_version`, `scope`, `groups`, `models`, and `totals`. A missing active-time, cost, or throughput figure is `null`, never a placeholder zero or wall-clock time. Lists arrive in rendered order.
 
 | Object | Fields |
 | --- | --- |
@@ -760,11 +762,11 @@ The `--json` document has the keys `schema` (`7`), `generated_at`, `rimz_version
 | member | `handle`, `role`, `name`, `kind`, `provider`, `model`, `effort`, `presence` (`live` or `exited`), `me`, `launch_ordinal`, `sessions`, `registered_at`, `last_activity`, `active_secs`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens`, `cost_usd`, `subagents`, `models` |
 | `messages` | `from_user`, `from_teammates`, `to_teammates` |
 | `tokens` | `input`, `output`, `cache_write`, `cache_read` |
-| subagent group | `task`, `count`, `cost_usd` |
-| model row | `model` (`null` when unnamed), `tokens`, `cost_usd` |
+| subagent group | `task`, `count`, `cost_usd`, `active_secs` (retained pane-backed child time only) |
+| model row | `model` (`null` when unnamed), `tokens`, `cost_usd`, `tokens_per_sec` (report-scoped response throughput) |
 | `totals` (group and document) | `agents`, `active_secs`, `wall_clock_secs`, `cost_usd`, `asks`, `asks_answered`, `tool_calls`, `compactions`, `messages`, `tokens` |
 
-`cost_usd`, `tokens`, and `active_secs` are all-in at every level; asks, tool calls, compactions, and messages count the member's own seat. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (`gc.older_than`, 7 days by default); a seat with no retained active-time records keeps its other figures with `active_secs` set to `null`.
+Member and total `cost_usd`, `tokens`, and `active_secs` are all-in; asks, tool calls, compactions, and messages count the member's own seat. Subagent rows split the included child effort, never add to totals. `sessions` counts the seat's own sessions, never children. A member's `models` splits that member's figures; the document's `models` is the list the panel and `--md` render, and groups carry none. Active time comes from per-session sidecars that `rimz gc` removes after its runtime retention (`gc.older_than`, 7 days by default); a seat or subagent kind with no retained active-time records keeps its other figures with `active_secs` set to `null`.
 
 #### `top`
 

@@ -173,14 +173,18 @@ forge team · 3 agents · 59m active · $42.72 · 10 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
       effort:    17m active · $9.66
-      subagents: 2 × explorer, 1 × designer · $3.51
+      subagents: 3 runs · $3.51 of $9.66
+                 explorer  2 × · $2.40
+                 designer  1 × · $1.11
       activity:  46 tool calls
       messages:  1 from you · 3 from teammates · 7 to teammates
       tokens:    469.5k input, 83.9k output, 142.1k cache write, 7.6m cache read
 
   @coder · Codex · gpt-6-astra@high
       effort:    33m active · $27.85
-      subagents: 8 × implementer, 1 × documenter · $11.38
+      subagents: 9 runs · $11.38 of $27.85
+                 implementer  8 × · 8m active · $10.38
+                 documenter   1 × · 2m active · $1.00
       activity:  234 tool calls
       messages:  5 from teammates · 13 to teammates
       tokens:    600.4k input, 95.6k output, 98.4k cache write, 18.9m cache read
@@ -192,13 +196,13 @@ forge team · 3 agents · 59m active · $42.72 · 10 messages (1 from you)
       tokens:   62 input, 37k output, 256.7k cache write, 3.4m cache read
 
 Models
-  gpt-6-astra:      $27.32 · 763.1k input, 81k output, 15.6m cache read
-  claude-opus-5:    $6.93 · 192 input, 65.5k output, 355.1k cache write, 7.7m cache read
-  claude-fable-5-1: $6.15 · 90 input, 45.5k output, 142.1k cache write, 4.1m cache read
-  gpt-5.6-terra:    $2.32 · 527k input, 39.1k output, 4m cache read
+  gpt-6-astra:      $27.32 · 763.1k input, 81k output, 15.6m cache read · 67 tok/s
+  claude-opus-5:    $6.93 · 192 input, 65.5k output, 355.1k cache write, 7.7m cache read · 41 tok/s
+  claude-fable-5-1: $6.15 · 90 input, 45.5k output, 142.1k cache write, 4.1m cache read · 33 tok/s
+  gpt-5.6-terra:    $2.32 · 527k input, 39.1k output, 4m cache read · 52 tok/s
 ```
 
-The report covers the agents that worked the checkout's current branch within the worktree's current life, teammates that exited on the way included. Every dollar and token figure is all-in for the member, its subagents counted in rather than added on, and `Models` splits that same spend by model, largest first. `--md` prints a collapsed block ready to paste into a pull-request body, and the [attribution reference](../reference/cli/agents.md#attribution) covers the other scopes, the branch evidence, and what the Markdown form leaves out.
+The report covers the agents that worked the checkout's current branch within the worktree's current life, teammates that exited on the way included. Every dollar and token figure is all-in for the member, its subagents counted in rather than added on. The per-kind subagent block shows a share of that member's figure, with active time for pane-backed children where available. `Models` splits the same spend by model, largest first, and shows response throughput over this report's agents when timing is available. `--md` prints a collapsed block ready to paste into a pull-request body, and the [attribution reference](../reference/cli/agents.md#attribution) covers the other scopes, the branch evidence, and what the Markdown form leaves out.
 
 **Find what is burning CPU or tokens.** When the machine gets loud, `rimz agents top` ranks the live fleet by the resources each agent's pane process tree is using. It streams by default; `--once` takes a sample and exits for a script:
 

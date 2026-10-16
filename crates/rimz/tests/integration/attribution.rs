@@ -418,7 +418,7 @@ fn attribution_credits_exited_team_members_and_transcript_spend() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
-    assert_eq!(report["schema"], 7);
+    assert_eq!(report["schema"], 8);
     assert_eq!(
         report["groups"].as_array().map(Vec::len),
         Some(1),
@@ -575,7 +575,7 @@ fn attribution_cli_credits_claude_subagent_companions() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("attribution json");
 
-    assert_eq!(report["schema"], 7);
+    assert_eq!(report["schema"], 8);
     assert_eq!(
         report["models"],
         serde_json::json!([
@@ -583,11 +583,13 @@ fn attribution_cli_credits_claude_subagent_companions() {
                 "model": "child-model",
                 "tokens": {"input": 20, "output": 2, "cache_write": 0, "cache_read": 0},
                 "cost_usd": 2.0,
+                "tokens_per_sec": null,
             },
             {
                 "model": null,
                 "tokens": {"input": 10, "output": 1, "cache_write": 0, "cache_read": 0},
                 "cost_usd": 1.0,
+                "tokens_per_sec": null,
             },
         ])
     );
@@ -626,7 +628,9 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.contains("effort: $3.00"));
-    assert!(markdown.contains("  - effort: $3.00\n  - subagents: 1 × explore · $2.00"));
+    assert!(markdown.contains(
+        "  - effort: $3.00\n  - subagents: 1 run · $2.00 of $3.00\n    - explore: 1 × · $2.00"
+    ));
     assert!(markdown.contains("**Models**"));
     assert!(markdown.contains("`child-model`"));
 }
@@ -914,7 +918,7 @@ fn attribution_counts_only_the_current_worktree_lifetime() {
         assert_eq!(members[0]["cost_usd"], 4.0);
         assert_eq!(
             members[0]["subagents"],
-            serde_json::json!([{"task": "explorer", "count": 1, "cost_usd": 3.0}])
+            serde_json::json!([{"task": "explorer", "count": 1, "cost_usd": 3.0, "active_secs": null}])
         );
         assert_eq!(report["totals"]["agents"], 1);
         assert_eq!(report["totals"]["cost_usd"], 4.0);
@@ -1166,7 +1170,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("Markdown utf8");
     assert!(
-        markdown.contains("  - effort: 3m active · $4.00\n  - subagents: 1 × explorer · $3.00")
+        markdown.contains("  - effort: 3m active · $4.00\n  - subagents: 1 run · $3.00 of $4.00\n    - explorer: 1 × · 2m active · $3.00")
     );
     assert!(!markdown.contains("launched"));
 }

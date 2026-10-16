@@ -47,6 +47,21 @@ impl EffortTokens {
 pub struct SlotEffort {
     pub tokens: EffortTokens,
     pub cost_usd: Option<f64>,
+    pub timed_ms: u64,
+    pub timed_output: u64,
+}
+
+impl SlotEffort {
+    pub fn add_assign(&mut self, other: Self) {
+        self.tokens.add_assign(other.tokens);
+        self.cost_usd = sum_optional_cost(self.cost_usd, other.cost_usd);
+        self.timed_ms = self.timed_ms.saturating_add(other.timed_ms);
+        self.timed_output = self.timed_output.saturating_add(other.timed_output);
+    }
+
+    pub fn tokens_per_sec(&self) -> Option<u64> {
+        super::aggregate::tokens_per_sec(self.timed_ms, self.timed_output)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -225,6 +240,10 @@ fn absorb_entry(effort: &mut SlotEffort, entry: &CachedEntry) {
         effort.cost_usd,
         (entry.cost_usd.is_finite() && entry.cost_usd > 0.0).then_some(entry.cost_usd),
     );
+    if let Some(timing) = entry.timing {
+        effort.timed_ms = effort.timed_ms.saturating_add(timing.ms);
+        effort.timed_output = effort.timed_output.saturating_add(timing.output);
+    }
 }
 
 pub fn sum_optional_cost(total: Option<f64>, value: Option<f64>) -> Option<f64> {
@@ -238,7 +257,106 @@ pub fn sum_optional_cost(total: Option<f64>, value: Option<f64>) -> Option<f64> 
 
 #[cfg(test)]
 mod tests {
+    use super::super::{ResponseTiming, SpendWindow};
     use super::*;
+
+    #[test]
+    fn fold_preserves_timing_for_total_model_and_child() {
+        let mut first = entry("first", 10, 0.25);
+        first.timing = Some(ResponseTiming {
+            ms: 2_000,
+            output: 100,
+        });
+        let mut second = entry("second", 20, 0.5);
+        second.timing = Some(ResponseTiming {
+            ms: 4_000,
+            output: 300,
+        });
+        let untimed = entry("untimed", 30, 0.0);
+        let breakdown = fold_tagged_entries(
+            [&first, &second, &untimed].map(|entry| (entry, Some("child".to_owned()))),
+        );
+        for effort in [
+            breakdown.total,
+            breakdown.models[&None],
+            breakdown.subagents["child"],
+        ] {
+            assert_eq!((effort.timed_ms, effort.timed_output), (6_000, 400));
+            assert_eq!(effort.tokens.input, 60);
+            assert_eq!(effort.cost_usd, Some(0.75));
+        }
+    }
+
+    #[test]
+    fn slot_effort_merges_all_dimensions_with_saturation() {
+        let mut effort = SlotEffort {
+            tokens: EffortTokens {
+                input: 10,
+                output: 2,
+                cache_write: 3,
+                cache_read: 4,
+            },
+            cost_usd: Some(0.25),
+            timed_ms: 2_000,
+            timed_output: 100,
+        };
+        effort.add_assign(SlotEffort {
+            tokens: effort.tokens,
+            cost_usd: Some(0.5),
+            timed_ms: 4_000,
+            timed_output: 300,
+        });
+        assert_eq!(
+            effort.tokens,
+            EffortTokens {
+                input: 20,
+                output: 4,
+                cache_write: 6,
+                cache_read: 8
+            }
+        );
+        assert_eq!(effort.cost_usd, Some(0.75));
+        assert_eq!((effort.timed_ms, effort.timed_output), (6_000, 400));
+        effort.add_assign(SlotEffort {
+            tokens: EffortTokens {
+                input: u64::MAX,
+                ..Default::default()
+            },
+            timed_ms: u64::MAX,
+            timed_output: u64::MAX,
+            ..Default::default()
+        });
+        assert_eq!(effort.tokens.input, u64::MAX);
+        assert_eq!((effort.timed_ms, effort.timed_output), (u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn slot_rate_matches_window_rounding_and_saturation() {
+        for (timed_ms, timed_output, expected) in [
+            (6_000, 400, Some(67)),
+            (0, 0, None),
+            (1, u64::MAX, Some(u64::MAX)),
+        ] {
+            assert_eq!(
+                SlotEffort {
+                    timed_ms,
+                    timed_output,
+                    ..Default::default()
+                }
+                .tokens_per_sec(),
+                expected
+            );
+            assert_eq!(
+                SpendWindow {
+                    timed_ms,
+                    timed_output,
+                    ..Default::default()
+                }
+                .tokens_per_sec(),
+                expected
+            );
+        }
+    }
 
     fn entry(key: &str, input: u64, cost_usd: f64) -> CachedEntry {
         CachedEntry {
@@ -358,6 +476,7 @@ mod tests {
                     ..EffortTokens::default()
                 },
                 cost_usd: Some(1.0),
+                ..SlotEffort::default()
             }
         );
         assert_eq!(

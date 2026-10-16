@@ -54,15 +54,19 @@ fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
 
+pub(super) fn tokens_per_sec(timed_ms: u64, timed_output: u64) -> Option<u64> {
+    if timed_ms == 0 {
+        return None;
+    }
+    let ms = u128::from(timed_ms);
+    let rate = (u128::from(timed_output) * 1_000 + ms / 2) / ms;
+    Some(rate.min(u128::from(u64::MAX)) as u64)
+}
+
 impl SpendWindow {
     /// Rounded output tokens per second across the window's timed responses.
     pub fn tokens_per_sec(&self) -> Option<u64> {
-        if self.timed_ms == 0 {
-            return None;
-        }
-        let ms = u128::from(self.timed_ms);
-        let rate = (u128::from(self.timed_output) * 1_000 + ms / 2) / ms;
-        Some(rate.min(u128::from(u64::MAX)) as u64)
+        tokens_per_sec(self.timed_ms, self.timed_output)
     }
 
     /// Fold one priced entry's spend and token split into the window. `input`

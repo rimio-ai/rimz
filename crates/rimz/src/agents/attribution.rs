@@ -22,7 +22,7 @@ use super::{AgentState, pricing, spending};
 
 pub use super::spending::EffortTokens as TokenSplit;
 
-const ATTRIBUTION_SCHEMA: u8 = 7;
+const ATTRIBUTION_SCHEMA: u8 = 8;
 const SUBAGENT_TYPE_MAX_CHARS: usize = 24;
 
 /// Estimated active seconds by provider session.
@@ -185,6 +185,7 @@ pub struct SubagentStat {
     pub task: Option<String>,
     pub count: u32,
     pub cost_usd: Option<f64>,
+    pub active_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -192,6 +193,7 @@ pub struct ModelStat {
     pub model: Option<String>,
     pub tokens: TokenSplit,
     pub cost_usd: Option<f64>,
+    pub tokens_per_sec: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -250,6 +252,7 @@ struct FoldedMember {
     channel: Option<String>,
     team: Option<String>,
     attribution: AttributionMember,
+    models: BTreeMap<Option<String>, spending::SlotEffort>,
     opened_turn: bool,
 }
 
@@ -275,7 +278,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 .identity
                 .iter()
                 .any(|agent| agent.turn_started_at.is_some());
-            let member = member(
+            let (member, models) = member(
                 &seat,
                 &peer_representatives,
                 &request,
@@ -286,6 +289,7 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
                 channel: slot.channel,
                 team,
                 attribution: member,
+                models,
                 opened_turn,
             })
         })
@@ -299,7 +303,11 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
 
     let mut by_team = BTreeMap::<String, Vec<AttributionMember>>::new();
     let mut other = Vec::new();
+    let mut models = BTreeMap::<Option<String>, spending::SlotEffort>::new();
     for member in members {
+        for (model, effort) in member.models {
+            models.entry(model).or_default().add_assign(effort);
+        }
         match member.team {
             Some(team) => by_team.entry(team).or_default().push(member.attribution),
             None => other.push(member.attribution),
@@ -338,12 +346,6 @@ pub fn build(request: AttributionRequest<'_>) -> Attribution {
         .flat_map(|group| group.members.iter())
         .collect::<Vec<_>>();
     let totals = totals_from_refs(&all_members);
-    let mut models = BTreeMap::<Option<String>, spending::SlotEffort>::new();
-    for stat in all_members.iter().flat_map(|member| &member.models) {
-        let effort = models.entry(stat.model.clone()).or_default();
-        effort.tokens.add_assign(stat.tokens);
-        effort.cost_usd = spending::sum_optional_cost(effort.cost_usd, stat.cost_usd);
-    }
     Attribution {
         schema: ATTRIBUTION_SCHEMA,
         generated_at: request.now,
@@ -475,7 +477,10 @@ fn member(
     request: &AttributionRequest<'_>,
     prices: &pricing::PriceBook,
     conversation_counts: &HashMap<(AgentKind, AgentSessionId), ConversationCounts>,
-) -> AttributionMember {
+) -> (
+    AttributionMember,
+    BTreeMap<Option<String>, spending::SlotEffort>,
+) {
     // Attribution drops identity-less slots before constructing a member.
     let latest = newest(&seat.identity).expect("folded attribution slot has records");
     let effort = spending::slot_effort_breakdown(
@@ -508,6 +513,7 @@ fn member(
             (
                 newest(&child_records).expect("folded child slot has records"),
                 child_effort,
+                seat_active_secs(child_records.iter().copied(), request.active_secs),
             )
         })
         .collect::<Vec<_>>();
@@ -545,23 +551,19 @@ fn member(
         &effort.subagents,
         &launched_effort,
     );
-    let mut tokens = effort.total.tokens;
-    let mut cost_usd = effort.total.cost_usd;
+    let mut total = effort.total;
     let mut models = effort.models;
-    for (_, child_effort) in launched_effort {
-        tokens.add_assign(child_effort.total.tokens);
-        cost_usd = spending::sum_optional_cost(cost_usd, child_effort.total.cost_usd);
+    for (_, child_effort, _) in launched_effort {
+        total.add_assign(child_effort.total);
         for (model, child_model) in child_effort.models {
-            let effort = models.entry(model).or_default();
-            effort.tokens.add_assign(child_model.tokens);
-            effort.cost_usd = spending::sum_optional_cost(effort.cost_usd, child_model.cost_usd);
+            models.entry(model).or_default().add_assign(child_model);
         }
     }
     let active_secs = seat_active_secs(
         seat.identity.iter().chain(&seat.children).copied(),
         request.active_secs,
     );
-    AttributionMember {
+    let attribution = AttributionMember {
         handle: crate::address::agent_handle(latest, peers, false),
         role: latest.role.clone(),
         name: latest.name.clone(),
@@ -608,11 +610,12 @@ fn member(
             total.saturating_add(agent.compaction_count)
         }),
         messages,
-        tokens,
-        cost_usd,
+        tokens: total.tokens,
+        cost_usd: total.cost_usd,
         subagents,
-        models: model_stats(models),
-    }
+        models: model_stats(models.clone()),
+    };
+    (attribution, models)
 }
 
 struct SeatRecords<'a> {
@@ -709,7 +712,7 @@ fn subagent_stats(
     records: &[&AgentState],
     subagents: &[&AgentState],
     spend: &BTreeMap<String, spending::SlotEffort>,
-    launched: &[(&AgentState, spending::SlotEffortBreakdown)],
+    launched: &[(&AgentState, spending::SlotEffortBreakdown, Option<u64>)],
 ) -> Vec<SubagentStat> {
     let mut children = BTreeMap::<String, Option<String>>::new();
     for child in subagents
@@ -732,6 +735,7 @@ fn subagent_stats(
             task,
             count: 0,
             cost_usd: None,
+            active_secs: None,
         });
         stat.count = stat.count.saturating_add(1);
         stat.cost_usd = spending::sum_optional_cost(
@@ -739,21 +743,29 @@ fn subagent_stats(
             spend.get(&child_id).and_then(|effort| effort.cost_usd),
         );
     }
-    for (child, effort) in launched {
+    for (child, effort, active_secs) in launched {
         let task = subagent_type(child.profile.as_deref());
         let stat = grouped.entry(task.clone()).or_insert_with(|| SubagentStat {
             task,
             count: 0,
             cost_usd: None,
+            active_secs: None,
         });
         stat.count = stat.count.saturating_add(1);
         stat.cost_usd = spending::sum_optional_cost(stat.cost_usd, effort.total.cost_usd);
+        stat.active_secs = match (stat.active_secs, *active_secs) {
+            (Some(total), Some(value)) => Some(total.saturating_add(value)),
+            (Some(total), None) => Some(total),
+            (None, value) => value,
+        };
     }
     let mut stats = grouped.into_values().collect::<Vec<_>>();
     stats.sort_by(|left, right| {
         right
-            .count
-            .cmp(&left.count)
+            .cost_usd
+            .unwrap_or(-1.0)
+            .total_cmp(&left.cost_usd.unwrap_or(-1.0))
+            .then_with(|| right.count.cmp(&left.count))
             .then_with(|| match (&left.task, &right.task) {
                 (Some(left), Some(right)) => left.cmp(right),
                 (Some(_), None) => Ordering::Less,
@@ -783,8 +795,7 @@ fn model_stats(models: BTreeMap<Option<String>, spending::SlotEffort>) -> Vec<Mo
         let total = grouped
             .entry(model.filter(|model| !model.trim().is_empty()))
             .or_default();
-        total.tokens.add_assign(effort.tokens);
-        total.cost_usd = spending::sum_optional_cost(total.cost_usd, effort.cost_usd);
+        total.add_assign(effort);
     }
     let mut stats = grouped
         .into_iter()
@@ -792,6 +803,7 @@ fn model_stats(models: BTreeMap<Option<String>, spending::SlotEffort>) -> Vec<Mo
             model,
             tokens: effort.tokens,
             cost_usd: effort.cost_usd,
+            tokens_per_sec: effort.tokens_per_sec(),
         })
         .collect::<Vec<_>>();
     stats.sort_by(model_order);

@@ -120,7 +120,7 @@ Writers refuse a schema downgrade after a cheap leading-version probe. An older 
 
 ### Response timing
 
-`CachedEntry.timing` uses optional cache key `g`, containing `ResponseTiming` as `{"m": milliseconds, "o": output_tokens}`. Compaction copies timing and sums both counters, retaining timing when any constituent row was timed. `SpendWindow` sums these into `timed_ms` and `timed_output`; zero counters are omitted from published JSON. `SpendWindow::tokens_per_sec` rounds the ratio of these sums rather than averaging response rates. Stats reads the published per-model windows, never scans transcripts for timing.
+`CachedEntry.timing` uses optional cache key `g`, containing `ResponseTiming` as `{"m": milliseconds, "o": output_tokens}`. Compaction copies timing and sums both counters, retaining timing when any constituent row was timed. `SpendWindow` sums these into `timed_ms` and `timed_output`; zero counters are omitted from published JSON. Stats reads the published per-model windows. Attribution folds transcript `CachedEntry.timing` through `SlotEffort`, retaining raw counters across member and report model merges. `SpendWindow::tokens_per_sec` and `SlotEffort::tokens_per_sec` share the rounded ratio of sums, never an average of response or member rates.
 
 Both timed adapters attach rows only through `response_timing` in `agents/spending/cache.rs`. Its metric-defining constants are `MIN_TIMED_OUTPUT_TOKENS = 100`, `MIN_RESPONSE_MS = 200`, and `MAX_RESPONSE_MS = 300_000`: output must meet the minimum, elapsed time must exceed 200 ms, and 300,000 ms is inclusive. A threshold change requires a cursor-cache version bump.
 

@@ -438,7 +438,24 @@ fn mixed_origin_report() -> Attribution {
     launched.profile = Some("explorer".to_owned());
     launched.transcript_path = Some(launched_transcript.to_string_lossy().into_owned());
 
-    build_with(&[parent, launched], &[native], &[])
+    let agents = [parent, launched];
+    let refs = agents.iter().collect::<Vec<_>>();
+    build(AttributionRequest {
+        agents: &refs,
+        lifetimes: &unbounded_lifetimes(agents.iter()),
+        peers: &refs,
+        subagents: &[&native],
+        transcript: &[],
+        me: None,
+        active_secs: &ActiveSecs::from([(
+            (agents[1].kind.clone(), agents[1].agent_id.clone()),
+            20,
+        )]),
+        pricing_cache_path: &dir.path().join("prices.json"),
+        require_contribution: false,
+        scope: AttributionScope::default(),
+        now: at(100),
+    })
 }
 
 #[test]
@@ -610,7 +627,23 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     }
     let agents = [parent, children.remove(0), children.remove(0)];
 
-    let report = build_for(&agents);
+    let refs = agents.iter().collect::<Vec<_>>();
+    let report = build(AttributionRequest {
+        agents: &refs,
+        lifetimes: &unbounded_lifetimes(agents.iter()),
+        peers: &refs,
+        subagents: &[],
+        transcript: &[],
+        me: None,
+        active_secs: &ActiveSecs::from([
+            ((agents[1].kind.clone(), agents[1].agent_id.clone()), 20),
+            ((agents[2].kind.clone(), agents[2].agent_id.clone()), 30),
+        ]),
+        pricing_cache_path: &dir.path().join("prices.json"),
+        require_contribution: false,
+        scope: AttributionScope::default(),
+        now: at(100),
+    });
     let member = &report.groups[0].members[0];
 
     assert_eq!(member.tokens.input, 20);
@@ -620,6 +653,7 @@ fn launched_child_continuations_deduplicate_as_one_subagent_seat() {
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
+            active_secs: Some(50),
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
@@ -664,6 +698,7 @@ fn claude_slot_credits_subagent_transcript_effort() {
         member.models,
         [
             ModelStat {
+                tokens_per_sec: None,
                 model: Some("child-model".to_owned()),
                 tokens: TokenSplit {
                     input: 20,
@@ -673,6 +708,7 @@ fn claude_slot_credits_subagent_transcript_effort() {
                 cost_usd: Some(2.0),
             },
             ModelStat {
+                tokens_per_sec: None,
                 model: None,
                 tokens: TokenSplit {
                     input: 10,
@@ -784,6 +820,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
     assert_eq!(
         member.subagents,
         vec![SubagentStat {
+            active_secs: Some(20),
             task: Some("explorer".to_owned()),
             count: 1,
             cost_usd: Some(2.0),
@@ -800,6 +837,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
         member.models,
         [
             ModelStat {
+                tokens_per_sec: None,
                 model: Some("child-model".to_owned()),
                 tokens: TokenSplit {
                     input: 20,
@@ -809,6 +847,7 @@ fn launched_child_effort_folds_into_the_parent_seat() {
                 cost_usd: Some(2.0),
             },
             ModelStat {
+                tokens_per_sec: None,
                 model: Some("parent-model".to_owned()),
                 tokens: TokenSplit {
                     input: 10,
@@ -855,6 +894,7 @@ fn subagents_with_one_label_merge_across_origins() {
     assert_eq!(
         member.subagents,
         [SubagentStat {
+            active_secs: Some(20),
             task: Some("explorer".to_owned()),
             count: 2,
             cost_usd: Some(5.0),
@@ -865,12 +905,12 @@ fn subagents_with_one_label_merge_across_origins() {
 }
 
 #[test]
-fn schema_seven_serializes_one_cost_and_task_grouped_subagents() {
+fn schema_eight_serializes_one_cost_and_task_grouped_subagents() {
     let report = serde_json::to_value(mixed_origin_report()).expect("serialize attribution");
     let member = &report["groups"][0]["members"][0];
     let subagent = &member["subagents"][0];
 
-    assert_eq!(report["schema"], 7);
+    assert_eq!(report["schema"], 8);
     assert_eq!(report["scope"].get("since"), Some(&serde_json::Value::Null));
     assert_eq!(member["cost_usd"], 6.0);
     assert_eq!(member.as_object().map(serde_json::Map::len), Some(23));
@@ -881,11 +921,13 @@ fn schema_seven_serializes_one_cost_and_task_grouped_subagents() {
                 "model": "child-model",
                 "tokens": {"input": 50, "output": 5, "cache_write": 14, "cache_read": 16},
                 "cost_usd": 5.0,
+                "tokens_per_sec": null,
             },
             {
                 "model": "parent-model",
                 "tokens": {"input": 10, "output": 1, "cache_write": 4, "cache_read": 5},
                 "cost_usd": 1.0,
+                "tokens_per_sec": null,
             },
         ])
     );
@@ -918,6 +960,7 @@ fn schema_seven_serializes_one_cost_and_task_grouped_subagents() {
             "task": "explorer",
             "count": 2,
             "cost_usd": 5.0,
+            "active_secs": 20,
         })
     );
     assert_eq!(
@@ -948,6 +991,7 @@ fn model_stats_orders_by_cost_tokens_and_model_id_with_unknowns_last() {
                         ..TokenSplit::default()
                     },
                     cost_usd,
+                    ..spending::SlotEffort::default()
                 },
             )
         })
@@ -972,6 +1016,125 @@ fn model_stats_orders_by_cost_tokens_and_model_id_with_unknowns_last() {
 }
 
 #[test]
+fn model_timing_merges_launched_children_and_uses_report_ratio_of_sums() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut agents = Vec::new();
+    for (id, output, ms, cost) in [
+        ("parent", 100, 2_000, 1.0),
+        ("child", 300, 4_000, 2.0),
+        ("peer", 100, 10_000, 3.0),
+    ] {
+        let path = dir.path().join(format!("{id}.jsonl"));
+        let rows = [
+            json!({"type": "user", "timestamp": "2026-01-01T10:00:00.000Z", "message": {"content": "prompt"}}),
+            json!({"timestamp": format!("2026-01-01T10:00:{:02}.000Z", ms / 1_000), "costUSD": cost, "requestId": id, "message": {"id": id, "model": "shared", "usage": {"output_tokens": output}}}),
+            json!({"timestamp": "2026-01-01T10:00:11.000Z", "costUSD": 1.0, "requestId": format!("{id}-untimed"), "message": {"id": format!("{id}-untimed"), "model": "untimed", "usage": {"output_tokens": 1}}}),
+        ];
+        std::fs::write(&path, rows.map(|row| row.to_string()).join("\n")).unwrap();
+        let mut record = agent(Path::new("/repo/lane"), id, "claude", 10);
+        record.transcript_path = Some(path.to_string_lossy().into_owned());
+        if id == "child" {
+            record.parent_agent_id = Some("parent".into());
+            record.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            record.launch_depth = Some(1);
+            record.profile = Some("explorer".to_owned());
+        }
+        agents.push(record);
+    }
+    let report = build_for(&agents);
+    let members = &report.groups[0].members;
+    let parent = members
+        .iter()
+        .find(|member| !member.subagents.is_empty())
+        .unwrap();
+    let peer = members
+        .iter()
+        .find(|member| member.subagents.is_empty())
+        .unwrap();
+    let rate = |models: &[ModelStat]| {
+        models
+            .iter()
+            .find(|model| model.model.as_deref() == Some("shared"))
+            .unwrap()
+            .tokens_per_sec
+    };
+    assert_eq!(rate(&parent.models), Some(67));
+    assert_eq!(rate(&peer.models), Some(10));
+    assert_eq!(rate(&report.models), Some(31));
+    assert_eq!(parent.cost_usd, Some(5.0));
+    assert_eq!(report.totals.cost_usd, Some(9.0));
+    let json = serde_json::to_value(&report).unwrap();
+    let untimed = json["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["model"] == "untimed")
+        .unwrap();
+    assert_eq!(
+        untimed.get("tokens_per_sec"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(parent.subagents[0].active_secs, None);
+}
+
+#[test]
+fn subagent_kinds_sort_by_cost_then_count_then_name_with_unpriced_last() {
+    let mut parent = agent(Path::new("/repo/lane"), "parent", "claude", 10);
+    parent.tool_calls.insert("exec".to_owned(), 1);
+    let mut children = Vec::new();
+    let dir = tempfile::tempdir().unwrap();
+    for (task, count, cost) in [
+        (Some("expensive"), 1, Some(3.0)),
+        (Some("many"), 3, Some(1.0)),
+        (Some("alpha"), 1, Some(1.0)),
+        (Some("beta"), 1, Some(1.0)),
+        (None, 1, Some(1.0)),
+        (Some("unpriced"), 4, None),
+    ] {
+        for ordinal in 0..count {
+            let id = format!("{}-{ordinal}", task.unwrap_or("other"));
+            let mut child = agent(Path::new("/repo/lane"), &id, "claude", 20);
+            child.parent_agent_id = Some(parent.agent_id.clone());
+            child.parent_agent_kind = Some(parent.kind.clone());
+            child.launch_depth = Some(1);
+            child.profile = task.map(ToOwned::to_owned);
+            if let Some(cost) = cost.filter(|_| ordinal == 0) {
+                let path = dir.path().join(format!("{id}.jsonl"));
+                std::fs::write(&path, json!({"timestamp": "2026-01-01T10:00:00.000Z", "costUSD": cost, "message": {"usage": {"output_tokens": 1}}}).to_string()).unwrap();
+                child.transcript_path = Some(path.to_string_lossy().into_owned());
+            }
+            children.push(child);
+        }
+    }
+    children.push(parent);
+    let report = build_for(&children);
+    let member = &report.groups[0].members[0];
+    assert_eq!(
+        member
+            .subagents
+            .iter()
+            .map(|stat| stat.task.as_deref())
+            .collect::<Vec<_>>(),
+        [
+            Some("expensive"),
+            Some("many"),
+            Some("alpha"),
+            Some("beta"),
+            None,
+            Some("unpriced")
+        ]
+    );
+    assert!(
+        member
+            .subagents
+            .iter()
+            .all(|stat| stat.active_secs.is_none())
+    );
+    assert_eq!(member.cost_usd, Some(7.0));
+    assert_eq!(report.totals.cost_usd, Some(7.0));
+}
+
+#[test]
 fn model_stats_merges_empty_ids_and_omits_rows_without_effort() {
     let rows = model_stats(
         [
@@ -992,6 +1155,8 @@ fn model_stats_merges_empty_ids_and_omits_rows_without_effort() {
                         ..TokenSplit::default()
                     },
                     cost_usd,
+                    timed_ms: 1_000,
+                    timed_output: 100,
                 },
             )
         })
@@ -1005,6 +1170,7 @@ fn model_stats_merges_empty_ids_and_omits_rows_without_effort() {
     assert_eq!(rows[1].model, None);
     assert_eq!(rows[1].cost_usd, Some(0.25));
     assert_eq!(rows[1].tokens.input, 35);
+    assert_eq!(rows[1].tokens_per_sec, Some(100));
     assert_eq!(rows[2].model.as_deref(), Some("unpriced"));
     assert_eq!(rows[2].cost_usd, None);
     assert_eq!(rows[2].tokens.input, 5);
@@ -1532,11 +1698,13 @@ fn subagents_group_by_task_and_join_durable_child_cost() {
         stats,
         &[
             SubagentStat {
+                active_secs: None,
                 task: Some("explore".to_owned()),
                 count: 2,
                 cost_usd: Some(3.25),
             },
             SubagentStat {
+                active_secs: None,
                 task: None,
                 count: 2,
                 cost_usd: Some(0.5),

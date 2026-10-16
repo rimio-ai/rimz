@@ -36,17 +36,20 @@ fn member(handle: &str, role: Option<&str>, provider: &str, model: &str) -> Attr
         cost_usd: Some(1.60),
         subagents: vec![
             SubagentStat {
+                active_secs: Some(1_500),
                 task: Some("explorer".to_owned()),
                 count: 4,
                 cost_usd: Some(0.90),
             },
             SubagentStat {
+                active_secs: None,
                 task: None,
                 count: 1,
                 cost_usd: None,
             },
         ],
         models: vec![ModelStat {
+            tokens_per_sec: Some(67),
             model: Some("claude-opus-4-8".to_owned()),
             tokens: TokenSplit {
                 input: 1_200,
@@ -68,6 +71,7 @@ fn report() -> Attribution {
         ..TokenSplit::default()
     };
     stray.models = vec![ModelStat {
+        tokens_per_sec: None,
         model: Some("gpt-5.5".to_owned()),
         tokens: stray.tokens,
         cost_usd: stray.cost_usd,
@@ -96,7 +100,7 @@ fn report() -> Attribution {
     let team_members = vec![team_member];
     let other_members = vec![stray];
     Attribution {
-        schema: 7,
+        schema: 8,
         generated_at: jiff::Timestamp::UNIX_EPOCH,
         rimz_version: "test".to_owned(),
         scope: AttributionScope::default(),
@@ -126,6 +130,31 @@ fn report() -> Attribution {
 }
 
 #[test]
+fn subagent_block_handles_one_unpriced_run_and_a_priced_share_without_member_cost() {
+    let mut report = report();
+    report.groups.truncate(1);
+    let member = &mut report.groups[0].members[0];
+    member.subagents.remove(0);
+    member.cost_usd = None;
+    let mut panel = anstream::StripStream::new(Vec::new());
+    render_panel(&mut panel, &report).unwrap();
+    let panel = String::from_utf8(panel.into_inner()).unwrap();
+    assert!(panel.contains("subagents: 1 run\n                 other  1 ×\n"));
+    assert!(!panel.contains("$0.00"));
+    let mut markdown = Vec::new();
+    render_markdown(&mut markdown, &report).unwrap();
+    let markdown = String::from_utf8(markdown).unwrap();
+    assert!(markdown.contains("  - subagents: 1 run\n    - other: 1 ×\n"));
+    assert!(!markdown.contains(" of "));
+
+    report.groups[0].members[0].subagents[0].cost_usd = Some(0.50);
+    let mut markdown = Vec::new();
+    render_markdown(&mut markdown, &report).unwrap();
+    let markdown = String::from_utf8(markdown).unwrap();
+    assert!(markdown.contains("  - subagents: 1 run · $0.50\n    - other: 1 × · $0.50\n"));
+}
+
+#[test]
 fn panel_groups_team_and_stray_members() {
     let mut output = anstream::StripStream::new(Vec::new());
     render_panel(&mut output, &report()).expect("render panel");
@@ -134,7 +163,9 @@ fn panel_groups_team_and_stray_members() {
 
       @planner (plan|ner) · Claude · fable`2@high
           effort:    1h05m active · $1.60
-          subagents: 4 × explorer, 1 × other · $0.90
+          subagents: 5 runs · $0.90 of $1.60
+                     explorer  4 × · 25m active · $0.90
+                     other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
           messages:  2 from you · 5 from teammates · 4 to teammates
           tokens:    1.2k input, 800 output, 2k cache write, 3k cache read
@@ -143,13 +174,15 @@ fn panel_groups_team_and_stray_members() {
 
       @codex · Codex · gpt-5.5@high
           effort:    1h05m active · $1.60
-          subagents: 4 × explorer, 1 × other · $0.90
+          subagents: 5 runs · $0.90 of $1.60
+                     explorer  4 × · 25m active · $0.90
+                     other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
           messages:  2 from you · 5 from teammates · 4 to teammates
           tokens:    300 input, 100 output
 
     Models
-      claude-opus-4-8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read
+      claude-opus-4-8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
       gpt-5.5:         $1.60 · 300 input, 100 output
 
     Total · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)
@@ -204,7 +237,9 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
       @codex · Codex · gpt-5.5@high
           effort:    1h05m active · $1.60
-          subagents: 4 × explorer, 1 × other · $0.90
+          subagents: 5 runs · $0.90 of $1.60
+                     explorer  4 × · 25m active · $0.90
+                     other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
           messages:  2 from you · 5 from teammates · 4 to teammates
           tokens:    300 input, 100 output
@@ -248,7 +283,9 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     - **`plan|ner`** — Claude ``fable`2@high``
       - effort: 1h05m active · $1.60
-      - subagents: 4 × explorer, 1 × other · $0.90
+      - subagents: 5 runs · $0.90 of $1.60
+        - explorer: 4 × · 25m active · $0.90
+        - other: 1 ×
       - activity: 2 asks · 7 tool calls · 1 compaction
       - messages: 2 from you · 5 from teammates · 4 to teammates
       - tokens: 1.2k input, 800 output, 2k cache write, 3k cache read
@@ -257,14 +294,16 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     - **`@codex`** — Codex `gpt-5.5@high`
       - effort: 1h05m active · $1.60
-      - subagents: 4 × explorer, 1 × other · $0.90
+      - subagents: 5 runs · $0.90 of $1.60
+        - explorer: 4 × · 25m active · $0.90
+        - other: 1 ×
       - activity: 2 asks · 7 tool calls · 1 compaction
       - messages: 2 from you · 5 from teammates · 4 to teammates
       - tokens: 300 input, 100 output
 
     **Models**
 
-    - `claude-opus-4-8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read
+    - `claude-opus-4-8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
     - `gpt-5.5` — $1.60 · 300 input, 100 output
 
     </details>
@@ -297,7 +336,7 @@ fn markdown_preserves_identity_punctuation_and_escapes_plain_labels() {
     let output = String::from_utf8(output).expect("utf8");
 
     assert!(output.contains(r"- **`plan*ner_[x]\tail`**"));
-    assert!(output.contains(r"subagents: 4 × plan\*ner\_\[x\]\\tail"));
+    assert!(output.contains(r"    - plan\*ner\_\[x\]\\tail: 4 × · 25m active · $0.90"));
 }
 
 #[test]
@@ -441,6 +480,7 @@ fn renderers_show_unpriced_unknown_model_tokens() {
     member.cost_usd = None;
     member.subagents.clear();
     member.models = vec![ModelStat {
+        tokens_per_sec: None,
         model: None,
         tokens: member.tokens,
         cost_usd: None,
