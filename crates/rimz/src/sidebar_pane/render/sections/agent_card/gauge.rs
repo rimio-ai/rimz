@@ -51,7 +51,7 @@ const BAR_VALUE_WIDTH: usize = 5;
 /// One aligned meter row: `<indent><label:1> <bar> <value:5>`; a caller that
 /// appends an age slot reserves it out of `width`. The caller's `make_bar` builds the colored bar spans to the supplied width and supplies the
 /// `label_style` for the lead glyph (the context meter tints its `▣` with the
-/// bar's severity); this helper owns the indent, the fixed label and value
+/// bar's severity or expired-cache tone); this helper owns the indent, the fixed label and value
 /// columns, and the gaps — so every row built through it shares one bar-start
 /// column and one value-end column by construction, with no per-call alignment
 /// math. The value column reads at the dim chrome weight, matching the token
@@ -96,16 +96,16 @@ pub(super) fn bar_row(
 /// one flat run in the fixed expired-cache tone. Components below 0.5% of the
 /// filled window fold into the lead run; each remaining accent starts with a
 /// gap-fronted `╺` cap, and the segmented fill ends flush at a whole cell. The
-/// cache-read run carries severity when present; the `▣` glyph and `▤` line
-/// always carry it. The value prefers a one-decimal precise fraction (`78.2%`)
+/// cache-read run carries severity when present; `▣` follows the fill's tone
+/// while the `▤` stats head always keeps severity. The value prefers a one-decimal precise fraction (`78.2%`)
 /// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
 /// fills it to `▣`.
 ///
 /// At L2 every meter reserves a five-cell age cluster after a space; below L2
 /// the bar keeps that room and the stats line pins the age instead. The age appears from five minutes quiet, with a
-/// clock-fill glyph ([`elapsed_glyph`]) and continuous tone ([`activity_age_style`]):
-/// dim while warm, heating toward the provider's prompt-cache TTL (the hour
-/// when unknown), then muted with a full face past the ceiling. A keep-warm
+/// clock-fill glyph ([`elapsed_glyph`]) and continuous tone: muted until the
+/// last ten minutes before the known TTL, caution to alarm in that band,
+/// then muted with a full face past the ceiling. Unknown lifetimes stay muted. A keep-warm
 /// horizon uses the steady held tone ([`cache_age_pin`]). Finished cards follow
 /// the same ramp. The clock reads the agent's own quiet time
 /// ([`SidebarRow::own_last_activity`]), not child-folded activity: a parent
@@ -128,7 +128,7 @@ pub(super) fn gauge_line(
         fill
     };
     let severity = row_severity(row, bands);
-    // One health amount drives the row's `▣` glyph and `▤` line. When present,
+    // While warm, one health amount drives the row's `▣` glyph and `▤` line. When present,
     // the cache-read segment carries that same tone; without cache reads the bar
     // keeps the flat cache-write and fresh-input composition tones.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
@@ -147,7 +147,7 @@ pub(super) fn gauge_line(
     let mut line = bar_row(
         theme,
         glyph,
-        theme.style(color, Modifier::empty()),
+        theme.style(bar_color, Modifier::empty()),
         &value,
         |bar_width| {
             if let Some(pixels) = meter_pixels
@@ -342,11 +342,53 @@ enum CacheAge {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum CachePhase {
+    Held,
+    Unknown,
+    Calm,
+    Closing { remaining: i64, amount: f32 },
+    Expired,
+}
+
 impl CacheAge {
+    fn phase(&self, now: jiff::Timestamp) -> CachePhase {
+        let Self::Aging { since, ceiling } = *self else {
+            return CachePhase::Held;
+        };
+        let Some(ceiling) = ceiling else {
+            return CachePhase::Unknown;
+        };
+        let age = age_secs(since, now);
+        if age > ceiling {
+            return CachePhase::Expired;
+        }
+        let band = ceiling.min(600);
+        let band_start = ceiling - band;
+        if age <= band_start {
+            return CachePhase::Calm;
+        }
+        CachePhase::Closing {
+            remaining: ceiling - age,
+            amount: (age - band_start) as f32 / band as f32,
+        }
+    }
     /// Past a known ceiling, never held or guessed from an unknown TTL.
     fn expired(&self, now: jiff::Timestamp) -> bool {
-        matches!(self, Self::Aging { since, ceiling: Some(ceiling) }
-            if age_secs(*since, now) > *ceiling)
+        self.phase(now) == CachePhase::Expired
+    }
+}
+
+impl CachePhase {
+    fn style(self, theme: &Theme) -> Style {
+        match self {
+            Self::Held => theme.good(Modifier::empty()),
+            Self::Closing { amount, .. } => theme.style(
+                theme.warm_heat_tone((1.0 + amount) / 2.0),
+                Modifier::empty(),
+            ),
+            _ => theme.muted(),
+        }
     }
 }
 
@@ -372,17 +414,17 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
 /// the time since the last real turn ended, the face filling over the horizon
 /// in the steady `good` tone; otherwise the time since the agent's own activity
 /// or its last cache request (a ping refreshes the cache, not the activity),
-/// face and heat over the card's provider cache TTL, else the hour. Past that
-/// ceiling the full face remains, but the tone becomes muted.
+/// face over the card's provider cache TTL, else the hour. Only the last ten
+/// minutes before a known TTL heat from caution to alarm; unknown lifetimes
+/// and expired caches stay muted.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
-    match cache_age(row, now) {
+    let age = cache_age(row, now);
+    let style = age.phase(now).style(theme);
+    match age {
         CacheAge::Held { ended, until } => {
             let label = activity_short(ended, now)?;
             let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
-            Some(Span::styled(
-                format!("{glyph} {label:>3}"),
-                theme.good(Modifier::empty()),
-            ))
+            Some(Span::styled(format!("{glyph} {label:>3}"), style))
         }
         CacheAge::Aging { since, ceiling } => {
             let label = activity_short(since, now)?;
@@ -390,11 +432,7 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
             let ceiling = ceiling.unwrap_or(ATTENTION_AGE_CEILING_SECS);
             Some(Span::styled(
                 format!("{} {label:>3}", elapsed_glyph(theme, secs, ceiling)),
-                if secs > ceiling {
-                    theme.muted()
-                } else {
-                    activity_age_style(theme, secs, ceiling)
-                },
+                style,
             ))
         }
     }
@@ -521,6 +559,62 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_phase_owns_the_expiry_band_and_strict_tie() {
+        let now = jiff::Timestamp::from_second(10000).unwrap();
+        let phase = |age, ceiling| {
+            CacheAge::Aging {
+                since: now - std::time::Duration::from_secs(age),
+                ceiling,
+            }
+            .phase(now)
+        };
+        assert_eq!(phase(1199, Some(1800)), CachePhase::Calm);
+        assert_eq!(phase(1200, Some(1800)), CachePhase::Calm);
+        assert_eq!(
+            phase(1201, Some(1800)),
+            CachePhase::Closing {
+                remaining: 599,
+                amount: 1.0 / 600.0
+            }
+        );
+        assert_eq!(
+            phase(1800, Some(1800)),
+            CachePhase::Closing {
+                remaining: 0,
+                amount: 1.0
+            }
+        );
+        assert_eq!(phase(1801, Some(1800)), CachePhase::Expired);
+        assert_eq!(
+            phase(1, Some(300)),
+            CachePhase::Closing {
+                remaining: 299,
+                amount: 1.0 / 300.0
+            }
+        );
+        assert_eq!(
+            phase(300, Some(300)),
+            CachePhase::Closing {
+                remaining: 0,
+                amount: 1.0
+            }
+        );
+        assert_eq!(phase(0, Some(0)), CachePhase::Calm);
+        assert_eq!(phase(1, Some(0)), CachePhase::Expired);
+        for age in [0, 300, 1800, 10000] {
+            assert_eq!(phase(age, None), CachePhase::Unknown);
+        }
+        assert_eq!(
+            CacheAge::Held {
+                ended: now,
+                until: now + std::time::Duration::from_secs(60)
+            }
+            .phase(now),
+            CachePhase::Held
+        );
+    }
 
     #[test]
     fn card_projection_model_prefers_id_over_friendly_name() {

@@ -153,8 +153,8 @@ fn assert_expired_meter(line: &Line<'_>, theme: &Theme) {
         .unwrap();
     assert_eq!(
         glyph.style.fg,
-        Some(theme.heat_tone(0.0)),
-        "glyph keeps severity"
+        Some(theme.component(Component::CacheExpired)),
+        "glyph shares the expired fill tone"
     );
     assert_eq!(
         line.spans
@@ -255,6 +255,45 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
 }
 
 #[test]
+fn cache_clock_heat_is_confined_to_the_last_ten_minutes() {
+    let theme = truecolor_sidebar_theme();
+    let style = |age, ttl: Option<u32>| {
+        let snapshot = cache_meter_snapshot(
+            age,
+            ttl.map(|ceiling_secs| CacheClock {
+                ceiling_secs,
+                ..half_hour_cache()
+            }),
+        );
+        cache_meter_line(&snapshot, &theme)
+            .spans
+            .into_iter()
+            .find(|span| {
+                ['◔', '◑', '◕', '●', '◉']
+                    .iter()
+                    .any(|face| span.content.contains(*face))
+            })
+            .unwrap()
+            .style
+    };
+    assert_eq!(style(1199, Some(1800)), theme.muted());
+    assert_eq!(style(1200, Some(1800)), theme.muted());
+    assert_eq!(
+        style(1800, Some(1800)),
+        theme.style(theme.heat_tone(1.0), Modifier::empty())
+    );
+    assert_eq!(style(1801, Some(1800)), theme.muted());
+    assert_ne!(style(1201, Some(1800)), theme.muted());
+    for age in [300, 900, 1201, 1800, 3599, 3600, 3601] {
+        assert_eq!(
+            style(age, None),
+            theme.muted(),
+            "unknown TTL never heats at {age}"
+        );
+    }
+}
+
+#[test]
 fn lapsed_or_incomplete_hold_uses_the_latest_cache_request() {
     let theme = Theme::fixed(false);
     let lapsed = CacheClock {
@@ -322,9 +361,16 @@ fn expired_empty_context_meter_stays_empty() {
     .as_agent_mut()
     .unwrap()
     .cache = None;
+    let mut expected = meter_fill(&cache_meter_line(&expired, &theme));
+    expected
+        .iter_mut()
+        .find(|span| span.content == theme.glyph(GlyphRole::MeterContextEmpty))
+        .unwrap()
+        .style = theme.style(theme.component(Component::CacheExpired), Modifier::empty());
     assert_eq!(
         meter_fill(&empty),
-        meter_fill(&cache_meter_line(&expired, &theme))
+        expected,
+        "only the hollow head changes tone"
     );
 }
 
@@ -1396,10 +1442,8 @@ fn calm_context_bar_orders_segments_left_to_right() {
     );
 }
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
-/// idle span) with a continuous tone: the dim resting weight while a resume
-/// would still hit cache, then a warn-caution-alarm ramp to the hour — the cost
-/// warning that resuming will likely re-read the whole context uncached. The
-/// ramp reads off the clock alone, but once the cache expires the pin is muted.
+/// idle span) with a continuous caution-to-alarm tone in the last ten minutes
+/// before expiry. Outside that band the pin stays muted.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
@@ -1415,7 +1459,13 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         codex.usage.context_pct = Some(21);
         codex.usage.total_tokens = Some(5_000);
         codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
-        let snapshot = snapshot_with(vec![codex]);
+        let mut snapshot = snapshot_with(vec![codex]);
+        for row in snapshot.rows_mut() {
+            row.as_agent_mut().unwrap().cache = Some(CacheClock {
+                ceiling_secs: 3600,
+                ..half_hour_cache()
+            });
+        }
         cache_meter_line(&snapshot, &theme)
             .spans
             .iter()
@@ -1425,7 +1475,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     };
     let heat = |age_secs: i64| {
         theme.style(
-            theme.warm_heat_tone(age_heat_amount_for_test(age_secs, 3600)),
+            theme.warm_heat_tone((1.0 + (age_secs - 3000) as f32 / 600.0) / 2.0),
             Modifier::empty(),
         )
     };
@@ -1436,13 +1486,13 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 25 * 60, '◑'),
-        heat(25 * 60),
-        "warm ramp tone with the half-full face"
+        theme.muted(),
+        "the half-full face is outside the expiry band"
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 40 * 60, '◕'),
-        heat(40 * 60),
-        "mid-ramp tone past the half hour"
+        theme.muted(),
+        "the expiry band has not started at forty minutes"
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 3_599, '●'),
@@ -1518,10 +1568,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     );
     assert_eq!(
         half_style,
-        theme.style(
-            theme.warm_heat_tone(age_heat_amount_for_test(25 * 60, 1800)),
-            Modifier::empty(),
-        )
+        theme.style(theme.warm_heat_tone(0.75), Modifier::empty(),)
     );
     assert_ne!(half_style, hour_style);
     assert_eq!(
