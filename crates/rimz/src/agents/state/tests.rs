@@ -2,6 +2,38 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn a_molt_successor_stands_until_it_ends_or_fails_before_registration() {
+    let predecessor = AgentSessionId::from("launch_old");
+    let mut successor = test_agent(AgentStatus::Running, 1_000);
+    successor.agent_id = "launch_new".into();
+    successor.molted_from = Some(predecessor.clone());
+    assert!(standing_successor(&[successor.clone()], &predecessor).is_some());
+    successor.status = AgentStatus::Failed;
+    assert!(standing_successor(&[successor.clone()], &predecessor).is_none());
+    successor.agent_id = "registered".into();
+    assert!(standing_successor(&[successor.clone()], &predecessor).is_some());
+    successor.ended_at = Some(successor.last_seen);
+    assert!(standing_successor(&[successor], &predecessor).is_none());
+}
+
+#[test]
+fn an_ended_molt_intermediate_still_supersedes_its_predecessor() {
+    let predecessor = AgentSessionId::from("launch_old");
+    let mut intermediate = test_agent(AgentStatus::Idle, 1_000);
+    intermediate.agent_id = "registered_middle".into();
+    intermediate.launch_id = Some("launch_middle".into());
+    intermediate.molted_from = Some(predecessor.clone());
+    intermediate.ended_at = Some(intermediate.last_seen);
+    let mut successor = test_agent(AgentStatus::Running, 1_000);
+    successor.agent_id = "launch_new".into();
+    successor.molted_from = intermediate.launch_id.clone();
+    assert_eq!(
+        standing_successor(&[intermediate, successor.clone()], &predecessor),
+        Some(&successor)
+    );
+}
+
+#[test]
 fn answers_to_session_current_and_prior_launch_ids() {
     let mut agent = test_agent(AgentStatus::Idle, 1_000);
     agent.launch_id = Some("current".into());

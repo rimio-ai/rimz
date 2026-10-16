@@ -658,6 +658,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pre_molt_latest_snapshot_refolds_the_succession_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(&paths.events_log, &EventEnvelope::new(
+            workspace, "session", "claude", "agent", "agent.launched",
+            serde_json::json!({"agent_id": "launch_new", "agent_name": "successor", "molted_from": "launch_old"}),
+        )).unwrap();
+        let mut legacy = rebuild(&paths).unwrap();
+        // The last version written without `molted_from`.
+        legacy.snapshot_version = 39;
+        for agent in Arc::make_mut(&mut legacy.agents) {
+            agent.molted_from = None;
+        }
+        atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+        assert!(
+            read_fresh_latest_cold(&paths).is_none(),
+            "a pre-molt latest.json cannot serve a lost succession link"
+        );
+        let rebuilt = build_from(&paths).unwrap();
+        assert_eq!(
+            rebuilt
+                .agents
+                .iter()
+                .find(|agent| agent.agent_id == "launch_new")
+                .unwrap()
+                .molted_from
+                .as_deref(),
+            Some("launch_old")
+        );
+    }
+
     /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
     /// cache: the reader a new binary starts with, for a check whose
     /// production path is always a cold-cache event.

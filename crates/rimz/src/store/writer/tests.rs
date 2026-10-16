@@ -140,6 +140,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             launch_ordinal: Some(1),
             channel: Some("identity-channel".to_owned()),
             kind_ordinal: Some(2),
+            molted_from: None,
         },
         run_id: Some(run_id.clone()),
         prompt: Some("  build it  ".to_owned()),

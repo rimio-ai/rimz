@@ -215,7 +215,18 @@ upward-dependencies = ["address"]
 # LaunchDirRefusal carries the HOME refusal alongside folder-trust failures (+1).
 # empty_dir::rows shares the machine-wide account/provider collection (+1).
 # empty_dir::Decision and decide replace the public prepare entry point (+1 net).
-surface-budget = 1079
+# standing_successor and molt_stands share molt standing across reservation, routing, and idle-stop (+2).
+surface-budget = 1081
+
+[[verdict]]
+kind = "item"
+key = "agents::state::molt_stands"
+reason = "Launch binding and successor traversal share the row's own standing test."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::standing_successor"
+reason = "One molt standing predicate shared by launch reservation, role routing, and idle-stop policy."
 
 [[verdict]]
 kind = "item"

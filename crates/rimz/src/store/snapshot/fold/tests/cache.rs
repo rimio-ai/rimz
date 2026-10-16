@@ -3,6 +3,44 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn pre_molt_rollup_cache_refolds_the_succession_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    event_log::append(&paths.events_log, &EventEnvelope::new(
+        workspace, "session", "claude", "agent", "agent.launched",
+        serde_json::json!({"agent_id": "launch_new", "agent_name": "successor", "molted_from": "launch_old"}),
+    )).unwrap();
+    write_rollup_cache(
+        &paths.rollup_cache,
+        &RollupCache {
+            // The last version written without `molted_from`.
+            version: 30,
+            extent: event_log::LogExtent {
+                generation: 0,
+                offset: std::fs::metadata(&paths.events_log).unwrap().len(),
+            },
+            raw_agents: vec![agent("claude", "launch_new", AgentStatus::Running, 0)],
+            resume_outcomes: Vec::new(),
+            agent_identity: AgentIdentityState::default(),
+            saw_session_rebirth: false,
+        },
+    )
+    .unwrap();
+    let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "launch_new")
+            .unwrap()
+            .molted_from
+            .as_deref(),
+        Some("launch_old")
+    );
+}
+
+#[test]
 fn picker_revive_links_survive_rollup_cache_and_carryover() {
     for carryover in [false, true] {
         let dir = tempfile::tempdir().unwrap();

@@ -702,6 +702,8 @@ fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub molted_from: Option<AgentSessionId>,
     pub agent_id: AgentSessionId,
     /// Current RimZ launch identity. Unlike `agent_id`, this survives adoption
     /// of the provider's native session id and remains equal to the id exported
@@ -1027,6 +1029,38 @@ pub struct AgentState {
     pub registered_at: Option<Timestamp>,
 }
 
+/// The live molt successor, following ended or failed intermediates in `agents`.
+pub fn standing_successor<'a>(
+    agents: impl IntoIterator<Item = &'a AgentState>,
+    predecessor: &AgentSessionId,
+) -> Option<&'a AgentState> {
+    let agents: Vec<_> = agents.into_iter().collect();
+    let mut pending = vec![predecessor];
+    let mut visited = BTreeSet::new();
+    while let Some(predecessor) = pending.pop() {
+        if !visited.insert(predecessor) {
+            continue;
+        }
+        for agent in agents
+            .iter()
+            .copied()
+            .filter(|agent| agent.molted_from.as_ref() == Some(predecessor))
+        {
+            if molt_stands(agent) {
+                return Some(agent);
+            }
+            pending.extend(agent.identity_ids());
+        }
+    }
+    None
+}
+
+/// A row stands unless it ended or its provisional launch failed.
+pub(crate) fn molt_stands(agent: &AgentState) -> bool {
+    agent.ended_at.is_none()
+        && !(agent.status == AgentStatus::Failed && agent.agent_id.is_provisional())
+}
+
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
@@ -1109,6 +1143,7 @@ impl AgentState {
     ) -> Self {
         Self {
             agent_id,
+            molted_from: None,
             launch_id: None,
             prior_launch_ids: Vec::new(),
             system_prompt_digest: None,
