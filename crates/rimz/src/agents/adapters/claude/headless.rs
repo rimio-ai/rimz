@@ -83,7 +83,7 @@ impl HeadlessForm for ClaudeHeadless {
             Ok(output) => output,
             Err(error) => {
                 return HeadlessResult {
-                    error: Some(format!("invalid Claude check output: {error}")),
+                    error: Some(format!("invalid Claude check output: {error}").into()),
                     ..Default::default()
                 };
             }
@@ -102,25 +102,31 @@ impl HeadlessForm for ClaudeHeadless {
             ..Default::default()
         };
         if output.is_error {
-            result.error = Some(format!(
-                "Claude check failed: {}",
-                output
-                    .result
-                    .or(output.subtype)
-                    .unwrap_or_else(|| "provider error".into())
-            ));
+            let text = output
+                .result
+                .or(output.subtype)
+                .unwrap_or_else(|| "provider error".into());
+            let class = super::statusline::classify_api_error(None, None, Some(&text));
+            result.error = Some(crate::agents::HeadlessError {
+                kind: if matches!(
+                    class,
+                    crate::agents::TurnErrorClass::PausedRateLimit
+                        | crate::agents::TurnErrorClass::PausedSpendLimit
+                ) {
+                    crate::agents::HeadlessErrorKind::ProviderLimit
+                } else {
+                    crate::agents::HeadlessErrorKind::Other
+                },
+                text: format!("Claude check failed: {text}"),
+            });
             return result;
         }
         let verdict = output
             .structured_output
-            .ok_or_else(|| "Claude check output has no structured_output".to_owned())
-            .and_then(|value| {
-                serde_json::from_value(value)
-                    .map_err(|error| format!("invalid Claude check verdict: {error}"))
-            });
+            .ok_or_else(|| "Claude check output has no structured_output".to_owned());
         match verdict {
             Ok(verdict) => result.verdict = Some(verdict),
-            Err(error) => result.error = Some(error),
+            Err(error) => result.error = Some(error.into()),
         }
         result
     }

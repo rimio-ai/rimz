@@ -239,31 +239,47 @@ pub(crate) fn run_bounded_output(
     command: &mut Command,
     timeout: Duration,
 ) -> io::Result<BoundedOutput> {
-    run_bounded(command, timeout, None)
+    run_bounded(command, timeout, None, |_| Ok(()))
 }
 
 /// [`run_bounded_output`] that also stops when `interrupted` answers true:
 /// the process group is killed and reaped, and the run returns
 /// [`io::ErrorKind::Interrupted`].
-pub(crate) fn run_bounded_output_interruptible(
+#[cfg(test)]
+fn run_bounded_output_interruptible(
+    command: &mut Command,
+    timeout: Duration,
+    interrupted: impl FnMut() -> bool,
+) -> io::Result<BoundedOutput> {
+    run_bounded_output_hosted(command, timeout, interrupted, |_| Ok(()))
+}
+
+pub(crate) fn run_bounded_output_hosted(
     command: &mut Command,
     timeout: Duration,
     mut interrupted: impl FnMut() -> bool,
+    spawned: impl FnOnce(u32) -> io::Result<()>,
 ) -> io::Result<BoundedOutput> {
-    run_bounded(command, timeout, Some(&mut interrupted))
+    run_bounded(command, timeout, Some(&mut interrupted), spawned)
 }
 
 fn run_bounded(
     command: &mut Command,
     timeout: Duration,
     interrupted: Option<&mut dyn FnMut() -> bool>,
+    spawned: impl FnOnce(u32) -> io::Result<()>,
 ) -> io::Result<BoundedOutput> {
     super::testkit::count_spawn();
     command.process_group(0);
-    let child = command
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    if let Err(error) = spawned(child.id()) {
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+        let _ = child.wait();
+        return Err(error);
+    }
     let output = pump_child_until(
         child,
         None,

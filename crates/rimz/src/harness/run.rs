@@ -185,6 +185,7 @@ pub struct SupervisedRunRequest {
     pub verify: Option<String>,
     pub max_attempts: Option<u32>,
     pub loop_task: Option<String>,
+    pub workflow: Option<crate::agents::WorkflowAttemptRef>,
     /// The `### Loop` reminder body the loop fire composed; every attempt's
     /// pane request carries it.
     pub loop_reminder: Option<String>,
@@ -239,6 +240,7 @@ impl SupervisedRunRequest {
             verify: None,
             max_attempts: None,
             loop_task: None,
+            workflow: None,
             loop_reminder: None,
             passthrough: Vec::new(),
             managed_launch,

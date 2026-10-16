@@ -543,6 +543,22 @@ fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
     assert!(crate::address::role_holders(snapshot.agents.iter(), "reviewer").is_empty());
 }
 
+#[test]
+fn pre_workflow_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let snapshot = rebuild(&paths).unwrap();
+    let mut legacy = serde_json::to_value(snapshot).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(43);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "a pre-workflow view must be refolded"
+    );
+}
+
 /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
 /// cache: the reader a new binary starts with, for a check whose
 /// production path is always a cold-cache event.

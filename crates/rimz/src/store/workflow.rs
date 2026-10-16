@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::disk::lock::WorkspaceLock;
 use crate::disk::paths::{StatePaths, WorkflowPaths};
-use crate::ids::{RunId, WorkflowRunId};
+use crate::ids::{AgentKind, RunId, WorkflowRunId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowStoreErr {
@@ -81,6 +81,8 @@ pub enum ParkReason {
     Deadline,
     Timeout,
     Invalid,
+    Asked,
+    Check,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -115,6 +117,7 @@ pub struct KeyVisits {
 pub enum AttemptKind {
     Script,
     Agent,
+    Judge,
     Team,
     Workflow,
 }
@@ -126,12 +129,51 @@ pub struct Host {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HostChild {
+    pub pid: u32,
+    pub start: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AttemptRun {
+    pub run_id: RunId,
+    pub handle: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndCause {
+    Lifecycle,
+    Timeout,
+    Deadline,
+    Cancel,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ending {
+    pub outcome: AttemptOutcome,
+    pub cause: EndCause,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LiveAttempt {
     pub kind: AttemptKind,
     pub seq: u64,
     pub node: String,
     pub started_at: Timestamp,
     pub host: Host,
+    #[serde(default)]
+    pub child: Option<HostChild>,
+    #[serde(default)]
+    pub run: Option<AttemptRun>,
+    #[serde(default)]
+    pub head_start: Option<String>,
+    #[serde(default)]
+    pub digests: BTreeMap<String, String>,
+    #[serde(default)]
+    pub ending: Option<Ending>,
+    #[serde(default)]
+    pub retry: Option<Value>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub woken: bool,
 }
@@ -142,7 +184,41 @@ pub enum AttemptOutcome {
     Ended,
     Died,
     Timeout,
+    Asked,
+    Limited,
     Canceled,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Limited {
+    pub reset_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Asked {
+    pub text: String,
+    pub kind: String,
+    pub handle: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TeamRef {
+    pub name: String,
+    pub channel: String,
+    pub stage: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChildRef {
+    pub handle: String,
+    pub kind: AgentKind,
+    pub team: Option<TeamRef>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Children {
+    pub stopped: Vec<ChildRef>,
+    pub live: Vec<ChildRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -159,7 +235,13 @@ pub struct PreviousAttempt {
     pub claim_path: PathBuf,
     pub head_start: Option<String>,
     pub head_end: Option<String>,
-    pub children: Option<Value>,
+    pub children: Option<Children>,
+    #[serde(default)]
+    pub limited: Option<Limited>,
+    #[serde(default)]
+    pub asked: Option<Asked>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,6 +281,8 @@ pub struct RunRecord {
     pub attempt: Option<LiveAttempt>,
     pub prev_attempt: Option<PreviousAttempt>,
     pub terminal_at: Option<Timestamp>,
+    #[serde(default)]
+    pub check_retry: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,6 +305,10 @@ pub enum JournalEvent {
         ended_at: Timestamp,
         #[serde(skip_serializing_if = "Option::is_none")]
         stderr_tail: Option<String>,
+        #[serde(default)]
+        cost_usd: Option<f64>,
+        #[serde(default)]
+        retry: Option<Value>,
     },
     Attempt {
         outcome: AttemptOutcome,
@@ -229,6 +317,24 @@ pub enum JournalEvent {
         digests: BTreeMap<String, String>,
         started_at: Timestamp,
         ended_at: Timestamp,
+        #[serde(default)]
+        handle: Option<String>,
+        #[serde(default)]
+        run_id: Option<RunId>,
+        #[serde(default)]
+        head_start: Option<String>,
+        #[serde(default)]
+        head_end: Option<String>,
+        #[serde(default)]
+        cost_usd: Option<f64>,
+        #[serde(default)]
+        children: Option<Children>,
+        #[serde(default)]
+        limited: Option<Limited>,
+        #[serde(default)]
+        asked: Option<Asked>,
+        #[serde(default)]
+        reason: Option<String>,
     },
     Wait {
         outcome: String,

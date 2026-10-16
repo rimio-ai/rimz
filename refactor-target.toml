@@ -217,7 +217,8 @@ upward-dependencies = ["address"]
 # empty_dir::Decision and decide replace the public prepare entry point (+1 net).
 # standing_successor, molt_stands, and yields_molt_seat share molt standing and role eligibility (+3).
 # pricing::cache_rewarm_cost_usd shares the spending cache-write price with the sidebar producer (+1).
-surface-budget = 1083
+# WorkflowAttemptRef/Role and HeadlessError/Kind share workflow identity and typed headless failures (+4).
+surface-budget = 1087
 
 [[verdict]]
 kind = "item"
@@ -522,7 +523,8 @@ allowed-dependencies = [
 # Empty-dir root, room and candidate paths stay in the disk path boundary (+3).
 # Machine GC resolves empty roots under explicit homes (+1).
 # WorkflowPaths, its accessors, definition paths, and run discovery share the classed path boundary (+9).
-surface-budget = 256
+# WorkflowPaths::check_output owns per-attempt judge output paths (+1).
+surface-budget = 257
 
 [[verdict]]
 kind = "item"
@@ -744,7 +746,9 @@ path = "crates/rimz/src/harness"
 # workflow::{schema, validate, Validation, SpecErr} and report vocabulary cross the CLI boundary (+6).
 # workflow::{WorkflowErr, create, advance, cancel, resume, wake} expose run control to the CLI (+6).
 # run::rekey_team_run, the trunk's molt re-export, takes the slack the workflow budget assumed (+1).
-surface-budget = 873 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
+# Shared spend ladder, fresh-offer facts, and redemption selection (+13).
+# headless shares HeadlessProfile, its resolve/prepare stages, typed errors and execution edges (+8).
+surface-budget = 881
 
 [[verdict]]
 kind = "item"
@@ -1167,7 +1171,8 @@ path = "crates/rimz/src/store"
 # AgentCard::open_ask shares the displayed-wait gate with the sidebar (+1).
 # RuntimeProjection::runtime_from_refs lets address tests project molt chains so supersession is computed, not asserted in (+1).
 # FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
-surface-budget = 455
+# Workflow attempt process, run, ending, ask, limit and child vocabulary is shared with the harness (+8).
+surface-budget = 463
 
 [[verdict]]
 kind = "item"
@@ -6852,3 +6857,118 @@ reason = "Workflow run admission and off-lock execution share the testkit runner
 kind = "item"
 key = "cli::render::status::workflow"
 reason = "Workflow list and detail views resolve typed run state through the shared theme core."
+
+[[verdict]]
+kind = "item"
+key = "agents::WorkflowAttemptRef"
+reason = "Launch identity is owned below Store so observations and supervised records share it without an agents-to-store dependency."
+
+[[verdict]]
+kind = "item"
+key = "agents::WorkflowAttemptRole"
+reason = "Launch compilation distinguishes workflow step and judge posture."
+
+[[verdict]]
+kind = "item"
+key = "agents::HeadlessError"
+reason = "Headless consumers retain provider-neutral failure text and classification."
+
+[[verdict]]
+kind = "item"
+key = "agents::HeadlessErrorKind"
+reason = "Workflow retry policy distinguishes typed provider limits from other failures."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths::check_output"
+reason = "Judge output paths stay inside the classed workflow path boundary."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::HostChild"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::AttemptRun"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::EndCause"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Ending"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Limited"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Asked"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::TeamRef"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::ChildRef"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::Children"
+reason = "Workflow attempts share durable process, run, stop, ask, limit, and lineage vocabulary with the engine and CLI."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless"
+reason = "Loop and workflow judges share profile admission and launch preparation outside the sidebar graph."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::HeadlessErr"
+reason = "Shared headless launch preparation returns typed failures to its consumers."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::HeadlessProfile"
+reason = "Staged headless admission lets loop-only scope refusals run before launch preparation."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::HeadlessProfile::resolve"
+reason = "Loop and workflow judges share profile, permission, and account resolution."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::HeadlessProfile::prepare"
+reason = "Loop and workflow judges share launch-plan compilation and materialization."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::ProcessErr"
+reason = "Bounded headless execution preserves folder refusal versus I/O failure."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::execute"
+reason = "The loop runner retains its injectable process-runner signature."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::execute_hosted"
+reason = "Workflow judges can publish their process-group leader before bounded pumping starts."
+
+[[verdict]]
+kind = "item"
+key = "proc::run_bounded_output_hosted"
+reason = "Hosted checks publish child identity synchronously after spawn and reap the group if publication fails."

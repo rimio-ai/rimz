@@ -2,6 +2,40 @@ use super::*;
 use crate::store::workflow::RunState;
 use serde_json::json;
 
+#[test]
+fn child_start_mismatch_or_missing_token_never_kills_a_group() {
+    use std::os::unix::process::CommandExt;
+    for start in [None, Some("not-this-process".to_owned())] {
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let spec = spec();
+        let paths = paths();
+        let mut record = record();
+        record.attempt.as_mut().unwrap().child = Some(crate::store::workflow::HostChild {
+            pid: child.id(),
+            start,
+        });
+        let t = Transition {
+            now: record.entered_at,
+            record,
+            spec: &spec,
+            paths: &paths,
+            entries: vec![],
+        };
+        t.kill_child();
+        let survived = child.try_wait().unwrap().is_none();
+        let _ = child.kill();
+        child.wait().unwrap();
+        assert!(
+            survived,
+            "an unproven child identity must not receive a signal"
+        );
+    }
+}
+
 fn record() -> RunRecord {
     serde_json::from_value(json!({
         "version":1, "id":"wf_0190b8172c0070008000000000000001", "workflow":"review",

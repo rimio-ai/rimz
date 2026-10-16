@@ -1300,6 +1300,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
         request.identity.name = Some("headless-test".into());
         request.identity.params.loop_task = Some("guard".into());
         request.headless = Some(HeadlessRequest {
+            schema_open: false,
             schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
             schema_file: state
                 .temp_unit_dir(Some("headless-test"))

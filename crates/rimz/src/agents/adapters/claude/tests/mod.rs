@@ -34,6 +34,7 @@ fn system_prompt_snapshot_requires_a_known_supported_version() {
 #[test]
 fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
     let request = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: "/unused/schema.json".into(),
         verdict_file: "/unused/verdict.json".into(),
@@ -49,10 +50,7 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
     );
     assert_eq!(
         result.verdict,
-        Some(crate::agents::HeadlessVerdict {
-            pass: false,
-            reason: "Nothing to do.".into()
-        })
+        Some(json!({"pass":false,"reason":"Nothing to do."}))
     );
     assert_eq!(result.cost_usd, Some(0.003));
     assert_eq!(result.input_tokens, Some(60));
@@ -76,6 +74,7 @@ fn headless_result_reads_structured_verdict_cost_and_all_input_tokens() {
 #[test]
 fn headless_result_rejects_malformed_and_provider_error_verdicts() {
     let request = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: "/unused/schema.json".into(),
         verdict_file: "/unused/verdict.json".into(),
@@ -96,9 +95,30 @@ fn headless_result_rejects_malformed_and_provider_error_verdicts() {
             false,
             &crate::agents::pricing::PriceBook::fixture(),
         );
-        assert!(result.error.is_some(), "{stdout}");
-        assert_eq!(result.verdict, None);
+        let verdict = result
+            .verdict
+            .and_then(|value| serde_json::from_value::<crate::agents::HeadlessVerdict>(value).ok());
+        assert_eq!(verdict, None, "{stdout}");
+        if stdout.contains("quota exhausted") {
+            assert_eq!(
+                result.error.unwrap().kind,
+                crate::agents::HeadlessErrorKind::ProviderLimit
+            );
+        }
     }
+    let result = CLAUDE_DESCRIPTOR.launch.headless.unwrap().read_result(
+        br#"{"structured_output":{"outcome":"wait","key":7,"extra":"allowed"}}"#,
+        b"",
+        &request,
+        None,
+        false,
+        &crate::agents::pricing::PriceBook::fixture(),
+    );
+    assert_eq!(
+        result.verdict,
+        Some(json!({"outcome":"wait","key":7,"extra":"allowed"}))
+    );
+    assert_eq!(result.error, None);
 }
 
 #[test]
@@ -114,6 +134,7 @@ fn headless_settings_merge_pending_host_skills_without_another_settings_flag() {
     })
     .unwrap();
     let request = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),

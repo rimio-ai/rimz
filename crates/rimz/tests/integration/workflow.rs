@@ -801,13 +801,71 @@ fn cancel_interrupts_live_evaluation_and_first_terminal_wins() {
 }
 
 #[test]
+fn another_process_kills_a_stalled_hosts_script_on_cancel_or_bound() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    for bounded in [false, true] {
+        let spec = format!(
+            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\ntimeout = '1h'\n"
+        );
+        let (env, _) = fixture(&spec, "exec sleep 60\n");
+        let id = start(&env, None);
+        let value = until(&env, &id, |value| {
+            value["record"]["attempt"]["child"]["pid"].is_number()
+        });
+        let host = value["record"]["attempt"]["host"]["pid"].as_u64().unwrap() as i32;
+        let child = value["record"]["attempt"]["child"]["pid"].as_u64().unwrap() as u32;
+        let state =
+            rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
+        // Publication precedes unlock; stop only after the host released that lock.
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        kill(Pid::from_raw(host), Signal::SIGSTOP).unwrap();
+        struct ResumeHost(i32);
+        impl Drop for ResumeHost {
+            fn drop(&mut self) {
+                let _ = kill(Pid::from_raw(self.0), Signal::SIGCONT);
+            }
+        }
+        let resume = ResumeHost(host);
+        if bounded {
+            let mut record = value["record"].clone();
+            record["entered_at"] = json!("2000-01-01T00:00:00Z");
+            let path = Path::new(value["dir"].as_str().unwrap())
+                .parent()
+                .unwrap()
+                .join("record.json");
+            fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+        }
+        drop(guard);
+        success(command(
+            &env,
+            &["workflow", if bounded { "advance" } else { "cancel" }, &id],
+        ));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while rimz::proc::process_is_live(child, None) {
+            assert!(
+                Instant::now() < deadline,
+                "the second process must kill the group while its host is stopped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let value = show(&env, &id);
+        assert_eq!(
+            events(&value, "evaluation")[0]["outcome"],
+            if bounded { "timeout" } else { "canceled" }
+        );
+        drop(resume);
+    }
+}
+
+#[test]
 fn concurrent_advance_does_not_mutate_live_attempt() {
     let (env, _) = fixture(
         &format!("{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"),
         "exec sleep 60",
     );
     let id = start(&env, None);
-    let value = until(&env, &id, |v| v["record"]["attempt"].is_object());
+    let value = until(&env, &id, |v| v["record"]["attempt"]["child"].is_object());
     success(command(&env, &["workflow", "advance", &id]));
     assert_eq!(
         show(&env, &id),

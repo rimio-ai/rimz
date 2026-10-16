@@ -76,6 +76,8 @@ impl Transition<'_> {
             Some(seq),
             JournalEvent::Evaluation {
                 outcome: outcome.clone(),
+                cost_usd: None,
+                retry: None,
                 object: object.clone(),
                 digests,
                 started_at,
@@ -223,6 +225,7 @@ impl Transition<'_> {
     }
 
     pub(super) fn end_step(&mut self, outcome: AttemptOutcome, digests: BTreeMap<String, String>) {
+        self.kill_child();
         let Some(attempt) = self.record.attempt.take() else {
             return;
         };
@@ -235,6 +238,15 @@ impl Transition<'_> {
         self.push(
             Some(attempt.seq),
             JournalEvent::Attempt {
+                handle: None,
+                run_id: None,
+                head_start: None,
+                head_end: None,
+                cost_usd: None,
+                children: None,
+                limited: None,
+                asked: None,
+                reason: None,
                 outcome,
                 visit,
                 key: self.record.key.clone(),
@@ -257,6 +269,9 @@ impl Transition<'_> {
             head_start: None,
             head_end: None,
             children: None,
+            limited: None,
+            asked: None,
+            cost_usd: None,
         });
     }
 
@@ -279,10 +294,13 @@ impl Transition<'_> {
     }
 
     pub(super) fn abandon_check(&mut self, outcome: &str) {
+        self.kill_child();
         if let Some(attempt) = self.record.attempt.take() {
             self.push(
                 Some(attempt.seq),
                 JournalEvent::Evaluation {
+                    cost_usd: None,
+                    retry: None,
                     outcome: outcome.into(),
                     object: Value::Null,
                     digests: BTreeMap::new(),
@@ -359,6 +377,27 @@ impl Transition<'_> {
             )?;
         }
         Ok(true)
+    }
+
+    fn kill_child(&self) {
+        let Some(child) = self
+            .record
+            .attempt
+            .as_ref()
+            .and_then(|attempt| attempt.child.as_ref())
+        else {
+            return;
+        };
+        // An absent token cannot prove ownership of a PID recycled since publication.
+        if let Some(start) = &child.start
+            && crate::proc::process_start_token(child.pid).as_ref() == Some(start)
+            && let Ok(pid) = i32::try_from(child.pid)
+        {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
     }
 }
 

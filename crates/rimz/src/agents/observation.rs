@@ -118,6 +118,8 @@ impl std::fmt::Display for TierSkipReason {
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowAttemptRef>,
     /// Absolute host checkout displaced by empty-dir placement; absent when the key did not apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<String>,
@@ -205,6 +207,20 @@ pub struct LaunchParams {
     /// The reducer derives it when the event omits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowAttemptRef {
+    pub run: crate::ids::WorkflowRunId,
+    pub seq: u64,
+    pub role: WorkflowAttemptRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowAttemptRole {
+    Step,
+    Judge,
 }
 
 /// One provider-neutral parent candidate for a hook whose own session id may

@@ -34,6 +34,7 @@ pub const HOOK_ENV_NAMES: &[&str] = &[
     "RIMZ_AGENT_PID",
     "RIMZ_HOOK_OWNER_KIND",
     "RIMZ_RUN_ID",
+    "RIMZ_WORKFLOW_RUN",
     "RIMZ_WORKSPACE_ID",
     "RIMZ_PROJECT_ROOT",
     "RIMZ_WORKTREE_PATH",

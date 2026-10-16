@@ -103,7 +103,8 @@ pub use folder_trust::{
     folder_trust_rows, grant_folder_trust,
 };
 pub use headless::{
-    CHECK_VERDICT_SCHEMA, HeadlessForm, HeadlessRequest, HeadlessResult, HeadlessVerdict,
+    CHECK_VERDICT_SCHEMA, HeadlessError, HeadlessErrorKind, HeadlessForm, HeadlessRequest,
+    HeadlessResult, HeadlessVerdict,
 };
 pub use hook_types::{HookOutput, HookReply, HookRouting};
 use identity::{RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity};
@@ -125,6 +126,7 @@ pub use observation::{
     AgentLifecycleObservation, AgentUsageSummary, AnsweredQuestion, AskQueueEdit, LaunchParams,
     LaunchRecord, LaunchedBy, QueuedQuestion, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
     SubagentCorrelationInput, SubagentSpawnInput, TierSkip, TierSkipReason, TierStamp,
+    WorkflowAttemptRef, WorkflowAttemptRole,
 };
 pub use open_ask::{AskRoute, OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub use park::ParkDemotion;

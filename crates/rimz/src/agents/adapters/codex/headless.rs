@@ -47,11 +47,14 @@ impl HeadlessForm for CodexHeadless {
             "features.hooks=false".into(),
             "exec".into(),
             "--json".into(),
-            "--output-schema".into(),
-            request.schema_file.display().to_string(),
-            "-o".into(),
-            request.verdict_file.display().to_string(),
         ]);
+        if !request.schema_open {
+            argv.extend([
+                "--output-schema".into(),
+                request.schema_file.display().to_string(),
+            ]);
+        }
+        argv.extend(["-o".into(), request.verdict_file.display().to_string()]);
         if let Some(prompt) = prompt {
             argv.extend(["--".into(), prompt.to_owned()]);
         }
@@ -106,7 +109,7 @@ impl HeadlessForm for CodexHeadless {
             });
         match verdict {
             Ok(verdict) => result.verdict = Some(verdict),
-            Err(error) => result.error = Some(error),
+            Err(error) => result.error = Some(error.into()),
         }
         result
     }

@@ -243,6 +243,10 @@ pub struct WorkflowPaths {
 }
 
 impl WorkflowPaths {
+    pub fn check_output(&self, seq: u64) -> PathBuf {
+        self.work.join(format!("{seq}.check.json"))
+    }
+
     pub fn signs(&self, step: Option<&str>) -> PathBuf {
         let dir = self.work.join("signs");
         match step {

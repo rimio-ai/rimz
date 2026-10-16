@@ -671,6 +671,26 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             );
         }
     }
+    for key in ["RIMZ_WORKFLOW_RUN", "RIMZ_WORKFLOW_DIR"] {
+        unset.insert(key.to_owned(), sandbox::EnvPin::Unset);
+    }
+    if let Some(workflow) = &request.identity.params.workflow {
+        unset.insert(
+            "RIMZ_WORKFLOW_RUN".to_owned(),
+            sandbox::EnvPin::Set(workflow.run.to_string()),
+        );
+        unset.insert(
+            "RIMZ_WORKFLOW_DIR".to_owned(),
+            sandbox::EnvPin::Set(
+                inputs
+                    .state
+                    .workflow(&workflow.run)
+                    .work
+                    .display()
+                    .to_string(),
+            ),
+        );
+    }
     if !unset.is_empty() {
         process.pin_env(unset);
     }
@@ -716,6 +736,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 cwd: inputs.cwd,
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
+                read_only: Vec::new(),
                 tmp_dir: &unit,
                 skills_dir: &inputs
                     .state

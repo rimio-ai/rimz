@@ -262,6 +262,8 @@ fn reason_word(reason: records::ParkReason) -> &'static str {
         ParkReason::Deadline => "deadline",
         ParkReason::Timeout => "timeout",
         ParkReason::Invalid => "invalid",
+        ParkReason::Asked => "asked",
+        ParkReason::Check => "check",
     }
 }
 

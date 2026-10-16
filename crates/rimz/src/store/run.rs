@@ -221,6 +221,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<crate::agents::WorkflowAttemptRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<RunVerify>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
@@ -441,6 +443,7 @@ impl RunRecord {
             failure_tail: None,
             retry_of: None,
             loop_task: None,
+            workflow: None,
             verify: None,
             status: RunStatus::Pending,
             permission_mode,

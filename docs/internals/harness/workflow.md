@@ -5,7 +5,7 @@ A workflow is a durable run through a flat graph of checks and steps. The run re
 ## Where the code lives
 
 - `crates/rimz/src/harness/workflow/engine.rs::advance` owns the locked decision, off-lock evaluation, and sequence-checked settlement loop; `create`, `cancel`, `resume`, and `wake` are the run-control entries in that module.
-- `crates/rimz/src/harness/workflow/state.rs::Transition` owns record-only routing and bound decisions; `crates/rimz/src/harness/workflow/script.rs::evaluate` hosts the interruptible process group.
+- `crates/rimz/src/harness/workflow/state.rs::Transition` owns locked routing, bound decisions, and hosted-child termination; `crates/rimz/src/harness/workflow/script.rs::evaluate` hosts the interruptible process group.
 - `crates/rimz/src/store/workflow.rs::RunRecord` owns the persisted vocabulary; its module owns the record and journal codecs, not transitions.
 - `crates/rimz/src/cli/workflow.rs::run` parses and presents without creating rooms. `crates/rimz/src/harness/schedule/signal.rs::wake_workflows` is the read-and-spawn signal edge; `crates/rimz/src/store/gc/classes.rs::collect_owned` owns terminal-home retention.
 
@@ -49,7 +49,7 @@ Journal entries carry time, node, optional attempt sequence, and an event: evalu
 
 ## Evaluation and routing
 
-The host is the short-lived `advance` process, not a supervised run. A lightweight supervised run would require agent launch machinery for a script that only needs a process group and deadline. The record first publishes a live attempt (`kind = script`, sequence, node, start time, host PID and process-start token). Preparation publishes its context under the same workspace lock, so a stale host cannot overwrite a newer attempt's context. No evaluation runs under the workspace lock. A second advance leaves a live host alone. A dead or reused host identity becomes `canceled`: a check re-runs without counting a step visit; a step substitute keeps the visit counted at launch and follows `then` with a canceled previous attempt.
+The host is the short-lived `advance` process, not a supervised run. A lightweight supervised run would require agent launch machinery for a script that only needs a process group and deadline. The record first publishes a live attempt (`kind = script`, sequence, node, start time, host PID and process-start token). Preparation publishes its context under the same workspace lock, so a stale host cannot overwrite a newer attempt's context. The lock is released after child publication, before waiting for output. A second advance leaves a live host alone. A dead or reused host identity becomes `canceled`: a check re-runs without counting a step visit; a step substitute keeps the visit counted at launch and follows `then` with a canceled previous attempt.
 
 Scripts have scope checkout cwd, null stdin, the room workspace pin, and `RIMZ_WORKFLOW_DIR`. Context contains `run`, `prompt`, `node`, `seq`, `key`, `input`, `output_path` (null for script checks), `signs_path`, and `prev_attempt`. Only steps have `visit` (under the current key) and `visits` (total), including this launch. Previous attempts expose step, outcome, sequence, visit, key, start/end, claim path, and nullable handle, supervised run id, HEAD pair, and children. Agent-dependent fields are null in this milestone.
 
@@ -59,7 +59,7 @@ Before settlement the host re-locks and verifies the live sequence. A stale resu
 
 Every advance checks bounds before waiting. Deadline fires once, with `{outcome: deadline, deadline: T}` as input, then stops gating until extended. A check timeout spans all its evaluations and waits; it routes `{outcome: timeout, node: C, timeout: S}`. A step timeout ends the attempt and follows `then`. A step launch over `max-visits + visit_grant` launches nothing and routes `{outcome: cap, step: S, visits: N, max: M}`. Engine objects inherit the current key.
 
-A running host re-reads the record at the bounded subprocess runner's interrupt cadence. Cancel or a replaced live sequence kills and reaps the script process group; live deadlines and timeout decisions are checked against fresh record state. A SIGKILLed host can orphan a script group, which may overlap its replacement. This is why checks are idempotent, not exactly-once effects.
+A running host re-reads the record at the bounded subprocess runner's interrupt cadence. Spawn and publication of the child's group-leader PID and process-start token share the workspace lock with cancel and bounds. Any advance or cancel kills the recorded group under that lock before withdrawing the attempt, including when its host is stalled or dead, but only when the child's start token still matches. Missing or changed tokens never authorize a signal. The host reaps its child when it resumes; its stale sequence cannot settle again. Checks remain idempotent, not exactly-once effects: a host can die after a script's effects but before settlement.
 
 One advance continues through transitions until it waits, parks, terminates, encounters a live host, or would evaluate a check twice without a step attempt between. Repeated cap-only routes also yield rather than spin without launching anything. These guards leave the run active for a future wake. One transition per wake would stall check chains in this milestone, which has no scheduler ticker.
 

@@ -20,9 +20,42 @@ mod project_trust;
 mod transcript;
 
 #[test]
+fn headless_schema_enforcement_matches_the_schema_contract() {
+    let root = tempfile::tempdir().unwrap();
+    let form = CODEX_DESCRIPTOR.launch.headless.unwrap();
+    for schema_open in [false, true] {
+        let request = crate::agents::HeadlessRequest {
+            schema: "{}".into(),
+            schema_open,
+            schema_file: root.path().join("schema.json"),
+            verdict_file: root.path().join("verdict.json"),
+        };
+        let argv = form
+            .render_argv(
+                &[],
+                Some("Return one JSON object"),
+                &request,
+                root.path(),
+                (root.path(), &mut None),
+            )
+            .unwrap();
+        assert_eq!(
+            argv.iter().any(|arg| arg == "--output-schema"),
+            !schema_open,
+            "Codex strict output cannot accept an open schema"
+        );
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair == ["-o", request.verdict_file.to_str().unwrap()])
+        );
+    }
+}
+
+#[test]
 fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
     let root = tempfile::tempdir().unwrap();
     let request = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
@@ -50,10 +83,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
     );
     assert_eq!(
         result.verdict,
-        Some(crate::agents::HeadlessVerdict {
-            pass: true,
-            reason: "Work remains.".into()
-        })
+        Some(json!({"pass":true,"reason":"Work remains."}))
     );
     assert_eq!(result.input_tokens, Some(100));
     assert_eq!(result.output_tokens, Some(5));
@@ -130,6 +160,7 @@ fn headless_result_reads_verdict_file_and_prices_last_completed_turn() {
 fn headless_result_rejects_missing_and_malformed_verdict_files() {
     let root = tempfile::tempdir().unwrap();
     let request = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),
@@ -145,8 +176,14 @@ fn headless_result_rejects_missing_and_malformed_verdict_files() {
     ] {
         std::fs::write(&request.verdict_file, verdict).unwrap();
         let result = form.read_result(b"", b"", &request, None, false, &prices);
-        assert!(result.error.is_some());
-        assert_eq!(result.verdict, None);
+        assert!(
+            result
+                .verdict
+                .and_then(
+                    |value| serde_json::from_value::<crate::agents::HeadlessVerdict>(value).ok()
+                )
+                .is_none()
+        );
     }
     std::fs::remove_file(&request.verdict_file).unwrap();
     let result = form.read_result(b"not JSON", b"", &request, None, false, &prices);
