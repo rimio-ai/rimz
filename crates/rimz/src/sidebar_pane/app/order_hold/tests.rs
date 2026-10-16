@@ -420,6 +420,32 @@ fn apply_order_hold_arms_holds_and_expires() {
 }
 
 #[test]
+fn order_hold_preserves_partitions_when_a_middle_group_lands_or_revives() {
+    for was_finished in [false, true] {
+        let mut groups = vec![
+            group("a", vec![row("a1", "terminal_1")]),
+            group("b", vec![row("b1", "terminal_2")]),
+            group("c", vec![row("c1", "terminal_3")]),
+            group("external", vec![row("e1", "terminal_4")]),
+        ];
+        groups[1].finished = was_finished;
+        groups[2].finished = was_finished;
+        groups[3].kind = SidebarWorktreeKind::External;
+        let mut current = snapshot_with_groups(groups);
+        let mut ui = UiState::default();
+        ui.last_order = capture_order(&current, &ui);
+        apply_order_hold(&mut ui, &mut current, true, 1_000);
+
+        let changed = if was_finished { 2 } else { 1 };
+        std::sync::Arc::make_mut(&mut current.worktree_groups)[changed].finished = !was_finished;
+        apply_order_hold(&mut ui, &mut current, false, 1_001);
+
+        assert_eq!(group_keys(&current), vec!["a", "c", "b", "external"]);
+        assert!(ui.order_hold.is_some(), "the hold remains armed");
+    }
+}
+
+#[test]
 fn new_group_during_hold_stays_at_its_ranked_position_after_expiry() {
     let mut ui = UiState {
         last_order: FrozenOrder {

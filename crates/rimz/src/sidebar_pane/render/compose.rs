@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::agents::AgentStatus;
-use crate::config::ScrollbarMode;
+use crate::config::{GlyphRole, ScrollbarMode};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
@@ -15,7 +15,7 @@ use super::chrome::{
     FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
     repo_header_lines, search_line, truth_notice_lines,
 };
-use super::layout::pad_line_to;
+use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
     cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
@@ -1036,12 +1036,35 @@ pub(super) fn scroll_lines(
             delegation_overrides: &ui.delegation_overrides,
             delegation_history: &ui.delegation_history,
         };
-        // A group the make-up filter empties is skipped whole — header,
-        // rows, and separator — so the filtered body holds only worktrees
-        // with a matching row. A finished multi-agent pod whose collapse
-        // hides every row still renders its header and collapsed roster toggle.
+        let filtered = ui.make_up_filter.filter.is_some()
+            || ui
+                .search_draft
+                .as_ref()
+                .map_or(ui.make_up_filter.query.is_some(), |draft| !draft.is_empty());
+        let landed_count = snapshot
+            .worktree_groups
+            .iter()
+            .filter(|group| group.finished)
+            .count();
+        let mut landed_drawn = false;
         let mut emitted = false;
         for group in roster.groups() {
+            if group.source().finished && !filtered {
+                if !landed_drawn {
+                    if emitted {
+                        block.push_inert(Line::from(""));
+                    }
+                    block.push_target(
+                        pad_chrome(landed_line(theme, width, landed_count, ui.landed_open)),
+                        HitTarget::ToggleLanded,
+                    );
+                    landed_drawn = true;
+                    emitted = true;
+                }
+                if !ui.landed_open && group.is_empty() {
+                    continue;
+                }
+            }
             if group.is_empty() && group.hidden_count() == 0 {
                 continue;
             }
@@ -1059,6 +1082,35 @@ pub(super) fn scroll_lines(
     }
 
     block
+}
+
+fn landed_line(theme: &Theme, width: usize, count: usize, open: bool) -> Line<'static> {
+    let arrow = theme.glyph(if open {
+        GlyphRole::WorktreeLandedOpen
+    } else {
+        GlyphRole::WorktreeLandedClosed
+    });
+    let label = format!("{arrow} {count} landed {arrow}");
+    let width = content_width(width);
+    let spare = width.saturating_sub(text_width(&label));
+    let left = spare / 2;
+    let right = spare - left;
+    let dotted = theme.glyph(GlyphRole::WorktreeDotted);
+    let mut spans = Vec::new();
+    if left > 0 {
+        spans.push(Span::styled(
+            format!("{} ", dotted.repeat(left - 1)),
+            theme.faint(),
+        ));
+    }
+    spans.push(Span::styled(label, theme.muted()));
+    if right > 0 {
+        spans.push(Span::styled(
+            format!(" {}", dotted.repeat(right - 1)),
+            theme.faint(),
+        ));
+    }
+    Line::from(trim_spans_to_width(spans, width))
 }
 
 /// Append structural (non-row) lines, tagging each map slot `None` and opening

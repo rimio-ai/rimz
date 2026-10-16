@@ -710,6 +710,7 @@ pub fn render_expanded_line_ansi<W: Write>(
     snapshot.theme.display.card_density = CardDensityMode::Expanded;
     let mut ui = UiState {
         selected_index: Some(0),
+        landed_open: true,
         expanded_groups: snapshot
             .worktree_groups
             .iter()

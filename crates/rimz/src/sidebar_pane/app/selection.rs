@@ -400,6 +400,13 @@ pub(super) fn handle_mouse_click(
             toggle_group_expanded(ui, snapshot, group_key);
             InputOutcome::redraw()
         }
+        Some(HitTarget::ToggleLanded) => {
+            ui.landed_open = !ui.landed_open;
+            anchor_selection(ui, snapshot);
+            ui.offset_authoritative = true;
+            ui.scroll_ease.cancel();
+            InputOutcome::redraw()
+        }
         Some(HitTarget::ToggleDelegation { row, open }) => {
             set_delegation_open(ui, snapshot, row, open);
             InputOutcome::redraw()
