@@ -613,19 +613,20 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
 }
 
 /// The start directory's workspace, or an empty-dir caller's checkout, which holds its lane.
+///
+/// The caller's record decides, not the start path: a symlinked RimZ home
+/// resolves the empty dir to a path outside `empty_dir_root()`.
 fn resolve_caller_workspace() -> Result<rimz::ResolvedWorkspace> {
     let workspace = WorkspaceResolver::resolve(".", None)?;
-    if !workspace
-        .worktree_root
-        .starts_with(rimz::disk::paths::empty_dir_root())
-    {
-        return Ok(workspace);
-    }
-    let room = WorkspaceResolver::resolve_participant(".", None)?;
-    let Some(store) = crate::cli::open_existing_store(&room)? else {
+    let Ok(room) = WorkspaceResolver::resolve_participant(".", None) else {
         return Ok(workspace);
     };
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let Ok(Some(store)) = crate::cli::open_existing_store(&room) else {
+        return Ok(workspace);
+    };
+    let Ok(snapshot) = store.snapshot_cached() else {
+        return Ok(workspace);
+    };
     let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents) else {
         return Ok(workspace);
     };
