@@ -1,7 +1,8 @@
 use super::*;
 use crate::agents::context::{AgentContext, TurnSettle, TurnSettleOutcome};
 use crate::agents::{
-    AgentLifecycleObservation, LifecycleSignal, PendingWait, PendingWaitTrigger, PermissionMode,
+    AgentLifecycleObservation, LaunchParams, LifecycleSignal, PendingWait, PendingWaitTrigger,
+    PermissionMode,
 };
 use crate::ids::MuxName;
 use crate::store::idle_stop::IdleStopRequest;
@@ -40,6 +41,110 @@ fn rested() -> (AgentState, IdleStop) {
 }
 
 const DUE: i64 = 1_180;
+
+#[test]
+fn molted_team_seat_stops_before_done_but_keeps_context_if_successor_fails() {
+    let (_dir, store) = fixture();
+    let (mut predecessor, stop) = rested();
+    predecessor.team = Some("forge".into());
+    predecessor.role = Some("coder".into());
+    predecessor.launch_id = Some("launch_old".into());
+    let mut successor = predecessor.clone();
+    successor.agent_id = "launch_new".into();
+    successor.launch_id = Some(successor.agent_id.clone());
+    successor.molted_from = predecessor.launch_id.clone();
+    successor.status = AgentStatus::Running;
+    let batch = store
+        .begin_agent_launch_batch(
+            &[crate::store::writer::AgentLaunchRequest {
+                kind: successor.kind.clone(),
+                login: crate::store::writer::LaunchLogin::RoomDefault,
+                agent_id: successor.agent_id.clone(),
+                name: crate::store::writer::AgentLaunchName::Mint,
+                launch: LaunchParams {
+                    molted_from: successor.molted_from.clone(),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            }],
+            crate::store::writer::AgentLaunchScope {
+                session_name: "session".into(),
+                cwd: _dir.path().into(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        decide(
+            &store,
+            &[predecessor.clone(), successor.clone()],
+            &predecessor,
+            &stop,
+            ts(DUE)
+        )
+        .unwrap(),
+        Verdict::Stop { idle_secs: 180 }
+    );
+    store.fail_agent_launch_batch(&batch).unwrap();
+    for ended in [false, true] {
+        successor.status = AgentStatus::Failed;
+        successor.ended_at = ended.then_some(ts(1_100));
+        if ended {
+            observe(
+                &store,
+                successor.agent_id.as_str(),
+                None,
+                LifecycleSignal::Ended,
+            );
+        }
+        assert!(
+            matches!(decide(&store, &[predecessor.clone(), successor.clone()], &predecessor, &stop, ts(DUE)).unwrap(), Verdict::Hold(hold) if hold != Hold::Board)
+        );
+    }
+}
+
+#[test]
+fn an_ended_molt_intermediate_does_not_hold_its_predecessor_open() {
+    let (dir, store) = fixture();
+    let (mut predecessor, stop) = rested();
+    predecessor.team = Some("forge".into());
+    predecessor.role = Some("coder".into());
+    predecessor.launch_id = Some("launch_old".into());
+    for (id, from) in [
+        ("launch_middle", "launch_old"),
+        ("launch_new", "launch_middle"),
+    ] {
+        store
+            .begin_agent_launch_batch(
+                &[crate::store::writer::AgentLaunchRequest {
+                    kind: predecessor.kind.clone(),
+                    login: crate::store::writer::LaunchLogin::RoomDefault,
+                    agent_id: id.into(),
+                    name: crate::store::writer::AgentLaunchName::Mint,
+                    launch: LaunchParams {
+                        molted_from: Some(from.into()),
+                        ..Default::default()
+                    },
+                    run_id: None,
+                    prompt: None,
+                }],
+                crate::store::writer::AgentLaunchScope {
+                    session_name: "session".into(),
+                    cwd: dir.path().into(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap();
+    }
+    observe(&store, "launch_middle", None, LifecycleSignal::Ended);
+    assert_eq!(
+        decide_alone(&store, &predecessor, &stop, ts(DUE)),
+        Verdict::Stop { idle_secs: 180 }
+    );
+}
 
 fn decide_alone(store: &Store, agent: &AgentState, stop: &IdleStop, now: Timestamp) -> Verdict {
     decide(store, std::slice::from_ref(agent), agent, stop, now).expect("decide")

@@ -33,10 +33,10 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
     }
     let verdict = decide(&ctx.store, &snapshot.agents, agent, &stop, Timestamp::now())
         .context("deciding whether the idle stop is due")?;
-    let Verdict::Stop { idle_secs } = verdict else {
+    if !matches!(verdict, Verdict::Stop { .. }) {
         tracing::debug!(agent = %request.label, ?verdict, "idle stop held");
         return Ok(());
-    };
+    }
     // `decide` matches runs by session; the stop picks one by name, which
     // another kind's or session's live run can share.
     for target in std::iter::once(agent).chain(closing_with(&snapshot.agents, agent)) {
@@ -49,6 +49,11 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
     if pending().as_ref() != Some(&stop) {
         return Ok(());
     }
+    let Verdict::Stop { idle_secs } =
+        decide(&ctx.store, &snapshot.agents, agent, &stop, Timestamp::now())?
+    else {
+        return Ok(());
+    };
     // A stop that closes the agent's pane retires the session, and with it the
     // request; one that leaves the pane open leaves the request armed for the
     // producer's next ask.

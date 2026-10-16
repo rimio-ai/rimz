@@ -38,7 +38,7 @@ These handles name one agent:
 
 | Handle | Names |
 | --- | --- |
-| `@coder` | A team or ad-hoc role. It follows the launch's current conversation; earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
+| `@coder` | A team or ad-hoc role. It follows the launch's current conversation and yields to its standing molt successor, even before registration. If that successor fails before opening a session, the predecessor holds the role again. Earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
 | `@writer` | An explicit name from a single-agent launch, such as `rimz agents claude --name writer`. |
 | `@swift-otter` | The pet name RimZ gives every launch. |
 | `@claude-2` | A kind plus ordinal. Still accepted as a selector; listings show the pet name instead. |
@@ -879,7 +879,8 @@ The agent stops only when all of this holds at one check:
 - nothing is owed to it: no armed wait, no subagent or launched team still to report, no message queued or scheduled for it, and no open supervised run or peer turn, so a soft stop never cancels a run;
 - every live `rimz subagents` child the stop would close with it, at any depth, passes those same two checks. A child needs no rest of its own, but a message queued for a child you kept holds its parent until the message lands. A provider's own subagent is not checked: its row can read as working after it finished;
 - stopping it and those children would not cancel a run that is still open;
-- for a team seat, the team's board reads `Done`. A seat whose checkout has no board is held;
+- for a team seat, the team's board reads `Done`, or a molt successor stands in its place. Without a successor, a seat whose checkout has no board is held;
+- if it has molted, a successor still stands: an ended successor or one that failed before opening a session holds the predecessor open with its context;
 - it has rested for the whole duration, never a fraction of a second less, measured from the latest of the request, its last turn end or interruption, and the session's last recorded event. A new turn before then restarts the clock, and so does a compaction that failed.
 
 Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, any `restart` (one that resumes the same session included), or the agent exiting removes it, [`rimz reset`](./maintenance.md#reset-a-wedged-room) drops every pending request so a resumed agent never inherits one, and a stop that leaves the agent's pane open keeps it armed for the next check. A stop that closed the agent but failed elsewhere, on a child's pane for one, removes it with the session. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).
