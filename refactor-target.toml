@@ -519,7 +519,8 @@ allowed-dependencies = [
 # Session-role segments share the provider cursor's durable root (+2).
 # Queue writers and the host share RuntimePaths::message_wake_path (+1).
 # Empty-dir root, room and candidate paths stay in the disk path boundary (+3).
-surface-budget = 246
+# Machine GC resolves empty roots under explicit homes (+1).
+surface-budget = 247
 
 [[verdict]]
 kind = "item"
@@ -1446,7 +1447,8 @@ allowed-dependencies = [
     "workspace",
 ]
 # Room-scoped class and orphan-temp entry points complement the machine sweeps.
-surface-budget = 17
+# OrphanEmptyTree reports orphan empty-dir retention alongside pruned workspaces (+1).
+surface-budget = 18
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -6365,6 +6367,21 @@ reason = "Addressing, grouping, lane recovery and checkout protection prefer the
 kind = "item"
 key = "disk::paths::empty_dir_root"
 reason = "Machine trust and diagnostics locate the empty root through the classed-path boundary."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::empty_dir_root_under"
+reason = "Machine GC and StatePaths resolve the empty root under the same explicit home."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::prune::OrphanEmptyTree"
+reason = "Machine GC reports orphan empty-dir removals and grace retention to CLI consumers."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::prune::WorkspacePruneReport"
+reason = "The empty_dirs field shares orphan empty-dir removals and retention with CLI reporting."
 
 [[verdict]]
 kind = "item"

@@ -10,6 +10,7 @@
 //! exists, or an abandoned `rimz start` scaffold with no history. A dir whose
 //! record is unreadable but still holds history is kept and reported, never
 //! deleted — durable history stays the correctness source.
+//! It also sweeps orphan empty-dir trees left by rooms removed now or earlier, applying the per-agent owned grace and removing each room directory once empty.
 
 use std::collections::BTreeSet;
 use std::fs::ReadDir;
@@ -29,7 +30,7 @@ pub(crate) fn collect_runtime_claims(runtime: &paths::RuntimePaths) -> Result<()
     collect::collect_claims(runtime)
 }
 
-pub use prune::{PruneReason, RemovedWorkspace, WorkspacePruneReport};
+pub use prune::{OrphanEmptyTree, PruneReason, RemovedWorkspace, WorkspacePruneReport};
 
 #[derive(Debug, thiserror::Error)]
 pub enum GcErr {
@@ -286,6 +287,7 @@ pub fn prune_dead_workspaces(dry_run: bool) -> Result<WorkspacePruneReport> {
     prune::prune_dead_workspaces_under(
         &paths::workspaces_dir(),
         &paths::runtime_workspaces_dir(),
+        &paths::empty_dir_root(),
         dry_run,
     )
 }

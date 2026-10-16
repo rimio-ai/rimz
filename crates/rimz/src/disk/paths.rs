@@ -289,7 +289,7 @@ impl StatePaths {
         let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
         Self {
-            empty_root: home.join("empty"),
+            empty_root: empty_dir_root_under(home),
             workspace_id,
             dir_name,
             agents_dir: owned_dir.join("agents"),
@@ -1346,7 +1346,12 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
 
 /// Machine-wide parent of room-owned empty agent directories.
 pub fn empty_dir_root() -> PathBuf {
-    rimz_home().join("empty")
+    empty_dir_root_under(&rimz_home())
+}
+
+/// Machine-wide parent of room-owned empty agent directories under an explicit home.
+pub fn empty_dir_root_under(home: &Path) -> PathBuf {
+    home.join("empty")
 }
 
 /// The one RimZ home: `$RIMZ_HOME`, else `$HOME/.rimz`.

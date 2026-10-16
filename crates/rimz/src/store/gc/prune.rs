@@ -1,12 +1,15 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::disk::usage::dir_size;
-use crate::ids::WorkspaceId;
+use crate::ids::{WorkspaceDirName, WorkspaceId};
 use crate::workspace::record;
 
-use super::{GcErr, Result, read_dir_if_exists};
+use super::classes::collect_empty_agent_dirs;
+use super::collect::Sweep;
+use super::{GcErr, GcReport, Result, read_dir_if_exists};
 
 /// Why a workspace directory was reaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,13 +41,28 @@ pub struct WorkspacePruneReport {
     /// Dirs with an unreadable record that still hold history, kept for the
     /// operator to inspect rather than silently deleted: `(directory name, error)`.
     pub retained_unreadable: Vec<(String, String)>,
+    /// Every orphan tree visited, including one where nothing was removed yet.
+    pub empty_dirs: Vec<OrphanEmptyTree>,
+}
+
+/// An `empty/<workspace-dir>/` tree whose room store is gone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrphanEmptyTree {
+    pub dir_name: String,
+    /// Files inside the agent directories removed, or that would be removed.
+    pub files_removed: usize,
+    pub bytes: u64,
+    /// Agent directories kept because their mtime is within the grace.
+    pub agent_dirs_kept: usize,
 }
 
 impl WorkspacePruneReport {
     pub fn bytes_removed(&self) -> u64 {
         self.removed
             .iter()
-            .fold(0_u64, |total, removed| total.saturating_add(removed.bytes))
+            .map(|removed| removed.bytes)
+            .chain(self.empty_dirs.iter().map(|tree| tree.bytes))
+            .fold(0_u64, u64::saturating_add)
     }
 }
 
@@ -61,14 +79,13 @@ impl WorkspacePruneReport {
 pub(crate) fn prune_dead_workspaces_under(
     workspaces_root: &Path,
     runtime_workspaces_root: &Path,
+    empty_root: &Path,
     dry_run: bool,
 ) -> Result<WorkspacePruneReport> {
-    let Some(entries) = read_dir_if_exists(workspaces_root)? else {
-        return Ok(WorkspacePruneReport::default());
-    };
+    let entries = read_dir_if_exists(workspaces_root)?;
 
     let mut report = WorkspacePruneReport::default();
-    for entry in entries {
+    for entry in entries.into_iter().flatten() {
         let entry = entry.map_err(|source| GcErr::ReadDir {
             path: workspaces_root.to_path_buf(),
             source,
@@ -101,7 +118,95 @@ pub(crate) fn prune_dead_workspaces_under(
             }
         }
     }
+    let pruned = report
+        .removed
+        .iter()
+        .map(|row| row.dir_name.as_str())
+        .collect();
+    report.empty_dirs = collect_orphan_empty_trees(workspaces_root, empty_root, &pruned, dry_run)
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "machine gc skipped the empty-dir root");
+            Vec::new()
+        });
     Ok(report)
+}
+
+fn collect_orphan_empty_trees(
+    workspaces_root: &Path,
+    empty_root: &Path,
+    pruned: &BTreeSet<&str>,
+    dry_run: bool,
+) -> Result<Vec<OrphanEmptyTree>> {
+    match fs::symlink_metadata(empty_root) {
+        Ok(metadata) if !metadata.is_dir() => return Ok(Vec::new()),
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(GcErr::Io {
+                path: empty_root.to_path_buf(),
+                source,
+            });
+        }
+    }
+    let mut entries = read_dir_if_exists(empty_root)?
+        .into_iter()
+        .flatten()
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|source| GcErr::ReadDir {
+            path: empty_root.to_path_buf(),
+            source,
+        })?;
+    entries.sort_by_key(|entry| entry.file_name());
+    let mut trees = Vec::new();
+    let mut sweep = Sweep::new(dry_run);
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(name) = name.to_str().and_then(WorkspaceDirName::parse) else {
+            continue;
+        };
+        match collect_orphan_empty_tree(workspaces_root, &entry.path(), &name, pruned, &mut sweep) {
+            Ok(Some(tree)) => trees.push(tree),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(workspace = %name, error = %err, "machine gc skipped an inaccessible empty-dir tree");
+            }
+        }
+    }
+    Ok(trees)
+}
+
+/// `None` when the entry is not a directory or its room store still exists.
+fn collect_orphan_empty_tree(
+    workspaces_root: &Path,
+    path: &Path,
+    name: &WorkspaceDirName,
+    pruned: &BTreeSet<&str>,
+    sweep: &mut Sweep,
+) -> Result<Option<OrphanEmptyTree>> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| GcErr::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_dir() {
+        return Ok(None);
+    }
+    let store_absent = matches!(
+        fs::symlink_metadata(workspaces_root.join(name.as_str())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound
+    );
+    if !pruned.contains(name.as_str()) && !store_absent {
+        return Ok(None);
+    }
+    let mut report = GcReport::default();
+    sweep.remember_dir_size(path);
+    let agent_dirs_kept = collect_empty_agent_dirs(path, |_| false, sweep, &mut report)?;
+    sweep.remove_dir_if_empty(path, &mut report)?;
+    Ok(Some(OrphanEmptyTree {
+        dir_name: name.to_string(),
+        files_removed: report.sidecar_files_removed,
+        bytes: report.bytes_removed,
+        agent_dirs_kept,
+    }))
 }
 
 enum Verdict {
@@ -175,9 +280,13 @@ mod tests {
             if let Some(record) = record {
                 fs::write(room.join("workspace.json"), record).unwrap();
             }
-            let report =
-                prune_dead_workspaces_under(home.path(), &home.path().join("runtime"), false)
-                    .unwrap();
+            let report = prune_dead_workspaces_under(
+                home.path(),
+                &home.path().join("runtime"),
+                &home.path().join("empty"),
+                false,
+            )
+            .unwrap();
             assert_eq!(report.removed.len(), 1);
             assert_eq!(report.removed[0].reason, PruneReason::AbandonedScaffold);
             assert!(report.retained_unreadable.is_empty());
@@ -198,7 +307,13 @@ mod tests {
             classify_workspace(&room),
             Verdict::Remove(PruneReason::IncompatibleLayout, _, _)
         ));
-        let report = prune_dead_workspaces_under(home.path(), runtime.path(), false).unwrap();
+        let report = prune_dead_workspaces_under(
+            home.path(),
+            runtime.path(),
+            &home.path().join("empty"),
+            false,
+        )
+        .unwrap();
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.removed[0].reason, PruneReason::IncompatibleLayout);
         assert!(report.retained_unreadable.is_empty());
@@ -243,7 +358,9 @@ mod tests {
         fs::write(history_dir.join("workspace.json"), b"{ not json").unwrap();
         fs::write(&history.events_log, b"{}\n").unwrap();
 
-        let report = prune_dead_workspaces_under(&workspaces, &runtime, false).unwrap();
+        let report =
+            prune_dead_workspaces_under(&workspaces, &runtime, &temp.path().join("empty"), false)
+                .unwrap();
 
         assert_eq!(report.kept, 1, "alive workspace kept");
         assert_eq!(report.removed.len(), 2, "dead root + scaffold removed");
@@ -299,7 +416,9 @@ mod tests {
         write_record(&gone_dir, &gone_id, &gone_root);
         fs::create_dir_all(runtime.join("gone-abcd")).unwrap();
 
-        let report = prune_dead_workspaces_under(&workspaces, &runtime, true).unwrap();
+        let report =
+            prune_dead_workspaces_under(&workspaces, &runtime, &temp.path().join("empty"), true)
+                .unwrap();
 
         assert_eq!(report.removed.len(), 1);
         assert!(report.removed[0].bytes > 0);
@@ -308,6 +427,215 @@ mod tests {
             runtime.join("gone-abcd").exists(),
             "dry-run keeps runtime dir"
         );
+    }
+
+    #[test]
+    fn orphan_empty_trees_preview_and_apply_with_or_without_a_store() {
+        for has_store in [false, true] {
+            let home = tempdir().unwrap();
+            let workspaces = home.path().join("ws");
+            let empty = home.path().join("empty");
+            if has_store {
+                fs::create_dir_all(workspaces.join("gone-abcd")).unwrap();
+            }
+            let agent = empty.join("gone-abcd/otter");
+            write_empty_agent(&agent, true);
+            let run = |dry_run| {
+                prune_dead_workspaces_under(
+                    &workspaces,
+                    &home.path().join("runtime"),
+                    &empty,
+                    dry_run,
+                )
+                .unwrap()
+            };
+            let preview = run(true);
+            assert_eq!(preview.empty_dirs.len(), 1);
+            assert_eq!(preview.empty_dirs[0].files_removed, 1);
+            assert_eq!(preview.empty_dirs[0].agent_dirs_kept, 0);
+            assert!(preview.empty_dirs[0].bytes > 0);
+            assert!(agent.join("file").exists());
+            let applied = run(false);
+            assert_eq!(preview, applied);
+            assert!(!agent.parent().unwrap().exists());
+            assert_eq!(
+                applied.bytes_removed(),
+                applied.removed.iter().map(|row| row.bytes).sum::<u64>()
+                    + applied.empty_dirs[0].bytes
+            );
+        }
+    }
+
+    #[test]
+    fn orphan_empty_trees_keep_recent_agents_unknown_entries_and_existing_rooms() {
+        let home = tempdir().unwrap();
+        let workspaces = home.path().join("ws");
+        let empty = home.path().join("empty");
+        let root = home.path().join("project");
+        fs::create_dir_all(&root).unwrap();
+        write_record(
+            &workspaces.join("alive-abcd"),
+            &WorkspaceId::from_project_root(&root),
+            &root,
+        );
+        let retained = workspaces.join("retained-abcd");
+        let history = StatePaths::history_paths(&retained);
+        fs::create_dir_all(history.events_log.parent().unwrap()).unwrap();
+        fs::write(history.events_log, b"history").unwrap();
+        for name in [
+            "alive-abcd",
+            "retained-abcd",
+            "invalid.name",
+            "orphan-abcd",
+            "unknown-abcd",
+        ] {
+            write_empty_agent(&empty.join(name).join("old"), true);
+        }
+        let recent = empty.join("orphan-abcd/recent");
+        write_empty_agent(&recent, false);
+        let unknown = empty.join("unknown-abcd/notes");
+        fs::write(&unknown, b"user file").unwrap();
+        let run = |dry_run| {
+            prune_dead_workspaces_under(&workspaces, &home.path().join("runtime"), &empty, dry_run)
+                .unwrap()
+        };
+        let preview = run(true);
+        assert_eq!(
+            preview
+                .empty_dirs
+                .iter()
+                .map(|row| row.dir_name.as_str())
+                .collect::<Vec<_>>(),
+            ["orphan-abcd", "unknown-abcd"]
+        );
+        assert_eq!(preview.empty_dirs[0].agent_dirs_kept, 1);
+        let applied = run(false);
+        assert_eq!(preview, applied);
+        assert!(recent.join("file").exists());
+        assert!(!empty.join("orphan-abcd/old").exists());
+        assert!(unknown.exists());
+        for name in ["alive-abcd", "retained-abcd", "invalid.name"] {
+            assert!(empty.join(name).join("old/file").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_empty_trees_do_not_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        for level in ["root", "room", "agent"] {
+            let home = tempdir().unwrap();
+            let empty = home.path().join("empty");
+            let target = home.path().join("target");
+            let target_agent = if level == "root" {
+                target.join("room-abcd/old")
+            } else {
+                target.join("old")
+            };
+            write_empty_agent(&target_agent, true);
+            let link = match level {
+                "root" => empty.clone(),
+                "room" => empty.join("linked-abcd"),
+                _ => empty.join("linked-abcd/linked"),
+            };
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            symlink(&target, &link).unwrap();
+            let run = |dry_run| {
+                prune_dead_workspaces_under(
+                    &home.path().join("ws"),
+                    &home.path().join("runtime"),
+                    &empty,
+                    dry_run,
+                )
+                .unwrap()
+            };
+            if level == "root" {
+                assert!(run(false).empty_dirs.is_empty());
+                fs::remove_file(&link).unwrap();
+                fs::create_dir(&empty).unwrap();
+            }
+            write_empty_agent(&empty.join("orphan-abcd/old"), true);
+            let preview = run(true);
+            assert!(preview.empty_dirs.iter().any(|row| row.files_removed == 1));
+            assert_eq!(preview, run(false));
+            assert!(target_agent.join("file").exists());
+            if level != "root" {
+                assert!(
+                    fs::symlink_metadata(&link)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
+            }
+        }
+    }
+
+    /// A tree `remove_dir_all` cannot delete (a read-only subdir, as a Go
+    /// module cache leaves) costs only that tree, never the prune report.
+    #[cfg(unix)]
+    #[test]
+    fn an_undeletable_orphan_tree_spares_the_workspace_report_and_other_trees() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempdir().unwrap();
+        let workspaces = temp.path().join("ws");
+        let empty = temp.path().join("empty");
+        let gone_root = temp.path().join("gone-project");
+        write_record(
+            &workspaces.join("gone-abcd"),
+            &WorkspaceId::from_project_root(&gone_root),
+            &gone_root,
+        );
+        let locked = empty.join("bad-abcd/otter/pkg");
+        fs::create_dir_all(locked.join("mod")).unwrap();
+        fs::write(locked.join("mod/file"), b"cached").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+        write_empty_agent(&empty.join("bad-abcd/otter"), true);
+        write_empty_agent(&empty.join("good-abcd/otter"), true);
+
+        let result =
+            prune_dead_workspaces_under(&workspaces, &temp.path().join("runtime"), &empty, false);
+        // Root bypasses the mode bits and deletes the tree; only a survivor needs restoring.
+        if locked.exists() {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let report = result.unwrap();
+        assert_eq!(report.removed.len(), 1);
+        assert_eq!(report.removed[0].dir_name, "gone-abcd");
+        assert!(
+            report
+                .empty_dirs
+                .iter()
+                .any(|tree| tree.dir_name == "good-abcd" && tree.files_removed == 1)
+        );
+        assert!(!empty.join("good-abcd").exists());
+    }
+
+    #[test]
+    fn orphan_empty_tree_bytes_are_in_the_prune_total() {
+        let report = WorkspacePruneReport {
+            empty_dirs: vec![OrphanEmptyTree {
+                dir_name: "gone-abcd".into(),
+                files_removed: 1,
+                bytes: 42,
+                agent_dirs_kept: 0,
+            }],
+            ..WorkspacePruneReport::default()
+        };
+        assert_eq!(report.bytes_removed(), 42);
+    }
+
+    fn write_empty_agent(path: &Path, old: bool) {
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join("file"), b"agent output").unwrap();
+        if old {
+            fs::File::open(path)
+                .unwrap()
+                .set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 86_400),
+                )
+                .unwrap();
+        }
     }
 
     fn write_record(dir: &Path, id: &WorkspaceId, project_root: &Path) {
