@@ -22,4 +22,5 @@ syn.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
+unicode-width.workspace = true
 ureq.workspace = true
