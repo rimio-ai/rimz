@@ -1,0 +1,34 @@
+---
+source: crates/rimz/tests/integration/workflow.rs
+expression: pinned
+---
+{
+  "input": {
+    "key": 8,
+    "outcome": "work"
+  },
+  "key": 8,
+  "node": "build",
+  "output_path": null,
+  "prev_attempt": {
+    "children": null,
+    "claim_path": "<work>/3.claim.json",
+    "ended_at": "<time>",
+    "handle": null,
+    "head_end": null,
+    "head_start": null,
+    "key": 7,
+    "outcome": "ended",
+    "run_id": null,
+    "seq": 3,
+    "started_at": "<time>",
+    "step": "build",
+    "visit": 1
+  },
+  "prompt": "Review this",
+  "run": "<run>",
+  "seq": 7,
+  "signs_path": "<work>/signs/build.md",
+  "visit": 1,
+  "visits": 2
+}

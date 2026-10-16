@@ -1,0 +1,14 @@
+---
+source: crates/rimz/tests/integration/workflow.rs
+expression: normalized
+---
+<work>
+workflow:       review
+scope checkout: <checkout>
+state:          active
+current node:   pr, since <time>
+deadline:       none
+prompt:         Review this
+waiting: pr, said pending, since <time>, ×1, recheck <time>
+history:
+  <time> #1 pr evaluation pending {"outcome":"pending","reason":"CI pending","recheck_at":"<time>"}

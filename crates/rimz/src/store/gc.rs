@@ -40,6 +40,8 @@ pub enum GcErr {
     Lock(#[from] crate::disk::lock::LockErr),
     #[error(transparent)]
     Run(#[from] crate::store::run::RunStoreErr),
+    #[error(transparent)]
+    Workflow(#[from] crate::store::workflow::WorkflowStoreErr),
     #[error("reading dir {path}: {source}")]
     ReadDir {
         path: PathBuf,

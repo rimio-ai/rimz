@@ -640,6 +640,7 @@ fn fire_signal_with_wait(
     signal: &Signal,
     wait: bool,
 ) -> Result<SignalFire, serde_json::Error> {
+    wake_workflows(project_root, signal);
     // A row pinned to a session that is durably ended must never be selected,
     // whoever ended it: the sibling-skip branch below returns before the fire
     // path's only liveness gate, so this is the decision point.
@@ -706,6 +707,47 @@ fn fire_signal_with_wait(
         }
     }
     Ok(fired)
+}
+
+fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Option<Vec<std::ffi::OsString>> {
+    if signal.source == SignalSource::Lifecycle {
+        return None;
+    }
+    Some(vec![
+        "--root".into(),
+        project_root.as_os_str().into(),
+        "workflow".into(),
+        "advance".into(),
+        "--wake-signal".into(),
+        signal.name.as_str().into(),
+    ])
+}
+
+fn wake_workflows(project_root: &Path, signal: &Signal) {
+    let Some(args) = workflow_wake_args(project_root, signal) else {
+        return;
+    };
+    let launch = || -> Result<(), Box<dyn std::error::Error>> {
+        let paths = StatePaths::for_project_root(project_root)?;
+        if !crate::store::workflow::list(&paths)?
+            .iter()
+            .any(|r| r.state == crate::store::workflow::RunState::Active)
+        {
+            return Ok(());
+        }
+        crate::child_process::spawn_detached_reaped(
+            crate::proc::rimz_exe(),
+            |command| {
+                command.args(&args);
+                Ok(())
+            },
+            "workflow signal wake",
+        )?;
+        Ok(())
+    };
+    if let Err(error) = launch() {
+        tracing::warn!(%error, "could not wake workflows");
+    }
 }
 
 pub(super) struct WatchLockGuard {
@@ -810,6 +852,46 @@ mod tests {
         AgentStatus, LifecycleEvent, LifecycleSignal, LifecycleTransition, TurnPhase,
     };
     use crate::ids::{AgentKind, AgentSessionId, EventId, WorkspaceId};
+
+    #[test]
+    fn workflow_wakes_exclude_only_lifecycle_signals() {
+        for source in [
+            SignalSource::Cli,
+            SignalSource::Watch,
+            SignalSource::Forge,
+            SignalSource::Git,
+            SignalSource::Worktree,
+            SignalSource::Team,
+            SignalSource::Lifecycle,
+        ] {
+            let signal = Signal {
+                name: "review.ready".parse().unwrap(),
+                source,
+                payload: Map::new(),
+                watch: None,
+            };
+            let args = workflow_wake_args(Path::new("/project"), &signal);
+            assert_eq!(
+                args.is_some(),
+                source != SignalSource::Lifecycle,
+                "only lifecycle edges must leave workflow waits untouched"
+            );
+            if let Some(args) = args {
+                assert_eq!(
+                    args,
+                    [
+                        "--root",
+                        "/project",
+                        "workflow",
+                        "advance",
+                        "--wake-signal",
+                        "review.ready"
+                    ]
+                    .map(std::ffi::OsString::from)
+                );
+            }
+        }
+    }
 
     #[test]
     fn watch_verdicts_share_labels_and_check_semantics() {

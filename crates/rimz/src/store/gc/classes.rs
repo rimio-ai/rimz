@@ -200,6 +200,15 @@ fn collect_owned(
             )?;
         }
     }
+    for run in crate::store::workflow::list(paths)? {
+        let home = paths.workflow(&run.id);
+        if run.state.is_terminal()
+            && super::collect::is_older_than(&home.record, retention::OWNED_GRACE)?
+        {
+            let files = sweep.files_under(&home.home)?.len();
+            sweep.remove_tree(&home.home, files, report)?;
+        }
+    }
     Ok(())
 }
 
@@ -682,6 +691,85 @@ mod tests {
         agent.runtime_owner = None;
         agent.ended_at = None;
         assert!(!owned_expired(Some(&agent), old, now));
+    }
+
+    #[test]
+    fn terminal_workflow_homes_expire_but_live_parked_and_recent_runs_stay() {
+        use crate::store::workflow::{self, RunRecord};
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        paths.ensure_dirs().unwrap();
+        let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+        let mut homes = Vec::new();
+        for (state, age) in [
+            ("done", true),
+            ("failed", true),
+            ("canceled", true),
+            ("active", true),
+            ("parked", true),
+            ("done", false),
+        ] {
+            let record: RunRecord = serde_json::from_value(serde_json::json!({
+                "version":1, "id":crate::ids::WorkflowRunId::new(), "workflow":"review",
+                "spec_dir":"/definitions/review", "spec_digest":"abc", "prompt":null,
+                "scope":{"kind":"worktree","path":"/project"}, "project_root":"/project",
+                "created_at":"2026-01-01T00:00:00Z", "state":state, "park":null, "node":"pr",
+                "entered_at":"2026-01-01T00:00:00Z", "input":null, "key":null, "recheck_at":null,
+                "wait":null, "visits":{}, "visit_grant":0, "deadline":null,
+                "deadline_fired":false, "next_seq":1, "attempt":null, "prev_attempt":null,
+                "terminal_at":null
+            }))
+            .unwrap();
+            let guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+            workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+            let home = paths.workflow(&record.id);
+            if age {
+                fs::File::open(&home.record)
+                    .unwrap()
+                    .set_modified(old)
+                    .unwrap();
+            }
+            homes.push(home);
+        }
+        for contents in [None, Some("corrupt")] {
+            let home = paths.workflow(&crate::ids::WorkflowRunId::new());
+            fs::create_dir_all(&home.home).unwrap();
+            if let Some(contents) = contents {
+                fs::write(&home.record, contents).unwrap();
+            }
+            homes.push(home);
+        }
+        let mut preview = GcReport::default();
+        let collected = collect_owned(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(true),
+            &mut preview,
+        );
+        assert!(
+            collected.is_ok(),
+            "unreadable workflow homes must not block GC: {collected:?}"
+        );
+        assert_eq!(
+            preview.sidecar_files_removed, 6,
+            "old terminal workflow homes must be collected together"
+        );
+        assert!(homes.iter().all(|p| p.home.exists()));
+        let mut actual = GcReport::default();
+        collect_owned(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(false),
+            &mut actual,
+        )
+        .unwrap();
+        assert_eq!(actual, preview);
+        assert!(homes[..3].iter().all(|p| !p.home.exists()));
+        assert!(homes[3..].iter().all(|p| p.home.exists()));
     }
 
     #[test]
