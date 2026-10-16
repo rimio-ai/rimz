@@ -11,7 +11,7 @@ use crate::harness::schedule::run_log::JudgeRecord;
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ProcessErr {
     #[error(transparent)]
-    Directory(#[from] crate::agents::LaunchDirUntrusted),
+    Directory(#[from] crate::agents::LaunchDirRefusal),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -243,6 +243,9 @@ pub(super) fn run(
                 crate::proc::tail_output(&output.stderr, CHECK_OUTPUT_CAP / 2)
             );
             (result, output.timed_out, false, tail)
+        }
+        Err(ProcessErr::Directory(error @ crate::agents::LaunchDirRefusal::Home { .. })) => {
+            anyhow::bail!("{error}; re-add the loop task from a project directory")
         }
         Err(ProcessErr::Directory(error)) => return Err(error.into()),
         Err(ProcessErr::Io(error)) => (

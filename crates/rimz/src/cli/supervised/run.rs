@@ -563,7 +563,14 @@ fn prepare_supervised(
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
-    supervised::preflight_agent(adapter, &launch, &login)?;
+    let home_fix = if loop_owned {
+        "re-add the loop task from a project directory"
+    } else if request.subagent {
+        "pass `--cwd <DIR>`, or launch the parent agent from a project directory"
+    } else {
+        "run it from a project directory, or pass `--cwd <DIR>`"
+    };
+    supervised::preflight_agent(adapter, &launch, &login, home_fix)?;
     supervised::preflight_program(adapter, &process, &launch.cwd)?;
     if !request.subagent {
         crate::cli::lsp_admission::admit(&launch.cwd, &machine_config)?;
