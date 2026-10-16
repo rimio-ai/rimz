@@ -247,6 +247,170 @@ fn cleared_anchor_without_push_still_reveals_on_the_first_target_fold() {
     assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
 }
 
+fn fitted_grow_hold(resize_first: bool) {
+    for (rows, cols, own_pane, holds) in [
+        (30, None, true, true),
+        (30, Some(79), true, true),
+        (31, Some(80), true, true),
+        (30, Some(80), false, true),
+        (30, Some(80), true, false),
+    ] {
+        let (mut rig, _, anchor) = hidden_destination();
+        let mut pty = crate::sidebar_pane::app::backend::tests::Pty::open(40, 24);
+        rig.terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
+        rig.state.prev_width = Some(40);
+        rig.state.self_close.seen_sibling = true;
+        let (mut wake, ack) = focus_push(anchor);
+        let Wakeup::FocusPush(ref mut push) = wake else {
+            unreachable!()
+        };
+        let pane = if own_pane {
+            rig.state.config.own_pane.clone().unwrap()
+        } else {
+            pane("terminal_100", "tab_0", false).pane_id
+        };
+        push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
+            pane,
+            crate::mux::FittedPane { rows, cols },
+        )])));
+        if resize_first {
+            pty.resize(80, 30);
+            rig.state
+                .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
+                .unwrap();
+            assert!(
+                rig.state.paint_hold.is_engaged(),
+                "without a push the stale legit bound holds the grow"
+            );
+        }
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+            .unwrap();
+        if !resize_first {
+            pty.resize(80, 30);
+            rig.state
+                .on_resize(&mut rig.fetch, &mut rig.terminal, Some(80))
+                .unwrap();
+        }
+        assert_eq!(
+            rig.state.paint_hold.is_engaged(),
+            holds,
+            "resize_first={resize_first}, rows={rows}, cols={cols:?}, own_pane={own_pane}: only the exact fitted own-pane size bypasses the hold"
+        );
+        if holds {
+            assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+            rig.state.paint_hold.release();
+        }
+        rig.state.dirty = true;
+        rig.state.next_frame = Instant::now();
+        pty.drain();
+        rig.paint(true);
+        if rows == 30 {
+            assert_eq!(
+                ack.try_recv(),
+                Ok(()),
+                "acknowledgement stays rows-only after a safe paint"
+            );
+        }
+    }
+}
+
+#[test]
+fn fitted_push_before_resize_skips_only_the_exact_size_hold() {
+    fitted_grow_hold(false);
+}
+
+#[test]
+fn fitted_push_after_resize_releases_only_the_exact_size_hold() {
+    fitted_grow_hold(true);
+}
+
+#[test]
+fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport() {
+    let (mut rig, _, anchor) = hidden_destination();
+    let (push, ack) = focus_push(anchor.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    rig.paint(true);
+    assert_eq!(ack.try_recv(), Ok(()));
+    rig.terminal = Terminal::with_options(
+        PaneBackend::headless(FrameOutput::default()),
+        ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 30)),
+        },
+    )
+    .unwrap();
+    let (mut wake, ack) = focus_push(anchor);
+    let Wakeup::FocusPush(ref mut push) = wake else {
+        unreachable!()
+    };
+    push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
+        rig.state.config.own_pane.clone().unwrap(),
+        crate::mux::FittedPane {
+            rows: 30,
+            cols: None,
+        },
+    )])));
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+        .unwrap();
+    assert_eq!(
+        ack.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty),
+        "the cached frame was painted at 24 rows, not 30"
+    );
+    rig.state.dirty = true;
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    assert_eq!(ack.try_recv(), Ok(()));
+}
+
+#[test]
+fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
+    for own_rows in [true, false] {
+        let (mut rig, _, anchor) = hidden_destination();
+        let (mut wake, ack) = focus_push(anchor);
+        let Wakeup::FocusPush(ref mut push) = wake else {
+            unreachable!()
+        };
+        let pane = if own_rows {
+            rig.state.config.own_pane.clone().unwrap()
+        } else {
+            pane("terminal_100", "tab_0", false).pane_id
+        };
+        push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
+            pane,
+            crate::mux::FittedPane {
+                rows: 30,
+                cols: None,
+            },
+        )])));
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+            .unwrap();
+        rig.paint(true);
+        if own_rows {
+            assert_eq!(
+                ack.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty),
+                "an old-height paint must not acknowledge a parked push"
+            );
+            rig.terminal = Terminal::with_options(
+                PaneBackend::headless(FrameOutput::default()),
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 30)),
+                },
+            )
+            .unwrap();
+            rig.state
+                .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
+                .unwrap();
+        }
+        assert_eq!(ack.try_recv(), Ok(()));
+    }
+}
+
 #[test]
 fn focus_click_is_watched_at_the_painted_row_until_the_next_paint() {
     let (mut rig, _) = scroll_rig();

@@ -12,7 +12,10 @@ const SETTLE: Duration = Duration::from_secs(10);
 
 #[test]
 fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
-    for outcome in ["painted", "released", "capped", "superseded"] {
+    for (outcome, stale) in ["painted", "released", "capped", "superseded"]
+        .into_iter()
+        .flat_map(|outcome| [false, true].map(|stale| (outcome, stale)))
+    {
         let plane = DataPlane::detached();
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
@@ -22,7 +25,19 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
         let (destination_tx, destination_rx) = std::sync::mpsc::sync_channel(64);
         let _source = plane.subscribe(&source, source_tx);
         let _destination = plane.subscribe(&destination, destination_tx);
-        let peers = plane.focus_peers(source.instance_id);
+        let peers = plane
+            .focus_peers(source.instance_id)
+            .with_fit(Some(Arc::new(move |anchor| {
+                stale.then(|| {
+                    std::collections::HashMap::from([(
+                        anchor.pane_id.clone(),
+                        crate::mux::FittedPane {
+                            rows: 70,
+                            cols: None,
+                        },
+                    )])
+                })
+            })));
         let anchor = crate::mux::focus_anchor::FocusAnchor {
             nonce: crate::ids::FocusNonce::new(),
             session_name: source.session_name,
@@ -49,6 +64,18 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                 panic!("destination must receive the focus push")
             };
             assert_eq!(push.anchor, expected);
+            assert_eq!(
+                push.expected_panes.as_deref(),
+                stale
+                    .then(|| std::collections::HashMap::from([(
+                        expected.pane_id.clone(),
+                        crate::mux::FittedPane {
+                            rows: 70,
+                            cols: None
+                        }
+                    )]))
+                    .as_ref()
+            );
             if outcome == "superseded" {
                 let mut newer = expected;
                 newer.nonce = crate::ids::FocusNonce::new();
@@ -76,7 +103,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                 "the source must not receive its own push"
             );
             if outcome == "capped" {
-                assert!(started.elapsed() >= Duration::from_millis(100));
+                assert!(started.elapsed() >= Duration::from_millis(if stale { 300 } else { 100 }));
                 dispatched_tx.send(()).unwrap();
             }
             if outcome == "superseded" {

@@ -131,6 +131,7 @@ pub(super) struct LoopState {
     last_folded_focus_intent: Option<FocusNonce>,
     pending_focus_push: Option<FocusPush>,
     painted_focus_anchor_ms: u64,
+    painted_height: u16,
     retired_anchor: Option<(Instant, u64)>,
     filter_observed_at: Option<Instant>,
     last_pulled_rows: usize,
@@ -299,6 +300,7 @@ impl LoopState {
             last_folded_focus_intent: None,
             pending_focus_push: None,
             painted_focus_anchor_ms: 0,
+            painted_height: 0,
             retired_anchor: None,
             filter_observed_at: None,
             last_pulled_rows: 0,
@@ -623,6 +625,7 @@ impl LoopState {
             last_folded_focus_intent: _,
             pending_focus_push: _,
             painted_focus_anchor_ms: _,
+            painted_height: _,
             retired_anchor: _,
             confirmed_focus_intent_ms: _,
             // Overlay events: an active one holds `overlay_baseline`.
@@ -689,7 +692,7 @@ impl LoopState {
     ) -> Result<()> {
         match wakeup {
             Wakeup::FocusPush(push) => {
-                self.on_focus_push(*push, fetch);
+                self.on_focus_push(*push, fetch, terminal);
                 Ok(())
             }
             Wakeup::Snapshot => {
@@ -856,7 +859,12 @@ impl LoopState {
         self.fold_inputs = previous;
     }
 
-    fn on_focus_push(&mut self, push: FocusPush, fetch: &mut FetchDispatcher) {
+    fn on_focus_push(
+        &mut self,
+        push: FocusPush,
+        fetch: &mut FetchDispatcher,
+        terminal: &Terminal<PaneBackend>,
+    ) {
         let arrived = Instant::now();
         if self.last_folded_focus_intent != Some(push.anchor.nonce) {
             self.prepare_action(fetch);
@@ -872,7 +880,10 @@ impl LoopState {
             self.pending_focus_push = None;
             return;
         }
-        if self.painted_focus_matches(&push.anchor) {
+        if self.focus_push_size_matches(&push, terminal) {
+            self.paint_hold.release();
+        }
+        if self.painted_focus_matches(&push) {
             push.ack.painted();
             return;
         }
@@ -1176,7 +1187,13 @@ impl LoopState {
             None => false,
         };
         self.run_width_control(terminal, WidthControlTrigger::ResizeFeedback);
-        if held_grow && self.self_close.seen_sibling {
+        if held_grow
+            && self.self_close.seen_sibling
+            && !self
+                .pending_focus_push
+                .as_ref()
+                .is_some_and(|push| self.focus_push_size_matches(push, terminal))
+        {
             self.dirty = true;
             self.paint_hold
                 .engage(Instant::now(), crate::utils::time::unix_now_ms());
@@ -1399,6 +1416,7 @@ impl LoopState {
                 self.health.alert.as_ref(),
                 &mut self.ui,
             )?;
+            self.painted_height = terminal.get_frame().area().height;
             self.observe_paint(Instant::now());
             let now = Instant::now();
             let interval = render::animation_interval(
@@ -1692,6 +1710,7 @@ impl LoopState {
                 self.health.alert.as_ref(),
                 &mut self.ui,
             )?;
+            self.painted_height = terminal.get_frame().area().height;
             self.observe_paint(Instant::now());
             self.dirty = false;
         }
@@ -2157,10 +2176,34 @@ impl LoopState {
         self.focus_peers.clone()
     }
 
-    fn painted_focus_matches(&self, anchor: &crate::mux::focus_anchor::FocusAnchor) -> bool {
+    fn focus_push_size_matches(&self, push: &FocusPush, terminal: &Terminal<PaneBackend>) -> bool {
+        let Some(expected) = self.config.own_pane.as_ref().and_then(|pane| {
+            push.expected_panes
+                .as_ref()
+                .and_then(|panes| panes.get(pane))
+        }) else {
+            return false;
+        };
+        terminal
+            .size()
+            .is_ok_and(|size| expected.cols == Some(size.width) && expected.rows == size.height)
+    }
+
+    fn painted_focus_matches(&self, push: &FocusPush) -> bool {
+        let anchor = &push.anchor;
         self.painted_focus_anchor_ms == anchor.issued_at_ms
             && self.ui.last_focus_anchor_ms == anchor.issued_at_ms
             && self.ui.focus_placement.is_none()
+            && push
+                .expected_panes
+                .as_ref()
+                .and_then(|rows| {
+                    self.config
+                        .own_pane
+                        .as_ref()
+                        .and_then(|pane| rows.get(pane))
+                })
+                .is_none_or(|pane| pane.rows == self.painted_height)
             && self
                 .current
                 .row_owning_pane(&anchor.pane_id)
@@ -2350,7 +2393,7 @@ impl LoopState {
         if self.pending_focus_push.as_ref().is_some_and(|push| {
             now < push.until
                 && self.owns_focus_target(&push.anchor.pane_id)
-                && self.painted_focus_matches(&push.anchor)
+                && self.painted_focus_matches(push)
         }) && let Some(push) = self.pending_focus_push.take()
         {
             push.ack.painted();
@@ -2547,7 +2590,7 @@ fn request_focus_until(
 /// sub-second window since the snapshot is a benign, self-correcting race, so
 /// the line stays local under `RUST_LOG=debug` and off the off-box error
 /// channel. A cross-tab user request pushes the stored anchor to host peers
-/// and waits up to 100 ms for the destination's frame before mux dispatch;
+/// and waits up to 100 ms for the destination's frame (300 ms after fitting a stale tmux view) before mux dispatch;
 /// the dispatch nonce check still fences superseded requests. The durable
 /// request also wakes renderers outside the push path;
 /// command acceptance applies it, and later native observations confirm or

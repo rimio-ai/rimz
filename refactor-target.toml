@@ -1026,7 +1026,13 @@ surface-budget = 59
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
-surface-budget = 13
+# FocusPeers::with_fit lets the host inject its tmux repair and tests drive both paint budgets (+1).
+surface-budget = 14
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::focus_push::FocusPeers::with_fit"
+reason = "The host injects a fresh stale-destination fit; unit and host tests exercise both branches without tmux."
 
 [[module]]
 path = "crates/rimz/src/sock.rs"

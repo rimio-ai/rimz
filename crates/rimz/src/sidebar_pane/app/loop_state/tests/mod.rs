@@ -21,6 +21,7 @@ fn focus_push(anchor: crate::mux::focus_anchor::FocusAnchor) -> (Wakeup, Receive
         Wakeup::FocusPush(Box::new(super::super::focus_push::FocusPush {
             anchor,
             ack: super::super::focus_push::PaintedAck::new(tx),
+            expected_panes: None,
             until: Instant::now() + Duration::from_secs(10),
         })),
         rx,

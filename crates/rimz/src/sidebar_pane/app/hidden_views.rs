@@ -1,12 +1,13 @@
 //! Debounced, paced hidden-view geometry repair owned by the room host.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use crate::diag::DiagSink;
 use crate::diag::record::{DiagEvent, ViewFitTrigger};
-use crate::ids::ViewId;
+use crate::ids::{PaneId, ViewId};
+use crate::mux::focus_anchor::FocusAnchor;
 use crate::mux::{LaggingViews, ViewSize};
 
 const SWEEP_SETTLE: Duration = Duration::from_millis(500);
@@ -39,6 +40,13 @@ struct Batch {
 }
 
 impl SweepPlan {
+    fn command(&mut self, command: Command) {
+        match command {
+            Command::Kick(now) => self.kick(now),
+            Command::Fitted(view) => self.remove(&view),
+        }
+    }
+
     fn kick(&mut self, now: Instant) {
         self.settle = Some(now + SWEEP_SETTLE);
     }
@@ -111,21 +119,64 @@ impl SweepPlan {
 }
 
 #[derive(Clone)]
-pub(super) struct Sweep(Sender<Instant>);
+pub(super) struct Sweep(Sender<Command>);
 
-pub(super) fn channel() -> (Sweep, Receiver<Instant>) {
+pub(super) enum Command {
+    Kick(Instant),
+    Fitted(ViewId),
+}
+
+pub(super) fn channel() -> (Sweep, Receiver<Command>) {
     let (tx, rx) = std::sync::mpsc::channel();
     (Sweep(tx), rx)
 }
 
 impl Sweep {
     pub(super) fn kick(&self) {
-        let _ = self.0.send(Instant::now());
+        let _ = self.0.send(Command::Kick(Instant::now()));
+    }
+
+    pub(super) fn fit_jump(
+        &self,
+        anchor: &FocusAnchor,
+        diag: &DiagSink,
+        runtime: &crate::RuntimePaths,
+    ) -> Option<HashMap<PaneId, crate::mux::FittedPane>> {
+        let backend = crate::mux::backend_for(crate::ids::MuxName::Tmux);
+        let lag = match backend.lagging_view(&anchor.session_name, &anchor.pane_id) {
+            Ok(lag) => lag?,
+            Err(err) => {
+                tracing::debug!(error = %err, "hidden-view jump read failed");
+                return None;
+            }
+        };
+        let result = backend.fit_view(&lag.view, lag.target, sidebar_cols(runtime, lag.target));
+        emit(
+            diag,
+            Summary {
+                target: lag.target,
+                fitted: usize::from(matches!(&result, Ok(Some(_)))),
+                failed: usize::from(result.is_err()),
+                skipped: usize::from(matches!(&result, Ok(None))),
+            },
+            ViewFitTrigger::Jump,
+        );
+        match result {
+            Ok(Some(rows)) => {
+                let _ = self.0.send(Command::Fitted(lag.view));
+                Some(rows)
+            }
+            Ok(None) => None,
+            Err(err) => {
+                tracing::debug!(view = %lag.view, error = %err, "hidden-view jump fit failed");
+                None
+            }
+        }
     }
 }
 
 pub(super) fn spawn(
-    rx: Receiver<Instant>,
+    rx: Receiver<Command>,
     session: String,
     diag: DiagSink,
     runtime: crate::RuntimePaths,
@@ -134,8 +185,8 @@ pub(super) fn spawn(
         let backend = crate::mux::backend_for(crate::ids::MuxName::Tmux);
         let mut plan = SweepPlan::default();
         loop {
-            while let Ok(kicked_at) = rx.try_recv() {
-                plan.kick(kicked_at);
+            while let Ok(command) = rx.try_recv() {
+                plan.command(command);
             }
             if let Some(summary) = plan.completed() {
                 emit(&diag, summary, ViewFitTrigger::Sweep);
@@ -172,7 +223,7 @@ pub(super) fn spawn(
                         None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
                     };
                     match received {
-                        Ok(kicked_at) => plan.kick(kicked_at),
+                        Ok(command) => plan.command(command),
                         Err(RecvTimeoutError::Timeout) => (),
                         Err(RecvTimeoutError::Disconnected) => return,
                     }
