@@ -400,6 +400,7 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
         now,
     );
     if let Some(card) = codex.as_agent_mut() {
+        card.ask_detail = Some("Allow the pricing cache write?".to_owned());
         card.cache = Some(rimz::store::snapshot::CacheClock {
             ceiling_secs: 1800,
             last_request_at: None,

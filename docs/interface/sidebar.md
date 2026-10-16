@@ -261,7 +261,7 @@ A mouse wheel tick glides the cards to their new position over about a tenth of 
 | line | shows |
 |------|-------|
 | identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context window size. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
-| description | The displayed error or pause reason in italics, else the first armed wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
+| description | The open question while waiting for input, when available; otherwise the displayed error or pause reason in italics, else the first armed wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
 | context meter | The percent of the context window in use, as a bar. The fill shows where the window went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the window fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` keeps its fullness heat color. After a compaction completes, the meter shows the provider's post-compaction figure where it reports one and an empty `0%` otherwise, until the next model call reports usage. |
 | stats line | `▤` tokens in the window: the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. The time since the agent's last activity sits on the right once it passes five minutes. |
 | subagents and waits | Present once the session has spawned a subagent or armed a wait. See [Subagents and waits](#subagents-and-waits). |
@@ -354,7 +354,16 @@ A subagent's `▤` glyph heats from green to red on the worse of window percent 
 
 A card is unread from the moment it becomes waiting, failed, paused, or done until you focus its pane or press `m`. An unread card has a soft wash behind it. The one card that most needs you, the oldest unanswered `?` or `!`, also animates across its glyph, name, and description, and the make-up bucket that owns it animates with it. Every other unread card is bright and bold without motion, so one thing on screen moves at a time. A card that is both selected and unread shows the selection. The animation style is `[theme.animations] unread` ([theming: unread attention](../guide/theme.md#unread-attention)).
 
-A waiting or failed card looks like any other card with `?` or `!` in the lead. When a turn dies on a provider API error, the description shows the provider's error text for as long as the `!` holds:
+A waiting or failed card looks like any other card with `?` or `!` in the lead. A waiting card shows its open question on the second line when one is available, otherwise its session label:
+
+```
+▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
+▌  Allow the pricing cache write?                    ▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────   71%▐
+▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                   ◉ 40m▐
+```
+
+When a turn dies on a provider API error, the description shows the provider's error text for as long as the `!` holds:
 
 ```
 ▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇

@@ -6,6 +6,26 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
+fn card_open_ask_round_trips_and_follows_display_status() {
+    let mut value = serde_json::to_value(AgentCard::default()).unwrap();
+    assert!(value.get("ask_detail").is_none());
+    value["ask_detail"] = serde_json::json!("Allow this write?");
+    value["status"] = serde_json::json!("waiting");
+    let mut card: AgentCard = serde_json::from_value(value).unwrap();
+    assert_eq!(card.open_ask(), Some("Allow this write?"));
+    assert_eq!(
+        serde_json::to_value(&card).unwrap()["ask_detail"],
+        "Allow this write?"
+    );
+    for status in [AgentStatus::Running, AgentStatus::Idle, AgentStatus::Failed] {
+        card.status = status;
+        assert_eq!(card.open_ask(), None);
+    }
+    card.status = AgentStatus::Waiting;
+    assert_eq!(card.open_ask(), Some("Allow this write?"));
+}
+
+#[test]
 fn subagent_context_window_round_trips_and_accepts_legacy_json() {
     let mut value = serde_json::json!({
         "id": "child", "name": "Explore", "status": "running",

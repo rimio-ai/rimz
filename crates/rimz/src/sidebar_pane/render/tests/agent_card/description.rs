@@ -1,6 +1,99 @@
 use super::*;
 use ratatui::text::Span;
 
+fn waiting_asker() -> AgentState {
+    let mut asker = agent(
+        "claude-ask",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("pricing cache"),
+    );
+    asker.context = Some(claude_context(fixed_now()));
+    asker.turn_started_at = Some(fixed_now() - Duration::from_secs(120));
+    asker.waiting_since = Some(fixed_now() - Duration::from_secs(60));
+    asker.last_activity = asker.waiting_since.unwrap();
+    asker.open_ask = Some(crate::agents::OpenAsk {
+        id: "ask_0123456789abcdef".parse().unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("Allow the pricing cache write?".to_owned()),
+        native_key: None,
+        since: asker.last_activity,
+    });
+    asker
+}
+
+#[test]
+fn waiting_card_description_prefers_open_ask_to_session_name() {
+    let snapshot = snapshot_with(vec![waiting_asker()]);
+    assert_eq!(
+        snapshot.rows().next().unwrap().status(),
+        Some(AgentStatus::Waiting)
+    );
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let text = line_texts(&lines);
+    let identity = text
+        .iter()
+        .position(|line| line.contains("? claude"))
+        .unwrap();
+    assert!(text[identity + 1].contains("Allow the pricing cache write?"));
+    assert!(!text.iter().any(|line| line.contains("store refactor")));
+    assert!(
+        !span_for(&lines, "Allow the pricing cache write?")
+            .style
+            .add_modifier
+            .contains(Modifier::ITALIC)
+    );
+
+    let mut multiline = waiting_asker();
+    multiline.open_ask.as_mut().unwrap().detail = Some("Which approach?\n1. merge".to_owned());
+    let snapshot = snapshot_with(vec![multiline]);
+    let text = line_texts(&group_lines(&snapshot, &theme, 0));
+    assert!(
+        text.iter()
+            .any(|line| line.contains("Which approach? 1. merge")),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn stale_waiting_card_description_returns_to_session_name() {
+    let mut asker = waiting_asker();
+    asker.last_activity = fixed_now() - Duration::from_secs(30);
+    assert!(!asker.is_awaiting_input());
+    let snapshot = snapshot_with(vec![asker]);
+    let rendered = snapshot_to_screen(&snapshot, 54, 17);
+    assert!(rendered.contains("store refactor"), "{rendered}");
+    assert!(
+        !rendered.contains("Allow the pricing cache write?"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn failed_card_description_keeps_error_over_stale_ask() {
+    let mut asker = waiting_asker();
+    asker.status = AgentStatus::Failed;
+    asker.context.as_mut().unwrap().turn_error = Some(AgentTurnError {
+        class: TurnErrorClass::Failed,
+        at: fixed_now() - Duration::from_secs(10),
+        label: Some("API Error: Bad request".to_owned()),
+    });
+    let snapshot = snapshot_with(vec![asker]);
+    assert_eq!(
+        snapshot.rows().next().unwrap().status(),
+        Some(AgentStatus::Failed)
+    );
+    let rendered = snapshot_to_screen(&snapshot, 54, 17);
+    assert!(rendered.contains("API Error: Bad request"), "{rendered}");
+    assert!(
+        !rendered.contains("Allow the pricing cache write?"),
+        "{rendered}"
+    );
+}
+
 #[test]
 fn render_paused_turn_card_quotes_provider_reason_in_italics() {
     let mut claude = agent(
