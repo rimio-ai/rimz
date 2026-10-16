@@ -1299,14 +1299,16 @@ fn fresh_sent_message_waits_for_reconcile_deadline() {
 }
 
 #[test]
-fn earliest_message_wake_includes_sent_reconcile_deadline() {
+fn queue_commit_wake_includes_sent_reconcile_deadline() {
     let q = Queue::new();
     let sent = q.sent(1);
     q.queue_with(2, |scheduled| {
         scheduled.not_before = Some(sent.updated_at + Duration::from_secs(120));
     });
 
-    let wake = q.earliest_message_wake(sent.updated_at).unwrap();
+    let path = q.runtime_paths().message_wake_path();
+    assert!(path.is_file(), "queue commit must publish its wake stamp");
+    let wake: Option<Timestamp> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
 
     assert_eq!(wake, sent.sent_reconcile_deadline());
 }

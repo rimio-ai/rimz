@@ -497,7 +497,18 @@ allowed-dependencies = [
 # Run listings construct full stamps from their single metadata read (+1).
 # IncrementalFold and its constructor/refresh share rotating-log cursors (+3).
 # Session-role segments share the provider cursor's durable root (+2).
-surface-budget = 242
+# Queue writers and the host share RuntimePaths::message_wake_path (+1).
+surface-budget = 243
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::message_wake_path"
+reason = "The store writer and read-only host share the classed message wake cache path."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::queue::Store::rearm_message_wake"
+reason = "The sweep rearms clock-dependent deadlines without a queue change; queue writes refresh on their own."
 
 [[verdict]]
 kind = "item"
@@ -1114,7 +1125,8 @@ path = "crates/rimz/src/store"
 # AgentCard::from_agent shares the store's base card projection with rowless CLI reports (+1).
 # SignalEvent::from_envelope shares the signal-line projection with events list (+1).
 # NeedsYou and needs_you share sidebar attention membership with both CLI scenes (+2).
-surface-budget = 426
+# Store::rearm_message_wake shares the sweep's clock-only rearm (+1).
+surface-budget = 427
 
 [[module]]
 path = "crates/rimz/src/theme"
