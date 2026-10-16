@@ -436,7 +436,7 @@ The sidebar host remains the sole automatic trigger, once daily per room after a
 
 ## What survives what
 
-The owned-class sweep removes terminal workflow homes together when their record mtime exceeds the seven-day grace, under the workspace lock. Active and parked workflow records are never candidates.
+The owned-class sweep removes terminal workflow homes together when their record mtime exceeds the seven-day grace, under the workspace lock. Active and parked workflow records are never candidates. A workflow home without its record, which only a crash during creation leaves, is removed once the home directory's mtime exceeds the same grace.
 
 Soft reset keeps `records/`, `audit/`, `owned/`, `tmp/`, `shared/`, `out/` and archived logs; hard reset also drops audit, owned state except `owned/runs/`, `tmp/`, `shared/`, `out/`, and carryover. Workflow homes under `owned/workflows/` therefore survive soft reset but not hard reset. Both keep state lock inodes. Reboot drops runtime, not state. Teardown drops runtime, not state. Age-based GC is independent of these boundaries.
 
