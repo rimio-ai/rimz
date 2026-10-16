@@ -49,6 +49,166 @@ fn half_hour_cache() -> CacheClock {
     }
 }
 
+#[test]
+fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
+    let theme = Theme::fixed(false);
+    for width in [45, 46, 47] {
+        let wide = width >= 46;
+        for (quiet, minutes) in [(22 * 60 + 1, 8), (29 * 60 + 59, 1), (30 * 60, 1)] {
+            let snapshot = cache_meter_snapshot(quiet, Some(half_hour_cache()));
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let cache = lines
+                .iter()
+                .find(|line| line.to_string().contains("expires in"))
+                .expect("selected closing cache line");
+            let expected = if wide {
+                format!("◷ cache expires in {minutes}m")
+            } else {
+                format!("◷ expires in {minutes}m")
+            };
+            assert!(cache.to_string().contains(&expected), "{cache}");
+            let clock_style = lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .find(|span| {
+                    span.content.contains("29m")
+                        || span.content.contains("22m")
+                        || span.content.contains("30m")
+                })
+                .unwrap()
+                .style;
+            assert_eq!(
+                cache
+                    .spans
+                    .iter()
+                    .find(|span| span.content.contains("expires"))
+                    .unwrap()
+                    .style,
+                clock_style
+            );
+        }
+        for estimate in [Some(1.44), Some(0.0049), None] {
+            let cache: CacheClock = serde_json::from_value(
+                serde_json::json!({"ceiling_secs": 1800, "rewarm_cost_usd": estimate}),
+            )
+            .unwrap();
+            let snapshot = cache_meter_snapshot(1801, Some(cache));
+            let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+            let cache_line = lines
+                .iter()
+                .find(|line| line.to_string().contains("expired"))
+                .expect("selected expired cache line");
+            assert_eq!(
+                cache_line
+                    .spans
+                    .iter()
+                    .find(|span| span.content.contains("expired"))
+                    .unwrap()
+                    .style
+                    .fg,
+                Some(theme.component(Component::CacheExpired))
+            );
+            if estimate == Some(1.44) {
+                assert_eq!(
+                    cache_line
+                        .spans
+                        .iter()
+                        .find(|span| span.content.contains("~$"))
+                        .unwrap()
+                        .style
+                        .fg,
+                    Some(theme.component(Component::CacheWrite))
+                );
+                assert_eq!(
+                    cache_line
+                        .spans
+                        .iter()
+                        .find(|span| span.content.contains('·'))
+                        .unwrap()
+                        .style
+                        .fg,
+                    theme.muted().fg
+                );
+            }
+            let stats_at = lines
+                .iter()
+                .position(|line| line.to_string().contains('▤'))
+                .unwrap();
+            let cache_at = lines
+                .iter()
+                .position(|line| line.to_string().contains("expired"))
+                .unwrap();
+            assert!(stats_at < cache_at, "cache guidance follows stats");
+            let text = cache_line.to_string();
+            let expected = if wide {
+                "◉ cache expired"
+            } else {
+                "◉ expired"
+            };
+            assert!(text.contains(expected), "{text}");
+            assert_eq!(text.contains("◍ ~$1.40"), estimate == Some(1.44), "{text}");
+            assert_eq!(
+                text.contains("to re-warm"),
+                wide && estimate == Some(1.44),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cache_line_is_absent_outside_expiry_and_on_non_live_selections() {
+    let theme = Theme::fixed(false);
+    let held = CacheClock {
+        warm_until: Some(fixed_now() + Duration::from_secs(600)),
+        held_since: Some(fixed_now() - Duration::from_secs(600)),
+        ..half_hour_cache()
+    };
+    for cache in [None, Some(held), Some(half_hour_cache())] {
+        let snapshot = cache_meter_snapshot(600, cache);
+        let text = line_texts(&group_lines(&snapshot, &theme, 0)).join("\n");
+        assert!(
+            !text.contains("expired") && !text.contains("expires in"),
+            "{text}"
+        );
+    }
+    for density in [
+        crate::config::CardDensityMode::Auto,
+        crate::config::CardDensityMode::Expanded,
+    ] {
+        let mut snapshot = cache_meter_snapshot(1801, Some(half_hour_cache()));
+        snapshot.theme.display.card_density = density;
+        let rolls = CostRolls::default();
+        let mut ctx = test_row_ctx(&snapshot, &theme, 54, usize::MAX, 0, &rolls);
+        let held = [snapshot.rows().next().unwrap().id.clone()].into();
+        ctx.held_expansions = &held;
+        let text = line_texts(
+            &worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines,
+        )
+        .join("\n");
+        assert!(text.contains('▤'), "held cards still have stats");
+        assert!(
+            !text.contains("expired"),
+            "held selection is not live: {text}"
+        );
+        let text = line_texts(&group_lines(&snapshot, &theme, usize::MAX)).join("\n");
+        assert!(!text.contains("expired"), "unselected: {text}");
+    }
+    let mut snapshot = cache_meter_snapshot(1801, Some(half_hour_cache()));
+    let row = snapshot.rows_mut().next().unwrap();
+    row.as_agent_mut().unwrap().team = Some("crew".into());
+    let mut teammate = row.clone();
+    teammate.id = "teammate".into();
+    teammate.as_agent_mut().unwrap().cache = None;
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(teammate);
+    let text = line_texts(&group_lines(&snapshot, &theme, 1)).join("\n");
+    assert!(
+        !text.contains("expired"),
+        "teammate reach is not live selection: {text}"
+    );
+}
+
 fn cache_meter_line(snapshot: &SidebarSnapshot, theme: &Theme) -> Line<'static> {
     group_lines(snapshot, theme, usize::MAX)
         .into_iter()

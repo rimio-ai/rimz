@@ -45,6 +45,7 @@ pub(super) enum CardSlot {
     AwaitingDots,
     Gauge,
     Tokens,
+    Cache,
     /// Standing lifetime child count and cost plus armed one-shot waits; empty
     /// until either exists.
     Delegation,
@@ -73,6 +74,7 @@ const ENGAGED: &[CardSlot] = &[
     CardSlot::Question,
     CardSlot::Gauge,
     CardSlot::Tokens,
+    CardSlot::Cache,
     CardSlot::Delegation,
 ];
 const ENGAGED_EXPANDED: &[CardSlot] = &[
@@ -81,6 +83,7 @@ const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Question,
     CardSlot::Gauge,
     CardSlot::Tokens,
+    CardSlot::Cache,
     CardSlot::Delegation,
     CardSlot::DelegationEntries,
 ];
@@ -229,7 +232,7 @@ mod tests {
         }
         .to_vec();
         if expansion.reach != SelectionReach::Selected && density != CardDensityMode::Expanded {
-            slots.retain(|slot| *slot != CardSlot::Tokens);
+            slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
         }
         if expansion.reach == SelectionReach::Unreached
             && !expansion.delegation

@@ -98,6 +98,20 @@ pub fn dollars2(usd: f64) -> String {
     format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
 }
 
+/// A two-significant-figure cache rebuild estimate, absent below half a cent.
+pub(crate) fn dollars_estimate(usd: f64) -> Option<String> {
+    if usd < 0.005 {
+        return None;
+    }
+    let scale = 10_f64.powf(1.0 - usd.log10().floor());
+    let rounded = (usd * scale).round() / scale;
+    Some(if rounded < 10.0 {
+        format!("~{}", dollars2(rounded))
+    } else {
+        format!("~${rounded:.0}")
+    })
+}
+
 pub(crate) fn dollars_cap(usd: f64) -> String {
     let cents = (usd.max(0.0) * 100.0).round() as u64;
     if cents.is_multiple_of(100) {
@@ -156,6 +170,24 @@ pub fn compact_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dollar_estimates_round_to_two_significant_figures() {
+        for (usd, expected) in [
+            (0.08, "~$0.08"),
+            (1.44, "~$1.40"),
+            (3.48, "~$3.50"),
+            (12.4, "~$12"),
+            (123.0, "~$120"),
+            (0.005, "~$0.01"),
+            (9.99, "~$10"),
+        ] {
+            assert_eq!(dollars_estimate(usd).as_deref(), Some(expected), "{usd}");
+        }
+        for usd in [0.0, 0.0049] {
+            assert_eq!(dollars_estimate(usd), None);
+        }
+    }
 
     #[test]
     fn compact_count_uses_uppercase_millions() {
