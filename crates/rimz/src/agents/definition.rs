@@ -141,16 +141,20 @@ impl LaunchSpec {
         Some(command)
     }
 
-    /// Describe the provider-native argv spelling rendered for a preset field.
-    pub fn preset_arg_matcher(self, field: PresetField) -> Option<PresetArgMatcher> {
-        let matcher = match field {
+    fn static_preset_matcher(self, field: PresetField) -> Option<StaticPresetMatcher> {
+        match field {
             PresetField::Model => self.presets.model,
             PresetField::Effort => self.presets.effort,
             PresetField::AutoCompact => self.presets.auto_compact,
             PresetField::SystemPromptFile => self.presets.system_prompt_file,
-        }?;
+        }
+    }
+
+    /// Describe the provider-native argv spelling rendered for a preset field.
+    pub fn preset_arg_matcher(self, field: PresetField) -> Option<PresetArgMatcher> {
+        let matcher = self.static_preset_matcher(field)?;
         Some(match matcher {
-            StaticPresetMatcher::Flag(flags) => {
+            StaticPresetMatcher::Flag(flags) | StaticPresetMatcher::ValueFlag { flags, .. } => {
                 PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
             }
             StaticPresetMatcher::TextFlag(flags) => {
@@ -216,6 +220,16 @@ impl LaunchSpec {
         let mut argv = Vec::new();
         for (field, field_name, value) in values {
             let Some(value) = value else { continue };
+            if let Some(StaticPresetMatcher::ValueFlag { values, .. }) =
+                self.static_preset_matcher(field)
+                && !values.contains(&value.as_str())
+            {
+                return Err(PresetErr::UnsupportedValue {
+                    agent: agent_kind,
+                    field: field_name,
+                    value,
+                });
+            }
             let matcher = self
                 .preset_arg_matcher(field)
                 .ok_or(PresetErr::UnsupportedField {
@@ -276,6 +290,7 @@ impl LaunchSpec {
                 PromptStyle::Flag(flag) => {
                     argv.extend([flag.to_owned(), prompt.to_owned()]);
                 }
+                PromptStyle::JoinedFlag(flag) => argv.push(format!("{flag}={prompt}")),
                 PromptStyle::FlagWithSuffix { flag, suffix } => {
                     argv.extend([flag.to_owned(), prompt.to_owned()]);
                     argv.extend(suffix.iter().map(|arg| (*arg).to_owned()));
@@ -361,6 +376,7 @@ pub enum PromptStyle {
     /// argument that follows `--`.
     Positional,
     Flag(&'static str),
+    JoinedFlag(&'static str),
     FlagWithSuffix {
         flag: &'static str,
         suffix: &'static [&'static str],
@@ -428,6 +444,10 @@ impl FastSwitch {
 #[derive(Clone, Copy, Debug)]
 pub enum StaticPresetMatcher {
     Flag(&'static [&'static str]),
+    ValueFlag {
+        flags: &'static [&'static str],
+        values: &'static [&'static str],
+    },
     TextFlag(&'static [&'static str]),
     EnvPathVar(&'static str),
     ConfigKey {
@@ -1319,6 +1339,31 @@ mod tests {
                     definition.kind,
                 );
             }
+        }
+    }
+
+    #[test]
+    fn joined_prompt_preserves_leading_dash_and_spaces() {
+        let launch = LaunchSpec {
+            program: Some("agent"),
+            fixed_args: &["chat"],
+            prompt: PromptStyle::JoinedFlag("--query"),
+            ..LaunchSpec::EMPTY
+        };
+        assert_eq!(
+            launch.launch_command(&["--cli".into()], Some("-x test")),
+            Some(vec![
+                "agent".into(),
+                "chat".into(),
+                "--cli".into(),
+                "--query=-x test".into()
+            ])
+        );
+        for prompt in [None, Some("")] {
+            assert_eq!(
+                launch.launch_command(&[], prompt),
+                Some(vec!["agent".into(), "chat".into()])
+            );
         }
     }
 
