@@ -54,6 +54,7 @@ pub(super) fn selected_chat_lines(view: &RenderedChat) -> Vec<ChatLine> {
 }
 
 pub(super) fn flat_entries(entries: &[RenderEntry], archive_prefix: usize) -> Vec<DisplayEntry> {
+    let answers = answer_asks(entries.iter().enumerate());
     entries
         .iter()
         .cloned()
@@ -62,7 +63,7 @@ pub(super) fn flat_entries(entries: &[RenderEntry], archive_prefix: usize) -> Ve
             entry,
             lane: DisplayLane::Margin,
             block: index,
-            archived: index < archive_prefix,
+            archived: answers.get(&index).copied().unwrap_or(index) < archive_prefix,
             source_index: index,
         })
         .collect()
@@ -72,9 +73,9 @@ pub(super) fn flat_entries(entries: &[RenderEntry], archive_prefix: usize) -> Ve
 /// Prompts, messages and flips keep their order: one continues the thread of
 /// the entry it answers only while that thread is still the latest
 /// conversation, and opens a new thread at the margin once anything else has
-/// intervened. Turn output and answers move instead, under the entry that
-/// opened them ([`turn_openers`]) however late they ran, and leave the latest
-/// conversation as they found it.
+/// intervened. Turn output moves under its opener ([`turn_openers`]) however
+/// late it ran, and an answer takes its ask's block; neither changes the
+/// latest conversation.
 pub(super) fn assemble_threads(
     entries: &[RenderEntry],
     archive_prefix: usize,
@@ -86,6 +87,7 @@ pub(super) fn assemble_threads(
 
     let by_message_id = message_index(entries);
     let openers = turn_openers(entries);
+    let answers = answer_asks(entries.iter().enumerate());
     let mut heads = Vec::<usize>::with_capacity(entries.len());
     let mut lanes = Vec::<DisplayLane>::with_capacity(entries.len());
     let mut current = None;
@@ -98,6 +100,8 @@ pub(super) fn assemble_threads(
                 .get(sender)
                 .copied()
                 .filter(|&latest| within_window(entries[latest].chat.at, entry.chat.at))
+        } else if entry.kind() == Some(TranscriptKind::Answer) {
+            answers.get(&index).copied()
         } else if is_turn_output(entry) {
             openers[index]
                 .iter()
@@ -116,7 +120,9 @@ pub(super) fn assemble_threads(
         let target = target.filter(|&target| !ordered || Some(heads[target]) == current);
         let head = target.map_or(index, |target| heads[target]);
         let lane = match target {
-            Some(target) if entry.is_stage() => lanes[target].clone(),
+            Some(target) if entry.is_stage() || entry.kind() == Some(TranscriptKind::Answer) => {
+                lanes[target].clone()
+            }
             Some(_) => DisplayLane::Thread {
                 component: head,
                 root_at: entries[head].chat.at,
@@ -128,7 +134,7 @@ pub(super) fn assemble_threads(
         if ordered {
             current = Some(head);
         }
-        if !entry.is_stage() {
+        if !entry.is_stage() && entry.kind() != Some(TranscriptKind::Answer) {
             latest_by_sender.insert(sender, index);
         }
     }
@@ -145,7 +151,8 @@ pub(super) fn assemble_threads(
                 entry: entries[source_index].clone(),
                 lane: lanes[source_index].clone(),
                 block,
-                archived: source_index < archive_prefix,
+                archived: answers.get(&source_index).copied().unwrap_or(source_index)
+                    < archive_prefix,
                 source_index,
             });
         }
@@ -279,16 +286,27 @@ fn message_index(entries: &[RenderEntry]) -> HashMap<&str, usize> {
     by_message_id
 }
 
-/// Keeps the last `last` display entries, widening the cut back to the first
-/// line of the block it lands in so a shown thread keeps the entry that opened
-/// it. A flip attached to that opener is itself at the margin, so the walk
-/// tests the block's head rather than the lane.
+/// Keeps the last `last` displayed cards (an ask and its folded answer count
+/// once), widening the cut back to the first line of the block it lands in so
+/// a shown thread keeps the entry that opened it. A flip attached to that
+/// opener is itself at the margin, so the walk tests the block's head rather
+/// than the lane.
 pub(super) fn keep_last_blocks(entries: &mut Vec<DisplayEntry>, last: Option<usize>) {
     let Some(last) = last else {
         return;
     };
     let len = entries.len();
-    let mut drop = len.saturating_sub(last);
+    let pairs = display_answer_asks(entries);
+    let mut cards = HashSet::new();
+    let mut drop = len;
+    for index in (0..len).rev() {
+        let card = pairs.get(&index).copied().unwrap_or(index);
+        if !cards.contains(&card) && cards.len() == last {
+            break;
+        }
+        cards.insert(card);
+        drop = index;
+    }
     while drop > 0 && drop < len && entries[drop].source_index != entries[drop].block {
         drop -= 1;
     }

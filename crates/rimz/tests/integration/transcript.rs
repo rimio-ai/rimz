@@ -1416,6 +1416,16 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
     let env = Env::new();
     env.record(&env.project_root);
     let branch = "living-transcript";
+    let ask_id = rimz::ids::AskId::parse("ask_0000000000000001").unwrap();
+    let mut prior_ask = entry(
+        "sess-prior-life",
+        branch,
+        TranscriptKind::Ask,
+        "Prior question?",
+        "2020-01-01T00:01:00Z",
+    );
+    prior_ask.id = Some(ask_id.clone());
+    append_transcript(&env, prior_ask);
     append_transcript(
         &env,
         entry(
@@ -1433,6 +1443,16 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
         "current prompt",
         "current answer",
     );
+    let mut late_answer = entry(
+        "sess-prior-life",
+        branch,
+        TranscriptKind::Answer,
+        "late choice",
+        "2098-01-01T00:00:00Z",
+    );
+    late_answer.id = Some(ask_id);
+    late_answer.from = Some("user".to_owned());
+    append_transcript(&env, late_answer);
 
     let output = env
         .rimz()
@@ -1451,7 +1471,17 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
     assert!(stdout.contains("current answer"), "{stdout}");
     assert!(!stdout.contains("prior prompt"), "{stdout}");
     assert!(
-        stderr.contains("1 earlier entry from a prior session"),
+        !stdout.contains("Prior question?") && !stdout.contains("late choice"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("3 earlier entries from a prior session"),
+        "{stderr}"
+    );
+    assert!(
+        // The stamp is the prior session's last arrival (2020-01-01T00:01Z, local
+        // date either side of the new year), never the carried answer's 2098.
+        (stderr.contains(" 2019)") || stderr.contains(" 2020)")) && !stderr.contains(" 209"),
         "{stderr}"
     );
     assert!(
@@ -1477,7 +1507,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             .unwrap();
         assert!(output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(stderr.contains("earlier entry"), has_note, "{stderr}");
+        assert_eq!(stderr.contains("earlier entr"), has_note, "{stderr}");
     }
 
     let all = run_ok(
@@ -1488,13 +1518,18 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
     assert_eq!(all.matches("Live ·").count(), 1, "{all}");
     assert!(all.contains("prior prompt"), "{all}");
     assert!(all.contains("current prompt"), "{all}");
+    assert!(all.contains("│ ● late choice — user"), "{all}");
+    assert!(
+        all.find("late choice").unwrap() < all.find("Live ·").unwrap(),
+        "{all}"
+    );
 
     let json = run_ok(
         env.rimz()
             .args(["transcript", &format!("#{branch}"), "--json"]),
     );
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("transcript json");
-    assert_eq!(parsed["archived_count"], json!(1));
+    assert_eq!(parsed["archived_count"], json!(3));
     let entries = parsed["entries"].as_array().expect("entries");
     assert!(
         entries
@@ -1502,6 +1537,11 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             .any(|entry| entry["text"] == "current prompt")
     );
     assert!(entries.iter().all(|entry| entry["text"] != "prior prompt"));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["text"] != "Prior question?" && entry["text"] != "late choice")
+    );
 }
 
 #[test]
