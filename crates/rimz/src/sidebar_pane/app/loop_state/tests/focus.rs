@@ -672,7 +672,7 @@ fn requested_focus_anchor(
 }
 
 #[test]
-fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
+fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
     let own = zellij("terminal_99");
     let target = zellij("terminal_2");
     let mut rig = Rig::with_own_pane(own);
@@ -680,17 +680,68 @@ fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
     snapshot.own_view = Some(own_view());
     snapshot.viewed_panes.clear();
     rig.fold(snapshot, SnapshotSource::Produced);
+    let selected = rig.state.ui.selected_pane.clone();
     let anchor = requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
-    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let mut pending = rig.state.current.clone();
+    pending.display_name = "waiting fold".to_owned();
+    rig.result_tx
+        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+        .unwrap();
+    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
     rig.state
         .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
         .unwrap();
     assert_eq!(
-        rig.state.ui.selected_pane,
-        Some(target),
-        "every peer folds the push"
+        rig.state.projections, 0,
+        "non-owner must leave projection in the mailbox"
     );
+    assert_eq!(rig.state.last_folded_focus_intent, None);
+    assert_eq!(rig.state.ui.selected_pane, selected);
+    assert_ne!(rig.state.current.display_name, "waiting fold");
     assert!(!rig.state.watched());
+    assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
+    rig.event(SidebarEvent::FocusIntent {
+        pane_id: target,
+        nonce: anchor.nonce,
+    });
+    assert_eq!(
+        rig.state.projections, 1,
+        "the ordinary event still flushes the mailbox"
+    );
+    assert_eq!(rig.state.current.display_name, "waiting fold");
+    assert_eq!(rig.state.last_folded_focus_intent, Some(anchor.nonce));
+}
+
+#[test]
+fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
+    let mut rig = Rig::with_own_pane(zellij("terminal_99"));
+    let mut pending = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));
+    pending.own_view = Some(own_view());
+    pending.display_name = "new target".to_owned();
+    assert!(
+        rig.state
+            .current
+            .row_owning_pane(&zellij("terminal_2"))
+            .is_none()
+    );
+    rig.result_tx
+        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+        .unwrap();
+    let anchor = requested_focus_anchor(
+        zellij("terminal_2"),
+        2,
+        crate::utils::time::unix_now_ms(),
+        None,
+    );
+    let nonce = anchor.nonce;
+    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    assert_eq!(rig.state.projections, 1);
+    assert_eq!(rig.state.current.display_name, "new target");
+    assert_eq!(rig.state.last_folded_focus_intent, Some(nonce));
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
 
@@ -698,9 +749,10 @@ fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
 fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
     for push_first in [true, false] {
         let mut rig = Rig::new();
+        let first = zellij("terminal_1");
         let target = zellij("terminal_2");
         rig.fold(
-            snapshot_with_focused_pane(&rig.ws, zellij("terminal_1")),
+            snapshot_with_focused_pane(&rig.ws, first.clone()),
             SnapshotSource::Produced,
         );
         let anchor =
@@ -710,30 +762,28 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
             pane_id: target.clone(),
             nonce: anchor.nonce,
         };
-        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
-        let mut push = Some(push);
+        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+        if !push_first {
+            rig.event(event.clone());
+        }
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+        assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
         if push_first {
-            rig.state
-                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.take().unwrap())
-                .unwrap();
-        } else {
+            assert_eq!(rig.state.ui.selected_pane, Some(first));
+            assert_eq!(rig.state.last_folded_focus_intent, None);
             rig.event(event.clone());
         }
         assert_eq!(rig.state.ui.selected_pane, Some(target));
+        assert_eq!(rig.state.last_folded_focus_intent, Some(anchor.nonce));
         let next_frame = Instant::now() + Duration::from_secs(1);
         rig.state.next_frame = next_frame;
-        if push_first {
-            rig.event(event);
-        } else {
-            rig.state
-                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.take().unwrap())
-                .unwrap();
-        }
+        rig.event(event);
         assert_eq!(
             rig.state.next_frame, next_frame,
             "duplicate delivery must not fold again"
         );
-        assert_push_report(&ack, &rig, PushVerdict::NotDestination, push_first);
     }
 }
 

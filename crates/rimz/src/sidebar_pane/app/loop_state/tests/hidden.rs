@@ -5,7 +5,11 @@ impl Rig {
         self.deliver(self.lazy_update(snapshot, source));
     }
 
-    fn lazy_update(&self, snapshot: SidebarSnapshot, source: SnapshotSource) -> FetchUpdate {
+    pub(super) fn lazy_update(
+        &self,
+        snapshot: SidebarSnapshot,
+        source: SnapshotSource,
+    ) -> FetchUpdate {
         let own = self.state.config.own_pane.clone().unwrap();
         let view = snapshot.own_view.as_ref().unwrap();
         let mut panes = vec![pane(own.raw(), "tab_0", false)];

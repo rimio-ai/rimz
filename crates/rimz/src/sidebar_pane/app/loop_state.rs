@@ -864,6 +864,12 @@ impl LoopState {
     ) -> Result<()> {
         let arrived = Instant::now();
         push.peer.received_ms = Some(push.elapsed_ms());
+        if self.current.row_owning_pane(&push.anchor.pane_id).is_some()
+            && !self.owns_focus_target(&push.anchor.pane_id)
+        {
+            push.finish(PushVerdict::NotDestination);
+            return Ok(());
+        }
         if self.last_folded_focus_intent != Some(push.anchor.nonce) {
             self.prepare_action(fetch);
             push.peer.snapshot_ms = Some(push.elapsed_ms());
