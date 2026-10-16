@@ -199,14 +199,16 @@ fn project_group<'a>(
     held: Option<&HashSet<String>>,
     focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
-    let pr_open = group.pr_state == Some(WorktreePrState::Open);
     let mut projection = project_rows(
         &group.rows,
         group.collapses(),
         lens,
         expanded,
         held,
-        pr_open,
+        (
+            group.pr_state == Some(WorktreePrState::Open),
+            group.finished,
+        ),
         focused_pane,
     );
     let Some(query) = &lens.query else {
@@ -241,7 +243,7 @@ fn project_rows<'a>(
     lens: &BodyLens,
     expanded: bool,
     held: Option<&HashSet<String>>,
-    pr_open: bool,
+    group_facts: (bool, bool),
     focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
     let process_is_only_live_member = process_is_only_live_member(source);
@@ -277,7 +279,7 @@ fn project_rows<'a>(
         natural_visible += usize::from(natural);
 
         let visible = match lens.filter {
-            Some(filter) => filter.matches(row, pr_open),
+            Some(filter) => filter.matches(row, group_facts),
             None if lens.query.is_some() || expanded => true,
             None if collapses => revealed,
             None => {
@@ -310,7 +312,16 @@ pub fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(rows, false, &BodyLens::default(), false, held, false, None).rows
+    project_rows(
+        rows,
+        false,
+        &BodyLens::default(),
+        false,
+        held,
+        (false, false),
+        None,
+    )
+    .rows
 }
 
 fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
@@ -436,7 +447,10 @@ mod tests {
             &BTreeSet::new(),
             None,
         );
-        assert_eq!(ids(&filtered), ["done-unread", "done-focused"]);
+        assert!(
+            ids(&filtered).is_empty(),
+            "success excludes finished groups even under focus"
+        );
     }
 
     #[test]
@@ -469,6 +483,23 @@ mod tests {
         assert_eq!(ids(&roster), ["done"]);
         assert_eq!(roster.groups()[0].hidden_count(), 0);
         assert_eq!(roster.groups()[0].natural_hidden_count(), 0);
+    }
+
+    #[test]
+    fn success_lens_reveals_only_unfinished_results() {
+        let mut finished = group(vec![agent_row("landed", AgentStatus::Success)]);
+        finished.finished = true;
+        let snapshot = snapshot(vec![
+            finished,
+            group(vec![agent_row("review", AgentStatus::Success)]),
+        ]);
+        let roster = VisibleRoster::new(
+            &snapshot,
+            &BodyLens::from(BodyFilter::Status(AgentStatus::Success)),
+            &BTreeSet::new(),
+            None,
+        );
+        assert_eq!(ids(&roster), ["review"]);
     }
 
     #[test]
