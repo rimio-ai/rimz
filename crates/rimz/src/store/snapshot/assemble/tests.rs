@@ -485,6 +485,49 @@ fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
     );
 }
 
+#[test]
+fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let now = Timestamp::now();
+    let mut predecessor = crate::testkit::agent_state("claude", "predecessor", now);
+    predecessor.launch_id = Some("launch_old".into());
+    predecessor.role = Some("reviewer".to_owned());
+    predecessor.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%3")));
+    let stale = Timestamp::from_second(
+        now.as_second() - crate::store::session_death::GHOST_SESSION_TTL_SECS - 1,
+    )
+    .unwrap();
+    let mut successor = crate::testkit::agent_state("claude", "successor", stale);
+    successor.launch_id = Some("launch_new".into());
+    successor.molted_from = predecessor.launch_id.clone();
+    successor.role = predecessor.role.clone();
+    successor.pane = Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%4")));
+
+    let snapshot = assemble_snapshot(
+        &paths,
+        event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        },
+        &[predecessor, successor],
+        Vec::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| agent.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["predecessor"]
+    );
+    assert!(crate::address::role_holders(snapshot.agents.iter(), "reviewer").is_empty());
+}
+
 /// [`read_fresh_latest`] on a fresh thread, past this thread's parse
 /// cache: the reader a new binary starts with, for a check whose
 /// production path is always a cold-cache event.
