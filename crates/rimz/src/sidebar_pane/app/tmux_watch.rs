@@ -22,6 +22,8 @@ use crate::sidebar::presence::projector::project_presence;
 use crate::sidebar::presence::tmux::TmuxPresenceState;
 use tracing::debug;
 
+use super::hidden_views::Sweep;
+
 /// Backoff between control-client attach attempts, so a refusing tmux (too
 /// old for `-f no-output`, server restarting) never spins the thread.
 const RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
@@ -33,15 +35,16 @@ const SEED_WINDOW: Duration = Duration::from_millis(300);
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
 /// control client child needs no explicit teardown — it exits on stdin EOF,
 /// which process exit guarantees by closing the pipe.
-pub(super) fn spawn(runtime: RuntimePaths, session_name: String) -> JoinHandle<()> {
-    std::thread::spawn(move || watch_loop(&runtime, &session_name))
+pub(super) fn spawn(runtime: RuntimePaths, session_name: String, sweep: Sweep) -> JoinHandle<()> {
+    std::thread::spawn(move || watch_loop(&runtime, &session_name, &sweep))
 }
 
-fn watch_loop(runtime: &RuntimePaths, session_name: &str) {
+fn watch_loop(runtime: &RuntimePaths, session_name: &str, sweep: &Sweep) {
     let control_socket = managed_server_socket_path();
     loop {
         match PresenceWatch::attach(&control_socket, session_name) {
             Ok(mut watch) => {
+                sweep.kick();
                 let diag =
                     DiagSink::for_workspace(runtime.workspace_id.clone(), session_name, None);
                 crate::sidebar::cache::write_presence_stamp(
@@ -55,6 +58,9 @@ fn watch_loop(runtime: &RuntimePaths, session_name: &str) {
                     let now = Instant::now();
                     let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
                     let seeding = now < *deadline;
+                    if state.should_fit_hidden(&line) {
+                        sweep.kick();
+                    }
                     let (transitions, boundary_move) = state.apply(line, seeding);
                     if let Some(event) = boundary_move {
                         diag.emit(event);

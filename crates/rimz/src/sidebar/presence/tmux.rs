@@ -43,6 +43,17 @@ struct SubscriptionUpdate {
 }
 
 impl TmuxPresenceState {
+    pub(crate) fn should_fit_hidden(&self, line: &ControlLine) -> bool {
+        match line {
+            ControlLine::WindowAdded => true,
+            ControlLine::LayoutChange { window, .. } => self
+                .current_window
+                .values()
+                .any(|current| current == window),
+            _ => false,
+        }
+    }
+
     pub(crate) fn apply(
         &mut self,
         line: ControlLine,
@@ -97,7 +108,9 @@ impl TmuxPresenceState {
             ControlLine::SessionWindowChanged { session, window } => {
                 (self.switch_window(session, window, seeding), None)
             }
-            ControlLine::Nudge => (vec![PresenceTransition::Nudge], None),
+            ControlLine::Nudge | ControlLine::WindowAdded => {
+                (vec![PresenceTransition::Nudge], None)
+            }
             ControlLine::Ignore => (Vec::new(), None),
         }
     }

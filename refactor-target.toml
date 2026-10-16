@@ -434,7 +434,13 @@ path = "crates/rimz/src/diag"
 # WakeEvent, RefaultSample and record share wake telemetry with the harness (+6).
 # Hook-feed failures expose hook_feed, Record, and append to the CLI (+3).
 # SubagentZoneLookup names the placement lookup in CLI fallback diagnostics (+1).
-surface-budget = 105
+# ViewFitTrigger is the shared sweep/jump geometry-repair diagnostic vocabulary (+1).
+surface-budget = 106
+
+[[verdict]]
+kind = "item"
+key = "diag::record::ViewFitTrigger"
+reason = "The host records one aggregate geometry repair per sweep or jump fit."
 
 [[module]]
 path = "crates/rimz/src/disk"
@@ -996,7 +1002,13 @@ path = "crates/rimz/src/sidebar"
 # HostInputs, PaneProducer, and private inspection replace the reader escape hatches and cache election within the existing surface budget.
 # project_local is public for the fleet publish benchmark, within existing headroom.
 # SidebarOwnView::from_frame also serves the renderer's projection-free preview (+1).
-surface-budget = 239
+# The host watch asks the presence state whether a layout belongs to the current window (+1).
+surface-budget = 240
+
+[[verdict]]
+kind = "item"
+key = "sidebar::presence::tmux::TmuxPresenceState::should_fit_hidden"
+reason = "Only current-window layout changes and window births kick hidden-view fitting."
 
 [[verdict]]
 kind = "item"

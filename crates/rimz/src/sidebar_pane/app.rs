@@ -23,6 +23,7 @@ pub(super) mod fixtures;
 mod focus_push;
 mod gate;
 mod health;
+mod hidden_views;
 mod inbox;
 mod input;
 mod keymap;

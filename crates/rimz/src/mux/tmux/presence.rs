@@ -26,6 +26,7 @@ type LayoutGeometry = (u64, Vec<TmuxLayoutPane>);
 /// A tmux control-mode line carrying pane-presence information.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlLine {
+    WindowAdded,
     Subscription {
         pane: String,
         window: String,
@@ -200,7 +201,8 @@ fn classify_control_line(line: &str) -> ControlLine {
         "%session-window-changed" => {
             parse_session_window_changed(line).unwrap_or(ControlLine::Ignore)
         }
-        "%window-add" | "%unlinked-window-add" | "%sessions-changed" => ControlLine::Nudge,
+        "%window-add" | "%unlinked-window-add" => ControlLine::WindowAdded,
+        "%sessions-changed" => ControlLine::Nudge,
         _ => ControlLine::Ignore,
     }
 }
@@ -458,8 +460,9 @@ mod tests {
                     floating: false,
                 },
             ),
-            ("%window-add @5", ControlLine::Nudge),
-            ("%unlinked-window-add @6", ControlLine::Nudge),
+            ("%window-add @5", ControlLine::WindowAdded),
+            ("%unlinked-window-add @5", ControlLine::WindowAdded),
+            ("%unlinked-window-add @6", ControlLine::WindowAdded),
             (
                 "%window-close @5",
                 ControlLine::WindowClosed {

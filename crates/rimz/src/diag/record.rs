@@ -74,6 +74,13 @@ pub enum DiagSeverity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ViewFitTrigger {
+    Sweep,
+    Jump,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SidebarHostUnavailableCause {
     StartFailed,
     NoAnswer,
@@ -556,6 +563,15 @@ pub enum DiagEvent {
         rows: u16,
         cols: u16,
     },
+    HiddenViewsFitted {
+        trigger: ViewFitTrigger,
+        target_cols: u16,
+        target_rows: u16,
+        fitted: usize,
+        failed: usize,
+        #[serde(default)]
+        skipped: usize,
+    },
     ModelCatalogRefreshFailed {
         agent_kind: AgentKind,
         login: LoginKey,
@@ -694,6 +710,7 @@ impl DiagEvent {
             | Self::RecoverySeatRefilled { .. }
             | Self::RecoveryChildEnded { .. }
             | Self::PaneWinsizeRepaired { .. }
+            | Self::HiddenViewsFitted { .. }
             | Self::SupervisorConvergence { .. }
             | Self::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
@@ -763,6 +780,7 @@ impl DiagEvent {
             Self::SubagentZoneLookupFailed { .. } => "subagent_zone_lookup_failed",
             Self::ProviderStartupExit { .. } => "provider_startup_exit",
             Self::PaneWinsizeRepaired { .. } => "pane_winsize_repaired",
+            Self::HiddenViewsFitted { .. } => "hidden_views_fitted",
             Self::RecoverySeatRefilled { .. } => "recovery_seat_refilled",
             Self::RecoveryChildEnded { .. } => "recovery_child_ended",
             Self::PaneCacheDivergence { .. } => "pane_cache_divergence",
@@ -1016,6 +1034,7 @@ impl DiagEvent {
                 ..
             } => format!("{}:{agent_kind}:{agent_name:?}", self.kind_name()),
             Self::PaneWinsizeRepaired { pane, .. } => format!("{}:{pane}", self.kind_name()),
+            Self::HiddenViewsFitted { trigger, .. } => format!("{}:{trigger:?}", self.kind_name()),
             Self::SupervisorConvergence { target_build }
             | Self::SupervisorPreflightRejected { target_build, .. } => {
                 format!("{}:{target_build}", self.kind_name())
@@ -1483,6 +1502,18 @@ impl DiagEvent {
             ),
             Self::PaneWinsizeRepaired { pane, rows, cols } => {
                 format!("{pane} tty winsize repaired to {rows} rows, {cols} columns")
+            }
+            Self::HiddenViewsFitted {
+                trigger,
+                target_cols,
+                target_rows,
+                fitted,
+                failed,
+                skipped,
+            } => {
+                format!(
+                    "{trigger:?}: {fitted} hidden views fitted to {target_cols}x{target_rows}, {failed} failed, {skipped} skipped"
+                )
             }
             Self::FetchDeliveryStats {
                 interval_ms,

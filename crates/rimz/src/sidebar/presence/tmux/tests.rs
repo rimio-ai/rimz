@@ -2,6 +2,23 @@ use super::*;
 use crate::sidebar::presence::projector::project_presence;
 use crate::wakeup::events::SidebarEvent;
 
+#[test]
+fn hidden_view_fit_trigger_ignores_hidden_layouts_and_tracks_the_current_window() {
+    let mut state = TmuxPresenceState::default();
+    let mut seed = seed_geometry("%1", "@1", 0, 80, 80);
+    if let ControlLine::SeedPane { window_active, .. } = &mut seed {
+        *window_active = true;
+    }
+    state.apply(seed, true);
+    assert!(state.should_fit_hidden(&layout("@1", 100, &[])));
+    assert!(!state.should_fit_hidden(&layout("@2", 100, &[])));
+    assert!(state.should_fit_hidden(&ControlLine::WindowAdded));
+    assert!(!state.should_fit_hidden(&ControlLine::Nudge));
+    state.apply(swin("$1", "@2"), false);
+    assert!(!state.should_fit_hidden(&layout("@1", 100, &[])));
+    assert!(state.should_fit_hidden(&layout("@2", 100, &[])));
+}
+
 fn project_apply(
     state: &mut TmuxPresenceState,
     line: ControlLine,
