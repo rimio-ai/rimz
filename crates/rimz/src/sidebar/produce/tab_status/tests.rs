@@ -19,7 +19,6 @@ fn frame(name: &str, panes: &[&str]) -> PaneFrame {
         produced_at_ms: 1,
         observed_at_ms: 1,
         topology_stamp_ms: Some(1),
-        metrics_stamp_ms: None,
         build: None,
         session_name: "room".to_owned(),
         tabs: vec![TabFrame {

@@ -235,7 +235,7 @@ Three properties matter downstream:
 
 - **It is the card-admission boundary.** A pane absent from the frame renders nothing, whatever the store says about it.
 - **`observed_at_ms` is the fusion supersession baseline.** It records when the pane source saw the topology, not when the producer wrote the file.
-- **It carries two monotonic section stamps.** A topology publication bumps both, a metrics publication bumps only the metrics stamp, and a presence publication preserves both. The fetch worker's tab-rename memo reads the topology stamp to tell a new topology from a repeat.
+- **It carries one monotonic topology stamp.** A topology publication bumps it, and metrics and presence publications keep it. The fetch worker's tab-rename memo reads it to tell a new topology from a repeat.
 
 The producer repairs raced-null processes, missing cwds, and briefly omitted panes before publishing; those guards are [sidebar.md → Honest reads across a mux hiccup](./sidebar.md#honest-reads-across-a-mux-hiccup).
 

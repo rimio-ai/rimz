@@ -64,7 +64,6 @@ fn frame_fold_carries_viewed_panes_onto_snapshot() {
         produced_at_ms: 1_000,
         observed_at_ms: 1_000,
         topology_stamp_ms: None,
-        metrics_stamp_ms: None,
         build: None,
         session_name: "rimz-test".to_owned(),
         tabs: Vec::new(),

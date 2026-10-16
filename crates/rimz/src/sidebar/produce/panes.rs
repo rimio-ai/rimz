@@ -1308,18 +1308,15 @@ enum PaneFramePublicationKind {
 }
 
 fn stamp_publication(frame: &mut PaneFrame, publication: PaneFramePublicationKind) {
-    let next =
-        |current: Option<u64>| unix_now_ms().max(current.unwrap_or_default().saturating_add(1));
     match publication {
         PaneFramePublicationKind::Topology => {
-            let stamp = next(frame.topology_stamp_ms.max(frame.metrics_stamp_ms));
-            frame.topology_stamp_ms = Some(stamp);
-            frame.metrics_stamp_ms = Some(stamp);
+            let floor = frame
+                .topology_stamp_ms
+                .unwrap_or_default()
+                .saturating_add(1);
+            frame.topology_stamp_ms = Some(unix_now_ms().max(floor));
         }
-        PaneFramePublicationKind::Metrics => {
-            frame.metrics_stamp_ms = Some(next(frame.metrics_stamp_ms));
-        }
-        PaneFramePublicationKind::Presence => {}
+        PaneFramePublicationKind::Metrics | PaneFramePublicationKind::Presence => {}
     }
 }
 
