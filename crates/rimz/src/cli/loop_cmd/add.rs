@@ -593,13 +593,16 @@ fn resolve_add_check(
 }
 
 fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
-    let task_workspace = WorkspaceResolver::resolve(&args.root, None)
-        .with_context(|| format!("resolving project root at {}", args.root.display()))?;
+    let task_workspace = if args.root == Path::new(".") {
+        resolve_caller_workspace()
+    } else {
+        WorkspaceResolver::resolve(&args.root, None).map_err(Into::into)
+    }
+    .with_context(|| format!("resolving project root at {}", args.root.display()))?;
     if !args.project {
         return Ok(task_workspace);
     }
-    let current =
-        WorkspaceResolver::resolve(".", None).context("resolving current project root")?;
+    let current = resolve_caller_workspace().context("resolving current project root")?;
     if task_workspace.project_root != current.project_root {
         bail!(
             "--project writes tasks for {}; choose a --root inside that project or run from the target project",
@@ -607,6 +610,30 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
         );
     }
     Ok(current)
+}
+
+/// The start directory's workspace, or an empty-dir caller's checkout, which holds its lane.
+fn resolve_caller_workspace() -> Result<rimz::ResolvedWorkspace> {
+    let workspace = WorkspaceResolver::resolve(".", None)?;
+    if !workspace
+        .worktree_root
+        .starts_with(rimz::disk::paths::empty_dir_root())
+    {
+        return Ok(workspace);
+    }
+    let room = WorkspaceResolver::resolve_participant(".", None)?;
+    let Some(store) = crate::cli::open_existing_store(&room)? else {
+        return Ok(workspace);
+    };
+    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+    let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents) else {
+        return Ok(workspace);
+    };
+    let Some(checkout) = caller.checkout.as_deref() else {
+        return Ok(workspace);
+    };
+    WorkspaceResolver::resolve(checkout, None)
+        .with_context(|| format!("resolving the caller's checkout `{checkout}`"))
 }
 
 fn resolve_add_action(
