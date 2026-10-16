@@ -5,6 +5,7 @@ use crate::cli::supervised;
 use rimz::harness::launch::{ExecAction, ExecRequest};
 use rimz::harness::resume::{PostureRequest, ResumePosture};
 use rimz::store::run::RunRecord;
+use std::path::Path;
 
 fn ended_child<'a>(
     agents: &'a [AgentState],
@@ -44,7 +45,9 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.worktree_root.clone());
-    if !cwd.is_dir() {
+    if child.checkout.is_some() {
+        rimz::agents::empty_dir::prepare_reentry(store.paths(), &cwd)?;
+    } else if !cwd.is_dir() {
         bail!("its worktree {} is gone", cwd.display());
     }
     let machine = crate::cli::machine_config();
@@ -104,10 +107,24 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     let provider_login =
         rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
     provider_login.health(&catalog.native_ambient(&child.kind, &rimz::agents::ambient_env()))?;
+    if child.checkout.is_some() {
+        crate::cli::folder_trust::preflight(
+            child.kind.as_str(),
+            adapter.folder_trust(
+                &cwd,
+                None,
+                &provider_login.env(&rimz::agents::ambient_env()),
+            ),
+            Some(crate::cli::folder_trust::Unattended::Subagent),
+        )?;
+    }
     match rimz::agents::preflight_launch_dir(
         adapter,
         &cwd,
-        Some(workspace.launch_repo_root()),
+        child
+            .checkout
+            .is_none()
+            .then(|| workspace.launch_repo_root()),
         &provider_login.env(&rimz::agents::ambient_env()),
         rimz::agents::LaunchDirMode::Supervised,
     ) {
@@ -158,8 +175,12 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         )?,
         name: child.name.clone(),
     };
-    let env =
-        rimz::room::pane_identity_env(&parent_workspace, &cwd, child.channel.as_deref(), false);
+    let env = rimz::room::pane_identity_env(
+        &parent_workspace,
+        child.lane_path().map(Path::new).unwrap_or(&cwd),
+        child.channel.as_deref(),
+        false,
+    );
     let _guard = supervised::pane::lock_subagent_zone(store)?;
     let current = store.runtime_projection(rimz::RuntimeScope::Audit)?;
     if supervised::pane::launch_has_bound_pane(&current.agents, &child.kind, launch_id) {

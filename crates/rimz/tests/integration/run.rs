@@ -1234,6 +1234,36 @@ fn subagent_missing_cwd_refuses_before_launch() {
     assert_subagent_checkout(false, false, Some("missing"));
 }
 
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_preserves_root_lane_and_recreates_on_restart() {
+    assert_subagent_checkout_case(false, false, None, None, Some("root"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_preserves_named_lane() {
+    assert_subagent_checkout_case(false, false, None, None, Some("named"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_without_grant_notices_fallback() {
+    assert_subagent_checkout_case(false, false, None, None, Some("fallback"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_explicit_cwd_wins_silently() {
+    assert_subagent_checkout_case(false, false, Some("absolute"), None, Some("override"));
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_empty_dir_dirty_root_refuses_even_without_grant() {
+    assert_subagent_checkout_case(false, false, None, None, Some("dirty"));
+}
+
 #[test]
 fn agent_launch_root_mismatch_refuses_without_creating_room() {
     let env = Env::new();
@@ -1321,8 +1351,21 @@ fn assert_subagent_checkout_with_login(
     cwd: Option<&str>,
     switch: Option<ParentLogin>,
 ) {
+    assert_subagent_checkout_case(fanout, repo_subdir, cwd, switch, None);
+}
+
+#[cfg(unix)]
+fn assert_subagent_checkout_case(
+    fanout: bool,
+    repo_subdir: bool,
+    cwd: Option<&str>,
+    switch: Option<ParentLogin>,
+    empty: Option<&str>,
+) {
     let env = Env::new();
-    let checkout = if repo_subdir {
+    let checkout = if empty == Some("root") {
+        env.project_root.clone()
+    } else if repo_subdir {
         let git = Command::new("git")
             .args(["init", "--quiet"])
             .arg(&env.home_root)
@@ -1349,6 +1392,31 @@ fn assert_subagent_checkout_with_login(
     )
     .expect("write fanout tasks");
     env.install_agent_hooks("codex");
+    let kind = if matches!(empty, Some("fallback" | "dirty")) {
+        env.install_agent_hooks("claude");
+        "claude"
+    } else {
+        "codex"
+    };
+    if empty.is_some() {
+        crate::common::write_definition(
+            &env,
+            "subagents",
+            "researcher",
+            &format!("description: Research\nagent: {kind}\ntools: [Read]\nempty-dir: true"),
+            "",
+        );
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+    }
+    let empty_root = env.store().paths().empty_dir_root();
+    if empty == Some("dirty") {
+        std::fs::create_dir_all(&empty_root).unwrap();
+        std::fs::write(empty_root.join("CLAUDE.md"), "must not load").unwrap();
+    }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
     if switch.is_some() {
@@ -1384,7 +1452,7 @@ fn assert_subagent_checkout_with_login(
             std::fs::write(config, toml::to_string(&table).unwrap()).unwrap();
         }
     }
-    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let agent_bin = write_failing_agent_shim(&env, kind, 1);
     let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve_under(
         &env.project_root,
@@ -1458,7 +1526,15 @@ fn assert_subagent_checkout_with_login(
     if fanout {
         command.args(["fanout", "tasks.json"]);
     } else {
-        command.args(["codex", "--prompt-file", "brief.md"]);
+        command.args([
+            if empty.is_some() {
+                "researcher"
+            } else {
+                "codex"
+            },
+            "--prompt-file",
+            "brief.md",
+        ]);
     }
     if let Some(cwd) = cwd {
         command.arg("--cwd").arg(if cwd == "absolute" {
@@ -1489,7 +1565,7 @@ fn assert_subagent_checkout_with_login(
     let launched = std::sync::atomic::AtomicBool::new(false);
     let output = std::thread::scope(|scope| {
         scope.spawn(|| {
-            if cwd == Some("missing") {
+            if cwd == Some("missing") || empty == Some("dirty") {
                 return; // Missing cwd refuses before opening a child pane.
             }
             bind_child_panes(&store, &trace_path, &workspace.session_name, &launched);
@@ -1499,6 +1575,17 @@ fn assert_subagent_checkout_with_login(
         output
     })
     .expect("launch subagents from foreign cwd");
+    if empty == Some("dirty") {
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&empty_root.join("CLAUDE.md").display().to_string()),
+            "{stderr}"
+        );
+        assert!(stderr.contains("remove it"), "{stderr}");
+        assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+        return;
+    }
     if cwd == Some("missing") {
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr).contains("create it first"));
@@ -1512,6 +1599,22 @@ fn assert_subagent_checkout_with_login(
         "subagent launch failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    if empty.is_some() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("empty-dir ignored"),
+            empty == Some("fallback"),
+            "{stderr}"
+        );
+        if empty == Some("fallback") {
+            assert!(
+                stderr.contains("claude")
+                    && stderr.contains("default")
+                    && stderr.contains("rimz doctor"),
+                "{stderr}"
+            );
+        }
+    }
     let expected_count = if fanout { 2 } else { 1 };
     let records = rimz::harness::run::list(store.paths()).expect("list child runs");
     assert_eq!(records.len(), expected_count);
@@ -1528,7 +1631,33 @@ fn assert_subagent_checkout_with_login(
             .as_deref(),
         checkout.to_str()
     );
-    let checkout = if cwd.is_some() { foreign } else { checkout };
+    let lane_path = if cwd.is_some() { foreign } else { checkout };
+    let applied = matches!(empty, Some("root" | "named"));
+    let checkout = if applied {
+        let child = agents
+            .iter()
+            .find(|agent| agent.parent_agent_id.is_some())
+            .unwrap();
+        let path = std::path::PathBuf::from(child.worktree_path.as_deref().unwrap());
+        assert_eq!(child.checkout.as_deref(), lane_path.to_str());
+        assert_eq!(
+            path.parent(),
+            Some(store.paths().empty_room_dir().as_path())
+        );
+        assert_eq!(child.root_lane, empty == Some("root"));
+        assert_eq!(
+            child.channel.as_deref(),
+            (empty == Some("named")).then_some("parent-checkout")
+        );
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        path
+    } else {
+        lane_path.clone()
+    };
     for record in &records {
         assert!(record.subagent);
         assert_eq!(record.workspace_id, env.workspace_id);
@@ -1580,14 +1709,13 @@ fn assert_subagent_checkout_with_login(
             .windows(2)
             .find(|args| args[0] == "--worktree-path")
             .map(|args| std::path::Path::new(args[1]));
-        let decoded =
-            rimz::harness::launch::decode_exec_request("codex", visible_worktree, payload)
-                .expect("child prompt artifact");
+        let decoded = rimz::harness::launch::decode_exec_request(kind, visible_worktree, payload)
+            .expect("child prompt artifact");
         assert!(
             matches!(decoded.action, rimz::harness::launch::ExecAction::Launch { prompt: Some(ref actual), .. } if actual == &prompt)
         );
     }
-    if cwd.is_some() {
+    if cwd.is_some() || applied {
         let record = &records[0];
         let child = agents
             .iter()
@@ -1597,8 +1725,51 @@ fn assert_subagent_checkout_with_login(
             child.pane.as_ref().map(|pane| &pane.pane_id),
             Some(&PaneId::from_parts(MuxName::Zellij, "terminal_3"))
         );
+        if applied {
+            assert!(
+                trace.contains(&format!("RIMZ_WORKTREE_PATH={}", lane_path.display())),
+                "{trace}"
+            );
+            let resolved = env
+                .rimz()
+                .args(["--mux", "zellij", "agents", "show", "@parent", "--json"])
+                .current_dir(&checkout)
+                .envs(
+                    command
+                        .get_envs()
+                        .filter_map(|(key, value)| value.map(|value| (key, value))),
+                )
+                .envs(rimz::room::pane_identity_env(
+                    &workspace,
+                    &lane_path,
+                    child.channel().as_deref(),
+                    false,
+                ))
+                .env(rimz::harness::launch::ENV_AGENT_KIND, kind)
+                .env(
+                    rimz::harness::launch::ENV_AGENT_ID,
+                    child.launch_id.as_ref().unwrap().as_str(),
+                )
+                .bounded_output()
+                .unwrap();
+            assert!(
+                resolved.status.success(),
+                "{}",
+                String::from_utf8_lossy(&resolved.stderr)
+            );
+            assert!(String::from_utf8_lossy(&resolved.stdout).contains("parent"));
+            std::fs::remove_dir_all(&checkout).unwrap();
+        }
+        let address = format!(
+            "@{}{}",
+            child.name.as_deref().unwrap(),
+            child
+                .channel()
+                .map(|channel| format!("#{channel}"))
+                .unwrap_or_default()
+        );
         let output = env.rimz()
-            .args(["--mux", "zellij", "agents", "restart", &format!("@{}#{}", child.name.as_deref().unwrap(), child.channel().unwrap())])
+            .args(["--mux", "zellij", "agents", "restart", &address])
             .envs(command.get_envs().filter_map(|(key, value)| value.map(|value| (key, value))))
             .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":3,"is_plugin":false,"tab_id":1,"title":"codex"}]"#)
             .bounded_output().unwrap();
@@ -1607,6 +1778,7 @@ fn assert_subagent_checkout_with_login(
             "restart: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(checkout.is_dir(), "restart must recreate the recorded cwd");
         let trace = std::fs::read_to_string(&trace_path).unwrap();
         let reopened = trace
             .lines()

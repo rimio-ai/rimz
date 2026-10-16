@@ -515,6 +515,12 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .is_ok();
     let mut extra_env = prompt.materialized.env.clone();
     extra_env.extend(login.overrides(inputs.ambient_env));
+    if let Some(checkout) = &request.identity.params.checkout {
+        extra_env.insert(
+            crate::workspace::ENV_WORKTREE_PATH.to_owned(),
+            checkout.clone(),
+        );
+    }
     let isolation = if inputs.bwrap.is_some() {
         crate::config::Isolation::Sandbox
     } else {
@@ -649,7 +655,14 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         );
         unset.insert(
             crate::workspace::ENV_WORKTREE_PATH.to_owned(),
-            sandbox::EnvPin::Set(inputs.cwd.display().to_string()),
+            sandbox::EnvPin::Set(
+                request
+                    .identity
+                    .params
+                    .checkout
+                    .clone()
+                    .unwrap_or_else(|| inputs.cwd.display().to_string()),
+            ),
         );
         if let Some(task) = &request.identity.params.loop_task {
             unset.insert(

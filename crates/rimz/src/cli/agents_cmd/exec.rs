@@ -72,7 +72,11 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                     .unwrap_or(false);
                 let exit = ParkExit {
                     identity: exec_launch_identity(&request)?,
-                    entered_worktree: request.worktree_path.as_ref().map(|_| cwd.clone()),
+                    entered_worktree: request
+                        .worktree_path
+                        .as_ref()
+                        .filter(|_| request.identity.params.checkout.is_none())
+                        .map(|_| cwd.clone()),
                     request,
                     cwd,
                     isolation,
@@ -99,6 +103,11 @@ fn run_exec_inner(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .context("resolving the agent launch workspace")?;
     let mut invocation = ExecInvocationContext::new(&workspace, cwd);
     invocation.store()?;
+    if envelope.request().identity.params.checkout.is_some() {
+        rimz::agents::empty_dir::prepare_reentry(invocation.store()?.paths(), &invocation.cwd)?;
+        std::env::set_current_dir(&invocation.cwd)
+            .context("entering the recorded empty directory")?;
+    }
     let run_context = run_exec_context(envelope.request(), &invocation)?;
     let mut provisional_identity = None;
     let launched = exec_launch_identity(envelope.request()).and_then(|identity| {
@@ -279,6 +288,7 @@ fn launch_and_supervise(
     let entered_worktree = request
         .worktree_path
         .as_deref()
+        .filter(|_| request.identity.params.checkout.is_none())
         .map(enter_worktree)
         .transpose()?;
     let process = plan.process();
@@ -860,7 +870,8 @@ fn should_record_end_trace(request: &rimz::harness::launch::ExecRequest) -> bool
 }
 
 fn should_drop_to_shell(request: &rimz::harness::launch::ExecRequest, abrupt: bool) -> bool {
-    (request.close_pane_on_exit || request.worktree_path.is_some())
+    (request.close_pane_on_exit
+        || (request.worktree_path.is_some() && request.identity.params.checkout.is_none()))
         && request.run_id.is_none()
         && !abrupt
 }
@@ -912,7 +923,11 @@ fn exit_hint(
     } else {
         format!("rimz: agent `{kind}` exited ({status}); relaunch with `{relaunch}`\r\n")
     };
-    if let Some(path) = request.worktree_path.as_deref() {
+    if let Some(path) = request
+        .worktree_path
+        .as_deref()
+        .filter(|_| request.identity.params.checkout.is_none())
+    {
         let path = crate::cli::render::home_relative_path(path);
         hint.push_str(&format!(
             "rimz: worktree {path} kept; `rimz worktree sweep` reclaims it once its work lands\r\n"

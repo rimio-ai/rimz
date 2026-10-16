@@ -969,6 +969,18 @@ fn subagent_launch_anchors_at_the_parent_checkout() {
     .expect("peer workspace");
     assert_eq!(peer.worktree_root, shell.worktree_root);
 
+    parent.checkout = Some(subdir.display().to_string());
+    parent.worktree_path = Some(scratch.path().display().to_string());
+    let peer = anchor_subagent_workspace(
+        shell.clone(),
+        &supervised_request("task", false),
+        Some(&parent),
+        &globals,
+    )
+    .expect("empty-dir peer workspace");
+    assert_eq!(peer.worktree_root, subdir.canonicalize().unwrap());
+    parent.checkout = None;
+
     parent.worktree_path = None;
     let legacy = anchor_subagent_workspace(
         shell.clone(),

@@ -73,7 +73,19 @@ pub(super) fn launch_layout(
         crate::cli::require_worktree_config(&machine_config)?;
     }
     crate::cli::check_launch_room(globals)?;
-    let ctx = Ctx::open(globals)?;
+    let mut ctx = Ctx::open(globals)?;
+    let snapshot = ctx.cached_snapshot()?;
+    if let Ok(caller) = ancestry::resolve_calling_agent(&snapshot.agents)
+        && let Some(checkout) = caller.checkout.as_deref()
+    {
+        ctx.workspace = rimz::workspace::WorkspaceResolver::resolve_participant(
+            checkout,
+            globals.root.clone(),
+        )?;
+        ctx.workspace.worktree_root = Path::new(checkout)
+            .canonicalize()
+            .with_context(|| format!("resolving the caller's checkout `{checkout}`"))?;
+    }
     let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
     if let Some(launched) = launch_resolved(
         args.launch,
@@ -350,6 +362,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
     let prompt_agent_index = prompt.and(receipt_leader_index);
     let mut checked_folder_trust = HashSet::new();
     let mut preflighted_logins = Vec::new();
+    let mut empty_dir = None;
     if !args.launch.cohort.continue_cohort {
         crate::cli::admit_launch_worktree_name(
             workspace,
@@ -422,8 +435,21 @@ pub(in crate::cli) fn launch_resolved<'a>(
     } else {
         workspace.clone()
     };
+    let empty_dir_eligible = single_cell && !worktree_launch && args.launch.cwd.is_none();
+    if !single_cell
+        && !worktree_launch
+        && args.launch.cwd.is_none()
+        && layout
+            .agent_cells()
+            .any(|cell| cell.empty_dir == Some(true))
+    {
+        writeln!(
+            std::io::stderr(),
+            "empty-dir ignored: applies only to single-agent launches"
+        )?;
+    }
     for (index, cell) in layout.agent_cells().enumerate() {
-        preflighted_logins.push(preflight_cell(
+        let (login, prepared) = preflight_cell(
             &preflight_workspace,
             store.runtime_paths(),
             cell,
@@ -445,7 +471,10 @@ pub(in crate::cli) fn launch_resolved<'a>(
                         .as_ref()
                         .map(|_| crate::cli::folder_trust::Unattended::Team)
                 }),
-        )?);
+            empty_dir_eligible.then_some((&projection.agents, args.launch.name.as_deref())),
+        )?;
+        preflighted_logins.push(login);
+        empty_dir = prepared;
     }
     Ok(Box::new(move || {
         let team = team_name.as_deref().and_then(|name| teams.0.get(name));
@@ -674,9 +703,14 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 base,
             ),
         }?;
-        let Some(launch) = launch else {
+        let Some(mut launch) = launch else {
             return Ok(None);
         };
+        let checkout = empty_dir.as_ref().map(|_| launch.cwd.display().to_string());
+        if let Some(prepared) = &empty_dir {
+            launch.cwd.clone_from(&prepared.cwd);
+            launch.repo_root = None;
+        }
         if let Some(team) = team {
             rimz::worktree::exclude_team_scratch(&launch.cwd, &team.scratch_patterns());
         }
@@ -686,14 +720,17 @@ pub(in crate::cli) fn launch_resolved<'a>(
         }
         let room_channel = rimz::harness::spec::resolve_room_channel(
             &workspace.project_root,
-            &launch.cwd,
+            checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
             team_name.as_deref(),
             explicit_channel,
         );
         let mut launch_requests = launch_identity_requests(
             &layout,
             args.launch.name.as_deref(),
-            launch.generated_name(),
+            empty_dir
+                .as_ref()
+                .map(|prepared| prepared.name.as_str())
+                .or_else(|| launch.generated_name()),
             team_name.as_deref(),
             team.map(|team| team.roles.as_slice()),
             room_channel.as_deref(),
@@ -703,6 +740,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
         )?;
         for (request, login) in launch_requests.iter_mut().zip(preflighted_logins) {
             request.login = rimz::store::writer::LaunchLogin::Pinned(login);
+            request.launch.checkout.clone_from(&checkout);
         }
         if let Some(index) = prompt_agent_index {
             launch_requests[index].launch.loop_task = loop_task.map(str::to_owned);
@@ -811,7 +849,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 sidebar,
                 identity_env: rimz::room::pane_identity_env(
                     workspace,
-                    &cwd,
+                    checkout.as_deref().map(Path::new).unwrap_or(&cwd),
                     room_channel.as_deref(),
                     !worktree_launch && loop_task.is_none(),
                 ),
@@ -1042,6 +1080,7 @@ enum CellStart<'a> {
     Pick,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn preflight_cell(
     workspace: &rimz::ResolvedWorkspace,
     runtime: &rimz::RuntimePaths,
@@ -1050,7 +1089,11 @@ fn preflight_cell(
     start: CellStart<'_>,
     checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
     unattended: Option<crate::cli::folder_trust::Unattended>,
-) -> Result<rimz::ids::LoginName> {
+    empty_dir: Option<(&[AgentState], Option<&str>)>,
+) -> Result<(
+    rimz::ids::LoginName,
+    Option<rimz::agents::empty_dir::Prepared>,
+)> {
     let adapter = rimz::agents::find_definition(cell.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", cell.kind))?;
     rimz::sandbox::preflight_launch(
@@ -1063,15 +1106,47 @@ fn preflight_cell(
         rimz::harness::launch::ExecRequest::bare_launch(cell.kind.clone(), Vec::new());
     let state = rimz::StatePaths::for_workspace(runtime.workspace_id.clone())?;
     let machine = rimz::config::MachineConfig::load_lenient();
-    let login = rimz::store::writer::LaunchLogin::RoomDefault.resolve(
-        &cell.kind,
-        &rimz::agents::room_accounts(
-            &state.workspace_record,
-            Some(&workspace.project_root),
-            &machine,
+    let login = cell
+        .launch
+        .login
+        .clone()
+        .map_or(
+            rimz::store::writer::LaunchLogin::RoomDefault,
+            rimz::store::writer::LaunchLogin::Pinned,
+        )
+        .resolve(
+            &cell.kind,
+            &rimz::agents::room_accounts(
+                &state.workspace_record,
+                Some(&workspace.project_root),
+                &machine,
+            )?,
+            &machine.accounts,
+        )?;
+    let decision = match empty_dir {
+        Some((agents, name)) => rimz::agents::empty_dir::decide(
+            &state,
+            agents,
+            name,
+            &cell.kind,
+            &login,
+            cell.empty_dir == Some(true),
         )?,
-        &machine.accounts,
-    )?;
+        None => rimz::agents::empty_dir::Decision::Skip,
+    };
+    let prepared = match decision {
+        rimz::agents::empty_dir::Decision::Applied(prepared) => Some(prepared),
+        rimz::agents::empty_dir::Decision::Fallback(notice) => {
+            writeln!(std::io::stderr(), "{notice}")?;
+            None
+        }
+        rimz::agents::empty_dir::Decision::Skip => None,
+    };
+    let cwd = prepared
+        .as_ref()
+        .map_or(workspace.worktree_root.as_path(), |prepared| {
+            prepared.cwd.as_path()
+        });
     request.identity.params.login = (!login.is_default()).then(|| login.name().clone());
     request.skills.clone_from(&cell.skills);
     request.isolation_default = cell.isolation_default;
@@ -1087,7 +1162,7 @@ fn preflight_cell(
     let process = rimz::harness::launch::preflight_agent_process(
         &workspace.project_root,
         &request,
-        &workspace.worktree_root,
+        cwd,
         (isolation == rimz::config::Isolation::Host).then_some(runtime),
     )?;
     login.health(
@@ -1096,11 +1171,7 @@ fn preflight_cell(
     )?;
     let mut launch_env = rimz::agents::ambient_env();
     launch_env.extend(process.env.clone());
-    if let Some(error) = adapter.launch_blocker(
-        &workspace.worktree_root,
-        &launch_env,
-        &process.provider_argv,
-    ) {
+    if let Some(error) = adapter.launch_blocker(cwd, &launch_env, &process.provider_argv) {
         return Err(error.into());
     }
     if adapter.min_version().is_some()
@@ -1108,18 +1179,22 @@ fn preflight_cell(
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
-    if checked_folder_trust.insert(login.key()) {
+    if prepared.is_some()
+        || cell.launch.checkout.is_some()
+        || checked_folder_trust.insert(login.key())
+    {
         crate::cli::folder_trust::preflight(
             cell.kind.as_str(),
             adapter.folder_trust(
-                &workspace.worktree_root,
-                Some(workspace.launch_repo_root()),
+                cwd,
+                (prepared.is_none() && cell.launch.checkout.is_none())
+                    .then(|| workspace.launch_repo_root()),
                 &login.env(&rimz::agents::ambient_env()),
             ),
             unattended,
         )?;
     }
-    Ok(login.name().clone())
+    Ok((login.name().clone(), prepared))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1202,6 +1277,21 @@ fn launch_resume_layout(
     )?;
     let mut preflighted_logins = Vec::new();
     for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
+        let mut cell = cell.clone();
+        let mut preflight_workspace = workspace.clone();
+        if let rimz::harness::plan::CohortSeed::Resume(agent) = seed {
+            cell.launch.checkout.clone_from(&agent.checkout);
+            cell.launch.login.clone_from(&agent.login);
+            if agent.checkout.is_some() {
+                let cwd = agent
+                    .worktree_path
+                    .as_deref()
+                    .context("empty-dir agent has no recorded working directory")?;
+                rimz::agents::empty_dir::prepare_reentry(store.paths(), Path::new(cwd))?;
+                preflight_workspace.worktree_root = cwd.into();
+                crate::cli::lsp_admission::admit(Path::new(cwd), machine_config)?;
+            }
+        }
         let isolation = match seed {
             rimz::harness::plan::CohortSeed::Resume(agent) => {
                 rimz::harness::plan::effective_resume_isolation(
@@ -1211,10 +1301,10 @@ fn launch_resume_layout(
             }
             rimz::harness::plan::CohortSeed::Fresh => cell.launch.isolation,
         };
-        let login = preflight_cell(
-            workspace,
+        let (login, _) = preflight_cell(
+            &preflight_workspace,
             store.runtime_paths(),
-            cell,
+            &cell,
             rimz::config::Isolation::resolve(
                 isolation,
                 cell.isolation_default,
@@ -1225,6 +1315,7 @@ fn launch_resume_layout(
             team_name
                 .as_ref()
                 .map(|_| crate::cli::folder_trust::Unattended::Team),
+            None,
         )?;
         if matches!(seed, rimz::harness::plan::CohortSeed::Fresh) {
             preflighted_logins.push(login);
@@ -1374,7 +1465,12 @@ fn launch_resume_layout(
             title,
             panes,
             sidebar,
-            identity_env: rimz::room::pane_identity_env(workspace, &cwd, channel.as_deref(), false),
+            identity_env: rimz::room::pane_identity_env(
+                workspace,
+                lane_path,
+                channel.as_deref(),
+                false,
+            ),
             focus,
             errors: LAUNCH_PLACEMENT_ERRORS,
         },

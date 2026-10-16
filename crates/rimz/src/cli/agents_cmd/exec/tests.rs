@@ -655,6 +655,8 @@ mod pane_exec {
         run_owned.run_id = Some(rimz::RunId::new());
         let mut worktree_owned = bare_exec_args();
         worktree_owned.worktree_path = Some(PathBuf::from("/tmp/rimz-worktree"));
+        let mut empty_dir_owned = worktree_owned.clone();
+        empty_dir_owned.identity.params.checkout = Some("/repo".into());
         let mut completion_owned = bare_exec_args();
         completion_owned.run_id = Some(rimz::RunId::new());
         completion_owned.exit_on_run_completion = true;
@@ -668,6 +670,7 @@ mod pane_exec {
             ("bare", bare_exec_args(), true, true, false),
             ("supervised run", run_owned, false, true, false),
             ("worktree", worktree_owned, true, true, true),
+            ("empty-dir", empty_dir_owned, true, true, false),
             ("completion", completion_owned, false, false, false),
             (
                 "subagent completion",

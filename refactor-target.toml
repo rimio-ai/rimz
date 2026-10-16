@@ -213,7 +213,8 @@ upward-dependencies = ["address"]
 # AgentState::identity_ids shares those identity keys with fleet joins and runtime projection (+1).
 # Empty-dir preparation and lane-path routing share the agent library surface (+5).
 # LaunchDirRefusal carries the HOME refusal alongside folder-trust failures (+1).
-surface-budget = 1077
+# empty_dir::Decision and decide replace the public prepare entry point (+1 net).
+surface-budget = 1078
 
 [[verdict]]
 kind = "item"
@@ -719,7 +720,8 @@ path = "crates/rimz/src/harness"
 # RefaultHelperRequest, its runner, wake_request and the focus timestamp cross the CLI seam (+4).
 # Admission::publish lets every room birth publish the shared capability verdict (+1).
 # hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
-surface-budget = 859 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
+# LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
+surface-budget = 860 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 
 [[verdict]]
 kind = "item"
@@ -1540,7 +1542,8 @@ allowed-dependencies = [
 # check_lane_scope lets `agents list` tell an unknown lane from an empty one by resume's lane rule (+1).
 # inspect_cohort_hold shares checkout/channel hold ownership with addressed board commands (+1).
 # plan_provider_resume adopts an exact session through the flat resume planner (+1).
-surface-budget = 67
+# LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
+surface-budget = 68
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"
@@ -6270,8 +6273,18 @@ reason = "Machine diagnostics can check the shared parent without resolving a wo
 
 [[verdict]]
 kind = "item"
-key = "agents::empty_dir::prepare"
-reason = "CLI fresh-launch paths share private cwd creation and retained-row name reservations."
+key = "agents::empty_dir::Decision"
+reason = "Interactive and supervised launches share applied, fallback-notice and skipped outcomes."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::decide"
+reason = "One library workflow checks cleanliness, evaluates account trust and prepares fresh launch directories."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::LaneResumeAction::agents_needing_preflight"
+reason = "Lane resume prepares recorded directories and resolves logins only for sessions the action restores."
 
 [[verdict]]
 kind = "item"

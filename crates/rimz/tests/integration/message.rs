@@ -4112,6 +4112,23 @@ fn assert_ended_child_resume_refusal(unhooked: bool) {
 #[cfg(unix)]
 #[test]
 fn parent_message_to_resumed_child_waits_for_installed_registration() {
+    assert_parent_message_resumes_child(None);
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_message_recreates_missing_empty_dir_before_resuming_child() {
+    assert_parent_message_resumes_child(Some(true));
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_message_refuses_revoked_empty_dir_grant_before_opening() {
+    assert_parent_message_resumes_child(Some(false));
+}
+
+#[cfg(unix)]
+fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
     use crate::common::{exec_args, path_with_front, write_long_lived_agent_shim};
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
@@ -4120,6 +4137,15 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
     env.install_agent_hooks("claude");
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
+    let cwd = if empty_grant.is_some() {
+        store.paths().empty_agent_dir("otter")
+    } else {
+        env.project_root.clone()
+    };
+    let checkout = empty_grant.map(|_| env.project_root.display().to_string());
+    if empty_grant == Some(true) {
+        std::fs::write(env.home_root.join(".claude.json"), serde_json::to_vec(&serde_json::json!({"projects": {store.paths().empty_dir_root().display().to_string(): {"hasTrustDialogAccepted": true}}})).unwrap()).unwrap();
+    }
     let transcript = env.project_root.join("child.jsonl");
     std::fs::write(&transcript, "{}\n").unwrap();
     append_lifecycle(
@@ -4145,6 +4171,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
                 agent_name: "otter".into(),
                 agent_name_explicit: true,
                 launch: LaunchParams {
+                    checkout: checkout.clone(),
                     parent_agent_id: Some("parent".into()),
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
@@ -4155,7 +4182,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
                 run_id: None,
                 pane_id: None,
                 runtime_owner: None,
-                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_path: Some(cwd.display().to_string()),
                 worktree_branch: None,
                 prompt: None,
                 description: None,
@@ -4178,7 +4205,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         AgentKind::new_unchecked("claude"),
         rimz::agents::PermissionMode::Auto,
         "finished task".into(),
-        env.project_root.clone(),
+        cwd.clone(),
     );
     run.agent_id = Some("child".into());
     run.agent_name = Some("otter".into());
@@ -4204,6 +4231,18 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    if empty_grant == Some(false) {
+        let output = sender.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success());
+        assert!(stderr.contains("trust decision"), "{stderr}");
+        let trace = std::fs::read_to_string(&trace).unwrap_or_default();
+        assert!(
+            !trace.contains("\tnew-tab\t") && !trace.contains("\tnew-pane\t"),
+            "{trace}"
+        );
+        return;
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let log = std::fs::read_to_string(&trace).unwrap_or_default();
@@ -4222,6 +4261,10 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         std::thread::sleep(Duration::from_millis(10));
     }
     // The trace mux records opens rather than executing them; start the same exec wrapper in the requested child pane.
+    assert!(
+        cwd.is_dir(),
+        "child resume must recreate its recorded empty directory before opening a pane"
+    );
     env.write_pane_fixture(&[parent_pane, agent_pane(&env, "claude")]);
     let mut request = ExecRequest {
         isolation_default: None,
@@ -4249,6 +4292,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
     request.identity.name_explicit = true;
     request.identity.launch_id = Some("launch_child".into());
     request.identity.params = LaunchParams {
+        checkout,
         parent_agent_id: Some("parent".into()),
         parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
         launch_depth: Some(1),
@@ -4256,6 +4300,13 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         ..LaunchParams::default()
     };
     let mut wrapper = traced_rimz(&env, &trace)
+        .current_dir(&cwd)
+        .envs(rimz::room::pane_identity_env(
+            &workspace,
+            &env.project_root,
+            None,
+            false,
+        ))
         .args(exec_args(&env, &request))
         .args(["--mux", "zellij"])
         .env("SHELL", "/definitely/not/a/shell")
@@ -4311,7 +4362,7 @@ fn parent_message_to_resumed_child_waits_for_installed_registration() {
         ("RIMZ_ZELLIJ_BIN", zellij.to_str().unwrap()),
         ("RIMZ_TEST_ZELLIJ_LOG", trace.to_str().unwrap()),
     ];
-    let registered = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"SessionStart", "session_id":"child", "source":"resume", "cwd":env.project_root}).to_string(), &hook_env);
+    let registered = env.run_installed_hook_in_pane("claude", &json!({"hook_event_name":"SessionStart", "session_id":"child", "source":"resume", "cwd":cwd}).to_string(), &hook_env);
     assert!(registered.status.success());
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

@@ -12,6 +12,7 @@ use super::render;
 pub(super) enum Unattended {
     Team,
     Loop,
+    Subagent,
 }
 
 impl std::fmt::Display for Unattended {
@@ -19,6 +20,7 @@ impl std::fmt::Display for Unattended {
         f.write_str(match self {
             Self::Team => "team",
             Self::Loop => "loop",
+            Self::Subagent => "subagent resume",
         })
     }
 }
@@ -42,11 +44,17 @@ pub(super) fn preflight(
             }
             message
         }
-        Some(FolderTrust::Undecided(gap)) => format!(
-            "{kind} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
-            gap.key.display(),
-            gap.fix(kind)
-        ),
+        Some(FolderTrust::Undecided(gap)) => {
+            let message = format!(
+                "{kind} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
+                gap.key.display(),
+                gap.fix(kind)
+            );
+            if matches!(unattended, Some(Unattended::Subagent)) {
+                anyhow::bail!("subagent resume refused: {message}");
+            }
+            message
+        }
         Some(FolderTrust::Decided) | None => return Ok(()),
     };
     writeln!(render::err(), "rimz: {message}")?;

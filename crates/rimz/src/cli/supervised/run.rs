@@ -155,6 +155,8 @@ struct PreparedRun {
     layout: LayoutSpec,
     adapter: &'static AgentDefinition,
     launch: rimz::worktree::LaunchCheckout,
+    checkout: Option<String>,
+    empty_dir_name: Option<String>,
     store: rimz::Store,
     kind: AgentKind,
     login: rimz::ids::LoginName,
@@ -266,7 +268,11 @@ fn open_attempt_pane(
     let target = own_pane_id(room.mux_name());
     let env = rimz::room::pane_identity_env(
         &prepared.workspace,
-        &prepared.launch.cwd,
+        prepared
+            .checkout
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or(&prepared.launch.cwd),
         prepared.room_channel.as_deref(),
         request.worktree.is_none() && request.from_pr.is_none() && request.loop_task.is_none(),
     );
@@ -509,7 +515,7 @@ fn prepare_supervised(
     if worktree_launch && !crate::cli::confirm_cross_repo_worktree(&workspace)? {
         return Ok(None);
     }
-    let Some(launch) = crate::cli::resolve_launch_checkout(
+    let Some(mut launch) = crate::cli::resolve_launch_checkout(
         &workspace,
         &machine_config,
         request.worktree.as_deref(),
@@ -538,6 +544,28 @@ fn prepare_supervised(
     )?;
     preflight_launch.login = (!login.is_default()).then(|| login.name().clone());
     login.preflight(&rimz::agents::ambient_env())?;
+    let mut checkout = None;
+    let mut empty_dir_name = None;
+    match rimz::agents::empty_dir::decide(
+        store.paths(),
+        &projection.agents,
+        request.name.as_deref(),
+        &agent_cell.kind,
+        &login,
+        agent_cell.empty_dir == Some(true) && !worktree_launch && request.cwd.is_none(),
+    )? {
+        rimz::agents::empty_dir::Decision::Applied(prepared) => {
+            checkout = Some(launch.cwd.display().to_string());
+            launch.cwd = prepared.cwd;
+            launch.repo_root = None;
+            empty_dir_name = Some(prepared.name);
+        }
+        rimz::agents::empty_dir::Decision::Fallback(notice) => {
+            writeln!(std::io::stderr(), "{notice}")?
+        }
+        rimz::agents::empty_dir::Decision::Skip => {}
+    }
+    preflight_launch.checkout.clone_from(&checkout);
     let launch_invocation = rimz::harness::launch::ExecRequest {
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: Some(prompt.to_string()),
@@ -583,7 +611,7 @@ fn prepare_supervised(
     // one recomputed from the caller's cwd.
     let room_channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
-        &launch.cwd,
+        checkout.as_deref().map(Path::new).unwrap_or(&launch.cwd),
         team_name.as_deref(),
         request
             .channel
@@ -597,6 +625,8 @@ fn prepare_supervised(
         layout,
         adapter,
         launch,
+        checkout,
+        empty_dir_name,
         store,
         kind,
         login: login.name().clone(),
@@ -662,7 +692,10 @@ fn execute_attempt(
     let mut launch_requests = launch_identity_requests(
         &prepared.layout,
         request.name.as_deref(),
-        prepared.launch.generated_name(),
+        prepared
+            .empty_dir_name
+            .as_deref()
+            .or_else(|| prepared.launch.generated_name()),
         None,
         None,
         prepared.room_channel.as_deref(),
@@ -671,6 +704,7 @@ fn execute_attempt(
         prepared.ancestry.as_ref(),
     )?;
     for request in &mut launch_requests {
+        request.launch.checkout.clone_from(&prepared.checkout);
         request.login = LaunchLogin::Pinned(prepared.login.clone());
         if attempt > 0
             && let AgentLaunchName::Explicit(name) = &request.name
