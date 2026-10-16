@@ -12,13 +12,13 @@ expression: strip_sgr(&ansi)
 ▎ pricing-refresh  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
 ▌ codex · GPT 5.5 · xhigh · 272k               $4.82▐
 ▌  approve pricing cache write                       ▐
-▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺─────────────────   58%▐
-▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪠 18m▐
+▌  󰿦 158k · 󱥸 151k  6k  19k                        ▐
 
   main                     ⇡3 ⇣1  +1840 -620   main
  ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
-   󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────────────   24%
+   󰕰 ━━━━━━━━━━━━╺━╺─────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
     subagents (2)                              $0.46
      ⠁ Plan · run focused nextest               $0.12
@@ -27,25 +27,25 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh                       5m
  ▁ claude · Opus 4.8 · xhigh · 1M              $28.90
    compact provider trace
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─────   79%
-   󰿦 797k · 󱥸 685k  79k  31k  99k ·  3       󰪟 8m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79% 󰪟  8m
+   󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
  ⣾ cargo nextest               37%   402M     8M/s
    integration::backend
 
   observer-lag                 ⇡1  +980 -360   main
   claude · Opus 4.8 · xhigh · 1M              $29.84
    API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85%
-   󰿦 853k · 󱥸 734k  85k  34k  106k            ◉ 1h
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% ◉  1h
+   󰿦 853k · 󱥸 734k  85k  34k  106k
  ⠁ opencode · GPT 5.5 · xhigh · 272k            $3.07
    trace tmux layout parity
-   󰕰 ━━━━━━━━━━━━━━━╺──────────────────────────   38%
+   󰕰 ━━━━━━━━━━━━━╺──────────────────────   38%
    󰿦 103k · 󱥸 99k  4k  12k ·  1
   pi · GPT 5.5 · xhigh
  ⢄ codex · GPT 5.5 · xhigh · 272k               $3.83
    triage stale pane sample
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━─────────────   68%
-   󰿦 185k · 󱥸 178k  7k  23k                   󰪥 54m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺───────────   68% 󰪥 54m
+   󰿦 185k · 󱥸 178k  7k  23k
     subagents (2)
      ⠁ Plan · run focused nextest
        󰿦 18k · Haiku · xhigh                       3m
@@ -56,18 +56,18 @@ expression: strip_sgr(&ansi)
   zellij-health                        ⇡1  +760 -210
   pi · GPT 5.5 · xhigh · 272k                  $5.76
    API error
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84%
-   󰿦 228k · 󱥸 219k  9k  28k                   󰪣 42m
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84% 󰪣 42m
+   󰿦 228k · 󱥸 219k  9k  28k
 
   theme-tune  #94         ⇡2 ⇣1  +1320 -540   main
   opencode · GPT 5.5 · xhigh · 272k            $0.68
    pick gallery color ramp
-   󰕰 ━━━━━━╺───────────────────────────────────   15%
-   󰿦 42k · 󱥸 40k  1k  5k                       󰪥 1h
+   󰕰 ━━━━━╺──────────────────────────────   15% 󰪥  1h
+   󰿦 42k · 󱥸 40k  1k  5k
  ⢄ claude · Opus 4.8 · xhigh · 1M               $6.95
    verify 256-color fallback
-   󰕰 ━━━━━━━━━━━━━━━━━╺━━╺─────────────────────   31%
-   󰿦 314k · 󱥸 270k  31k  12k  39k             󰪞 6m
+   󰕰 ━━━━━━━━━━━━━━━╺━╺──────────────────   31% 󰪞  6m
+   󰿦 314k · 󱥸 270k  31k  12k  39k
     subagents (2)                              $0.46
      ⠁ Plan · run focused nextest               $0.12
        󰿦 18k · Haiku · xhigh                       3m
@@ -77,12 +77,12 @@ expression: strip_sgr(&ansi)
   mux-merge #91                                main
   claude · Opus 4.8 · xhigh · 1M              $15.38
    API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺━━╺━───────────────   46%
-   󰿦 469k · 󱥸 403k  46k  18k  58k             ◉ 1h
+   󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺─────────────   46% ◉  1h
+   󰿦 469k · 󱥸 403k  46k  18k  58k
   claude · Opus 4.8 · xhigh · 1M               $2.41
    land tmux hook fix
-   󰕰 ━━━━━━━━╺━╺───────────────────────────────   13%
-   󰿦 132k · 󱥸 114k  13k  5k  16k              ◉ 2h
+   󰕰 ━━━━━━━╺╺───────────────────────────   13% ◉  2h
+   󰿦 132k · 󱥸 114k  13k  5k  16k
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

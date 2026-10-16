@@ -67,6 +67,26 @@ fn assert_collapse_hold(offset: usize, parent: usize, target: usize) {
 }
 
 #[test]
+fn collapse_above_at_zero_holds_the_previous_cards_stats() {
+    let snapshot = delegation_fleet(&[]);
+    let mut ui = selected_ui();
+    let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    select_card(&snapshot, &mut ui, "codex-2");
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    assert_eq!(
+        screen.matches('▤').count(),
+        2,
+        "only live and held selections keep stats: {screen}"
+    );
+    assert!(ui.held_expansions.contains("codex-0"));
+    assert!(
+        screen.lines().any(|line| line.starts_with("▎  ▤")),
+        "the held card keeps its stats: {screen}"
+    );
+}
+
+#[test]
 fn collapse_above_at_zero_keeps_clicked_card_and_unselected_entries() {
     assert_collapse_hold(0, 0, 2);
 }
@@ -232,7 +252,7 @@ fn growth_above_an_unchanged_selection_keeps_its_row() {
         ..Default::default()
     };
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
-    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     let after = paint_card_row(&snapshot, &mut ui, "task-2", 30);
     assert_eq!(
         after, before,
@@ -244,6 +264,7 @@ fn growth_above_an_unchanged_selection_keeps_its_row() {
 #[test]
 fn shrinking_above_at_the_top_records_the_unavoidable_clamp() {
     let mut snapshot = overflowing_fleet();
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     let mut ui = UiState {
         selected_index: Some(2),
         ..Default::default()
@@ -310,7 +331,7 @@ fn wheel_peek_anchors_the_top_visible_card_not_the_offscreen_selection() {
         ..Default::default()
     };
     let before = paint_card_row(&snapshot, &mut ui, "task-3", 20);
-    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     assert_eq!(paint_card_row(&snapshot, &mut ui, "task-3", 20), before);
 }
 
@@ -351,7 +372,7 @@ fn resort_anchors_the_cards_own_line_not_its_new_group_header() {
     let mut snapshot = overflowing_fleet();
     let mut ui = UiState {
         selected_index: Some(2),
-        scroll_offset: 9,
+        scroll_offset: 7,
         ..Default::default()
     };
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 24);
@@ -380,7 +401,7 @@ fn correction_during_a_wheel_flight_snaps_without_losing_the_remaining_glide() {
     ui.scroll_ease.observe(6, 0);
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 28);
     let remaining = ui.scroll_offset - ui.scroll_ease.visible(ui.scroll_offset, ui.frame_ms);
-    snapshot.theme.display.card_density = crate::config::CardDensityMode::Auto;
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Expanded;
     assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 28), before);
     assert!(ui.scroll_ease.in_flight());
     assert_eq!(
@@ -809,7 +830,7 @@ fn render_scroll_manual_offset_holds() {
             ..Default::default()
         },
         38,
-        34,
+        28,
     );
     assert!(
         !rendered.contains("task-0"),
@@ -850,9 +871,9 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         None,
         &UiState {
             selected_index: Some(0),
-            scroll_offset: 10,
+            scroll_offset: 9,
             offset_authoritative: true,
-            scrollbar: scrolled_fade(10, 0),
+            scrollbar: scrolled_fade(9, 0),
             ..Default::default()
         },
         38,

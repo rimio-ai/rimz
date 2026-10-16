@@ -48,8 +48,8 @@ pub(super) fn display_reasoning(row: &SidebarRow) -> Option<&str> {
 const BAR_LABEL_WIDTH: usize = 1;
 const BAR_VALUE_WIDTH: usize = 5;
 
-/// One aligned meter row: `<indent><label:3> <bar> <value:5>`. The caller's
-/// `make_bar` builds the colored bar spans to the supplied width and supplies the
+/// One aligned meter row: `<indent><label:1> <bar> <value:5>`; a caller that
+/// appends an age slot reserves it out of `width`. The caller's `make_bar` builds the colored bar spans to the supplied width and supplies the
 /// `label_style` for the lead glyph (the context meter tints its `▣` with the
 /// bar's severity); this helper owns the indent, the fixed label and value
 /// columns, and the gaps — so every row built through it shares one bar-start
@@ -64,7 +64,7 @@ pub(super) fn bar_row(
     make_bar: impl FnOnce(usize) -> Vec<Span<'static>>,
     width: usize,
 ) -> Line<'static> {
-    // "  "(2) + label(3) + " "(1) + bar + " "(1) + value(5)
+    // "  "(2) + label(1) + " "(1) + bar + " "(1) + value(5)
     let bar_width = width
         .saturating_sub(2 + BAR_LABEL_WIDTH + 1 + 1 + BAR_VALUE_WIDTH)
         .max(1);
@@ -82,9 +82,9 @@ pub(super) fn bar_row(
     Line::from(trim_spans_to_width(spans, width))
 }
 
-/// The context meter — the resting card's one bar. `ctx` on the left, the
-/// **percent used** on the right (always — the window *size* moves to the
-/// expanded token line), the bar between. The fill amount and its calm-blue →
+/// The context meter — the resting card's one bar. A context glyph on the left,
+/// the **percent used** on the right, the bar between. The window size is on the
+/// identity line. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
 /// `[theme.display.context_meter]`) come from the used percentage and the
 /// absolute tokens. Fill geometry is log-scaled by default, with curve strength
@@ -100,6 +100,16 @@ pub(super) fn bar_row(
 /// always carry it. The value prefers a one-decimal precise fraction (`78.2%`)
 /// over the integer gauge. An empty (0%) window reads the hollow `▢`; any usage
 /// fills it to `▣`.
+///
+/// At L2 every meter reserves a five-cell age cluster after a space; below L2
+/// the bar keeps that room and the stats line pins the age instead. The age appears from five minutes quiet, with a
+/// clock-fill glyph ([`elapsed_glyph`]) and continuous tone ([`activity_age_style`]):
+/// dim while warm, heating toward the provider's prompt-cache TTL (the hour
+/// when unknown), then muted with a full face past the ceiling. A keep-warm
+/// horizon uses the steady held tone ([`cache_age_pin`]). Finished cards follow
+/// the same ramp. The clock reads the agent's own quiet time
+/// ([`SidebarRow::own_last_activity`]), not child-folded activity: a parent
+/// waiting on children makes no model call, so its cache keeps cooling.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
@@ -133,7 +143,8 @@ pub(super) fn gauge_line(
     } else {
         theme.glyph(GlyphRole::MeterContextFull)
     };
-    bar_row(
+    let age_width = if ctx.tier == Tier::L2 { 6 } else { 0 };
+    let mut line = bar_row(
         theme,
         glyph,
         theme.style(color, Modifier::empty()),
@@ -159,8 +170,14 @@ pub(super) fn gauge_line(
                 None => context_gauge_spans(theme, bar_color, &[], fill, bar_width),
             }
         },
-        width,
-    )
+        width.saturating_sub(age_width),
+    );
+    if age_width != 0 {
+        line.spans.push(Span::raw(" "));
+        line.spans
+            .push(cache_age_pin(theme, row, ctx.now).unwrap_or_else(|| Span::raw("     ")));
+    }
+    line
 }
 
 /// Window below which the drawn fill stays linear.
@@ -363,7 +380,7 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
             let label = activity_short(ended, now)?;
             let glyph = elapsed_glyph(theme, age_secs(ended, now), age_secs(ended, until));
             Some(Span::styled(
-                format!("{glyph} {label}"),
+                format!("{glyph} {label:>3}"),
                 theme.good(Modifier::empty()),
             ))
         }
@@ -372,7 +389,7 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
             let secs = age_secs(since, now);
             let ceiling = ceiling.unwrap_or(ATTENTION_AGE_CEILING_SECS);
             Some(Span::styled(
-                format!("{} {label}", elapsed_glyph(theme, secs, ceiling)),
+                format!("{} {label:>3}", elapsed_glyph(theme, secs, ceiling)),
                 if secs > ceiling {
                     theme.muted()
                 } else {
@@ -383,7 +400,8 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
     }
 }
 
-/// The card's stats line with the last-activity age pinned right. Current-window
+/// The selected or held card's stats line, also shown on every engaged card
+/// under expanded density. Current-window
 /// truth retains the `▤` form: `▤` is
 /// `input + cache_write + cache_read` of the latest API call — exactly the
 /// numerator the `▣` meter scales — so the bar's percent and this absolute
@@ -404,31 +422,12 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
 /// exact latest-call `▤` composition wins over cumulative `◇` session totals;
 /// the scalar wins over both when the split disagrees.
 /// Falls back to the bare `▤` rollup total when no categorized source exists,
-/// using zero before the first token measurement. The age rides the right edge
-/// only once it crosses five minutes
-/// — a recently active agent shows the breakdown alone, left-aligned, rather than
-/// a noisy sub-`5m` clock — as the clock-fill glyph ([`elapsed_glyph`]) over the
-/// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
-/// through warn, caution, and alarm toward the provider's prompt-cache TTL (the
-/// hour when the card carries none), when resuming would likely re-read the
-/// whole context uncached. Past that ceiling its face stays full and its tone
-/// drops to muted. While a keep-warm horizon holds the cache the pin
-/// instead reads the steady held tone ([`cache_age_pin`]). A finished row heats on the same ramp —
-/// its context is exactly what a follow-up prompt would pay to re-read, then
-/// mutes past the ceiling too. The age
-/// is the agent's own quiet time ([`SidebarRow::own_last_activity`]), not the
-/// child-folded row clock: a parent waiting on its subagents' reports is making
-/// no model call, so its cache keeps cooling while they work.
+/// using zero before the first token measurement. At L2 the age rides the
+/// meter; below L2 the meter has no room for it, so this line pins it right.
 pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'static> {
     let theme = row_ctx.theme;
     let bands = row_ctx.bands;
-    let now = row_ctx.now;
     let width = content_width(row_ctx.width);
-    // The age clock is the line's one right pin — resource stats are
-    // process-row vocabulary and never ride an agent card.
-    let age = cache_age_pin(theme, row, now)
-        .into_iter()
-        .collect::<Vec<_>>();
     // The `▤` head carries row severity, matching a cache-read run when present
     // and retaining urgency beside a reads-absent composition. A row with no
     // gauge percent folds to 0 and lets the token overlay alone speak.
@@ -510,6 +509,12 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
         row.as_agent().and_then(|agent| agent.tool_repeat.as_ref()),
         row_ctx.tool_repeat_warn_after,
     ));
+    if row_ctx.tier == Tier::L2 {
+        return Line::from(trim_spans_to_width(left, width));
+    }
+    let age = cache_age_pin(theme, row, row_ctx.now)
+        .into_iter()
+        .collect::<Vec<_>>();
     pin_right(left, age, width)
 }
 

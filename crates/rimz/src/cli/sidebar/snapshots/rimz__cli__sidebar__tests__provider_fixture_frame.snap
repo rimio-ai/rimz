@@ -12,7 +12,7 @@ expression: rendered
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
 ▌⢄ claude · Opus 4.8 · xhigh · 1M              $12.40▐
 ▌  port auth watcher                                 ▐
-▌  ▣ ━━━━━━━━━━━━━━━━━━╺━━╺────────────────────   34%▐
+▌  ▣ ━━━━━━━━━━━━━━━━╺━╺─────────────────   34%      ▐
 ▌  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 ▐
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
@@ -21,8 +21,8 @@ expression: rendered
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
 ▎? codex · GPT 5.5 · xhigh · 272k               $4.36🮇
 ▎  Allow the pricing cache write?                    🮇
-▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────   71%🮇
-▎  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                   ◉ 40m🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◉ 40m🮇
+▎⣾ cargo nextest                                     🮇
 
  ─── Claude ──── Codex ──────────────────────────────
 

@@ -930,6 +930,11 @@ fn selecting_named_team_member_folds_teammate_entries() {
             .is_some_and(|line| line.starts_with('▎')),
         "the expanded teammate keeps the lane gutter:\n{rendered}"
     );
+    assert_eq!(
+        rendered.matches('▤').count(),
+        1,
+        "teammates do not gain stats: {rendered}"
+    );
     assert_snapshot("named_team_selection_folds_teammate_entries", rendered);
 }
 

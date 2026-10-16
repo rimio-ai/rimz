@@ -13,16 +13,16 @@ expression: strip_sgr(&ansi)
 ▎ pricing-refresh  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
 ▌ codex · GPT 5.5 · xhigh · 272k               $4.82▐
 ▌  approve pricing cache write                       ▐
-▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺─────────────────   58%▐
-▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪠 18m▐
+▌  󰿦 158k · 󱥸 151k  6k  19k                        ▐
 
   main                     ⇡3 ⇣1  +1840 -620   main
  ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
-   󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────────────   24%
-   󰿦 247k · 󱥸 212k  24k  9k  30k
+   󰕰 ━━━━━━━━━━━━╺━╺─────────────────────   24%
     subagents (2)                              $0.46
  ▁ claude · Opus 4.8 · xhigh · 1M              $28.90
+   compact provider trace
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

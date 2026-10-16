@@ -261,29 +261,31 @@ fn pending_waits_line_counts_armed_waits() {
     );
 
     let expanded = line_texts(&group_lines(&snapshot, &theme, 0));
-    for (resting, selected) in collapsed_text[2..=stats].iter().zip(&expanded[2..=stats]) {
+    for (resting, selected) in collapsed_text[2..stats].iter().zip(&expanded[2..stats]) {
         assert_eq!(
             resting.chars().skip(1).take(52).collect::<String>(),
             selected.chars().skip(1).take(52).collect::<String>(),
-            "selection only appends delegation entries"
+            "selection leaves identity, description, and meter in place"
         );
     }
-    assert!(expanded[stats].ends_with("$0.42▐"));
-    assert!(expanded[stats + 1].contains("inspect the renderer"));
-    assert!(expanded[stats + 2].contains("12k"));
-    assert!(expanded[stats + 3].contains("◷ timer · in 12m"));
-    assert!(expanded[stats + 4].contains(&shell_lead(&theme, "command · make")));
-    assert!(expanded[stats + 5].contains("      make check"));
+    assert!(expanded[stats].contains("▤ 0"));
+    let selected_stats = stats + 1;
+    assert!(expanded[selected_stats].ends_with("$0.42▐"));
+    assert!(expanded[selected_stats + 1].contains("inspect the renderer"));
+    assert!(expanded[selected_stats + 2].contains("12k"));
+    assert!(expanded[selected_stats + 3].contains("◷ timer · in 12m"));
+    assert!(expanded[selected_stats + 4].contains(&shell_lead(&theme, "command · make")));
+    assert!(expanded[selected_stats + 5].contains("      make check"));
     assert_eq!(
         expanded.len(),
-        stats + 6,
+        selected_stats + 6,
         "a command wait always carries its command on line 2"
     );
 
     for width in [24, 30, 36, 45, 46] {
         let narrow = group_lines_at_width(&snapshot, &theme, 0, width);
         let narrow_text = line_texts(&narrow);
-        let counts = narrow_text[stats]
+        let counts = narrow_text[selected_stats]
             .strip_suffix("$0.42▐")
             .unwrap()
             .trim_end();
@@ -293,10 +295,10 @@ fn pending_waits_line_counts_armed_waits() {
             "▌  ⧉ subagents (1) · ⧖ waits (2)"
         };
         assert_eq!(counts, expected, "pane width {width}");
-        assert_eq!(narrow[stats].width(), width);
+        assert_eq!(narrow[selected_stats].width(), width);
         let collapsed = line_texts(&group_lines_at_width(&snapshot, &theme, usize::MAX, width));
         assert_eq!(
-            narrow_text[stats]
+            narrow_text[selected_stats]
                 .chars()
                 .skip(1)
                 .take(width - 2)
@@ -321,6 +323,7 @@ fn pending_waits_line_counts_armed_waits() {
         },
         armed_at: Some(fixed_now()),
     });
+    let stats = selected_stats;
     let with_signal = group_lines(&snapshot, &theme, 0);
     let with_signal_text = line_texts(&with_signal);
     assert!(with_signal_text[stats].contains("⧖ waits (3)"));
