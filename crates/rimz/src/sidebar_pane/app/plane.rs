@@ -27,6 +27,7 @@ pub(in crate::sidebar_pane) struct DataPlane {
     host_data: Arc<Mutex<HostData>>,
     covered: Covered,
     observe_tx: SyncSender<ObserveMsg>,
+    fit: Option<super::focus_push::FitView>,
     /// The plane's threads, until the first pane starts them.
     lanes: Mutex<Option<Lanes>>,
 }
@@ -39,6 +40,7 @@ impl DataPlane {
         source: SidebarInstanceId,
     ) -> super::focus_push::FocusPeers {
         super::focus_push::FocusPeers::new(self.subscribers.clone(), source)
+            .with_fit(self.fit.clone())
     }
 
     /// Threads start with the first pane and live as long as the host. Fetch and production run off every render loop, so animation and input never block on them.
@@ -47,7 +49,7 @@ impl DataPlane {
         runtime: &RuntimePaths,
         diag: &crate::diag::DiagSink,
     ) -> Self {
-        let (plane, request_rx, observe_rx) = Self::idle();
+        let (mut plane, request_rx, observe_rx) = Self::idle();
         let observer = diag
             .is_enabled()
             .then(|| observe::RoomObserver::new(plane.observe_tx.clone(), plane.events.clone()));
@@ -56,6 +58,14 @@ impl DataPlane {
         let covered = plane.covered.clone();
         let host_data = plane.host_data.clone();
         let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
+        if let Some((sweep, _)) = &hidden {
+            let sweep = sweep.clone();
+            let diag = diag.clone();
+            let runtime = runtime.clone();
+            plane.fit = Some(Arc::new(move |anchor| {
+                sweep.fit_jump(anchor, &diag, &runtime)
+            }));
+        }
         let lanes: Lanes = Box::new(move || {
             let producer = PaneProducer::seeded(&runtime, &config.session_name);
             let last_projection =
@@ -116,6 +126,7 @@ impl DataPlane {
             host_data: Arc::default(),
             covered: Covered::default(),
             observe_tx,
+            fit: None,
             lanes: Mutex::new(None),
         };
         (plane, request_rx, observe_rx)
