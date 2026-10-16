@@ -75,10 +75,10 @@ fn looks_like_slug(value: &str) -> bool {
         && !value.chars().any(|c| c.is_ascii_uppercase())
 }
 
-/// Context windows use a quiet lowercase magnitude, separate from token counts.
+/// Context windows truncate to whole units, with lowercase `k` and uppercase `M`.
 pub(crate) fn window_short(window: u64) -> String {
     if window >= 1_000_000 {
-        format!("{}m", window / 1_000_000)
+        format!("{}M", window / 1_000_000)
     } else if window >= 1_000 {
         format!("{}k", window / 1_000)
     } else {
@@ -243,7 +243,7 @@ mod tests {
         ] {
             assert_eq!(
                 model_label_parts(raw),
-                ("Opus 5.5".to_owned(), Some("1m".to_owned()))
+                ("Opus 5.5".to_owned(), Some("1M".to_owned()))
             );
         }
         assert_eq!(
@@ -263,7 +263,8 @@ mod tests {
         ] {
             assert_eq!(model_label_parts(raw), (raw.to_owned(), None));
         }
-        assert_eq!(window_short(1_050_000), "1m");
+        assert_eq!(window_short(1_000_000), "1M");
+        assert_eq!(window_short(1_050_000), "1M");
         assert_eq!(window_short(272_000), "272k");
         assert_eq!(window_short(523), "523");
     }

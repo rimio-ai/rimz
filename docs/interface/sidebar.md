@@ -95,7 +95,7 @@ Each head's frames, color, effect, and speed are configurable under [`[theme.ani
 | `⟲ 5` | consecutive identical tool calls, shown from 3 through 19 |
 | `◔ 8m` | an age, never a duration. The face fills by quarters of the scale, then becomes `◉` past it: the provider's prompt-cache lifetime for a card's own age, `stalled_after_secs` for child quiet, and an hour for waits. |
 | `9m`, `2h` | plain muted runtime, frozen for finished children; pipeline durations use two units from an hour up, such as `4h12m`. |
-| `200k`, `1m` | the model's context window size |
+| `200k`, `1M` | the model's context window size |
 | `$1.27` | cost in dollars, two decimals |
 | `⋯ bg` after the description | the turn finished while background work it started is still running |
 | `C 34%` `M 512M` `⇅ 8M/s` | a working process row's CPU, resident memory, and I/O rate |

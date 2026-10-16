@@ -86,7 +86,7 @@ pub(super) fn agent_lead_cell(
 /// name, then the dim capability tokens (`· model · reasoning · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
-/// The window token is the model's context window (`258k`, `1m`) — the
+/// The window token is the model's context window (`258k`, `1M`) — the
 /// context-sidecar reading first, the row's carried/default fallback second.
 /// It rides only non-idle cards; idle cards keep model and reasoning configuration but drop the
 /// window until work starts.
@@ -176,7 +176,7 @@ pub(super) fn agent_identity_line(
     pin_right(left, right, width)
 }
 
-/// The model's context window for the identity line (`258k`, `1m`). Prefers the
+/// The model's context window for the identity line (`258k`, `1M`). Prefers the
 /// out-of-band runtime reading and falls back to the row's carried/default
 /// window.
 pub(super) fn display_context_window(row: &SidebarRow) -> Option<u64> {

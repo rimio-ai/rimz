@@ -17,12 +17,12 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
 
   main                     ⇡3 ⇣1  +1840 -620   main
- ⢄ claude · Opus 4.8 · xhigh · 1m               $8.64
+ ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
    󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
     subagents (2)                              $0.46
- ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
+ ▁ claude · Opus 4.8 · xhigh · 1M              $28.90
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 
