@@ -27,8 +27,10 @@ pub(super) fn spawn_command_is_sidebar_serve(spawn: &str) -> bool {
         })
 }
 
-/// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by initial
-/// launch and in-place recovery so the two cannot drift.
+/// The `rimz sidebar serve …` argv a tmux sidebar pane runs. Shared by every
+/// site that creates one (the pristine-birth `respawn-pane`, the
+/// non-destructive open split, the `after-new-window` hook, and the reconcile
+/// re-dock) so they cannot drift.
 pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
     let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
     command.extend(sidebar_serve_args(MuxName::Tmux, opts));
