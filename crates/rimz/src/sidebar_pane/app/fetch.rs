@@ -1488,6 +1488,17 @@ impl ResultReceiver {
             .is_some()
     }
 
+    pub(super) fn has_pending_own_view_change(&self, current: &SidebarOwnView) -> bool {
+        self.0
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot
+            .as_ref()
+            .and_then(FetchUpdate::preview)
+            .is_some_and(|(own_view, _)| own_view.as_ref() != Some(current))
+    }
+
     /// Preview before projecting; deferred content still releases completion.
     /// Projection and equal-content comparison happen only on a consumer take.
     pub(super) fn take_unless(

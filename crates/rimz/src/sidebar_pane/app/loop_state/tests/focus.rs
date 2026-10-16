@@ -714,6 +714,62 @@ fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
 }
 
 #[test]
+fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
+    let (mut pending, sidebar, first, target) = focus_fixture();
+    let mut rig = Rig::with_own_pane(sidebar);
+    rig.state.prev_width = Some(80);
+    pending.focused_pane = Some(first);
+    pending.viewed_panes.clear();
+    let mut seed = pending.clone();
+    seed.own_view = Some(own_view());
+    rig.fold(seed, SnapshotSource::Produced);
+    rig.result_tx
+        .send(rig.lazy_update(pending, SnapshotSource::Produced))
+        .unwrap();
+    rig.state
+        .paint_hold
+        .engage(Instant::now(), crate::utils::time::unix_now_ms());
+    let mut anchor =
+        requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
+    anchor.placement = None;
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    assert_eq!(
+        ack.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty),
+        "the pending owner must park, not report not_destination"
+    );
+    assert!(rig.state.pending_focus_push.is_some());
+    assert_eq!(rig.state.projections, 1);
+    rig.state.paint_hold.release();
+    rig.paint(true);
+    assert_eq!(
+        rig.state.ui.drawn_selection.as_deref(),
+        Some(target.to_string().as_str())
+    );
+    assert_push_report(&ack, &rig, PushVerdict::Painted, true);
+}
+
+#[test]
+fn focus_push_with_unknown_own_view_takes_the_drain_and_fold_path() {
+    let (mut seed, sidebar, _, target) = focus_fixture();
+    let mut rig = Rig::with_own_pane(sidebar);
+    seed.own_view = None;
+    rig.fold(seed, SnapshotSource::Produced);
+    let anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
+    let nonce = anchor.nonce;
+    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    assert_eq!(rig.state.last_folded_focus_intent, Some(nonce));
+    assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
+}
+
+#[test]
 fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
     let mut rig = Rig::with_own_pane(zellij("terminal_99"));
     let mut pending = snapshot_with_focused_pane(&rig.ws, zellij("terminal_1"));

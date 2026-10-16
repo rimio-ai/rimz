@@ -866,6 +866,11 @@ impl LoopState {
         push.peer.received_ms = Some(push.elapsed_ms());
         if self.current.row_owning_pane(&push.anchor.pane_id).is_some()
             && !self.owns_focus_target(&push.anchor.pane_id)
+            && self
+                .current
+                .own_view
+                .as_ref()
+                .is_some_and(|own_view| !self.result_rx.has_pending_own_view_change(own_view))
         {
             push.finish(PushVerdict::NotDestination);
             return Ok(());
