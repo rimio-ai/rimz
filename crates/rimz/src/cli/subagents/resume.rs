@@ -104,14 +104,19 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
     let provider_login =
         rimz::agents::session_login(&child.kind, login.as_ref(), &machine.accounts)?;
     provider_login.health(&catalog.native_ambient(&child.kind, &rimz::agents::ambient_env()))?;
-    rimz::agents::preflight_launch_dir(
+    match rimz::agents::preflight_launch_dir(
         adapter,
         &cwd,
         Some(workspace.launch_repo_root()),
         &provider_login.env(&rimz::agents::ambient_env()),
         rimz::agents::LaunchDirMode::Supervised,
-    )
-    .context("supervised resume refused")?;
+    ) {
+        Ok(()) => {}
+        Err(error @ rimz::agents::LaunchDirRefusal::Home { .. }) => bail!(
+            "supervised resume refused: {error}; the child cannot move, so launch a new child with `--cwd <DIR>`"
+        ),
+        Err(error) => return Err(error).context("supervised resume refused"),
+    }
     let runs = rimz::harness::run::list(store.paths())?;
     let run = newest_run_for_child(&runs, child)
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;

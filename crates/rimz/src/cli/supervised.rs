@@ -94,6 +94,7 @@ fn preflight_agent(
     adapter: &AgentDefinition,
     launch: &rimz::worktree::LaunchCheckout,
     login: &rimz::agents::ProviderLogin,
+    home_fix: &str,
 ) -> Result<()> {
     let definition = adapter.spec();
     let kind = definition.kind;
@@ -116,16 +117,17 @@ fn preflight_agent(
             bail!("`rimz agents -p` cannot supervise {kind}: {reason}; {fix}")
         }
     }
-    if let Err(error) = rimz::agents::preflight_launch_dir(
+    match rimz::agents::preflight_launch_dir(
         adapter,
         &launch.cwd,
         launch.repo_root.as_deref(),
         &login_env,
         rimz::agents::LaunchDirMode::Supervised,
     ) {
-        bail!("`rimz agents -p` supervised launch refused: {error}");
+        Ok(()) => Ok(()),
+        Err(error @ rimz::agents::LaunchDirRefusal::Home { .. }) => bail!("{error}; {home_fix}"),
+        Err(error) => bail!("`rimz agents -p` supervised launch refused: {error}"),
     }
-    Ok(())
 }
 
 fn preflight_program(

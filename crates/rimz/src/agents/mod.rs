@@ -1105,14 +1105,34 @@ pub struct LaunchDirUntrusted {
     reason: &'static str,
 }
 
-/// Check folder trust for supervised panes or headless execution.
+/// Why an unattended run may not start in its working directory. The home
+/// case carries no fix: only the entry knows how its user moves the run.
+#[derive(Debug, thiserror::Error)]
+pub enum LaunchDirRefusal {
+    #[error("`{}` is the home directory, where an unattended agent cannot be started", dir.display())]
+    Home { dir: PathBuf },
+    #[error(transparent)]
+    Untrusted(#[from] LaunchDirUntrusted),
+}
+
+/// Check the working directory for supervised panes or headless execution.
+/// The login's `$HOME` is refused for every kind, ahead of folder trust: no
+/// one answers an unattended run's trust prompt, and Claude never saves trust
+/// there.
 pub fn preflight_launch_dir(
     adapter: &AgentDefinition,
     cwd: &Path,
     repo_root: Option<&Path>,
     login_env: &BTreeMap<String, String>,
     mode: LaunchDirMode,
-) -> std::result::Result<(), LaunchDirUntrusted> {
+) -> std::result::Result<(), LaunchDirRefusal> {
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.into());
+    let home = login_env.get("HOME").filter(|home| !home.is_empty());
+    if home.is_some_and(|home| canonical(Path::new(home)) == canonical(cwd)) {
+        return Err(LaunchDirRefusal::Home {
+            dir: cwd.to_path_buf(),
+        });
+    }
     if !adapter.headless_requires_folder_trust() {
         return Ok(());
     }
@@ -1122,7 +1142,7 @@ pub fn preflight_launch_dir(
             dir: cwd.to_path_buf(),
             fix: gap.fix(adapter.spec().kind),
             reason: "has no trust decision and would stop at its trust prompt",
-        }),
+        }.into()),
         Some(FolderTrust::Restricted { key }) if mode == LaunchDirMode::Supervised => {
             Err(LaunchDirUntrusted {
                 kind: adapter.spec().kind,
@@ -1132,7 +1152,7 @@ pub fn preflight_launch_dir(
                     FolderTrust::RESTRICTED_FIX
                 ),
                 reason: "is saved untrusted and will stop at its Folder access prompt on every launch",
-            })
+            }.into())
         }
         _ => Ok(()),
     }
@@ -1164,6 +1184,101 @@ pub fn hook_trust_fix(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unattended_home_refuses_every_builtin_in_both_modes() {
+        let home = tempfile::tempdir().unwrap();
+        let login_env = BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
+        for adapter in registry::BUILTINS {
+            for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
+                assert!(
+                    matches!(
+                        preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                        Err(LaunchDirRefusal::Home { dir }) if dir == home.path()
+                    ),
+                    "{} {mode:?} must refuse home",
+                    adapter.spec().kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unattended_home_refuses_canonical_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let alias = root.path().join("alias");
+        std::fs::create_dir(&home).unwrap();
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        let adapter = definition_by_kind("claude").unwrap();
+        for (cwd, home) in [(&alias, &home), (&home, &alias), (&home.join("."), &home)] {
+            let login_env = BTreeMap::from([("HOME".into(), home.display().to_string())]);
+            assert!(matches!(
+                preflight_launch_dir(adapter, cwd, None, &login_env, LaunchDirMode::Supervised),
+                Err(LaunchDirRefusal::Home { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn unattended_home_allows_subdirectories_and_missing_home() {
+        let home = tempfile::tempdir().unwrap();
+        let sub = home.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        for adapter in registry::BUILTINS {
+            for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
+                let mut login_env =
+                    BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
+                assert!(
+                    preflight_launch_dir(adapter, &sub, Some(home.path()), &login_env, mode)
+                        .is_ok()
+                );
+                login_env.remove("HOME");
+                assert!(!matches!(
+                    preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                    Err(LaunchDirRefusal::Home { .. })
+                ));
+                login_env.insert("HOME".into(), String::new());
+                assert!(!matches!(
+                    preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                    Err(LaunchDirRefusal::Home { .. })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn unattended_home_refuses_even_when_codex_trusts_it() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("config.toml");
+        let mut table = toml::Table::new();
+        table.insert(
+            "projects".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                home.path().display().to_string(),
+                toml::Value::Table(toml::Table::from_iter([(
+                    "trust_level".into(),
+                    toml::Value::String("trusted".into()),
+                )])),
+            )])),
+        );
+        std::fs::write(&config, toml::to_string(&table).unwrap()).unwrap();
+        let login_env = BTreeMap::from([
+            ("HOME".into(), home.path().display().to_string()),
+            ("RIMZ_CODEX_CONFIG".into(), config.display().to_string()),
+        ]);
+        let adapter = definition_by_kind("codex").unwrap();
+        assert!(matches!(
+            adapter.folder_trust(home.path(), None, &login_env),
+            Some(FolderTrust::Decided)
+        ));
+        for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
+            assert!(matches!(
+                preflight_launch_dir(adapter, home.path(), None, &login_env, mode),
+                Err(LaunchDirRefusal::Home { .. })
+            ));
+        }
+    }
 
     fn local_context_refresh_ctx(
         prior_transcript_stat: Option<&TranscriptStat>,

@@ -1663,6 +1663,141 @@ fn supervised_codex_saved_untrusted_refuses_before_launch() {
 
 #[cfg(unix)]
 #[test]
+fn subagent_home_checkout_refuses_claude_before_launch() {
+    assert_unattended_home_refusal("claude", true, false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_home_checkout_refuses_pi_before_launch() {
+    assert_unattended_home_refusal("pi", true, false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_explicit_home_cwd_refuses_before_launch() {
+    assert_unattended_home_refusal("claude", true, true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn subagent_fanout_home_checkout_refuses_before_launch() {
+    assert_unattended_home_refusal("claude", true, false, true);
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_home_cwd_refuses_before_launch() {
+    assert_unattended_home_refusal("claude", false, false, false);
+}
+
+#[cfg(unix)]
+fn assert_unattended_home_refusal(kind: &str, subagent: bool, explicit_cwd: bool, fanout: bool) {
+    let env = Env::new();
+    env.install_agent_hooks(kind);
+    let agent_bin = write_failing_agent_shim(&env, kind, 1);
+    let store = env.store();
+    if subagent {
+        let workspace =
+            rimz::WorkspaceResolver::resolve_under(&env.project_root, None, &env.rimz_home())
+                .unwrap();
+        store.record_workspace(&workspace).unwrap();
+        store
+            .append_event(&EventEnvelope::agent_launched(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                &AgentKind::new_unchecked("claude"),
+                AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: AgentSessionId::from("parent-session"),
+                    launch_id: Some(AgentSessionId::from("parent-launch")),
+                    agent_name: "parent".into(),
+                    agent_name_explicit: true,
+                    launch: LaunchParams::default(),
+                    state: AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: Some(PaneId::from_parts(MuxName::Zellij, "terminal_2")),
+                    runtime_owner: None,
+                    worktree_path: Some(
+                        if explicit_cwd {
+                            &env.project_root
+                        } else {
+                            &env.home_root
+                        }
+                        .display()
+                        .to_string(),
+                    ),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+    }
+    let trace_path = env.project_root.join("home-refusal.log");
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij"]);
+    if subagent {
+        command.arg("subagents");
+        if fanout {
+            let tasks = env.project_root.join("tasks.json");
+            std::fs::write(
+                &tasks,
+                serde_json::to_vec(&json!([
+                    {"profile":kind,"prompt":"fix it"}, {"profile":kind,"prompt":"fix it"}
+                ]))
+                .unwrap(),
+            )
+            .unwrap();
+            command.arg("fanout").arg(tasks);
+        } else {
+            command.args([kind, "fix it"]);
+        }
+        command
+            .envs(rimz::workspace::pin_env(
+                &env.workspace_id,
+                &env.project_root,
+            ))
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch");
+    } else {
+        command
+            .current_dir(&env.home_root)
+            .args(["agents", kind, "fix it", "-p", "--bg"]);
+    }
+    if explicit_cwd {
+        command.arg("--cwd").arg(&env.home_root);
+    }
+    let output = command
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("home directory"), "{stderr}");
+    assert!(stderr.contains(env.home_root.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("--cwd"), "{stderr}");
+    if subagent {
+        assert!(!stderr.contains("rimz agents -p"), "{stderr}");
+    }
+    assert!(!output.status.success(), "{stderr}");
+    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    if !subagent {
+        let home_workspace =
+            rimz::WorkspaceResolver::resolve_under(&env.home_root, None, &env.rimz_home()).unwrap();
+        let home_state = rimz::StatePaths::for_project_root_under(
+            &home_workspace.project_root,
+            &env.rimz_home(),
+        )
+        .unwrap();
+        assert!(rimz::harness::run::list(&home_state).unwrap().is_empty());
+    }
+    assert!(!trace_path.exists(), "preflight must not invoke the mux");
+}
+
+#[cfg(unix)]
+#[test]
 fn supervised_codex_without_project_trust_refuses_before_launch() {
     let env = Env::new();
     std::fs::create_dir(env.project_root.join(".git")).unwrap();
@@ -1765,7 +1900,7 @@ fn supervised_claude_without_folder_trust_passes_preflight() {
             rimz::agents::LaunchDirMode::Supervised,
         )
         .is_ok(),
-        "Claude headless launches do not show the folder-trust dialog"
+        "supervised Claude launches do not check folder trust"
     );
     assert!(!config.exists(), "preflight must not grant folder trust");
 }

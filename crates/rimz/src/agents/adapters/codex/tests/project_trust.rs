@@ -245,6 +245,9 @@ fn codex_config_path_honors_codex_home_and_override() {
             LaunchDirMode::Supervised,
         )
         .unwrap_err();
+        let crate::agents::LaunchDirRefusal::Untrusted(error) = error else {
+            panic!("expected a folder-trust refusal");
+        };
         assert_eq!(error.kind, "codex");
         assert_eq!(error.dir, cwd);
         assert!(error.fix.contains("rimz trust grant --agents codex"));
@@ -267,6 +270,9 @@ fn codex_config_path_honors_codex_home_and_override() {
             LaunchDirMode::Supervised,
         )
         .unwrap_err();
+        let crate::agents::LaunchDirRefusal::Untrusted(error) = error else {
+            panic!("expected a folder-trust refusal");
+        };
         assert!(error.to_string().contains("saved untrusted"));
         assert!(error.fix.contains("Open restricted"));
     }
