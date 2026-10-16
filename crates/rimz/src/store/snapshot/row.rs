@@ -454,7 +454,7 @@ pub struct AgentCard {
 /// fills over, the last request (pings included) that TTL counts from, and
 /// while a keep-warm horizon holds the cache, the end of the last real turn and
 /// the instant the horizon lets go.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheClock {
     pub ceiling_secs: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -463,6 +463,9 @@ pub struct CacheClock {
     pub warm_until: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_since: Option<Timestamp>,
+    /// Producer-priced cache write of the card's current context at this TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewarm_cost_usd: Option<f64>,
 }
 
 impl Default for AgentCard {

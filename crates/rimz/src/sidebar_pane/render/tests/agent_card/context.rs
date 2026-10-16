@@ -45,6 +45,7 @@ fn half_hour_cache() -> CacheClock {
         last_request_at: None,
         warm_until: None,
         held_since: None,
+        rewarm_cost_usd: None,
     }
 }
 
@@ -1552,6 +1553,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             last_request_at: None,
             warm_until: None,
             held_since: None,
+            rewarm_cost_usd: None,
         })
     };
     let (hour_face, hour_style) = age_span(ttl(3600), 25 * 60);
@@ -1583,6 +1585,7 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
             last_request_at: None,
             warm_until: Some(fixed_now() + Duration::from_secs(warm_until_secs)),
             held_since: Some(fixed_now() - Duration::from_secs(50 * 60)),
+            rewarm_cost_usd: None,
         })
     };
     assert_eq!(

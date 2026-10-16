@@ -40,6 +40,30 @@ use super::spending::is_priceable_model_name;
 const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
 const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
 
+/// Estimate rebuilding a context through the same cache-write pricing as spending.
+pub fn cache_rewarm_cost_usd(
+    book: &PriceBook,
+    model: &str,
+    context_tokens: u64,
+    ttl: std::time::Duration,
+) -> Option<f64> {
+    let split = if ttl.as_secs() >= 3600 {
+        TokenSplit {
+            cache_write_1h: context_tokens,
+            ..TokenSplit::default()
+        }
+    } else {
+        TokenSplit {
+            cache_write: context_tokens,
+            ..TokenSplit::default()
+        }
+    };
+    match super::spending::lookup_split_price(book, model, split) {
+        super::spending::SplitPrice::Priced(cost) => Some(cost),
+        _ => None,
+    }
+}
+
 /// The token counts one priced request consumed. Providers fill the fields
 /// their wire exposes and leave the rest at zero; `cache_write_1h` and `fast`
 /// carry Claude's cache-tier and priority-turn distinctions, which every other
@@ -724,6 +748,19 @@ mod tests {
                 "claude-sonnet-4": {"input_cost_per_token": 9e-9, "output_cost_per_token": 9e-9}
             }"#,
         )
+    }
+
+    #[test]
+    fn cache_rewarm_prices_the_ttl_bucket_without_guessing_unknown_models() {
+        let book = PriceBook::fixture();
+        let cost = |model, ttl| {
+            cache_rewarm_cost_usd(&book, model, 100000, std::time::Duration::from_secs(ttl))
+        };
+        assert_eq!(cost("claude-sonnet-4-6", 3600), Some(0.6));
+        assert_eq!(cost("claude-sonnet-4-6", 3599), Some(0.375));
+        assert_eq!(cost("gpt-5", 1800), Some(0.125));
+        assert_eq!(cost("future-unpriced-model", 3600), None);
+        assert_eq!(cost("<synthetic>", 1800), None);
     }
 
     #[test]

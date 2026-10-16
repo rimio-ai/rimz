@@ -486,6 +486,21 @@ fn pre_supersession_latest_snapshot_reprojects_the_molt_chain() {
 }
 
 #[test]
+fn pre_rewarm_estimate_snapshot_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(42);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "pre-estimate snapshots must be reprojected"
+    );
+}
+
+#[test]
 fn a_reaped_unended_molt_successor_keeps_its_predecessor_superseded() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

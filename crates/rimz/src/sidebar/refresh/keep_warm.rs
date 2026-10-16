@@ -64,12 +64,15 @@ pub(super) fn publish(
 /// the age pin's ceiling, plus the held window when keep-warm is holding the
 /// agent under its published horizon ([`holds`]) — judged here on every fold,
 /// since status and harness settings move faster than the heavy lane.
+/// Price the card's current context with the memoized book, without refreshing it.
 pub(in crate::sidebar) fn project_cache_clocks(
     snapshot: &mut SidebarSnapshot,
     cache: &KeepWarmCache,
     harness: &HarnessConfig,
+    runtime: &RuntimePaths,
 ) {
     let now = snapshot.now;
+    let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
     let clocks = snapshot
         .agents
         .iter()
@@ -85,6 +88,7 @@ pub(in crate::sidebar) fn project_cache_clocks(
                 last_request_at: agent.last_request_at(),
                 warm_until: held.map(|(until, _)| until),
                 held_since: held.map(|(_, ended)| ended),
+                rewarm_cost_usd: None,
             };
             Some((horizon_key(agent), clock))
         })
@@ -92,7 +96,22 @@ pub(in crate::sidebar) fn project_cache_clocks(
     for row in snapshot.rows_mut() {
         let key = format!("{}:{}", row.name, row.id);
         if let Some(card) = row.as_agent_mut() {
-            card.cache = clocks.get(&key).copied();
+            card.cache = clocks.get(&key).copied().map(|mut clock| {
+                clock.rewarm_cost_usd = card.context_used_tokens().and_then(|tokens| {
+                    let model = card
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.model_id.as_deref())
+                        .or(card.model.as_deref())?;
+                    crate::agents::pricing::cache_rewarm_cost_usd(
+                        &prices,
+                        model,
+                        tokens,
+                        std::time::Duration::from_secs(u64::from(clock.ceiling_secs)),
+                    )
+                });
+                clock
+            });
         }
     }
 }
@@ -123,6 +142,76 @@ mod tests {
         let mut policy = KeepWarmPolicy::default();
         policy.profiles.0.insert("warm".into(), profile);
         policy
+    }
+
+    #[test]
+    fn cache_clock_estimates_rewarm_from_the_api_model_and_context_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        crate::agents::PriceBook::write_fixture_cache(&runtime.shared_pricing_cache_path());
+        assert!(runtime.shared_pricing_cache_path().is_file());
+        let mut snapshot = snapshot(
+            &runtime,
+            vec![
+                agent("claude", "priced", None, Some(10)),
+                agent("codex", "codex", None, Some(10)),
+                agent("claude", "unpriced", None, Some(10)),
+                agent("claude", "empty", None, Some(10)),
+            ],
+        );
+        for row in snapshot.rows_mut() {
+            let id = row.id.clone();
+            let card = row.as_agent_mut().unwrap();
+            card.model = Some("friendly display name, not a pricing id".into());
+            let mut context =
+                crate::agents::AgentContext::new("fixture", Timestamp::from_second(100).unwrap());
+            context.model_id = Some(
+                match id.as_str() {
+                    "codex" => "gpt-5",
+                    "unpriced" => "future-unpriced-model",
+                    _ => "claude-sonnet-4-6",
+                }
+                .into(),
+            );
+            if id != "empty" {
+                context.tokens = Some(crate::agents::AgentTokenUsage {
+                    current_context_tokens: Some(100000),
+                    ..Default::default()
+                });
+            }
+            card.context = Some(context);
+        }
+        project_cache_clocks(
+            &mut snapshot,
+            &KeepWarmCache::default(),
+            &HarnessConfig::default(),
+            &runtime,
+        );
+        for (id, expected) in [
+            ("priced", Some(0.6)),
+            ("codex", Some(0.125)),
+            ("unpriced", None),
+            ("empty", None),
+        ] {
+            let clock = snapshot
+                .rows()
+                .find(|row| row.id == id)
+                .unwrap()
+                .as_agent()
+                .unwrap()
+                .cache
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(clock).unwrap()["rewarm_cost_usd"].as_f64(),
+                expected,
+                "{id}"
+            );
+        }
     }
 
     fn snapshot(runtime: &RuntimePaths, agents: Vec<AgentState>) -> SidebarSnapshot {
@@ -219,7 +308,7 @@ mod tests {
                 ("claude:unended-1".to_owned(), 7200),
             ]),
         };
-        project_cache_clocks(&mut snapshot, &cache, &HarnessConfig::default());
+        project_cache_clocks(&mut snapshot, &cache, &HarnessConfig::default(), &runtime);
         let clock = |id: &str| {
             snapshot
                 .rows()
@@ -236,6 +325,7 @@ mod tests {
                 last_request_at: Some(ended),
                 warm_until: Some(Timestamp::from_second(7210).unwrap()),
                 held_since: Some(ended),
+                rewarm_cost_usd: None,
             })
         );
         assert_eq!(
@@ -245,6 +335,7 @@ mod tests {
                 last_request_at: None,
                 warm_until: None,
                 held_since: None,
+                rewarm_cost_usd: None,
             }),
             "no real turn has ended, so there is nothing to hold yet"
         );
@@ -255,6 +346,7 @@ mod tests {
                 last_request_at: Some(ended),
                 warm_until: None,
                 held_since: None,
+                rewarm_cost_usd: None,
             })
         );
         assert_eq!(
@@ -282,7 +374,7 @@ mod tests {
                 ("claude:cold-1".to_owned(), 7200),
             ]),
         };
-        project_cache_clocks(&mut snapshot, &cache, &HarnessConfig::default());
+        project_cache_clocks(&mut snapshot, &cache, &HarnessConfig::default(), &runtime);
         let clock = |id: &str| {
             snapshot
                 .rows()
@@ -347,7 +439,12 @@ mod tests {
                 .collect(),
         };
         let mut clocks = |harness: &str| {
-            project_cache_clocks(&mut snapshot, &cache, &toml::from_str(harness).unwrap());
+            project_cache_clocks(
+                &mut snapshot,
+                &cache,
+                &toml::from_str(harness).unwrap(),
+                &runtime,
+            );
             ids.map(|id| {
                 snapshot
                     .rows()
@@ -363,6 +460,7 @@ mod tests {
                 last_request_at: Some(Timestamp::from_second(10).unwrap()),
                 warm_until: None,
                 held_since: None,
+                rewarm_cost_usd: None,
             })
         };
         let [done, parked, held] = clocks("");
