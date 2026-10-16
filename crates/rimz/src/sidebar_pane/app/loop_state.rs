@@ -8,7 +8,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::diag::focus_trace::FocusTraceEvent;
+use crate::diag::focus_trace::{FocusTraceEvent, PushBlock, PushVerdict};
 use crate::diag::record::{
     AnomalyKind, ClickedRowDisplacementCause, RendererExitCause,
     SidebarWidthControlTrigger as WidthControlTrigger,
@@ -861,33 +861,41 @@ impl LoopState {
 
     fn on_focus_push(
         &mut self,
-        push: FocusPush,
+        mut push: FocusPush,
         fetch: &mut FetchDispatcher,
         terminal: &Terminal<PaneBackend>,
     ) {
         let arrived = Instant::now();
+        push.peer.received_ms = Some(push.elapsed_ms());
         if self.last_folded_focus_intent != Some(push.anchor.nonce) {
             self.prepare_action(fetch);
+            push.peer.snapshot_ms = Some(push.elapsed_ms());
             self.fold_focus_intent(push.anchor.clone(), arrived);
+            push.peer.folded_ms = Some(push.elapsed_ms());
         }
         if push.anchor.session_name != self.config.session_name
             || !self.owns_focus_target(&push.anchor.pane_id)
         {
+            push.finish(PushVerdict::NotDestination);
             return;
         }
         if self.should_exit {
-            debug!(nonce = %push.anchor.nonce, target = %push.anchor.pane_id, should_exit = true, "focus push paint blocked");
-            self.pending_focus_push = None;
+            if let Some(pending) = self.pending_focus_push.take() {
+                pending.finish(PushVerdict::Exiting);
+            }
+            push.finish(PushVerdict::Exiting);
             return;
         }
         if self.focus_push_size_matches(&push, terminal) {
             self.paint_hold.release();
         }
         if self.painted_focus_matches(&push) {
-            push.ack.painted();
+            push.finish(PushVerdict::Painted);
             return;
         }
-        self.pending_focus_push = Some(push);
+        if let Some(pending) = self.pending_focus_push.replace(push) {
+            pending.finish(PushVerdict::Superseded);
+        }
     }
 
     pub(super) fn on_event(
@@ -1634,14 +1642,25 @@ impl LoopState {
     ) -> Result<()> {
         let now = Instant::now();
         let paint_blocked = self.prepare_paint(terminal, now);
-        if let Some(push) = &self.pending_focus_push {
-            if paint_blocked || self.self_close.confirming_empty() || self.should_exit {
-                debug!(nonce = %push.anchor.nonce, target = %push.anchor.pane_id,
-                    paint_hold = paint_blocked, confirming_empty = self.self_close.confirming_empty(),
-                    should_exit = self.should_exit, "focus push destination paint blocked");
+        if let Some(push) = &mut self.pending_focus_push {
+            if !self.should_exit && push.peer.blocked_by.is_none() {
+                push.peer.blocked_by = if paint_blocked {
+                    Some(PushBlock::PaintHold)
+                } else if self.self_close.confirming_empty() {
+                    Some(PushBlock::ConfirmingEmpty)
+                } else {
+                    None
+                };
             }
             if now >= push.until || self.should_exit {
-                self.pending_focus_push = None;
+                let verdict = if self.should_exit {
+                    PushVerdict::Exiting
+                } else {
+                    PushVerdict::Expired
+                };
+                if let Some(push) = self.pending_focus_push.take() {
+                    push.finish(verdict);
+                }
             }
         }
         let watched = self.watched();
@@ -2396,7 +2415,17 @@ impl LoopState {
                 && self.painted_focus_matches(push)
         }) && let Some(push) = self.pending_focus_push.take()
         {
-            push.ack.painted();
+            push.finish(PushVerdict::Painted);
+        }
+        if let Some(push) = &mut self.pending_focus_push {
+            push.peer.unmatched_paints = push.peer.unmatched_paints.saturating_add(1);
+            if self
+                .current
+                .row_owning_pane(&push.anchor.pane_id)
+                .is_some_and(|row| self.ui.drawn_selection.as_ref() == Some(&row.id))
+            {
+                push.peer.misplaced_paints = push.peer.misplaced_paints.saturating_add(1);
+            }
         }
         let hold_expired = std::mem::take(&mut self.hold_expired_since_paint);
         let Some(mut watch) = self.clicked_row.take() else {

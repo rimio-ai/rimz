@@ -26,7 +26,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
         let _source = plane.subscribe(&source, source_tx);
         let _destination = plane.subscribe(&destination, destination_tx);
         let peers = plane
-            .focus_peers(source.instance_id)
+            .focus_peers(source.instance_id, crate::diag::DiagSink::disabled())
             .with_fit(Some(Arc::new(move |anchor| {
                 stale.then(|| {
                     std::collections::HashMap::from([(
@@ -83,7 +83,9 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
             }
             painted_tx.send(()).unwrap();
             match outcome {
-                "painted" | "superseded" => push.ack.painted(),
+                "painted" | "superseded" => {
+                    push.finish(crate::diag::focus_trace::PushVerdict::Painted)
+                }
                 "capped" => {
                     dispatched_rx.recv_timeout(SETTLE).unwrap();
                     drop(push);
@@ -1289,7 +1291,7 @@ esac
             assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
             assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
             std::fs::write(dir.join("pushed"), b"").unwrap();
-            push.ack.painted();
+            push.finish(crate::diag::focus_trace::PushVerdict::Painted);
         }
         eventually("the click is dispatched", || {
             load(&room.runtime).is_some_and(|anchor| anchor.state == FocusIntentState::Applied)
