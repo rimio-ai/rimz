@@ -181,6 +181,7 @@ fn a_wrapper_still_ends_its_launch_row_after_the_reaper_ended_it() {
             kind: AgentKind::new_unchecked("codex"),
             agent_id: AgentSessionId::from("resumed"),
             name: Some("name-resumed".to_owned()),
+            is_child_session: false,
         })
     );
 }
@@ -923,7 +924,8 @@ mod pane_exec {
                 Some(EndedSession {
                     kind,
                     agent_id: session,
-                    name: None
+                    name: None,
+                    is_child_session: false,
                 })
             ),
             "a pane close ends"
@@ -1030,12 +1032,52 @@ mod pane_exec {
     }
 
     #[test]
+    fn exit_hints_offer_session_resume_for_peers_not_children() {
+        let session = "019f796b-f60b-7ab0-9adb-35be6e6904b7";
+        let own = rimz::ids::PaneId::parse(OWN_PANE).unwrap();
+        let status = exit_status(0);
+        for launch in [Some("launch_a"), None] {
+            let request = exit_request(launch, Some(session));
+            for (parent, depth) in [
+                (None, Some(3)),
+                (Some("parent"), Some(1)),
+                (Some("parent"), None),
+            ] {
+                let mut agent = pane_row(session, launch, OWN_PANE, 10, true);
+                agent.name = Some("swift-otter".into());
+                agent.parent_agent_id = parent.map(AgentSessionId::from);
+                agent.launch_depth = depth;
+                let ended = exit_end_target(&[agent], Some(&own), &request).unwrap();
+                let resumable = exited_session_resumable(Some(&ended), Path::new("/code/feature"));
+                let hint = exit_hint(
+                    &request,
+                    &status,
+                    false,
+                    resumable,
+                    ended.name.as_deref(),
+                    Some(&ended.agent_id),
+                );
+                let command = if parent.is_none() {
+                    "resume with `rimz agents resume @swift-otter`"
+                } else {
+                    "relaunch with `rimz agents codex`"
+                };
+                assert_eq!(
+                    hint,
+                    format!("rimz: agent `codex` exited ({status}); {command}\r\n")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn exited_session_resumable_requires_real_id_and_resume_cli() {
         let cwd = Path::new("/code/feature");
         let codex = EndedSession {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             agent_id: rimz::ids::AgentSessionId::from("019f796b-f60b-7ab0-9adb-35be6e6904b7"),
             name: None,
+            is_child_session: false,
         };
         assert!(exited_session_resumable(Some(&codex), cwd));
 
@@ -1043,6 +1085,7 @@ mod pane_exec {
             kind: rimz::ids::AgentKind::new_unchecked("codex"),
             agent_id: rimz::ids::AgentSessionId::from("launch_019f2cecea067320b667c5946d266e64"),
             name: None,
+            is_child_session: false,
         };
         assert!(!exited_session_resumable(Some(&provisional), cwd));
         assert!(!exited_session_resumable(None, cwd));

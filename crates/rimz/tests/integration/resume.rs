@@ -688,22 +688,70 @@ mod agent_ref {
 
     #[test]
     fn children_are_refused_with_subagents() {
-        for (launch, parent) in [
-            (LaunchParams::default(), Some("parent-session")),
-            (
+        for depth in [None, Some(1)] {
+            let fixture = Fixture::new(
                 LaunchParams {
-                    launch_depth: Some(1),
+                    launch_depth: depth,
                     ..Default::default()
                 },
-                None,
-            ),
-        ] {
-            let fixture = Fixture::new(launch, false, parent);
+                false,
+                Some("parent-session"),
+            );
             let output = fixture.output("@bright-otter");
             assert_eq!(output.status.code(), Some(1));
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(stderr.contains("rimz subagents"), "{stderr}");
         }
+    }
+
+    #[test]
+    fn ended_peer_resumes_with_recorded_ancestry_without_reconnecting_the_run() {
+        let launched_by = rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: "original-launcher".into(),
+        };
+        let fixture = Fixture::new(
+            LaunchParams {
+                launch_depth: Some(3),
+                launched_by: Some(Box::new(launched_by.clone())),
+                ..Default::default()
+            },
+            false,
+            None,
+        );
+        let output = fixture.output("@bright-otter");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "resumed claude:bright-otter (saved-session)\n"
+        );
+        let trace = fixture.trace();
+        let layout: String = serde_json::from_str(
+            trace
+                .lines()
+                .find_map(|line| line.strip_prefix("layout-json\t"))
+                .unwrap(),
+        )
+        .unwrap();
+        let layout: kdl::KdlDocument = layout.parse().unwrap();
+        let (_, argv) = resumed_pane(&layout).unwrap();
+        let payload = argv.windows(2).find(|pair| pair[0] == "--request").unwrap();
+        let request =
+            rimz::harness::launch::decode_exec_request("claude", None, &payload[1]).unwrap();
+        assert!(
+            matches!(&request.action, ExecAction::Resume { session_id, .. } if session_id == SESSION)
+        );
+        assert_eq!(request.identity.params.launch_depth, Some(3));
+        assert_eq!(
+            request.identity.params.launched_by.as_deref(),
+            Some(&launched_by)
+        );
+        assert!(request.identity.params.parent_agent_id.is_none());
+        assert!(request.run_id.is_none());
     }
 
     #[test]

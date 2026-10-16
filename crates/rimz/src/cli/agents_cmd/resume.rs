@@ -52,10 +52,7 @@ fn validate_recorded_resume(
             "@{name} is a member of team `{team}`; reopen it with `rimz agents {team}.{role} --continue`"
         );
     }
-    if agent.is_provider_subagent()
-        || agent.parent_agent_id.is_some()
-        || agent.launch_depth.is_some_and(|depth| depth > 0)
-    {
+    if agent.is_child_session() {
         bail!("@{name} is a child session; use `rimz subagents` instead");
     }
     Ok(())
@@ -763,6 +760,32 @@ fn render_lane_list(out: &mut impl Write, mut lanes: Vec<LaneSummary>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_resume_allows_peers_but_refuses_children() {
+        let mut agent = rimz::testkit::agent_state("claude", "saved", Timestamp::UNIX_EPOCH);
+        agent.name = Some("peer".into());
+        agent.ended_at = Some(Timestamp::UNIX_EPOCH);
+        agent.launch_depth = Some(3);
+        agent.launched_by = Some(rimz::agents::LaunchedBy {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: "launcher".into(),
+        });
+        validate_recorded_resume(&agent, &agent.kind, None).unwrap();
+
+        agent.parent_agent_id = Some("parent".into());
+        agent.launched_by = None;
+        for depth in [Some(1), None] {
+            agent.launch_depth = depth;
+            let error = validate_recorded_resume(&agent, &agent.kind, None)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                "@peer is a child session; use `rimz subagents` instead"
+            );
+        }
+    }
 
     #[test]
     fn recorded_provider_resume_refuses_mismatched_spec() {
