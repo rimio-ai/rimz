@@ -144,6 +144,12 @@ fn auto_gc_assist(
             + outcome.runtime.sidecar_files_removed
             + outcome.runtime.sidebar_sockets_removed
             + outcome.runtime.probe_markers_removed
+            + outcome
+                .prune
+                .empty_dirs
+                .iter()
+                .map(|tree| tree.files_removed)
+                .sum::<usize>()
             + outcome.temps.files_removed
             + outcome.runtime.state_files_removed
             + outcome.budget_ledgers.ledgers,
@@ -699,8 +705,20 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
         );
     }
     let removed = out.prune.removed.len();
+    let empty_removed = out
+        .prune
+        .empty_dirs
+        .iter()
+        .any(|tree| tree.files_removed > 0 || tree.bytes > 0);
+    let acted = removed > 0 || empty_removed;
     let unreadable = out.prune.retained_unreadable.len();
-    let outcome = if removed > 0 {
+    let outcome = if empty_removed && removed == 0 {
+        format!(
+            "{} empty-dir state · {}",
+            if out.dry_run { "would prune" } else { "pruned" },
+            fmt_bytes(out.prune.bytes_removed())
+        )
+    } else if removed > 0 {
         if out.dry_run {
             format!(
                 "would prune {removed} · {}",
@@ -723,7 +741,7 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
     } else {
         "none found".to_owned()
     };
-    let verdict = if removed > 0 {
+    let verdict = if acted {
         RowVerdict::Acted
     } else if unreadable > 0 {
         RowVerdict::Warn
@@ -739,7 +757,32 @@ fn render_workspaces(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
             &format!("{action}: {}", removed_workspace_detail(removed)),
         )?;
     }
-    if removed > 0 && unreadable > 0 {
+    for tree in &out.prune.empty_dirs {
+        if tree.files_removed > 0 || tree.bytes > 0 {
+            render_subline(
+                w,
+                palette::muted(),
+                &format!(
+                    "{action}: empty-dir tree {} — {} ({})",
+                    tree.dir_name,
+                    plural(tree.files_removed, "file", "files"),
+                    fmt_bytes(tree.bytes)
+                ),
+            )?;
+        }
+        if tree.agent_dirs_kept > 0 {
+            render_subline(
+                w,
+                palette::muted(),
+                &format!(
+                    "kept: empty-dir tree {} — {} within the 7-day grace",
+                    tree.dir_name,
+                    plural(tree.agent_dirs_kept, "agent dir", "agent dirs")
+                ),
+            )?;
+        }
+    }
+    if acted && unreadable > 0 {
         render_subline(
             w,
             palette::warn(),
@@ -1106,6 +1149,7 @@ struct JsonWorkspaces {
     removed: Vec<JsonRemovedWorkspace>,
     retained_unreadable: Vec<JsonRetainedWorkspace>,
     kept: usize,
+    empty_dirs: Vec<JsonOrphanEmptyTree>,
 }
 
 impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
@@ -1123,8 +1167,26 @@ impl From<&gc::WorkspacePruneReport> for JsonWorkspaces {
                 .map(JsonRetainedWorkspace::from)
                 .collect(),
             kept: report.kept,
+            empty_dirs: report
+                .empty_dirs
+                .iter()
+                .map(|tree| JsonOrphanEmptyTree {
+                    dir_name: tree.dir_name.clone(),
+                    files_removed: tree.files_removed,
+                    bytes: tree.bytes,
+                    agent_dirs_kept: tree.agent_dirs_kept,
+                })
+                .collect(),
         }
     }
+}
+
+#[derive(Serialize)]
+struct JsonOrphanEmptyTree {
+    dir_name: String,
+    files_removed: usize,
+    bytes: u64,
+    agent_dirs_kept: usize,
 }
 
 #[derive(Serialize)]
@@ -1308,6 +1370,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn orphan_empty_trees_are_rendered_serialized_and_counted_in_assists() {
+        let mut outcome = GcOutcome::default();
+        outcome.prune.empty_dirs.push(gc::OrphanEmptyTree {
+            dir_name: "gone-abcd".into(),
+            files_removed: 2,
+            bytes: 42,
+            agent_dirs_kept: 1,
+        });
+        for dry_run in [false, true] {
+            outcome.dry_run = dry_run;
+            let out = strip_report(&outcome);
+            let action = if dry_run { "would prune" } else { "pruned" };
+            assert!(
+                out.contains(&format!(
+                    "{action}: empty-dir tree gone-abcd — 2 files (42 B)"
+                )),
+                "{out}"
+            );
+            assert!(
+                out.contains("kept: empty-dir tree gone-abcd — 1 agent dir within the 7-day grace")
+            );
+            assert!(out.contains("✦ workspaces"));
+        }
+        let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
+        assert_eq!(
+            json["workspaces"]["empty_dirs"],
+            serde_json::json!([{"dir_name":"gone-abcd","files_removed":2,"bytes":42,"agent_dirs_kept":1}])
+        );
+        assert_eq!(json["reclaimed_bytes"], 42);
+        let id = rimz::WorkspaceId::from_project_root(std::path::Path::new("/test"));
+        let assist = auto_gc_assist(
+            &id,
+            "test-abcd",
+            GcScope::Machine,
+            Duration::ZERO,
+            &Ok(outcome),
+        );
+        let json = serde_json::to_value(assist).unwrap();
+        assert_eq!(json["files_removed"], 2);
+        assert_eq!(json["reclaimed_bytes"], 42);
+    }
+
+    #[test]
     fn gc_json_and_assist_report_classes() {
         let mut outcome = GcOutcome::default();
         outcome.budget_ledgers.ledgers = 2;
@@ -1357,6 +1462,7 @@ mod tests {
         let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
         assert_eq!(json["scope"], "room");
         assert_eq!(json["workspaces"]["skipped"], "room_scope");
+        assert_eq!(json["workspaces"]["empty_dirs"], serde_json::json!([]));
     }
 
     #[test]
@@ -1645,6 +1751,7 @@ mod tests {
                 }],
                 kept: 0,
                 retained_unreadable: Vec::new(),
+                empty_dirs: Vec::new(),
             },
             worktrees: WorktreeSweepStatus::Swept(WorktreeSweep {
                 removed: vec![

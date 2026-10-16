@@ -238,18 +238,10 @@ fn collect_empty(
         path: dir.clone(),
         source,
     })?;
-    for entry in read_dir_if_exists(&dir)?.into_iter().flatten() {
-        let entry = entry.map_err(|source| GcErr::ReadDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|source| GcErr::Io {
-            path: path.clone(),
-            source,
-        })?;
-        if !metadata.is_dir()
-            || agents.iter().any(|agent| {
+    collect_empty_agent_dirs(
+        &dir,
+        |path| {
+            agents.iter().any(|agent| {
                 agent
                     .worktree_path
                     .as_deref()
@@ -263,7 +255,31 @@ fn collect_empty(
                                 == Some(resolved_dir.as_path())
                     })
             })
-        {
+        },
+        sweep,
+        report,
+    )
+    .map(|_| ())
+}
+
+pub(super) fn collect_empty_agent_dirs(
+    dir: &Path,
+    retained: impl Fn(&Path) -> bool,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<usize> {
+    let mut kept = 0;
+    for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| GcErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if !metadata.is_dir() || retained(&path) {
             continue;
         }
         let modified = metadata.modified().map_err(|source| GcErr::Io {
@@ -273,9 +289,11 @@ fn collect_empty(
         if expired(modified, SystemTime::now(), retention::OWNED_GRACE) {
             let files = sweep.files_under(&path)?.len();
             sweep.remove_tree(&path, files, report)?;
+        } else {
+            kept += 1;
         }
     }
-    Ok(())
+    Ok(kept)
 }
 
 /// Result files past the grace: a wait's once its watcher is gone, a

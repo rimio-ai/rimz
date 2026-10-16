@@ -350,7 +350,16 @@ fn gc_all_dry_run_previews_a_pruned_room_only_as_a_workspace() {
     let env = Env::new();
     let gone_root = env.home_root.join("gone-project");
     stale_room_files(&env, &gone_root);
-    let gone = env.state_path_for(&gone_root).dir_name.to_string();
+    let paths = env.state_path_for(&gone_root);
+    let gone = paths.dir_name.to_string();
+    let agent = paths.empty_agent_dir("otter");
+    std::fs::create_dir_all(&agent).unwrap();
+    let file = agent.join("file");
+    std::fs::write(&file, b"agent output").unwrap();
+    std::fs::File::open(&agent)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+        .unwrap();
     std::fs::remove_dir_all(&gone_root).unwrap();
     let run = |dry_run: bool| {
         let mut cmd = env.rimz();
@@ -362,6 +371,10 @@ fn gc_all_dry_run_previews_a_pruned_room_only_as_a_workspace() {
         serde_json::from_slice::<serde_json::Value>(&output.get_output().stdout).unwrap()
     };
     let preview = run(true);
+    assert_eq!(preview["workspaces"]["empty_dirs"][0]["dir_name"], gone);
+    assert_eq!(preview["workspaces"]["empty_dirs"][0]["files_removed"], 1);
+    assert_eq!(preview["workspaces"]["empty_dirs"][0]["agent_dirs_kept"], 0);
+    assert!(file.exists());
     assert_eq!(
         preview["workspaces"]["removed"][0]["project_root"],
         json!(gone_root)
@@ -375,6 +388,11 @@ fn gc_all_dry_run_previews_a_pruned_room_only_as_a_workspace() {
     };
     assert!(!named(&preview), "{preview}");
     let applied = run(false);
+    assert!(!paths.empty_room_dir().exists());
+    assert_eq!(
+        preview["workspaces"]["empty_dirs"],
+        applied["workspaces"]["empty_dirs"]
+    );
     assert!(!named(&applied), "{applied}");
     assert_eq!(preview["reclaimed_bytes"], applied["reclaimed_bytes"]);
 }

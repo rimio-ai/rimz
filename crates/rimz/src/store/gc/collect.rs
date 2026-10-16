@@ -428,7 +428,7 @@ impl Sweep {
         }
     }
 
-    fn remember_dir_size(&mut self, path: &Path) {
+    pub(super) fn remember_dir_size(&mut self, path: &Path) {
         if let Ok(meta) = fs::symlink_metadata(path) {
             self.dir_bytes.insert(path.to_path_buf(), meta.len());
         }
@@ -467,7 +467,7 @@ impl Sweep {
         }
     }
 
-    fn remove_dir_if_empty(&mut self, path: &Path, report: &mut GcReport) -> Result<()> {
+    pub(super) fn remove_dir_if_empty(&mut self, path: &Path, report: &mut GcReport) -> Result<()> {
         let Some(entries) = read_dir_if_exists(path)? else {
             return Ok(());
         };
