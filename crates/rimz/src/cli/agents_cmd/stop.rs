@@ -410,6 +410,26 @@ fn close_agent_pane(
     store: &rimz::Store,
     agent: &AgentState,
 ) -> Result<()> {
+    let refreshed;
+    let agent = if agent.molted_from.is_some() && agent.agent_id.is_provisional() {
+        let cwd = agent
+            .worktree_path
+            .as_deref()
+            .map_or(workspace.worktree_root.as_path(), Path::new);
+        if store.cancel_unbound_molt_launch(
+            &agent.kind,
+            &agent.agent_id,
+            &workspace.session_name,
+            cwd,
+        )? {
+            return Ok(());
+        }
+        refreshed = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        rimz::address::launch_row(&refreshed.agents, &agent.kind, &agent.agent_id)
+            .context("molt successor disappeared while stopping it")?
+    } else {
+        agent
+    };
     let pane = agent
         .pane
         .as_ref()

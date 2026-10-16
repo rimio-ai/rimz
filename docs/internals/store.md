@@ -284,6 +284,8 @@ Molt successors stamp `LaunchParams.molted_from` with the predecessor's launch i
 
 `Store::begin_agent_launch_batch` checks that predicate under the workspace lock, against the caught-up durable fold, before allocating or appending anything. A standing successor refuses another molt reservation with its handle and stop command. A failed startup frees the slot through the same predicate, without a separate release record or CLI precheck.
 
+Stopping a pane-less molt reservation appends Failed under that same lock. `Store::bind_agent_launch` rejects a late binding for a failed or ended provisional molt, and its wrapper refuses to start the provider if binding fails. If a binding won the race with stop, stop refreshes the row and closes the bound pane instead. Ordinary launches retain their existing binding policy.
+
 ### Crash recovery
 
 Only the trailing frame can be in flight when a process dies, because each append is one `write()` under the workspace lock.

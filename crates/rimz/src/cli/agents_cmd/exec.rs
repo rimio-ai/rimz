@@ -340,7 +340,7 @@ fn launch_and_supervise(
                 rimz::harness::launch::ExecAction::Launch { .. }
             )
             .then_some(plan.system_prompt_digest.as_str()),
-        );
+        )?;
         if attach_target.is_none() {
             attach_own_launch_pane(invocation, identity);
         }
@@ -1377,9 +1377,9 @@ fn record_own_launch_pane(
     invocation: &ExecInvocationContext<'_>,
     identity: &LaunchIdentity,
     system_prompt_digest: Option<&str>,
-) {
+) -> Result<()> {
     let Some(pane_id) = rimz::mux::ambient_pane_id() else {
-        return;
+        return Ok(());
     };
     let workspace = invocation.workspace;
     match invocation.store().and_then(|store| {
@@ -1393,6 +1393,7 @@ fn record_own_launch_pane(
         Ok(())
     }) {
         Ok(()) => {}
+        Err(err) if identity.launch.molted_from.is_some() => return Err(err),
         Err(err) => tracing::debug!(
             agent_name = %identity.name,
             pane = %pane_id,
@@ -1400,6 +1401,7 @@ fn record_own_launch_pane(
             "could not persist provisional agent pane id",
         ),
     }
+    Ok(())
 }
 
 fn attach_own_launch_pane(invocation: &ExecInvocationContext<'_>, identity: &LaunchIdentity) {

@@ -129,7 +129,7 @@ An agent-launched interactive peer with a nonempty prompt also gets a per-turn r
 Launches refuse before they create any pane or record when:
 
 - the final prompt exceeds 120 KiB (122880 bytes), counting `--stdin` content and any reminder text appended to it, because the provider receives the prompt as one argument (move detail into a file the agent reads);
-- an agent-launched command would exceed `[agents] max-chain-length` successive agent-to-agent launches (default `3`);
+- an agent-launched command would exceed `[agents] max-chain-length` successive agent-to-agent launches (default `3`); [`molt`](#molt) keeps the generation and does not consume this limit;
 - a Markdown definition has invalid syntax, an unknown key, or a resolution error (the error names the source; run `rimz agents validate`).
 
 When an agent runs `rimz agents`, each new agent is an independent top-level peer with its own sidebar row. A parented child with one prompt comes only from the agent-only [`rimz subagents`](./subagents.md) command, and a subagent cannot launch agents or subagents.
@@ -825,6 +825,20 @@ The fork always opens in the source agent's worktree. From a user shell it takes
 
 Other kinds, including OpenCode and plugins, cannot fork.
 
+#### `molt`
+
+`rimz agents molt [NOTE] [--stdin] [--agent <PROFILE|KIND>]` moves the calling agent into a fresh session in a new, unfocused tab, with the note as its first prompt. It runs only inside an agent: only the session holding the context can write the note. From your shell, type `/rimz-molt` in that agent's pane, or send `rimz message @<agent> '/rimz-molt'`. Subagents cannot molt; they finish and report to their caller.
+
+The positional note and `--stdin` follow `rimz message`: either supplies the note, or the positional instruction comes first and stdin follows inside `<stdin>` tags. Empty notes are refused. A note may start with `-`; use `--` for a note that exactly equals a molt flag, including `-h` or `--help`.
+
+Without `--agent`, molt replays the saved launch settings, including the recorded model, effort, and fast mode, with the current profile and role layers. An in-session `/model` switch is not recorded and is **not carried**. `--agent` instead re-bases the same profile and role onto the replacement profile or provider, as on an ordinary launch; it does not replay the old record's model, effort, or fast mode. The predecessor's stamped permission mode and recorded isolation still carry over. The replacement is saved for the successor's later restart or molt.
+
+The successor keeps the same generation, launcher, team, role, channel, and launch ordinal. Repeated molts do not count toward `max-chain-length`. Its note turn creates no peer-report run; an existing leader's open team run moves to the successor. `@role` yields to the successor even before registration, while the predecessor remains reachable by its own handle. If the successor fails before opening a session, the predecessor holds the role again.
+
+Only one successor may stand at a time. A second molt refuses and names it; stop a stuck successor with the printed `rimz agents stop @<successor>` command. An ended successor or one that failed before registration frees the slot only if no successor farther down its molt chain still stands. A registered successor's later failed turn does not.
+
+Once the new tab opens, molt requests that the old session stop after **5m of rest with nothing owed**, as in [`stop --when-idle`](#stop). A standing successor, directly or farther down the molt chain, lets a team predecessor stop before the board reads `Done`; only when none stands is the predecessor held open with its context. Placement failure arms no stop. If arming fails after placement, the error names the live successor and the manual stop request; do not repeat the molt. The receipt names both handles, the tab, the five-minute idle stop, and `rimz agents show @<successor>` as the next command. [`rimz stats`](./stats.md#the-assist-timeline) records the molt once the tab opens.
+
 #### `wait`
 
 Immediately after a prompted peer launch, `rimz agents wait @peer` resolves the pending launch run even before provider registration. After a later launcher message, it retains the ordinary turn wait until a prompt-correlated turn-start hook enrolls the new run. Use `rimz message --wait @peer '<text>'` for a message-correlated reply wait. A turn-start hook without prompt text acknowledges delivery but opens no reportable turn.
@@ -880,7 +894,7 @@ The agent stops only when all of this holds at one check:
 - every live `rimz subagents` child the stop would close with it, at any depth, passes those same two checks. A child needs no rest of its own, but a message queued for a child you kept holds its parent until the message lands. A provider's own subagent is not checked: its row can read as working after it finished;
 - stopping it and those children would not cancel a run that is still open;
 - for a team seat, the team's board reads `Done`, or a molt successor stands in its place. Without a successor, a seat whose checkout has no board is held;
-- if it has molted, a successor still stands: an ended successor or one that failed before opening a session holds the predecessor open with its context;
+- if it has molted, a successor still stands, directly or farther down its molt chain: only when none stands is the predecessor held open with its context;
 - it has rested for the whole duration, never a fraction of a second less, measured from the latest of the request, its last turn end or interruption, and the session's last recorded event. A new turn before then restarts the clock, and so does a compaction that failed.
 
 Timing is best effort. The check runs on the room's refresh, which a running sidebar drives, so the stop comes after the duration, never at a wall-clock instant. While pending, the request shows as `idle_stop` in `rimz agents show`, in the `show` and `list` JSON, and as a `stop` entry under the card's `⧖ waits`. It ends with the session: a plain `stop`, any `restart` (one that resumes the same session included), or the agent exiting removes it, [`rimz reset`](./maintenance.md#reset-a-wedged-room) drops every pending request so a resumed agent never inherits one, and a stop that leaves the agent's pane open keeps it armed for the next check. A stop that closed the agent but failed elsewhere, on a child's pane for one, removes it with the session. Each attempt is recorded as an `idle_stop` assist in [`rimz stats`](./stats.md#the-assist-timeline).

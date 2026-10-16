@@ -1844,6 +1844,47 @@ fn turn_end(agent: &str) -> AgentLifecycleObservation {
 }
 
 #[test]
+fn molt_rekeys_the_leader_run_across_providers_and_again_after_failed_startup() {
+    let (_dir, paths, _) = setup();
+    let record = team_record(&paths, "forge#x");
+    let mut predecessor = AgentState::stub("claude", "old", AgentStatus::Idle);
+    predecessor.launch_id = Some("lead-launch".into());
+    let mut successor = AgentState::stub("codex", "launch_new", AgentStatus::Running);
+    successor.launch_id = Some(successor.agent_id.clone());
+    successor.molted_from = predecessor.launch_id.clone();
+    successor.name = Some("otter".into());
+    let mut identity = crate::store::writer::AgentLaunchIdentity {
+        kind: successor.kind.clone(),
+        agent_id: successor.agent_id.clone(),
+        name: "otter".into(),
+        name_explicit: false,
+        launch: Default::default(),
+        run_id: None,
+        prompt: None,
+    };
+    rekey_team_run(&paths, &predecessor, &identity, &[]).unwrap();
+    let moved = open_team_run(&paths, &successor)
+        .unwrap()
+        .expect("successor owns the open team run");
+    assert_eq!(moved.run_id, record.run_id);
+    assert!(moved.matches_agent(&successor));
+    assert!(open_team_run(&paths, &predecessor).unwrap().is_none());
+    assert!(!moved.matches_agent(&predecessor));
+    assert_eq!(moved.agent_name, successor.name);
+    successor.status = AgentStatus::Failed;
+    identity.agent_id = "launch_retry".into();
+    identity.kind = predecessor.kind.clone();
+    identity.name = "fox".into();
+    rekey_team_run(&paths, &predecessor, &identity, &[successor]).unwrap();
+    let mut retried = predecessor.clone();
+    retried.agent_id = identity.agent_id.clone();
+    retried.launch_id = Some(identity.agent_id);
+    let moved = open_team_run(&paths, &retried).unwrap().unwrap();
+    assert_eq!(moved.run_id, record.run_id);
+    assert!(moved.matches_agent(&retried));
+}
+
+#[test]
 fn team_run_keeps_the_leaders_last_message_across_turns_and_rows() {
     let (_dir, paths, _) = setup();
     let record = team_record(&paths, "forge#x");

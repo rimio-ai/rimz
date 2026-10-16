@@ -1148,7 +1148,14 @@ path = "crates/rimz/src/store"
 # SignalEvent::from_envelope shares the signal-line projection with events list (+1).
 # NeedsYou and needs_you share sidebar attention membership with both CLI scenes (+2).
 # Store::rearm_message_wake replaces the lock-free wake read without surface growth.
-surface-budget = 426
+# Store::cancel_unbound_molt_launch makes the prescribed stuck-successor stop durable (+1).
+# Store::begin_agent_launch_replacement excludes the replaced row from molt rivalry (+1).
+surface-budget = 428
+
+[[verdict]]
+kind = "item"
+key = "store::writer::Store::begin_agent_launch_replacement"
+reason = "Fresh restart reserves under the launch lock while preserving the old row's molt link."
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -1659,7 +1666,43 @@ allowed-dependencies = [
 # A silent-child notice is claimed once per run and released only after a failed queue write (+2).
 # Thin exec supervision cancels runs through paths without a Store (+1).
 # Host readers share the crate-private cached listing wrapper (+1).
-surface-budget = 56
+# rekey_team_run moves a molting leader's open team run after placement (+1).
+surface-budget = 57
+
+[[verdict]]
+kind = "item"
+key = "harness::run::team::rekey_team_run"
+reason = "Molt moves the leader identity under the workspace lock after successful placement."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::Store::cancel_unbound_molt_launch"
+reason = "Stopping a stuck pane-less molt cancels its reservation and rejects a late wrapper binding."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::restart::fresh_launch_request"
+reason = "Restart and molt share durable seat and lineage copying without creating a peer generation."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::restart::restart_posture"
+reason = "Molt replays the same recorded posture and degradation policy as restart."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::restart::restart_cell"
+reason = "Molt and fresh restart reserve from the same replayed launch cell."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::molt::MoltArgs"
+reason = "Agent-only self-succession is dispatched through the agents command."
+
+[[verdict]]
+kind = "item"
+key = "cli::agents_cmd::molt::run_molt"
+reason = "The agents dispatcher owns the agent-only molt verb."
 
 [[module]]
 path = "crates/rimz/src/harness/run/report.rs"

@@ -327,7 +327,7 @@ pub(in crate::cli) fn relaunch_request(
 /// Restart is interactive, so a profile that now names a different provider
 /// refuses here rather than degrading — switching providers under a running
 /// agent is the user's call. Every other degrade prints and continues.
-fn restart_posture(
+pub(super) fn restart_posture(
     agent: &AgentState,
     workspace: &rimz::ResolvedWorkspace,
     machine_config: &rimz::config::MachineConfig,
@@ -363,7 +363,7 @@ fn restart_posture(
         Some(reason @ PostureDegrade::PromptUnsupported { .. }) => bail!("{reason}"),
         Some(reason) => writeln!(
             crate::cli::render::err(),
-            "rimz: {reason}; restarting as bare {}",
+            "rimz: {reason}; launching as bare {}",
             agent.kind
         )?,
         None => {}
@@ -373,7 +373,7 @@ fn restart_posture(
 
 /// The layout cell a fresh restart launches, carrying the replayed posture and
 /// the agent's durable identity.
-fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
+pub(super) fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
         empty_dir: None,
         resume_model_override: false,
@@ -452,6 +452,34 @@ fn append_fresh_launch(
     cell: Cell,
     mode: Option<PermissionMode>,
 ) -> Result<AgentLaunchBatch> {
+    let request = fresh_launch_request(agent, cell, mode)?;
+    let batch = store
+        .begin_agent_launch_replacement(
+            agent,
+            &request,
+            AgentLaunchScope {
+                session_name: workspace.session_name.clone(),
+                cwd: cwd.to_path_buf(),
+                branch: None,
+                description: None,
+            },
+        )
+        .map_err(|err| match err {
+            rimz::store::StoreErr::MoltSuccessor { successor } => anyhow::anyhow!(
+                "restart refused: this agent molted into @{successor}, which holds its place now; \
+             message or restart @{successor} instead; do not retry this command"
+            ),
+            err => err.into(),
+        })?;
+    batch.single_identity()?;
+    Ok(batch)
+}
+
+pub(super) fn fresh_launch_request(
+    agent: &AgentState,
+    cell: Cell,
+    mode: Option<PermissionMode>,
+) -> Result<AgentLaunchRequest> {
     let layout = LayoutSpec::single(cell);
     let mut requests = rimz::harness::plan::launch_identity_requests(
         &layout,
@@ -485,17 +513,7 @@ fn append_fresh_launch(
     request.launch.launch_ordinal = agent.launch_ordinal;
     request.launch.molted_from = agent.molted_from.clone();
     request.launch.channel = agent.channel.clone();
-    let batch = store.begin_agent_launch_batch(
-        &requests,
-        AgentLaunchScope {
-            session_name: workspace.session_name.clone(),
-            cwd: cwd.to_path_buf(),
-            branch: None,
-            description: None,
-        },
-    )?;
-    batch.single_identity()?;
-    Ok(batch)
+    Ok(request.clone())
 }
 
 fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result<()> {
@@ -510,6 +528,65 @@ fn settle_peer_before_restart(store: &rimz::Store, agent: &AgentState) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fresh_restart_of_a_molt_successor_keeps_its_predecessor_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None).unwrap();
+        let store = rimz::Store::open(
+            rimz::StatePaths::under(workspace.workspace_id.clone(), &dir.path().join("state"))
+                .unwrap(),
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), &dir.path().join("runtime"))
+                .unwrap(),
+        )
+        .unwrap();
+        let mut successor =
+            rimz::testkit::agent_state("claude", "launch_middle", jiff::Timestamp::now());
+        successor.launch_id = Some(successor.agent_id.clone());
+        successor.molted_from = Some("launch_old".into());
+        successor.role = Some("coder".into());
+        let posture = ResumePosture::default();
+        let mut request =
+            fresh_launch_request(&successor, restart_cell(&successor, &posture), None).unwrap();
+        request.agent_id = successor.agent_id.clone();
+        store
+            .begin_agent_launch_batch(
+                &[request],
+                AgentLaunchScope {
+                    session_name: workspace.session_name.clone(),
+                    cwd: dir.path().into(),
+                    branch: None,
+                    description: None,
+                },
+            )
+            .unwrap();
+        let restarted = append_fresh_launch(
+            &store,
+            &workspace,
+            &successor,
+            dir.path(),
+            restart_cell(&successor, &posture),
+            None,
+        );
+        assert!(restarted.is_ok(), "{restarted:?}");
+        let restarted = restarted.unwrap();
+        let replacement = restarted.single_identity().unwrap();
+        assert_eq!(replacement.launch.molted_from, successor.molted_from);
+        let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+        assert!(
+            rimz::agents::state::standing_successor(
+                &audit.agents,
+                successor.molted_from.as_ref().unwrap(),
+            )
+            .is_some()
+        );
+        let mut predecessor = successor.clone();
+        predecessor.agent_id = "launch_old".into();
+        predecessor.launch_id = Some(predecessor.agent_id.clone());
+        predecessor.molted_from = None;
+        let members = audit.agents.iter().chain([&predecessor]);
+        assert!(!rimz::address::role_holders(members, "coder").contains(&&predecessor));
+    }
 
     #[test]
     fn a_failed_retirement_still_counts_the_waits_it_dropped() {
