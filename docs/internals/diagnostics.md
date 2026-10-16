@@ -296,7 +296,7 @@ One pass over the log answers an episode's three questions in order: what the us
 4. **Diff the captures.** Each capture holds the last good frame beside the offending one; `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
 5. **Encode the episode** as a detector test ([above](#from-anomaly-to-regression-test)).
 
-Two shapes are worth recognizing.
+Three shapes are worth recognizing.
 
 **A long run of `gate_hold` with rule `agent_demoted_to_process`**, where every matching `gate_release` carries `via_escape_hatch: true`, means the rollup kept presenting the same live agent pane as a bare process with unchanged or missing foreground-command evidence. A real exit whose foreground command changed commits at once. A nearby `hosted_carry_dropped` means the producer's hosted-stamp carry declined, and its `reason` names the source guard; with no such record the carry restored the stamp, and the next step is instrumenting the rollup bind guard. The reject count is evidence only: the gate holds until `ACCEPT_REGRESSION_AFTER` (1s) has passed since the first reject, then releases through the escape hatch.
 
@@ -306,6 +306,8 @@ Two shapes are worth recognizing.
 | --- | --- |
 | `pane_count_drop` with eight removed panes | The shrink published; the capture pair preserves both frames |
 | five `row_presence_flap`, gone to back in 2.26s, no `PaneClosed` events, `pulled_rows` back at full count | Every instance painted the flap; pulled truth had already recovered, so the rendered gap was the published partial frame propagating |
+
+**A tab or card that outlives its pane**, where a closed pane keeps a sidebar-only tab open, or its card listed, for up to 30 seconds. The log reads `pane_carry_forward` at the close, `carry_forward_expired` about `PANE_CARRY_TTL` (30s) later, then `renderer_exit` with cause `self_close_empty_tab`. No `self_close_rejected` appears, because the carried sibling keeps the attachment from asking and the request never reaches the supervisor, so start from the carry records rather than looking for a rejection. Carry holds a closed pane only while its root process lives, so measure that process's lifetime alongside the symptom (`ps -o pid,etimes,cmd -p <root_pid>` on the pane's recorded root pid): a root that ignores the hangup outlives its pane, and the late close tracks the shorter of its lifetime and the TTL.
 
 ## Inspecting live card state
 
