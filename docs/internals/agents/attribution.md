@@ -31,7 +31,7 @@ Figures stay whole-identity, so an identity observed on several branches can rep
 
 One contributor can span several session records. Compaction continuations and `/clear` conversations mint fresh session ids while the contributor keeps its seat, so the fold groups records by provider kind plus the first stable slot available, in this order: team and role, launch group and ordinal, explicit name, pane id, then session id.
 
-Pane-backed children join the seat that launched them, with child continuations deduplicated, and merge with provider-native children into one subagent breakdown grouped by task. An orphan whose parent has left the audit rollup is omitted. A member's `cost_usd`, token split, and active time are all-in across its seat and every child; asks, tool calls, compactions, and messages count the seat only.
+Pane-backed children join the seat that launched them, with child continuations deduplicated, and merge with provider-native children into one subagent breakdown grouped by task. Kinds sort by cost descending (unpriced last), then count descending, then name with unnamed kinds last at ties. An orphan whose parent has left the audit rollup is omitted. A member's `cost_usd`, token split, and active time are all-in across its seat and every child; asks, tool calls, compactions, and messages count the seat only. Subagent rows expose a share of those figures and never add to them.
 
 ## Where the figures come from
 
@@ -44,6 +44,8 @@ Each figure keeps its source boundary.
 | sent messages | sender handles on received agent messages, matched by `agents::petname::sender_handle` (role, name, kind) and channel, not the displayed list handle; best-effort |
 | tokens and dollars, model rows | each session's provider transcript, parsed once by its adapter and priced through the shared price book |
 | estimated active seconds | per-session active-time sidecars, projected by `store::active_time::display_secs_for_keys` under the configured silence grace and summed across the seat and launched children by `agents::attribution::seat_active_secs` ([model.md](./model.md#activity-clocks)); provider-native children pulse their parent's record |
+| per-kind active seconds | the same retained sidecars, summed over every continuation of each launched child slot in the kind; native children contribute no separate time, including in mixed-origin kinds |
+| model `tokens_per_sec` | transcript `CachedEntry.timing` through the seat's `SlotEffort` fold, rounded ratio of summed timed output to summed milliseconds per model; report rows fold raw counters over retained members, never member rates |
 
 Matched system nudges are sender-stamped and excluded from prompt counts. System nudges written before sender stamping existed cannot be told apart from user prompts.
 
@@ -51,7 +53,7 @@ Matched system nudges are sender-stamped and excluded from prompt counts. System
 
 Provider-native child spend arrives inside the parent's transcript; pane-backed child spend comes from each child's own transcript and folds into the same member total. Child transcript entries keep their child id through deduplication, so cost can group by durable task without changing the all-in parent total. A missing, long, or whitespace-bearing task label groups as `other`, so task descriptions are never exposed. The same deduplicated entries split all-in tokens and cost into model rows by transcript model id; blank or missing ids share the unnamed row, and a row with neither tokens nor a price is omitted. The pricing read itself is [spending.md](./spending.md#token-pricing).
 
-A missing source reads `null`, never zero. Runtime GC can remove an active-time sidecar before the audit record or transcript disappears, and a transcript can lack pricing.
+A missing source reads `null`, never zero. Runtime GC can remove an active-time sidecar before the audit record or transcript disappears, and a transcript can lack pricing. A subagent kind with no retained launched-child sidecar has `active_secs: null`; an untimed model has `tokens_per_sec: null`. Report throughput is scoped to the retained members, not the account-wide windows used by stats ([spending.md](./spending.md#response-timing)).
 
 ## Membership
 

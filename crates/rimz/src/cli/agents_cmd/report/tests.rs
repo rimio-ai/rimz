@@ -617,6 +617,7 @@ fn lifetime_effort_overrides_live_stats_as_one_unit() {
                     cache_read: 40,
                 },
                 cost_usd: Some(0.5),
+                ..rimz::agents::spending::SlotEffort::default()
             }),
             active_secs: Some(60),
             budget_cost_usd: Some(0.25),

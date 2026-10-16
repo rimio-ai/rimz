@@ -1,12 +1,13 @@
 //! `rimz agents attribution` audit collection and presentation.
 
 use std::io::Write;
+use unicode_width::UnicodeWidthStr;
 
 use super::*;
 use crate::cli::render;
 use rimz::agents::attribution::{
     Attribution, AttributionGroup, AttributionMember, AttributionRequest, AttributionScope,
-    EffortTotals, LaneLifetimes, ModelStat, TokenSplit,
+    EffortTotals, LaneLifetimes, ModelStat, SubagentStat, TokenSplit,
 };
 
 const REPO_URL: &str = "https://github.com/rimio-ai/rimz";
@@ -215,8 +216,23 @@ pub(super) fn render_panel(w: &mut impl Write, report: &Attribution) -> std::io:
             if let Some(effort) = effort_label(member) {
                 details.push("effort", render::cell(effort));
             }
-            if let Some(subagents) = subagents_label(member) {
-                details.push("subagents", render::cell(subagents));
+            if let Some(header) = subagents_header(member) {
+                let width = member
+                    .subagents
+                    .iter()
+                    .map(|stat| subagent_name(stat).width())
+                    .max()
+                    .unwrap_or(0);
+                let mut lines = vec![vec![render::cell(header)]];
+                for stat in &member.subagents {
+                    let name = subagent_name(stat);
+                    lines.push(vec![render::cell(format!(
+                        "{name}{}{}",
+                        " ".repeat(width - name.width() + 2),
+                        subagent_row_label(stat)
+                    ))]);
+                }
+                details.push_lines("subagents", lines);
             }
             if let Some(activity) = activity_label(member) {
                 details.push("activity", render::cell(activity));
@@ -282,8 +298,16 @@ pub(super) fn render_markdown(w: &mut impl Write, report: &Attribution) -> std::
             if let Some(effort) = effort_label(member) {
                 writeln!(w, "  - effort: {}", markdown_escape(&effort))?;
             }
-            if let Some(subagents) = subagents_label(member) {
-                writeln!(w, "  - subagents: {}", markdown_escape(&subagents))?;
+            if let Some(header) = subagents_header(member) {
+                writeln!(w, "  - subagents: {}", markdown_escape(&header))?;
+                for stat in &member.subagents {
+                    writeln!(
+                        w,
+                        "    - {}: {}",
+                        markdown_escape(subagent_name(stat)),
+                        markdown_escape(&subagent_row_label(stat))
+                    )?;
+                }
             }
             if let Some(activity) = activity_label(member) {
                 writeln!(w, "  - activity: {}", markdown_escape(&activity))?;
@@ -444,6 +468,7 @@ fn model_row_label(stat: &ModelStat) -> String {
     [
         stat.cost_usd.map(rimz::theme::fmt::dollars2),
         token_split_label(&stat.tokens),
+        stat.tokens_per_sec.map(|rate| format!("{rate} tok/s")),
     ]
     .into_iter()
     .flatten()
@@ -468,23 +493,43 @@ fn token_split_label(tokens: &TokenSplit) -> Option<String> {
     })
 }
 
-fn subagents_label(member: &AttributionMember) -> Option<String> {
+fn subagents_header(member: &AttributionMember) -> Option<String> {
     if member.subagents.is_empty() {
         return None;
     }
     let mut cost_usd = None;
-    let mut segments = Vec::with_capacity(member.subagents.len());
+    let mut count = 0u64;
     for stat in &member.subagents {
-        let task = stat.task.as_deref().unwrap_or("other");
-        segments.push(format!("{} × {task}", stat.count));
+        count = count.saturating_add(u64::from(stat.count));
         cost_usd = rimz::agents::spending::sum_optional_cost(cost_usd, stat.cost_usd);
     }
-    let mut label = segments.join(", ");
+    let mut label = format!("{count} {}", if count == 1 { "run" } else { "runs" });
     if let Some(cost) = cost_usd {
         label.push_str(" · ");
         label.push_str(&rimz::theme::fmt::dollars2(cost));
+        if let Some(member_cost) = member.cost_usd {
+            label.push_str(" of ");
+            label.push_str(&rimz::theme::fmt::dollars2(member_cost));
+        }
     }
     Some(label)
+}
+
+fn subagent_name(stat: &SubagentStat) -> &str {
+    stat.task.as_deref().unwrap_or("other")
+}
+
+fn subagent_row_label(stat: &SubagentStat) -> String {
+    [
+        Some(format!("{} ×", stat.count)),
+        stat.active_secs
+            .map(|seconds| format!("{} active", duration_label(seconds))),
+        stat.cost_usd.map(rimz::theme::fmt::dollars2),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 
 fn token_count(value: u64) -> String {
