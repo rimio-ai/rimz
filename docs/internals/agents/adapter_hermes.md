@@ -87,3 +87,14 @@ Run `rimz coverage` for the current matrix. The gaps worth a reason:
 - **Subagent timing.** `subagent_stop` fires when Hermes processes the child's result, not at the child's last token.
 - **Consent prompts.** The first interactive launch after install asks ten y/N questions, one per installed event.
 - **Skills.** `--skills` preloads rather than restricts, so a profile `skills` list refuses under the sandbox and warns on the host.
+
+## Live check
+
+A live check runs Hermes without anyone's login, so every home it reads is a scratch one:
+
+- **Scratch homes.** Set `HOME`, `HERMES_HOME` (`$HOME/.hermes`), `RIMZ_HOME`, and a short `XDG_RUNTIME_DIR` (`/tmp/<8 chars>`) to directories under one scratch root, and unset `ZELLIJ`, `ZELLIJ_SOCKET_DIR`, `ZELLIJ_SESSION_NAME`, and `TMUX`. Never point any of them at `~/.hermes`: its `auth.json`, `.env`, `state.db`, and `config.yaml` are the user's.
+- **A stub model server.** Real turns need a model, and a local OpenAI-compatible server stands in for one with no credentials. It answers `GET /v1/models` with one model and its `context_length`, and answers `POST /v1/chat/completions` from a scripted list of replies, one per request. A reply is plain content, or a tool call (`terminal` for a permission ask, `clarify` for a question). Each reply carries `usage`, which is what the context gauge reads. The scratch `config.yaml` points the `model` block at it: `provider: custom`, `base_url: http://127.0.0.1:<port>/v1`, any `api_key`, `streaming: false`.
+- **The installs link.** Hermes resolves its dependency state under `$HERMES_HOME/installs`, and an empty scratch home cannot start. Link `$HERMES_HOME/installs` to `~/.hermes/installs`.
+- **What the link touches.** It is the one path from the scratch home into real state. A launch touches `~/.hermes/installs/<key>/pm-runtime` and takes the update lock at `~/.hermes/hermes-agent/.git/hermes-update.lock`, which a real Hermes update also takes. Afterwards, confirm the real `hermes --version` still runs.
+
+Install with `rimz hooks install hermes` under these homes, then answer the consent prompts in the first interactive `hermes chat --cli` by hand: RimZ never grants consent itself, and neither should the check. Stop the stub server by its PID.
