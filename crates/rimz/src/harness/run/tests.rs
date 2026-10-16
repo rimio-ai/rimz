@@ -1478,6 +1478,77 @@ fn settle_verify_reopens_a_red_run_under_the_cap() {
 }
 
 #[test]
+fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
+    use std::sync::Mutex;
+    use tracing_subscriber::prelude::*;
+
+    struct WakeCost {
+        paths: StatePaths,
+        run_id: RunId,
+        costs: Arc<Mutex<Vec<Option<f64>>>>,
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for WakeCost {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            event.record(
+                &mut |field: &tracing::field::Field, value: &dyn std::fmt::Debug| {
+                    if field.name() == "message"
+                        && format!("{value:?}").contains("could not wake workflow attempt")
+                    {
+                        self.costs
+                            .lock()
+                            .unwrap()
+                            .push(load(&self.paths, &self.run_id).unwrap().cost_usd);
+                    }
+                },
+            );
+        }
+    }
+
+    let (dir, paths, mut record) = setup();
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    record.agent_id = Some("priced-session".into());
+    // A missing workflow makes the wake observable synchronously without spawning a child.
+    record.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    });
+    create(&paths, &record).unwrap();
+    let mut context = crate::agents::AgentContext::new("claude", Timestamp::now());
+    context.cost = Some(crate::agents::AgentCost {
+        total_cost_usd: Some(1.25),
+        ..Default::default()
+    });
+    crate::store::agent_context::write(store.runtime_paths(), "claude", "priced-session", &context)
+        .unwrap();
+    let costs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(WakeCost {
+        paths,
+        run_id: record.run_id.clone(),
+        costs: costs.clone(),
+    });
+    let ended = AgentLifecycleObservation::new(record.agent_id.clone(), LifecycleSignal::Ended);
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    let settled = tracing::subscriber::with_default(subscriber, || {
+        settle_lifecycle(&store, &record.run_id, adapter, &ended, None)
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(settled.cost_usd, Some(1.25));
+    assert_eq!(
+        *costs.lock().unwrap(),
+        vec![Some(1.25)],
+        "the workflow wake must see the stamped spend exactly once"
+    );
+}
+
+#[test]
 fn record_spend_persists_tokens_and_ignores_non_finite_cost() {
     let (_dir, paths, record) = setup();
 
