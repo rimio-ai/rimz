@@ -8,6 +8,12 @@ common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || t
 case "$common" in
     */.git) repo="${common%/.git}" ;;
 esac
+# A submodule or --separate-git-dir checkout keeps its git directory outside it.
+gitdir=
+case "$common" in
+    "" | "$repo"/*) ;;
+    *) gitdir="$common" ;;
+esac
 worktrees="${repo}-worktrees"
 if ! mkdir -p "$worktrees" 2>/dev/null; then
     printf 'rimz-docker: cannot create %s; worktrees made in the container stay inside it.\n' "$worktrees" >&2
@@ -49,6 +55,9 @@ case "$checkout/" in
 esac
 if [ -n "$worktrees" ]; then
     set -- -v "$worktrees:$worktrees" "$@"
+fi
+if [ -n "$gitdir" ]; then
+    set -- -v "$gitdir:$gitdir" "$@"
 fi
 set -- -v "$repo:$repo" -v rimz-home:/home/rimz \
     -w "$here" -e TERM=xterm-256color -e COLORTERM "$@"
