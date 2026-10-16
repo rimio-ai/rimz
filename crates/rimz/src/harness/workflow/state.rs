@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use super::WorkflowSpec;
 use crate::disk::paths::WorkflowPaths;
 use crate::store::workflow::{
-    AttemptOutcome, JournalEntry, JournalEvent, Key, Park, ParkReason, PreviousAttempt, RunRecord,
-    RunState, Wait,
+    AttemptKind, AttemptOutcome, Children, EndCause, Ending, JournalEntry, JournalEvent, Key, Park,
+    ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
 };
 use crate::utils::time::{DurationUnit, TimeInputErr, parse_duration_units};
 
@@ -20,6 +20,83 @@ pub(super) struct Transition<'a> {
 }
 
 impl Transition<'_> {
+    pub(super) fn finish_judge(
+        &mut self,
+        seq: u64,
+        result: super::script::Evaluation,
+    ) -> Result<bool, TimeInputErr> {
+        if !self.current(seq) {
+            return Ok(false);
+        }
+        let attempt = self
+            .record
+            .attempt
+            .as_ref()
+            .expect("current judge attempt")
+            .clone();
+        let (object, failure) = match result.object {
+            Ok(object) => (
+                normalize_object(
+                    object,
+                    &self.spec.checks[&self.record.node],
+                    self.record.key.as_ref(),
+                ),
+                "invalid",
+            ),
+            Err(reason) => (Err(reason), result.failure),
+        };
+        if let Ok(object) = object {
+            self.record.check_retry_context = None;
+            self.finish_check(seq, Ok(object), result.digests, result.stderr_tail)?;
+            for entry in &mut self.entries {
+                if entry.seq == Some(seq)
+                    && let JournalEvent::Evaluation {
+                        cost_usd, retry, ..
+                    } = &mut entry.event
+                {
+                    *cost_usd = result.cost_usd;
+                    *retry = attempt.retry.clone();
+                }
+            }
+            return Ok(false);
+        }
+        // The successful case returned above.
+        let reason = object.expect_err("failed judge evaluation");
+        let object = self.engine_object(json!({"outcome":failure, "reason":reason}));
+        self.close_wait();
+        self.push(
+            Some(seq),
+            JournalEvent::Evaluation {
+                outcome: failure.into(),
+                object: object.clone(),
+                digests: result.digests,
+                started_at: attempt.started_at,
+                ended_at: self.now,
+                stderr_tail: result.stderr_tail,
+                cost_usd: result.cost_usd,
+                retry: attempt.retry,
+            },
+        );
+        self.record.attempt = None;
+        self.record.recheck_at = None;
+        match failure {
+            "canceled" => Ok(true),
+            "limited" => {
+                self.record.recheck_at = result.limited.and_then(|limited| limited.reset_at);
+                Ok(false)
+            }
+            _ if self.record.check_retry == 0 => {
+                self.record.check_retry = 1;
+                self.record.check_retry_context = Some(json!({"outcome":failure,"reason":reason}));
+                Ok(true)
+            }
+            _ => {
+                self.route("@user", object, ParkReason::Check)?;
+                Ok(false)
+            }
+        }
+    }
+
     pub(super) fn current(&self, seq: u64) -> bool {
         self.record.state == RunState::Active
             && self.record.attempt.as_ref().is_some_and(|a| a.seq == seq)
@@ -188,6 +265,8 @@ impl Transition<'_> {
                 node => {
                     self.record.node = node.into();
                     self.record.entered_at = self.now;
+                    self.record.check_retry = 0;
+                    self.record.check_retry_context = None;
                 }
             }
         }
@@ -224,63 +303,161 @@ impl Transition<'_> {
         self.route(target, object, reason)
     }
 
-    pub(super) fn end_step(&mut self, outcome: AttemptOutcome, digests: BTreeMap<String, String>) {
-        self.kill_child();
-        let Some(attempt) = self.record.attempt.take() else {
-            return;
-        };
+    pub(super) fn step_wait(&mut self, outcome: &str) {
+        if self
+            .record
+            .wait
+            .as_ref()
+            .is_some_and(|wait| wait.outcome != outcome)
+        {
+            self.close_wait();
+        }
+        let wait = self.record.wait.get_or_insert_with(|| Wait {
+            node: self.record.node.clone(),
+            outcome: outcome.into(),
+            first: self.now,
+            last: self.now,
+            count: 0,
+            recheck_at: None,
+        });
+        wait.last = self.now;
+        wait.count += 1;
+    }
+
+    pub(super) fn stage_agent_end(&mut self, ending: Ending, observed: &super::Observed) {
+        // Only published agent attempts enter the stop protocol.
+        let attempt = self
+            .record
+            .attempt
+            .as_mut()
+            .expect("agent ending has an attempt");
+        let outcome = ending.outcome;
+        attempt.ending = Some(ending);
         let visits = &self.record.visits[&attempt.node];
         let visit = visits
             .keys
             .iter()
             .find(|v| v.key == self.record.key)
             .map_or(0, |v| v.visits);
-        self.push(
-            Some(attempt.seq),
-            JournalEvent::Attempt {
-                handle: None,
-                run_id: None,
-                head_start: None,
-                head_end: None,
-                cost_usd: None,
-                children: None,
-                limited: None,
-                asked: None,
-                reason: None,
-                outcome,
-                visit,
-                key: self.record.key.clone(),
-                digests,
-                started_at: attempt.started_at,
-                ended_at: self.now,
-            },
-        );
         self.record.prev_attempt = Some(PreviousAttempt {
-            step: attempt.node,
+            step: attempt.node.clone(),
             outcome,
             seq: attempt.seq,
             visit,
             key: self.record.key.clone(),
             started_at: attempt.started_at,
             ended_at: self.now,
-            handle: None,
-            run_id: None,
+            handle: attempt.run.as_ref().map(|run| run.handle.clone()),
+            run_id: attempt.run.as_ref().map(|run| run.run_id.clone()),
             claim_path: self.paths.claim(attempt.seq),
-            head_start: None,
+            head_start: attempt.head_start.clone(),
             head_end: None,
-            children: None,
-            limited: None,
-            asked: None,
-            cost_usd: None,
+            children: Some(observed.children.clone()),
+            limited: (outcome == AttemptOutcome::Limited)
+                .then(|| observed.limited.clone())
+                .flatten(),
+            asked: (outcome == AttemptOutcome::Asked)
+                .then(|| observed.ask.clone())
+                .flatten(),
+            cost_usd: observed.cost_usd,
         });
     }
 
-    pub(super) fn finish_step(
+    pub(super) fn settle_agent(
         &mut self,
-        outcome: AttemptOutcome,
-        digests: BTreeMap<String, String>,
+        mut children: Children,
+        cost_usd: Option<f64>,
+        head_end: Option<String>,
+        reason: Option<String>,
     ) -> Result<(), TimeInputErr> {
-        self.end_step(outcome, digests);
+        // stage_agent_end durably saves observations before stop can erase asks or limits.
+        let attempt = self.record.attempt.take().expect("staged agent attempt");
+        let ending = attempt.ending.expect("staged agent ending");
+        let previous = self
+            .record
+            .prev_attempt
+            .as_mut()
+            .expect("staged agent evidence");
+        previous.outcome = ending.outcome;
+        previous.handle = attempt.run.as_ref().map(|run| run.handle.clone());
+        previous.run_id = attempt.run.as_ref().map(|run| run.run_id.clone());
+        previous.ended_at = self.now;
+        previous.head_end = head_end;
+        previous.cost_usd = cost_usd;
+        if let Some(staged) = previous.children.take() {
+            for (saved, current) in [
+                (staged.stopped, &mut children.stopped),
+                (staged.live, &mut children.live),
+            ] {
+                for child in saved {
+                    if !current
+                        .iter()
+                        .any(|item| item.kind == child.kind && item.handle == child.handle)
+                    {
+                        current.push(child);
+                    }
+                }
+            }
+        }
+        children.live.retain(|child| {
+            !children
+                .stopped
+                .iter()
+                .any(|stopped| stopped.kind == child.kind && stopped.handle == child.handle)
+        });
+        previous.children = Some(children);
+        if ending.outcome != AttemptOutcome::Asked {
+            previous.asked = None;
+        }
+        if ending.outcome != AttemptOutcome::Limited {
+            previous.limited = None;
+        }
+        let previous = previous.clone();
+        self.push(
+            Some(attempt.seq),
+            JournalEvent::Attempt {
+                outcome: previous.outcome,
+                visit: previous.visit,
+                key: previous.key.clone(),
+                digests: attempt.digests,
+                started_at: previous.started_at,
+                ended_at: self.now,
+                handle: previous.handle,
+                run_id: previous.run_id,
+                head_start: previous.head_start,
+                head_end: previous.head_end,
+                cost_usd,
+                children: previous.children,
+                limited: previous.limited,
+                asked: previous.asked.clone(),
+                reason,
+            },
+        );
+        if ending.cause == EndCause::Cancel {
+            self.close_wait();
+            self.record.state = RunState::Canceled;
+            self.record.terminal_at = Some(self.now);
+            self.push(None, JournalEvent::Cancel);
+            self.push(
+                None,
+                JournalEvent::Terminal {
+                    state: RunState::Canceled,
+                },
+            );
+            return Ok(());
+        }
+        if ending.cause == EndCause::Deadline {
+            self.record.deadline_fired = true;
+            return self.engine_route(
+                "deadline",
+                json!({"outcome":"deadline", "deadline":self.record.deadline}),
+                self.spec.workflow.on.deadline.as_deref().unwrap_or("@user"),
+                ParkReason::Deadline,
+            );
+        }
+        if ending.outcome == AttemptOutcome::Asked {
+            return self.engine_route("asked", json!({"outcome":"asked", "reason":previous.asked.as_ref().map(|ask| &ask.text), "asked":previous.asked}), self.spec.steps[&self.record.node].on.asked.as_deref().unwrap_or("@user"), ParkReason::Asked);
+        }
         let target = self.spec.steps[&self.record.node]
             .then
             .as_deref()
@@ -288,7 +465,7 @@ impl Transition<'_> {
             .to_owned();
         self.route(
             &target,
-            self.record.input.clone().unwrap_or_else(|| json!({})),
+            self.engine_object(self.record.input.clone().unwrap_or_else(|| json!({}))),
             ParkReason::User,
         )
     }
@@ -337,15 +514,19 @@ impl Transition<'_> {
         if self.record.state != RunState::Active {
             return Ok(false);
         }
+        if self
+            .record
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.kind == AttemptKind::Agent)
+        {
+            return Ok(false);
+        }
         if !self.record.deadline_fired
             && let Some(deadline) = self.record.deadline
             && deadline <= self.now
         {
-            if self.spec.steps.contains_key(&self.record.node) {
-                self.end_step(AttemptOutcome::Canceled, BTreeMap::new());
-            } else {
-                self.abandon_check("canceled");
-            }
+            self.abandon_check("canceled");
             self.record.deadline_fired = true;
             let target = self.spec.workflow.on.deadline.as_deref().unwrap_or("@user");
             self.engine_route(
@@ -359,23 +540,19 @@ impl Transition<'_> {
         if !self.timeout_at()?.is_some_and(|at| at <= self.now) {
             return Ok(false);
         }
-        if self.spec.steps.contains_key(&self.record.node) {
-            self.finish_step(AttemptOutcome::Timeout, BTreeMap::new())?;
-        } else {
-            self.abandon_check("timeout");
-            let check = &self.spec.checks[&self.record.node];
-            let target = check
-                .on
-                .get("timeout")
-                .map(String::as_str)
-                .unwrap_or("@user");
-            self.engine_route(
-                "timeout",
-                json!({"outcome":"timeout", "node":self.record.node, "timeout":check.timeout}),
-                target,
-                ParkReason::Timeout,
-            )?;
-        }
+        self.abandon_check("timeout");
+        let check = &self.spec.checks[&self.record.node];
+        let target = check
+            .on
+            .get("timeout")
+            .map(String::as_str)
+            .unwrap_or("@user");
+        self.engine_route(
+            "timeout",
+            json!({"outcome":"timeout", "node":self.record.node, "timeout":check.timeout}),
+            target,
+            ParkReason::Timeout,
+        )?;
         Ok(true)
     }
 

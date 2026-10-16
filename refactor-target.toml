@@ -748,7 +748,10 @@ path = "crates/rimz/src/harness"
 # run::rekey_team_run, the trunk's molt re-export, takes the slack the workflow budget assumed (+1).
 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 # headless shares HeadlessProfile, its resolve/prepare stages, typed errors and execution edges (+8).
-surface-budget = 881
+# Workflow AttemptHost, StepLaunch, Occupancy, Observed, LaunchFailure and wake_run cross the CLI seam (+6).
+# Agent identity/head/compose/prepare_end/launch/finish and judge evaluate share private orchestration;
+# Transition finish_judge/stage_agent_end/settle_agent/step_wait replace the old step/stub helpers (+5 net).
+surface-budget = 892
 
 [[verdict]]
 kind = "item"
@@ -6805,13 +6808,8 @@ reason = "Workflow engine orchestration and script-host interrupts share the pur
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::state::Transition::end_step"
-reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
-
-[[verdict]]
-kind = "item"
-key = "harness::workflow::state::Transition::finish_step"
-reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+key = "harness::workflow::state::Transition::stage_agent_end"
+reason = "Agent stop admission durably saves observations before the off-lock cascade can erase them."
 
 [[verdict]]
 kind = "item"
@@ -6840,18 +6838,13 @@ reason = "The off-lock script host returns captured evaluation evidence for sequ
 
 [[verdict]]
 kind = "item"
-key = "harness::workflow::script::step_stub"
-reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
-
-[[verdict]]
-kind = "item"
 key = "harness::workflow::script::digest"
-reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
+reason = "Workflow checks and step prompt composition share content digesting."
 
 [[verdict]]
 kind = "item"
 key = "harness::workflow::script::evaluate"
-reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
+reason = "The workflow engine hosts scripts and judges through one interruptible child-publication boundary."
 
 [[verdict]]
 kind = "item"
@@ -6972,3 +6965,83 @@ reason = "Workflow judges can publish their process-group leader before bounded 
 kind = "item"
 key = "proc::run_bounded_output_hosted"
 reason = "Hosted checks publish child identity synchronously after spawn and reap the group if publication fails."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::AttemptHost"
+reason = "The library decides workflow transitions while the CLI owns agent lifecycle operations."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::StepLaunch"
+reason = "The host receives the complete admitted supervised-attempt request."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Occupancy"
+reason = "Checkout admission consumes typed occupant and open-turn evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::Observed"
+reason = "Agent observations carry typed run status, asks, limits, children and spend across the host seam."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::LaunchFailure"
+reason = "Failed launches settle as counted attempts with typed outcomes and journaled reasons."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::wake_run"
+reason = "Attempt-specific lifecycle producers can request an advance without clearing room-wide backoff."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::finish_judge"
+reason = "Judge settlement owns normalization, the durable retry budget and check parks under the workspace lock."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::settle_agent"
+reason = "The off-lock stop rejoins the sequence-checked transition to journal and route its saved evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::step_wait"
+reason = "Window and occupancy admission merge waits without replacing routed input or key."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::identity"
+reason = "Launch and stop admission publish the same PID/start-token ownership identity."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::head"
+reason = "Agent preparation and settlement sample bounded checkout HEAD evidence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::compose"
+reason = "Step admission reads live prompts and signs and publishes their content digests."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::prepare_end"
+reason = "Locked agent observation admits exactly one recoverable off-lock stop."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::launch"
+reason = "The engine settles an off-lock host launch under its original sequence."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::agent::finish"
+reason = "All agent end causes share the off-lock stop and locked settlement path."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::judge::evaluate"
+reason = "Workflow judges use shared headless launch preparation and the same hosted-child boundary as scripts."
