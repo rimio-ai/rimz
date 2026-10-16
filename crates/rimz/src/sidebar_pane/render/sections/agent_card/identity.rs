@@ -106,27 +106,7 @@ pub(super) fn agent_identity_line(
 ) -> Line<'static> {
     let theme = row_ctx.theme;
     let width = content_width(row_ctx.width);
-    // Right cluster, built first so the left trims to whatever's left: the
-    // resolved card cost, bold in dollar green: session-scoped while live and
-    // seat-lifetime once its finished cohort collapses. The row's stepped roll
-    // makes an increase tick up rather than jump. A cost that rounds to $0.00 is
-    // omitted, not printed as zero (the filter reads the authoritative target,
-    // never a mid-climb value).
-    let mut right: Vec<Span<'static>> = Vec::new();
-    if let Some(target) = cost_usd.filter(|usd| *usd >= 0.005) {
-        let usd = row_ctx
-            .cost_rolls
-            .display(&row.id, target, row_ctx.animation_phase);
-        let style = if row_ctx
-            .cost_rolls
-            .flashing(&row.id, row_ctx.animation_phase)
-        {
-            theme.value_flash()
-        } else {
-            theme.money_style(Modifier::BOLD)
-        };
-        right.push(Span::styled(dollars2(usd), style));
-    }
+    let right = cost_spans(row_ctx, row, cost_usd);
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —
     // metadata, a step under the soft stat figures — over `·` seams of the
@@ -172,6 +152,73 @@ pub(super) fn agent_identity_line(
                 window_style(theme, window),
             ));
         }
+    }
+    pin_right(left, right, width)
+}
+
+fn cost_spans(row_ctx: &RowCtx<'_>, row: &SidebarRow, cost_usd: Option<f64>) -> Vec<Span<'static>> {
+    let theme = row_ctx.theme;
+    // Right cluster, built first so the left trims to whatever's left: the
+    // resolved card cost, bold in dollar green: session-scoped while live and
+    // seat-lifetime once its finished cohort collapses. The row's stepped roll
+    // makes an increase tick up rather than jump. A cost that rounds to $0.00 is
+    // omitted, not printed as zero (the filter reads the authoritative target,
+    // never a mid-climb value).
+    let mut right: Vec<Span<'static>> = Vec::new();
+    if let Some(target) = cost_usd.filter(|usd| *usd >= 0.005) {
+        let usd = row_ctx
+            .cost_rolls
+            .display(&row.id, target, row_ctx.animation_phase);
+        let style = if row_ctx
+            .cost_rolls
+            .flashing(&row.id, row_ctx.animation_phase)
+        {
+            theme.value_flash()
+        } else {
+            theme.money_style(Modifier::BOLD)
+        };
+        right.push(Span::styled(dollars2(usd), style));
+    }
+
+    right
+}
+
+pub(super) fn stale_line(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    attention: CardAttention,
+    cost_usd: Option<f64>,
+) -> Line<'static> {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
+    let mut right = cost_spans(ctx, row, cost_usd);
+    if !right.is_empty() {
+        right.push(Span::raw("  "));
+    }
+    let age = crate::sidebar_pane::render::fmt::age_label(age_secs(row.last_activity, ctx.now));
+    right.push(Span::styled(format!("{age:>3}"), theme.muted()));
+    let mut left = vec![
+        agent_lead_cell(
+            theme,
+            row,
+            row.status().unwrap_or(AgentStatus::Idle),
+            attention,
+            ctx.animation_phase,
+        ),
+        Span::raw(" "),
+    ];
+    left.extend(attention_name_spans(
+        theme,
+        row.display_name(),
+        &row.name,
+        attention,
+    ));
+    left.push(Span::styled(value_seam(theme), theme.muted()));
+    let mut remaining = width.saturating_sub(spans_width(&left) + spans_width(&right) + 1);
+    for mut span in description_spans(ctx, row, attention) {
+        span.content = ellipsize(&span.content, remaining).into();
+        remaining = remaining.saturating_sub(span.width());
+        left.push(span);
     }
     pin_right(left, right, width)
 }

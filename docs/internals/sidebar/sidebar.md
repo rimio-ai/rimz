@@ -205,13 +205,14 @@ Each agent is a small stacked card whose anatomy is drawn in [the interface refe
 
 A card's line set is fixed before any content fills it, so a provider that starts reporting a field cannot grow a line. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
-- **Stage** (`CardStage`), from durable lifecycle facts only. A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Anything else is `Engaged`.
+- **Stage** (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables); only idle and success rows may use the stale template.
 - **Expansion** (`CardExpansion`): `reach` (`SelectionReach`) distinguishes the live or held selected row, its visible named teammates, and unreached rows. Both selected rows and teammates open the card, but only selected rows gain the stats line outside `expanded` density. `delegation` (the sticky header override, else the live or held selected row itself or `expanded` density) picks whether the delegation entries show, so a teammate folds its entries behind the summary line. Renderer-local holds accumulate across clicks and release all at once when the hold-free layout no longer clamps the selected card's own target. Authoritative wheel, banner, and toggle paints release immediately; off-screen selections reveal without holding.
 - **Density**: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
-- **Status**, read only by the resting compact arm.
+- **Status**, read by the stale, resting compact, and delegation-summary arms.
 
 | Card | Slots |
 |---|---|
+| stale idle or success, unreached, density not `expanded` | stale |
 | compact, not expanded: `idle` | identity |
 | compact, not expanded: `running`, `waiting` | identity, description, gauge |
 | compact, not expanded: `paused`, `success`, `failed`, `sleeping` | identity, description |
@@ -219,7 +220,8 @@ A card's line set is fixed before any content fills it, so a provider that start
 | fresh labeled, not expanded | identity, description |
 | fresh unlabeled, expanded | identity, awaiting dots, gauge |
 | fresh labeled, expanded | identity, description, gauge |
-| engaged, resting or teammate, `auto` or opened `compact` | identity, description, question, gauge, delegation |
+| engaged, unreached idle or success, delegation closed, density not `expanded` | identity, description, question, gauge |
+| engaged, otherwise resting or teammate, `auto` or opened `compact` | identity, description, question, gauge, delegation |
 | engaged, selected (live or held) or `expanded` density | identity, description, question, gauge, tokens, delegation |
 | engaged, delegation open | the applicable shape above plus delegation entries |
 

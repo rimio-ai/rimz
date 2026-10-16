@@ -1,6 +1,6 @@
 //! The per-agent card: identity line, description, the context meter and its
 //! token line on selected or held cards (every engaged card at expanded density),
-//! and expanded subagent and wait entries. A state-to-template table fixes
+//! and expanded subagent and wait entries. Read idle and done history can shrink to one line; closed, unreached resting history hides the delegation summary. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.
@@ -28,7 +28,7 @@ use crate::sidebar_pane::render::labels::{
     severity_heat_amount, severity_heat_color, subagent_head_style, token_breakdown_spans,
     token_total_glyph, unread_run_spans, value_seam, window_style,
 };
-use crate::sidebar_pane::render::layout::{ellipsize, text_width};
+use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 mod bands;
@@ -41,7 +41,7 @@ mod waits;
 
 use self::{description::*, gauge::*};
 use entry::{Entry, push_entry};
-use identity::{display_context_window, identity_line};
+use identity::{display_context_window, identity_line, stale_line};
 use template::{CardSlot, CardStage, template};
 
 use super::process::{process_detail_line, process_row_line};
@@ -154,9 +154,19 @@ pub(super) fn row_lines(
             inner.push(line.into());
         }
     } else if let Some(agent) = row.as_agent() {
-        let stage = CardStage::of(row);
+        let stage = if !row.unread
+            && !expanded.reach.opens_card()
+            && ctx.card_density != CardDensityMode::Expanded
+            && ctx.stale_after_secs > 0
+            && age_secs(row.last_activity, ctx.now) as u64 > ctx.stale_after_secs
+        {
+            CardStage::Stale
+        } else {
+            CardStage::of(row)
+        };
         for slot in template(stage, status, ctx.card_density, expanded) {
             match slot {
+                CardSlot::Stale => inner.push(stale_line(ctx, row, attention, cost_usd).into()),
                 CardSlot::Identity => {
                     inner.push(identity_line(ctx, row, attention, cost_usd).into());
                 }

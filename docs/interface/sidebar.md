@@ -276,14 +276,15 @@ The meter draws windows up to 256k tokens linearly and larger ones on a log curv
 
 ### Card shapes
 
-A card's lines are set by its stage and selection reach. Within that shape, data fills in place and no line moves.
+A card's lines are set by its stage, age, density, and selection reach. Within that shape, data fills in place and no line moves.
 
 | card | lines |
 |------|-------|
+| stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, or teammate reach restores the card |
 | fresh: idle, never prompted | identity, plus the description when it was launched with one |
 | fresh, selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
 | engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |
-| engaged, with subagents or waits | adds the subagents and waits line |
+| engaged, with subagents or waits | adds the subagents and waits line, except on unreached idle and done cards with their entries closed |
 | selected or held, engaged | adds the stats line (`▤ 0` until data arrives) below the meter and lists the subagent and wait entries below the card; only the live selection lights the spines |
 
 Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its stats and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
@@ -295,6 +296,8 @@ Selecting an engaged card inserts its stats line below the meter and appends ent
 | `auto` (default) | the shapes above |
 | `expanded` | every engaged card keeps its stats line and lists its subagent and wait entries |
 | `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
+
+`[theme.display] stale_after_secs` defaults to 86400 (24 hours); `0` disables shrinking. Only read idle and done cards shrink, using the card's last activity including its children. Stale takes priority over `compact`; `expanded` never shrinks cards. Every width tier keeps the description, cost, and muted coarse age on the stale line, clipping the description to fit.
 
 ### Subagents and waits
 
@@ -320,7 +323,7 @@ A card with waits uses the same entry layout:
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, and, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
-Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card, and that choice outranks selection and `card_density` until the sidebar restarts. In `compact` density, select the card first to reach the line.
+Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card where it appears, and that choice outranks selection and `card_density` until the sidebar restarts. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
 
 Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 

@@ -45,8 +45,17 @@ pub(super) fn description_line(
     row: &SidebarRow,
     attention: CardAttention,
 ) -> Line<'static> {
+    let mut spans = vec![Span::raw("  ")];
+    spans.extend(description_spans(ctx, row, attention));
+    Line::from(trim_spans_to_width(spans, content_width(ctx.width)))
+}
+
+pub(super) fn description_spans(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    attention: CardAttention,
+) -> Vec<Span<'static>> {
     let theme = ctx.theme;
-    let width = content_width(ctx.width);
     // The shared unread treatment, on a concrete body tone so the description
     // lifts in unison with the lead glyph and the name. Shimmer flows one span
     // per character; blink and bright stay a single span; calm rows read at the
@@ -71,7 +80,7 @@ pub(super) fn description_line(
             spans
         }
     };
-    let mut left = vec![Span::raw("  ")];
+    let mut left = Vec::new();
     match row.as_agent().map_or(CardDescription::None, |agent| {
         agent.open_ask().map_or_else(
             || agent.description(ctx.now),
@@ -95,7 +104,7 @@ pub(super) fn description_line(
             theme.faint(),
         ));
     }
-    Line::from(trim_spans_to_width(left, width))
+    left
 }
 
 /// An idle agent with no submitted prompt or authored pre-prompt label. Rich

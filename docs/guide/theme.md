@@ -218,6 +218,7 @@ An unread card also rests on a soft wash, the selection blue lifted a step, the 
 | `max_percent` | `50` | maximum sidebar share, including widths you set with keys or dragging; clamped to 10 through 90. The 24-column minimum wins on narrow views |
 | `scrollbar` | `auto` | `auto` shows the overflow indicator only while the view moves; `always` and `never` pin it |
 | `card_density` | `auto` | `auto` keeps the standard card; `expanded` keeps the stats line on every engaged card and opens every card's subagents and waits; `compact` trims resting cards |
+| `stale_after_secs` | `86400` | Read idle and done cards quiet past this many seconds shrink to one line; `0` disables it, and `expanded` density never shrinks cards |
 | `recent_subagent_secs` | `900` | how long, in seconds, a finished subagent stays in a card's recent list before it moves behind `+K older`. `0` moves every finished child there at once, though a card with nothing newer to show lists them directly |
 | `max_recent_subagents` | `5` | how many finished subagents the recent list holds, newest first. Running children are never capped |
 | `provider_tabs` | `auto` | how the dashboard picks between stacked provider blocks and a tab rail: `auto` tabs at three providers or more, `always` at more than one, `never` not at all |

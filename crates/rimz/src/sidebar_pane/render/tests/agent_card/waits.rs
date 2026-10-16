@@ -148,7 +148,7 @@ fn a_pending_idle_stop_is_one_wait_entry() {
     let theme = Theme::fixed(false);
     let collapsed = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
     assert!(
-        collapsed.iter().any(|line| line.contains("⧖ waits (1)")),
+        !collapsed.iter().any(|line| line.contains("⧖ waits (1)")),
         "{collapsed:?}"
     );
     assert!(!collapsed.iter().any(|line| line.contains("after 3m idle")));
