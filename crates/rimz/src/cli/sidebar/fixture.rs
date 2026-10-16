@@ -406,6 +406,7 @@ fn add_fleet_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             last_request_at: None,
             warm_until: None,
             held_since: None,
+            rewarm_cost_usd: None,
         });
     }
     let pi = agent_row(

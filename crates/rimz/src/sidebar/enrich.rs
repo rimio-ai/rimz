@@ -731,6 +731,7 @@ fn enrich_core(
         &mut folded,
         &keep_warm_cache,
         &machine_config.harness,
+        runtime,
     );
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states, &lanes.branch_ci, &diff_cache);
