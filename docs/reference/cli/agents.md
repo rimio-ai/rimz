@@ -586,7 +586,7 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | `PROFILE` | The launch profile, or a faint `-` when absent. |
 | `AGENT` | The provider kind, such as `claude` or `codex`; a named account includes its name, such as `claude@work`. |
 | `STATUS` | The card status (below). |
-| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1m]`. |
+| `MODEL` | The shared model display name and effort, as `model@effort`; a recorded context-window qualifier appears as `[1M]`. |
 | `CTX` | Context-window fill. |
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
 | `SEEN` | Time since the agent was last seen active. |

@@ -61,7 +61,7 @@ fn render_agent_capability_and_window() {
     );
     claude.model = Some("Opus".to_owned());
     claude.effort = Some("xhigh".to_owned());
-    // The hook-derived window renders as the identity line's `1m` token.
+    // The hook-derived window renders as the identity line's `1M` token.
     claude.usage.context_window = Some(1_000_000);
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
     let snapshot = snapshot_with(vec![claude]);
@@ -73,7 +73,7 @@ fn render_agent_capability_and_window() {
         "a failed agent leads with the attention glyph:\n{rendered}"
     );
     assert!(
-        rendered.contains("Opus · 1m"),
+        rendered.contains("Opus · 1M"),
         "the identity line carries the capability and hook-derived window token:\n{rendered}"
     );
 }

@@ -16,7 +16,7 @@ expression: strip_sgr(&ansi)
 ▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
 
   main                     ⇡3 ⇣1  +1840 -620   main
- ⢄ claude · Opus 4.8 · xhigh · 1m               $8.64
+ ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
    stabilize render diff
    󰕰 ━━━━━━━━━━━━━━━╺━╺────────────────────────   24%
    󰿦 247k · 󱥸 212k  24k  9k  30k
@@ -25,7 +25,7 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes     $0.34
         22k · Haiku · xhigh                       5m
- ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
+ ▁ claude · Opus 4.8 · xhigh · 1M              $28.90
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━─────   79%
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3       󰪟 8m
@@ -33,7 +33,7 @@ expression: strip_sgr(&ansi)
    integration::backend
 
   observer-lag                 ⇡1  +980 -360   main
-  claude · Opus 4.8 · xhigh · 1m              $29.84
+  claude · Opus 4.8 · xhigh · 1M              $29.84
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85%
    󰿦 853k · 󱥸 734k  85k  34k  106k            ◉ 1h
@@ -64,7 +64,7 @@ expression: strip_sgr(&ansi)
    pick gallery color ramp
    󰕰 ━━━━━━╺───────────────────────────────────   15%
    󰿦 42k · 󱥸 40k  1k  5k                       󰪥 1h
- ⢄ claude · Opus 4.8 · xhigh · 1m               $6.95
+ ⢄ claude · Opus 4.8 · xhigh · 1M               $6.95
    verify 256-color fallback
    󰕰 ━━━━━━━━━━━━━━━━━╺━━╺─────────────────────   31%
    󰿦 314k · 󱥸 270k  31k  12k  39k             󰪞 6m
@@ -75,11 +75,11 @@ expression: strip_sgr(&ansi)
         22k · Haiku · xhigh                       5m
 
   mux-merge #91                                main
-  claude · Opus 4.8 · xhigh · 1m              $15.38
+  claude · Opus 4.8 · xhigh · 1M              $15.38
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺━━╺━───────────────   46%
    󰿦 469k · 󱥸 403k  46k  18k  58k             ◉ 1h
-  claude · Opus 4.8 · xhigh · 1m               $2.41
+  claude · Opus 4.8 · xhigh · 1M               $2.41
    land tmux hook fix
    󰕰 ━━━━━━━━╺━╺───────────────────────────────   13%
    󰿦 132k · 󱥸 114k  13k  5k  16k              ◉ 2h

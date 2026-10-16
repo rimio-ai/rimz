@@ -757,7 +757,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         )
     };
     let first = render(qwen.clone());
-    assert!(first.contains("DeepSeek V4 Pro · 1m"), "{first}");
+    assert!(first.contains("DeepSeek V4 Pro · 1M"), "{first}");
     assert!(first.contains("3.9%"), "{first}");
     assert!(first.contains("▤ 38k · ◌ 38k ↘ 71 ↗ 85"), "{first}");
     assert!(first.contains("$0.02"), "{first}");

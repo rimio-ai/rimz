@@ -240,7 +240,7 @@ fn assert_snapshot(name: &str, screen: String) {
             // card snapshot stays stable across time.
             (r"([↻\x{f0450}]\s+)\d+[dhms]\d+[dhms]\b", "$1<reset>"),
             // Single-unit live durations, anchored to where they render so
-            // the identity line's deterministic window token (`1m`) stays
+            // the identity line's deterministic window token (`1M`) stays
             // visible: an age after its clock-fill glyph, and the `5h`/`7d`
             // budget label ahead of its mana bar.
             (r"([◔◑◕●◉]) \d+[smhd]\b", "$1 <t>"),
