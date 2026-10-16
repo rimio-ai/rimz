@@ -757,6 +757,51 @@ fn molt_reservation_refuses_without_appending_and_failed_startup_frees_it() {
 }
 
 #[test]
+fn cancelled_unbound_molts_free_the_slot_and_cannot_bind_late() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let mut request = launch_request("launch_first", AgentLaunchName::Mint);
+    request.launch.molted_from = Some("launch_old".into());
+    let batch = store
+        .begin_agent_launch_batch(&[request.clone()], scope.clone())
+        .unwrap();
+    let identity = batch.single_identity().unwrap();
+    assert!(
+        store
+            .cancel_unbound_molt_launch(&identity.kind, &identity.agent_id, "session", dir.path())
+            .unwrap()
+    );
+    let pane = crate::ids::PaneId::parse("tmux:%1").unwrap();
+    assert!(
+        store
+            .bind_agent_launch(identity, "session", dir.path(), &pane, None)
+            .is_err()
+    );
+    request.agent_id = "launch_second".into();
+    let batch = store.begin_agent_launch_batch(&[request], scope).unwrap();
+    let bound = batch.single_identity().unwrap();
+    store
+        .bind_agent_launch(bound, "session", dir.path(), &pane, None)
+        .unwrap();
+    assert!(
+        !store
+            .cancel_unbound_molt_launch(&bound.kind, &bound.agent_id, "session", dir.path())
+            .unwrap()
+    );
+}
+
+#[test]
 fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");

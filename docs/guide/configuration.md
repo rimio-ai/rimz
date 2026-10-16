@@ -704,7 +704,7 @@ placement = "auto"   # "auto" | "pane" | "tab"
 max-chain-length = 3
 ```
 
-An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers, not children. `max-chain-length` caps how many of those launches can chain from one human-started root, and defaults to three. A launch past the limit fails before it creates a pane, a worktree, or a provisional agent, and tells the calling agent not to retry. [`rimz agents fork`](../reference/cli/agents.md#fork) is not a launch: the fork takes the chain position of the agent it copies, so a fork of an agent at the limit cannot launch peers either, and a fork is never refused by the limit.
+An agent that runs `rimz agents` or `rimz teams` launches independent top-level peers, not children. `max-chain-length` caps how many of those launches can chain from one human-started root, and defaults to three. A launch past the limit fails before it creates a pane, a worktree, or a provisional agent, and tells the calling agent not to retry. [`rimz agents fork`](../reference/cli/agents.md#fork) is not a launch: the fork takes the chain position of the agent it copies, so a fork of an agent at the limit cannot launch peers either, and a fork is never refused by the limit. `rimz agents molt` replaces the calling agent at the same generation, so repeated molts do not consume the limit.
 
 #### Startup relaunches
 

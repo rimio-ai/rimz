@@ -77,6 +77,39 @@ pub fn open_team_run(paths: &StatePaths, seat: &AgentState) -> Result<Option<Run
     }))
 }
 
+/// Move an open leader run to its molt successor, including a retry after startup failure.
+pub fn rekey_team_run(
+    paths: &StatePaths,
+    predecessor: &AgentState,
+    successor: &crate::store::writer::AgentLaunchIdentity,
+    agents: &[AgentState],
+) -> Result<()> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let predecessor_id = predecessor
+        .launch_id
+        .as_ref()
+        .unwrap_or(&predecessor.agent_id);
+    let Some(mut record) = super::list(paths)?.into_iter().find(|record| {
+        !record.status.is_terminal()
+            && record.team.is_some()
+            && (record.matches_agent(predecessor)
+                || agents.iter().any(|agent| {
+                    agent.molted_from.as_ref() == Some(predecessor_id)
+                        && record.matches_agent(agent)
+                }))
+    }) else {
+        return Ok(());
+    };
+    record.kind.clone_from(&successor.kind);
+    record.agent_name = Some(successor.name.clone());
+    record.agent_id = None;
+    if let Some(team) = record.team.as_mut() {
+        team.launch_id.clone_from(&successor.agent_id);
+    }
+    crate::store::run::write(&paths.runs_dir, &record)?;
+    Ok(())
+}
+
 /// The open team run of the cohort `instance` (`<team>#<channel>`).
 pub fn open_team_run_for(paths: &StatePaths, instance: &str) -> Result<Option<RunRecord>> {
     Ok(team_runs(paths, instance)?

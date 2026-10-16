@@ -1495,6 +1495,281 @@ fn over_limit_agent_launch_refuses_before_creating_runtime_state() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn molt_from_user_shell_refuses_before_creating_runtime_state() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["agents", "molt", "note"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("/rimz-molt"), "{stderr}");
+    assert!(stderr.contains("only inside an agent"), "{stderr}");
+    let paths = env.state_path_for(&env.project_root);
+    assert!(!paths.workspace_record.exists());
+    assert!(!paths.events_log.exists());
+}
+
+#[test]
+fn molt_refuses_children_unresolved_callers_and_empty_notes_without_appending() {
+    for (scenario, code, expected) in [
+        (
+            "child",
+            1,
+            "subagents cannot molt; finish and report to your caller; do not retry this command",
+        ),
+        ("unresolved", 1, "do not retry this command"),
+        ("empty", 2, "NOTE or --stdin"),
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        if scenario != "unresolved" {
+            crate::common::wait::register_calling_agent_with_launch(
+                &env,
+                LaunchParams {
+                    parent_agent_id: (scenario == "child").then(|| "parent".into()),
+                    parent_agent_kind: (scenario == "child")
+                        .then(|| AgentKind::new_unchecked("claude")),
+                    launch_depth: (scenario == "child").then_some(0),
+                    ..Default::default()
+                },
+            );
+        }
+        let before = env.store().read_events().unwrap().len();
+        let mut command = crate::common::wait::agent_wait(&env);
+        command.args(["agents", "molt"]);
+        if scenario != "empty" {
+            command.arg("note");
+        }
+        let output = command.bounded_output().unwrap();
+        assert_eq!(output.status.code(), Some(code), "{scenario}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{scenario}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(env.store().read_events().unwrap().len(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_placement() {
+    for placement_fails in [false, true] {
+        let env = Env::new();
+        env.install_agent_hooks("claude");
+        env.record(&env.project_root);
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\nmax-chain-length = 3\n",
+        )
+        .unwrap();
+        let launcher = rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: "launch_root".into(),
+        };
+        crate::common::wait::register_calling_agent_with_launch(
+            &env,
+            LaunchParams {
+                launch_depth: Some(3),
+                launched_by: Some(Box::new(launcher.clone())),
+                record: Some(Box::new(rimz::agents::LaunchRecord {
+                    model: Some("opus[1m]".into()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        );
+        let shim = write_env_dump_shim(&env, "claude");
+        let workspace = env.resolve_workspace(&env.project_root);
+        crate::common::room::seed_live_zellij_room(
+            &env.runtime_paths(),
+            &workspace.session_name,
+            Vec::new(),
+        );
+        let log = env.home_root.join("molt-mux.log");
+        let run = || {
+            let mut command = crate::common::wait::agent_wait(&env);
+            command
+                .args(["--mux", "zellij", "agents", "molt", "continue the work"])
+                .env("PATH", path_with_front(&shim))
+                .env("ZELLIJ_PANE_ID", "1")
+                .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+                .env(
+                    "RIMZ_ZELLIJ_BIN",
+                    crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+                )
+                .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+                .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{} [Created 1s ago]\n", workspace.session_name),
+                );
+            if placement_fails {
+                command.env("RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB", "1");
+            }
+            command.bounded_output().unwrap()
+        };
+        let output = run();
+        assert_eq!(
+            output.status.success(),
+            !placement_fails,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let agents = env
+            .store()
+            .runtime_projection(rimz::store::runtime::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        let successor = agents
+            .iter()
+            .find(|agent| agent.molted_from.as_deref() == Some("launch-session"))
+            .expect("molt successor recorded even on failed placement");
+        assert_eq!(successor.launch_depth, Some(3));
+        assert_eq!(successor.launched_by.as_ref(), Some(&launcher));
+        assert_eq!(successor.first_prompt.as_deref(), Some("continue the work"));
+        assert_eq!(
+            successor.record.as_ref().unwrap().model.as_deref(),
+            Some("opus[1m]")
+        );
+        let stops = rimz::store::idle_stop::read(env.store().paths());
+        let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+        assert_eq!(
+            assists
+                .iter()
+                .filter(|record| serde_json::to_value(record).unwrap()["assist"] == "molt")
+                .count(),
+            usize::from(!placement_fails)
+        );
+        if placement_fails {
+            assert_eq!(successor.status, rimz::agents::AgentStatus::Failed);
+            assert!(successor.agent_id.is_provisional());
+            assert!(stops.is_empty());
+        } else {
+            assert_eq!(stops.len(), 1);
+            assert_eq!(stops[0].agent_id.as_str(), "provider-session");
+            assert_eq!(stops[0].stop.after_secs, 300);
+            assert_eq!(stops[0].stop.requested_by.as_deref(), Some("@planner"));
+            let receipt = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                receipt.contains("@planner")
+                    && receipt.contains(successor.name.as_deref().unwrap())
+                    && receipt.contains("new tab")
+                    && receipt.contains("5m")
+                    && receipt.contains("next: rimz agents show"),
+                "{receipt}"
+            );
+            let before = env.store().read_events().unwrap().len();
+            let refused = run();
+            assert_eq!(refused.status.code(), Some(1));
+            assert!(String::from_utf8_lossy(&refused.stderr).contains("one successor"));
+            assert_eq!(env.store().read_events().unwrap().len(), before);
+        }
+    }
+}
+
+#[test]
+fn stopping_a_molt_launch_without_a_pane_frees_its_predecessor() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let batch = store
+        .begin_agent_launch_batch(
+            &[rimz::store::writer::AgentLaunchRequest {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "launch_molt".into(),
+                name: rimz::store::writer::AgentLaunchName::Mint,
+                login: rimz::store::writer::LaunchLogin::RoomDefault,
+                launch: LaunchParams {
+                    molted_from: Some("launch_old".into()),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            }],
+            rimz::store::writer::AgentLaunchScope {
+                session_name: workspace.session_name,
+                cwd: env.project_root.clone(),
+                branch: None,
+                description: None,
+            },
+        )
+        .unwrap();
+    let output = env
+        .rimz()
+        .args([
+            "agents",
+            "stop",
+            &format!("@{}", batch.single_identity().unwrap().name),
+        ])
+        .bounded_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(rimz::agents::state::standing_successor(agents.iter(), &"launch_old".into()).is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cancelled_molt_wrapper_never_starts_the_provider() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_startup_relaunch_config(&env, "isolation = 'host'\nstartup-relaunches = 0");
+    let launch_id = "launch_cancelled";
+    let launch = LaunchParams {
+        molted_from: Some("launch_old".into()),
+        ..Default::default()
+    };
+    seed_launch(&env, launch_id, "pruner", launch.clone());
+    let workspace = env.resolve_workspace(&env.project_root);
+    assert!(
+        env.store()
+            .cancel_unbound_molt_launch(
+                &AgentKind::new_unchecked("codex"),
+                &launch_id.into(),
+                &workspace.session_name,
+                &env.project_root,
+            )
+            .unwrap()
+    );
+    let log = env.home_root.join("cancelled-provider.log");
+    let shim = write_counting_dead_agent(&env, &log);
+    let mut request = fresh_exec("codex", None);
+    request.identity.name = Some("pruner".into());
+    request.identity.launch_id = Some(launch_id.into());
+    request.identity.params = launch;
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("PATH", path_with_front(&shim))
+        .env("TMUX_PANE", "%1")
+        .bounded_output()
+        .unwrap();
+    assert_eq!(
+        launch_count(&log),
+        0,
+        "cancelled wrapper started the provider"
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cancelled or failed before binding"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Seeds a bound `rimz subagents` child and returns the launch id its
 /// process environment carries.
 fn seed_subagent_caller(env: &Env) -> AgentSessionId {

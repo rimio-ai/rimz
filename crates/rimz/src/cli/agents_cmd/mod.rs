@@ -19,6 +19,7 @@ pub(in crate::cli) mod launch;
 mod launch_resolve;
 mod list;
 mod logs;
+mod molt;
 mod orphan_subagent;
 mod park_notice;
 mod placement;
@@ -99,6 +100,7 @@ use launch_resolve::*;
 use list::list_agents;
 pub(crate) use list::render_agents_table;
 use logs::logs_agent;
+use molt::{MoltArgs, run_molt};
 use orphan_subagent::repair_orphan;
 use refresh::{RefreshArgs, run_refresh};
 use refresh_usage::run_refresh_usage;
@@ -576,6 +578,11 @@ enum AgentsSubcmd {
     },
     /// Fork an agent with its full conversation history under a new session id.
     Fork(ForkArgs),
+    /// Move yourself into a fresh session in a new tab (agent-only).
+    #[command(
+        long_about = "Run only inside an agent. Move into a fresh session in a new, unfocused tab with NOTE as its first prompt. Molting does not count toward max-chain-length. The old session stops once idle for 5m with nothing owed."
+    )]
+    Molt(MoltArgs),
     /// Wait for supervised runs or interactive agents; several references join.
     Wait {
         /// Agents or runs to wait for: @handle, @handle#lane, pet name, pane id (tmux:%12), or run id.
@@ -886,6 +893,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         Some(AgentsSubcmd::Top(args)) => return run_top(args, globals),
         Some(AgentsSubcmd::Focus { reference }) => return focus_agent(reference, globals),
         Some(AgentsSubcmd::Fork(args)) => return run_fork(args, globals),
+        Some(AgentsSubcmd::Molt(args)) => return run_molt(args, globals),
         Some(AgentsSubcmd::Wait {
             references,
             any,

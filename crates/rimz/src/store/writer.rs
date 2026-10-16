@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tracing::warn;
 
-use crate::agents::LaunchParams;
+use crate::agents::{AgentState, LaunchParams};
 use crate::disk::{lock, paths::StatePaths};
 use crate::ids::{AgentKind, AgentSessionId, EventId, RunId, WorkspaceId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
@@ -557,14 +557,52 @@ impl Store {
         requests: &[AgentLaunchRequest],
         scope: AgentLaunchScope,
     ) -> Result<AgentLaunchBatch> {
+        self.reserve_agent_launch_batch(requests, scope, None)
+    }
+
+    /// Reserve a fresh restart without treating the replaced row as a rival.
+    #[must_use = "durability barrier; check the result"]
+    pub fn begin_agent_launch_replacement(
+        &self,
+        replaced: &AgentState,
+        request: &AgentLaunchRequest,
+        scope: AgentLaunchScope,
+    ) -> Result<AgentLaunchBatch> {
+        self.reserve_agent_launch_batch(std::slice::from_ref(request), scope, Some(replaced))
+    }
+
+    fn reserve_agent_launch_batch(
+        &self,
+        requests: &[AgentLaunchRequest],
+        scope: AgentLaunchScope,
+        replaced: Option<&AgentState>,
+    ) -> Result<AgentLaunchBatch> {
         let batch = self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let replaced = base_agents
+                .iter()
+                .find(|agent| {
+                    replaced
+                        .is_some_and(|row| agent.kind == row.kind && agent.agent_id == row.agent_id)
+                })
+                .cloned()
+                .map(|mut agent| {
+                    // Preserve its links for traversal without counting it as a rival.
+                    agent.ended_at = Some(agent.last_seen);
+                    agent
+                });
             for predecessor in requests
                 .iter()
                 .filter_map(|request| request.launch.molted_from.as_ref())
             {
+                let candidates = base_agents.iter().map(|agent| {
+                    replaced
+                        .as_ref()
+                        .filter(|row| agent.kind == row.kind && agent.agent_id == row.agent_id)
+                        .unwrap_or(agent)
+                });
                 if let Some(successor) =
-                    crate::agents::state::standing_successor(base_agents.iter(), predecessor)
+                    crate::agents::state::standing_successor(candidates, predecessor)
                 {
                     return Err(StoreErr::MoltSuccessor {
                         successor: successor
@@ -657,6 +695,52 @@ impl Store {
         })
     }
 
+    /// Cancel a pane-less molt reservation; its wrapper may no longer bind it.
+    #[must_use = "durability barrier; check the result"]
+    pub fn cancel_unbound_molt_launch(
+        &self,
+        kind: &crate::ids::AgentKind,
+        launch_id: &AgentSessionId,
+        session_name: &str,
+        cwd: &Path,
+    ) -> Result<bool> {
+        self.commit(|txn| {
+            let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            let Some(agent) = agents.iter().find(|agent| {
+                agent.kind == *kind
+                    && agent.agent_id == *launch_id
+                    && agent.agent_id.is_provisional()
+                    && agent.molted_from.is_some()
+                    && agent.pane.is_none()
+            }) else {
+                return Ok(false);
+            };
+            let identity = AgentLaunchIdentity {
+                kind: kind.clone(),
+                agent_id: launch_id.clone(),
+                name: agent.name.clone().unwrap_or_else(|| launch_id.to_string()),
+                name_explicit: agent.name_explicit,
+                launch: LaunchParams {
+                    molted_from: agent.molted_from.clone(),
+                    ..Default::default()
+                },
+                run_id: None,
+                prompt: None,
+            };
+            txn.append(&self.agent_launch_event(
+                &identity,
+                AgentLaunchState::Failed,
+                session_name,
+                cwd,
+                None,
+                None,
+                None,
+                None,
+            ))?;
+            Ok(true)
+        })
+    }
+
     /// Bind one provisional launch to the pane observed by its wrapper.
     /// Only fresh launches supply a prompt digest; resumes and forks supply `None`.
     #[must_use = "durability barrier; check the result"]
@@ -669,6 +753,19 @@ impl Store {
         system_prompt_digest: Option<&str>,
     ) -> Result<()> {
         self.commit(|txn| {
+            if identity.launch.molted_from.is_some() {
+                let (_cache, agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+                let message =
+                    "molt launch was cancelled or failed before binding; do not retry this command";
+                if agents.iter().any(|agent| {
+                    agent.kind == identity.kind
+                        && agent.agent_id == identity.agent_id
+                        && agent.agent_id.is_provisional()
+                        && !crate::agents::state::molt_stands(agent)
+                }) {
+                    return Err(StoreErr::AgentLaunchIdentity(message.into()));
+                }
+            }
             txn.append(&self.agent_launch_event(
                 identity,
                 AgentLaunchState::Bound,
