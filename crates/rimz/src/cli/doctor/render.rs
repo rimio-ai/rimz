@@ -185,6 +185,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     if let Some(trust) = &report.folder_trust {
         render_folder_trust(w, trust, &mut tally)?;
     }
+    render_empty_dir(w, &report.empty_dir, &mut tally)?;
     render_accounts(w, &report.accounts, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
@@ -1388,6 +1389,46 @@ fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
         health,
         format!("{label} (>= {maj}.{min_v}.{patch} required)"),
     )
+}
+
+fn render_empty_dir(
+    w: &mut impl Write,
+    empty_dir: &super::model::EmptyDir,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    use crate::cli::folder_trust::State;
+    if empty_dir.rows.is_empty()
+        && matches!(empty_dir.check, Probe::Ready(()))
+        && empty_dir.profiles_error.is_none()
+    {
+        return Ok(());
+    }
+    section(w, tally, "EMPTY-DIR")?;
+    if let Probe::Unavailable { error } = &empty_dir.check {
+        note(tally, w, Health::Warn, error)?;
+    }
+    if let Some(error) = &empty_dir.profiles_error {
+        note(tally, w, Health::Warn, error)?;
+    }
+    if empty_dir.rows.is_empty() {
+        return Ok(());
+    }
+    let mut table = Table::new(["", "AGENT", "LOGIN", "PROFILES", "STATUS", "FIX"]);
+    for row in &empty_dir.rows {
+        let fix = match &row.trust.state {
+            State::Decided => continue,
+            State::Undecided { fix, .. } | State::Restricted { fix, .. } => fix,
+        };
+        table.row([
+            badge(tally, Health::Warn),
+            cell(row.trust.kind),
+            cell(row.trust.login.as_str()),
+            cell(row.profiles.join(", ")),
+            cell("they start in the parent's directory instead").fg(style_of(Health::Warn)),
+            cell(fix),
+        ]);
+    }
+    table.render(w)
 }
 
 fn render_folder_trust(

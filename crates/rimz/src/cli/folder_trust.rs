@@ -27,6 +27,7 @@ impl std::fmt::Display for Unattended {
 
 pub(super) fn preflight(
     kind: &str,
+    cwd: &std::path::Path,
     trust: Option<FolderTrust>,
     unattended: Option<Unattended>,
 ) -> Result<()> {
@@ -45,10 +46,15 @@ pub(super) fn preflight(
             message
         }
         Some(FolderTrust::Undecided(gap)) => {
+            let subject = if cwd.starts_with(rimz::disk::paths::empty_dir_root()) {
+                "rimz trust grant --empty-dir"
+            } else {
+                "rimz trust grant"
+            };
             let message = format!(
                 "{kind} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
                 gap.key.display(),
-                gap.fix(kind)
+                gap.fix(kind, subject)
             );
             if matches!(unattended, Some(Unattended::Subagent)) {
                 anyhow::bail!("subagent resume refused: {message}");
@@ -107,6 +113,12 @@ pub(super) enum State {
 
 impl From<&FolderTrustRow> for Row {
     fn from(row: &FolderTrustRow) -> Self {
+        Self::for_subject(row, "rimz trust grant")
+    }
+}
+
+impl Row {
+    pub(super) fn for_subject(row: &FolderTrustRow, subject: &str) -> Self {
         Self {
             kind: row.kind,
             login: row.login.clone(),
@@ -119,17 +131,31 @@ impl From<&FolderTrustRow> for Row {
                 FolderTrust::Undecided(gap) => State::Undecided {
                     key: gap.key.display().to_string(),
                     path: gap.path.display().to_string(),
-                    fix: gap.fix(row.kind),
+                    fix: gap.fix(row.kind, subject),
                 },
             },
         }
     }
 }
 
-pub(super) fn preview(rows: &[&FolderTrustRow]) -> Result<Vec<String>> {
+fn unique_grants<'a>(rows: &[&'a FolderTrustRow]) -> Vec<&'a FolderTrustRow> {
+    let mut seen = std::collections::HashSet::new();
+    rows.iter()
+        .copied()
+        .filter(|row| match &row.trust {
+            FolderTrust::Undecided(gap) => seen.insert((
+                row.kind,
+                gap.path.canonicalize().unwrap_or_else(|_| gap.path.clone()),
+            )),
+            _ => true,
+        })
+        .collect()
+}
+
+pub(super) fn preview(rows: &[&FolderTrustRow], subject: &str) -> Result<Vec<String>> {
     let mut out = render::err();
     let mut grantable = Vec::new();
-    for row in rows {
+    for row in unique_grants(rows) {
         let FolderTrust::Undecided(gap) = &row.trust else {
             continue;
         };
@@ -149,16 +175,16 @@ pub(super) fn preview(rows: &[&FolderTrustRow]) -> Result<Vec<String>> {
                 )?;
                 grantable.push(row.kind.to_owned());
             }
-            Err(_) => writeln!(out, "  {}", gap.fix(row.kind))?,
+            Err(_) => writeln!(out, "  {}", gap.fix(row.kind, subject))?,
         }
     }
     Ok(grantable)
 }
 
-pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str) -> Result<bool> {
+pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str, subject: &str) -> Result<bool> {
     let mut succeeded = true;
     let mut out = render::err();
-    for row in rows {
+    for row in unique_grants(rows) {
         if let FolderTrust::Restricted { key } = &row.trust {
             succeeded = false;
             writeln!(
@@ -187,7 +213,7 @@ pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str) -> Result<bool> {
                     out,
                     "{prefix}: {}: {}",
                     row.kind,
-                    grant_error(row.kind, &error)
+                    grant_error(row.kind, &error, subject)
                 )?;
             }
         }
@@ -195,10 +221,10 @@ pub(super) fn grant(rows: &[&FolderTrustRow], prefix: &str) -> Result<bool> {
     Ok(succeeded)
 }
 
-fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr) -> String {
+fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr, subject: &str) -> String {
     match error {
         rimz::agents::FolderTrustErr::Changed { path } => format!(
-            "{} changed since the preview; run `rimz trust grant --agents {kind}`",
+            "{} changed since the preview; run `{subject} --agents {kind}`",
             path.display()
         ),
         _ => error.to_string(),
@@ -216,6 +242,7 @@ mod tests {
         ] {
             let result = super::preflight(
                 "codex",
+                std::path::Path::new("/repo"),
                 Some(rimz::agents::FolderTrust::Restricted {
                     key: "/repo".into(),
                 }),
@@ -244,8 +271,12 @@ mod tests {
         let json = serde_json::to_value(super::Row::from(&row)).unwrap();
         assert_eq!(json["state"], "restricted");
         assert_eq!(json["key"], "/repo");
-        assert!(super::preview(&[&row]).unwrap().is_empty());
-        assert!(!super::grant(&[&row], "trust").unwrap());
+        assert!(
+            super::preview(&[&row], "rimz trust grant")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!super::grant(&[&row], "trust", "rimz trust grant").unwrap());
     }
 
     #[test]
@@ -253,7 +284,7 @@ mod tests {
         let error = rimz::agents::FolderTrustErr::Changed {
             path: "/config".into(),
         };
-        let advice = super::grant_error("agent", &error);
+        let advice = super::grant_error("agent", &error, "rimz trust grant");
         assert_eq!(
             advice,
             "/config changed since the preview; run `rimz trust grant --agents agent`"

@@ -331,6 +331,7 @@ fn resume_selected(
         .with_context(|| format!("unknown agent kind `{kind}`"))?;
     crate::cli::folder_trust::preflight(
         kind.as_str(),
+        &tab.cwd,
         adapter.folder_trust(
             &tab.cwd,
             match source {
@@ -515,6 +516,7 @@ pub(super) fn resume_lane(
                 .with_context(|| format!("unknown agent kind `{kind}`"))?;
             crate::cli::folder_trust::preflight(
                 kind.as_str(),
+                cwd,
                 adapter.folder_trust(cwd, repo_root, &login.env(&rimz::agents::ambient_env())),
                 None,
             )?;

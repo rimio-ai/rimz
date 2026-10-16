@@ -669,7 +669,7 @@ fn readiness_from(
                     gap.key.display()
                 )
             } else {
-                gap.fix("claude")
+                gap.fix("claude", "rimz trust grant")
             },
             command: gap
                 .grant

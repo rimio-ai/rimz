@@ -50,6 +50,7 @@ pub(super) struct DoctorReport {
     pub(super) trust: Option<Probe<Trust>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) folder_trust: Option<Probe<FolderTrust>>,
+    pub(super) empty_dir: EmptyDir,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +66,21 @@ pub(super) struct DoctorReport {
 #[derive(Debug, Serialize)]
 pub(super) struct FolderTrust {
     pub(super) rows: Vec<crate::cli::folder_trust::Row>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct EmptyDir {
+    pub(super) rows: Vec<EmptyDirRow>,
+    pub(super) check: Probe<()>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) profiles_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct EmptyDirRow {
+    #[serde(flatten)]
+    pub(super) trust: crate::cli::folder_trust::Row,
+    pub(super) profiles: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

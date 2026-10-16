@@ -7,6 +7,84 @@ use super::model::{
     PluginRow, Probe, Trust,
 };
 
+pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::model::EmptyDir {
+    use super::model::{EmptyDir, EmptyDirRow};
+    use rimz::agents::{LoginCatalog, RoomLoginSet, empty_dir};
+
+    let machine = rimz::config::MachineConfig::load_lenient();
+    let effective = ws
+        .map(|ws| rimz::config::effective::load(&machine, &ws.project_root))
+        .transpose();
+    let (profiles, subagent_profiles, profiles_error) = match effective {
+        Ok(Some(effective)) => (effective.profiles, effective.subagent_profiles, None),
+        result => (
+            machine.agents.profiles.clone(),
+            machine.subagents.profiles.clone(),
+            result.err().map(|error| error.to_string()),
+        ),
+    };
+    let logins = RoomLoginSet::new(
+        None,
+        Some(LoginCatalog::room_view(&machine.accounts).0),
+        rimz::agents::ambient_env(),
+    );
+    let mut by_kind = std::collections::BTreeMap::<_, Vec<String>>::new();
+    for profiles in [&profiles, &subagent_profiles] {
+        for name in profiles.0.keys() {
+            let Ok(profile) = rimz::harness::spec::resolve_profile(name, profiles) else {
+                continue;
+            };
+            if profile.empty_dir == Some(true) {
+                by_kind.entry(profile.kind).or_default().push(name.clone());
+            }
+        }
+    }
+    let profiles_error = profiles_error.filter(|_| !by_kind.is_empty());
+    let mut rows = Vec::new();
+    for (kind, mut profiles) in by_kind {
+        profiles.sort();
+        profiles.dedup();
+        for login in logins.declared(kind.as_str()) {
+            let empty_dir::Verdict::Fallback(trust) =
+                empty_dir::verdict(true, &kind, &logins.env(&login))
+            else {
+                continue;
+            };
+            // resolve_profile rejects unknown terminal providers before grouping by kind.
+            let row = rimz::agents::FolderTrustRow {
+                kind: rimz::agents::find_definition(kind.as_str())
+                    .expect("resolved profile has a known provider")
+                    .spec()
+                    .kind,
+                login: login.name().clone(),
+                trust,
+            };
+            rows.push(EmptyDirRow {
+                trust: crate::cli::folder_trust::Row::for_subject(
+                    &row,
+                    "rimz trust grant --empty-dir",
+                ),
+                profiles: profiles.clone(),
+            });
+        }
+    }
+    EmptyDir {
+        rows,
+        check: match ws.map_or_else(
+            || empty_dir::check_root().map_err(|error| error.to_string()),
+            |ws| {
+                rimz::StatePaths::for_project_root(&ws.project_root)
+                    .map_err(|error| error.to_string())
+                    .and_then(|paths| empty_dir::check(&paths).map_err(|error| error.to_string()))
+            },
+        ) {
+            Ok(()) => Probe::Ready(()),
+            Err(error) => Probe::Unavailable { error },
+        },
+        profiles_error,
+    }
+}
+
 /// Walk the snapshot's agent rollup into health counts and problem rows. The
 /// default scope is live runtime state; audit widens to durable history and
 /// emits every observed row.

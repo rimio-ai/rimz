@@ -144,7 +144,10 @@ fn missing_project_trust_names_manual_fixes_without_writing_config() {
     for repo in [None, Some(dir.path())] {
         let gap = trust_gap_at(&config, &cwd, repo).unwrap();
         assert_eq!(gap.path, config);
-        assert!(gap.fix("codex").contains("rimz trust grant --agents codex"));
+        assert!(
+            gap.fix("codex", "rimz trust grant")
+                .contains("rimz trust grant --agents codex")
+        );
         let key = toml::Value::String(
             repo.unwrap_or(&cwd)
                 .canonicalize()
@@ -187,7 +190,7 @@ fn malformed_project_trust_requires_repair_even_with_a_valid_fallback() {
     write_trust(&config, &[(&cwd, "invalid"), (dir.path(), "trusted")], None);
     let fix = trust_gap_at(&config, &cwd, Some(dir.path()))
         .unwrap()
-        .fix("codex");
+        .fix("codex", "rimz trust grant");
     assert!(fix.contains("repair"));
     assert!(fix.contains("invalid"));
     for text in [
@@ -196,7 +199,9 @@ fn malformed_project_trust_requires_repair_even_with_a_valid_fallback() {
         "[projects.somewhere]\ntrust_level = true",
     ] {
         std::fs::write(&config, text).unwrap();
-        let fix = trust_gap_at(&config, &cwd, None).unwrap().fix("codex");
+        let fix = trust_gap_at(&config, &cwd, None)
+            .unwrap()
+            .fix("codex", "rimz trust grant");
         assert!(fix.contains("repair"), "{fix}");
         assert!(fix.contains(config.to_str().unwrap()));
     }

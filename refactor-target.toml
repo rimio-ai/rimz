@@ -213,8 +213,9 @@ upward-dependencies = ["address"]
 # AgentState::identity_ids shares those identity keys with fleet joins and runtime projection (+1).
 # Empty-dir preparation and lane-path routing share the agent library surface (+5).
 # LaunchDirRefusal carries the HOME refusal alongside folder-trust failures (+1).
+# empty_dir::rows shares the machine-wide account/provider collection (+1).
 # empty_dir::Decision and decide replace the public prepare entry point (+1 net).
-surface-budget = 1078
+surface-budget = 1079
 
 [[verdict]]
 kind = "item"
@@ -6260,6 +6261,11 @@ reason = "Fresh launch carries the prepared process cwd and candidate name to th
 kind = "item"
 key = "agents::empty_dir::verdict"
 reason = "Launch and machine diagnostics must use the same provider verdict at the empty root."
+
+[[verdict]]
+kind = "item"
+key = "agents::empty_dir::rows"
+reason = "Trust status and grants share the launch verdict's provider probe for every declared login."
 
 [[verdict]]
 kind = "item"

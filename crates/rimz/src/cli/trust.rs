@@ -1,4 +1,4 @@
-//! `rimz trust` — manage the project's executable-surface trust grant.
+//! `rimz trust` — manage project and provider folder-trust grants.
 //!
 //! Three subcommands: `status` (default), `grant`, `revoke`. Status re-hashes
 //! the live `.rimz/config.toml` every call, so a drifted hash surfaces as
@@ -33,6 +33,9 @@ enum TrustSubcmd {
     Status,
     /// Pin the current executable-surface hash as trusted.
     Grant {
+        /// Grant only machine-wide empty-directory folder trust, not project trust.
+        #[arg(long)]
+        empty_dir: bool,
         /// Also grant folder trust for detected agents (all, or selected kinds).
         #[arg(long, num_args = 0.., value_delimiter = ',', action = clap::ArgAction::Append)]
         agents: Option<Vec<String>>,
@@ -42,9 +45,16 @@ enum TrustSubcmd {
 }
 
 pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
+    let command = args.command.unwrap_or(TrustSubcmd::Status);
+    if let TrustSubcmd::Grant {
+        empty_dir: true,
+        agents,
+    } = command
+    {
+        return grant_empty_dir(agents.as_deref(), args.json);
+    }
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let command = args.command.unwrap_or(TrustSubcmd::Status);
     let report = match &command {
         TrustSubcmd::Status => {
             trust::status(&workspace.project_root).context("reading trust state")?
@@ -58,7 +68,15 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let mut rows = match folder_trust::collect(&workspace) {
         Ok(rows) => rows,
-        Err(error) if !matches!(command, TrustSubcmd::Grant { agents: Some(_) }) => {
+        Err(error)
+            if !matches!(
+                command,
+                TrustSubcmd::Grant {
+                    agents: Some(_),
+                    ..
+                }
+            ) =>
+        {
             writeln!(render::err(), "trust: agents: {error:#}")?;
             Vec::new()
         }
@@ -68,7 +86,7 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
         print_project_report(&report)?;
     }
     let mut succeeded = true;
-    if let TrustSubcmd::Grant { agents } = command {
+    if let TrustSubcmd::Grant { agents, .. } = command {
         if let Some(kinds) = agents {
             let selected: Vec<_> = rows
                 .iter()
@@ -89,14 +107,14 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
                     succeeded = false;
                 }
             }
-            folder_trust::preview(&selected)?;
-            succeeded &= folder_trust::grant(&selected, "trust")?;
+            folder_trust::preview(&selected, "rimz trust grant")?;
+            succeeded &= folder_trust::grant(&selected, "trust", "rimz trust grant")?;
         } else if io::stdin().is_terminal() {
             let undecided: Vec<_> = rows
                 .iter()
                 .filter(|row| matches!(row.trust, FolderTrust::Undecided(_)))
                 .collect();
-            let kinds = folder_trust::preview(&undecided)?;
+            let kinds = folder_trust::preview(&undecided, "rimz trust grant")?;
             if !kinds.is_empty()
                 && super::confirm_with_default(
                     &format!("Also trust this folder for {}?", kinds.join(", ")),
@@ -107,7 +125,7 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
                     .into_iter()
                     .filter(|row| kinds.iter().any(|kind| kind == row.kind))
                     .collect();
-                succeeded = folder_trust::grant(&grantable, "trust")?;
+                succeeded = folder_trust::grant(&grantable, "trust", "rimz trust grant")?;
             }
         } else {
             for row in &rows {
@@ -124,10 +142,82 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
             rows = fresh;
         }
     }
+    let empty_dir = match collect_empty_dir() {
+        Ok(rows) => rows,
+        Err(error) => {
+            writeln!(render::err(), "trust: empty-dir: {error:#}")?;
+            Vec::new()
+        }
+    };
     if args.json {
-        print_json_report(&report, &rows)?;
+        print_json_report(&report, &rows, &empty_dir)?;
     } else {
-        print_agent_report(&rows)?;
+        print_agent_report(&rows, "agents", "rimz trust grant", None)?;
+        print_agent_report(
+            &empty_dir,
+            "empty-dir",
+            "rimz trust grant --empty-dir",
+            Some(&rimz::disk::paths::empty_dir_root()),
+        )?;
+    }
+    anyhow::ensure!(succeeded, "one or more agent folder-trust grants failed");
+    Ok(())
+}
+
+fn collect_empty_dir() -> Result<Vec<rimz::agents::FolderTrustRow>> {
+    let machine = rimz::config::MachineConfig::load()?;
+    let logins = rimz::agents::RoomLoginSet::new(
+        None,
+        Some(rimz::agents::LoginCatalog::from_config(&machine.accounts)?),
+        rimz::agents::ambient_env(),
+    );
+    Ok(rimz::agents::empty_dir::rows(&logins))
+}
+
+fn grant_empty_dir(kinds: Option<&[String]>, json: bool) -> Result<()> {
+    let rows = collect_empty_dir()?;
+    let kinds = kinds.unwrap_or_default();
+    let mut succeeded = true;
+    for kind in kinds {
+        if !rows.iter().any(|row| row.kind == kind) {
+            writeln!(
+                render::err(),
+                "trust: {kind}: unknown or undetected agent with folder trust"
+            )?;
+            succeeded = false;
+        }
+    }
+    let selected: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            if kinds.is_empty() {
+                matches!(row.trust, FolderTrust::Undecided(_))
+            } else {
+                kinds.iter().any(|kind| kind == row.kind)
+            }
+        })
+        .collect();
+    folder_trust::preview(&selected, "rimz trust grant --empty-dir")?;
+    succeeded &= folder_trust::grant(&selected, "trust", "rimz trust grant --empty-dir")?;
+    let rows = collect_empty_dir()?;
+    if json {
+        #[derive(Serialize)]
+        struct EmptyDirJson {
+            empty_dir: Vec<folder_trust::Row>,
+        }
+        render::json_pretty(&EmptyDirJson {
+            empty_dir: rows
+                .iter()
+                .map(|row| folder_trust::Row::for_subject(row, "rimz trust grant --empty-dir"))
+                .collect(),
+        })?;
+    } else {
+        print_agent_report(
+            &rows,
+            "empty-dir",
+            "rimz trust grant --empty-dir",
+            Some(&rimz::disk::paths::empty_dir_root()),
+        )?;
     }
     anyhow::ensure!(succeeded, "one or more agent folder-trust grants failed");
     Ok(())
@@ -136,6 +226,7 @@ pub fn run(args: TrustArgs, globals: &GlobalFlags) -> Result<()> {
 #[derive(Serialize)]
 struct ReportJson<'a> {
     agents: Vec<folder_trust::Row>,
+    empty_dir: Vec<folder_trust::Row>,
     state: &'a str,
     workspace_id: &'a str,
     project_root: String,
@@ -147,9 +238,17 @@ struct ReportJson<'a> {
     surface_diff: Option<&'a [SurfaceDiffEntry]>,
 }
 
-fn print_json_report(report: &TrustReport, rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
+fn print_json_report(
+    report: &TrustReport,
+    rows: &[rimz::agents::FolderTrustRow],
+    empty_dir: &[rimz::agents::FolderTrustRow],
+) -> Result<()> {
     render::json_pretty(&ReportJson {
         agents: rows.iter().map(folder_trust::Row::from).collect(),
+        empty_dir: empty_dir
+            .iter()
+            .map(|row| folder_trust::Row::for_subject(row, "rimz trust grant --empty-dir"))
+            .collect(),
         state: report.state.as_str(),
         workspace_id: report.workspace_id.as_str(),
         project_root: report.project_root.display().to_string(),
@@ -223,9 +322,17 @@ fn trust_banner(state: TrustState) -> &'static str {
     }
 }
 
-fn print_agent_report(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
+fn print_agent_report(
+    rows: &[rimz::agents::FolderTrustRow],
+    heading: &str,
+    subject: &str,
+    folder: Option<&Path>,
+) -> Result<()> {
     let mut out = render::out();
-    writeln!(out, "  agents:")?;
+    writeln!(out, "  {heading}:")?;
+    if let Some(folder) = folder {
+        writeln!(out, "    folder: {}", folder.display())?;
+    }
     for row in rows {
         let state = match &row.trust {
             FolderTrust::Decided => "decided".to_owned(),
@@ -233,7 +340,7 @@ fn print_agent_report(rows: &[rimz::agents::FolderTrustRow]) -> Result<()> {
                 "restricted (saved untrusted) → {}",
                 FolderTrust::RESTRICTED_FIX
             ),
-            FolderTrust::Undecided(gap) => format!("undecided → {}", gap.fix(row.kind)),
+            FolderTrust::Undecided(gap) => format!("undecided → {}", gap.fix(row.kind, subject)),
         };
         writeln!(
             out,

@@ -144,6 +144,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
     crate::cli::folder_trust::preflight(
         seed.kind.as_str(),
+        &seed.cwd,
         adapter.folder_trust(
             &seed.cwd,
             seed.launch
