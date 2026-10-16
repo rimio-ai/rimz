@@ -1,4 +1,5 @@
 use super::*;
+use crate::diag::focus_trace::{PushBlock, PushDelivery, PushPeer, PushVerdict};
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, serve_config, snapshot, snapshot_with_panes, workspace,
 };
@@ -15,17 +16,51 @@ mod maintenance;
 mod paint;
 mod scroll;
 
-fn focus_push(anchor: crate::mux::focus_anchor::FocusAnchor) -> (Wakeup, Receiver<()>) {
+fn focus_push(
+    anchor: crate::mux::focus_anchor::FocusAnchor,
+    instance_id: SidebarInstanceId,
+) -> (Wakeup, Receiver<PushPeer>) {
     let (tx, rx) = std::sync::mpsc::channel();
+    let sent = Instant::now();
     (
-        Wakeup::FocusPush(Box::new(super::super::focus_push::FocusPush {
+        Wakeup::FocusPush(Box::new(super::super::focus_push::FocusPush::new(
             anchor,
-            ack: super::super::focus_push::PaintedAck::new(tx),
-            expected_panes: None,
-            until: Instant::now() + Duration::from_secs(10),
-        })),
+            super::super::focus_push::PushAck::new(tx),
+            instance_id,
+            sent,
+            sent + Duration::from_secs(10),
+        ))),
         rx,
     )
+}
+
+fn assert_push_report(
+    ack: &Receiver<PushPeer>,
+    rig: &Rig,
+    verdict: PushVerdict,
+    folded: bool,
+) -> PushPeer {
+    let report = ack.try_recv().expect("peer must report its verdict");
+    assert_eq!(report.instance_id, rig.state.config.instance_id);
+    assert_eq!(report.delivery, PushDelivery::Sent);
+    assert_eq!(report.verdict, Some(verdict));
+    let received = report.received_ms.expect("arrival stamp");
+    let finished = report.finished_ms.expect("finish stamp");
+    assert!(received <= finished);
+    if folded {
+        let snapshot = report.snapshot_ms.expect("snapshot stamp");
+        let folded = report.folded_ms.expect("fold stamp");
+        assert!(received <= snapshot && snapshot <= folded && folded <= finished);
+    } else {
+        assert_eq!(report.snapshot_ms, None);
+        assert_eq!(report.folded_ms, None);
+    }
+    assert_eq!(
+        ack.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Disconnected),
+        "exactly one report, then release"
+    );
+    report
 }
 
 #[derive(Clone, Default)]

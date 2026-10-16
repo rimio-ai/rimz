@@ -38,8 +38,9 @@ impl DataPlane {
     pub(in crate::sidebar_pane) fn focus_peers(
         &self,
         source: SidebarInstanceId,
+        diag: crate::diag::DiagSink,
     ) -> super::focus_push::FocusPeers {
-        super::focus_push::FocusPeers::new(self.subscribers.clone(), source)
+        super::focus_push::FocusPeers::new(self.subscribers.clone(), source, diag)
             .with_fit(self.fit.clone())
     }
 

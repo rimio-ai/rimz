@@ -117,7 +117,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     let (mut rig, output, anchor) = hidden_destination();
     let target = anchor.pane_id.clone();
     let placement = anchor.placement.clone().unwrap();
-    let (push, ack) = focus_push(anchor.clone());
+    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
     assert!(!rig.runtime.focus_anchor_path().exists());
     rig.state
         .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
@@ -134,7 +134,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     );
     rig.paint(true);
     assert_eq!(paints(&output), 1);
-    assert_eq!(ack.try_recv(), Ok(()));
+    assert_push_report(&ack, &rig, PushVerdict::Painted, true);
     let y = |rig: &Rig| {
         rig.state
             .ui
@@ -168,13 +168,13 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
 fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
     for exit in [false, true] {
         let (mut rig, output, anchor) = hidden_destination();
-        let (push, ack) = focus_push(anchor);
-        rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
-            .unwrap();
+        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
         rig.state
             .paint_hold
             .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
         rig.paint(true);
         assert_eq!(paints(&output), 0);
         assert_eq!(
@@ -187,13 +187,11 @@ fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
         rig.paint(true);
         if exit {
             assert_eq!(paints(&output), 0);
-            assert_eq!(
-                ack.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Disconnected)
-            );
+            assert_push_report(&ack, &rig, PushVerdict::Exiting, true);
         } else {
             assert_eq!(paints(&output), 1);
-            assert_eq!(ack.try_recv(), Ok(()));
+            let report = assert_push_report(&ack, &rig, PushVerdict::Painted, true);
+            assert_eq!(report.blocked_by, Some(PushBlock::PaintHold));
         }
     }
 }
@@ -202,25 +200,21 @@ fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
 fn a_late_duplicate_push_uses_the_painted_frame_unless_the_destination_is_exiting() {
     for exit in [false, true] {
         let (mut rig, output, anchor) = hidden_destination();
-        let (push, ack) = focus_push(anchor.clone());
+        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
         rig.state
             .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
             .unwrap();
         rig.paint(true);
-        assert_eq!(ack.try_recv(), Ok(()));
+        assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         rig.state.should_exit = exit;
-        let (push, ack) = focus_push(anchor);
+        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
         rig.state
             .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
             .unwrap();
         if exit {
-            assert_eq!(
-                ack.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Disconnected),
-                "an exiting destination must release a late acknowledgement"
-            );
+            assert_push_report(&ack, &rig, PushVerdict::Exiting, false);
         } else {
-            assert_eq!(ack.try_recv(), Ok(()));
+            assert_push_report(&ack, &rig, PushVerdict::Painted, false);
         }
         assert_eq!(paints(&output), 1, "a duplicate push must not paint again");
     }
@@ -260,7 +254,7 @@ fn fitted_grow_hold(resize_first: bool) {
         rig.terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
         rig.state.prev_width = Some(40);
         rig.state.self_close.seen_sibling = true;
-        let (mut wake, ack) = focus_push(anchor);
+        let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
         let Wakeup::FocusPush(ref mut push) = wake else {
             unreachable!()
         };
@@ -306,11 +300,7 @@ fn fitted_grow_hold(resize_first: bool) {
         pty.drain();
         rig.paint(true);
         if rows == 30 {
-            assert_eq!(
-                ack.try_recv(),
-                Ok(()),
-                "acknowledgement stays rows-only after a safe paint"
-            );
+            assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         }
     }
 }
@@ -328,12 +318,12 @@ fn fitted_push_after_resize_releases_only_the_exact_size_hold() {
 #[test]
 fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport() {
     let (mut rig, _, anchor) = hidden_destination();
-    let (push, ack) = focus_push(anchor.clone());
+    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
     rig.state
         .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
         .unwrap();
     rig.paint(true);
-    assert_eq!(ack.try_recv(), Ok(()));
+    assert_push_report(&ack, &rig, PushVerdict::Painted, true);
     rig.terminal = Terminal::with_options(
         PaneBackend::headless(FrameOutput::default()),
         ratatui::TerminalOptions {
@@ -341,7 +331,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
         },
     )
     .unwrap();
-    let (mut wake, ack) = focus_push(anchor);
+    let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
     let Wakeup::FocusPush(ref mut push) = wake else {
         unreachable!()
     };
@@ -363,14 +353,14 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
     rig.state.dirty = true;
     rig.state.next_frame = Instant::now();
     rig.paint(true);
-    assert_eq!(ack.try_recv(), Ok(()));
+    assert_push_report(&ack, &rig, PushVerdict::Painted, false);
 }
 
 #[test]
 fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
     for own_rows in [true, false] {
         let (mut rig, _, anchor) = hidden_destination();
-        let (mut wake, ack) = focus_push(anchor);
+        let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
         let Wakeup::FocusPush(ref mut push) = wake else {
             unreachable!()
         };
@@ -407,8 +397,63 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
                 .on_input(Wakeup::Resize, &mut rig.terminal, &mut rig.fetch)
                 .unwrap();
         }
-        assert_eq!(ack.try_recv(), Ok(()));
+        assert_push_report(&ack, &rig, PushVerdict::Painted, true);
     }
+}
+
+#[test]
+fn parked_push_reports_first_block_expiry_and_supersession() {
+    let (mut rig, output, anchor) = hidden_destination();
+    rig.state
+        .paint_hold
+        .engage(Instant::now(), crate::utils::time::unix_now_ms());
+    let (first, first_ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, first)
+        .unwrap();
+    rig.paint(true);
+    let mut newer = anchor;
+    newer.nonce = crate::ids::FocusNonce::new();
+    newer.issued_at_ms += 1;
+    let (second, second_ack) = focus_push(newer, rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, second)
+        .unwrap();
+    let first = assert_push_report(&first_ack, &rig, PushVerdict::Superseded, true);
+    assert_eq!(first.blocked_by, Some(PushBlock::PaintHold));
+    rig.paint(true);
+    rig.state.pending_focus_push.as_mut().unwrap().until = Instant::now();
+    rig.paint(true);
+    let second = assert_push_report(&second_ack, &rig, PushVerdict::Expired, true);
+    assert_eq!(second.blocked_by, Some(PushBlock::PaintHold));
+    assert_eq!(paints(&output), 0);
+}
+
+#[test]
+fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
+    let (mut rig, _, anchor) = hidden_destination();
+    rig.state
+        .paint_hold
+        .engage(Instant::now(), crate::utils::time::unix_now_ms());
+    let row_id = anchor.placement.as_ref().unwrap().row_id.clone();
+    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .unwrap();
+    rig.state.ui.drawn_selection = None;
+    rig.state.observe_paint(Instant::now());
+    rig.state.ui.drawn_selection = Some(row_id);
+    assert!(
+        rig.state.ui.focus_placement.is_some(),
+        "placement has not been consumed by a paint"
+    );
+    rig.state.observe_paint(Instant::now());
+    assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    rig.state.should_exit = true;
+    rig.paint(true);
+    let report = assert_push_report(&ack, &rig, PushVerdict::Exiting, true);
+    assert_eq!(report.unmatched_paints, 2);
+    assert_eq!(report.misplaced_paints, 1);
 }
 
 #[test]

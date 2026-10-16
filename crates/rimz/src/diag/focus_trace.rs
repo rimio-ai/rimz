@@ -1,4 +1,4 @@
-//! Edge-triggered evidence of published focus and renderer selection decisions.
+//! Focus publication edges, renderer selection decisions, and cross-tab push handshakes.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -60,28 +60,45 @@ pub(crate) enum PushBlock {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PushPeer {
-    instance_id: SidebarInstanceId,
-    delivery: PushDelivery,
+    pub(crate) instance_id: SidebarInstanceId,
+    pub(crate) delivery: PushDelivery,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    received_ms: Option<u64>,
+    pub(crate) received_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    snapshot_ms: Option<u64>,
+    pub(crate) snapshot_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    folded_ms: Option<u64>,
+    pub(crate) folded_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    finished_ms: Option<u64>,
+    pub(crate) finished_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    verdict: Option<PushVerdict>,
+    pub(crate) verdict: Option<PushVerdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    blocked_by: Option<PushBlock>,
+    pub(crate) blocked_by: Option<PushBlock>,
     #[serde(default, skip_serializing_if = "is_zero")]
-    unmatched_paints: u32,
+    pub(crate) unmatched_paints: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
-    misplaced_paints: u32,
+    pub(crate) misplaced_paints: u32,
 }
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
+}
+
+impl PushPeer {
+    pub(crate) fn new(instance_id: SidebarInstanceId) -> Self {
+        Self {
+            instance_id,
+            delivery: PushDelivery::Sent,
+            received_ms: None,
+            snapshot_ms: None,
+            folded_ms: None,
+            finished_ms: None,
+            verdict: None,
+            blocked_by: None,
+            unmatched_paints: 0,
+            misplaced_paints: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

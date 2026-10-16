@@ -681,7 +681,7 @@ fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
     snapshot.viewed_panes.clear();
     rig.fold(snapshot, SnapshotSource::Produced);
     let anchor = requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
-    let (push, ack) = focus_push(anchor);
+    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
     rig.state
         .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
         .unwrap();
@@ -691,10 +691,7 @@ fn focus_push_to_a_non_destination_folds_but_releases_without_paint() {
         "every peer folds the push"
     );
     assert!(!rig.state.watched());
-    assert_eq!(
-        ack.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Disconnected)
-    );
+    assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
 }
 
 #[test]
@@ -713,10 +710,11 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
             pane_id: target.clone(),
             nonce: anchor.nonce,
         };
-        let (push, _ack) = focus_push(anchor);
+        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+        let mut push = Some(push);
         if push_first {
             rig.state
-                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.clone())
+                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.take().unwrap())
                 .unwrap();
         } else {
             rig.event(event.clone());
@@ -728,13 +726,14 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
             rig.event(event);
         } else {
             rig.state
-                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+                .on_wakeup(&mut rig.fetch, &mut rig.terminal, push.take().unwrap())
                 .unwrap();
         }
         assert_eq!(
             rig.state.next_frame, next_frame,
             "duplicate delivery must not fold again"
         );
+        assert_push_report(&ack, &rig, PushVerdict::NotDestination, push_first);
     }
 }
 
@@ -742,7 +741,10 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
 fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
     let mut rig = Rig::with_own_pane(zellij("terminal_99"));
     let plane = super::super::super::plane::DataPlane::detached();
-    rig.state.focus_peers = Some(plane.focus_peers(rig.state.config.instance_id.clone()));
+    rig.state.focus_peers = Some(plane.focus_peers(
+        rig.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    ));
     rig.state.current.own_view = Some(own_view());
     assert!(
         rig.state.focus_peers_for(&zellij("terminal_2")).is_some(),
