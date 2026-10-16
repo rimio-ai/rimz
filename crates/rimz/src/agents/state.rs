@@ -1061,6 +1061,15 @@ pub(crate) fn molt_stands(agent: &AgentState) -> bool {
         && !(agent.status == AgentStatus::Failed && agent.agent_id.is_provisional())
 }
 
+/// Superseded predecessors and non-standing successors yield their role seat.
+pub(crate) fn yields_molt_seat<'a>(
+    agent: &AgentState,
+    agents: impl IntoIterator<Item = &'a AgentState>,
+) -> bool {
+    (agent.molted_from.is_some() && !molt_stands(agent))
+        || standing_successor(agents, agent.launch_id.as_ref().unwrap_or(&agent.agent_id)).is_some()
+}
+
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }

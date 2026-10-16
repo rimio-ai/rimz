@@ -200,6 +200,10 @@ trait Candidate<'a>: Copy {
     fn worktree_path(self) -> Option<&'a str>;
     fn pane_id(self) -> Option<&'a PaneId>;
 
+    fn role_matches(candidates: Vec<Self>) -> Vec<Self> {
+        prefer_claimed(candidates)
+    }
+
     /// The human lane label, else a placeholder.
     fn channel_label(self) -> String {
         self.lane_label()
@@ -236,6 +240,12 @@ trait Candidate<'a>: Copy {
 }
 
 impl<'a> Candidate<'a> for &'a AgentState {
+    fn role_matches(candidates: Vec<Self>) -> Vec<Self> {
+        let Some(&first) = candidates.first() else {
+            return candidates;
+        };
+        role_holders(candidates, first.role.as_deref().unwrap_or_default())
+    }
     fn lane_label(self) -> Option<String> {
         AgentState::lane_label(self)
     }
@@ -810,7 +820,7 @@ fn select_at_tier<'a, C: Candidate<'a>>(
         .filter(|candidate| tier_matches(tier, selector, *candidate))
         .collect::<Vec<_>>();
     if tier == SelectorTier::Role {
-        matches = prefer_claimed(matches);
+        matches = C::role_matches(matches);
     }
     if let (SelectorTier::SessionPrefix, AgentSelector::NameOrSession(selector)) = (tier, selector)
     {
@@ -956,17 +966,22 @@ fn prefer_claimed<'a, C: Candidate<'a>>(candidates: Vec<C>) -> Vec<C> {
         .collect()
 }
 
-/// The agents holding `role` among `members`, under the same claimed-wins rule
-/// the Role tier applies, so a harness lookup and a `@role` address pick the
-/// same agent.
+/// The current holders of `role`: standing molt successors replace their
+/// predecessors before the claimed-wins rule. The Role tier delegates here,
+/// so harness lookups and `@role` addresses agree.
 pub fn role_holders<'a>(
     members: impl IntoIterator<Item = &'a AgentState>,
     role: &str,
 ) -> Vec<&'a AgentState> {
+    let members: Vec<_> = members.into_iter().collect();
     prefer_claimed(
         members
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|member| member.role.as_deref() == Some(role))
+            .filter(|member| {
+                !crate::agents::state::yields_molt_seat(member, members.iter().copied())
+            })
             .collect(),
     )
 }

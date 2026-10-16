@@ -2500,6 +2500,108 @@ fn role_holders_pick_the_claimed_member_whatever_the_order() {
 }
 
 #[test]
+fn a_standing_molt_successor_alone_holds_the_role_even_before_registration() {
+    let (mut predecessor, mut successor) = claimed_and_unclaimed_reviewers();
+    predecessor.launch_id = Some("launch_old".into());
+    successor.molted_from = predecessor.launch_id.clone();
+    for registered in [false, true] {
+        successor.agent_id = if registered {
+            "registered"
+        } else {
+            "launch_new"
+        }
+        .into();
+        successor.status = AgentStatus::Running;
+        let mut snapshot = empty_snapshot();
+        snapshot.agents = vec![predecessor.clone(), successor.clone()].into();
+        assert_eq!(
+            role_holders(snapshot.agents.iter(), "reviewer")
+                .iter()
+                .map(|agent| &agent.agent_id)
+                .collect::<Vec<_>>(),
+            [&successor.agent_id]
+        );
+        assert_eq!(
+            resolve_one(&snapshot, "@reviewer", None, &context(None))
+                .unwrap()
+                .agent_id,
+            successor.agent_id
+        );
+    }
+    successor.agent_id = "launch_new".into();
+    successor.status = AgentStatus::Failed;
+    successor.pane = Some(PaneRef::from_id(PaneId::from_parts(
+        MuxName::Zellij,
+        "terminal_66",
+    )));
+    let mut snapshot = empty_snapshot();
+    snapshot.agents = vec![predecessor.clone(), successor].into();
+    assert_eq!(
+        role_holders(snapshot.agents.iter(), "reviewer")[0].agent_id,
+        predecessor.agent_id
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@reviewer", None, &context(None))
+            .unwrap()
+            .agent_id,
+        predecessor.agent_id
+    );
+}
+
+#[test]
+fn an_ended_molt_intermediate_does_not_restore_its_predecessors_role() {
+    let (mut predecessor, mut intermediate) = claimed_and_unclaimed_reviewers();
+    predecessor.launch_id = Some("launch_old".into());
+    intermediate.launch_id = Some("launch_middle".into());
+    intermediate.molted_from = predecessor.launch_id.clone();
+    intermediate.ended_at = Some(intermediate.last_seen);
+    let mut successor = intermediate.clone();
+    successor.agent_id = "launch_new".into();
+    successor.launch_id = Some(successor.agent_id.clone());
+    successor.molted_from = intermediate.launch_id.clone();
+    successor.ended_at = None;
+    successor.status = AgentStatus::Running;
+    let members = [predecessor, intermediate, successor.clone()];
+    assert_eq!(role_holders(&members, "reviewer"), [&successor]);
+}
+
+#[test]
+fn live_role_delivery_yields_to_the_molt_successor_and_back_after_startup_failure() {
+    let (mut predecessor, mut successor) = claimed_and_unclaimed_reviewers();
+    successor.molted_from = predecessor.launch_id.clone();
+    successor.pane = Some(PaneRef::from_id(PaneId::from_parts(
+        MuxName::Zellij,
+        "terminal_66",
+    )));
+    predecessor.profile = None;
+    successor.profile = None;
+    for failed in [false, true] {
+        successor.status = if failed {
+            AgentStatus::Failed
+        } else {
+            AgentStatus::Running
+        };
+        let panes = vec![
+            predecessor.pane.clone().unwrap(),
+            successor.pane.clone().unwrap(),
+        ];
+        let mut snapshot = empty_snapshot();
+        snapshot.agents = vec![predecessor.clone(), successor.clone()].into();
+        let snapshot = snapshot.with_live_panes(panes, None);
+        let targets = resolve_targets(&snapshot, "@reviewer", None, &context(None)).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].agent_id.as_ref(),
+            Some(if failed {
+                &predecessor.agent_id
+            } else {
+                &successor.agent_id
+            })
+        );
+    }
+}
+
+#[test]
 fn the_yield_never_crosses_lanes() {
     let mut snapshot = empty_snapshot();
     let (registered, mut elsewhere) = claimed_and_unclaimed_reviewers();

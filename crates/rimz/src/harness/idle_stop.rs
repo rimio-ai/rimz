@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::owed::OwedWake;
-use crate::agents::state::{IdleStop, PendingIdleStop, settled_outcome};
+use crate::agents::state::{IdleStop, PendingIdleStop, settled_outcome, standing_successor};
 use crate::agents::{AgentState, AgentStatus, TurnPhase};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -61,6 +61,8 @@ pub enum Hold {
     OpenRun,
     /// A team seat whose board does not read `Done` is owed a stage.
     Board,
+    /// The agent molted, but no successor still stands to keep its context.
+    MoltSuccessor,
     /// An agent the stop would close with this one is working or owed something.
     Tree,
 }
@@ -192,7 +194,18 @@ pub fn decide(
             return Ok(Verdict::Hold(Hold::Tree));
         }
     }
-    if agent.is_team_seat() && !board_done(agent) {
+    let audit = store.runtime_projection(crate::RuntimeScope::Audit)?;
+    let predecessor = agent.launch_id.as_ref().unwrap_or(&agent.agent_id);
+    let successor = standing_successor(audit.agents.iter(), predecessor);
+    if successor.is_none()
+        && audit
+            .agents
+            .iter()
+            .any(|row| row.molted_from.as_ref() == Some(predecessor))
+    {
+        return Ok(Verdict::Hold(Hold::MoltSuccessor));
+    }
+    if agent.is_team_seat() && successor.is_none() && !board_done(agent) {
         return Ok(Verdict::Hold(Hold::Board));
     }
     let idle = now

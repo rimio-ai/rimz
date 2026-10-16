@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
+use crate::agents::state::yields_molt_seat;
 use crate::diag::record::DiagEvent;
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
@@ -158,6 +159,19 @@ impl SidebarSnapshot {
             }
         }
 
+        for pane in &mut agent_panes {
+            if pane.role.is_none() {
+                continue;
+            }
+            let Some(agent) = self.agents.iter().find(|agent| {
+                agent.kind == pane.kind && pane.agent_id.as_ref() == Some(&agent.agent_id)
+            }) else {
+                continue;
+            };
+            if yields_molt_seat(agent, self.agents.iter()) {
+                pane.role = None;
+            }
+        }
         RowProjection {
             rows,
             agent_panes,

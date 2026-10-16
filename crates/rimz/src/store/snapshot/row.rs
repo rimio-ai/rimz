@@ -249,9 +249,9 @@ pub struct PaneAgent {
     /// for a sessionless pane or a bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    /// The `[agents.teams]` role the bound session launched as, copied from the
-    /// rollup so a bound agent answers to `@<role>` through its pane. `None`
-    /// for a sessionless pane or a roleless launch.
+    /// The bound session's current routing role. A superseded or failed-startup
+    /// molt holder yields it, keeping pane delivery aligned with durable role
+    /// resolution. Also `None` for a sessionless pane or roleless launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Routing lane copied from the bound session.
