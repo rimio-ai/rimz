@@ -1,0 +1,57 @@
+---
+source: crates/rimz/src/store/workflow/tests.rs
+expression: value
+---
+{
+  "attempt": {
+    "host": {
+      "pid": 123,
+      "start": "token"
+    },
+    "kind": "script",
+    "node": "pr",
+    "seq": 1,
+    "started_at": "2026-01-01T00:00:00Z"
+  },
+  "created_at": "2026-01-01T00:00:00Z",
+  "deadline": null,
+  "deadline_fired": false,
+  "entered_at": "2026-01-01T00:00:00Z",
+  "id": "wf_0190b8172c0070008000000000000001",
+  "input": null,
+  "key": null,
+  "next_seq": 2,
+  "node": "pr",
+  "park": null,
+  "prev_attempt": null,
+  "project_root": "/project",
+  "prompt": "Review this PR",
+  "recheck_at": null,
+  "scope": {
+    "kind": "worktree",
+    "path": "/project"
+  },
+  "spec_digest": "abc",
+  "spec_dir": "/definitions/review",
+  "state": "active",
+  "terminal_at": null,
+  "version": 1,
+  "visit_grant": 0,
+  "visits": {
+    "build": {
+      "keys": [
+        {
+          "key": 42,
+          "visits": 1
+        },
+        {
+          "key": "42",
+          "visits": 1
+        }
+      ],
+      "total": 2
+    }
+  },
+  "wait": null,
+  "workflow": "review"
+}

@@ -71,6 +71,7 @@ mod update_homebrew;
 mod wait;
 mod wakeup_pipe;
 mod web;
+mod workflow;
 mod workspace;
 mod worktree;
 mod zellij_health;

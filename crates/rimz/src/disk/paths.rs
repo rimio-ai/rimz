@@ -232,6 +232,67 @@ pub struct StatePaths {
     pub crashes_dir: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct WorkflowPaths {
+    pub home: PathBuf,
+    pub record: PathBuf,
+    pub journal: PathBuf,
+    pub spec: PathBuf,
+    pub work: PathBuf,
+    pub context: PathBuf,
+}
+
+impl WorkflowPaths {
+    pub fn signs(&self, step: Option<&str>) -> PathBuf {
+        let dir = self.work.join("signs");
+        match step {
+            Some(step) => dir.join(format!("{step}.md")),
+            None => dir,
+        }
+    }
+
+    pub fn claim(&self, seq: u64) -> PathBuf {
+        self.work.join(format!("{seq}.claim.json"))
+    }
+}
+
+pub fn workflows_dir_under(home: &Path) -> PathBuf {
+    home.join("workflows")
+}
+
+pub fn workflows_dir() -> PathBuf {
+    workflows_dir_under(&rimz_home())
+}
+
+pub fn workflow_spec_file(dir: &Path) -> PathBuf {
+    dir.join("workflow.toml")
+}
+
+pub fn workflow_runs_under(home: &Path) -> Result<Vec<(StatePaths, WorkflowPaths)>> {
+    let ws = workspaces_dir_under(home);
+    let mut runs = Vec::new();
+    for name in workspace_dir_names(&ws)? {
+        let root = ws.join(name.as_str());
+        let Some(id) = recorded_workspace_id(&root).and_then(|id| WorkspaceId::parse(&id).ok())
+        else {
+            continue;
+        };
+        let state = StatePaths::under_named(id, name, home);
+        let homes = match state.workflow_runs() {
+            Ok(homes) => homes,
+            Err(error) => {
+                tracing::warn!(path = %state.root.display(), %error, "skipping room with unreadable workflow homes");
+                continue;
+            }
+        };
+        for paths in homes {
+            runs.push((state.clone(), paths));
+        }
+    }
+    runs.sort_by(|a, b| a.1.home.cmp(&b.1.home));
+    Ok(runs)
+}
+
 impl StatePaths {
     /// The machine-wide parent used for empty-dir folder trust.
     pub fn empty_dir_root(&self) -> PathBuf {
@@ -245,6 +306,52 @@ impl StatePaths {
     pub fn empty_agent_dir(&self, handle: &str) -> PathBuf {
         self.empty_room_dir().join(handle)
     }
+
+    pub fn workflow(&self, id: &crate::ids::WorkflowRunId) -> WorkflowPaths {
+        let home = Class::Owned
+            .path_under(&self.root)
+            .join("workflows")
+            .join(id.as_str());
+        let work = home.join("work");
+        WorkflowPaths {
+            record: home.join("record.json"),
+            journal: home.join("journal.jsonl"),
+            spec: workflow_spec_file(&home),
+            context: work.join("context.json"),
+            home,
+            work,
+        }
+    }
+
+    pub fn workflow_runs(&self) -> Result<Vec<WorkflowPaths>> {
+        let dir = Class::Owned.path_under(&self.root).join("workflows");
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(PathErr::io(&dir)(err)),
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(PathErr::io(&dir))?;
+            if !entry
+                .file_type()
+                .map_err(PathErr::io(&entry.path()))?
+                .is_dir()
+            {
+                continue;
+            }
+            if let Some(id) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| crate::ids::WorkflowRunId::parse(name).ok())
+            {
+                paths.push(self.workflow(&id));
+            }
+        }
+        paths.sort_by(|a, b| a.home.cmp(&b.home));
+        Ok(paths)
+    }
+
     /// Paths for the workspace born at `project_root`: its existing dir, else
     /// a freshly minted `<basename>-<hex>` name. Creates nothing.
     pub fn for_project_root(project_root: &Path) -> Result<Self> {

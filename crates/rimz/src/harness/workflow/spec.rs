@@ -1,0 +1,211 @@
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+pub use crate::store::workflow::ScopeKind;
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowSpec {
+    pub workflow: Header,
+    #[serde(default)]
+    pub checks: BTreeMap<String, Check>,
+    #[serde(default)]
+    pub steps: BTreeMap<String, Step>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Header {
+    pub scope: ScopeKind,
+    pub start: String,
+    pub deadline: Option<String>,
+    #[serde(default)]
+    pub on: HeaderEdges,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HeaderEdges {
+    pub deadline: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StepEdges {
+    pub asked: Option<String>,
+    pub cap: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Check {
+    pub run: Option<String>,
+    pub agent: Option<String>,
+    pub prompt_file: Option<String>,
+    pub window: Option<String>,
+    #[serde(default)]
+    pub on: BTreeMap<String, String>,
+    pub timeout: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Step {
+    pub agent: String,
+    pub prompt_file: String,
+    pub window: Option<String>,
+    #[serde(default)]
+    pub takeover: bool,
+    #[schemars(required)]
+    pub then: Option<String>,
+    #[serde(default)]
+    pub on: StepEdges,
+    #[schemars(range(min = 1))]
+    pub max_visits: Option<u64>,
+    pub timeout: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SpecErr {
+    #[error("cannot read {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{path}: {source}")]
+    Toml {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("invalid workflow path {path}: {reason}")]
+    Path { path: PathBuf, reason: &'static str },
+    #[error("invalid run command: use a nonempty, correctly quoted argv")]
+    Command,
+    #[error(transparent)]
+    Window(#[from] crate::harness::schedule::when::WhenError),
+    #[error("only provider-window keys are allowed")]
+    WindowKeys,
+}
+
+pub fn load(dir: &Path) -> Result<WorkflowSpec, SpecErr> {
+    let path = crate::disk::paths::workflow_spec_file(dir);
+    let text = std::fs::read_to_string(&path).map_err(|source| SpecErr::Io { path, source })?;
+    let value: toml::Value = toml::from_str(&text).map_err(|source| SpecErr::Toml {
+        path: "workflow".into(),
+        source,
+    })?;
+    value.clone().try_into().map_err(|source| SpecErr::Toml {
+        path: schema_path(&value),
+        source,
+    })
+}
+
+fn schema_path(value: &toml::Value) -> String {
+    if let Some(table) = value.as_table()
+        && let Some(key) = table
+            .keys()
+            .find(|key| !matches!(key.as_str(), "workflow" | "checks" | "steps"))
+    {
+        return key.clone();
+    }
+    for table in ["checks", "steps"] {
+        let Some(nodes) = value.get(table) else {
+            continue;
+        };
+        let Some(nodes) = nodes.as_table() else {
+            return table.into();
+        };
+        for (name, node) in nodes {
+            let invalid = match table {
+                "checks" => node.clone().try_into::<Check>().is_err(),
+                _ => node.clone().try_into::<Step>().is_err(),
+            };
+            if invalid {
+                return format!("{table}.{name}");
+            }
+        }
+    }
+    "workflow".into()
+}
+
+pub fn schema() -> schemars::Schema {
+    schemars::schema_for!(WorkflowSpec)
+}
+
+pub(super) fn confined_file(dir: &Path, path: &str) -> Result<PathBuf, SpecErr> {
+    if path.is_empty()
+        || !Path::new(path)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Err(SpecErr::Path {
+            path: path.into(),
+            reason: "use a relative path with only normal components",
+        });
+    }
+    let file = dir.join(path);
+    let file = file
+        .canonicalize()
+        .map_err(|source| SpecErr::Io { path: file, source })?;
+    let root = dir.canonicalize().map_err(|source| SpecErr::Io {
+        path: dir.into(),
+        source,
+    })?;
+    if !file.starts_with(root) || !file.is_file() {
+        return Err(SpecErr::Path {
+            path: path.into(),
+            reason: "must be a file inside this workflow directory",
+        });
+    }
+    Ok(file)
+}
+
+pub(super) fn resolve_argv(dir: &Path, run: &str) -> Result<Vec<OsString>, SpecErr> {
+    let words = shlex::split(run)
+        .filter(|words| !words.is_empty())
+        .ok_or(SpecErr::Command)?;
+    words
+        .into_iter()
+        .map(|word| {
+            if word.contains('/') {
+                Ok(confined_file(dir, &word)?.into_os_string())
+            } else {
+                Ok(word.into())
+            }
+        })
+        .collect()
+}
+
+pub(super) fn parse_deadline(raw: &str) -> Result<jiff::Timestamp, jiff::Error> {
+    if let Ok(at) = raw.parse::<jiff::Timestamp>() {
+        return Ok(at);
+    }
+    let civil = raw.parse::<jiff::civil::DateTime>().or_else(|_| {
+        raw.parse::<jiff::civil::Date>()
+            .map(|date| date.at(0, 0, 0, 0))
+    })?;
+    Ok(civil.to_zoned(jiff::tz::TimeZone::system())?.timestamp())
+}
+
+pub(super) fn parse_window(raw: &str) -> Result<crate::harness::schedule::when::WhenExpr, SpecErr> {
+    let mut expression = String::new();
+    for part in raw.split_inclusive(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_') {
+        let word =
+            part.trim_end_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_');
+        if matches!(word, "5h.left" | "7d.left") {
+            expression.push_str("window.");
+        }
+        expression.push_str(part);
+    }
+    let expr = crate::harness::schedule::when::WhenExpr::parse_with_stages(&[expression], None)?;
+    if !expr.terms().all(|term| term.key.starts_with("window.")) {
+        return Err(SpecErr::WindowKeys);
+    }
+    Ok(expr)
+}
