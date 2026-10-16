@@ -570,6 +570,14 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let socket = managed_socket(runtime.path());
     let _server = TmuxServerGuard::new(socket.clone());
     let fake_codex = fake_codex_bin(server_dir.path());
+    let codex_command = shlex::try_join([
+        "sh",
+        "-c",
+        "trap '' HUP TERM; exec \"$1\" 60",
+        "rimz-lingering-root",
+        fake_codex.to_str().expect("codex path"),
+    ])
+    .expect("quote lingering root command");
 
     tmux(
         &socket,
@@ -584,7 +592,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
             "40",
             "-c",
             &env.project_root.display().to_string(),
-            &format!("{} 60", fake_codex.display()),
+            &codex_command,
         ],
     );
     let codex_pane = tmux_capture(&socket, &["list-panes", "-t", "room", "-F", "#{pane_id}"]);
@@ -592,14 +600,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
         &socket,
         &["display-message", "-p", "-t", &codex_pane, "#{pane_pid}"],
     );
-    let serve = sidebar_serve_line(
-        &env,
-        &rimz,
-        runtime.path(),
-        "tmux",
-        "room",
-        &[("RIMZ_TEST_PANE_CARRY_MS", "3000")],
-    );
+    let serve = sidebar_serve_line(&env, &rimz, runtime.path(), "tmux", "room", &[]);
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Drive a real agent until its row renders. That row means a snapshot
@@ -642,6 +643,11 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let flash_ceiling = split_width + 5;
 
     tmux(&socket, &["kill-pane", "-t", &codex_pane]);
+    let codex_pid = codex_pid.parse::<u32>().expect("codex pid");
+    assert!(
+        rimz::proc::process_is_live(codex_pid, None),
+        "closed pane root must linger"
+    );
     let killed_at = Instant::now();
     let flash_guard_deadline = killed_at + rimz::sidebar::timing::RESIZE_PAINT_HOLD_CEILING;
 
@@ -676,8 +682,16 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let closed_after = closed_after.expect("closed path records elapsed time");
     assert!(
         closed_after < Duration::from_secs(10),
-        "the sidebar self-closed after {closed_after:?}; the test carry TTL override should keep \
-         this path well below the 30s production carry window"
+        "the sidebar self-closed after {closed_after:?}; an authoritative omission must not \
+         wait for the living root or the 30s carry window"
+    );
+    assert!(
+        rimz::proc::process_is_live(codex_pid, None),
+        "root must outlive self-close"
+    );
+    let _ = nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(codex_pid as i32),
+        nix::sys::signal::Signal::SIGKILL,
     );
 }
 

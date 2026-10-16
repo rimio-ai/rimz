@@ -449,6 +449,7 @@ pub fn repaired_pane_frame_for_binding(
     let cache_path = runtime.pane_frame_path();
     let listing = match super::pane_list_fixture()? {
         Some(fixture) => PaneListing {
+            authoritative: true,
             panes: fixture,
             views: Vec::new(),
             observed_at_ms: unix_now_ms(),
@@ -713,7 +714,7 @@ impl FrameContext<'_> {
         enrich_metrics: bool,
         min_topology_produced_at_ms: Option<u64>,
         authoritative: bool,
-    ) -> Result<PaneFrame> {
+    ) -> Result<(PaneFrame, bool)> {
         let listing = match list_session_panes(
             self.mux,
             self.session,
@@ -730,6 +731,7 @@ impl FrameContext<'_> {
             }
         };
         let PaneListing {
+            authoritative: listing_authoritative,
             panes,
             views,
             observed_at_ms,
@@ -805,7 +807,7 @@ impl FrameContext<'_> {
         );
         self.sampled |= sampled;
         emit_hosted_carry_dropped(self.diag, hosted_carry_drops);
-        Ok(frame)
+        Ok((frame, listing_authoritative))
     }
 
     fn produce(&mut self, prior: Option<&PaneFrame>) -> Result<Accepted> {
@@ -853,13 +855,15 @@ fn emit_frame_diagnostics(diag: &crate::diag::DiagSink, events: Vec<DiagEvent>) 
     }
 }
 
-/// Repair incomplete latency frames, using a prefer-authoritative mux read
-/// when the candidate omits the producer's own pane or needs carry verification.
+/// Repair incomplete frames with a prefer-authoritative re-pull. Server listings
+/// refute missing siblings in tabs they list; wholly omitted tabs and cache
+/// fallbacks retain carry protection. Own-pane omissions and large shrinks also
+/// trigger confirmation.
 fn confirm_and_carry_with(
-    frame: PaneFrame,
+    (frame, authoritative): (PaneFrame, bool),
     prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
-    produce_candidate: &mut dyn FnMut(bool, Option<u64>, bool) -> Result<PaneFrame>,
+    produce_candidate: &mut dyn FnMut(bool, Option<u64>, bool) -> Result<(PaneFrame, bool)>,
     diag: &crate::diag::DiagSink,
     enrich_metrics: bool,
     bindings: &std::collections::HashMap<PaneId, super::metrics::PaneRootBinding>,
@@ -868,6 +872,7 @@ fn confirm_and_carry_with(
     let initial_frame = frame.clone();
     let initial = apply_carry_forward(
         frame,
+        authoritative,
         prior,
         own_pane,
         bindings,
@@ -885,12 +890,13 @@ fn confirm_and_carry_with(
 
     let prior_count = prior.map(pane_count).unwrap_or_default();
     let confirm_floor = Some(unix_now_ms());
-    let verified = produce_candidate(enrich_metrics, confirm_floor, true)?;
+    let (verified, authoritative) = produce_candidate(enrich_metrics, confirm_floor, true)?;
     let verified_count = pane_count(&verified);
     let confirmed_at_ms = unix_now_ms();
     let verified_frame = verified.clone();
     let confirmed = apply_carry_forward(
         verified,
+        authoritative,
         prior,
         own_pane,
         bindings,
@@ -919,7 +925,7 @@ fn confirm_and_carry_with(
         emit_pane_carry_forward(
             diag,
             prior,
-            &verified_frame,
+            (&verified_frame, authoritative),
             &confirmed,
             prior_count,
             verified_count,
@@ -941,7 +947,7 @@ fn live_start_ticks(stat: crate::proc::StatMetrics) -> Option<u64> {
 fn emit_pane_carry_forward(
     diag: &crate::diag::DiagSink,
     prior: Option<&PaneFrame>,
-    offending_frame: &PaneFrame,
+    (offending_frame, authoritative): (&PaneFrame, bool),
     outcome: &CarryOutcome,
     prior_count: usize,
     fresh_count: usize,
@@ -967,9 +973,7 @@ fn emit_pane_carry_forward(
         pids,
         prior: prior_count,
         fresh: fresh_count,
-        // Zellij confirmation asks the server for authoritative JSON panes;
-        // tmux's primary listing already comes from the server.
-        cli_confirmed: true,
+        cli_confirmed: authoritative,
         frames_ref,
     });
 }

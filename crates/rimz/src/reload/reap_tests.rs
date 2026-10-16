@@ -31,13 +31,17 @@ fn pane(raw: &str) -> PaneId {
 
 fn listing(panes: &[PaneId], observed_at_ms: u64) -> PaneListing {
     PaneListing {
+        authoritative: true,
         panes: panes
             .iter()
             .cloned()
             .map(crate::pane::PaneRef::from_id)
             .collect(),
         observed_at_ms,
-        ..Default::default()
+        views: Vec::new(),
+        session_focus: None,
+        client_view: None,
+        client_sample_withheld: false,
     }
 }
 

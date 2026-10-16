@@ -75,25 +75,10 @@ pub(crate) const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 /// badge clears within this bound of a keypress.
 pub(super) const PRESENCE_SAMPLE_TTL: Duration = Duration::from_secs(1);
 
-/// Maximum time a pane omitted by the mux source may be carried from the last
-/// good frame while `/proc` still proves the old pane root alive. Long enough
-/// to cover several bad pane pulls, short enough that a persistently lying mux
-/// source cannot freeze the room indefinitely.
+/// Maximum time a sibling may be carried while its root remains live but its
+/// whole tab is omitted, or authoritative re-pulls fall back to the cache. A
+/// server listing refutes missing siblings in tabs it lists immediately.
 pub(super) const PANE_CARRY_TTL: Duration = Duration::from_secs(30);
-
-/// Runtime pane-carry TTL. Tests may set `RIMZ_TEST_PANE_CARRY_MS` to shorten
-/// the liveness carry window around a spawned sidebar process.
-pub(super) fn pane_carry_ttl() -> Duration {
-    let Some(value) = std::env::var_os("RIMZ_TEST_PANE_CARRY_MS").filter(|value| !value.is_empty())
-    else {
-        return PANE_CARRY_TTL;
-    };
-    value
-        .to_str()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(PANE_CARRY_TTL)
-}
 
 /// Tolerance when comparing a pane's recorded process start against the live
 /// `/proc` start. The check works at whole-second granularity, so this absorbs

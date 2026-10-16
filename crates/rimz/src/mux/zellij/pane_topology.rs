@@ -1,9 +1,10 @@
 //! Zellij pane-topology cache published by the presence plugin through
 //! `rimz sidebar wake`.
 //!
-//! The cache is Zellij's authoritative pane roster: it carries the topology
-//! fields RimZ needs for pane projection, the attached-client view when the
-//! plugin has sampled it, plus the plugin-retained live foreground command.
+//! The cache is Zellij's pushed pane projection, not proof of absence: it
+//! carries the topology fields RimZ needs for pane projection, the
+//! attached-client view when the plugin has sampled it, plus the
+//! plugin-retained live foreground command.
 //! `terminal_command` remains the pane's spawn command; `pane_command` is the
 //! foreground display command.
 //! `pane_cwd` follows Zellij's cwd events and `pane_pid` identifies each pane's
@@ -51,7 +52,11 @@ impl PaneTopologyCache {
         project_session_focus(&self.panes, clients.as_ref(), self.focused_pane)
     }
 
-    pub(super) fn into_pane_listing(self, session_name: String) -> PaneListing {
+    pub(super) fn into_pane_listing(
+        self,
+        session_name: String,
+        authoritative: bool,
+    ) -> PaneListing {
         let Self {
             produced_at_ms,
             focused_pane,
@@ -63,6 +68,7 @@ impl PaneTopologyCache {
         let client_view = clients.map(TopologyClients::into_client_view);
         let session_focus = project_session_focus(&panes, client_view.as_ref(), focused_pane);
         PaneListing {
+            authoritative,
             views: Vec::new(),
             panes: panes
                 .into_iter()
@@ -464,7 +470,7 @@ mod tests {
         let old: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
         assert!(
             !old.clone()
-                .into_pane_listing("rimz-test".to_owned())
+                .into_pane_listing("rimz-test".to_owned(), false)
                 .client_sample_withheld
         );
         assert!(
@@ -477,7 +483,7 @@ mod tests {
         payload["clients_withheld"] = true.into();
         let cache: PaneTopologyCache = serde_json::from_value(payload.clone()).unwrap();
         assert_eq!(serde_json::to_value(&cache).unwrap(), payload);
-        let listing = cache.into_pane_listing("rimz-test".to_owned());
+        let listing = cache.into_pane_listing("rimz-test".to_owned(), false);
         assert!(listing.client_sample_withheld);
         assert!(listing.client_view.is_none());
         assert!(listing.session_focus.is_none());

@@ -318,8 +318,11 @@ pub struct PaneListOptions {
     pub command_timeout: Option<Duration>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PaneListing {
+    /// Whether `panes` is the mux server's own answer, complete for each tab it
+    /// lists, rather than a cached projection. Whole tabs may still be omitted.
+    pub authoritative: bool,
     pub panes: Vec<PaneRef>,
     /// Naming metadata keyed by the same view ids carried by `panes`.
     pub views: Vec<(String, tab_name::ViewNaming)>,

@@ -64,7 +64,7 @@ fn cached_pid_restoration_does_not_rotate_a_pidless_fresh_pane() {
         metrics: &mut history,
         sampled: false,
     };
-    let fresh = context.candidate(Some(&prior), true, None, false).unwrap();
+    let (fresh, _) = context.candidate(Some(&prior), true, None, false).unwrap();
 
     assert_eq!(first(&fresh).current.pid, Some(u32::MAX));
     assert_eq!(
@@ -749,7 +749,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
         let calls = std::cell::Cell::new(0);
 
         let repulled = confirm_and_carry_with(
-            raced,
+            (raced, false),
             Some(&prior),
             None,
             &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
@@ -757,7 +757,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
                 calls.set(calls.get() + 1);
-                Ok(verified.clone())
+                Ok((verified.clone(), true))
             },
             &crate::diag::DiagSink::disabled(),
             true,
@@ -825,7 +825,7 @@ fn missing_own_pane_controls_authoritative_repull() {
         let calls = std::cell::Cell::new(0);
 
         let repulled = confirm_and_carry_with(
-            initial,
+            (initial, false),
             None,
             Some(&own),
             &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
@@ -833,7 +833,7 @@ fn missing_own_pane_controls_authoritative_repull() {
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
                 calls.set(calls.get() + 1);
-                Ok(verified.clone())
+                Ok((verified.clone(), true))
             },
             &crate::diag::DiagSink::disabled(),
             true,
@@ -879,7 +879,7 @@ fn ambiguous_plain_process_absence_repull_matrix() {
         let calls = std::cell::Cell::new(0);
 
         let repulled = confirm_and_carry_with(
-            fresh,
+            (fresh, false),
             Some(&prior),
             None,
             &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
@@ -887,7 +887,7 @@ fn ambiguous_plain_process_absence_repull_matrix() {
                 assert!(min_topology_produced_at_ms.is_some(), "{name}");
                 assert!(authoritative, "{name}");
                 calls.set(calls.get() + 1);
-                Ok(verified.clone())
+                Ok((verified.clone(), true))
             },
             &crate::diag::DiagSink::disabled(),
             true,
@@ -933,14 +933,14 @@ fn refuted_initial_carry_records_diagnostic() {
     let verified = prior.clone();
 
     let repulled = confirm_and_carry_with(
-        fresh,
+        (fresh, false),
         Some(&prior),
         None,
         &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
             assert!(enrich_metrics);
             assert!(min_topology_produced_at_ms.is_some());
             assert!(authoritative);
-            Ok(verified.clone())
+            Ok((verified.clone(), true))
         },
         &sink,
         true,
@@ -976,6 +976,56 @@ fn refuted_initial_carry_records_diagnostic() {
 
 #[test]
 fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
+    check_partial_frame_carry(false, false);
+}
+
+#[test]
+fn authoritative_partial_frame_refutes_live_dropped_pane() {
+    check_partial_frame_carry(false, true);
+    check_partial_frame_carry(true, true);
+}
+
+#[test]
+fn authoritative_whole_tab_omission_records_confirmed_carry() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
+    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
+    let mut sibling = pane("terminal_2", Some("zsh"), Some("/repo"));
+    sibling.view_id = Some("tab_9".to_owned());
+    sibling.pane_pid = Some(std::process::id());
+    let prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        sibling,
+    ]);
+    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let carried = confirm_and_carry_with(
+        (fresh.clone(), false),
+        Some(&prior),
+        None,
+        &mut |_, _, authoritative| {
+            assert!(authoritative);
+            Ok((fresh.clone(), true))
+        },
+        &sink,
+        true,
+        &std::collections::HashMap::new(),
+    )
+    .expect("carry confirmation succeeds");
+
+    assert_eq!(pane_count(&carried), 2);
+    assert_eq!(carried.tabs.len(), 2);
+    assert_eq!(carried.carried_panes.len(), 1);
+    assert_eq!(carried.carried_panes[0].pane_id.raw(), "terminal_2");
+    let events = diagnostic_events(&sink);
+    assert!(
+        matches!(events.as_slice(), [crate::diag::record::DiagEvent::PaneCarryForward {
+        carried, cli_confirmed: true, prior: 2, fresh: 1, ..
+    }] if carried.len() == 1 && carried[0].raw() == "terminal_2"),
+        "{events:?}"
+    );
+}
+
+fn check_partial_frame_carry(initial_authoritative: bool, verified_authoritative: bool) {
     let Some(root_ticks) =
         crate::proc::stat_metrics(std::process::id()).map(|stat| stat.start_ticks)
     else {
@@ -988,9 +1038,14 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
     runtime.ensure_dirs().unwrap();
     let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
 
+    let same_tab_pane = |id| {
+        let mut pane = pane(id, Some("zsh"), Some("/repo"));
+        pane.view_id = Some("tab_0".to_owned());
+        pane
+    };
     let mut prior = frame(vec![
-        pane("terminal_1", Some("zsh"), Some("/repo")),
-        pane("terminal_2", Some("zsh"), Some("/repo")),
+        same_tab_pane("terminal_1"),
+        same_tab_pane("terminal_2"),
     ]);
     prior
         .pane_states_mut()
@@ -998,11 +1053,11 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
         .expect("terminal_2 present")
         .current
         .pid = Some(std::process::id());
-    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let fresh = frame(vec![same_tab_pane("terminal_1")]);
     let calls = std::cell::Cell::new(0);
 
     let carried = confirm_and_carry_with(
-        fresh.clone(),
+        (fresh.clone(), initial_authoritative),
         Some(&prior),
         None,
         &mut |enrich_metrics, min_topology_produced_at_ms, authoritative| {
@@ -1010,7 +1065,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
             assert!(min_topology_produced_at_ms.is_some());
             assert!(authoritative);
             calls.set(calls.get() + 1);
-            Ok(fresh.clone())
+            Ok((fresh.clone(), verified_authoritative))
         },
         &sink,
         true,
@@ -1020,7 +1075,30 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
     )
     .expect("carry confirmation succeeds");
 
-    assert_eq!(calls.get(), 1);
+    // tmux's initial server listing needs no carry confirmation.
+    assert_eq!(calls.get(), usize::from(!initial_authoritative));
+    let events = if initial_authoritative {
+        assert!(!sink.log_path().unwrap().exists());
+        Vec::new()
+    } else {
+        diagnostic_events(&sink)
+    };
+    if verified_authoritative {
+        assert_eq!(pane_count(&carried), 1);
+        assert!(carried.carried_panes.is_empty());
+        if initial_authoritative {
+            assert!(events.is_empty(), "{events:?}");
+        } else {
+            assert!(
+                matches!(events.as_slice(), [crate::diag::record::DiagEvent::PaneCarryRefuted {
+                carried, pids, prior: 2, fresh: 1, verified: 1, frames_ref: None,
+            }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
+                && pids == &vec![std::process::id()]),
+                "{events:?}"
+            );
+        }
+        return;
+    }
     assert_eq!(pane_count(&carried), 2);
     assert_eq!(carried.carried_panes.len(), 1);
     assert_eq!(
@@ -1030,7 +1108,6 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
     );
     assert_eq!(carried.carried_panes[0].start_ticks, Some(root_ticks));
 
-    let events = diagnostic_events(&sink);
     assert!(matches!(
         events.as_slice(),
         [crate::diag::record::DiagEvent::PaneCarryForward {
@@ -1038,7 +1115,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
             pids,
             prior: 2,
             fresh: 1,
-            cli_confirmed: true,
+            cli_confirmed: false,
             frames_ref: Some(_),
         }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
             && pids == &vec![std::process::id()]
