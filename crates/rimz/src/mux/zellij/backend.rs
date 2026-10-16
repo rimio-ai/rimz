@@ -1195,7 +1195,7 @@ impl MuxBackend for ZellijBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session_name = opts.session_name.unwrap_or_default();
-        let cache = self.read_topology(
+        let (cache, authoritative) = self.read_topology(
             (!session_name.is_empty()).then_some(session_name.as_str()),
             opts.runtime_paths.as_ref(),
             opts.workspace_id.as_ref(),
@@ -1228,7 +1228,7 @@ impl MuxBackend for ZellijBackend {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let mut listing = cache.into_pane_listing(session_name);
+        let mut listing = cache.into_pane_listing(session_name, authoritative);
         listing.views = views.into_iter().collect();
         Ok(listing)
     }

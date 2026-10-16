@@ -117,6 +117,7 @@ impl ZellijBackend {
             PaneReadConsistency::Cached,
             timeout,
         )
+        .map(|(cache, _)| cache)
     }
 
     pub(super) fn read_topology(
@@ -127,7 +128,7 @@ impl ZellijBackend {
         min_topology_produced_at_ms: Option<u64>,
         consistency: PaneReadConsistency,
         timeout: Duration,
-    ) -> Result<PaneTopologyCache> {
+    ) -> Result<(PaneTopologyCache, bool)> {
         let session = self.resolve_session(session)?;
         match consistency {
             PaneReadConsistency::Cached => self.cached_topology(
@@ -136,7 +137,7 @@ impl ZellijBackend {
                 workspace_id,
                 min_topology_produced_at_ms,
                 timeout,
-            ),
+            ).map(|cache| (cache, false)),
             PaneReadConsistency::PreferAuthoritative => self
                 .authoritative_pane_listing(
                     &session,
@@ -144,6 +145,7 @@ impl ZellijBackend {
                     workspace_id,
                     timeout,
                 )
+                .map(|cache| (cache, true))
                 .or_else(|err| {
                     tracing::debug!(session = %session, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
                     self.cached_topology(
@@ -152,14 +154,14 @@ impl ZellijBackend {
                         workspace_id,
                         min_topology_produced_at_ms,
                         timeout,
-                    )
+                    ).map(|cache| (cache, false))
                 }),
             PaneReadConsistency::RequireAuthoritative => self.authoritative_pane_listing(
                 &session,
                 runtime_paths,
                 workspace_id,
                 timeout,
-            ),
+            ).map(|cache| (cache, true)),
         }
     }
 

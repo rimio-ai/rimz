@@ -1019,6 +1019,7 @@ fn list_panes_joins_ownership_by_stable_id_on_cached_and_native_paths() {
     .unwrap();
     for consistency in [
         PaneReadConsistency::Cached,
+        PaneReadConsistency::PreferAuthoritative,
         PaneReadConsistency::RequireAuthoritative,
     ] {
         let listing = backend
@@ -1030,6 +1031,10 @@ fn list_panes_joins_ownership_by_stable_id_on_cached_and_native_paths() {
                 ..Default::default()
             })
             .unwrap();
+        assert_eq!(
+            listing.authoritative,
+            consistency != PaneReadConsistency::Cached
+        );
         let views = listing
             .views
             .into_iter()
@@ -1040,7 +1045,7 @@ fn list_panes_joins_ownership_by_stable_id_on_cached_and_native_paths() {
         );
         assert_eq!(
             views.get("tab_4").and_then(|view| view.owner.as_ref()),
-            (consistency == PaneReadConsistency::RequireAuthoritative).then_some(&owner)
+            (consistency != PaneReadConsistency::Cached).then_some(&owner)
         );
     }
 }
@@ -2217,6 +2222,7 @@ exit 1
             ..Default::default()
         })
         .expect("optional authoritative read falls back");
+    assert!(!listing.authoritative);
     assert_eq!(listing.panes[0].pane_id.raw(), "terminal_8");
     let err = backend
         .list_panes(PaneListOptions {

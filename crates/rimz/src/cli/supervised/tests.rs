@@ -520,8 +520,13 @@ mod zone_backend {
             );
             if let Some(panes) = &self.listed {
                 return Ok(m::PaneListing {
+                    authoritative: true,
                     panes: panes.clone(),
-                    ..Default::default()
+                    views: Vec::new(),
+                    observed_at_ms: 0,
+                    session_focus: None,
+                    client_view: None,
+                    client_sample_withheld: false,
                 });
             }
             Err(m::MuxErr::Timeout {

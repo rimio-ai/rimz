@@ -55,8 +55,11 @@ struct CarryClassification<'a> {
     confirmed_tabs: HashSet<crate::ids::ViewId>,
 }
 
+/// Carry omissions with liveness or own-pane evidence. A server listing refutes
+/// missing siblings in tabs it lists; wholly omitted tabs retain carry protection.
 pub(super) fn apply_carry_forward(
     mut fresh: PaneFrame,
+    authoritative: bool,
     prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
     bindings: &HashMap<PaneId, PaneRootBinding>,
@@ -87,6 +90,11 @@ pub(super) fn apply_carry_forward(
         .pane_states()
         .map(|pane| pane.pane_id.clone())
         .collect::<HashSet<_>>();
+    let fresh_views = fresh
+        .tabs
+        .iter()
+        .map(|tab| tab.view_id.clone())
+        .collect::<HashSet<_>>();
     let prior_carried = prior
         .carried_panes
         .iter()
@@ -97,6 +105,9 @@ pub(super) fn apply_carry_forward(
         .iter()
         .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
         .filter(|(_, pane)| !fresh_ids.contains(&pane.pane_id))
+        .filter(|(tab, pane)| {
+            !authoritative || !fresh_views.contains(&tab.view_id) || own_pane == Some(&pane.pane_id)
+        })
         .collect::<Vec<_>>();
 
     let mut classification = classify_missing(
@@ -359,7 +370,7 @@ fn expired_carry(
 }
 
 pub(super) fn expired_at(carried_since_ms: u64, now_ms: u64) -> bool {
-    now_ms.saturating_sub(carried_since_ms) > timing::pane_carry_ttl().as_millis() as u64
+    now_ms.saturating_sub(carried_since_ms) > timing::PANE_CARRY_TTL.as_millis() as u64
 }
 
 fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: &PaneState) {
@@ -390,409 +401,4 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::ids::{MuxName, ViewId, ViewKind};
-    use crate::sidebar::frame::{PaneProcess, PaneState};
-    use crate::sidebar::produce::test_support::pane;
-    use crate::sidebar::timing::PANE_CARRY_TTL;
-
-    fn frame(raws: &[&str], produced_at_ms: u64) -> PaneFrame {
-        let panes = raws
-            .iter()
-            .map(|raw| same_tab_pane(raw, None))
-            .collect::<Vec<_>>();
-        crate::sidebar::frame::assemble_frame(panes, produced_at_ms, "s")
-    }
-
-    fn pidded_frame(raws: &[(&str, u32)], produced_at_ms: u64) -> PaneFrame {
-        let panes = raws
-            .iter()
-            .map(|(raw, pid)| {
-                let mut pane = same_tab_pane(raw, None);
-                pane.pane_pid = Some(*pid);
-                pane
-            })
-            .collect::<Vec<_>>();
-        crate::sidebar::frame::assemble_frame(panes, produced_at_ms, "s")
-    }
-
-    fn same_tab_pane(raw: &str, tab: Option<&str>) -> crate::pane::PaneRef {
-        let mut pane = pane(raw, Some("zsh"), Some("/repo"));
-        pane.view_id = Some(tab.unwrap_or("tab_0").to_owned());
-        pane.view_kind = Some(ViewKind::Tab);
-        pane
-    }
-
-    fn pane_id(raw: &str) -> PaneId {
-        PaneId::from_parts(MuxName::Zellij, raw)
-    }
-
-    #[test]
-    fn live_prior_pid_carries_a_dropped_pane() {
-        let prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(9),
-            2,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 2);
-        assert_eq!(outcome.carried.len(), 1);
-        assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_2"));
-        assert_eq!(outcome.carried[0].pid, Some(202));
-        assert_eq!(outcome.carried[0].start_ticks, Some(9));
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn unreadable_prior_pid_drops_the_pane_as_ambiguous() {
-        let prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(fresh, Some(&prior), None, &HashMap::new(), &|_| None, 2);
-
-        assert_eq!(outcome.frame.pane_states().count(), 1);
-        assert!(outcome.carried.is_empty());
-        assert!(outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn pidless_drop_without_liveness_evidence_is_ambiguous() {
-        let prior = frame(&["terminal_1", "terminal_2"], 1);
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(fresh, Some(&prior), None, &HashMap::new(), &|_| None, 2);
-
-        assert_eq!(outcome.frame.pane_states().count(), 1);
-        assert!(outcome.carried.is_empty());
-        assert!(outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn dead_prior_carried_pid_is_not_ambiguous() {
-        let mut prior = frame(&["terminal_1", "terminal_2"], 1);
-        prior.carried_panes = vec![CarriedPane {
-            pane_id: pane_id("terminal_2"),
-            pid: Some(202),
-            start_ticks: Some(9),
-            carried_since_ms: 1,
-        }];
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(10),
-            2,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 1);
-        assert!(outcome.carried.is_empty());
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn cached_binding_carries_pidless_zellij_pane() {
-        let prior = frame(&["terminal_1", "terminal_2"], 1);
-        let fresh = frame(&["terminal_1"], 2);
-        let bindings = HashMap::from([(
-            pane_id("terminal_2"),
-            PaneRootBinding {
-                pid: 202,
-                start_ticks: 9,
-            },
-        )]);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &bindings,
-            &|pid| (pid == 202).then_some(9),
-            2,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 2);
-        assert_eq!(outcome.carried[0].pid, Some(202));
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn start_tick_mismatch_blocks_cached_binding() {
-        let prior = frame(&["terminal_1", "terminal_2"], 1);
-        let fresh = frame(&["terminal_1"], 2);
-        let bindings = HashMap::from([(
-            pane_id("terminal_2"),
-            PaneRootBinding {
-                pid: 202,
-                start_ticks: 9,
-            },
-        )]);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &bindings,
-            &|pid| (pid == 202).then_some(10),
-            2,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 1);
-        assert!(outcome.carried.is_empty());
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn previous_carried_since_survives_until_ttl_then_expires() {
-        let mut prior = pidded_frame(&[("terminal_1", 101), ("terminal_2", 202)], 1);
-        prior.carried_panes = vec![CarriedPane {
-            pane_id: pane_id("terminal_2"),
-            pid: Some(202),
-            start_ticks: Some(9),
-            carried_since_ms: 1,
-        }];
-        let fresh = frame(&["terminal_1"], 2);
-
-        let at_ttl = apply_carry_forward(
-            fresh.clone(),
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(9),
-            1 + PANE_CARRY_TTL.as_millis() as u64,
-        );
-
-        assert_eq!(at_ttl.carried[0].carried_since_ms, 1);
-        assert!(at_ttl.expired.is_empty());
-        assert!(!at_ttl.ambiguous_loss);
-
-        let expired = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(9),
-            2 + PANE_CARRY_TTL.as_millis() as u64,
-        );
-
-        assert_eq!(expired.frame.pane_states().count(), 1);
-        assert!(expired.carried.is_empty());
-        assert_eq!(expired.expired[0].pane_id, pane_id("terminal_2"));
-        assert!(!expired.ambiguous_loss);
-    }
-
-    #[test]
-    fn own_pane_carry_never_expires() {
-        let mut prior = frame(&["terminal_1", "terminal_2"], 1);
-        prior.carried_panes = vec![CarriedPane {
-            pane_id: pane_id("terminal_1"),
-            pid: Some(101),
-            start_ticks: Some(9),
-            carried_since_ms: 1,
-        }];
-        let fresh = frame(&["terminal_2"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            Some(&pane_id("terminal_1")),
-            &HashMap::new(),
-            &|_| None,
-            2 + PANE_CARRY_TTL.as_millis() as u64,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 2);
-        assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_1"));
-        assert!(outcome.expired.is_empty());
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn same_tab_pidless_sibling_carries_for_coherence() {
-        let mut prior = pidded_frame(
-            &[
-                ("terminal_1", 101),
-                ("terminal_2", 202),
-                ("terminal_3", 303),
-            ],
-            1,
-        );
-        prior
-            .pane_states_mut()
-            .find(|pane| pane.pane_id.raw() == "terminal_3")
-            .expect("terminal_3 present")
-            .current
-            .pid = None;
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(9),
-            2,
-        );
-
-        let ids = outcome
-            .carried
-            .iter()
-            .map(|carried| carried.pane_id.raw().to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["terminal_2", "terminal_3"]);
-        assert_eq!(
-            outcome
-                .carried
-                .iter()
-                .find(|carried| carried.pane_id.raw() == "terminal_3")
-                .and_then(|carried| carried.pid),
-            None
-        );
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn same_tab_dead_sibling_does_not_carry_for_coherence() {
-        let prior = pidded_frame(
-            &[
-                ("terminal_1", 101),
-                ("terminal_2", 202),
-                ("terminal_3", 303),
-            ],
-            1,
-        );
-        let fresh = frame(&["terminal_1"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 202).then_some(9),
-            2,
-        );
-
-        let ids = outcome
-            .carried
-            .iter()
-            .map(|carried| carried.pane_id.raw().to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["terminal_2"]);
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn omitted_own_pane_carries_even_without_proc_evidence() {
-        let prior = frame(&["terminal_1", "terminal_2"], 1);
-        let fresh = frame(&["terminal_2"], 2);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            Some(&pane_id("terminal_1")),
-            &HashMap::new(),
-            &|_| None,
-            2,
-        );
-
-        assert_eq!(outcome.frame.pane_states().count(), 2);
-        assert_eq!(outcome.carried[0].pane_id, pane_id("terminal_1"));
-        assert!(!outcome.ambiguous_loss);
-    }
-
-    #[test]
-    fn no_prior_and_empty_fresh_are_not_ambiguous() {
-        let fresh = frame(&["terminal_1"], 1);
-        let no_prior = apply_carry_forward(fresh, None, None, &HashMap::new(), &|_| None, 1);
-        assert!(!no_prior.ambiguous_loss);
-
-        let prior = frame(&["terminal_1"], 1);
-        let empty = frame(&[], 2);
-        let empty_fresh =
-            apply_carry_forward(empty, Some(&prior), None, &HashMap::new(), &|_| None, 2);
-        assert!(!empty_fresh.ambiguous_loss);
-    }
-
-    #[test]
-    fn omitted_tab_is_recreated_from_prior_metadata() {
-        let mut prior = PaneFrame {
-            focus_origin: Default::default(),
-            client_view_fresh: false,
-            client_sample_withheld: false,
-            topology_stamp_ms: None,
-            produced_at_ms: 1,
-            observed_at_ms: 1,
-            build: None,
-            session_name: "s".to_owned(),
-            tabs: vec![TabFrame {
-                view_id: ViewId::new_unchecked("tab_9"),
-                kind: ViewKind::Tab,
-                name: Some("work".to_owned()),
-                naming: Default::default(),
-                panes: vec![PaneState {
-                    pane_id: pane_id("terminal_9"),
-                    title: None,
-                    first_seen_at_ms: Some(1),
-                    hosted_carry_since_ms: None,
-                    is_floating: false,
-                    current: PaneProcess {
-                        pid: Some(909),
-                        command: Some("zsh".to_owned()),
-                        foreground_cmdline: None,
-                        spawn_command: None,
-                        cwd: Some("/repo".to_owned()),
-                        started_at: None,
-                        hosted_agent_kind: None,
-                        hosted_agent_process_start: None,
-                        hosted_agent_lineage: Vec::new(),
-                        resumed_session_id: None,
-                        elevated_agent: None,
-                    },
-                    previous: None,
-                    children: Vec::new(),
-                    metrics: Default::default(),
-                }],
-            }],
-            carried_panes: Vec::new(),
-            viewed_panes: Vec::new(),
-            client_views: Vec::new(),
-            focused_pane: None,
-            presence: None,
-        };
-        let fresh = frame(&["terminal_1"], 2);
-        prior.tabs[0].panes[0].current.pid = Some(909);
-
-        let outcome = apply_carry_forward(
-            fresh,
-            Some(&prior),
-            None,
-            &HashMap::new(),
-            &|pid| (pid == 909).then_some(90),
-            2,
-        );
-
-        let carried_tab = outcome
-            .frame
-            .tabs
-            .iter()
-            .find(|tab| tab.view_id.as_str() == "tab_9")
-            .expect("prior tab recreated");
-        assert_eq!(carried_tab.name.as_deref(), Some("work"));
-        assert!(
-            carried_tab
-                .panes
-                .iter()
-                .any(|pane| pane.pane_id == pane_id("terminal_9"))
-        );
-    }
-}
+mod tests;

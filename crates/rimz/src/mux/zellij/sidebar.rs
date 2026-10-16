@@ -276,6 +276,7 @@ impl ZellijBackend {
                     PaneReadConsistency::RequireAuthoritative,
                     RECONCILE_LIST_TIMEOUT,
                 )?
+                .0
                 .panes;
             let before: HashSet<u64> = before_panes
                 .iter()
@@ -448,6 +449,7 @@ impl ZellijBackend {
             PaneReadConsistency::PreferAuthoritative,
             RECONCILE_LIST_TIMEOUT,
         )
+        .map(|(cache, _)| cache)
     }
 
     /// Seed the attached client's initial tab with its deterministic work pane.
@@ -922,7 +924,7 @@ impl ZellijBackend {
                     consistency,
                     RECONCILE_LIST_TIMEOUT,
                 );
-                let Ok(listing) = listing else {
+                let Ok((listing, _)) = listing else {
                     if listing_retries < TRANSIENT_MAX_RETRIES {
                         listing_retries += 1;
                         continue;

@@ -26,6 +26,15 @@ fn wait_for_no_serve_processes(session: &str, timeout: Duration) {
 
 #[test]
 fn sidebar_self_closes_when_its_tab_empties() {
+    check_sidebar_self_close(false);
+}
+
+#[test]
+fn sidebar_self_closes_while_closed_sibling_root_lives() {
+    check_sidebar_self_close(true);
+}
+
+fn check_sidebar_self_close(lingering_root: bool) {
     require_zellij!();
 
     let rimz = crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz"));
@@ -54,7 +63,7 @@ fn sidebar_self_closes_when_its_tab_empties() {
     record_known_workspace_session(xdg, &workspace_id, cwd.path(), &name);
     seed_presence_permissions(xdg, &wasm);
 
-    let layout = self_close_layout(&name, &rimz, xdg, &workspace_id);
+    let layout = self_close_layout(&name, &rimz, xdg, &workspace_id, lingering_root);
     let layout_path = cwd.path().join("layout.kdl");
     std::fs::write(&layout_path, layout).expect("write layout");
 
@@ -84,6 +93,90 @@ fn sidebar_self_closes_when_its_tab_empties() {
         .expect("load presence plugin for self-close topology");
 
     wait_for_nonplugin_panes(&room, 2, Duration::from_secs(15));
+    if lingering_root {
+        let runtime = rimz::RuntimePaths::under(workspace_id.clone(), xdg).expect("runtime paths");
+        let root_pid = poll_until(
+            Duration::from_secs(15),
+            || {
+                std::fs::read_to_string(xdg.join("sibling-pid"))
+                    .map_err(|err| err.to_string())
+                    .and_then(|pid| pid.parse::<u32>().map_err(|err| err.to_string()))
+            },
+            |_| true,
+            "sibling signal handlers installed",
+        );
+        let frame = poll_until(
+            Duration::from_secs(15),
+            || {
+                std::fs::read(runtime.pane_frame_path())
+                    .map_err(|err| err.to_string())
+                    .and_then(|bytes| {
+                        serde_json::from_slice::<rimz::sidebar::frame::PaneFrame>(&bytes)
+                            .map_err(|err| err.to_string())
+                    })
+            },
+            |frame| {
+                frame
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| &tab.panes)
+                    .any(|pane| pane.current.pid == Some(root_pid))
+            },
+            "producer observes the lingering sibling root",
+        );
+        let sibling = frame
+            .tabs
+            .iter()
+            .flat_map(|tab| &tab.panes)
+            .find(|pane| pane.current.pid == Some(root_pid))
+            .expect("observed sibling")
+            .pane_id
+            .clone();
+        let closed_at = std::time::Instant::now();
+        ZellijBackend::with_runtime_dir(xdg)
+            .close_pane(&name, &sibling)
+            .expect("close sibling pane");
+        assert!(
+            rimz::proc::process_is_live(root_pid, None),
+            "closed pane root must linger"
+        );
+        wait_for_no_serve_processes(&name, Duration::from_secs(15));
+        wait_for_nonplugin_panes(&room, 0, Duration::from_secs(15));
+        assert!(
+            closed_at.elapsed() < Duration::from_secs(15),
+            "self-close must not wait for the 30s carry TTL"
+        );
+        assert!(
+            rimz::proc::process_is_live(root_pid, None),
+            "root must outlive self-close"
+        );
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(root_pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        let state = rimz::StatePaths::under(workspace_id.clone(), xdg).expect("state paths");
+        let diag = rimz::diag::DiagSink::under(state.root, workspace_id.clone(), &name, None);
+        let records = std::fs::read_to_string(diag.log_path().expect("diagnostic path"))
+            .expect("self-close diagnostics");
+        let events = records
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<rimz::diag::record::DiagEnvelope>(line)
+                    .expect("diagnostic record")
+                    .event
+            })
+            .collect::<Vec<_>>();
+        assert!(events.iter().any(|event| matches!(event,
+            rimz::diag::record::DiagEvent::PaneCarryRefuted { carried, .. } if carried.contains(&sibling)
+        )), "missing sibling carry refutation: {records}");
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                rimz::diag::record::DiagEvent::CarryForwardExpired { .. }
+            )),
+            "carry must not expire: {records}"
+        );
+    }
     wait_for_no_serve_processes(&name, Duration::from_secs(15));
     wait_for_nonplugin_panes(&room, 0, Duration::from_secs(20));
 
@@ -189,9 +282,24 @@ fn wait_for_no_sidebar_heartbeat(dir: &Path, timeout: Duration) {
     );
 }
 
-fn self_close_layout(session: &str, rimz: &Path, xdg: &Path, workspace_id: &WorkspaceId) -> String {
+fn self_close_layout(
+    session: &str,
+    rimz: &Path,
+    xdg: &Path,
+    workspace_id: &WorkspaceId,
+    lingering_root: bool,
+) -> String {
     let q = |s: String| serde_json::to_string(&s).expect("kdl escape");
     let serve = sidebar_serve_command_with_tick(session, rimz, xdg, workspace_id, 2);
+    let sibling = if lingering_root {
+        let marker = xdg.join("sibling-pid");
+        let marker = shlex::try_quote(marker.to_str().expect("marker path"))
+            .expect("quote marker")
+            .into_owned();
+        format!("trap '' HUP TERM; printf '%s' \"$$\" > {marker}; exec sleep 60")
+    } else {
+        "exec sleep 6".to_owned()
+    };
     format!(
         r#"layout {{
     default_tab_template split_direction="vertical" {{
@@ -204,14 +312,15 @@ fn self_close_layout(session: &str, rimz: &Path, xdg: &Path, workspace_id: &Work
     }}
         tab name="rimz" {{
         pane focus=true {{
-            command "sleep"
-            args "6"
+            command "sh"
+            args "-c" {sibling}
             close_on_exit true
         }}
     }}
 }}
 "#,
         serve = q(serve),
+        sibling = q(sibling),
     )
 }
 

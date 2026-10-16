@@ -120,9 +120,9 @@ The host-only supervisor no longer records child-renderer signal deaths or child
 
 The carry kinds attribute a pane-source fault precisely, and the distinction matters when reading a log:
 
-- `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while process liveness proved the omitted panes alive. The source under-reported, the producer carried the panes, and the frame pair is captured.
-- `pane_carry_refuted` marks an initial listing that the forced re-pull corrected. Truth healed within one produce, so no frame pair is captured and the log line is the evidence.
-- `carry_forward_expired` marks a carried pane dropping when its liveness proof runs out after `PANE_CARRY_TTL` (30s).
+- `pane_carry_forward` marks an omission carried after a forced direct re-pull, with a captured frame pair. `cli_confirmed: true` means the server answered: the carry is the renderer's own pane or panes in wholly omitted tabs. `cli_confirmed: false` means the direct re-pull failed and the topology cache answered. Process liveness and tab coherence protect omitted panes; the renderer's own pane can carry by identity. A sibling missing from a tab the server lists cannot survive that read.
+- `pane_carry_refuted` marks an initial carry the forced re-pull made unnecessary: the panes reappeared, or the server listed their tab without them, refuting their existence even while their roots live (the `rimz agents stop` shape). No frame pair is captured; the log line is the evidence.
+- `carry_forward_expired` marks a sibling carry dropping after `PANE_CARRY_TTL` (30s), even if its root still lives. Whole-tab omissions and cache fallbacks share this bound; own-pane carry never expires.
 - `hosted_carry_dropped` marks a prior hosted lazy-agent stamp the producer declined to restore. Its `reason` is `probe_reports_absent` or `carry_expired`, where dropping a stale stamp is correct and Doctor marks the record expected, or `start_regressed` or `foreground_kind_mismatch`, which stay investigative evidence of contradictory identity.
 
 [sidebar.md](./sidebar/sidebar.md#honest-reads-across-a-mux-hiccup) describes the guards these records come from.
@@ -300,7 +300,7 @@ Two shapes are worth recognizing.
 
 **A long run of `gate_hold` with rule `agent_demoted_to_process`**, where every matching `gate_release` carries `via_escape_hatch: true`, means the rollup kept presenting the same live agent pane as a bare process with unchanged or missing foreground-command evidence. A real exit whose foreground command changed commits at once. A nearby `hosted_carry_dropped` means the producer's hosted-stamp carry declined, and its `reason` names the source guard; with no such record the carry restored the stamp, and the next step is instrumenting the rollup bind guard. The reject count is evidence only: the gate holds until `ACCEPT_REGRESSION_AFTER` (1s) has passed since the first reject, then releases through the escape hatch.
 
-**A partial read**, where a pane source reports fourteen panes as six by omitting two whole tabs whose processes live. The carry-forward guard answers this before publication, so a healthy log shows `pane_carry_forward` under a steady roster. When the guard misses, the log reads:
+**A partial read**, where a pane source reports fourteen panes as six by omitting two whole tabs whose processes live. Both the topology cache and native Zellij listings have shown this shape. The carry-forward guard protects whole omitted tabs even after a successful server read, so a healthy log shows `pane_carry_forward` under a steady roster (`cli_confirmed: true` when the server answered, `false` on a cache fallback). It does not carry a missing sibling from a tab the server still lists. When the whole-tab guard misses, the log reads:
 
 | Records | Reading |
 | --- | --- |

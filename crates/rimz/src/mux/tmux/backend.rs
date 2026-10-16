@@ -349,6 +349,7 @@ impl MuxBackend for TmuxBackend {
             panes.push(pane);
         }
         Ok(PaneListing {
+            authoritative: true,
             panes,
             views: views.into_iter().collect(),
             observed_at_ms,
