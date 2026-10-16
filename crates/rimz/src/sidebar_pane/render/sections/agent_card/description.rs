@@ -28,9 +28,9 @@ pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'
     ))
 }
 
-/// Line 2 for an agent: the description on its own full-width line. Rich
-/// context metadata wins first; for Codex that is thread `name`, then app-server
-/// `preview`. Named sessions and live task/prompt fallbacks keep the row
+/// Line 2 for an agent: the open ask while waiting, else the description on its
+/// own full-width line. Rich context metadata wins the fallback; for Codex that
+/// is thread `name`, then app-server `preview`. Named sessions and live task/prompt fallbacks keep the row
 /// labelled when richer metadata is absent. An idle agent with nothing to show
 /// yet contributes no line; any non-idle empty description falls to an em dash.
 /// A turn that failed or paused on a provider API error takes the line over the
@@ -72,10 +72,12 @@ pub(super) fn description_line(
         }
     };
     let mut left = vec![Span::raw("  ")];
-    match row
-        .as_agent()
-        .map_or(CardDescription::None, |agent| agent.description(ctx.now))
-    {
+    match row.as_agent().map_or(CardDescription::None, |agent| {
+        agent.open_ask().map_or_else(
+            || agent.description(ctx.now),
+            |ask| CardDescription::Activity(ask.to_owned()),
+        )
+    }) {
         CardDescription::Error(label) => left.extend(body_spans(&label, true)),
         CardDescription::Wait(label) => left.push(Span::styled(
             label,

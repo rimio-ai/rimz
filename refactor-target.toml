@@ -1157,12 +1157,23 @@ path = "crates/rimz/src/store"
 # Store::begin_agent_launch_replacement excludes the replaced row from molt rivalry (+1).
 # workflow::{RunRecord, JournalEntry, JournalEvent} and locked codecs serve the engine and inspection (+23).
 # gc::prune::OrphanEmptyTree, the trunk's orphan empty-dir report, takes the slack the workflow budget assumed (+1).
-surface-budget = 452
+# AgentCard::open_ask shares the displayed-wait gate with the sidebar (+1).
+surface-budget = 453
 
 [[verdict]]
 kind = "item"
 key = "store::writer::Store::begin_agent_launch_replacement"
 reason = "Fresh restart reserves under the launch lock while preserving the old row's molt link."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::AgentCard::ask_detail"
+reason = "Carry the eligible blocking ask through serialized cards and CLI sidebar fixtures."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::row::AgentCard::open_ask"
+reason = "One displayed-status gate for the sidebar's blocking ask description."
 
 [[module]]
 path = "crates/rimz/src/theme"

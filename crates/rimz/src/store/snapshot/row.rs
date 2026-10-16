@@ -334,6 +334,9 @@ pub enum RowCard {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentCard {
     pub status: AgentStatus,
+    /// The blocking ask's summary while the source agent awaits input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_asks: Vec<crate::agents::QueuedAsk>,
     /// Every armed one-shot delivery, soonest first, copied from the enriched rollup.
@@ -465,6 +468,7 @@ impl Default for AgentCard {
     fn default() -> Self {
         Self {
             status: AgentStatus::Idle,
+            ask_detail: None,
             queued_asks: Vec::new(),
             pending_waits: Vec::new(),
             idle_stop: None,
@@ -512,13 +516,22 @@ pub enum CardDescription {
 impl AgentCard {
     /// Project the base card before pane, child, and display-status enrichment.
     pub fn from_agent(agent: &crate::agents::AgentState, now: Timestamp) -> Self {
-        let (status, phase) = if agent.is_awaiting_input() {
-            (AgentStatus::Waiting, TurnPhase::Idle)
+        let (status, phase, ask_detail) = if agent.is_awaiting_input() {
+            (
+                AgentStatus::Waiting,
+                TurnPhase::Idle,
+                agent
+                    .open_ask
+                    .as_ref()
+                    .and_then(|ask| ask.detail.as_deref())
+                    .and_then(crate::agents::single_line_description),
+            )
         } else {
-            (agent.status, agent.phase)
+            (agent.status, agent.phase, None)
         };
         Self {
             status,
+            ask_detail,
             queued_asks: agent.queued_asks.clone(),
             pending_waits: agent.pending_waits.clone(),
             idle_stop: agent.idle_stop.clone(),
@@ -561,6 +574,14 @@ impl AgentCard {
             tool_repeat: agent.tool_repeat.clone(),
             turn_error_label: None,
         }
+    }
+
+    /// The blocking ask's summary while the card is waiting for input.
+    pub fn open_ask(&self) -> Option<&str> {
+        if self.status != AgentStatus::Waiting {
+            return None;
+        }
+        self.ask_detail.as_deref()
     }
 
     /// Error reason, sleeping wait, activity, or no description, at the view's clock.
