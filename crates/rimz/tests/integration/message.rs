@@ -3800,6 +3800,105 @@ fn parent_message_to_ended_child_refuses_a_login_without_hooks() {
     assert_ended_child_resume_refusal(true);
 }
 
+#[cfg(unix)]
+#[test]
+fn parent_message_to_ended_child_home_cwd_refusal_names_the_child_fix() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionStart",
+        "parent",
+        LifecycleSignal::Registered,
+        |observation| observation.agent_name = Some("parent".to_owned()),
+    );
+    let transcript = env.project_root.join("child.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "child".into(),
+                launch_id: Some("launch_child".into()),
+                agent_name: "otter".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    parent_agent_id: Some("parent".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    isolation: Some(rimz::config::Isolation::Host),
+                    channel: Some("home".into()),
+                    ..LaunchParams::default()
+                },
+                state: AgentLaunchState::Starting,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.home_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    append_lifecycle(
+        &env,
+        "claude",
+        "SessionEnd",
+        "child",
+        LifecycleSignal::Ended,
+        |observation| {
+            observation.agent_name = Some("otter".to_owned());
+            observation.launch.parent_agent_id = Some("parent".into());
+            observation.launch.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+            observation.launch.launch_depth = Some(1);
+            observation.launch.isolation = Some(rimz::config::Isolation::Host);
+            observation.worktree_path = Some(env.home_root.display().to_string());
+            observation.launch.channel = Some("home".into());
+            observation.transcript_path = Some(transcript.display().to_string());
+        },
+    );
+    let trace = env.project_root.join("home-resume-mux.log");
+    let output = traced_rimz(&env, &trace)
+        .args(["--mux", "zellij", "message", "@otter#home", "follow up"])
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("cannot resume @otter"), "{stderr}");
+    assert!(stderr.contains("home directory"), "{stderr}");
+    assert!(stderr.contains(env.home_root.to_str().unwrap()), "{stderr}");
+    assert!(
+        stderr.contains("the child cannot move, so launch a new child with `--cwd <DIR>`"),
+        "{stderr}"
+    );
+    assert!(store.list_pending_messages().unwrap().is_empty());
+    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+    let child = audit
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "child")
+        .unwrap();
+    assert!(child.ended_at.is_some(), "{child:?}");
+    let calls = trace_lines(&trace);
+    assert!(
+        calls
+            .iter()
+            .all(|call| !call.contains("\tnew-pane\t") && !call.contains("\tnew-tab\t")),
+        "resume refusal must not launch a pane: {calls:?}"
+    );
+}
+
 #[test]
 fn parent_message_to_stopped_pane_gone_child_reaches_resume_refusal() {
     use rimz::store::run::{RunRecord, RunStatus};
