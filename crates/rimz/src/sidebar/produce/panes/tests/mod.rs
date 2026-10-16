@@ -309,7 +309,6 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
     );
     frame.presence = Some(presence_sample(1, Some(1_000), 1_000));
     frame.topology_stamp_ms = Some(10);
-    frame.metrics_stamp_ms = Some(11);
     let produced_at_ms = frame.produced_at_ms;
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
     let before = std::fs::read(&cache_path).unwrap();
@@ -350,22 +349,20 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
     assert_eq!(published.presence.unwrap().human_clients, 2);
     assert_eq!(published.produced_at_ms, produced_at_ms);
     assert_eq!(published.topology_stamp_ms, Some(10));
-    assert_eq!(published.metrics_stamp_ms, Some(11));
 }
 
 #[test]
-fn publication_stamps_only_workspace_affecting_sections() {
+fn only_topology_publications_bump_the_topology_stamp() {
     let mut frame = frame(Vec::new());
+    frame.topology_stamp_ms = Some(u64::MAX - 1);
+    stamp_publication(&mut frame, PaneFramePublicationKind::Topology);
+    assert_eq!(frame.topology_stamp_ms, Some(u64::MAX));
+
+    frame.topology_stamp_ms = None;
     stamp_publication(&mut frame, PaneFramePublicationKind::Topology);
     let topology = frame.topology_stamp_ms.expect("topology stamp");
-    let initial_metrics = frame.metrics_stamp_ms.expect("metrics stamp");
-    assert_eq!(topology, initial_metrics);
 
     stamp_publication(&mut frame, PaneFramePublicationKind::Metrics);
-    assert_eq!(frame.topology_stamp_ms, Some(topology));
-    assert!(frame.metrics_stamp_ms.unwrap() > initial_metrics);
-
-    let sections = (frame.topology_stamp_ms, frame.metrics_stamp_ms);
     stamp_publication(&mut frame, PaneFramePublicationKind::Presence);
-    assert_eq!((frame.topology_stamp_ms, frame.metrics_stamp_ms), sections);
+    assert_eq!(frame.topology_stamp_ms, Some(topology));
 }

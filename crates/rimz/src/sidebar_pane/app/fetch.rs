@@ -667,7 +667,6 @@ impl IdleCycleFixture {
             let mut data = self.sink.host_data.lock().expect("host data");
             let inputs = data.inputs.as_mut().expect("seeded inputs");
             let frame = Arc::make_mut(&mut inputs.frame);
-            frame.metrics_stamp_ms = Some(frame.metrics_stamp_ms.unwrap_or_default() + 1);
             let pane = frame
                 .tabs
                 .iter_mut()

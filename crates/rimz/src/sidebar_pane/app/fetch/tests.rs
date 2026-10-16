@@ -1446,7 +1446,6 @@ impl FetchFixture {
             "rimz-test",
         );
         frame.topology_stamp_ms = Some(11);
-        frame.metrics_stamp_ms = Some(12);
         self.host_data.lock().unwrap().inputs = Some(HostInputs::from_frame(frame));
     }
 }

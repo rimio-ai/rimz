@@ -730,7 +730,6 @@ mod tests {
             client_view_fresh: false,
             client_sample_withheld: false,
             topology_stamp_ms: None,
-            metrics_stamp_ms: None,
             produced_at_ms: 1,
             observed_at_ms: 1,
             build: None,
