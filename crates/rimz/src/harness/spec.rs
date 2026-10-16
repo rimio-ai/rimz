@@ -1552,7 +1552,8 @@ fn profile_preset_reason(err: &crate::agents::PresetErr) -> String {
         crate::agents::PresetErr::UnsupportedFast { agent, fix } => format!(
             "field `fast = true`: agent `{agent}` has no fast-mode launch switch; {fix}, or remove `fast`"
         ),
-        crate::agents::PresetErr::UnsupportedField { .. } => err.to_string(),
+        crate::agents::PresetErr::UnsupportedField { .. }
+        | crate::agents::PresetErr::UnsupportedValue { .. } => err.to_string(),
     }
 }
 

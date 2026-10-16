@@ -364,8 +364,16 @@ impl PresetArgMatcher {
     }
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PresetErr {
+    #[error(
+        "agent `{agent}` does not support profile {field} value `{value}`; use a native value or remove it"
+    )]
+    UnsupportedValue {
+        agent: &'static str,
+        field: &'static str,
+        value: String,
+    },
     #[error(
         "agent `{agent}` does not support profile field `{field}`; remove it or put provider-specific flags in `args`"
     )]
@@ -1186,7 +1194,10 @@ fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Opt
 /// One-line fix for an installed-but-untrusted hook set, shared by hook
 /// preflights, the `rimz start` notice, and `rimz doctor`.
 pub fn hook_trust_fix(kind: &str) -> String {
-    format!("run /hooks inside {kind} and trust the RimZ hooks")
+    registry::find_definition(kind).map_or_else(
+        || format!("run /hooks inside {kind} and trust the RimZ hooks"),
+        |adapter| adapter.hook_trust_fix(),
+    )
 }
 
 #[cfg(test)]
@@ -1286,6 +1297,16 @@ mod tests {
                 Err(LaunchDirRefusal::Home { .. })
             ));
         }
+    }
+
+    #[test]
+    fn adapter_hook_trust_fix_preserves_codex_instructions() {
+        let codex = registry::definition_by_kind("codex").unwrap();
+        assert_eq!(
+            codex.hook_trust_fix(),
+            "run /hooks inside codex and trust the RimZ hooks"
+        );
+        assert_eq!(hook_trust_fix("codex"), codex.hook_trust_fix());
     }
 
     fn local_context_refresh_ctx(

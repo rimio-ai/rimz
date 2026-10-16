@@ -875,6 +875,8 @@ impl fmt::Display for LaunchFinalizeWarning {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchFinalizeError {
+    #[error(transparent)]
+    PresetValue(crate::agents::PresetErr),
     #[error("unknown agent kind `{kind}`")]
     UnknownAdapter { kind: String },
     #[error(transparent)]
@@ -913,6 +915,7 @@ impl LaunchFinalizeError {
         match self {
             Self::UnsupportedMaxTurns { warnings, .. } => warnings,
             Self::UnknownAdapter { .. }
+            | Self::PresetValue(_)
             | Self::PromptFile(_)
             | Self::UnsupportedPresetField { .. }
             | Self::UnsupportedSystemPrompt { .. }
@@ -1267,6 +1270,9 @@ fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::Pres
 
 fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeError {
     match err {
+        err @ crate::agents::PresetErr::UnsupportedValue { .. } => {
+            LaunchFinalizeError::PresetValue(err)
+        }
         crate::agents::PresetErr::UnsupportedField { agent, field } => {
             LaunchFinalizeError::UnsupportedPresetField { agent, field }
         }

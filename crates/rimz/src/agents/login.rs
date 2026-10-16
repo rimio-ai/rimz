@@ -305,7 +305,11 @@ fn exports_home(
 }
 
 fn config_home_env_key(kind: &AgentKind) -> Option<&'static str> {
-    match crate::agents::find_definition(kind.as_str())?.config_home_env_keys() {
+    let adapter = crate::agents::find_definition(kind.as_str())?;
+    if !adapter.supports_named_logins() {
+        return None;
+    }
+    match adapter.config_home_env_keys() {
         [key] => Some(key),
         _ => None,
     }
