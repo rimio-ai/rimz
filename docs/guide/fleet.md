@@ -173,7 +173,7 @@ forge team · 3 agents · 59m active · $42.72 · 10 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
       effort:    17m active · $9.66
-      subagents: 3 runs · $3.51 of $9.66
+      subagents: 3 runs · $3.51
                  explorer  2 × · $2.40
                  designer  1 × · $1.11
       activity:  46 tool calls
@@ -182,7 +182,7 @@ forge team · 3 agents · 59m active · $42.72 · 10 messages (1 from you)
 
   @coder · Codex · gpt-6-astra@high
       effort:    33m active · $27.85
-      subagents: 9 runs · $11.38 of $27.85
+      subagents: 9 runs · $11.38
                  implementer  8 × · 8m active · $10.38
                  documenter   1 × · 2m active · $1.00
       activity:  234 tool calls

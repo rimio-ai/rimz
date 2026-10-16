@@ -628,9 +628,11 @@ fn attribution_cli_credits_claude_subagent_companions() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("markdown utf8");
     assert!(markdown.contains("effort: $3.00"));
-    assert!(markdown.contains(
-        "  - effort: $3.00\n  - subagents: 1 run · $2.00 of $3.00\n    - explore: 1 × · $2.00"
-    ));
+    assert!(
+        markdown.contains(
+            "  - effort: $3.00\n  - subagents: 1 run · $2.00\n    - explore: 1 × · $2.00"
+        )
+    );
     assert!(markdown.contains("**Models**"));
     assert!(markdown.contains("`child-model`"));
 }
@@ -1170,7 +1172,7 @@ fn attribution_scope_keeps_a_launched_child_with_its_parent() {
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).expect("Markdown utf8");
     assert!(
-        markdown.contains("  - effort: 3m active · $4.00\n  - subagents: 1 run · $3.00 of $4.00\n    - explorer: 1 × · 2m active · $3.00")
+        markdown.contains("  - effort: 3m active · $4.00\n  - subagents: 1 run · $3.00\n    - explorer: 1 × · 2m active · $3.00")
     );
     assert!(!markdown.contains("launched"));
 }
