@@ -212,8 +212,8 @@ fn finished_group_collapses_unread_success_until_revealed() {
             false
         )
         .len(),
-        2,
-        "a status filter reveals the terminal roster"
+        0,
+        "the success lens excludes finished groups"
     );
 
     let focused_pane = group.rows[1].pane.as_ref().expect("pane").pane_id.clone();

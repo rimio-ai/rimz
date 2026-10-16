@@ -52,9 +52,12 @@ impl From<BodyFilter> for BodyLens {
 }
 
 impl BodyFilter {
-    pub(crate) fn matches(self, row: &SidebarRow, pr_open: bool) -> bool {
+    pub(crate) fn matches(self, row: &SidebarRow, (pr_open, finished): (bool, bool)) -> bool {
         match self {
-            Self::Status(status) => row.status() == Some(status),
+            Self::Status(status) => {
+                (status != AgentStatus::Success || !finished)
+                    && row.attention_status() == Some(status)
+            }
             Self::Unread => row.unread,
             Self::OpenPr => pr_open,
         }
@@ -64,6 +67,7 @@ impl BodyFilter {
         match self {
             Self::Status(status) => groups
                 .iter()
+                .filter(|group| status != AgentStatus::Success || !group.finished)
                 .flat_map(|group| &group.status_counts)
                 .filter(|count| count.status == status)
                 .map(|count| count.count)
@@ -119,6 +123,52 @@ pub(crate) fn write(runtime: &RuntimePaths, lens: &BodyLens) -> atomic::Result<(
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    #[test]
+    fn success_count_and_lens_exclude_finished_groups_only() {
+        use crate::sidebar::test_support::{activity_row, worktree_group};
+        use crate::store::snapshot::SidebarStatusCount;
+        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let groups = [true, false].map(|finished| {
+            let path = std::path::Path::new("/repo/lane");
+            let count = if finished { 2 } else { 1 };
+            let mut group = worktree_group(
+                path,
+                (0..count)
+                    .map(|_| activity_row(true, Some(AgentStatus::Success), now, path))
+                    .chain([activity_row(true, Some(AgentStatus::Idle), now, path)])
+                    .collect(),
+            );
+            group.finished = finished;
+            group.status_counts = vec![
+                SidebarStatusCount {
+                    status: AgentStatus::Success,
+                    count,
+                },
+                SidebarStatusCount {
+                    status: AgentStatus::Idle,
+                    count: 1,
+                },
+            ];
+            group
+        });
+        let success = BodyFilter::Status(AgentStatus::Success);
+        assert_eq!(success.total(&groups), 1);
+        let idle = BodyFilter::Status(AgentStatus::Idle);
+        assert_eq!(idle.total(&groups), 2);
+        for filter in [success, idle] {
+            let matches = groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .rows
+                        .iter()
+                        .filter(move |row| filter.matches(row, (false, group.finished)))
+                })
+                .count();
+            assert_eq!(filter.total(&groups), matches);
+        }
+    }
 
     fn runtime(dir: &std::path::Path) -> RuntimePaths {
         RuntimePaths::under(

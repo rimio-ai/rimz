@@ -38,7 +38,8 @@ use super::{pin_right, trim_spans_to_width};
 /// bucket renders even at zero; colored statuses use their semantic tone, idle rests at the
 /// soft stat gray, and every zero count sits at the same soft gray beside its
 /// glyph.
-/// Counts span the full snapshot roster (`status_counts`). The
+/// Counts span the full snapshot roster (`status_counts`), except success,
+/// which excludes finished groups. The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
@@ -71,15 +72,10 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         (AgentStatus::Sleeping, BucketCluster::Right),
         (AgentStatus::Idle, BucketCluster::Right),
     ];
-    let total = buckets
-        .iter()
-        .map(|(status, _)| BodyFilter::Status(*status).total(groups))
-        .sum::<usize>();
-
     // An empty (or process-only) room has no make-up line — the `¤ 0  ◎ 0` summary
     // lives on the dashboard above. The make-up line is reserved for a room that
     // has agents to summarize.
-    if total == 0 {
+    if fleet_size(groups).0 == 0 {
         return (Vec::new(), Vec::new());
     }
 
@@ -244,8 +240,8 @@ impl<'a> Cluster<'a> {
 }
 
 /// The fleet head-count read by the dashboard's L2: `(main, subs)` — the main
-/// agents you launched (the sum of the per-worktree `status_counts`, so it
-/// matches the cockpit make-up below) and the subagents they spawned this turn.
+/// agents you launched (the sum of the per-worktree `status_counts`, including
+/// finished groups) and the subagents they spawned this turn.
 pub(in crate::sidebar_pane::render) fn fleet_size(
     groups: &[SidebarWorktreeGroup],
 ) -> (usize, usize) {
@@ -299,8 +295,18 @@ fn bucket_style(
     let (rest_style, color) = tone;
     let oldest_unread = groups
         .iter()
-        .flat_map(|group| group.rows.iter())
-        .filter(|row| row.status() == Some(status) && row.unread)
+        .flat_map(|group| {
+            group.rows.iter().filter(move |row| {
+                BodyFilter::Status(status).matches(
+                    row,
+                    (
+                        group.pr_state == Some(WorktreePrState::Open),
+                        group.finished,
+                    ),
+                )
+            })
+        })
+        .filter(|row| row.unread)
         .map(|row| age_secs(row.last_activity, now))
         .max();
     if let Some(age) = oldest_unread {

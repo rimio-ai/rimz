@@ -494,6 +494,35 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
             "the hit sits exactly on its bucket:\n{text}"
         );
     }
+
+    let mut snapshot = snapshot_with(vec![agent(
+        "done",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    )]);
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    let screen = snapshot_to_screen(&snapshot, 54, 20);
+    assert!(screen.lines().nth(3).unwrap().contains("¤ 1"), "{screen}");
+    assert!(
+        screen.lines().nth(5).unwrap().contains("✓ 0"),
+        "landed-only rooms retain the make-up line: {screen}"
+    );
+    let (_, hits) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        &BodyLens::default(),
+        0,
+        54,
+        None,
+    );
+    assert!(
+        hits.iter()
+            .all(|hit| body_filter_hit(hit) != Some(&BodyFilter::Status(AgentStatus::Success)))
+    );
 }
 /// A bucket the width clips keeps no hit — dropped whole rather than left
 /// aimed past the visible edge, the tab rail's drop-whole-tab rule.

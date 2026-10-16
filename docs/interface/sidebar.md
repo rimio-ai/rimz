@@ -218,7 +218,7 @@ The `⑃ N` colour reads each worktree's own pull request, since stacked pull re
 
 ### The make-up line
 
-The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done. The right cluster counts the rest: `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero. The counts always cover the whole room.
+The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done on work that has not landed. The right cluster counts the rest: `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results. `✓` excludes finished groups; a landed group with a working or blocked member is not finished, so its done cards still count. The other buckets and `¤` cover the whole room, so the buckets need not sum to `¤`.
 
 Click a non-zero bucket, the unread count, or the `⑃` count to filter the cards to it. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. The filter keys are in [Keys and mouse](#keys-and-mouse).
 
@@ -537,7 +537,7 @@ A group is finished when its pull request merged or closed, or the trunk contain
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click the header or either receipt line, press `s`, or focus a member to show the cards, and click the header to collapse them again. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
+Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
 
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 

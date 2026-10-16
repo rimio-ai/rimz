@@ -1128,6 +1128,35 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
         BodyLens::default(),
         "a stale open PR lens clears after its last PR resolves"
     );
+
+    let mut snapshot = snapshot.clone();
+    let groups = std::sync::Arc::make_mut(&mut snapshot.worktree_groups);
+    for group in groups.iter_mut() {
+        for row in std::sync::Arc::make_mut(&mut group.rows) {
+            if let Some(agent) = row.as_agent_mut() {
+                agent.status = AgentStatus::Success;
+            }
+        }
+        group.status_counts = vec![crate::store::snapshot::SidebarStatusCount {
+            status: AgentStatus::Success,
+            count: 1,
+        }];
+    }
+    groups[1].finished = true;
+    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Success));
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(
+        ui.visible_roster(&snapshot).len(),
+        1,
+        "landed results are outside the review lens"
+    );
+    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].finished = true;
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(
+        ui.make_up_filter,
+        BodyLens::default(),
+        "landing the last review result clears the pick"
+    );
 }
 #[test]
 fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
