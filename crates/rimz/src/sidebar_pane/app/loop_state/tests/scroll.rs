@@ -128,13 +128,17 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
         "the overlay must open the existing paint gate"
     );
     assert_eq!(
-        ack.try_recv(),
-        Err(std::sync::mpsc::TryRecvError::Empty),
-        "folding is not painting"
+        paints(&output),
+        1,
+        "the push paints inside on_wakeup, before maintenance"
     );
-    rig.paint(true);
-    assert_eq!(paints(&output), 1);
     assert_push_report(&ack, &rig, PushVerdict::Painted, true);
+    rig.paint(true);
+    assert_eq!(
+        paints(&output),
+        1,
+        "the later frame phase must not paint twice"
+    );
     let y = |rig: &Rig| {
         rig.state
             .ui
@@ -280,6 +284,10 @@ fn fitted_grow_hold(resize_first: bool) {
         rig.state
             .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
             .unwrap();
+        let painted_before_resize = !resize_first && !own_pane;
+        if painted_before_resize {
+            assert_push_report(&ack, &rig, PushVerdict::Painted, true);
+        }
         if !resize_first {
             pty.resize(80, 30);
             rig.state
@@ -291,15 +299,17 @@ fn fitted_grow_hold(resize_first: bool) {
             holds,
             "resize_first={resize_first}, rows={rows}, cols={cols:?}, own_pane={own_pane}: only the exact fitted own-pane size bypasses the hold"
         );
-        if holds {
+        if holds && !painted_before_resize {
             assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+        }
+        if holds {
             rig.state.paint_hold.release();
         }
         rig.state.dirty = true;
         rig.state.next_frame = Instant::now();
         pty.drain();
         rig.paint(true);
-        if rows == 30 {
+        if rows == 30 && !painted_before_resize {
             assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         }
     }
