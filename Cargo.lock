@@ -5489,6 +5489,7 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
+ "unicode-width 0.2.2",
  "ureq",
 ]
 

@@ -12,18 +12,20 @@ Install the local renderer, rasterizer, and font once on the machine that runs t
 
 ```sh
 mkdir -p ~/.local/bin ~/.local/share/fonts
+sudo apt-get install -y librsvg2-bin unzip
 tmp="$(mktemp -d)"
 curl -fsSL https://github.com/charmbracelet/freeze/releases/download/v0.2.2/freeze_0.2.2_Linux_x86_64.tar.gz | tar -xz -C "$tmp"
 install -m 0755 "$tmp/freeze_0.2.2_Linux_x86_64/freeze" ~/.local/bin/freeze
+curl -fsSL -o "$tmp/cascadia.zip" https://github.com/microsoft/cascadia-code/releases/download/v2407.24/CascadiaCode-2407.24.zip
+unzip -j -o "$tmp/cascadia.zip" 'ttf/static/CascadiaCodeNF-*.ttf' -d ~/.local/share/fonts
 curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/JetBrainsMono.tar.xz | tar -xJ -C ~/.local/share/fonts
 fc-cache -f
-sudo apt-get install -y librsvg2-bin
 freeze --version
 rsvg-convert --version
-fc-match "JetBrainsMono Nerd Font Mono"
+fc-match "Cascadia Code NF"
 ```
 
-The task fails at entry when `freeze`, `rsvg-convert`, or JetBrainsMono Nerd Font Mono is missing and prints these commands.
+The task fails at entry when `freeze`, `rsvg-convert`, or the required Cascadia Code NF font is missing and prints these commands. JetBrainsMono is the icon fallback.
 
 ## Commands
 
@@ -45,4 +47,8 @@ Set `RIMZ_BIN=/path/to/rimz` to capture with a specific binary. Without it, `xta
 
 ## Fidelity
 
-Live capture reads the multiplexer grid and re-renders it through `freeze`; content, layout, ANSI colors, and glyphs are the review target. `freeze` writes an SVG and `rsvg-convert` rasterizes it at a fixed ~576px width — the sidebar's reading width at roughly 30% of a 1920px screen — so the installed Nerd Font is used for sidebar symbols and the vectors stay crisp at that size. A handful of glyphs Ghostty paints from its own sprite renderer (the Symbols for Legacy Computing block) carry no outline in the font; the capture remaps those to the nearest glyph the font has so the column stays aligned where Ghostty would have drawn the sprite itself. Client-side terminal details such as subpixel hinting and Ghostty font thickening remain outside this capture path.
+Live capture reads the multiplexer grid and re-renders it through `freeze`; content, layout, ANSI colors, and glyphs are the review target. The frame targets Ghostty's 2× Retina geometry with Cascadia Code NF at 13pt and `adjust-cell-height = 2`: 26px glyphs, 32px rows, and 4px padding. A 54×34 frame is 831×1103px, and `rsvg-convert` rasterizes the SVG 1:1 without resizing.
+
+On macOS, 13pt × 2 gives 26 device pixels; Cascadia's typo metrics give round(26 × (1900 + 480)/2048) + 2 = 32px rows, since `adjust-cell-height = 2` adds two device pixels, not four. Default 2pt window padding becomes 4px, while the font's exact advance, 26 × 1200/2048 = 15.234375px, stays fractional here; Ghostty rounds it to 15px, making its frame about 1.6% narrower.
+
+Ghostty draws box-drawing, block, braille, and Legacy Computing glyphs from its sprite renderer to fill the cell, while the font's outlines leave gaps in `│` rules and bar meters. `freeze` places background highlights on its own 1/1.68-em column grid, so a highlight drifts right by up to about 0.8 cell at the right edge of a 54-column frame. `freeze` drops bold and dim styling. CoreText renders heavier than FreeType/librsvg and blends in Display P3. Kitty-graphics pets never appear in these captures. Cascadia 2407.24 lacks six of the sidebar's Nerd Font icons and a few arrows, which fall back to JetBrainsMono NFM (or DejaVu Sans Mono), as Ghostty also falls back. `--theme-mode 256` colors go through freeze's xterm palette, not Ghostty's.

@@ -7,6 +7,7 @@ use std::process;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use unicode_width::UnicodeWidthStr;
 
 use crate::files::remove_stale_file;
 use crate::is_help_flag;
@@ -15,13 +16,18 @@ use crate::runner::ensure_success;
 const SCREENSHOT_CONFIG: &str = "xtask/assets/ghostty-tokyonight.json";
 const SCREENSHOT_DIR: &str = "target/screenshots";
 const FREEZE_VERSION: &str = "0.2.2";
+const CASCADIA_CODE_VERSION: &str = "2407.24";
 const NERD_FONTS_VERSION: &str = "3.4.0";
-/// Output width for rendered PNGs. The sidebar reads at roughly 30% of a 1920px
-/// screen, so freeze's intrinsic raster (cell-sized, ~1x) is scaled to this target.
-/// rsvg rasterizes the SVG vectors straight at this width, so glyphs stay crisp
-/// without a supersample pass; `--keep-aspect-ratio` scales uniformly so cells never
-/// distort.
-const SCREENSHOT_TARGET_WIDTH_PX: &str = "576";
+// Ghostty on macOS: 13pt × content scale 2 × 72/72 = 26 device pixels.
+const FONT_PX: f64 = 26.0;
+// Cascadia typo metrics: round(26 × (1900 + 480)/2048) + 2 device px adjustment.
+const CELL_HEIGHT_PX: f64 = 32.0;
+// freeze's line height is a multiple of the font size; this makes the row pitch 32px.
+const LINE_HEIGHT: f64 = CELL_HEIGHT_PX / FONT_PX;
+// Cascadia's exact advance; Ghostty rounds this to 15 device pixels.
+const CELL_WIDTH_PX: f64 = FONT_PX * 1200.0 / 2048.0;
+// Ghostty's default 2pt window padding: floor(2 × 144/72) = 4 device pixels.
+const PADDING_PX: f64 = 4.0;
 
 #[derive(Debug, Default)]
 struct CaptureScreenshotOptions {
@@ -369,18 +375,18 @@ fn ensure_screenshot_prerequisites() -> Result<()> {
         ),
     }
 
-    if !jetbrains_nerd_font_available()? {
+    if !cascadia_font_available()? {
         bail!(
             "{}",
-            screenshot_bootstrap_message("JetBrainsMono Nerd Font Mono is not installed")
+            screenshot_bootstrap_message("Cascadia Code NF is not installed")
         );
     }
     Ok(())
 }
 
-fn jetbrains_nerd_font_available() -> Result<bool> {
+fn cascadia_font_available() -> Result<bool> {
     let output = match Command::new("fc-match")
-        .args(["-f", "%{family}\n", "JetBrainsMono Nerd Font Mono"])
+        .args(["-f", "%{family}\n", "Cascadia Code NF"])
         .output()
     {
         Ok(output) => output,
@@ -391,13 +397,12 @@ fn jetbrains_nerd_font_available() -> Result<bool> {
         return Ok(false);
     }
     let family = String::from_utf8_lossy(&output.stdout);
-    let family = family.to_lowercase();
-    Ok(family.contains("jetbrains") && family.contains("nerd"))
+    Ok(is_cascadia_font_family(&family))
 }
 
 fn screenshot_bootstrap_message(reason: &str) -> String {
     format!(
-        "{reason}\n\nInstall screenshot prerequisites:\n  mkdir -p ~/.local/bin ~/.local/share/fonts\n  tmp=\"$(mktemp -d)\"\n  curl -fsSL https://github.com/charmbracelet/freeze/releases/download/v{FREEZE_VERSION}/freeze_{FREEZE_VERSION}_Linux_x86_64.tar.gz | tar -xz -C \"$tmp\"\n  install -m 0755 \"$tmp/freeze_{FREEZE_VERSION}_Linux_x86_64/freeze\" ~/.local/bin/freeze\n  curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/download/v{NERD_FONTS_VERSION}/JetBrainsMono.tar.xz | tar -xJ -C ~/.local/share/fonts\n  fc-cache -f\n  sudo apt-get install -y librsvg2-bin\n  freeze --version\n  rsvg-convert --version\n  fc-match \"JetBrainsMono Nerd Font Mono\""
+        "{reason}\n\nInstall screenshot prerequisites:\n  mkdir -p ~/.local/bin ~/.local/share/fonts\n  sudo apt-get install -y librsvg2-bin unzip\n  tmp=\"$(mktemp -d)\"\n  curl -fsSL https://github.com/charmbracelet/freeze/releases/download/v{FREEZE_VERSION}/freeze_{FREEZE_VERSION}_Linux_x86_64.tar.gz | tar -xz -C \"$tmp\"\n  install -m 0755 \"$tmp/freeze_{FREEZE_VERSION}_Linux_x86_64/freeze\" ~/.local/bin/freeze\n  curl -fsSL -o \"$tmp/cascadia.zip\" https://github.com/microsoft/cascadia-code/releases/download/v{CASCADIA_CODE_VERSION}/CascadiaCode-{CASCADIA_CODE_VERSION}.zip\n  unzip -j -o \"$tmp/cascadia.zip\" 'ttf/static/CascadiaCodeNF-*.ttf' -d ~/.local/share/fonts\n  curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/download/v{NERD_FONTS_VERSION}/JetBrainsMono.tar.xz | tar -xJ -C ~/.local/share/fonts\n  fc-cache -f\n  freeze --version\n  rsvg-convert --version\n  fc-match \"Cascadia Code NF\""
     )
 }
 
@@ -426,35 +431,83 @@ fn screenshot_output_path(root: &Path, output: Option<PathBuf>, label: &str) -> 
     Ok(path)
 }
 
-/// Glyphs Ghostty paints from its built-in sprite renderer — box-drawing and the
-/// Symbols for Legacy Computing block — that JetBrainsMono Nerd Font Mono carries no
-/// outline for. freeze rasterizes through librsvg, which can only draw glyphs the
-/// font file actually contains, so an unmapped sprite glyph falls back to a
-/// mismatched font at a different advance width and breaks column alignment. Each
-/// entry maps such a glyph to the nearest glyph the font has. Ordinary symbols the
-/// font also lacks (arrows, braille, geometric shapes) fall back cleanly on their
-/// own and stay untouched.
-const SPRITE_GLYPH_FALLBACKS: &[(char, &str)] = &[
-    ('\u{1FB87}', "\u{2595}"), // RIGHT ONE QUARTER BLOCK -> RIGHT ONE EIGHTH BLOCK
-];
-
-/// Substitute the sprite glyphs the screenshot font cannot draw (see
-/// [`SPRITE_GLYPH_FALLBACKS`]). The sidebar emits them because a live Ghostty
-/// terminal renders them itself; this keeps the captured frame aligned where it is
-/// rasterized through a plain font instead.
-fn remap_sprite_glyphs(ansi: &[u8]) -> Vec<u8> {
-    let Ok(text) = std::str::from_utf8(ansi) else {
-        return ansi.to_vec();
-    };
-    let mut text = text.to_owned();
-    for (from, to) in SPRITE_GLYPH_FALLBACKS {
-        text = text.replace(*from, to);
+fn frame_grid(ansi: &[u8]) -> (usize, usize) {
+    if ansi.is_empty() {
+        return (0, 0);
     }
-    text.into_bytes()
+    let mut cols = 0;
+    let mut rows = 0;
+    for line in ansi
+        .strip_suffix(b"\n")
+        .unwrap_or(ansi)
+        .split(|&b| b == b'\n')
+    {
+        let mut plain = Vec::with_capacity(line.len());
+        let mut index = 0;
+        while index < line.len() {
+            if line[index] == 0x1b {
+                index += escape_sequence_len(&line[index..]);
+                continue;
+            }
+            plain.push(line[index]);
+            index += 1;
+        }
+        let width = std::str::from_utf8(&plain)
+            .map(UnicodeWidthStr::width)
+            .unwrap_or(plain.len());
+        cols = cols.max(width);
+        rows += 1;
+    }
+    (cols, rows)
+}
+
+/// Byte length of the escape sequence `rest` starts with (`rest[0]` is ESC), so no
+/// escape byte counts as a column: CSI up to its final byte; OSC, DCS, SOS, PM, and
+/// APC strings (an OSC 8 hyperlink among them) up to BEL or ST; any other escape up to
+/// its final byte. An unterminated sequence runs to the end of the line.
+fn escape_sequence_len(rest: &[u8]) -> usize {
+    match rest.get(1) {
+        None => 1,
+        Some(b'[') => rest[2..]
+            .iter()
+            .position(|b| (0x40..=0x7e).contains(b))
+            .map_or(rest.len(), |end| end + 3),
+        Some(b']' | b'P' | b'X' | b'^' | b'_') => (2..rest.len())
+            .find_map(|i| match (rest[i], rest.get(i + 1)) {
+                (0x07, _) => Some(i + 1),
+                (0x1b, Some(b'\\')) => Some(i + 2),
+                _ => None,
+            })
+            .unwrap_or(rest.len()),
+        Some(_) => rest[1..]
+            .iter()
+            .position(|b| !(0x20..=0x2f).contains(b))
+            .map_or(rest.len(), |end| end + 2),
+    }
+}
+
+fn freeze_frame_size(cols: usize, rows: usize) -> (u32, u32) {
+    let width = cols as f64 * CELL_WIDTH_PX + 2.0 * PADDING_PX;
+    // freeze v0.2.2 ansi.go::beginBackground: top offset (font size + line height)/5
+    // and a 1px rectangle overshoot, so the final highlight retains bottom padding.
+    let height = PADDING_PX
+        + (FONT_PX + LINE_HEIGHT) / 5.0
+        + rows as f64 * CELL_HEIGHT_PX
+        + 1.0
+        + PADDING_PX;
+    (width.ceil() as u32, height.ceil() as u32)
+}
+
+fn is_cascadia_font_family(family: &str) -> bool {
+    family.to_lowercase().contains("cascadia code nf")
 }
 
 fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
-    let ansi = remap_sprite_glyphs(ansi);
+    let (cols, rows) = frame_grid(ansi);
+    if cols == 0 || rows == 0 {
+        bail!("screenshot capture is empty: {}", output.display());
+    }
+    let (width, height) = freeze_frame_size(cols, rows);
     let parent = output
         .parent()
         .with_context(|| format!("{} has no parent directory", output.display()))?;
@@ -472,6 +525,16 @@ fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
     let args = vec![
         OsString::from("--config"),
         config.as_os_str().to_owned(),
+        OsString::from("--font.size"),
+        OsString::from(FONT_PX.to_string()),
+        OsString::from("--line-height"),
+        OsString::from(LINE_HEIGHT.to_string()),
+        OsString::from("--padding"),
+        OsString::from(PADDING_PX.to_string()),
+        OsString::from("-W"),
+        OsString::from(width.to_string()),
+        OsString::from("-H"),
+        OsString::from(height.to_string()),
         OsString::from("--output"),
         staged_svg.as_os_str().to_owned(),
     ];
@@ -485,7 +548,7 @@ fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
     {
         let stdin = child.stdin.as_mut().context("freeze stdin was not piped")?;
         stdin
-            .write_all(&ansi)
+            .write_all(ansi)
             .context("writing ANSI frame to freeze")?;
     }
     drop(child.stdin.take());
@@ -496,9 +559,6 @@ fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
     }
 
     let rsvg_args = vec![
-        OsString::from("--width"),
-        OsString::from(SCREENSHOT_TARGET_WIDTH_PX),
-        OsString::from("--keep-aspect-ratio"),
         OsString::from("-o"),
         staged_png.as_os_str().to_owned(),
         staged_svg.as_os_str().to_owned(),

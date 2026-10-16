@@ -464,7 +464,7 @@ mod tests {
             ('⧖', "Misc Math Symbols-B; the Nerd Font set replaces it"),
             (
                 '🮇',
-                "Legacy Computing; terminal sprite renderers draw it, xtask/src/screenshot.rs remaps it",
+                "Legacy Computing; terminal sprite renderers draw it, and Cascadia Code NF carries it for xtask screenshots",
             ),
         ];
         for row in GLYPH_CATALOG {
