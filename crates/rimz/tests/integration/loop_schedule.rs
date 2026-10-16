@@ -4634,6 +4634,95 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     assert!(!loop_arming_path(&env).exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn loop_spawn_home_cwd_refusal_names_the_loop_fix() {
+    let env = Env::new();
+    env.record(&env.home_root);
+    let store = env.store_for(&env.home_root);
+    env.install_agent_hooks("claude");
+    env.write_config(&env.home_root, "[agents]\nisolation = \"host\"\n");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.home-spawn]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\nevery = \"1h\"\nthrottle = \"off\"\n",
+            env.home_root,
+        ),
+    );
+    let trace = env.project_root.join("home-spawn-mux.log");
+    let output = env
+        .rimz()
+        .current_dir(&env.home_root)
+        .args(["--mux", "zellij", "loop", "run", "home-spawn"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.len(),
+        1,
+        "records={records:?}; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let error = records[0].error.as_deref().expect("loop refusal");
+    assert!(error.contains("home directory"), "{error}");
+    assert!(error.contains(env.home_root.to_str().unwrap()), "{error}");
+    assert!(
+        error.contains("re-add the loop task from a project directory"),
+        "{error}"
+    );
+    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    assert!(!trace.exists(), "preflight must not invoke the mux");
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_judge_home_cwd_refusal_names_the_loop_fix() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    env.install_agent_hooks("claude");
+    env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.home-judge]\nagent = \"claude\"\nprompt = \"repair\"\nroot = {:?}\ndir = {:?}\nevery = \"1h\"\nthrottle = \"off\"\non = \"success\"\n[tasks.home-judge.check]\nagent = \"claude\"\nprompt = \"Any work?\"\n",
+            env.project_root, env.home_root,
+        ),
+    );
+    let trace = env.project_root.join("home-judge-mux.log");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "loop", "run", "home-judge"])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.len(),
+        1,
+        "records={records:?}; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let error = records[0].error.as_deref().expect("judge refusal");
+    assert!(error.contains("home directory"), "{error}");
+    assert!(error.contains(env.home_root.to_str().unwrap()), "{error}");
+    assert!(
+        error.contains("re-add the loop task from a project directory"),
+        "{error}"
+    );
+    assert!(rimz::harness::run::list(store.paths()).unwrap().is_empty());
+    assert!(!trace.exists(), "preflight must not invoke the mux");
+}
+
 #[test]
 fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
     let env = Env::new();
