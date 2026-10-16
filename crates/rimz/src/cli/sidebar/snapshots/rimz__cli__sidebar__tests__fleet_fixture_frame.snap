@@ -14,6 +14,7 @@ expression: rendered
 ▌  Allow the pricing cache write?                    ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◉ 40m▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
+▌  ◉ cache expired                                   ▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1M              $12.40🮇
 ▎  port auth watcher                                 🮇
 ▎  ▣ ━━━━━━━━━━━━━━━━╺━╺─────────────────   34%      🮇
@@ -21,15 +22,14 @@ expression: rendered
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇
 ▎○ codex · GPT 5.1 Codex · xhigh                     🮇
-▎○ codex · GPT 5.1 Codex · xhigh                     🮇
-▎○ codex · GPT 5.1 Codex · xhigh                     🮇
+▎○ codex · —                                       1d🮇
+▎○ codex · —                                       1d🮇
 ▎  +3 more                                           🮇
 
  ⑂ zellij-health                           ⇡1  +14 -3
  ! pi · GPT 5.5 · xhigh · 272k                  $2.18
    API error
    ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──   95%
-
 
  ────────────────────────────────────────────────────
   W: ◎ 22  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k     $26.38

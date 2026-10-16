@@ -100,7 +100,7 @@ Beside the flat slots, `Palette` carries two ramps and two derived tones:
 | heat ramp | `good → warn → caution → alarm` | `Palette::budget_tone`, the one mapping from a remaining percent and the `[theme.display.budget_bar]` zones to a tone: the sidebar's provider budget bar and its window label, and the window percentages of `rimz providers`; `Theme::heat_tone`: the context meter, the remote link badge, the Codex reset-credit expiry while auto-redeem is off; `Palette::pace_tone`: the shared burn-rate bands for the sidebar reset marker and CLI pace reading (warm tail); `Theme::warm_heat_tone`: the child quiet clock and the card age clock's `caution → alarm` tail in the last ten minutes before its known TTL (clamped to the TTL); unknown-TTL card clocks stay muted |
 | calm ramp | `body → good` | `Palette::pace_tone`: the shared burn-rate bands for the sidebar reset marker and CLI pace reading (cool tail); `Theme::calm_tone`: the Codex reset-credit expiry while auto-redeem is armed or holding |
 | `expense` | `alarm` with chroma scaled by `INPUT_EXPENSE_CHROMA` (1.30), then lightness lowered by `INPUT_EXPENSE_DEEPEN` (0.09) | `Component::Input`, the `↘` fresh-input marker and the reddest tone on screen |
-| `cache_expired` | the ramp's `alarm` stop blended halfway to `muted` in OKLab (`CACHE_EXPIRED_GREY`, 0.5), then depth-quantized | `Component::CacheExpired`, the context meter's single expired-cache fill and lead glyph |
+| `cache_expired` | the ramp's `alarm` stop blended halfway to `muted` in OKLab (`CACHE_EXPIRED_GREY`, 0.5), then depth-quantized | `Component::CacheExpired`, the context meter's single expired-cache fill and lead glyph, and the selected card's expired-cache notice |
 
 `ramp_tone(ramp, amount)` interpolates piecewise across any number of stops in OKLab, so a ramp can gain or lose stops without touching the math. `warm_heat_tone` maps its amount into `[HEAT_RAMP_WARM_START, 1.0]`, the tail from `warn` onward, for readers whose low end should rest warm instead of healthy green: an idle agent is stale, not optimal.
 
@@ -175,6 +175,7 @@ In the sidebar, `Component` in `render/theme/component.rs` is the equivalent for
 | `reset_countdown` | two-unit reset countdown: `5h00m`, `1d01h` |
 | `window_label`, `duration_label` | rate-limit window labels: the scope label if any, else `5h`, `7d`, `90m` |
 | `dollars2`, `dollars_cap` | thousands-grouped dollars; `dollars_cap`, sidebar-only, drops `.00` on whole amounts |
+| `dollars_estimate` | approximate cache-rebuild dollars, two significant figures, cents below $10 and integers above, omitted below $0.005 |
 | `group_thousands` | `12,345` |
 | `compact_count` | whole-unit token counts: `999`, `12k`, `3m` |
 | `fmt_bytes` | 1024-based sizes: `512 B`, `1.5 MB` |

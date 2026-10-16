@@ -438,6 +438,62 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
     }
 }
 
+/// Cache expiry guidance belongs to the live selection, not held or teammate reach.
+pub(super) fn cache_line(
+    ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    selected: bool,
+) -> Option<Line<'static>> {
+    if !selected {
+        return None;
+    }
+    let theme = ctx.theme;
+    let wide = ctx.tier == Tier::L2;
+    let phase = cache_age(row, ctx.now).phase(ctx.now);
+    let mut spans = vec![Span::raw("  ")];
+    match phase {
+        CachePhase::Closing { remaining, .. } => {
+            let minutes = ((remaining + 59) / 60).max(1);
+            let subject = if wide { "cache expires" } else { "expires" };
+            spans.push(Span::styled(
+                format!(
+                    "{} {subject} in {minutes}m",
+                    theme.glyph(GlyphRole::CardWaitTimer)
+                ),
+                phase.style(theme),
+            ));
+        }
+        CachePhase::Expired => {
+            let subject = if wide { "cache expired" } else { "expired" };
+            spans.push(Span::styled(
+                format!("{} {subject}", theme.glyph(GlyphRole::ClockOver)),
+                theme.style(theme.component(Component::CacheExpired), Modifier::empty()),
+            ));
+            if let Some(cost) = row
+                .as_agent()
+                .and_then(|card| card.cache)
+                .and_then(|cache| cache.rewarm_cost_usd)
+                .and_then(crate::theme::fmt::dollars_estimate)
+            {
+                spans.push(Span::styled(value_seam(theme), theme.muted()));
+                let suffix = if wide { " to re-warm" } else { "" };
+                spans.push(Span::styled(
+                    format!(
+                        "{} {cost}{suffix}",
+                        theme.glyph(GlyphRole::TokensCacheWrite)
+                    ),
+                    theme.style(theme.component(Component::CacheWrite), Modifier::empty()),
+                ));
+            }
+        }
+        _ => return None,
+    }
+    Some(Line::from(trim_spans_to_width(
+        spans,
+        content_width(ctx.width),
+    )))
+}
+
 /// The selected or held card's stats line, also shown on every engaged card
 /// under expanded density. Current-window
 /// truth retains the `▤` form: `▤` is
