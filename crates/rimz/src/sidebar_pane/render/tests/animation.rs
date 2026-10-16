@@ -347,8 +347,36 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
     ui.delegation_overrides.clear();
     ui.selected_index = Some(usize::MAX);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
-    ui.delegation_overrides.insert(row_id, true);
+    ui.delegation_overrides.insert(row_id.clone(), true);
     assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+
+    // A read done card quiet past the stale threshold: the click-open section
+    // keeps the full card and its motion; closed, the stale line draws no
+    // entries and holds nothing.
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    let (unread, last_activity) = (row.unread, row.last_activity);
+    row.unread = false;
+    row.last_activity = snapshot.now - std::time::Duration::from_secs(86_401);
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Success;
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    let mut ctx = test_row_ctx(&snapshot, &theme, 70, usize::MAX, 0, &rolls);
+    ctx.delegation_overrides = &ui.delegation_overrides;
+    let open =
+        line_texts(&worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines)
+            .join("\n");
+    assert!(open.contains("cargo test"), "{open}");
+    ui.delegation_overrides.remove(&row_id);
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
+    ui.delegation_overrides.insert(row_id, true);
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[0];
+    (row.unread, row.last_activity) = (unread, last_activity);
+    row.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Sleeping;
 
     let agent = std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,

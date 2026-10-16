@@ -2,6 +2,7 @@
 
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
+use crate::sidebar_pane::render::fmt::age_secs;
 use crate::store::snapshot::SidebarRow;
 
 use super::super::SelectionReach;
@@ -32,6 +33,29 @@ impl CardStage {
             }
         } else {
             Self::Engaged
+        }
+    }
+
+    /// The stage every `template` caller draws from: a read card quiet past
+    /// `stale_after_secs` is `Stale` unless selection, teammate reach, an
+    /// open delegation section, or `expanded` density keeps it open.
+    pub(super) fn resolve(
+        row: &SidebarRow,
+        density: CardDensityMode,
+        expansion: CardExpansion,
+        stale_after_secs: u64,
+        now: jiff::Timestamp,
+    ) -> Self {
+        if !row.unread
+            && !expansion.reach.opens_card()
+            && !expansion.delegation
+            && density != CardDensityMode::Expanded
+            && stale_after_secs > 0
+            && age_secs(row.last_activity, now).unsigned_abs() > stale_after_secs
+        {
+            Self::Stale
+        } else {
+            Self::of(row)
         }
     }
 }

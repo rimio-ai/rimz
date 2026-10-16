@@ -205,14 +205,14 @@ Each agent is a small stacked card whose anatomy is drawn in [the interface refe
 
 A card's slot skeleton is fixed before any content fills it; optional slots render only when their content applies. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
-- **Stage** (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables); only idle and success rows may use the stale template.
+- **Stage** (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables), unless reach, an open delegation section, or `expanded` density keeps it open; only idle and success rows may use the stale template. `CardStage::resolve` is that one decision, and both `template` callers (`row_lines` and the frame-rate check `delegation_motion`) read it.
 - **Expansion** (`CardExpansion`): `reach` (`SelectionReach`) distinguishes the live or held selected row, its visible named teammates, and unreached rows. Both selected rows and teammates open the card, but only selected rows gain the stats line outside `expanded` density. `delegation` (the sticky header override, else the live or held selected row itself or `expanded` density) picks whether the delegation entries show, so a teammate folds its entries behind the summary line. Renderer-local holds accumulate across clicks and release all at once when the hold-free layout no longer clamps the selected card's own target. Authoritative wheel, banner, and toggle paints release immediately; off-screen selections reveal without holding.
 - **Density**: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
 - **Status**, read by the stale, resting compact, and delegation-summary arms.
 
 | Card | Slots |
 |---|---|
-| stale idle or success, unreached, density not `expanded` | stale |
+| stale idle or success, unreached, delegation closed, density not `expanded` | stale |
 | compact, not expanded: `idle` | identity |
 | compact, not expanded: `running`, `waiting` | identity, description, gauge |
 | compact, not expanded: `paused`, `success`, `failed`, `sleeping` | identity, description |
