@@ -473,16 +473,16 @@ mod tests {
     }
 
     #[test]
-    fn roster_keeps_lone_finished_row_visible() {
+    fn roster_collapses_lone_finished_row() {
         let mut finished = group(vec![agent_row("done", AgentStatus::Success)]);
         finished.finished = true;
         let snapshot = snapshot(vec![finished]);
 
         let roster = VisibleRoster::baseline(&snapshot);
 
-        assert_eq!(ids(&roster), ["done"]);
-        assert_eq!(roster.groups()[0].hidden_count(), 0);
-        assert_eq!(roster.groups()[0].natural_hidden_count(), 0);
+        assert!(ids(&roster).is_empty());
+        assert_eq!(roster.groups()[0].hidden_count(), 1);
+        assert_eq!(roster.groups()[0].natural_hidden_count(), 1);
     }
 
     #[test]

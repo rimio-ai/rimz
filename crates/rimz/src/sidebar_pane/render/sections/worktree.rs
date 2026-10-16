@@ -1,6 +1,6 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
-//! with its parallel hit-test map entries. Finished multi-row pods collapse
+//! with its parallel hit-test map entries. Finished agent pods collapse
 //! hidden agents into a two-line receipt: an expandable team/member roster with
 //! cost pinned right, then token totals and cache health with active duration,
 //! or the finished age when that record is absent,
@@ -46,7 +46,7 @@ pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snaps
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// a finished multi-agent pod the collapse empties still renders its header and
+/// a finished agent pod the collapse empties still renders its header and
 /// two-line receipt when totals exist. The live more/less line is
 /// filter-suppressed because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
@@ -351,7 +351,17 @@ fn finished_roster_line(
     let cost_spans = if let Some(cost) = group
         .cohort_effort
         .as_ref()
-        .and_then(|effort| effort.cost_usd)
+        .map_or_else(
+            || {
+                Some(
+                    hidden_rows
+                        .iter()
+                        .filter_map(|row| row.as_agent()?.cost_usd())
+                        .sum::<f64>(),
+                )
+            },
+            |effort| effort.cost_usd,
+        )
         .filter(|cost| *cost >= 0.005)
     {
         vec![Span::styled(

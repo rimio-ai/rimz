@@ -654,19 +654,22 @@ pub(super) fn compare_groups(
     // The `external` catch-all always tails: out-of-project residue never
     // displaces project work, so it sorts below every project group — below even
     // archived groups, and regardless of any `waiting`/`failed` member it holds.
-    // Among project groups the same macro bands apply, read off the liveliest
+    // Finished project groups follow all unfinished work. Within each
+    // partition the same macro bands apply, read off the liveliest
     // member: hot work, warm work, archive. Urgency decides attention inside the
     // winning band, then calm activity orders working, successful, idle, and
     // process-only groups before git, pane creation, and label settle ties.
     group_sort_key(
         left.rows.iter().map(row_rank_facts),
         left.kind,
+        left.finished,
         group_git_rung(left),
         &left.label,
     )
     .cmp(&group_sort_key(
         right.rows.iter().map(row_rank_facts),
         right.kind,
+        right.finished,
         group_git_rung(right),
         &right.label,
     ))
@@ -675,6 +678,7 @@ pub(super) fn compare_groups(
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct GroupRankKey {
     external: bool,
+    finished: bool,
     band: u8,
     urgency: Reverse<u32>,
     calm: GroupCalm,
@@ -686,6 +690,7 @@ struct GroupRankKey {
 fn group_sort_key<'a>(
     facts: impl Iterator<Item = RankFacts<'a>>,
     kind: SidebarWorktreeKind,
+    finished: bool,
     git: GitRung,
     label: &str,
 ) -> GroupRankKey {
@@ -696,11 +701,7 @@ fn group_sort_key<'a>(
     let mut urgency = 0;
     let mut calm = GroupCalm::Processes;
     let mut earliest_ordinal: Option<u64> = None;
-    let mut has_rows = false;
-    let mut finish_blocked = false;
     for facts in facts {
-        has_rows = true;
-        finish_blocked |= member_blocks_finish(facts.status);
         let facts_band = facts_band(&facts);
         if facts_band < band {
             band = facts_band;
@@ -714,11 +715,9 @@ fn group_sort_key<'a>(
             earliest_ordinal = Some(earliest_ordinal.map_or(ordinal, |min| min.min(ordinal)));
         }
     }
-    if has_rows && git == GitRung::Done && !finish_blocked {
-        band = 2;
-    }
     GroupRankKey {
         external: kind == SidebarWorktreeKind::External,
+        finished,
         band,
         urgency: Reverse(urgency),
         calm,
@@ -747,7 +746,7 @@ pub(super) fn group_finished(group: &SidebarWorktreeGroup) -> bool {
         && !group
             .rows
             .iter()
-            .any(|row| member_blocks_finish(row.status()))
+            .any(|row| member_blocks_finish(row.attention_status()))
 }
 
 fn member_blocks_finish(status: Option<AgentStatus>) -> bool {
@@ -847,6 +846,7 @@ pub fn group_live_agents_by_worktree<'a>(
                 .copied()
                 .map(|agent| agent_rank_facts(agent, snapshot.now, windows)),
             group.kind,
+            false,
             GitRung::Unknown,
             &group.label,
         )

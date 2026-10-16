@@ -421,10 +421,10 @@ pub struct SidebarWorktreeGroup {
 }
 
 impl SidebarWorktreeGroup {
-    /// A finished roster with several agents collapses behind the two-line
-    /// receipt. Process rows never count, so a lone agent stays on screen.
+    /// A finished roster with any agent collapses behind the two-line receipt.
+    /// Process-only groups stay open.
     pub fn collapses(&self) -> bool {
-        self.finished && self.rows.iter().filter(|row| row.is_agent()).count() > 1
+        self.finished && self.rows.iter().any(SidebarRow::is_agent)
     }
 }
 
@@ -634,7 +634,8 @@ mod tests {
     }
 
     #[test]
-    fn finished_groups_collapse_only_with_several_agents() {
+    fn finished_groups_collapse_with_any_agent() {
+        assert!(collapse_test_group(vec![collapse_test_row("solo", true)]).collapses());
         assert!(
             !collapse_test_group(vec![
                 collapse_test_row("shell-one", false),
@@ -643,7 +644,7 @@ mod tests {
             .collapses()
         );
         assert!(
-            !collapse_test_group(vec![
+            collapse_test_group(vec![
                 collapse_test_row("agent", true),
                 collapse_test_row("shell-one", false),
                 collapse_test_row("shell-two", false),

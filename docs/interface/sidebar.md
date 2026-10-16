@@ -527,7 +527,7 @@ A group shows at most six idle and process rows. The rest fold behind a dim `+K 
    +3 more
 ```
 
-A group is finished when its pull request merged or closed, or the trunk contains its work, its tree is clean, and no member is working or needs you. A finished group with several agents collapses to its header and a two-line receipt, unread results included:
+A group is finished when its pull request merged or closed, or the trunk contains its work, its tree is clean, and no member is working or blocked. Every finished group with an agent collapses to its header and a two-line receipt, unread results included:
 
 ```
  ↩ merged-work                                   ✓ main
@@ -537,7 +537,7 @@ A group is finished when its pull request merged or closed, or the trunk contain
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A finished group with one agent, and a group with only process rows, stay open.
+Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 

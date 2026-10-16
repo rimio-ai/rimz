@@ -98,7 +98,10 @@ fn header_label_parts_keep_styles_only_when_the_full_label_fits() {
             // Two gutter cells and the header's one-cell gap are reserved.
             let fits = text_width(full) + 3;
             for width in [fits - 1, fits, fits + 1] {
-                let lines = group_lines_at_width(&snapshot, &theme, 0, width);
+                let costs = CostRolls::default();
+                let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &costs);
+                let lines =
+                    worktree_group_block(&ctx, &snapshot.worktree_groups[0], true, None).lines;
                 let spans = &lines[0].spans;
                 assert_eq!(spans[1].style, label_style);
                 if width < fits {
