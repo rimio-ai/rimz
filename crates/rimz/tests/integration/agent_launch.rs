@@ -5273,6 +5273,121 @@ fn launch_count(log: &std::path::Path) -> usize {
 
 #[cfg(unix)]
 #[test]
+fn an_unbound_picker_exit_is_silent_ends_its_card_and_never_retries() {
+    for code in [0, 1, 7] {
+        picker_exit_case(false, code);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bound_picker_exit_keeps_its_normal_hint_and_never_retries() {
+    for code in [0, 1] {
+        picker_exit_case(true, code);
+    }
+}
+
+#[cfg(unix)]
+fn picker_exit_case(bound: bool, code: i32) {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = env.home_root.join("agent-bin");
+    crate::common::write_path_shim(
+        &shim_dir,
+        "codex",
+        &format!(
+            r#"if [ "${{1:-}}" = --version ]; then echo 0.159.2; exit 0; fi
+printf 'launch\n' >> "$RIMZ_TEST_PICK_LOG"
+if [ "$RIMZ_TEST_PICK_BOUND" = 1 ]; then
+    printf '%s\n' '{{"hook_event_name":"SessionStart","session_id":"sess-picked"}}' | "$RIMZ_TEST_PICK_BIN" hooks feed --source codex || exit 99
+fi
+exit {code}"#,
+        ),
+    );
+    write_startup_relaunch_config(&env, "startup-relaunch-wait = \"0s\"");
+    let launch_id = "launch_picker";
+    seed_launch(&env, launch_id, "picker", LaunchParams::default());
+    let mut request = fresh_exec("codex", None);
+    request.identity.name = Some("picker".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    request.action = ExecAction::Pick {
+        extra_args: Vec::new(),
+    };
+    request.close_pane_on_exit = false;
+    let output = env
+        .rimz()
+        .args(exec_args(&env, &request))
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim_dir))
+        .env("TMUX_PANE", "%1")
+        .env("RIMZ_TEST_PICK_LOG", &launch_log)
+        .env("RIMZ_TEST_PICK_BOUND", if bound { "1" } else { "0" })
+        .env("RIMZ_TEST_PICK_BIN", env.rimz_bin())
+        .bounded_output()
+        .expect("picker exit settles");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(code), "{stderr}");
+    assert_eq!(launch_count(&launch_log), 1, "{stderr}");
+    assert_eq!(launch_retries(&env), Vec::new(), "no picker retry assist");
+    assert!(!stderr.contains("relaunching"), "{stderr}");
+    assert!(!stderr.contains("died at startup"), "{stderr}");
+    assert!(!stderr.contains("failed to start"), "{stderr}");
+    if bound {
+        assert!(stderr.contains("agent `codex` exited"), "{stderr}");
+        assert!(
+            stderr.contains("resume with `rimz agents resume @picker`"),
+            "{stderr}"
+        );
+    } else {
+        assert!(stderr.is_empty(), "unbound picker must be silent: {stderr}");
+    }
+
+    let store = env.store();
+    let events = store.read_events().expect("picker events");
+    assert!(
+        !events.iter().any(|event| matches!(
+            event.kind(), EventKind::AgentLaunch(payload)
+                if payload.agent_id.as_str() == launch_id && payload.state == AgentLaunchState::Failed
+        )),
+        "a picker exit is not a failed startup: {events:#?}"
+    );
+    let ended_id = if bound { "sess-picked" } else { launch_id };
+    assert!(events.iter().any(|event| matches!(
+        event.kind(), EventKind::AgentLifecycle(payload)
+            if payload.observation.agent_id.as_ref().map(AgentSessionId::as_str) == Some(ended_id)
+                && payload.event_name.as_deref() == Some("rimz.agent-ended")
+    )), "the wrapper must stamp its card ended: {events:#?}");
+    let projection = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("picker audit projection");
+    assert!(
+        projection
+            .agents
+            .iter()
+            .any(|agent| { agent.agent_id.as_str() == ended_id && agent.ended_at.is_some() }),
+        "picker card is ended: {:#?}",
+        projection.agents
+    );
+
+    if code != 0 {
+        let workspace = env.resolve_workspace(&env.project_root);
+        let exits: Vec<_> = env
+            .diag_records(&workspace.session_name)
+            .into_iter()
+            .map(|record| serde_json::to_value(record.event).unwrap())
+            .filter(|event| event["kind"] == "provider_startup_exit")
+            .collect();
+        assert_eq!(exits.len(), 1, "picker diagnostics are retained: {exits:?}");
+        assert_eq!(exits[0]["action"], "pick");
+        assert_eq!(exits[0]["exit_code"], code);
+        assert_eq!(exits[0]["relaunches"], 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn close_pane_exec_relaunches_a_startup_death_to_the_cap_then_reports_the_failure() {
     let env = Env::new();
     env.record(&env.project_root);

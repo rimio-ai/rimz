@@ -413,6 +413,77 @@ fn picker_consumes_launch_identity_without_attaching_a_session() {
     assert_eq!(exec_attach_target(&request), None);
 }
 
+#[test]
+fn picker_binding_evidence_survives_session_end() {
+    for bound in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = test_workspace(dir.path());
+        let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let runtime =
+            rimz::RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+        let store = rimz::Store::open(paths, runtime).unwrap();
+        let identity = LaunchIdentity {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: "launch_picker".into(),
+            name: "picker".into(),
+            name_explicit: false,
+            launch: Default::default(),
+            run_id: None,
+            prompt: None,
+        };
+        let pane = rimz::ids::PaneId::parse("tmux:%1").unwrap();
+        store
+            .bind_agent_launch(&identity, "room", dir.path(), &pane, None)
+            .unwrap();
+        let invocation = ExecInvocationContext {
+            workspace: &workspace,
+            cwd: dir.path().to_owned(),
+            store: RefCell::new(Some(store.clone())),
+            effective_isolation: None,
+        };
+        assert_eq!(picker_session_bound(&invocation, &identity), Some(false));
+        let session = if bound {
+            AgentSessionId::from("provider-session")
+        } else {
+            identity.agent_id.clone()
+        };
+        let observe = |signal, event_name| {
+            let mut observation =
+                rimz::agents::AgentLifecycleObservation::new(Some(session.clone()), signal);
+            observation.pane_id = Some(pane.clone());
+            observation.agent_name = Some(identity.name.clone());
+            store
+                .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                    session_name: "room",
+                    agent_kind: identity.kind.clone(),
+                    event_name,
+                    observation: &observation,
+                    spawned_subagents: &[],
+                })
+                .unwrap();
+        };
+        if bound {
+            observe(rimz::agents::LifecycleSignal::Registered, "SessionStart");
+        }
+        assert_eq!(picker_session_bound(&invocation, &identity), Some(bound));
+        observe(rimz::agents::LifecycleSignal::Ended, "SessionEnd");
+        assert!(
+            !store
+                .snapshot_cached()
+                .unwrap()
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id == session),
+            "ended roots are absent from the live snapshot"
+        );
+        assert_eq!(
+            picker_session_bound(&invocation, &identity),
+            Some(bound),
+            "a durable end must not change whether a provider session bound"
+        );
+    }
+}
+
 fn bare_exec_args() -> ExecRequest {
     ExecRequest {
         isolation_default: None,
