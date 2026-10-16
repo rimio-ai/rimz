@@ -26,7 +26,7 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | `Wait` | A `Type: WAIT`, `Type: SIGNAL`, `Type: STAGE`, or `Type: CACHE_KEEPALIVE` delivery, with `from: rimz` | Hidden with the output of the turn it opens |
 | `Assistant` | A root turn's final assistant message | `@receiver: text` |
 | `Ask` | A native question or plan approval, carrying option labels and descriptions | The agent's question |
-| `Answer` | The effective answer, from the native prompt UI or the first human prompt submitted while a question is open | `you` to the agent, folded into its ask card |
+| `Answer` | The effective answer, from the native prompt UI or the first human prompt submitted while a question is open | `user` to the agent, folded into its ask card |
 | `Error` | A hook-path provider error newly merged into `AgentContext.turn_error` | `@receiver: error text`, styled as an error |
 
 `rimz transcript --json` includes every hidden entry. [`TranscriptEntry::origin()`](../../../crates/rimz/src/transcript.rs) is the one read-side origin projection, shared by rendering, thread assembly, and attribution. It derives `EntryOrigin` from `(entry, from)` without adding a field to stored JSONL. The first matching row wins:
@@ -38,10 +38,10 @@ Three nearby reads use other sources. Supervised-run streaming tails the provide
 | Any remaining kind | `"rimz"` (`HARNESS_FROM`) | `Harness` |
 | `Message` | Absent | `Harness` |
 | `Prompt`, `Answer` | Absent | `Human` |
-| Any remaining kind | `"you"` (`HUMAN_FROM`) | `Human` |
+| Any remaining kind | `"user"` (`HUMAN_FROM`) | `Human` |
 | Any remaining kind | Any other sender | `Agent` |
 
-`is_harness()` delegates to this projection. Conversation counts count only human-origin prompts as input from the user. Rendered `from` stays identity rather than origin; the fallback `user` is reserved for human-origin entries. Stage lines derive their origin separately from the flip's author: the operator is human, otherwise the author is an agent.
+The bucket decoder normalizes the legacy `from: "you"` alias to `"user"` on every read without rewriting stored files. New answers record `from: "user"`; typed human prompts still carry no `from`. `is_harness()` delegates to this projection. Conversation counts count only human-origin prompts as input from the user. Every human-origin entry renders `from: "user"`. Stage lines derive their origin separately from the flip's author: the operator is human, otherwise the author is an agent.
 
 ## Writing entries
 

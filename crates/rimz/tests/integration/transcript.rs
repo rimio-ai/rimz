@@ -799,13 +799,13 @@ fn transcript_records_native_ask_question_context_and_answer() {
     let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
     assert!(output.contains("here is my read"), "{output}");
     assert!(output.contains("│ │ Choose deployment path?"), "{output}");
-    assert!(output.contains("│ │ ● safe — you"), "{output}");
+    assert!(output.contains("│ │ ● safe — user"), "{output}");
     assert!(
         output.contains("│ │     Use staged rollout with rollback ready."),
         "{output}"
     );
     assert!(output.contains("│ │ ○ fast"), "{output}");
-    assert!(!output.contains(" you  → @claude"), "{output}");
+    assert_eq!(output.matches(" user  → @claude").count(), 1, "{output}");
     assert!(!output.contains("\"answers\""), "{output}");
     assert!(!output.contains("claude needs attention"), "{output}");
 
@@ -909,7 +909,7 @@ fn transcript_records_pane_typed_prompt_as_open_ask_answer() {
     let output = run_ok(env.rimz().args(["transcript", &format!("#{branch}")]));
     assert!(output.contains("│ │ Choose deployment path?"), "{output}");
     assert!(
-        output.contains("│ │ ● other: Ship after staging finishes. — you"),
+        output.contains("│ │ ● other: Ship after staging finishes. — user"),
         "{output}"
     );
     assert!(!output.contains("◌ unanswered"), "{output}");
@@ -925,7 +925,7 @@ fn transcript_records_pane_typed_prompt_as_open_ask_answer() {
         .find(|entry| entry.entry == TranscriptKind::Answer)
         .expect("answer entry");
     assert_eq!(answer.id, ask.id);
-    assert_eq!(answer.from.as_deref(), Some("you"));
+    assert_eq!(answer.from.as_deref(), Some("user"));
     assert_eq!(answer.answers[0].chosen, ["Ship after staging finishes."]);
     assert!(
         !entries.iter().any(|entry| {

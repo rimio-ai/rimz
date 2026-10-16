@@ -145,10 +145,43 @@ fn entry_origin_and_rendered_author_cover_kind_and_sender_vocabulary() {
     for entry in &log {
         let chat = chat_entry_for_log_entry(entry, &identities, false, None);
         assert_eq!(chat.origin, entry.origin());
-        if chat.from == "user" {
-            assert_eq!(entry.origin(), Human, "{entry:?}");
+        if chat.origin == Human {
+            assert_eq!(chat.from, "user", "{entry:?}");
         }
     }
+}
+
+#[test]
+fn human_answers_project_one_label_in_human_and_json_views() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = rimz::StatePaths::under(
+        rimz::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    for from in [None, Some("you"), Some("user")] {
+        let answer = log_entry("claude", "receiver", TranscriptKind::Answer, from, "safe");
+        rimz::transcript::append(&paths, &answer).unwrap();
+    }
+    let log = rimz::transcript::read_all(&paths).unwrap();
+    let identities = build_identities(&log, None);
+    let view = follow_view(
+        log.iter()
+            .map(|entry| render_entry_for_log_entry(entry, &identities, false, None))
+            .collect(),
+    );
+    for line in selected_chat_lines(&view) {
+        assert_eq!(line.from, "user");
+        assert_eq!(line.origin, EntryOrigin::Human);
+    }
+    let mut out = anstream::StripStream::new(Vec::new());
+    render_lines_to(&mut out, &view, &TimeZone::UTC, Prose::Raw).unwrap();
+    let out = String::from_utf8(out.into_inner()).unwrap();
+    assert!(out.contains(" user  →"), "{out}");
+    assert!(
+        !out.contains(" you  →") && !out.contains(" answered  →"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -162,7 +195,7 @@ fn writer_produced_shapes_preserve_harness_classification() {
         (Wait, Some("@rimz"), true),
         (Assistant, None, false),
         (Ask, None, false),
-        (Answer, Some("you"), false),
+        (Answer, Some(rimz::transcript::HUMAN_FROM), false),
         (Answer, Some("@coder"), false),
         (Error, None, false),
     ] {
@@ -235,7 +268,7 @@ fn render_entry(
         },
         chat: ChatLine {
             from: from.to_owned(),
-            origin: if matches!(from, "user" | "you" | "answered") {
+            origin: if from == "user" {
                 EntryOrigin::Human
             } else {
                 EntryOrigin::Agent
@@ -274,7 +307,7 @@ fn ask_entry(at: &str, text: &str) -> RenderEntry {
 }
 
 fn answer_entry(at: &str, text: &str) -> RenderEntry {
-    render_entry(TranscriptKind::Answer, "you", Some("@claude"), at, text)
+    render_entry(TranscriptKind::Answer, "user", Some("@claude"), at, text)
 }
 
 fn message_id(index: u64) -> String {
@@ -2376,7 +2409,7 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         "{out}"
     );
     assert!(out.contains("│ Choose deployment path?"), "{out}");
-    assert!(out.contains("│ ● safe — you · “use prod window”"), "{out}");
+    assert!(out.contains("│ ● safe — user · “use prod window”"), "{out}");
     assert!(
         out.contains("│     Use staged rollout with rollback ready."),
         "{out}"
@@ -2386,7 +2419,7 @@ fn structured_ask_card_folds_selected_answer_with_note() {
         out.contains("│     Ship immediately and monitor closely."),
         "{out}"
     );
-    assert!(!out.contains(" you  → @claude"), "{out}");
+    assert!(!out.contains(" user  → @claude"), "{out}");
 
     let mut raw_ask = ask_entry("2026-06-28T18:00:00Z", "");
     raw_ask.chat.questions = vec![rimz::transcript::AskQuestion {
@@ -2443,9 +2476,9 @@ fn structured_ask_card_renders_other_and_multi_question_answers() {
 
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
-    assert!(out.contains("│ ● other: live repro first — you"), "{out}");
+    assert!(out.contains("│ ● other: live repro first — user"), "{out}");
     assert!(out.contains("│\n│ Notify team?"), "{out}");
-    assert!(out.contains("│ ● yes — you"), "{out}");
+    assert!(out.contains("│ ● yes — user"), "{out}");
 }
 
 #[test]
@@ -2457,7 +2490,7 @@ fn text_ask_card_folds_text_answer_or_stays_unanswered() {
     let unanswered = render(&[ask], jiff::civil::date(2026, 6, 28));
 
     assert!(
-        answered.contains("│ Choose path? [safe, fast]\n│ ● safe — you"),
+        answered.contains("│ Choose path? [safe, fast]\n│ ● safe — user"),
         "{answered}"
     );
     assert!(
@@ -2545,7 +2578,7 @@ fn answer_without_matching_agent_ask_stays_plain() {
     let out = render(&[ask, answer], jiff::civil::date(2026, 6, 28));
 
     assert!(out.contains("│ Native question?\n│ ◌ unanswered"), "{out}");
-    assert!(out.contains(" you  → @codex"), "{out}");
+    assert!(out.contains(" user  → @codex"), "{out}");
     assert!(out.contains("\nallow"), "{out}");
 }
 

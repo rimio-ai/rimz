@@ -969,7 +969,7 @@ fn sender_render_uses_attributed_address_precedence() {
             },
             "@claude",
         ),
-        (MessageSender::Human, "you"),
+        (MessageSender::Human, "user"),
         (MessageSender::System, "rimz"),
         (
             MessageSender::Harness {

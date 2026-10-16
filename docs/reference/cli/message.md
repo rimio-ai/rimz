@@ -249,13 +249,13 @@ Bare `rimz message` is `rimz message list` for the current lane. A shell at the 
 The list shows conversation by default: sends from you and from agents. Archived messages are hidden unless `--all` or `--status archived` asks for them. Each row is two lines, the header then the text clipped to the terminal width with `$HOME` shown as `~`:
 
 ```text
-you → @coder  queued  3m ago  msg_…
+user → @coder  queued  3m ago  msg_…
   Read plan.md when the planner finishes. · after @planner
 ```
 
 An unfiltered empty lane reports counts from other lanes, not their rows. These counts exclude archived messages and, unless `--system` is passed, system traffic. Only queued messages count as not yet delivered, so the number matches what `--status queued` lists. The hint offers `rimz message list --all --status queued` when any are undelivered, otherwise `rimz message list --all`. A target or status filter keeps the scoped empty-state line, and JSON stays an array of the selected lane's rows. A row whose text is no longer retained and has no reason or condition shows `(text no longer kept)`. An invalid status lists all accepted status names.
 
-The sender reads `you` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under `#channel` headers, lanes with the newest message first. Channel-less messages and messages under the root directory's name share one `#main` header. Previously recorded recipient addresses retain their original spelling; JSON `channel` values remain the stored routing keys.
+The sender reads `user` for a user shell, the handle for an agent, `@rimz` for RimZ notices, and `rimz` for `--no-from` text. A handle drops `#channel` when the list is already scoped to that channel. A final message whose text was not retained shows its terminal reason instead. With `--all`, rows group under `#channel` headers, lanes with the newest message first. Channel-less messages and messages under the root directory's name share one `#main` header. Previously recorded recipient addresses retain their original spelling; JSON `channel` values remain the stored routing keys.
 
 Trailing lines report what the view left out:
 

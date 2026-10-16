@@ -116,7 +116,7 @@ A parked message delivers the moment the agent can take it, which means all of t
 ```console
 $ rimz message show msg_06gc05m0d327d1d0
 msg_06gc05m0d327d1d0 — queued
-  from:    you
+  from:    user
   to:      @coder
   channel: auth
   created: 2m ago (2026-07-08T15:41:06Z)
@@ -234,11 +234,11 @@ rimz message clear @coder               # cancel every open message for one agen
 
 ```console
 $ rimz message list
-you → @reviewer  queued  1m ago  msg_06gc05nhj9q2b4t7
+user → @reviewer  queued  1m ago  msg_06gc05nhj9q2b4t7
   read plan.md and start the review · after @coder
-you → @coder  queued  2m ago  msg_06gc05m0d327d1d0
+user → @coder  queued  2m ago  msg_06gc05m0d327d1d0
   open a PR summary once tests pass
-you → @planner  delivered  12m ago  msg_06gc04t1kkr7c0h9
+user → @planner  delivered  12m ago  msg_06gc04t1kkr7c0h9
   draft the implementation plan
 ... 6 system messages hidden (--system shows them)
 ```

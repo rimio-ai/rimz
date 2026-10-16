@@ -411,7 +411,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         answer.id.as_ref().map(rimz::ids::AskId::as_str),
         Some("ask_0123456789abcdef")
     );
-    assert_eq!(answer.from.as_deref(), Some("you"));
+    assert_eq!(answer.from.as_deref(), Some("user"));
     assert_eq!(answer.text, "typed directly");
     assert_eq!(
         answer.answers,

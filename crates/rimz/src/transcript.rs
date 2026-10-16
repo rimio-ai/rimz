@@ -23,7 +23,7 @@ use crate::workspace::{KnownWorkspace, known_workspaces_under};
 pub const HARNESS_FROM: &str = "rimz";
 
 /// The `from` handle a human-authored entry carries; a typed prompt carries none.
-pub const HUMAN_FROM: &str = "you";
+pub const HUMAN_FROM: &str = "user";
 
 /// Who authored a transcript entry. The renderer, the thread builder, and
 /// attribution all read this projection instead of deciding for themselves, so
@@ -496,6 +496,13 @@ fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<TranscriptEntry>(line).ok())
+        .map(|mut entry| {
+            // Legacy human labels stay on disk; every reader sees the current label.
+            if entry.from.as_deref() == Some("you") {
+                entry.from = Some(HUMAN_FROM.to_owned());
+            }
+            entry
+        })
         .filter(|entry| !is_legacy_paste_fragment(entry))
         .collect())
 }
