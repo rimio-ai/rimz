@@ -1226,14 +1226,6 @@ impl Store {
         })
     }
 
-    pub fn earliest_message_wake(&self, now: Timestamp) -> Result<Option<Timestamp>> {
-        let next = message::read_queue(&self.inner.paths.messages_dir)?
-            .into_iter()
-            .filter_map(|message| message.wake_deadline(now))
-            .min();
-        Ok(next)
-    }
-
     #[must_use = "durability barrier; check the result"]
     pub fn record_send_error(
         &self,

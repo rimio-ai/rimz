@@ -1125,8 +1125,8 @@ path = "crates/rimz/src/store"
 # AgentCard::from_agent shares the store's base card projection with rowless CLI reports (+1).
 # SignalEvent::from_envelope shares the signal-line projection with events list (+1).
 # NeedsYou and needs_you share sidebar attention membership with both CLI scenes (+2).
-# Store::rearm_message_wake shares the sweep's clock-only rearm (+1).
-surface-budget = 427
+# Store::rearm_message_wake replaces the lock-free wake read without surface growth.
+surface-budget = 426
 
 [[module]]
 path = "crates/rimz/src/theme"
@@ -2504,11 +2504,6 @@ reason = "Pass 13: policy is two-valued in production: message steer passes Stee
 kind = "item"
 key = "message::deliver::sweep"
 reason = "Pass 13: one caller, deep: single-flight lock, stale-Sent reconcile, condition stamps, FIFO heads, wake refresh."
-
-[[verdict]]
-kind = "item"
-key = "message::deliver::register_message_wake"
-reason = "Pass 13: small interface over the wake-stamp protocol, reached from dispatch, edit and delivery recovery."
 
 [[verdict]]
 kind = "item"

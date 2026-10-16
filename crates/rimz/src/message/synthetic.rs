@@ -91,7 +91,6 @@ pub fn attempt_now(
             })
         }),
     };
-    deliver::register_message_wake(workspace, store);
     if head_sent? {
         return Ok(true);
     }

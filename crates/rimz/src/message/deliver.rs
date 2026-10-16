@@ -325,10 +325,7 @@ fn attempt_delivery(
     {
         match cancel_joined_subagent_report(workspace, store, message) {
             Ok(false) => {}
-            Ok(true) => {
-                register_message_wake(workspace, store);
-                return Ok(DeliveryReport::Stopped);
-            }
+            Ok(true) => return Ok(DeliveryReport::Stopped),
             Err(error) => {
                 tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
                 return Ok(DeliveryReport::Stopped);
@@ -354,15 +351,11 @@ fn attempt_delivery(
     let Some(claimed) = claimed else {
         return Ok(DeliveryReport::Stopped);
     };
-    register_message_wake(workspace, store);
     #[cfg(feature = "testkit")]
     crate::testkit::rendezvous("RIMZ_TEST_DELIVERY_AFTER_CLAIM");
     match cancel_joined_subagent_report(workspace, store, &claimed[0]) {
         Ok(false) => {}
-        Ok(true) => {
-            register_message_wake(workspace, store);
-            return Ok(DeliveryReport::Stopped);
-        }
+        Ok(true) => return Ok(DeliveryReport::Stopped),
         Err(error) => {
             tracing::warn!(%message_id, %error, "deferring subagent digest: cannot check or settle joined runs");
             store.release_message_claims(
@@ -370,7 +363,6 @@ fn attempt_delivery(
                 "deferred: cannot check or settle joined runs",
                 &workspace.session_name,
             )?;
-            register_message_wake(workspace, store);
             return Ok(DeliveryReport::Stopped);
         }
     }
@@ -400,7 +392,6 @@ fn attempt_delivery(
         },
         &mut live_send,
     )?;
-    register_message_wake(workspace, store);
     Ok(match outcome {
         AttemptOutcome::Sent { interrupt, .. } => DeliveryReport::Sent { interrupt },
         _ => DeliveryReport::Stopped,
@@ -740,7 +731,7 @@ pub fn sweep(
             store.defer_message_wake(&head.message_id, now + delivery_window, blocker)?;
         }
     }
-    register_message_wake(workspace, store);
+    store.rearm_message_wake(Timestamp::now());
     Ok(())
 }
 
@@ -1273,27 +1264,6 @@ fn delivery_candidate<'a>(
         target,
         bound,
     }))
-}
-
-/// Refreshes the elder's wake after any queue change: before a claim's pane write, so a sender
-/// that dies mid-write is requeued after `CLAIM_TTL`, and after an attempt or a queue edit, so the
-/// elder sees what remains. Wakes are latency, never truth: a stamp that cannot be written warns
-/// and delays the elder's next look, and never changes the outcome of the change it follows.
-pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) {
-    let refresh = || -> Result<()> {
-        let runtime = RuntimePaths::for_project_root(&workspace.project_root)?;
-        Ok(send::refresh_wake_stamp(&runtime, store, Timestamp::now())?)
-    };
-    if let Err(error) = refresh() {
-        tracing::warn!(
-            %error,
-            "cannot refresh the message wake stamp; the elder sweep may run late"
-        );
-    }
-}
-
-pub(super) fn wake_stamp_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.lane_path(crate::message::MESSAGE_WAKE_FILE)
 }
 
 #[cfg(test)]

@@ -1331,7 +1331,6 @@ fn launch_resume_layout(
             prompt,
             rimz::harness::spec::prompt_leader(&layout, team)?,
         )?;
-        rimz::message::deliver::register_message_wake(workspace, store);
     }
     write_resume_announcement(&mut render::out(), &plan)?;
     if in_place {
