@@ -73,6 +73,24 @@ fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
 }
 
 #[test]
+fn reading_normalizes_the_legacy_human_label_without_rewriting_the_log() {
+    let (_dir, paths) = paths();
+    let mut answer = entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
+    answer.from = Some("you".to_owned());
+    append(&paths, &answer).expect("append legacy answer");
+
+    let entries = read_all(&paths).expect("read");
+    assert_eq!(entries[0].from.as_deref(), Some("user"));
+    assert_eq!(entries[0].origin(), EntryOrigin::Human);
+    let bucket = bucket_files(&paths.transcript_dir).expect("buckets");
+    assert!(
+        fs::read_to_string(&bucket[0])
+            .expect("raw log")
+            .contains("\"from\":\"you\"")
+    );
+}
+
+#[test]
 fn section_origin_round_trips_through_its_entry_encoding() {
     let cases = [
         (

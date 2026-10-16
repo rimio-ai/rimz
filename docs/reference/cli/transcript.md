@@ -111,7 +111,7 @@ Review docs/reference/cli/transcript.md against the transcript CLI code.
 
 ### Headers and grouping
 
-Each header names the sender, then `→` and the receiver when there is one, then the local time as `HH:MM`. Human senders show as the `user` or `you` chip, and RimZ itself as `rimz`. A channel view drops the `#channel` suffix from handles. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
+Each header names the sender, then `→` and the receiver when there is one, then the local time as `HH:MM`. Human senders show as the `user` chip, and RimZ itself as `rimz`. A channel view drops the `#channel` suffix from handles. Consecutive entries from the same sender to the same receiver share one header when they fall within 5 minutes of each other, on the same day, in the same margin or thread. A rule labelled `Today` or with the date (`Sat, Jun 27 2026`) marks a change of day.
 
 A message's time is its creation time when known, otherwise its recorded time. When delivery trails creation by at least 60 seconds, the header reads `12:41 · delivered 12:45`. Delivery on a different local date includes that date, as in `23:58 · delivered Mon, Jun 29 2026 · 00:02`. Such a line gets its own header, and the next line cannot share it. Older entries without a recorded creation time keep their original timestamp.
 
@@ -129,7 +129,7 @@ On a styled terminal, bodies render markdown (headings, emphasis, links, lists, 
 
 ### Asks
 
-A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — you`. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
+A blocking question or plan approval prints as a card behind its own `│` spine: the question, each option as `○ <label>` with its description beneath, and the answer folded in as `● <label> — user`. A card with no recorded answer ends in `◌ unanswered`. A prompt the user submits while the ask is open counts as its answer and folds into the card. An ask continues the agent's preceding block on the same day even after the 5-minute window.
 
 ### Stage flips
 
@@ -192,7 +192,7 @@ Each entry carries these fields. A field shown as optional is absent when empty 
 
 | Field | Value |
 | --- | --- |
-| `from` | Sender identity: `user` for a human prompt, `you` or `answered` for an answer, `rimz` for a system prompt or command, `@rimz` for a harness notice, otherwise the agent's handle. |
+| `from` | Sender identity: `user` for a human prompt or answer, `rimz` for a system prompt or command, `@rimz` for a harness notice, otherwise the agent's handle. |
 | `origin` | Always present: `human`, `agent`, or `harness`. Classifies authorship independently of the sender's display handle. |
 | `to` | Optional. The receiving agent's handle. Absent on agent output and flips. |
 | `at` | The creation time when known, otherwise the recorded time, RFC 3339 in UTC. |

@@ -65,13 +65,11 @@ pub(super) fn render_entry_for_flip(
 /// The rendered author of a turn-opening entry. `"user"` is reserved for a
 /// human origin; anything RimZ or an agent introduced renders as its handle.
 fn chat_from(entry: &TranscriptEntry, root_channel: Option<&str>) -> String {
+    if entry.origin() == EntryOrigin::Human {
+        return rimz::transcript::HUMAN_FROM.to_owned();
+    }
     let Some(from) = entry.from.as_deref() else {
-        return match (entry.entry, entry.origin()) {
-            (TranscriptKind::Answer, _) => "answered",
-            (_, EntryOrigin::Human) => "user",
-            (_, EntryOrigin::Agent | EntryOrigin::Harness) => rimz::transcript::HARNESS_FROM,
-        }
-        .to_owned();
+        return rimz::transcript::HARNESS_FROM.to_owned();
     };
     if let Ok((selector, Some(channel))) = rimz::address::parse_selector(from) {
         let lane = rimz::address::record_lane_label(Some(&channel), root_channel);
@@ -617,7 +615,9 @@ pub(super) fn write_entry_header(
 
 pub(super) fn paint_handle(handle: &str, grouped: bool, brands: &BrandColors) -> String {
     match base_handle(handle) {
-        label @ ("user" | "you" | "answered") => chip(render::palette::human_chip(), label),
+        rimz::transcript::HUMAN_FROM => {
+            chip(render::palette::human_chip(), rimz::transcript::HUMAN_FROM)
+        }
         "rimz" => chip(render::palette::system_chip(), "rimz"),
         _ => render::paint(brands.style_for(handle), display_handle(handle, grouped)),
     }

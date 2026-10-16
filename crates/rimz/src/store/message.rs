@@ -149,7 +149,7 @@ impl MessageSender {
 
     pub fn render(&self) -> String {
         match self {
-            Self::Human => "you".to_owned(),
+            Self::Human => "user".to_owned(),
             Self::System => "rimz".to_owned(),
             Self::Harness { .. } => "@rimz".to_owned(),
             Self::Subagent { name, .. } => format!("@{name}"),
