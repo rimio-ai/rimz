@@ -9,10 +9,9 @@ use jiff::{Timestamp, Zoned};
 
 use crate::RuntimePaths;
 use crate::ids::{MuxName, WorkspaceId};
-use crate::message::deliver::wake_stamp_path;
 
 pub(crate) fn wake_due_messages(runtime: &RuntimePaths, mux: MuxName, now: &Zoned) {
-    let path = wake_stamp_path(runtime);
+    let path = runtime.message_wake_path();
     if !should_wake(read_stamp(&path), now.timestamp()) {
         return;
     }

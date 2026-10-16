@@ -214,7 +214,6 @@ fn sweep(
                 {
                     tracing::warn!(%error, "could not wake hook drainer for held messages");
                 }
-                rimz::message::deliver::register_message_wake(workspace, &store);
                 spinner.set("pruning store caches...");
                 let carryover_pruned = store
                     .prune_carryover(rimz::store::event_log::DEFAULT_RETENTION)
@@ -457,12 +456,7 @@ fn sweep_worktrees(
         dry_run,
         &super::machine_config().agents.worktree.hooks,
     ) {
-        Ok(sweep) => {
-            if !dry_run {
-                rimz::message::deliver::register_message_wake(workspace, &store);
-            }
-            WorktreeSweepStatus::Swept(sweep)
-        }
+        Ok(sweep) => WorktreeSweepStatus::Swept(sweep),
         Err(err) => {
             tracing::debug!(error = %err, "worktree gc skipped");
             WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed)

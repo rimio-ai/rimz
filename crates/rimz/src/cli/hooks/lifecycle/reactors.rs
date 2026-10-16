@@ -116,7 +116,6 @@ fn archive_ended(ctx: &ReactorCtx<'_>, event: &rimz::agents::LifecycleEvent) {
             "lifecycle: failed to archive receiver messages",
         );
     }
-    rimz::message::deliver::register_message_wake(ctx.workspace, ctx.store);
 }
 
 #[cfg(test)]

@@ -893,7 +893,6 @@ fn dispatch_targets(
             decision,
         )?);
     }
-    deliver::register_message_wake(state.workspace, state.store);
     Ok((outcomes, compacted))
 }
 
@@ -1017,7 +1016,6 @@ fn dispatch_one(
             reason: Some(ParkReason::Behind(blocker)),
         });
     }
-    deliver::register_message_wake(state.workspace, state.store);
     let message_id = message.message_id.clone();
     match deliver::execute_attempt(
         deliver::Attempt {

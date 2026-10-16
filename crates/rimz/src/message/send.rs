@@ -1,12 +1,10 @@
 //! Live-pane payload construction, exclusive paced writes, and the durable Sent-before-submit barrier.
 
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use jiff::Timestamp;
-
+use crate::Store;
 use crate::agents::{AgentState, AgentStatus, LifecycleSignal};
 use crate::message::{
     DeliveryKind, InterruptConfirmation, MessageDraft, Recipient, command_segments,
@@ -18,7 +16,6 @@ use crate::store::follow::{EventFollower, FollowEvent};
 use crate::store::message::{AutoCompact, MessageBody, MessageRecord, MessageSender};
 use crate::store::snapshot::{PaneAgent, SidebarSnapshot};
 use crate::workspace::ResolvedWorkspace;
-use crate::{RuntimePaths, Store};
 
 type Result<T> = std::result::Result<T, SendErr>;
 
@@ -56,27 +53,6 @@ pub(super) enum Receipt {
     SkippedWaiting,
     CompactionPending,
     ClaimLost,
-}
-
-pub(super) fn refresh_wake_stamp(
-    runtime: &RuntimePaths,
-    store: &Store,
-    now: Timestamp,
-) -> Result<()> {
-    let path = runtime.lane_path(super::MESSAGE_WAKE_FILE);
-    match store.earliest_message_wake(now)? {
-        Some(not_before) => {
-            crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(not_before))?;
-        }
-        None => match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(SendErr::Io { path, source: err });
-            }
-        },
-    }
-    Ok(())
 }
 
 /// How a live-pane send is delivered: whether to send past Waiting, and pacing
@@ -256,10 +232,6 @@ fn write_live(
             &workspace.session_name,
             jiff::Timestamp::now(),
         )?;
-        // Wakes are latency, never truth: an unwritable stamp delays claim recovery, not the send.
-        if let Err(error) = refresh_wake_stamp(store.runtime_paths(), store, Timestamp::now()) {
-            tracing::warn!(%error, "cannot arm the claim recovery wake");
-        }
         match write_batch(
             workspace,
             store,

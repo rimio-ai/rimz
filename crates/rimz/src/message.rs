@@ -47,7 +47,6 @@ const MESSAGE_DURATION_UNITS: &[DurationUnit] = &[
 
 const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
 const SETTLE_ENV: &str = "RIMZ_MESSAGE_SETTLE_MS";
-const MESSAGE_WAKE_FILE: &str = "message-wake.json";
 /// Default spacing between discrete message pane writes.
 const DEFAULT_MESSAGE_INTERVAL: Duration = Duration::from_secs(1);
 const MESSAGE_INTERVAL_ENV: &str = "RIMZ_MESSAGE_INTERVAL_MS";
