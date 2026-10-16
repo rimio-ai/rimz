@@ -719,6 +719,44 @@ fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
 }
 
 #[test]
+fn molt_reservation_refuses_without_appending_and_failed_startup_frees_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let id = WorkspaceId::from_project_root(dir.path());
+    let store = Store::open(
+        StatePaths::under(id.clone(), dir.path()).unwrap(),
+        RuntimePaths::under(id, dir.path()).unwrap(),
+    )
+    .unwrap();
+    let scope = AgentLaunchScope {
+        session_name: "session".into(),
+        cwd: dir.path().into(),
+        branch: None,
+        description: None,
+    };
+    let mut request = launch_request("launch_first", AgentLaunchName::Mint);
+    request.launch.molted_from = Some("launch_predecessor".into());
+    let first = store
+        .begin_agent_launch_batch(&[request.clone()], scope.clone())
+        .unwrap();
+    request.agent_id = "launch_second".into();
+    let before = store.read_events().unwrap().len();
+    let refused = store.begin_agent_launch_batch(&[request.clone()], scope.clone());
+    assert!(
+        refused.is_err(),
+        "a standing successor must reserve its predecessor"
+    );
+    assert_eq!(store.read_events().unwrap().len(), before);
+    let message = refused.unwrap_err().to_string();
+    assert!(message.contains(&first.identities()[0].name), "{message}");
+    assert!(
+        message.contains("one successor") && message.contains("do not retry this command"),
+        "{message}"
+    );
+    store.fail_agent_launch_batch(&first).unwrap();
+    assert!(store.begin_agent_launch_batch(&[request], scope).is_ok());
+}
+
+#[test]
 fn record_room_bin_publishes_a_sweep_safe_spawn_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");

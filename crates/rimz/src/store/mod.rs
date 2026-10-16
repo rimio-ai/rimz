@@ -116,6 +116,10 @@ pub enum StoreErr {
     #[error("{0}")]
     AgentLaunchIdentity(String),
     #[error(
+        "molt refused: @{successor} already stands as successor; only one successor is allowed at a time. If it is stuck, `rimz agents stop @{successor}` frees the slot; do not retry this command"
+    )]
+    MoltSuccessor { successor: String },
+    #[error(
         "this room uses {kind} account `{current}`, not `{requested}`; switch it with `rimz accounts use {kind} {requested}`"
     )]
     RoomLoginsFrozen {

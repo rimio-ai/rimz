@@ -559,6 +559,21 @@ impl Store {
     ) -> Result<AgentLaunchBatch> {
         let batch = self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
+            for predecessor in requests
+                .iter()
+                .filter_map(|request| request.launch.molted_from.as_ref())
+            {
+                if let Some(successor) =
+                    crate::agents::state::standing_successor(base_agents.iter(), predecessor)
+                {
+                    return Err(StoreErr::MoltSuccessor {
+                        successor: successor
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| successor.agent_id.to_string()),
+                    });
+                }
+            }
             let accounts = if requests
                 .iter()
                 .any(|request| request.login == LaunchLogin::RoomDefault)

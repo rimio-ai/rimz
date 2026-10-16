@@ -282,6 +282,8 @@ Resident loop launches stamp `LaunchParams.loop_task` on the prompt leader befor
 
 Molt successors stamp `LaunchParams.molted_from` with the predecessor's launch id (session id for a legacy row). The additive optional field changes no event schema version. Snapshot version 40 and rollup-cache version 31 invalidate pre-field caches so they cannot hide the succession link. The fold carries it onto the registered session and through sparse observations and session rotation. `agents::state::standing_successor` recognizes an unended successor unless it is Failed with a still-provisional id: startup failure yields the place back, but a registered session's failed turn does not.
 
+`Store::begin_agent_launch_batch` checks that predicate under the workspace lock, against the caught-up durable fold, before allocating or appending anything. A standing successor refuses another molt reservation with its handle and stop command. A failed startup frees the slot through the same predicate, without a separate release record or CLI precheck.
+
 ### Crash recovery
 
 Only the trailing frame can be in flight when a process dies, because each append is one `write()` under the workspace lock.
