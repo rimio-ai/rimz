@@ -57,7 +57,8 @@ LABEL org.opencontainers.image.source="https://github.com/rimio-ai/rimz" \
       org.opencontainers.image.base.name="${BASE_IMAGE}"
 
 ENV LANG=C.UTF-8 \
-    PATH=/home/rimz/.local/bin:/home/rimz/.opencode/bin:$PATH
+    DISABLE_UPDATES=1 \
+    OPENCODE_DISABLE_AUTOUPDATE=1
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -72,6 +73,7 @@ RUN apt-get update \
       openssh-client \
       procps \
       sudo \
+      tzdata \
       unzip \
       wget \
       xz-utils \
@@ -91,7 +93,7 @@ COPY --from=tmux-build /opt/stage/usr/local/ /usr/local/
 COPY --from=rimz-build /src/target/release/rimz /usr/local/bin/rimz
 COPY --chmod=0755 docker/install-tools.sh /usr/local/bin/install-tools
 RUN /usr/local/bin/install-tools \
- && npm install -g @earendil-works/pi-coding-agent \
+ && npm install -g @earendil-works/pi-coding-agent @opencode/cli \
  && npm cache clean --force \
  && pi --version
 
@@ -99,17 +101,17 @@ RUN userdel -r ubuntu 2>/dev/null || true \
  && useradd -m -u 1000 -s /bin/bash rimz \
  && printf 'rimz ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/rimz \
  && chmod 0440 /etc/sudoers.d/rimz \
- && printf 'export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"\n' > /etc/profile.d/rimz-path.sh \
  && install -d -o rimz -g rimz /workspace
 
 COPY --chmod=0755 docker/install-agents.sh /usr/local/bin/install-agents
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/rimz-entrypoint
+COPY --chmod=0644 docker/rimz-docker /usr/local/share/rimz/rimz-docker
+RUN /usr/local/bin/install-agents
 
 USER rimz
 ENV HOME=/home/rimz
 WORKDIR /workspace
-RUN /usr/local/bin/install-agents \
- && rimz hooks install claude \
+RUN rimz hooks install claude \
  && rimz hooks install codex \
  && rimz hooks install pi \
  && rimz hooks install opencode \
@@ -124,9 +126,13 @@ RUN /usr/local/bin/install-agents \
  && codex --version \
  && pi --version \
  && opencode --version \
+ && setpriv --version \
+ && test ! -e /home/rimz/.local/bin/claude \
+ && test ! -e /home/rimz/.opencode \
  && test "$(id -u)" -eq 1000 \
  && sudo -n true
 
 EXPOSE 8200
+USER root
 ENTRYPOINT ["/usr/local/bin/rimz-entrypoint"]
 CMD ["shell"]
