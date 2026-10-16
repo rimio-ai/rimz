@@ -243,6 +243,43 @@ fn accordion_selection_keeps_the_clicked_card_row_with_room_above() {
 }
 
 #[test]
+fn stale_card_selection_and_threshold_crossing_keep_the_selected_row() {
+    let mut snapshot = overflowing_fleet();
+    for (index, row) in snapshot.rows_mut().enumerate() {
+        row.as_agent_mut().unwrap().status = AgentStatus::Success;
+        row.as_agent_mut().unwrap().handle = Some(format!("card-{index}"));
+        row.last_activity = fixed_now() - Duration::from_secs(86401);
+        row.unread = false;
+    }
+    let mut ui = UiState {
+        selected_index: Some(0),
+        scroll_offset: 2,
+        ..Default::default()
+    };
+    let before = paint_card_row(&snapshot, &mut ui, "card-2", 30);
+    let old = snapshot.rows().nth(2).unwrap();
+    let stale_line = group_lines(&snapshot, &Theme::fixed(false), 0)
+        .into_iter()
+        .find(|line| line.to_string().contains(old.display_name()))
+        .unwrap();
+    assert!(
+        stale_line.to_string().contains("task-2"),
+        "the unselected card has shrunk"
+    );
+    ui.selected_index = Some(2);
+    assert_eq!(paint_card_row(&snapshot, &mut ui, "card-2", 30), before);
+
+    snapshot.rows_mut().next().unwrap().last_activity = fixed_now() - Duration::from_secs(86400);
+    let before = paint_card_row(&snapshot, &mut ui, "card-2", 30);
+    snapshot.now += Duration::from_secs(1);
+    assert_eq!(
+        paint_card_row(&snapshot, &mut ui, "card-2", 30),
+        before,
+        "shrinking above preserves the selection"
+    );
+}
+
+#[test]
 fn growth_above_an_unchanged_selection_keeps_its_row() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;

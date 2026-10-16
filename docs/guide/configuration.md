@@ -314,7 +314,7 @@ Stale runtime files, orphaned temp files, dead workspace stores, and landed work
 
 ### Sidebar rendering
 
-Three tables shape the sidebar: the room-level keys, its movement chords, and the timings behind card ranking. What the sidebar shows is the [sidebar guide](./sidebar.md) and the [interface reference](../interface/sidebar.md); these are the settings behind it. Its colors, glyphs, width, render cadence, and card density live in `theme.toml` instead, under [theme → display](./theme.md#display).
+Three tables shape the sidebar: the room-level keys, its movement chords, and the timings behind card ranking. What the sidebar shows is the [sidebar guide](./sidebar.md) and the [interface reference](../interface/sidebar.md); these are the settings behind it. Its colors, glyphs, width, render cadence, card density, and stale-card threshold live in `theme.toml` instead, under [theme → display](./theme.md#display).
 
 ```toml
 timezone = "America/New_York"

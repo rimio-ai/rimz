@@ -131,6 +131,8 @@ pub struct DisplayConfig {
     /// Resolved producer-side onto the snapshot like the rest of
     /// `[theme.display]`.
     pub card_density: CardDensityMode,
+    /// Read idle and done cards quiet past this many seconds shrink to one line. `0` disables shrinking; expanded density never shrinks cards.
+    pub stale_after_secs: u64,
     /// How long, in seconds, a finished subagent stays in an open delegation
     /// section's recent band before it folds behind `+K older`. `0` folds every
     /// finished child. Display-only.
@@ -164,6 +166,7 @@ impl Default for DisplayConfig {
             max_percent: 50,
             scrollbar: ScrollbarMode::default(),
             card_density: CardDensityMode::default(),
+            stale_after_secs: 86400,
             recent_subagent_secs: 900,
             max_recent_subagents: 5,
             context_meter: ContextMeterConfig::default(),

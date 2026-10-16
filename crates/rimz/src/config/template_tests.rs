@@ -24,6 +24,22 @@ const ACTIVE_TMUX_DEFAULTS: &[&str] = &[
 ];
 
 #[test]
+fn stale_card_threshold_defaults_and_round_trips() {
+    let default = toml::Value::try_from(DisplayConfig::default()).unwrap();
+    assert_eq!(
+        default
+            .get("stale_after_secs")
+            .and_then(toml::Value::as_integer),
+        Some(86400)
+    );
+    for secs in [0, 15, 86400] {
+        let parsed: DisplayConfig = toml::from_str(&format!("stale_after_secs = {secs}")).unwrap();
+        let round_trip = toml::Value::try_from(parsed).unwrap();
+        assert_eq!(round_trip["stale_after_secs"].as_integer(), Some(secs));
+    }
+}
+
+#[test]
 fn template_defaults_deserialize_to_machine_defaults() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(

@@ -151,6 +151,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) tool_repeat_warn_after: u32,
     pub(in crate::sidebar_pane::render) stalled_after_secs: u32,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
+    pub(in crate::sidebar_pane::render) stale_after_secs: u64,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
     pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
     pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,

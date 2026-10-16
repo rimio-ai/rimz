@@ -1,5 +1,4 @@
-//! State-derived agent-card templates. Lifecycle facts choose an ordered line
-//! skeleton; provider enrichment only fills the chosen slots.
+//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered line skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line, and closed resting history omits the delegation summary.
 
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
@@ -15,6 +14,7 @@ use super::description::awaiting_first_prompt;
 pub(super) enum CardStage {
     Fresh { labeled: bool },
     Engaged,
+    Stale,
 }
 
 impl CardStage {
@@ -38,6 +38,7 @@ impl CardStage {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CardSlot {
+    Stale,
     Identity,
     Description,
     Question,
@@ -107,6 +108,13 @@ pub(super) fn template(
     expansion: CardExpansion,
 ) -> &'static [CardSlot] {
     let expanded = expansion.reach.opens_card();
+    if stage == CardStage::Stale
+        && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+        && !expanded
+        && density != CardDensityMode::Expanded
+    {
+        return &[CardSlot::Stale];
+    }
     if density == CardDensityMode::Compact && !expanded {
         return match status {
             AgentStatus::Idle => IDENTITY,
@@ -123,13 +131,19 @@ pub(super) fn template(
         CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged => match (
+        CardStage::Engaged | CardStage::Stale => match (
             expansion.reach == SelectionReach::Selected || density == CardDensityMode::Expanded,
             expansion.delegation,
         ) {
             (true, true) => ENGAGED_EXPANDED,
             (true, false) => ENGAGED,
             (false, true) => ENGAGED_RESTING_EXPANDED,
+            (false, false)
+                if expansion.reach == SelectionReach::Unreached
+                    && matches!(status, AgentStatus::Idle | AgentStatus::Success) =>
+            {
+                IDENTITY_DESCRIPTION_GAUGE
+            }
             (false, false) => ENGAGED_RESTING,
         },
     }
@@ -155,10 +169,11 @@ mod tests {
         }
     }
 
-    const STAGES: [CardStage; 3] = [
+    const STAGES: [CardStage; 4] = [
         CardStage::Fresh { labeled: false },
         CardStage::Fresh { labeled: true },
         CardStage::Engaged,
+        CardStage::Stale,
     ];
     const STATUSES: [AgentStatus; 7] = [
         AgentStatus::Idle,
@@ -186,6 +201,13 @@ mod tests {
         density: CardDensityMode,
         expansion: CardExpansion,
     ) -> Vec<CardSlot> {
+        if stage == CardStage::Stale
+            && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+            && !expansion.reach.opens_card()
+            && density != CardDensityMode::Expanded
+        {
+            return vec![CardSlot::Stale];
+        }
         if density == CardDensityMode::Compact && !expansion.reach.opens_card() {
             return match status {
                 AgentStatus::Idle => IDENTITY,
@@ -202,12 +224,19 @@ mod tests {
             (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
             (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
             (CardStage::Fresh { labeled: true }, true, _) => IDENTITY_DESCRIPTION_GAUGE,
-            (CardStage::Engaged, _, true) => ENGAGED_EXPANDED,
-            (CardStage::Engaged, _, false) => ENGAGED,
+            (CardStage::Engaged | CardStage::Stale, _, true) => ENGAGED_EXPANDED,
+            (CardStage::Engaged | CardStage::Stale, _, false) => ENGAGED,
         }
         .to_vec();
         if expansion.reach != SelectionReach::Selected && density != CardDensityMode::Expanded {
             slots.retain(|slot| *slot != CardSlot::Tokens);
+        }
+        if expansion.reach == SelectionReach::Unreached
+            && !expansion.delegation
+            && density != CardDensityMode::Expanded
+            && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+        {
+            slots.retain(|slot| *slot != CardSlot::Delegation);
         }
         slots
     }

@@ -1,6 +1,118 @@
 use super::*;
 
 use crate::config::CardDensityMode;
+use crate::sidebar_pane::render::sections::SelectionReach;
+
+#[test]
+fn stale_cards_shrink_only_unread_free_resting_history() {
+    let mut snapshot = snapshot_with(vec![density_agent(
+        "old",
+        "claude",
+        AgentStatus::Success,
+        Some("try the arena cap idea"),
+        40,
+    )]);
+    let theme = Theme::fixed(false);
+    let mut row = snapshot.worktree_groups[0].rows[0].clone();
+    row.last_activity = fixed_now() - Duration::from_secs(172800);
+    row.unread = false;
+    row.as_agent_mut().unwrap().delegated_cost_usd = Some(3.10);
+    *snapshot.rows_mut().next().unwrap() = row.clone();
+    for width in [36, 70] {
+        let lines = group_lines_at_width(&snapshot, &theme, usize::MAX, width);
+        assert!(
+            !lines.iter().any(|line| line.to_string().contains('▣')),
+            "old history has no meter at {width}"
+        );
+        let text = lines
+            .iter()
+            .find(|line| line.to_string().contains("claude"))
+            .unwrap()
+            .to_string();
+        assert!(text.contains("try the"), "{text}");
+        assert!(text.contains("$3.10") && text.ends_with("2d "), "{text}");
+        assert_snapshot(
+            if width == 36 {
+                "stale_card_narrow"
+            } else {
+                "stale_card_wide"
+            },
+            line_texts(&lines).join("\n"),
+        );
+    }
+    row.as_agent_mut().unwrap().team = Some("crew".into());
+    let mut teammate = row.clone();
+    teammate.id = "teammate".into();
+    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+        .push(teammate);
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Waiting,
+        AgentStatus::Failed,
+        AgentStatus::Paused,
+        AgentStatus::Sleeping,
+        AgentStatus::Idle,
+        AgentStatus::Success,
+    ] {
+        row.as_agent_mut().unwrap().status = status;
+        for unread in [false, true] {
+            row.unread = unread;
+            for density in [
+                CardDensityMode::Auto,
+                CardDensityMode::Compact,
+                CardDensityMode::Expanded,
+            ] {
+                snapshot.theme.display.card_density = density;
+                for reach in [
+                    SelectionReach::Unreached,
+                    SelectionReach::Selected,
+                    SelectionReach::Teammate,
+                ] {
+                    *snapshot.rows_mut().next().unwrap() = row.clone();
+                    let rolls = CostRolls::default();
+                    let mut ctx = test_row_ctx(&snapshot, &theme, 70, usize::MAX, 0, &rolls);
+                    let held = [if reach == SelectionReach::Teammate {
+                        "teammate".into()
+                    } else {
+                        row.id.clone()
+                    }]
+                    .into();
+                    if reach != SelectionReach::Unreached {
+                        ctx.held_expansions = &held;
+                    }
+                    let lines =
+                        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+                    let stale = !unread
+                        && matches!(status, AgentStatus::Idle | AgentStatus::Success)
+                        && density != CardDensityMode::Expanded
+                        && reach == SelectionReach::Unreached;
+                    let identity = lines
+                        .iter()
+                        .find(|line| line.to_string().contains("claude"))
+                        .unwrap();
+                    assert_eq!(
+                        identity.to_string().contains("try the arena"),
+                        stale,
+                        "{status:?} {unread} {density:?} {reach:?}"
+                    );
+                }
+            }
+        }
+    }
+    row.unread = false;
+    *snapshot.rows_mut().next().unwrap() = row;
+    snapshot.theme.display.card_density = CardDensityMode::Auto;
+    snapshot.theme.display.stale_after_secs = 0;
+    let lines = group_lines(&snapshot, &theme, usize::MAX);
+    let identity = lines
+        .iter()
+        .find(|line| line.to_string().contains("claude"))
+        .unwrap();
+    assert!(
+        !identity.to_string().contains("try the arena"),
+        "zero disables shrinking"
+    );
+}
 
 #[test]
 fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
