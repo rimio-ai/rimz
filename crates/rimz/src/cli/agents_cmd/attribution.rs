@@ -516,10 +516,6 @@ fn subagents_header(member: &AttributionMember) -> Option<String> {
     if let Some(cost) = cost_usd {
         label.push_str(" · ");
         label.push_str(&rimz::theme::fmt::dollars2(cost));
-        if let Some(member_cost) = member.cost_usd {
-            label.push_str(" of ");
-            label.push_str(&rimz::theme::fmt::dollars2(member_cost));
-        }
     }
     Some(label)
 }

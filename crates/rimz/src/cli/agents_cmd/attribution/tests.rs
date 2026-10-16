@@ -163,7 +163,7 @@ fn panel_groups_team_and_stray_members() {
 
       @planner (plan|ner) · Claude · fable`2@high
           effort:    1h05m active · $1.60
-          subagents: 5 runs · $0.90 of $1.60
+          subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
                      other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
@@ -174,7 +174,7 @@ fn panel_groups_team_and_stray_members() {
 
       @codex · Codex · gpt-5.5@high
           effort:    1h05m active · $1.60
-          subagents: 5 runs · $0.90 of $1.60
+          subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
                      other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
@@ -237,7 +237,7 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
       @codex · Codex · gpt-5.5@high
           effort:    1h05m active · $1.60
-          subagents: 5 runs · $0.90 of $1.60
+          subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
                      other     1 ×
           activity:  2 asks · 7 tool calls · 1 compaction
@@ -283,7 +283,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     - **`plan|ner`** — Claude ``fable`2@high``
       - effort: 1h05m active · $1.60
-      - subagents: 5 runs · $0.90 of $1.60
+      - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90
         - other: 1 ×
       - activity: 2 asks · 7 tool calls · 1 compaction
@@ -294,7 +294,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     - **`@codex`** — Codex `gpt-5.5@high`
       - effort: 1h05m active · $1.60
-      - subagents: 5 runs · $0.90 of $1.60
+      - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90
         - other: 1 ×
       - activity: 2 asks · 7 tool calls · 1 compaction

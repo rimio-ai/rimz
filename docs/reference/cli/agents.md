@@ -731,7 +731,7 @@ Which agents count:
 The panel names the applied `branch <name>` and any `since` boundary above the groups, then groups members by team. Each member line shows handle, provider, and model with effort, followed by labelled lines in the order `effort`, `subagents`, `activity`, `messages`, `tokens`; an unavailable figure's line or part is omitted.
 
 - `effort` is active time and cost. Active time includes the seat and the pane-backed children it launched. Cost and tokens are all-in: the member plus every subagent it spawned, the same figure `agents show`, `teams show`, and the sidebar report.
-- `subagents` opens a block with `{n} runs · {subagent cost} of {member cost}`, followed by one row per kind as `{kind}  {count} × · {duration} active · {cost}`. Unavailable time or cost parts are omitted; one run reads `1 run`. Rows sort by cost, highest first (unpriced last), then count, then kind name. The breakdown is a share of `effort`, never added to it. Kinds come from provider-reported types and launch profiles, and missing or description-like types group as `other`. Per-kind active time sums retained sidecars across the pane-backed children's sessions only; native children contribute no separate time.
+- `subagents` opens a block with `{n} runs · {subagent cost}`, followed by one row per kind as `{kind}  {count} × · {duration} active · {cost}`. Unavailable time or cost parts are omitted; one run reads `1 run`. Rows sort by cost, highest first (unpriced last), then count, then kind name. The breakdown is a share of `effort`, never added to it. Kinds come from provider-reported types and launch profiles, and missing or description-like types group as `other`. Per-kind active time sums retained sidecars across the pane-backed children's sessions only; native children contribute no separate time.
 - `activity` leads with asks, then tool calls.
 - `messages` reads `{n} from you · {n} from teammates · {n} to teammates`, excluding RimZ automation. Sent messages are credited by handle, so a message sent by an excluded session still credits the handle a counted session holds.
 
@@ -744,7 +744,7 @@ forge team · 3 agents · 59m active · $42.73 · 10 messages (1 from you)
 
   @planner · Claude · claude-fable-5-1@high
       effort:    17m active · $9.66
-      subagents: 3 runs · $3.51 of $9.66
+      subagents: 3 runs · $3.51
                  explorer  2 × · $2.40
                  designer  1 × · $1.11
       activity:  46 tool calls
