@@ -17,6 +17,12 @@ use crate::store::workflow::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
+    #[error("workflow {workflow} already has run {run} for {}", scope.display())]
+    Exists {
+        run: WorkflowRunId,
+        workflow: String,
+        scope: std::path::PathBuf,
+    },
     #[error(transparent)]
     Store(#[from] workflow::WorkflowStoreErr),
     #[error(transparent)]
@@ -43,6 +49,7 @@ pub fn create(
     scope: &Path,
     project_root: &Path,
     prompt: Option<String>,
+    task: Option<String>,
 ) -> Result<RunRecord> {
     let spec_dir = spec_dir.canonicalize()?;
     let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&spec_dir))?;
@@ -87,6 +94,7 @@ pub fn create(
         version: 1,
         id: WorkflowRunId::new(),
         workflow: name,
+        task,
         spec_dir,
         spec_digest: script::digest(&bytes),
         prompt,
@@ -126,12 +134,11 @@ pub fn create(
         if let Some(existing) = workflow::list(state)?.into_iter().find(|r| {
             !r.state.is_terminal() && r.workflow == record.workflow && r.scope == record.scope
         }) {
-            return Err(WorkflowErr::Refused(format!(
-                "workflow {} already has run {} for {}",
-                record.workflow,
-                existing.id,
-                record.scope.path.display()
-            )));
+            return Err(WorkflowErr::Exists {
+                run: existing.id,
+                workflow: record.workflow,
+                scope: record.scope.path,
+            });
         }
         workflow::initialize(state, &record, &bytes, &guard)?;
     }
@@ -152,11 +159,11 @@ fn spawn(record: &RunRecord) -> Result<()> {
     crate::child_process::spawn_detached_reaped(
         crate::proc::rimz_exe(),
         |command| {
-            command
-                .arg("--root")
-                .arg(&record.project_root)
-                .args(["workflow", "advance"])
-                .arg(record.id.as_str());
+            command.args(super::advance_args(
+                &record.project_root,
+                Some(&record.id),
+                None,
+            ));
             Ok(())
         },
         "workflow advance",
@@ -172,30 +179,31 @@ fn persist(t: &Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
     Ok(())
 }
 
-fn window_matches(
+fn window_wait(
     raw: &str,
     scope: &Path,
     provider: &crate::ids::AgentKind,
     account: Option<&crate::ids::LoginName>,
     windows: &WindowReadings<'_>,
-) -> Result<bool> {
-    Ok(crate::harness::schedule::when::evaluate(
-        &spec::parse_window(raw)?,
+) -> Result<Option<String>> {
+    let expr = spec::parse_window(raw)?;
+    let verdict = crate::harness::schedule::when::evaluate(
+        &expr,
         scope,
         None,
         Some(provider),
         account,
         windows,
-    )
-    .ok)
+    );
+    Ok((!verdict.ok).then(|| expr.blocking_evidence(&verdict).replacen("window.", "", 1)))
 }
 
-fn window_open(
+fn window_wait_for_profile(
     record: &RunRecord,
     profile: &str,
     raw: &str,
     windows: &WindowReadings<'_>,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let workspace = crate::workspace::WorkspaceResolver::resolve(
         &record.scope.path,
         Some(record.project_root.clone()),
@@ -210,7 +218,7 @@ fn window_open(
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
     let login = crate::harness::schedule::runner::task_login(&login, resolved.kind(), &runtime)
         .map_err(|error| WorkflowErr::Refused(error.to_string()))?;
-    window_matches(
+    window_wait(
         raw,
         &record.scope.path,
         &crate::ids::AgentKind::new_unchecked(resolved.kind()),
@@ -417,9 +425,9 @@ fn prepare(
             return Ok(Decision::Again);
         }
         if let Some(raw) = &step.window
-            && !window_open(&t.record, &step.agent, raw, windows)?
+            && let Some(detail) = window_wait_for_profile(&t.record, &step.agent, raw, windows)?
         {
-            t.step_wait("window");
+            t.step_wait("window", Some(detail));
             persist(&t, &guard)?;
             return Ok(Decision::Stop);
         }
@@ -430,37 +438,24 @@ fn prepare(
             match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
                 Occupancy::Free => {}
                 Occupancy::Blocked(_) => {
-                    t.step_wait("takeover");
+                    t.step_wait("takeover", None);
                     persist(&t, &guard)?;
                     return Ok(Decision::Stop);
                 }
                 Occupancy::Occupied(_) if !step.takeover => {
-                    t.step_wait("occupied");
+                    t.step_wait("occupied", None);
                     persist(&t, &guard)?;
                     return Ok(Decision::Stop);
                 }
                 Occupancy::Occupied(_) => return Ok(Decision::Evict(Box::new(t.record))),
             }
         }
-        t.close_wait();
-        seen.clear();
-        let visits = t.record.visits.entry(t.record.node.clone()).or_default();
-        visits.total += 1;
-        if let Some(key) = visits.keys.iter_mut().find(|v| v.key == t.record.key) {
-            key.visits += 1;
-        } else {
-            visits.keys.push(KeyVisits {
-                key: t.record.key.clone(),
-                visits: 1,
-            });
-        }
-        t.record.entered_at = t.now;
     } else if spec.checks.contains_key(&t.record.node) {
         let check = &spec.checks[&t.record.node];
         if let (Some(raw), Some(profile)) = (&check.window, &check.agent)
-            && !window_open(&t.record, profile, raw, windows)?
+            && let Some(detail) = window_wait_for_profile(&t.record, profile, raw, windows)?
         {
-            t.step_wait("window");
+            t.step_wait("window", Some(detail));
             persist(&t, &guard)?;
             return Ok(Decision::Stop);
         }
@@ -481,8 +476,6 @@ fn prepare(
             t.record.node
         )));
     }
-    let seq = t.record.next_seq;
-    t.record.next_seq += 1;
     let step = spec.steps.get(&t.record.node);
     let kind = if step.is_some() {
         AttemptKind::Agent
@@ -500,6 +493,28 @@ fn prepare(
     } else {
         agent::head(&t.record.scope.path)
     };
+    t.now = Timestamp::now();
+    if t.bound()? {
+        persist(&t, &guard)?;
+        return Ok(Decision::Again);
+    }
+    if step.is_some() {
+        t.close_wait();
+        seen.clear();
+        let visits = t.record.visits.entry(t.record.node.clone()).or_default();
+        visits.total += 1;
+        if let Some(key) = visits.keys.iter_mut().find(|v| v.key == t.record.key) {
+            key.visits += 1;
+        } else {
+            visits.keys.push(KeyVisits {
+                key: t.record.key.clone(),
+                visits: 1,
+            });
+        }
+        t.record.entered_at = t.now;
+    }
+    let seq = t.record.next_seq;
+    t.record.next_seq += 1;
     t.record.attempt = Some(LiveAttempt {
         kind,
         seq,

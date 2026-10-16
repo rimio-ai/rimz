@@ -713,14 +713,11 @@ fn workflow_wake_args(project_root: &Path, signal: &Signal) -> Option<Vec<std::f
     if signal.source == SignalSource::Lifecycle {
         return None;
     }
-    Some(vec![
-        "--root".into(),
-        project_root.as_os_str().into(),
-        "workflow".into(),
-        "advance".into(),
-        "--wake-signal".into(),
-        signal.name.as_str().into(),
-    ])
+    Some(crate::harness::workflow::advance_args(
+        project_root,
+        None,
+        Some(signal.name.as_str()),
+    ))
 }
 
 fn wake_workflows(project_root: &Path, signal: &Signal) {

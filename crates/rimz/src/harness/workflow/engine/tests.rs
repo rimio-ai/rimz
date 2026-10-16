@@ -58,13 +58,150 @@ fn create_validates_the_spec_it_reads_before_publication() {
     let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='@done'\n";
     let (home, state, record, _) = fixture(text);
     fs::write(crate::disk::paths::workflow_spec_file(home.path()), text).unwrap();
-    let error = create(&state, home.path(), home.path(), home.path(), None).unwrap_err();
+    let error = create(&state, home.path(), home.path(), home.path(), None, None).unwrap_err();
     assert!(
         error.to_string().contains("checks.pr.timeout"),
         "the bytes to seal must be validated first: {error}"
     );
     assert_eq!(workflow::list(&state).unwrap().len(), 1);
     assert!(state.workflow(&record.id).home.exists());
+}
+
+#[test]
+fn window_wait_evidence_preserves_strict_and_inclusive_boundaries() {
+    for (comparison, reading, expected) in [
+        (">=42", Some("12"), "window.5h.left=12<42"),
+        (">42", Some("42"), "window.5h.left=42<=42"),
+        ("<=42", Some("80"), "window.5h.left=80>42"),
+        ("<42", Some("42"), "window.5h.left=42>=42"),
+        (">=42", None, "window.5h.left=unknown>=42"),
+    ] {
+        let expr = spec::parse_window(&format!("5h.left{comparison}")).unwrap();
+        let verdict = crate::harness::schedule::when::Verdict {
+            ok: false,
+            readings: BTreeMap::from([("window.5h.left".into(), reading.map(str::to_owned))]),
+        };
+        assert_eq!(expr.blocking_evidence(&verdict), expected);
+    }
+    for (raw, expected) in [
+        ("5h.left>=10 && 7d.left>=42", "window.7d.left=12<42"),
+        ("!(5h.left<42)", "!window.5h.left=12<42"),
+        ("!(5h.left>=42 || !(7d.left>=42))", "window.7d.left=12<42"),
+    ] {
+        let expr = spec::parse_window(raw).unwrap();
+        let verdict = crate::harness::schedule::when::Verdict {
+            ok: false,
+            readings: BTreeMap::from([
+                ("window.5h.left".into(), Some("12".into())),
+                ("window.7d.left".into(), Some("12".into())),
+            ]),
+        };
+        assert_eq!(expr.blocking_evidence(&verdict), expected);
+    }
+}
+
+#[test]
+fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
+    let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n";
+    let (home, state, mut record, _) = fixture(text);
+    let dir = home.path().join("review");
+    fs::create_dir(&dir).unwrap();
+    record.spec_dir = dir.clone();
+    fs::write(crate::disk::paths::workflow_spec_file(&dir), text).unwrap();
+    fs::write(&state.workspace_record, serde_json::to_vec(&json!({
+        "layout":crate::disk::paths::WORKSPACE_LAYOUT, "workspace_id":crate::ids::WorkspaceId::from_project_root(home.path()),
+        "project_root":home.path(), "session_name":"test", "updated_at":record.created_at
+    })).unwrap()).unwrap();
+    for status in [RunState::Active, RunState::Parked] {
+        record.state = status;
+        {
+            let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
+        }
+        let error = create(&state, &dir, home.path(), home.path(), None, None).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "workflow review already has run {} for {}",
+                record.id,
+                home.path().display()
+            )
+        );
+        assert!(
+            matches!(&error, WorkflowErr::Exists { run, workflow, scope }
+            if run == &record.id && workflow == &record.workflow && scope == home.path()),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn admission_rechecks_bounds_after_occupancy() {
+    admission_after_occupancy(true);
+}
+
+#[test]
+fn admission_stamps_the_attempt_after_occupancy() {
+    admission_after_occupancy(false);
+}
+
+fn admission_after_occupancy(expires: bool) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (home, state, mut record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pick'\n[checks.pick]\nrun='true'\non.go='pr'\n[steps.pr]\nagent='claude'\nprompt-file='prompt.md'\nthen='after'\n[checks.after]\nrun='true'\non.ok='@done'\n",
+    );
+    fs::write(home.path().join("prompt.md"), "Build").unwrap();
+    let deadline = Timestamp::now() + jiff::SignedDuration::from_secs(1);
+    record.deadline = expires.then_some(deadline);
+    let paths = state.workflow(&record.id);
+    {
+        let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        workflow::write(&paths, &record, &guard).unwrap();
+    }
+    let observed_at = Rc::new(Cell::new(None));
+    let host = super::super::tests::FakeHost::new();
+    let observed = observed_at.clone();
+    *host.on_occupancy.borrow_mut() = Some(Box::new(move || {
+        if expires {
+            let remaining = deadline.duration_since(Timestamp::now());
+            if remaining.is_positive() {
+                std::thread::sleep(std::time::Duration::try_from(remaining).unwrap());
+            }
+        }
+        observed.set(Some(Timestamp::now()));
+    }));
+    let decision = prepare(
+        &state,
+        &paths,
+        &spec,
+        &mut BTreeSet::new(),
+        &host,
+        &WindowReadings::fixed(Timestamp::now(), BTreeMap::new()),
+        &mut None,
+    )
+    .unwrap();
+    let after_occupancy = observed_at.get().expect("admission must reach occupancy");
+    let current = workflow::load(&paths).unwrap();
+    if expires {
+        assert!(
+            matches!(decision, Decision::Again),
+            "a newly due bound must route, not launch"
+        );
+        assert!(current.attempt.is_none());
+        assert!(
+            current.visits.is_empty(),
+            "a refused admission is not a visit"
+        );
+        assert_eq!(current.next_seq, 1);
+        assert_eq!(current.state, RunState::Parked);
+        assert_eq!(current.park.unwrap().reason, ParkReason::Deadline);
+    } else {
+        assert!(matches!(decision, Decision::Launch(_)));
+        assert!(current.attempt.as_ref().unwrap().started_at >= after_occupancy);
+        assert_eq!(current.entered_at, current.attempt.unwrap().started_at);
+    }
 }
 
 #[test]
@@ -112,14 +249,15 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             )]),
         );
         assert_eq!(
-            window_matches(
+            window_wait(
                 "window.5h.left >= 20",
                 Path::new("/project"),
                 &kind,
                 None,
                 &windows
             )
-            .unwrap(),
+            .unwrap()
+            .is_none(),
             open
         );
         for _ in 0..if open { 1 } else { 2 } {
@@ -142,6 +280,10 @@ fn provider_windows_close_and_reopen_on_fresh_capacity() {
             assert!(current.visits.is_empty());
             assert_eq!(current.wait.as_ref().unwrap().outcome, "window");
             assert_eq!(current.wait.as_ref().unwrap().count, 2);
+            assert_eq!(
+                serde_json::to_value(&current).unwrap()["wait"]["detail"],
+                "5h.left=0<20"
+            );
         } else {
             assert_eq!(current.visits["pr"].total, 1);
             assert!(current.wait.is_none());

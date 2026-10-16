@@ -832,6 +832,19 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     let duplicate = command(&env, &["workflow", "run", "review"]);
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains(&id));
+    let mut record = show(&env, &id)["record"].clone();
+    record["state"] = json!("parked");
+    record["park"] = json!({"reason":"user", "text":"Review", "at":record["created_at"]});
+    let paths = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap());
+    fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    let duplicate = command(&env, &["workflow", "run", "review"]);
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr)
+            .contains(&format!("workflow review already has run {id} for"))
+    );
     let outside = command(
         &env,
         &["workflow", "run", env.project_root.to_str().unwrap()],
@@ -870,6 +883,21 @@ fn human_show_wait_and_journal_are_readable() {
     assert!(text.contains("evaluation"));
     assert!(text.contains("CI pending"));
     assert!(text.contains("Review this"));
+    let local_time = |at: &Value| {
+        at.as_str()
+            .unwrap()
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::system())
+            .strftime("%H:%M")
+            .to_string()
+    };
+    let wait = &value["record"]["wait"];
+    assert!(text.contains(&format!(
+        "waiting: pr, said pending, since {}, ×1, recheck {}",
+        local_time(&wait["first"]),
+        local_time(&wait["recheck_at"])
+    )));
     let mut normalized = text
         .replace(value["dir"].as_str().unwrap(), "<work>")
         .replace(env.project_root.to_str().unwrap(), "<checkout>");
@@ -882,6 +910,9 @@ fn human_show_wait_and_journal_are_readable() {
     ] {
         normalized = normalized.replace(at.as_str().unwrap(), "<time>");
     }
+    normalized = normalized
+        .replace(&local_time(&wait["first"]), "<clock>")
+        .replace(&local_time(&wait["recheck_at"]), "<clock>");
     insta::assert_snapshot!("show_wait", normalized);
     fs::write(dir.join("checks/pr.sh"), "printf 'not-json'").unwrap();
     success(command(&env, &["events", "emit", "review.ready"]));
@@ -894,6 +925,33 @@ fn human_show_wait_and_journal_are_readable() {
     settled(&env, &id, "done");
     let terminal = success(command(&env, &["workflow", "show", &id]));
     assert!(terminal.contains("pr terminal done"));
+}
+
+#[test]
+fn human_window_wait_includes_evidence_and_omits_missing_recheck() {
+    let (env, _) = fixture(&format!("{HEADER}{WAIT}"), PENDING);
+    let id = start(&env);
+    let value = until(&env, &id, |v| v["record"]["wait"].is_object());
+    let mut record = value["record"].clone();
+    record["wait"] = json!({"node":"pr", "outcome":"window", "detail":"5h.left=12<42",
+        "first":"2026-01-01T15:02:00Z", "last":"2026-01-01T15:02:00Z", "count":40, "recheck_at":null});
+    record["recheck_at"] = Value::Null;
+    let paths = env
+        .state_path_for(&env.project_root)
+        .workflow(&id.parse().unwrap());
+    fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    let text = success(command(&env, &["workflow", "show", &id]));
+    let clock = "2026-01-01T15:02:00Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::system())
+        .strftime("%H:%M")
+        .to_string();
+    let line = format!("waiting: pr, window 5h.left=12<42, since {clock}, ×40");
+    assert!(text.lines().any(|shown| shown == line), "{text}");
+    let listed = success(command(&env, &["workflow", "list"]));
+    assert!(listed.contains(&line), "{listed}");
+    success(command(&env, &["workflow", "cancel", &id]));
 }
 
 #[test]
