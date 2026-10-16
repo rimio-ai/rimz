@@ -174,6 +174,7 @@ impl DiagSink {
         if !edges.admit(&event, pane_ids) {
             return;
         }
+        drop(edges);
         focus_trace::append(
             &inner.state_root,
             inner.workspace_id.clone(),
