@@ -105,6 +105,17 @@ pub(crate) fn run(status: RunStatus) -> anstyle::Style {
     }
 }
 
+pub(crate) fn workflow(state: rimz::store::workflow::RunState) -> anstyle::Style {
+    use rimz::store::workflow::RunState;
+    match state {
+        RunState::Active => role(StateRole::Working),
+        RunState::Parked => role(StateRole::Waiting),
+        RunState::Done => role(StateRole::Success),
+        RunState::Failed => role(StateRole::Failed),
+        RunState::Canceled => role(StateRole::Neutral),
+    }
+}
+
 /// A queued message's delivery status.
 pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
     match status {

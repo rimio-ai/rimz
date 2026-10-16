@@ -741,7 +741,9 @@ path = "crates/rimz/src/harness"
 # hook_drain::restart and RestartOutcome share frame-boundary replacement with reload (+2).
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
 # workflow::{schema, validate, Validation, SpecErr} and report vocabulary cross the CLI boundary (+6).
-surface-budget = 866 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
+# workflow::{WorkflowErr, create, advance, cancel, resume, wake} expose run control to the CLI (+6).
+# run::rekey_team_run, the trunk's molt re-export, takes the slack the workflow budget assumed (+1).
+surface-budget = 873 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
 
 [[verdict]]
 kind = "item"
@@ -1438,7 +1440,7 @@ surface-budget = 20
 [[module]]
 path = "crates/rimz/src/store/gc"
 # The lifetime-class sweeps read owner liveness (store::runtime, agents), ended rows
-# (store::snapshot), and run status (store::run) to apply the owned-class grace.
+# (store::snapshot), and run status (store::run, store::workflow) to apply the owned-class grace.
 allowed-dependencies = [
     "(crate)",
     "agents",
@@ -1447,6 +1449,7 @@ allowed-dependencies = [
     "store::run",
     "store::runtime",
     "store::snapshot",
+    "store::workflow",
     "wakeup",
     "workspace",
 ]
@@ -6702,3 +6705,113 @@ reason = "The parent CLI dispatch owns workflow argument parsing and presentatio
 kind = "item"
 key = "cli::workflow::run"
 reason = "The parent CLI dispatch owns workflow argument parsing and presentation only."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::WorkflowErr"
+reason = "Workflow run control reports typed storage, spec, lock and process failures to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::create"
+reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::advance"
+reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::cancel"
+reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::resume"
+reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::wake"
+reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition"
+reason = "The engine and script host share the record-only transition vocabulary; no journal reads inform decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::current"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::push"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::finish_check"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::close_wait"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::end_step"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::finish_step"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::abandon_check"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::timeout_at"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::bound"
+reason = "Workflow engine orchestration and script-host interrupts share the pure record transition and bound decisions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::state::Transition::engine_route"
+reason = "Workflow admission bounds route through the same journaled transition as evaluation bounds."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::Evaluation"
+reason = "The off-lock script host returns captured evaluation evidence for sequence-checked settlement."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::step_stub"
+reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::digest"
+reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::script::evaluate"
+reason = "Workflow run admission and off-lock execution share the testkit runner gate and digest/evaluation boundary."
+
+[[verdict]]
+kind = "item"
+key = "cli::render::status::workflow"
+reason = "Workflow list and detail views resolve typed run state through the shared theme core."

@@ -91,6 +91,8 @@ workspace store         ~/.rimz/ws/<basename>-<hex>/
   every room flock lives in locks/, never cleared by reset or teardown
   room.lock: exclusive birth/reset claim, shared pane-supervisor lifetime holds
   workspace.json (layout: 2) and rimz remain room identity at the root
+  owned/workflows/<run-id>/ holds workflow records, sealed specs and journals;
+  its work/ subtree is the node-writable workflow directory
 
 empty agent directories ~/.rimz/empty/<workspace-dir>/<candidate-handle>/
   persistent agent cwd, separate from temp units; retained session rows keep it
@@ -106,7 +108,7 @@ shared runtime          $XDG_RUNTIME_DIR/rimz/shared/
 language-server runtime $XDG_RUNTIME_DIR/rimz/lsp/
   machine admission lock and queue; per-key entries, sockets, publication locks
 
-machine-wide persistent ~/.rimz/{accounts,builds,loops,logs,web,cache}/
+machine-wide persistent ~/.rimz/{accounts,builds,loops,workflows,logs,web,cache}/
   accounts/<kind>/<name>/ provider homes RimZ placed, builds/<build_id>/rimz
   immutable executable generations, the loop registry, append-only logs, the
   browser daemon pid/port records and token store, the broadcast room allowlist,
