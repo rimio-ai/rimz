@@ -132,6 +132,7 @@ fn unsupported_yaml_refuses_without_writing() {
             error.contains("rimz hooks install hermes --dry-run"),
             "{error}"
         );
+        assert!(error.contains(&path.display().to_string()), "{error}");
         assert!(install_at(&path, None).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), input);
     }
