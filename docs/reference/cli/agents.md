@@ -38,7 +38,7 @@ These handles name one agent:
 
 | Handle | Names |
 | --- | --- |
-| `@coder` | A team or ad-hoc role. It follows the launch's current conversation and yields to its standing molt successor, even before registration. If that successor fails before opening a session, the predecessor holds the role again. Earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
+| `@coder` | A team or ad-hoc role. It follows the launch's current conversation and yields to its standing molt successor, directly or farther down its molt chain, even before registration. If that successor fails before opening a session, the predecessor holds the role again. Earlier conversations in the same seat stay readable through `show`, `history`, and `fork` but never receive messages. |
 | `@writer` | An explicit name from a single-agent launch, such as `rimz agents claude --name writer`. |
 | `@swift-otter` | The pet name RimZ gives every launch. |
 | `@claude-2` | A kind plus ordinal. Still accepted as a selector; listings show the pet name instead. |
@@ -833,7 +833,7 @@ The positional note and `--stdin` follow `rimz message`: either supplies the not
 
 Without `--agent`, molt replays the saved launch settings, including the recorded model, effort, and fast mode, with the current profile and role layers. An in-session `/model` switch is not recorded and is **not carried**. `--agent` instead re-bases the same profile and role onto the replacement profile or provider, as on an ordinary launch; it does not replay the old record's model, effort, or fast mode. The predecessor's stamped permission mode and recorded isolation still carry over. The replacement is saved for the successor's later restart or molt.
 
-The successor keeps the same generation, launcher, team, role, channel, and launch ordinal. Repeated molts do not count toward `max-chain-length`. Its note turn creates no peer-report run; an existing leader's open team run moves to the successor. `@role` yields to the successor even before registration, while the predecessor remains reachable by its own handle. If the successor fails before opening a session, the predecessor holds the role again.
+The successor keeps the same generation, launcher, team, role, channel, and launch ordinal. Repeated molts do not count toward `max-chain-length`. Its note turn creates no peer-report run; an existing leader's open team run moves to the successor. `@role` yields to a standing successor, directly or farther down its molt chain, even before registration, while the predecessor remains reachable by its own handle. If the successor fails before opening a session, the predecessor holds the role again.
 
 Only one successor may stand at a time. A second molt refuses and names it; stop a stuck successor with the printed `rimz agents stop @<successor>` command. An ended successor or one that failed before registration frees the slot only if no successor farther down its molt chain still stands. A registered successor's later failed turn does not.
 

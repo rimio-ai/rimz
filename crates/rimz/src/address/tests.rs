@@ -2513,7 +2513,12 @@ fn a_standing_molt_successor_alone_holds_the_role_even_before_registration() {
         .into();
         successor.status = AgentStatus::Running;
         let mut snapshot = empty_snapshot();
-        snapshot.agents = vec![predecessor.clone(), successor.clone()].into();
+        snapshot.agents = crate::store::RuntimeProjection::runtime_from_refs(
+            [&predecessor, &successor],
+            Vec::new(),
+        )
+        .agents
+        .into();
         assert_eq!(
             role_holders(snapshot.agents.iter(), "reviewer")
                 .iter()
@@ -2535,7 +2540,10 @@ fn a_standing_molt_successor_alone_holds_the_role_even_before_registration() {
         "terminal_66",
     )));
     let mut snapshot = empty_snapshot();
-    snapshot.agents = vec![predecessor.clone(), successor].into();
+    snapshot.agents =
+        crate::store::RuntimeProjection::runtime_from_refs([&predecessor, &successor], Vec::new())
+            .agents
+            .into();
     assert_eq!(
         role_holders(snapshot.agents.iter(), "reviewer")[0].agent_id,
         predecessor.agent_id
@@ -2561,8 +2569,43 @@ fn an_ended_molt_intermediate_does_not_restore_its_predecessors_role() {
     successor.molted_from = intermediate.launch_id.clone();
     successor.ended_at = None;
     successor.status = AgentStatus::Running;
+    successor.pane = Some(PaneRef::from_id(PaneId::from_parts(
+        MuxName::Zellij,
+        "terminal_66",
+    )));
+    predecessor.profile = None;
+    successor.profile = None;
+    let panes = vec![
+        predecessor.pane.clone().unwrap(),
+        successor.pane.clone().unwrap(),
+    ];
+    let predecessor_id = predecessor.agent_id.clone();
     let members = [predecessor, intermediate, successor.clone()];
-    assert_eq!(role_holders(&members, "reviewer"), [&successor]);
+    let mut snapshot = empty_snapshot();
+    snapshot.agents = crate::store::RuntimeProjection::runtime_from_refs(&members, Vec::new())
+        .agents
+        .into();
+    assert_eq!(snapshot.agents.len(), 2);
+    assert_eq!(
+        role_holders(snapshot.agents.iter(), "reviewer"),
+        [&successor]
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@reviewer", None, &context(None))
+            .unwrap()
+            .agent_id,
+        successor.agent_id
+    );
+    assert_eq!(
+        resolve_one(&snapshot, "@zesty-river", None, &context(None))
+            .unwrap()
+            .agent_id,
+        predecessor_id
+    );
+    let snapshot = snapshot.with_live_panes(panes, None);
+    let targets = resolve_targets(&snapshot, "@reviewer", None, &context(None)).unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].agent_id.as_ref(), Some(&successor.agent_id));
 }
 
 #[test]
@@ -2586,7 +2629,12 @@ fn live_role_delivery_yields_to_the_molt_successor_and_back_after_startup_failur
             successor.pane.clone().unwrap(),
         ];
         let mut snapshot = empty_snapshot();
-        snapshot.agents = vec![predecessor.clone(), successor.clone()].into();
+        snapshot.agents = crate::store::RuntimeProjection::runtime_from_refs(
+            [&predecessor, &successor],
+            Vec::new(),
+        )
+        .agents
+        .into();
         let snapshot = snapshot.with_live_panes(panes, None);
         let targets = resolve_targets(&snapshot, "@reviewer", None, &context(None)).unwrap();
         assert_eq!(targets.len(), 1);

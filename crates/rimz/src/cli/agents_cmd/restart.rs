@@ -546,12 +546,19 @@ mod tests {
         successor.molted_from = Some("launch_old".into());
         successor.role = Some("coder".into());
         let posture = ResumePosture::default();
+        let mut predecessor = successor.clone();
+        predecessor.agent_id = "launch_old".into();
+        predecessor.launch_id = Some(predecessor.agent_id.clone());
+        predecessor.molted_from = None;
+        let mut predecessor_request =
+            fresh_launch_request(&predecessor, restart_cell(&predecessor, &posture), None).unwrap();
+        predecessor_request.agent_id = predecessor.agent_id;
         let mut request =
             fresh_launch_request(&successor, restart_cell(&successor, &posture), None).unwrap();
         request.agent_id = successor.agent_id.clone();
         store
             .begin_agent_launch_batch(
-                &[request],
+                &[predecessor_request, request],
                 AgentLaunchScope {
                     session_name: workspace.session_name.clone(),
                     cwd: dir.path().into(),
@@ -573,19 +580,13 @@ mod tests {
         let replacement = restarted.single_identity().unwrap();
         assert_eq!(replacement.launch.molted_from, successor.molted_from);
         let audit = store.runtime_projection(rimz::RuntimeScope::Audit).unwrap();
+        let holders = rimz::address::role_holders(&audit.agents, "coder");
+        assert!(holders.iter().all(|agent| agent.agent_id != "launch_old"));
         assert!(
-            rimz::agents::state::standing_successor(
-                &audit.agents,
-                successor.molted_from.as_ref().unwrap(),
-            )
-            .is_some()
+            holders
+                .iter()
+                .any(|agent| agent.agent_id == replacement.agent_id)
         );
-        let mut predecessor = successor.clone();
-        predecessor.agent_id = "launch_old".into();
-        predecessor.launch_id = Some(predecessor.agent_id.clone());
-        predecessor.molted_from = None;
-        let members = audit.agents.iter().chain([&predecessor]);
-        assert!(!rimz::address::role_holders(members, "coder").contains(&&predecessor));
     }
 
     #[test]

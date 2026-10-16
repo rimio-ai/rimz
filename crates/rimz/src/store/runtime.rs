@@ -4,7 +4,7 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use crate::agents::AgentState;
+use crate::agents::{AgentState, state::standing_successor};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 use std::collections::{BTreeSet, HashSet};
@@ -59,19 +59,27 @@ impl RuntimeProjection {
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
     ) -> Self {
         match scope {
-            RuntimeScope::Audit => Self {
-                ended: ended_keys(agents.iter()),
-                expelled: BTreeSet::new(),
-                agents: agents.to_vec(),
-                resume_outcomes,
-            },
+            RuntimeScope::Audit => {
+                let superseded = superseded_molt_ids(agents.iter());
+                let mut projected = agents.to_vec();
+                for agent in &mut projected {
+                    agent.molt_superseded =
+                        superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
+                }
+                Self {
+                    ended: ended_keys(agents.iter()),
+                    expelled: BTreeSet::new(),
+                    agents: projected,
+                    resume_outcomes,
+                }
+            }
             RuntimeScope::Runtime => Self::runtime_from_refs(agents.iter(), resume_outcomes),
         }
     }
 
     /// The runtime-scoped projection over borrowed rows, cloning only the
     /// rows it keeps — a long-lived reader's rollup stays shared.
-    pub(super) fn runtime_from_refs<'a>(
+    pub(crate) fn runtime_from_refs<'a>(
         agents: impl IntoIterator<Item = &'a AgentState>,
         resume_outcomes: Vec<super::snapshot::ResumeOutcome>,
     ) -> Self {
@@ -79,6 +87,7 @@ impl RuntimeProjection {
             .into_iter()
             .map(|agent| (agent, agent_is_runtime_visible(agent)))
             .collect::<Vec<_>>();
+        let superseded = superseded_molt_ids(agents.iter().map(|(agent, _)| *agent));
         let visible_parents = agents
             .iter()
             .filter(|(agent, visible)| agent.parent_agent_id.is_none() && *visible)
@@ -99,7 +108,12 @@ impl RuntimeProjection {
                 if !visible && agent.ended_at.is_none() {
                     expelled.insert((agent.kind.clone(), agent.agent_id.clone()));
                 }
-                visible.then(|| (*agent).clone())
+                visible.then(|| {
+                    let mut projected = (*agent).clone();
+                    projected.molt_superseded =
+                        superseded.contains(agent.launch_id.as_ref().unwrap_or(&agent.agent_id));
+                    projected
+                })
             })
             .collect();
         Self {
@@ -109,6 +123,28 @@ impl RuntimeProjection {
             resume_outcomes,
         }
     }
+}
+
+fn superseded_molt_ids<'a>(
+    agents: impl Iterator<Item = &'a AgentState> + Clone,
+) -> HashSet<&'a AgentSessionId> {
+    let predecessors = agents
+        .clone()
+        .filter_map(|agent| agent.molted_from.as_ref())
+        .collect::<HashSet<_>>();
+    if predecessors.is_empty() {
+        return HashSet::new();
+    }
+    agents
+        .clone()
+        .filter_map(|agent| {
+            if !agent.identity_ids().any(|id| predecessors.contains(id)) {
+                return None;
+            }
+            let id = agent.launch_id.as_ref().unwrap_or(&agent.agent_id);
+            standing_successor(agents.clone(), id).map(|_| id)
+        })
+        .collect()
 }
 
 fn ended_keys<'a>(
@@ -183,6 +219,66 @@ mod tests {
             status: AgentStatus::Idle,
             runtime_owner: owner,
             ..crate::testkit::agent_state("claude", "sess-1", Timestamp::UNIX_EPOCH)
+        }
+    }
+
+    fn molt_chain() -> Vec<AgentState> {
+        let mut predecessor = agent(None);
+        predecessor.launch_id = Some("launch_old".into());
+        let mut intermediate = agent(None);
+        intermediate.agent_id = "middle".into();
+        intermediate.launch_id = Some("launch_middle".into());
+        intermediate.molted_from = predecessor.launch_id.clone();
+        intermediate.ended_at = Some(Timestamp::UNIX_EPOCH);
+        let mut successor = agent(None);
+        successor.agent_id = "launch_new".into();
+        successor.launch_id = Some(successor.agent_id.clone());
+        successor.molted_from = intermediate.launch_id.clone();
+        successor.status = AgentStatus::Running;
+        vec![predecessor, intermediate, successor]
+    }
+
+    #[test]
+    fn runtime_supersession_crosses_an_ended_molt_intermediate() {
+        let agents = molt_chain();
+        let projection = RuntimeProjection::runtime_from_refs(&agents, Vec::new());
+        assert_eq!(projection.agents.len(), 2);
+        assert!(projection.agents[0].molt_superseded);
+        assert!(!projection.agents[1].molt_superseded);
+        let from_parts =
+            RuntimeProjection::from_parts(&agents.into(), RuntimeScope::Runtime, Vec::new());
+        assert_eq!(projection, from_parts);
+    }
+
+    #[test]
+    fn audit_supersession_crosses_an_ended_molt_intermediate() {
+        let projection =
+            RuntimeProjection::from_parts(&molt_chain().into(), RuntimeScope::Audit, Vec::new());
+        assert_eq!(projection.agents.len(), 3);
+        assert!(projection.agents[0].molt_superseded);
+        assert!(projection.agents[1].molt_superseded);
+        assert!(!projection.agents[2].molt_superseded);
+    }
+
+    #[test]
+    fn a_failed_provisional_molt_restores_the_predecessor() {
+        let mut agents = molt_chain();
+        agents[2].status = AgentStatus::Failed;
+        for scope in [RuntimeScope::Runtime, RuntimeScope::Audit] {
+            let projection =
+                RuntimeProjection::from_parts(&agents.clone().into(), scope, Vec::new());
+            assert!(projection.agents.iter().all(|agent| !agent.molt_superseded));
+        }
+    }
+
+    #[test]
+    fn projections_overwrite_cached_molt_supersession() {
+        let mut agent = agent(None);
+        agent.molt_superseded = true;
+        for scope in [RuntimeScope::Runtime, RuntimeScope::Audit] {
+            let projection =
+                RuntimeProjection::from_parts(&vec![agent.clone()].into(), scope, Vec::new());
+            assert!(!projection.agents[0].molt_superseded);
         }
     }
 

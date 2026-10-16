@@ -4,7 +4,6 @@ use std::collections::{BTreeSet, HashSet};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
-use crate::agents::state::yields_molt_seat;
 use crate::diag::record::DiagEvent;
 use crate::ids::AgentKind;
 use crate::pane::PaneRef;
@@ -168,7 +167,7 @@ impl SidebarSnapshot {
             }) else {
                 continue;
             };
-            if yields_molt_seat(agent, self.agents.iter()) {
+            if agent.yields_molt_seat() {
                 pane.role = None;
             }
         }
