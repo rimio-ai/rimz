@@ -34,9 +34,16 @@ pub struct RemovedWorkspace {
     pub project_root: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailedWorkspace {
+    pub dir_name: String,
+    pub error: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkspacePruneReport {
     pub removed: Vec<RemovedWorkspace>,
+    pub failed: Vec<FailedWorkspace>,
     pub kept: usize,
     /// Dirs with an unreadable record that still hold history, kept for the
     /// operator to inspect rather than silently deleted: `(directory name, error)`.
@@ -105,8 +112,15 @@ pub(crate) fn prune_dead_workspaces_under(
             Verdict::Remove(reason, project_root, workspace_id) => {
                 let bytes = dir_size(&path).saturating_add(dir_size(&runtime_dir));
                 if !dry_run {
-                    remove_dir_all_if_exists(&path)?;
-                    remove_dir_all_if_exists(&runtime_dir)?;
+                    let state = remove_state_dir(&path);
+                    let runtime = remove_dir_all_if_exists(&runtime_dir);
+                    if let Err(err) = state.and(runtime) {
+                        report.failed.push(FailedWorkspace {
+                            dir_name: name.to_string_lossy().into_owned(),
+                            error: err.to_string(),
+                        });
+                        continue;
+                    }
                 }
                 report.removed.push(RemovedWorkspace {
                     workspace_id,
@@ -250,6 +264,50 @@ fn workspace_has_history(path: &Path) -> bool {
 
 fn dir_has_entries(path: &Path) -> bool {
     fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// Removes a dead workspace's state dir with `workspace.json` last, so a
+/// removal that fails part-way leaves the record that classifies the dir as
+/// dead and the next sweep retries it rather than retaining its history.
+fn remove_state_dir(path: &Path) -> Result<()> {
+    let io_err = |source| GcErr::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(io_err(source)),
+    };
+    let record = path.join("workspace.json");
+    let mut result = Ok(());
+    for entry in entries {
+        let entry = entry.map_err(io_err)?;
+        let child = entry.path();
+        if child == record {
+            continue;
+        }
+        let removed = if entry.file_type().map_err(io_err)?.is_dir() {
+            remove_dir_all_if_exists(&child)
+        } else {
+            remove_file_if_exists(&child)
+        };
+        result = result.and(removed);
+    }
+    result?;
+    remove_file_if_exists(&record)?;
+    remove_dir_all_if_exists(path)
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(GcErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
@@ -427,6 +485,97 @@ mod tests {
             runtime.join("gone-abcd").exists(),
             "dry-run keeps runtime dir"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_undeletable_workspace_spares_other_workspaces_and_attempts_both_removals() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for locked_state in [true, false] {
+            let temp = tempdir().unwrap();
+            let workspaces = temp.path().join("ws");
+            let runtime = temp.path().join("runtime");
+            let alive_root = temp.path().join("alive");
+            fs::create_dir(&alive_root).unwrap();
+            write_record(
+                &workspaces.join("alive-abcd"),
+                &WorkspaceId::from_project_root(&alive_root),
+                &alive_root,
+            );
+            let gone_root = temp.path().join("gone");
+            for name in ["bad-abcd", "good-abcd"] {
+                write_record(
+                    &workspaces.join(name),
+                    &WorkspaceId::from_project_root(&gone_root),
+                    &gone_root,
+                );
+                fs::create_dir_all(runtime.join(name)).unwrap();
+            }
+            let bad = workspaces.join("bad-abcd");
+            let bad_runtime = runtime.join("bad-abcd");
+            let locked_root = if locked_state { &bad } else { &bad_runtime };
+            let locked = locked_root.join("tmp/pkg");
+            fs::create_dir_all(&locked).unwrap();
+            fs::write(locked.join("file"), b"cached").unwrap();
+            let events_log = crate::StatePaths::history_paths(&bad).events_log;
+            fs::create_dir_all(events_log.parent().unwrap()).unwrap();
+            fs::write(&events_log, b"").unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+            let result = prune_dead_workspaces_under(
+                &workspaces,
+                &runtime,
+                &temp.path().join("empty"),
+                false,
+            );
+            // Root bypasses the mode bits; restore any survivor before assertions or tempdir drop.
+            let survived = locked.exists();
+            if survived {
+                fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let report = result.expect("one failed removal must not abort the prune");
+            let good = report
+                .removed
+                .iter()
+                .find(|row| row.dir_name == "good-abcd")
+                .unwrap();
+            assert_eq!(good.reason, PruneReason::ProjectRootGone);
+            assert!(!workspaces.join("good-abcd").exists());
+            assert!(!runtime.join("good-abcd").exists());
+            assert_eq!(report.kept, 1);
+            assert!(workspaces.join("alive-abcd").exists());
+            assert!(!if locked_state { &bad_runtime } else { &bad }.exists());
+            if survived {
+                assert_eq!(report.failed.len(), 1);
+                assert_eq!(report.failed[0].dir_name, "bad-abcd");
+                assert!(
+                    report.failed[0]
+                        .error
+                        .contains(&locked_root.display().to_string())
+                );
+                assert_eq!(report.removed.len(), 1);
+                assert_eq!(report.bytes_removed(), good.bytes);
+            }
+            if survived && locked_state {
+                // The record outlives a partial removal, so the fixed dir is retried, not retained.
+                let retry = prune_dead_workspaces_under(
+                    &workspaces,
+                    &runtime,
+                    &temp.path().join("empty"),
+                    false,
+                )
+                .unwrap();
+                assert!(retry.failed.is_empty(), "{retry:?}");
+                assert!(retry.retained_unreadable.is_empty(), "{retry:?}");
+                assert!(retry.removed.iter().any(|row| row.dir_name == "bad-abcd"));
+                assert!(!bad.exists() && !bad_runtime.exists());
+            }
+            if !survived {
+                assert!(report.failed.is_empty());
+                assert!(report.removed.iter().any(|row| row.dir_name == "bad-abcd"));
+            }
+        }
     }
 
     #[test]
