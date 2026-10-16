@@ -323,16 +323,12 @@ fn agent_rank_facts(
     windows: AttentionWindows,
 ) -> RankFacts<'_> {
     let age_secs = score::age_secs(now, agent.last_activity);
-    let score = score::attention_score(
-        Some(agent.status),
-        age_secs,
-        windows.inactive_after_secs,
-        windows.archive_after_secs,
-    );
+    let (inactive, archived, score) =
+        score::attention_facts(Some(agent.status), age_secs, windows, false);
     RankFacts {
         is_process: false,
-        inactive: age_secs > windows.inactive_after_secs,
-        archived: age_secs > windows.archive_after_secs,
+        inactive,
+        archived,
         status: Some(agent.status),
         score,
         factor_milli: score::recovered_time_factor_milli(Some(agent.status), score),
@@ -776,9 +772,8 @@ fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {
 }
 
 /// Macro bands: hot work, warm work past the inactive window, and archived work
-/// past the archive window. Read state never changes the band. Status no longer
-/// sets the band — score orders within one — so a fresh `idle` agent outranks a
-/// warm or archived `waiting` one. The `external` partition is group-only
+/// past the archive window. Read state never changes the band. Actionable rows
+/// stay hot while alive; calm and parked rows cool with age. The `external` partition is group-only
 /// ([`compare_groups`]).
 fn band(inactive: bool, archived: bool) -> u8 {
     if archived {

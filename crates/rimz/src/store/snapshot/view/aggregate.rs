@@ -245,19 +245,8 @@ impl SidebarSnapshot {
 fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
     for row in rows {
         let age_secs = score::age_secs(now, row.last_activity);
-        let is_process = row.is_process();
-        row.inactive = !is_process && age_secs > windows.inactive_after_secs;
-        row.archived = !is_process && age_secs > windows.archive_after_secs;
-        row.attention_score = if is_process {
-            0
-        } else {
-            score::attention_score(
-                row.attention_status(),
-                age_secs,
-                windows.inactive_after_secs,
-                windows.archive_after_secs,
-            )
-        };
+        (row.inactive, row.archived, row.attention_score) =
+            score::attention_facts(row.attention_status(), age_secs, windows, row.is_process());
     }
 }
 
@@ -444,10 +433,22 @@ mod tests {
         let mut rows = vec![row_aged(1_800)];
         rows[0].as_agent_mut().unwrap().status = AgentStatus::Waiting;
         stamp_attention(&mut rows, now(), windows);
-        assert_eq!(
-            rows[0].attention_score,
-            score::attention_score(Some(AgentStatus::Waiting), 1_800, 3_600, 86_400)
-        );
+        assert_eq!(rows[0].attention_score, 900);
+
+        for (status, expected_score) in
+            [(AgentStatus::Waiting, 1_200), (AgentStatus::Failed, 1_120)]
+        {
+            let mut rows = vec![row_aged(22 * 3_600)];
+            rows[0].as_agent_mut().unwrap().status = status;
+            stamp_attention(&mut rows, now(), windows);
+            assert!(!rows[0].inactive, "an actionable row stays hot");
+            assert!(!rows[0].archived);
+            assert_eq!(rows[0].attention_score, expected_score);
+        }
+        let mut rows = vec![row_aged(22 * 3_600)];
+        rows[0].as_agent_mut().unwrap().status = AgentStatus::Paused;
+        stamp_attention(&mut rows, now(), windows);
+        assert!(rows[0].inactive, "a provider park still cools");
     }
 
     #[test]

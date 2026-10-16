@@ -206,7 +206,7 @@ The third is the one no status dump answers, because a zombie run wears the same
 
 Every row carries a weight from its state, and time scales it. By weight, heaviest first:
 
-1. Asks (`?`) and failures (`!`) are blocked on you, and together they are your work queue. Every minute an ask waits idles a loaded context, a whole team's when the asker leads one, so they carry the most weight and climb as they age.
+1. Asks (`?`) and failures (`!`) are blocked on you, and together they are your work queue. Every minute an ask waits idles a loaded context, a whole team's when the asker leads one, so they carry the most weight, climb for the first hour, then hold at the top until answered or the agent stops.
 2. A parked card (`⏸`) is blocked on the provider rather than on you. There is nothing to answer until the limit recovers, and with [auto-continue](./loops.md#keep-the-fleet-moving) on, nothing to do at all.
 3. A `done` card has delivered and waits on your verdict, so it leads the calm cards in its line of work: your review queue. That queue rots while it waits, because the trunk moves on and the group header's behind count (`⇣`) climbs, so the header tells you when a delivered branch is getting more expensive to land.
 4. A running card is in flight and healthy. It needs nothing and wants a stable position so your eyes can track it, so it keeps a flat weight and holds its place, with live cost and last-activity age as the cheap progress cues.
@@ -220,8 +220,10 @@ These are weights rather than fixed tiers, and time scales them, so an hour-old 
 Time is measured from each card's last activity, in three windows.
 
 1. **Inside the first hour, blocked work climbs.** An ask, failure, or park grows more urgent the longer it waits, so blocked work reads roughly oldest-first, the cheapest order to clear, and a failure overdue fifty minutes outranks an ask from two minutes ago. Calm work keeps a flat weight, so live agents hold their place while they run. The hour is the default because a prompt after that much quiet usually re-reads the whole context uncached: answer inside it and the agent resumes warm.
-2. **Between one hour and twenty-four, everything cools.** Urgency decays with age instead of climbing, and the whole window sinks beneath anything currently hot. Recency starts to matter more than state here, so yesterday's unanswered question can read below a result delivered an hour ago, and neither competes with the agent blocked right now.
-3. **Past twenty-four hours, a card archives.** It parks at the back, keeping only its state order, so an archived ask still reads above an archived idle agent. This band is about age; it is unrelated to an agent sleeping on a wait.
+2. **Between one hour and twenty-four, calm and parked cards cool.** Their weight decays with age instead of climbing, and the whole window sinks beneath anything currently hot. Recency starts to matter more than state here.
+3. **Past twenty-four hours, a calm or parked card archives.** It parks at the back, keeping only its state order. This band is about age; it is unrelated to an agent sleeping on a wait.
+
+Asks and failures are exempt from cooling and archiving while the agent is alive: an unanswered question still leads fresh running or idle work tomorrow.
 
 A finished line of work with nobody running or blocked skips the clock and archives at once; a new run, ask, failure, or park revives it into the activity-ranked bands.
 
@@ -244,7 +246,7 @@ Inside a group, the six-row cap folds idle cards and process rows behind `+K mor
 
 ## Tuning
 
-Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (hot work ends, one hour), and `archive_after_secs` (a card archives, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
+Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (calm and parked cards cool, one hour), and `archive_after_secs` (those cards archive, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
 
 ## See also
 

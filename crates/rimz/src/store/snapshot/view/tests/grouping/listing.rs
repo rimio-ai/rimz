@@ -217,6 +217,7 @@ fn listing_roster_mirrors_cohort_block_order_and_group_attention_rank() {
     second.launch_group = Some("launch_group_1".to_owned());
     second.launch_ordinal = Some(1);
     second.pane = Some(pane("%1", "claude", "/repo/a"));
+    second = second.active_ago(22 * 3_600);
     let other = agent("claude", "other-running", AgentStatus::Running, 40).worktree("/repo/b");
     let snapshot = room(vec![second, other, first]);
     let refs: Vec<&AgentState> = snapshot.agents.iter().collect();

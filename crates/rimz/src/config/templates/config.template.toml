@@ -237,8 +237,8 @@ aggressive_resize = true
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
 # tool_repeat_warn_after = 3            # identical calls before the card gains a warning marker
 # tool_repeat_attention_after = 20      # identical calls before the agent becomes actionable
-# inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
-# archive_after_secs = 86400           # a card idle this many seconds parks below hot and warm work
+# inactive_after_secs = 3600           # calm and parked cards sink after this silence; asks and failures stay hot
+# archive_after_secs = 86400           # calm and parked cards sink below hot and warm work; asks and failures hold
 
 # [agents.subagents]
 # timeout = "30m"                      # tell supervised children to stop at this work deadline
