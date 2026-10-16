@@ -16,7 +16,7 @@ use super::fetch::{
     result_channel, spawn_fetch_worker,
 };
 use super::input::Wakeup;
-use super::{ServeConfig, cache_refresh, tmux_watch, transcript_watch};
+use super::{ServeConfig, cache_refresh, hidden_views, tmux_watch, transcript_watch};
 
 pub(in crate::sidebar_pane) struct DataPlane {
     pub(super) events: Arc<Mutex<crate::sidebar::event_store::EventStore>>,
@@ -55,6 +55,7 @@ impl DataPlane {
         let subscribers = plane.subscribers.clone();
         let covered = plane.covered.clone();
         let host_data = plane.host_data.clone();
+        let hidden = (config.mux == MuxName::Tmux).then(hidden_views::channel);
         let lanes: Lanes = Box::new(move || {
             let producer = PaneProducer::seeded(&runtime, &config.session_name);
             let last_projection =
@@ -81,7 +82,7 @@ impl DataPlane {
             cache_refresh::spawn(
                 config.clone(),
                 runtime.clone(),
-                diag,
+                diag.clone(),
                 host_data,
                 move || {
                     lock(&subscribers)
@@ -91,8 +92,9 @@ impl DataPlane {
                 },
             );
             // tmux fast path: the host streams control-mode topology nudges so a pane open/close publishes a fresh pane frame in tens of milliseconds instead of waiting out the poll. Latency only: the poll stays the presence backstop, and Zellij reaches the same publication path through its presence plugin.
-            if config.mux == MuxName::Tmux {
-                tmux_watch::spawn(runtime.clone(), config.session_name.clone());
+            if let Some((sweep, rx)) = hidden {
+                hidden_views::spawn(rx, config.session_name.clone(), diag, runtime.clone());
+                tmux_watch::spawn(runtime.clone(), config.session_name.clone(), sweep);
             }
             // The host watches every session whose adapter declares transcript-tail context, so mid-turn token and cost updates repaint without waiting for the next hook or tick. Latency only: the tick backstop stays truth.
             transcript_watch::spawn(runtime);
