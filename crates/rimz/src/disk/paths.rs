@@ -884,6 +884,11 @@ impl RuntimePaths {
         self.lane_path("sidebar-width.json")
     }
 
+    /// Next message sweep deadline for the room host.
+    pub(crate) fn message_wake_path(&self) -> PathBuf {
+        self.lane_path("message-wake.json")
+    }
+
     /// Shared cockpit body filter adopted by every renderer in the room.
     pub(crate) fn sidebar_filter_path(&self) -> PathBuf {
         self.lane_path("sidebar-filter.json")

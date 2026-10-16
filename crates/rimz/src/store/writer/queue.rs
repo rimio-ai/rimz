@@ -369,9 +369,10 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         claimed
     }
 
-    fn finish(self) -> Result<()> {
+    fn finish(self, store: &Store) -> Result<()> {
         if self.live_changed {
             message::write_queue(&self.txn.paths.messages_dir, &self.live)?;
+            store.refresh_message_wake(&self.live, Timestamp::now());
         }
         if let Err(error) =
             message::append_history_many(&self.txn.paths.message_history_dir, &self.history)
@@ -535,6 +536,22 @@ fn condition_stamp_reason(after: &[String], when: &[String]) -> String {
 }
 
 impl Store {
+    /// Rearm the delivery sweep after the clock passes a queued record's schedule floor.
+    ///
+    /// Only the sweep needs this clock-only refresh; queue commits refresh their own writes. Reads and refreshes hold the workspace lock (or the open hook transaction's lock). Failures warn without changing queue truth.
+    pub fn rearm_message_wake(&self, now: Timestamp) {
+        if let Err(error) = self.commit(|txn| {
+            let messages = message::read_queue(&txn.paths.messages_dir)?;
+            self.refresh_message_wake(&messages, now);
+            Ok(())
+        }) {
+            tracing::warn!(
+                %error,
+                "cannot refresh the message wake stamp; the elder sweep may run late"
+            );
+        }
+    }
+
     fn commit_queue<T>(&self, f: impl FnOnce(&mut QueueTxn<'_, '_>) -> Result<T>) -> Result<T> {
         self.commit(|txn| {
             let mut queue = QueueTxn::new(txn)?;
@@ -561,7 +578,7 @@ impl Store {
                     queue.upsert(notice);
                 }
             }
-            queue.finish()?;
+            queue.finish(self)?;
             Ok(result)
         })
     }

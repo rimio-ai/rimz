@@ -220,6 +220,28 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
 }
 
 impl Store {
+    fn refresh_message_wake(&self, messages: &[message::MessageRecord], now: jiff::Timestamp) {
+        let refresh = || -> Result<()> {
+            let path = self.runtime_paths().message_wake_path();
+            match messages
+                .iter()
+                .filter_map(|message| message.wake_deadline(now))
+                .min()
+            {
+                Some(next) => crate::disk::atomic::write_temp_then_rename_cache(&path, &Some(next))
+                    .map_err(message::MessageStoreErr::from)?,
+                None => remove_file_if_exists(&path)?,
+            }
+            Ok(())
+        };
+        if let Err(error) = refresh() {
+            tracing::warn!(
+                %error,
+                "cannot refresh the message wake stamp; the elder sweep may run late"
+            );
+        }
+    }
+
     /// Attribute all events written through this handle to one ingress frame.
     pub fn for_hook_ingress(&self, ingress: EventId, at: jiff::Timestamp) -> Self {
         Self {
@@ -477,6 +499,7 @@ impl Store {
                 message.workspace_id = workspace.workspace_id.clone();
             }
             message::write_queue(&paths.messages_dir, &messages)?;
+            self.refresh_message_wake(&messages, jiff::Timestamp::now());
 
             let mut events = event_log::read_all(&paths.events_log)?;
             let events_rewritten = events.len();
