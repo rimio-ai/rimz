@@ -479,6 +479,9 @@ pub(super) fn close_run_pane(
     session_name: &str,
     record: &RunRecord,
 ) -> rimz::mux::Result<()> {
+    if run_predates_rebirth(store, record).map_err(std::io::Error::other)? {
+        return Ok(());
+    }
     let mut recorded = Ok(());
     if let Some(pane_id) = record.pane_id.as_ref() {
         rimz::harness::hibernate::wake_pane(store, pane_id).map_err(std::io::Error::other)?;
@@ -662,6 +665,9 @@ pub(super) fn resolve_run_pane(
     session_name: &str,
     record: &RunRecord,
 ) -> Option<ResolvedRunPane> {
+    if run_predates_rebirth(store, record).ok()? {
+        return None;
+    }
     record
         .pane_id
         .as_ref()
@@ -670,6 +676,27 @@ pub(super) fn resolve_run_pane(
             session_name: session_name.to_owned(),
         })
         .or_else(|| resolve_run_pane_from_snapshot(store, session_name, record))
+}
+
+fn run_predates_rebirth(store: &rimz::Store, record: &RunRecord) -> Result<bool> {
+    // Only workflow attempts are canceled across a rebirth and stopped afterward by another process.
+    if record.workflow.is_none() {
+        return Ok(false);
+    }
+    match std::fs::read(&store.paths().last_death_marker) {
+        Ok(bytes) => {
+            let death: rimz::store::event::LastDeathMarker = serde_json::from_slice(&bytes)?;
+            if record.started_at <= death.at {
+                return Ok(true);
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(store.read_events()?.iter().any(|event| {
+        event.timestamp >= record.started_at
+            && matches!(event.kind(), rimz::store::event::EventKind::SessionRebirth)
+    }))
 }
 
 fn resolve_run_pane_from_snapshot(

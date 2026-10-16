@@ -1,0 +1,517 @@
+use super::*;
+use crate::common::{
+    path_with_front, trust_codex_preflight_hooks, trust_codex_project, write_fake_login_shell,
+};
+use rimz::store::run::{RunRecord, RunStatus};
+use rimz::store::workflow as records;
+use std::collections::BTreeMap;
+
+struct Room {
+    env: Env,
+    shell: PathBuf,
+    bin: PathBuf,
+}
+
+impl Room {
+    fn new(extra: &str) -> Self {
+        Self::with_kind(extra, "codex")
+    }
+
+    fn with_kind(extra: &str, kind: &str) -> Self {
+        let spec = format!(
+            "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.go = 'build'\n[steps.build]\nagent = '{kind}'\nprompt-file = 'prompt.md'\nthen = 'after'\nmax-visits = 2\n{extra}\n[checks.after]\nrun = 'sh checks/pr.sh'\non.done = '@done'\n"
+        );
+        let (env, _) = fixture(
+            &spec,
+            "if grep -q '^  \"node\": \"pr\"' \"$RIMZ_WORKFLOW_DIR/context.json\"; then printf '{\"outcome\":\"go\",\"key\":7}'; else printf '{\"outcome\":\"done\"}'; fi\n",
+        );
+        env.install_agent_hooks(kind);
+        if kind == "codex" {
+            trust_codex_preflight_hooks(&env);
+            trust_codex_project(&env, &env.project_root);
+        }
+        let bin = crate::common::write_failing_agent_shim(&env, kind, 1);
+        let shell = write_fake_login_shell(&env, "workflow-shell", &[]);
+        let workspace = env.resolve_workspace(&env.project_root);
+        crate::common::room::seed_live_zellij_room(
+            &env.runtime_paths(),
+            &workspace.session_name,
+            Vec::new(),
+        );
+        Self { env, shell, bin }
+    }
+
+    fn command(&self, args: &[&str]) -> std::process::Command {
+        let mut cmd = self.env.rimz();
+        let workspace = self.env.resolve_workspace(&self.env.project_root);
+        cmd.args(["--mux", "zellij"])
+            .args(args)
+            .env("SHELL", &self.shell)
+            .env("PATH", path_with_front(&self.bin))
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LOG",
+                self.env.project_root.join("spawn.log"),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG_LAYOUTS", "1")
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        let panes = self.env.project_root.join("panes.json");
+        if panes.exists() {
+            cmd.env("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE", panes);
+        }
+        cmd
+    }
+
+    fn launch(&self) -> (String, RunRecord) {
+        let id = self.start();
+        let run = self.attempt(&id);
+        (id, run)
+    }
+
+    fn start(&self) -> String {
+        let receipt = success(
+            self.command(&["workflow", "run", "review", "--prompt", "Review this"])
+                .output()
+                .unwrap(),
+        );
+        receipt.lines().next().unwrap().to_owned()
+    }
+
+    fn attempt(&self, id: &str) -> RunRecord {
+        let value = until(&self.env, id, |v| v["record"]["attempt"]["run"].is_object());
+        let run_id = value["record"]["attempt"]["run"]["run_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        rimz::harness::run::load(&self.env.state_path_for(&self.env.project_root), &run_id).unwrap()
+    }
+
+    fn hook(&self, id: &str, run: &RunRecord, mut payload: Value) {
+        payload["session_id"] = json!("workflow-session");
+        payload["cwd"] = json!(self.env.project_root);
+        let mut cmd = self.hook_command(run.kind.as_str());
+        cmd.env("RIMZ_RUN_ID", run.run_id.as_str())
+            .env("RIMZ_AGENT_NAME", run.agent_name.as_deref().unwrap())
+            .env("RIMZ_WORKFLOW_RUN", id)
+            .env("ZELLIJ", "1")
+            .env("ZELLIJ_PANE_ID", "61")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            );
+        success(
+            self.env
+                .spawn_payload(cmd, &payload.to_string())
+                .wait_with_output()
+                .unwrap(),
+        );
+        self.env.drain_hooks();
+    }
+
+    fn hook_command(&self, kind: &str) -> std::process::Command {
+        let mut cmd = self.command(&["hooks", "feed", "--source", kind]);
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env("RIMZ_AGENT_PID", self.env.agent_owner_pid().to_string());
+        cmd
+    }
+}
+
+#[test]
+fn terminal_write_without_a_hook_wakes_the_workflow() {
+    if let Ok(id) = std::env::var("RIMZ_TEST_FAIL_WORKFLOW_ATTEMPT") {
+        let fixture_home = PathBuf::from(std::env::var_os("RIMZ_HOME").unwrap());
+        let state = rimz::StatePaths::for_project_root_under(
+            &std::env::current_dir().unwrap(),
+            &fixture_home,
+        )
+        .unwrap();
+        rimz::harness::run::fail_if_nonterminal(
+            &state,
+            &id.parse().unwrap(),
+            "provider exited without a hook",
+        )
+        .unwrap()
+        .unwrap();
+        return;
+    }
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    let mut failure = room.env.rimz_at(&std::env::current_exe().unwrap());
+    for (key, value) in room.command(&[]).get_envs() {
+        match value {
+            Some(value) => {
+                failure.env(key, value);
+            }
+            None => {
+                failure.env_remove(key);
+            }
+        }
+    }
+    success(
+        failure
+            .args([
+                "--exact",
+                "workflow::attempts::terminal_write_without_a_hook_wakes_the_workflow",
+            ])
+            .env("RIMZ_BIN", room.env.rimz_bin())
+            .env("RIMZ_TEST_FAIL_WORKFLOW_ATTEMPT", run.run_id.as_str())
+            .output()
+            .unwrap(),
+    );
+    let ended = until(&room.env, &id, |v| v["record"]["state"] == "done");
+    assert_eq!(ended["record"]["prev_attempt"]["outcome"], "died");
+}
+
+#[test]
+fn show_keeps_durable_history_when_takeover_blockers_are_unavailable() {
+    let room = Room::new("window='5h.left>=100'\n");
+    let id = room.start();
+    until(&room.env, &id, |v| {
+        v["record"]["wait"]["outcome"] == "window"
+    });
+    let state = room.env.state_path_for(&room.env.project_root);
+    let paths = state.workflow(&id.parse().unwrap());
+    let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let mut record = records::load(&paths).unwrap();
+    record.wait.as_mut().unwrap().outcome = "takeover".into();
+    records::write(&paths, &record, &guard).unwrap();
+    drop(guard);
+    let text = success(
+        room.command(&["workflow", "show", &id])
+            .env("RIMZ_ZELLIJ_BIN", "/nonexistent-zellij")
+            .output()
+            .unwrap(),
+    );
+    assert!(text.contains("blockers unavailable"), "{text}");
+    assert!(text.contains("history:"), "{text}");
+}
+
+#[test]
+fn supervised_identity_prompt_and_lifecycle_completion() {
+    let room = Room::new("");
+    if crate::common::git::git_missing() {
+        return;
+    }
+    crate::common::git::init_repo(&room.env.project_root);
+    let script = room.env.rimz_home().join("workflows/review/checks/pr.sh");
+    let original = fs::read_to_string(&script).unwrap();
+    fs::write(&script, format!("mkdir -p \"$RIMZ_WORKFLOW_DIR/signs\"\nprintf '%s' 'Use the smaller fix' > \"$RIMZ_WORKFLOW_DIR/signs/build.md\"\n{original}")).unwrap();
+    let (id, run) = room.launch();
+    let value = show(&room.env, &id);
+    assert_eq!(run.workflow.as_ref().unwrap().run.as_str(), id);
+    assert_eq!(run.workflow.as_ref().unwrap().seq, 2);
+    assert_eq!(context(&value)["visit"], 1);
+    assert_eq!(context(&value)["visits"], 1);
+    assert_eq!(context(&value)["key"], 7);
+    assert_eq!(run.prompt, "Build it\n\nUse the smaller fix\n\nReview this");
+    let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+    let payload = trace
+        .split("\"--request\" ")
+        .nth(1)
+        .and_then(|rest| {
+            serde_json::Deserializer::from_str(rest)
+                .into_iter::<String>()
+                .next()?
+                .ok()
+        })
+        .unwrap();
+    let request = rimz::harness::launch::decode_exec_request("codex", None, &payload).unwrap();
+    assert_eq!(request.identity.params.workflow, run.workflow);
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let snapshot = room.env.store().snapshot_cached().unwrap();
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name)
+            .unwrap()
+            .workflow,
+        run.workflow
+    );
+    room.hook(
+        &id,
+        &run,
+        json!({"hook_event_name":"Stop","last_assistant_message":"built"}),
+    );
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(value["record"]["prev_attempt"]["outcome"], "ended");
+    assert_eq!(
+        value["record"]["prev_attempt"]["run_id"],
+        run.run_id.as_str()
+    );
+    assert_eq!(
+        value["record"]["prev_attempt"]["children"],
+        json!({"stopped":[],"live":[]})
+    );
+    let previous = &value["record"]["prev_attempt"];
+    assert!(previous["head_start"].as_str().unwrap().len() >= 40);
+    assert_eq!(previous["head_start"], previous["head_end"]);
+    let attempt = &events(&value, "attempt")[0];
+    assert!(attempt["digests"]["prompt.md"].is_string());
+    assert!(attempt["digests"]["signs/build.md"].is_string());
+    assert_eq!(
+        fs::read_to_string(room.env.rimz_home().join("workflows/review/prompt.md")).unwrap(),
+        "Build it"
+    );
+    let human = success(command(&room.env, &["workflow", "show", &id]));
+    assert!(human.contains(previous["handle"].as_str().unwrap()));
+    assert!(human.contains(&previous["head_start"].as_str().unwrap()[..8]));
+    assert!(human.contains("cost") && human.contains("stopped (0)") && human.contains("live (0)"));
+}
+
+#[test]
+fn queued_async_question_does_not_end_the_attempt() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    let bound = rimz::harness::run::load(
+        &room.env.state_path_for(&room.env.project_root),
+        &run.run_id,
+    )
+    .unwrap();
+    let observation = serde_json::from_value(json!({
+        "agent_id":bound.agent_id, "signal":{"signal":"tool_used","mutates":false,"edits":false},
+        "ask_queue":{"queued":[{"ask_id":rimz::ids::AskId::new(),"native_key":"async","detail":"Later?",
+            "question":{"question":"Later?","options":[],"multi_select":false}}]}
+    })).unwrap();
+    let workspace = room.env.resolve_workspace(&room.env.project_root);
+    room.env
+        .store()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            workspace.session_name,
+            "codex",
+            "test",
+            &observation,
+        ))
+        .unwrap();
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let current = show(&room.env, &id);
+    assert_eq!(
+        current["record"]["state"], "active",
+        "an async question does not own input"
+    );
+    assert!(current["record"]["attempt"].is_object());
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
+#[test]
+fn permission_parks_and_question_routes_with_evidence() {
+    for (extra, payload, parked) in [
+        (
+            "",
+            serde_json::from_str::<Value>(&crate::common::codex_permission_payload()).unwrap(),
+            true,
+        ),
+        (
+            "on.asked = 'after'",
+            serde_json::from_str::<Value>(&crate::common::codex_pre_tool_use_payload()).unwrap(),
+            false,
+        ),
+    ] {
+        let room = Room::new(extra);
+        let (id, run) = room.launch();
+        room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+        room.hook(&id, &run, payload);
+        let value = settled(&room.env, &id, if parked { "parked" } else { "done" });
+        let asked = &value["record"]["prev_attempt"]["asked"];
+        assert_eq!(
+            asked["kind"],
+            if parked { "permission" } else { "question" }
+        );
+        assert!(!asked["text"].as_str().unwrap().is_empty());
+        assert!(asked["handle"].as_str().unwrap().starts_with('@'));
+        if parked {
+            assert_eq!(value["record"]["park"]["reason"], "asked");
+            let human = success(command(&room.env, &["workflow", "show", &id]));
+            assert!(human.contains(asked["text"].as_str().unwrap()));
+            assert!(human.contains("permission"));
+        }
+    }
+}
+
+#[test]
+fn cancel_pending_attempt_is_durable_and_idempotent() {
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    let value = settled(&room.env, &id, "canceled");
+    assert_eq!(value["record"]["prev_attempt"]["outcome"], "canceled");
+    assert_eq!(
+        rimz::harness::run::load(
+            &room.env.state_path_for(&room.env.project_root),
+            &run.run_id
+        )
+        .unwrap()
+        .status,
+        RunStatus::Canceled
+    );
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    assert_eq!(show(&room.env, &id)["journal"], value["journal"]);
+}
+
+#[test]
+fn timeout_and_failed_run_settle_before_following_then() {
+    for timeout in [true, false] {
+        let room = Room::new(if timeout { "timeout='1h'" } else { "" });
+        let (id, run) = room.launch();
+        let state = room.env.state_path_for(&room.env.project_root);
+        if timeout {
+            room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+            let guard = rimz::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+            let paths = state.workflow(&id.parse().unwrap());
+            let mut record = records::load(&paths).unwrap();
+            record.attempt.as_mut().unwrap().started_at =
+                jiff::Timestamp::now() - jiff::SignedDuration::from_hours(2);
+            records::write(&paths, &record, &guard).unwrap();
+        } else {
+            let mut metered = rimz::harness::run::load(&state, &run.run_id).unwrap();
+            metered.cost_usd = Some(0.42);
+            rimz::harness::run::create(&state, &metered).unwrap();
+            room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+            room.hook(
+                &id,
+                &run,
+                json!({"hook_event_name":"Stop", "status":"failed"}),
+            );
+        }
+        let mut advance = room.command(&["workflow", "advance", &id]);
+        if timeout {
+            advance.env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            );
+        }
+        success(advance.output().unwrap());
+        let value = settled(&room.env, &id, "done");
+        assert_eq!(
+            value["record"]["prev_attempt"]["outcome"],
+            if timeout { "timeout" } else { "died" }
+        );
+        let ended = rimz::harness::run::load(&state, &run.run_id).unwrap();
+        assert_eq!(
+            ended.status,
+            if timeout {
+                RunStatus::Canceled
+            } else {
+                RunStatus::Failed
+            }
+        );
+        if timeout {
+            let trace = fs::read_to_string(room.env.project_root.join("spawn.log")).unwrap();
+            assert!(trace.contains("close-pane"));
+        } else {
+            assert_eq!(value["record"]["prev_attempt"]["cost_usd"], 0.42);
+            assert!(success(command(&room.env, &["workflow", "show", &id])).contains("$0.42"));
+        }
+    }
+}
+
+#[test]
+fn closed_window_merges_without_visits_then_reopens() {
+    use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
+    let room = Room::new("window='5h.left>=42'");
+    let capacity = |used| {
+        room.env.publish_rate_limits(&RateLimitsCache {
+            entries: BTreeMap::from([(
+                "codex@default".parse().unwrap(),
+                RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![RateLimitWindow {
+                            used_percentage: Some(used),
+                            duration_mins: Some(300),
+                            resets_at: Some(
+                                jiff::Timestamp::now() + jiff::SignedDuration::from_hours(2),
+                            ),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        })
+    };
+    capacity(100);
+    let id = room.start();
+    until(&room.env, &id, |value| {
+        value["record"]["wait"]["outcome"] == "window"
+    });
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let value = show(&room.env, &id);
+    assert_eq!(value["record"]["wait"]["count"], 2);
+    assert!(value["record"]["visits"].as_object().unwrap().is_empty());
+    assert!(
+        rimz::harness::run::list(&room.env.state_path_for(&room.env.project_root))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        success(command(&room.env, &["workflow", "show", &id])).contains("waiting: build, window")
+    );
+    capacity(0);
+    success(
+        room.command(&["workflow", "advance", &id])
+            .output()
+            .unwrap(),
+    );
+    let _ = room.attempt(&id);
+    let value = show(&room.env, &id);
+    assert_eq!(events(&value, "wait").len(), 1);
+    assert_eq!(events(&value, "wait")[0]["count"], 2);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+}
+
+#[test]
+fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
+    use crate::common::CommandTimeoutExt;
+    let room = Room::new("");
+    let (id, run) = room.launch();
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    rimz::store::live_roster::publish(
+        &room.env.state_path_for(&room.env.project_root).live_roster,
+        [(run.kind.clone(), "workflow-session".into())].into(),
+    )
+    .unwrap();
+    let presence = room.env.home_root.join("presence.wasm");
+    fs::write(&presence, b"test-presence").unwrap();
+    success(room.command(&["start", "--no-attach", "--no-resume"])
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#)
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("RIMZ_PETS_OFFLINE", "1")
+        .env("TERM", "dumb")
+        .bounded_output().unwrap());
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(value["record"]["prev_attempt"]["outcome"], "canceled");
+    assert_eq!(
+        rimz::harness::run::load(
+            &room.env.state_path_for(&room.env.project_root),
+            &run.run_id
+        )
+        .unwrap()
+        .status,
+        RunStatus::Canceled
+    );
+}
+
+mod residents;

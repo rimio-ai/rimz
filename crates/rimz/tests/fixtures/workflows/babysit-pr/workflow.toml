@@ -1,0 +1,36 @@
+[workflow]
+scope = "worktree"
+start = "pr"
+
+[checks.pr]
+run = "uv run checks/pr.py"
+on = { merged = "notes", ci-pending = "@wait", needs-sweep = "sweep" }
+timeout = "2d"
+
+[checks.notes]
+run = "uv run checks/notes.py"
+on = { none = "@done", needed = "triage", unsure = "judge" }
+
+[checks.judge]
+agent = "haiku"
+prompt-file = "checks/triage-judge.md"
+window = "5h.left>=42"
+on = { skip = "@done", triage = "triage" }
+timeout = "3d"
+
+[steps.sweep]
+agent = "sweeper"
+prompt-file = "prompts/sweep.md"
+takeover = true
+then = "pr"
+max-visits = 5
+timeout = "6h"
+
+[steps.triage]
+agent = "yagni"
+prompt-file = "prompts/triage.md"
+window = "5h.left>=42"
+takeover = true
+then = "notes"
+on.asked = "judge"
+max-visits = 3

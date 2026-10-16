@@ -409,7 +409,7 @@ fn update_record<T>(
     run_id: &RunId,
     update: impl FnOnce(&mut RunRecord, Timestamp) -> Result<RecordMutation<T>>,
 ) -> Result<(RunRecord, T)> {
-    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut record = load(paths, run_id)?;
     let was_terminal = record.status.is_terminal();
     let now = Timestamp::now();
@@ -430,6 +430,19 @@ fn update_record<T>(
                 tracing::warn!(run_id = %record.run_id, error = %err, "publishing subagent response failed");
             }
             crate::store::run::write(&paths.runs_dir, &record)?;
+            drop(guard);
+            if !was_terminal
+                && record.status.is_terminal()
+                && let Some(attempt) = &record.workflow
+            {
+                let wake = (|| {
+                    let workflow = crate::store::workflow::load(&paths.workflow(&attempt.run))?;
+                    crate::harness::workflow::wake_run(&workflow.project_root, &attempt.run)
+                })();
+                if let Err(error) = wake {
+                    tracing::warn!(run_id = %record.run_id, %error, "could not wake workflow attempt");
+                }
+            }
             Ok((record, outcome))
         }
     }

@@ -393,9 +393,9 @@ fn prepare_supervised(
     presentation: &SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<PreparedRun>> {
-    // Loop-owned launches have no agent caller, from either env or ancestry.
-    let loop_owned = request.loop_task.is_some();
-    if !loop_owned {
+    // Harness-owned launches have no agent caller, from either env or ancestry.
+    let harness_owned = request.loop_task.is_some() || request.workflow.is_some();
+    if !harness_owned {
         crate::cli::check_launch_room(globals)?;
     }
     let workspace = supervised::resolve_run_workspace(globals)?;
@@ -413,7 +413,7 @@ fn prepare_supervised(
     // `forge.reviewer`.
     let effective = rimz::config::effective::load(&machine_config, &workspace.project_root)?;
     let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
-    let caller_identity = if loop_owned {
+    let caller_identity = if harness_owned {
         None
     } else {
         rimz::harness::ancestry::resolve_caller(&projection.agents)
@@ -441,7 +441,7 @@ fn prepare_supervised(
         request.worktree.as_deref(),
     )?;
     let lane = request.channel.clone().or_else(|| {
-        if loop_owned {
+        if harness_owned {
             crate::cli::directory_channel(
                 &workspace,
                 cwd.as_deref().unwrap_or(&workspace.worktree_root),
@@ -591,7 +591,9 @@ fn prepare_supervised(
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.
-    let home_fix = if loop_owned {
+    let home_fix = if request.workflow.is_some() {
+        "start the workflow from a project directory"
+    } else if request.loop_task.is_some() {
         "re-add the loop task from a project directory"
     } else if request.subagent {
         "pass `--cwd <DIR>`, or launch the parent agent from a project directory"

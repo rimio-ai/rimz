@@ -325,6 +325,31 @@ fn occupancy_waits_merge_without_consuming_input_key_or_visits() {
 }
 
 #[test]
+fn successful_eviction_admits_only_the_immediate_launch() {
+    let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
+    let host = FakeHost::new();
+    *host.occupancy.borrow_mut() = Occupancy::Occupied(vec!["sweeper".into()]);
+    host.stale_after_evict.set(true);
+    let live = advance_ok(&state, &record.id, &host);
+    assert_eq!(
+        host.launched.borrow().len(),
+        1,
+        "successful eviction admits its immediate launch despite stale occupancy"
+    );
+    assert_eq!(live.visits["build"].total, 1);
+    assert_eq!(host.evictions.get(), 1);
+    host.observed.borrow_mut().status = RunStatus::Completed;
+    let mut ended = advance_ok(&state, &record.id, &host);
+    ended.state = RunState::Active;
+    update(&state, &ended);
+    host.observed.borrow_mut().status = RunStatus::Running;
+    let waiting = advance_ok(&state, &record.id, &host);
+    assert_eq!(waiting.wait.unwrap().outcome, "takeover");
+    assert_eq!(waiting.visits["build"].total, 1);
+    assert_eq!(host.launched.borrow().len(), 1);
+}
+
+#[test]
 fn eviction_failure_is_a_counted_died_attempt() {
     let (_dir, state, record) = setup(&format!("{STEP}takeover=true\n"));
     let host = FakeHost::new();

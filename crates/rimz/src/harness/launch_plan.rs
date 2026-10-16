@@ -736,7 +736,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                 cwd: inputs.cwd,
                 project_root: inputs.project_root,
                 worktree: request.worktree_path.as_deref(),
-                read_only: Vec::new(),
+                read_only: judge_read_only(&request, inputs.cwd)?,
                 tmp_dir: &unit,
                 skills_dir: &inputs
                     .state
@@ -785,6 +785,43 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         runtime: inputs.runtime.clone(),
         state: inputs.state.clone(),
     })
+}
+
+fn judge_read_only(request: &ExecRequest, cwd: &Path) -> Result<Vec<PathBuf>, LaunchPlanErr> {
+    if !request
+        .identity
+        .params
+        .workflow
+        .as_ref()
+        .is_some_and(|workflow| workflow.role == crate::agents::WorkflowAttemptRole::Judge)
+    {
+        return Ok(Vec::new());
+    }
+    let mut paths = vec![cwd.to_path_buf()];
+    let Some(checkout) = cwd.ancestors().find(|dir| dir.join(".git").exists()) else {
+        return Ok(paths);
+    };
+    let metadata_error = |source| sandbox::SandboxErr::Io {
+        path: checkout.join(".git"),
+        source,
+    };
+    let Some(git_dir) = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
+        .map_err(|error| metadata_error(std::io::Error::other(error)))?
+    else {
+        return Ok(paths);
+    };
+    match std::fs::read_to_string(git_dir.join("commondir")) {
+        Ok(common) => paths.push(
+            git_dir
+                .join(common.trim())
+                .canonicalize()
+                .map_err(metadata_error)?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(metadata_error(error).into()),
+    }
+    paths.push(git_dir);
+    Ok(paths)
 }
 
 pub fn apply(plan: &LaunchPlan) -> Result<Option<SkillLinkOutcome>, LaunchPlanErr> {

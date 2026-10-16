@@ -35,6 +35,16 @@ fn compile_prompt_request(
 #[test]
 fn workflow_env_pins_survive_both_isolations() {
     let project = tempfile::tempdir().unwrap();
+    let metadata = tempfile::tempdir().unwrap();
+    let common = metadata.path().join(".git");
+    let admin = common.join("worktrees/judge");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(
+        project.path().join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
     let state = StatePaths::under(
         crate::WorkspaceId::from_project_root(project.path()),
         project.path(),
@@ -47,9 +57,15 @@ fn workflow_env_pins_survive_both_isolations() {
         seq: 3,
         role: crate::agents::WorkflowAttemptRole::Step,
     };
-    for sandboxed in [false, true] {
+    for (sandboxed, role) in [
+        (false, crate::agents::WorkflowAttemptRole::Step),
+        (true, crate::agents::WorkflowAttemptRole::Step),
+        (false, crate::agents::WorkflowAttemptRole::Judge),
+        (true, crate::agents::WorkflowAttemptRole::Judge),
+    ] {
         let mut request = request("claude", action_with_args("launch", vec![]));
         request.identity.params.workflow = Some(workflow.clone());
+        request.identity.params.workflow.as_mut().unwrap().role = role;
         let plan = compile(LaunchPlanInputs {
             request: &request,
             cwd: project.path(),
@@ -76,6 +92,25 @@ fn workflow_env_pins_survive_both_isolations() {
             plan.process().env.get("RIMZ_WORKFLOW_DIR"),
             Some(&state.workflow(&workflow.run).work.display().to_string())
         );
+        if let Some(sandbox) = &plan.sandbox {
+            let checkout_ro = |mount: &crate::sandbox::Mount| {
+                matches!(mount,
+                crate::sandbox::Mount::RoBind { source, target }
+                if source == project.path() && target == project.path())
+            };
+            assert_eq!(
+                sandbox.plan.mounts.iter().any(checkout_ro),
+                role == crate::agents::WorkflowAttemptRole::Judge,
+                "only a judge overlays the checkout read-only after the reach rebinds"
+            );
+            if role == crate::agents::WorkflowAttemptRole::Judge {
+                for path in [&admin, &common] {
+                    assert!(sandbox.plan.mounts.iter().any(|mount| matches!(mount,
+                        crate::sandbox::Mount::RoBind { source, target } if source == path && target == path
+                    )), "judge Git metadata must be read-only: {}", path.display());
+                }
+            }
+        }
     }
 }
 

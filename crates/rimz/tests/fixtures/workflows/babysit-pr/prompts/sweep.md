@@ -1,0 +1,3 @@
+The team's pull request belongs to this checkout. Inspect its branch's PR and CI, resolve the review findings and failing checks that are yours, and queue it to merge. Stay with it until it merges. Read the team's blackboard.md and reflect-notes.md when present before changing code. Do not discard a dirty tree left by a stopped attempt: inspect it and deliberately continue or explain it.
+
+Read context.json under RIMZ_WORKFLOW_DIR for the previous attempt and routed input. Work idempotently: a repeated attempt may find the previous fix or merge already complete. The workflow checks the PR after your turn; do not claim success in place of the external PR state. If you cannot proceed without the user, ask in your native UI.

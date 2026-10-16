@@ -234,7 +234,7 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
     let paths = state.workflow(id);
     let spec = spec::load(&paths.home)?;
     let mut seen = BTreeSet::new();
-    let mut eviction_failure = None;
+    let mut eviction = None;
     loop {
         let windows = WindowReadings::new(Some(&runtime), Timestamp::now());
         let decision = prepare(
@@ -244,16 +244,15 @@ pub fn advance(state: &StatePaths, id: &WorkflowRunId, host: &dyn AttemptHost) -
             &mut seen,
             host,
             &windows,
-            &mut eviction_failure,
+            &mut eviction,
         )?;
         let record = match decision {
             Decision::Stop => return Ok(()),
             Decision::Again => continue,
             Decision::Evaluate(record) => record,
             Decision::Evict(record) => {
-                if let Err(error) = host.evict(&record.scope.path, &record.project_root) {
-                    eviction_failure = Some((record.node, error.to_string()));
-                }
+                let error = host.evict(&record.scope.path, &record.project_root).err();
+                eviction = Some((record.next_seq, error.map(|error| error.to_string())));
                 continue;
             }
             Decision::Launch(launch) => {
@@ -350,7 +349,7 @@ fn prepare(
     seen: &mut BTreeSet<String>,
     host: &dyn AttemptHost,
     windows: &WindowReadings<'_>,
-    eviction_failure: &mut Option<(String, String)>,
+    eviction: &mut Option<(u64, Option<String>)>,
 ) -> Result<Decision> {
     let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
     let mut t = Transition {
@@ -396,6 +395,7 @@ fn prepare(
         persist(&t, &guard)?;
         return Ok(Decision::Stop);
     }
+    let mut eviction_error = None;
     if let Some(step) = spec.steps.get(&t.record.node) {
         let visits = t.record.visits.get(&t.record.node).map_or(0, |v| v.total);
         let max = step
@@ -423,10 +423,10 @@ fn prepare(
             persist(&t, &guard)?;
             return Ok(Decision::Stop);
         }
-        let failed_eviction = eviction_failure
-            .as_ref()
-            .is_some_and(|(node, _)| *node == t.record.node);
-        if !failed_eviction {
+        if let Some((_, error)) = eviction.take().filter(|(seq, _)| *seq == t.record.next_seq) {
+            // A confirmed stop admits only this launch; later visits read occupancy afresh.
+            eviction_error = error;
+        } else {
             match host.occupancy(&t.record.scope.path, &t.record.project_root)? {
                 Occupancy::Free => {}
                 Occupancy::Blocked(_) => {
@@ -517,9 +517,7 @@ fn prepare(
     persist(&t, &guard)?;
     write_context(&t.record, paths, spec)?;
     if let Some(mut prompt) = prompt {
-        if let Some((node, reason)) = eviction_failure.take()
-            && node == t.record.node
-        {
+        if let Some(reason) = eviction_error {
             prompt = Err(reason);
         }
         return Ok(Decision::Launch(Box::new((t.record, prompt))));
