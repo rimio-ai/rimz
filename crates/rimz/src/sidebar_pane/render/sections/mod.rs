@@ -57,16 +57,17 @@ pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected}
 /// How far live or held selection reaches a row: the source row itself, a named
 /// teammate opened alongside it, or neither. This controls expansion, not
 /// selection styling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SelectionReach {
     Selected,
     Teammate,
+    #[default]
     Unreached,
 }
 
 impl SelectionReach {
-    /// Selection opens the full card shape for the selected row and its
-    /// teammates alike.
+    /// Selection opens the card for the selected row and its teammates alike;
+    /// only the selected row gains session stats outside expanded density.
     pub(super) fn opens_card(self) -> bool {
         self != Self::Unreached
     }
@@ -107,12 +108,12 @@ pub(super) fn row_selection_reach(
     reach
 }
 
-/// What a card opens: the full shape follows live or held selection, teammates
-/// included. Delegation entries follow the sticky header override, else open
+/// What a card opens: reach distinguishes live or held selections from teammates,
+/// which open without session stats. Delegation entries follow the sticky header override, else open
 /// for a live or held source row or under `expanded` density.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CardExpansion {
-    pub(super) by_selection: bool,
+    pub(super) reach: SelectionReach,
     pub(super) delegation: bool,
     /// The open section also lists the children folded behind `+K older`.
     pub(super) history: bool,
@@ -134,7 +135,7 @@ impl CardExpansion {
             .as_agent()
             .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));
         Self {
-            by_selection: reach.opens_card(),
+            reach,
             delegation,
             history,
         }

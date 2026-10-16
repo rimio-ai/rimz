@@ -371,7 +371,7 @@ archive_after_secs = 86400
 | --- | --- | --- |
 | `active_grace_secs` | `180` | How much silence inside an open working span still counts as active time. |
 | `stalled_after_secs` | `1800` | When a silent running agent, including native and launched children, escalates to the actionable `!` bucket. A native child silent for three hours leaves its card, so a window of `10800` or more never flags one. |
-| `tool_repeat_warn_after` | `3` | Identical tool calls in a row before the card gains `⟲`. |
+| `tool_repeat_warn_after` | `3` | Identical tool calls in a row before `⟲` appears on the selected or held card's stats line, or under `expanded` density. |
 | `tool_repeat_attention_after` | `20` | Identical tool calls in a row before that agent escalates to `!`. |
 | `inactive_after_secs` | `3600` | How long a card stays in hot work after its last activity before the ranking treats it as cold. |
 | `archive_after_secs` | `86400` | When a card parks below hot and warm work. |

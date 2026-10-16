@@ -422,7 +422,7 @@ fn running_agent_without_enrichment_keeps_full_placeholder_shape() {
         .skip(1)
         .collect::<Vec<_>>();
 
-    assert_eq!(card_lines.len(), 4, "{}", card_lines.join("\n"));
+    assert_eq!(card_lines.len(), 3, "{}", card_lines.join("\n"));
     assert!(
         card_lines[1].contains("implement the fix"),
         "{card_lines:?}"
@@ -431,7 +431,10 @@ fn running_agent_without_enrichment_keeps_full_placeholder_shape() {
         card_lines[2].contains('▢') && card_lines[2].contains("0%"),
         "{card_lines:?}"
     );
-    assert!(card_lines[3].contains("▤ 0"), "{card_lines:?}");
+    assert!(
+        !card_lines.iter().any(|line| line.contains('▤')),
+        "{card_lines:?}"
+    );
 }
 
 #[test]
@@ -453,7 +456,7 @@ fn idle_agent_with_submitted_prompt_keeps_full_placeholder_shape() {
         .skip(1)
         .collect::<Vec<_>>();
 
-    assert_eq!(card_lines.len(), 4, "{}", card_lines.join("\n"));
+    assert_eq!(card_lines.len(), 3, "{}", card_lines.join("\n"));
     assert!(
         card_lines[1].contains("first real prompt"),
         "{card_lines:?}"
@@ -462,7 +465,10 @@ fn idle_agent_with_submitted_prompt_keeps_full_placeholder_shape() {
         card_lines[2].contains('▢') && card_lines[2].contains("0%"),
         "{card_lines:?}"
     );
-    assert!(card_lines[3].contains("▤ 0"), "{card_lines:?}");
+    assert!(
+        !card_lines.iter().any(|line| line.contains('▤')),
+        "{card_lines:?}"
+    );
 }
 
 #[test]
@@ -657,14 +663,14 @@ fn render_enriched_selected_agent_card() {
     // Line 2 is the full-width description.
     assert!(rendered.contains("store refactor"));
     // The context bar carries the `▣` label and the percent used as its
-    // value (always — the window size moved to the token line below); the
+    // value (the window size is on the identity line); the
     // fill carries the same reading.
     assert!(rendered.contains("▣ "));
     // The account-scoped 5h/7d budgets are gone from the row — they live in
     // the provider dashboard now.
     assert!(!rendered.contains("5h↻"));
     assert!(!rendered.contains("7d↻"));
-    // The card carries the context line at rest: ▤ the filled window
+    // The selected card carries the context line: ▤ the filled window
     // (input + cache-write + cache-read — the ▣ meter's numerator, so the
     // 38.2% above and this 76k are one measurement), a · seam, then the
     // latest call's composition ordered by how the window filled — ◌

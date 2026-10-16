@@ -12,30 +12,30 @@ expression: screen
 ▎⑂ alpha ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌⣾ codex                                                                       ▐
 ▌  task-0                                                                      ▐
-▌  ▢ ────────────────────────────────────────────────────────────────────    0%▐
+▌  ▢ ──────────────────────────────────────────────────────────────    0%      ▐
 ▌  ▤ 0                                                                         ▐
 ▎⣾ codex                                                                       🮇
 ▎  task-1                                                                      🮇
-▎  ▢ ────────────────────────────────────────────────────────────────────    0%🮇
-▎  ▤ 0                                                                         🮇
+▎  ▢ ──────────────────────────────────────────────────────────────    0%      🮇
 ▎⣾ codex                                                                       🮇
 ▎  task-2                                                                      🮇
-▎  ▢ ──────────────────────────────────╭ help ─────────────────────────────────╮
-▎  ▤ 0                                 │ keys                                  │
-                                       │   /   search          esc   clear     │
- ⑂ beta                                │ ↕ j/k rows          ↕ J/K   worktrees │
- ⣾ codex                               │ ↕ g/G ends          ↕ ^f/^b page      │
-   task-3                              │ ↕ H/L screen        ⏎ l     focus     │
-   ▢ ──────────────────────────────────│ ⏎ 1-9 direct        ␣ n/N   needs-you │
-   ▤ 0                                 │ ✉ m   read/unread   ✉ M     read all  │
+▎  ▢ ──────────────────────────────────────────────────────────────    0%      🮇
+                                       ╭ help ─────────────────────────────────╮
+ ⑂ beta                                │ keys                                  │
+ ⣾ codex                               │   /   search          esc   clear     │
+   task-3                              │ ↕ j/k rows          ↕ J/K   worktrees │
+   ▢ ──────────────────────────────────│ ↕ g/G ends          ↕ ^f/^b page      │
+ ⣾ codex                               │ ↕ H/L screen        ⏎ l     focus     │
+   task-4                              │ ⏎ 1-9 direct        ␣ n/N   needs-you │
+   ▢ ──────────────────────────────────│ ✉ m   read/unread   ✉ M     read all  │
  ⣾ codex                               │ ↔ ←/→ account tabs  ⟳ r     reload    │
-   task-4                              │ ✕ x   dismiss       ↕ a/d   width     │
+   task-5                              │ ✕ x   dismiss       ↕ a/d   width     │
    ▢ ──────────────────────────────────│                                       │
-   ▤ 0                                 │ filter                                │
- ⣾ codex                               │ ? q   waiting       ! e     attention │
-   task-5                              │ ⏸︎ p   paused        ✓ s     done      │
-   ▢ ──────────────────────────────────│ ⢿ w   working       ○ o     idle      │
-   ▤ 0                                 │ ☾ z   sleeping                        │
+                                       │ filter                                │
+                                       │ ? q   waiting       ! e     attention │
+                                       │ ⏸︎ p   paused        ✓ s     done      │
+                                       │ ⢿ w   working       ○ o     idle      │
+                                       │ ☾ z   sleeping                        │
                                        │ ● u   unread        ≡ A     all       │
                                        │                                       │
                                        │ ▐ alt p sidebar                       │

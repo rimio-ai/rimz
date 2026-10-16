@@ -12,7 +12,7 @@ expression: rendered
 ▎ provider-store  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1580 -520🮇
 ▌⢄ opencode · GPT 5.5 · xhigh · 272k            $7.44▐
 ▌  rebalance metered sessions                        ▐
-▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━╺━───────────────   64%▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺─────────────   64%      ▐
 ▌  󰿦 175k · 󱥸 168k  7k  21k                        ▐
 ▌   subagents (2)                                   ▐
 ▌    ⠁ Plan · run focused nextest                    ▐
@@ -21,8 +21,8 @@ expression: rendered
 ▌       22k · Haiku · xhigh                       5m▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1M              $12.62🮇
 ▎  audit provider spend                              🮇
-▎  󰕰 ━━━━━━━━━━━━━━━━━╺━╺──────────────────────   29%🮇
-▎  󰿦 296k · 󱥸 254k  29k  11k  37k             󰪞 6m🮇
+▎  󰕰 ━━━━━━━━━━━━━━╺━╺───────────────────   29% 󰪞  6m🮇
+▎   subagents (2)                              $0.46🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

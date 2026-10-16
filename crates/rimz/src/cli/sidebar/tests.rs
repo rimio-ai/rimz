@@ -354,7 +354,7 @@ fn clock_fixtures_separate_runtime_quiet_and_finished_durations() {
                 "silent 30m",
                 "◉ 30m▐",
                 "   9m▐",
-                "◉ 4h▐",
+                "◉  4h▐",
             ],
         ),
         (

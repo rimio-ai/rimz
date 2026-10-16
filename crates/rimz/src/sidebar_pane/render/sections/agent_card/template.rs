@@ -5,6 +5,7 @@ use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
 use crate::store::snapshot::SidebarRow;
 
+use super::super::SelectionReach;
 use super::CardExpansion;
 use super::description::awaiting_first_prompt;
 
@@ -82,6 +83,21 @@ const ENGAGED_EXPANDED: &[CardSlot] = &[
     CardSlot::Delegation,
     CardSlot::DelegationEntries,
 ];
+const ENGAGED_RESTING: &[CardSlot] = &[
+    CardSlot::Identity,
+    CardSlot::Description,
+    CardSlot::Question,
+    CardSlot::Gauge,
+    CardSlot::Delegation,
+];
+const ENGAGED_RESTING_EXPANDED: &[CardSlot] = &[
+    CardSlot::Identity,
+    CardSlot::Description,
+    CardSlot::Question,
+    CardSlot::Gauge,
+    CardSlot::Delegation,
+    CardSlot::DelegationEntries,
+];
 
 /// The ordered line skeleton for one agent-card state.
 pub(super) fn template(
@@ -90,7 +106,7 @@ pub(super) fn template(
     density: CardDensityMode,
     expansion: CardExpansion,
 ) -> &'static [CardSlot] {
-    let expanded = expansion.by_selection;
+    let expanded = expansion.reach.opens_card();
     if density == CardDensityMode::Compact && !expanded {
         return match status {
             AgentStatus::Idle => IDENTITY,
@@ -107,8 +123,15 @@ pub(super) fn template(
         CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
-        CardStage::Engaged if expansion.delegation => ENGAGED_EXPANDED,
-        CardStage::Engaged => ENGAGED,
+        CardStage::Engaged => match (
+            expansion.reach == SelectionReach::Selected || density == CardDensityMode::Expanded,
+            expansion.delegation,
+        ) {
+            (true, true) => ENGAGED_EXPANDED,
+            (true, false) => ENGAGED,
+            (false, true) => ENGAGED_RESTING_EXPANDED,
+            (false, false) => ENGAGED_RESTING,
+        },
     }
 }
 
@@ -124,7 +147,7 @@ mod tests {
                 status,
                 CardDensityMode::Expanded,
                 CardExpansion {
-                    by_selection: true,
+                    reach: SelectionReach::Selected,
                     ..Default::default()
                 },
             );
@@ -151,14 +174,19 @@ mod tests {
         CardDensityMode::Expanded,
         CardDensityMode::Compact,
     ];
+    const REACHES: [SelectionReach; 3] = [
+        SelectionReach::Unreached,
+        SelectionReach::Teammate,
+        SelectionReach::Selected,
+    ];
 
     fn expected_template(
         stage: CardStage,
         status: AgentStatus,
         density: CardDensityMode,
         expansion: CardExpansion,
-    ) -> &'static [CardSlot] {
-        if density == CardDensityMode::Compact && !expansion.by_selection {
+    ) -> Vec<CardSlot> {
+        if density == CardDensityMode::Compact && !expansion.reach.opens_card() {
             return match status {
                 AgentStatus::Idle => IDENTITY,
                 AgentStatus::Running | AgentStatus::Waiting => IDENTITY_DESCRIPTION_GAUGE,
@@ -166,9 +194,10 @@ mod tests {
                 | AgentStatus::Success
                 | AgentStatus::Failed
                 | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
-            };
+            }
+            .to_vec();
         }
-        match (stage, expansion.by_selection, expansion.delegation) {
+        let mut slots = match (stage, expansion.reach.opens_card(), expansion.delegation) {
             (CardStage::Fresh { labeled: false }, false, _) => IDENTITY,
             (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
             (CardStage::Fresh { labeled: false }, true, _) => IDENTITY_AWAITING_GAUGE,
@@ -176,6 +205,11 @@ mod tests {
             (CardStage::Engaged, _, true) => ENGAGED_EXPANDED,
             (CardStage::Engaged, _, false) => ENGAGED,
         }
+        .to_vec();
+        if expansion.reach != SelectionReach::Selected && density != CardDensityMode::Expanded {
+            slots.retain(|slot| *slot != CardSlot::Tokens);
+        }
+        slots
     }
 
     /// The card shape follows live or held selection and the delegation entries
@@ -187,19 +221,19 @@ mod tests {
         for stage in STAGES {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for (by_selection, delegation) in
-                        [(false, false), (true, false), (false, true), (true, true)]
-                    {
-                        let expansion = CardExpansion {
-                            by_selection,
-                            delegation,
-                            history: false,
-                        };
-                        assert_eq!(
-                            template(stage, status, density, expansion),
-                            expected_template(stage, status, density, expansion),
-                            "{stage:?} {status:?} {density:?} {expansion:?}"
-                        );
+                    for reach in REACHES {
+                        for delegation in [false, true] {
+                            let expansion = CardExpansion {
+                                reach,
+                                delegation,
+                                history: false,
+                            };
+                            assert_eq!(
+                                template(stage, status, density, expansion),
+                                expected_template(stage, status, density, expansion),
+                                "{stage:?} {status:?} {density:?} {expansion:?}"
+                            );
+                        }
                     }
                 }
             }
@@ -214,14 +248,14 @@ mod tests {
         ] {
             for status in STATUSES {
                 for density in DENSITIES {
-                    for expanded in [false, true] {
+                    for reach in REACHES {
                         let template = template(
                             stage,
                             status,
                             density,
                             CardExpansion {
-                                by_selection: expanded,
-                                delegation: expanded,
+                                reach,
+                                delegation: reach == SelectionReach::Selected,
                                 history: false,
                             },
                         );

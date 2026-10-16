@@ -312,6 +312,18 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     child.last_activity = fixed_now() - Duration::from_secs(60);
 
     let mut snapshot = snapshot_with(vec![parent, selected, child]);
+    let resting = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &selected_ui(), 54, 25);
+    let stats_count = |screen: &str| {
+        screen
+            .lines()
+            .filter(|line| line.contains("▌  ▤") || line.contains("▎  ▤"))
+            .count()
+    };
+    assert_eq!(
+        stats_count(&resting),
+        1,
+        "only the selected card keeps stats: {resting}"
+    );
     snapshot.theme.display.card_density = CardDensityMode::Expanded;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -325,6 +337,11 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         25,
     );
 
+    assert_eq!(
+        stats_count(&rendered),
+        2,
+        "expanded keeps every card's stats: {rendered}"
+    );
     let subagent_line = rendered
         .lines()
         .find(|line| line.contains("⧉ subagents (1)"))

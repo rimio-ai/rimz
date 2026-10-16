@@ -713,9 +713,9 @@ fn subagent_stats_line_outlives_the_turn() {
     let snapshot = snapshot_with(vec![parent, child]);
     let theme = Theme::fixed(false);
     let unselected = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
-    assert_eq!(unselected.len(), 6, "{}", unselected.join("\n"));
+    assert_eq!(unselected.len(), 5, "{}", unselected.join("\n"));
     assert!(
-        unselected[5].contains("⧉ subagents (1)") && unselected[5].contains("$0.42"),
+        unselected[4].contains("⧉ subagents (1)") && unselected[4].contains("$0.42"),
         "{}",
         unselected.join("\n")
     );
@@ -798,7 +798,7 @@ fn engaged_card_without_children_has_no_stats_line() {
     let snapshot = snapshot_with(vec![parent]);
     let rendered = line_texts(&group_lines(&snapshot, &Theme::fixed(false), usize::MAX));
 
-    assert_eq!(rendered.len(), 5, "{}", rendered.join("\n"));
+    assert_eq!(rendered.len(), 4, "{}", rendered.join("\n"));
     assert!(!rendered.iter().any(|line| line.contains("⧉ subagents")));
 }
 

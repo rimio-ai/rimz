@@ -17,10 +17,10 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
  ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: agents by status
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
-▌⢄ claude · Opus 4.8 · xhigh · 200k               $1.27▐    ← status, handle, model, effort, window, cost
+▌⣾ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
 ▌  store refactor                                      ▐    ← what the session is on
-▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────────────── 38.2%▐    ← context meter
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · 97%              ◔ 8m▐    ← tokens in the window, cache hit, last activity
+▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐    ← selected card's tokens in the window
 ▌  ⧉ subagents (2) · ⧖ waits (3)                  $0.42▐    ← subagents and waits line
 ▌    ⠁ Explore · audit the trust hash                  ▐    ← running subagent
 ▌      ▤ 3k · Opus 4.8                               3m▐    ← its tokens, model, muted runtime
@@ -250,12 +250,13 @@ A mouse wheel tick glides the cards to their new position over about a tenth of 
 
 ### The card
 
+The selected card includes its stats line:
+
 ```
-▌✓ claude · Opus 4.8 · xhigh · 200k               $2.14▐    ← identity line
+▌⣾ claude · Opus 4.8 · high · 200k                $1.27▐    ← identity line
 ▌  store refactor                                      ▐    ← description line
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━╺────────── 78.4%▐    ← context meter
-▌  ▤ 157k · ◌ 149k ◍ 6k ↘ 2k ↗ 2k · 97% · ↻ 2      ◔ 8m▐    ← stats line
-▌  ⧉ subagents (2) · ⧖ waits (1)                  $0.42▐    ← subagents and waits line
+▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m▐    ← context meter and own quiet age
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐    ← selected card's stats line
 ```
 
 | line | shows |
@@ -263,35 +264,35 @@ A mouse wheel tick glides the cards to their new position over about a tenth of 
 | identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context window size. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
 | description | The open question while waiting for input, when available; otherwise the displayed error or pause reason in italics, else the first armed wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
 | context meter | The percent of the context window in use, as a bar. The fill shows where the window went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the window fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` keeps its fullness heat color. After a compaction completes, the meter shows the provider's post-compaction figure where it reports one and an empty `0%` otherwise, until the next model call reports usage. |
-| stats line | `▤` tokens in the window: the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. The time since the agent's last activity sits on the right once it passes five minutes. |
+| stats line | On a selected or held engaged card, or under `expanded` density: `▤` tokens in the window, the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. From 46 columns the age is on the meter; below that it pins right on this line. |
 | subagents and waits | Present once the session has spawned a subagent or armed a wait. See [Subagents and waits](#subagents-and-waits). |
 
-On a narrow sidebar the identity line drops the reasoning token first, then the model and window, and keeps the handle. The window size shows on non-idle cards only.
+On a narrow sidebar the identity line drops the reasoning token first, then the model and window, and keeps the handle. The window size shows on non-idle cards only. At 46 columns or wider, every context meter reserves a fixed five-cell age cluster after its percent, blank until five minutes quiet. Below 46 columns the meter keeps its full bar and the age moves to the right of the selected or held card's stats line. Selected, resting, fresh, and compact meters all use the same slot, keeping their bars and percentages aligned.
 
-On the stats line, a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
+On the selected or held card's stats line (every engaged card under `expanded` density), a column that is zero or unreported is left out. A provider that reports only session totals, as stock Droid does, shows `◇ total ↘ input ↗ output ◌ cache-read` on this line instead, and its meter stays empty. The cache hit is cached input divided by all input, and it is absent until the session has input counters.
 
 The meter draws windows up to 256k tokens linearly and larger ones on a log curve that reaches full strength at 1M, so a large window keeps detail in its working range. The percent is always the raw share in use. The age clock fills and heats over the provider's prompt-cache lifetime (60 minutes for Claude, 30 for Codex, or your [`[harness.prompt_cache_ttl]`](../guide/configuration.md#idle-compaction) override) and turns red at it. Past the lifetime it becomes muted with its full `◉` face: no action can save a cache that has already expired. At the same moment, a nonempty meter's fill turns into one greyed-red run. A provider with no known lifetime keeps the hour on the clock only; its meter stays unchanged. While a [keep-warm horizon](../guide/configuration.md#keep-warm) is actively holding the cache, the clock instead shows the time since the agent's last real turn in steady green, filling over the horizon; once the horizon passes, the usual ramp resumes from the last ping. Wait ages and the card's breathing keep the hour scale; child quiet uses the configured stall window, and durations never heat. Outside a hold the age clock counts from the later of the agent's own activity and its last cache ping, so a ping restarts the ramp without reading as work. The age clock measures the agent's own quiet time, so a parent waiting on its subagents keeps counting while they work: its own session is making no call, and its cache ages the whole wait. The children's own times ride their entries under the card. Bands, curve, and tones are set under [`[theme.display]`](../guide/theme.md#display).
 
 ### Card shapes
 
-A card's lines are set by its stage. Within a stage, data fills in place and no line moves.
+A card's lines are set by its stage and selection reach. Within that shape, data fills in place and no line moves.
 
 | card | lines |
 |------|-------|
 | fresh: idle, never prompted | identity, plus the description when it was launched with one |
 | fresh, selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
-| engaged: after its first prompt | identity, description, meter, stats, with `▢ 0%` and `▤ 0` until data arrives |
+| engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |
 | engaged, with subagents or waits | adds the subagents and waits line |
-| selected | lights the spines and lists the subagent and wait entries below the card |
+| selected or held, engaged | adds the stats line (`▤ 0` until data arrives) below the meter and lists the subagent and wait entries below the card; only the live selection lights the spines |
 
-Selecting a card only appends lines below it. When the selected agent belongs to a named team, every visible teammate's card opens to its full shape too, with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its open shape and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` lists entries on every card, teammates included.
+Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its stats and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
 
 `[theme.display] card_density` changes how much a resting card shows:
 
 | value | resting cards |
 |-------|---------------|
 | `auto` (default) | the shapes above |
-| `expanded` | every engaged card lists its subagent and wait entries |
+| `expanded` | every engaged card keeps its stats line and lists its subagent and wait entries |
 | `compact` | idle: identity. Running and waiting: identity, description, meter. Paused, done, sleeping, failed: identity and description. Selecting a card restores its full shape. |
 
 ### Subagents and waits
@@ -359,21 +360,21 @@ A waiting or failed card looks like any other card with `?` or `!` in the lead. 
 ```
 ▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
 ▌  Allow the pricing cache write?                    ▐
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────   71%▐
-▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                   ◉ 40m▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◉ 40m▐
+▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
 ```
 
 When a turn dies on a provider API error, the description shows the provider's error text for as long as the `!` holds:
 
 ```
-▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌! claude · Opus 4.8 · high · 200k                $1.27▐
-▌  API Error: Overloaded                               ▐
-▌  ▣ ━━━━━━━━━━━━━━━━╺━╺───────────────────────── 38.2%▐
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                        ▐
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▌! claude · Opus 4.8 · high · 200k              $1.27▐
+▌  API Error: Bad Request                            ▐
+▌  ▣ ━━━━━━━━━━━╺━╺────────────────────── 38.2%      ▐
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                      ▐
 ```
 
-Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. Any open native or launched child can also become `!`, labelled `silent Nm`; sleep, pause, and displayed errors exclude it from this check. A parent waiting on a child still displayed as working is exempt. A stalled child no longer holds its turn, and a native child's failure lifts the parent card's attention because it has no pane of its own. A working agent that repeats one tool call with the same arguments shows `⟲ N` on its stats line from the third call; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
+Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. Any open native or launched child can also become `!`, labelled `silent Nm`; sleep, pause, and displayed errors exclude it from this check. A parent waiting on a child still displayed as working is exempt. A stalled child no longer holds its turn, and a native child's failure lifts the parent card's attention because it has no pane of its own. A working agent that repeats one tool call with the same arguments shows `⟲ N` from the third call on the selected or held card's stats line, or under `expanded` density; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
 
 A sleeping card names its first pending wait in the description:
 
@@ -470,18 +471,16 @@ No selection, compact cards:
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇    ← selected group: lane spine and dotted seal
 ▌? claude                                              ▐    ← selected card: bright spine on both edges
 ▌  permission                                          ▐
-▌  ▢ ────────────────────────────────────────────    0%▐
+▌  ▢ ──────────────────────────────────────    0%      ▐
 ▌  ▤ 0                                                 ▐
 ▎⣾ codex · GPT 5.5 · 272k                              🮇    ← same group, not selected
 ▎  add tests                                           🮇
-▎  ▢ ────────────────────────────────────────────    0%🮇
-▎  ▤ 0                                                 🮇
+▎  ▢ ──────────────────────────────────────    0%      🮇
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1     ← panes outside the project, with its own ? and ! count
  ? claude
    Deploy staging?
-   ▢ ────────────────────────────────────────────    0%
-   ▤ 0
+   ▢ ──────────────────────────────────────    0%
 ```
 
 Panes outside the project (scripts, CI, stray shells) collect under the dim `external` divider, which always sorts last. It keeps a `? n` or `! n` count so an ask from outside the project still shows.
@@ -492,7 +491,7 @@ A room opened on a plain directory groups git-backed agents by their checkout, e
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3🮇    ← a checkout inside the directory: full header
 ▌⣾ claude                                              ▐
 ▌  db migrate                                          ▐
-▌  ▢ ────────────────────────────────────────────    0%▐
+▌  ▢ ──────────────────────────────────────    0%      ▐
 ▌  ▤ 0                                                 ▐
 
  agents                                                     ← the directory's own group: name only

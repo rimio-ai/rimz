@@ -1,5 +1,6 @@
 //! The per-agent card: identity line, description, the context meter and its
-//! token line, and expanded subagent and wait entries. A state-to-template table fixes
+//! token line on selected or held cards (every engaged card at expanded density),
+//! and expanded subagent and wait entries. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
 //! density and expansion invariants live in docs/internals/sidebar/sidebar.md.

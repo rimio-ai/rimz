@@ -67,10 +67,10 @@ impl ProviderTabsMode {
 #[serde(rename_all = "lowercase")]
 pub enum CardDensityMode {
     /// Keep the default card shape: resting cards show their normal detail, and
-    /// the selected card appends its subagents.
+    /// the selected or held card adds its stats line and subagents.
     #[default]
     Auto,
-    /// Show each card's subagent section while keeping the normal card lines.
+    /// Keep the stats line on every engaged card and show each card's subagents.
     Expanded,
     /// Trim resting cards by status; the selected agent still opens to the full
     /// default card.

@@ -435,7 +435,8 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
     /// Lifetime count of completed context compactions, copied from the rollup;
-    /// the context line renders `↻ N` from the first completed compaction.
+    /// the selected or held card's stats line (every engaged card under expanded
+    /// density) renders `↻ N` from the first completed compaction.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
     /// Named tool calls observed for this session.

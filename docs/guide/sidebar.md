@@ -100,14 +100,13 @@ A previously saved width above `max_percent` is reduced to the cap on reload, no
   <br/><sub>A finished card with the subagents it fanned out this turn; the idle agent below collapses to a single line.</sub>
 </p>
 
-Each agent is a small stacked card, four lines at rest plus a shared line for subagents and pending waits:
+Each engaged agent is a small stacked card, three lines at rest plus a shared line for subagents and pending waits:
 
 ```
-⢿ claude · Opus 4.8 · xhigh · 200k              $1.27    ← state · identity · cost
-  store refactor                                         ← what it is working on
-  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
-  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← stats: tokens in the window · last activity
-  ⧉ subagents (2) · ⧖ waits (2)                 $0.42    ← children · pending waits · what the children cost
+⣾ claude · Opus 4.8 · high · 200k                $1.27    ← state · identity · cost
+  store refactor                                          ← what it is working on
+  ▣ ━━━━━━━━━━━━╺━╺─────────────────────── 38.2% ◔  7m    ← context meter · own quiet age
+  ⧉ subagents (2) · ⧖ waits (2)                   $0.42    ← children · pending waits · what the children cost
 ```
 
 The identity line leads with the state glyph, animated while the agent works, then the agent's handle (its team role, name, or profile, so a team reads `planner` / `coder` / `reviewer`), the model, its reasoning setting (an effort level such as `xhigh`, or `thinking`), and the size of its context window. The session's dollar cost pins right once it rounds to a cent, counts up live, and already includes what the children it launched through `rimz subagents` spent.
@@ -116,7 +115,9 @@ The second line says what the session is on: its name or task, falling back to i
 
 The context meter is how full the agent's context window is, as a bar and a percentage. The fill also shows where the window went, painting cache reads, cache writes, and fresh input as distinct runs, and its tone shifts from calm toward red as the window fills. An expired prompt cache instead wears one solid greyed-red run: waking that agent re-reads the whole window at full price. The fraction and percentage stay the same, and the `▣` glyph keeps its fullness color. When a compaction finishes, the meter drops to the size the agent reports for its compacted context, or to an empty 0% when the agent reports none, and fills again from the agent's next model call.
 
-The stats line puts the same thing in absolute numbers. `▤` is the tokens in the window right now, then the same total split into cache reads, cache writes, input, and output, a `↻ N` count of completed context compactions, and an amber `⟲ N` once a running agent has repeated one tool call with identical arguments three times. Once the agent has been quiet for five minutes, its last-activity age pins right with a clock face and heats toward red at the provider's prompt-cache lifetime (an hour when none is known). Past that lifetime it becomes muted, keeping its full face, and the meter becomes greyed red: the cache has already expired. When no lifetime is known, only the clock keeps the hour fallback; the meter does not guess at expiry. A keep-warm hold stays steady green and keeps the meter's usual segments. That age is the agent's own quiet time, so an agent waiting on its subagents keeps counting: its own session is making no call, and its context will be re-read when it resumes.
+At 46 columns or wider, every meter reserves the same right-hand age slot, blank until the agent has been quiet for five minutes. Below 46 columns the bar keeps that room, and the age pins right on the selected card's stats line instead. The clock face fills and heats toward red at the provider's prompt-cache lifetime (an hour when none is known). Past that lifetime it becomes muted, keeping its full face, and the meter becomes greyed red: the cache has already expired. When no lifetime is known, only the clock keeps the hour fallback; the meter does not guess at expiry. A keep-warm hold stays steady green and keeps the meter's usual segments. That age is the agent's own quiet time, so an agent waiting on its subagents keeps counting: its own session is making no call, and its context will be re-read when it resumes.
+
+Select an engaged card to see its stats line below the meter. A previously selected card held open to prevent a jump keeps it too, and `expanded` density shows it on every engaged card. `▤` is the tokens in the window right now, then the same total split into cache reads, cache writes, input, and output, a `↻ N` count of completed context compactions, and an amber `⟲ N` once a running agent has repeated one tool call with identical arguments three times.
 
 The subagents and waits line appears once the session has spawned a child or armed a wait, and either count shows alone when only one applies. The subagent count is the session's lifetime children, for as long as RimZ retains its history, with their known cost pinned right. That cost is a breakdown of the identity line's figure rather than a second charge to add to it.
 
@@ -130,7 +131,7 @@ Click either line of a launched child's entry to go straight to its live pane, e
 
 The `⧖` count covers armed one-shot waits (timers, existing processes, watched shell commands, one-shot signals) plus the shell commands a Claude agent left running in the background. It shares the subagents line, stays visible while the agent works as well as while it sleeps, and disappears when nothing is pending. Open the line and each wait lists beneath the subagent entries, naming its kind before the headline: `◷ timer · in 12m` for a timer, `⌁ signal · pr.merged` for a signal hold. Commands, checks, and background shells lead with a spinner and show the full command on a second line when known. The time on the right is how long each has been pending. See the [entry table](../interface/sidebar.md#subagents-and-waits) for every kind.
 
-How much of the card shows at rest is yours to tune with `card_density` ([theming: display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, and `expanded` opens subagent and wait entries everywhere. In compact mode, select the card first to expose the clickable count line.
+How much of the card shows at rest is yours to tune with `card_density` ([theming: display](./theme.md#display)): `compact` trims resting cards, including the shared subagents and waits line, and `expanded` keeps every engaged card's stats line and opens subagent and wait entries everywhere. In compact mode, select the card first to expose the clickable count line.
 
 ## Process rows
 

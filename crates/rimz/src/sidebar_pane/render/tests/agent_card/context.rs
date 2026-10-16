@@ -61,6 +61,69 @@ fn cache_meter_line(snapshot: &SidebarSnapshot, theme: &Theme) -> Line<'static> 
         .expect("the card's context meter")
 }
 
+#[test]
+fn resting_meters_reserve_one_age_slot_at_the_wide_tier() {
+    let agents = (0..3)
+        .map(|i| {
+            let mut card = agent(
+                &format!("card-{i}"),
+                "claude",
+                AgentStatus::Running,
+                Some("/repo/main"),
+                Some("main"),
+                Some("work"),
+            );
+            card.context = Some(claude_context(fixed_now()));
+            card
+        })
+        .collect();
+    let mut snapshot = snapshot_with(agents);
+    for (i, row) in snapshot.rows_mut().enumerate() {
+        row.as_agent_mut().unwrap().own_last_activity =
+            Some(fixed_now() - Duration::from_secs(if i < 2 { 420 } else { 0 }));
+    }
+    let theme = Theme::fixed(false);
+    let rolls = CostRolls::default();
+    for width in [45, 46, 47, 63] {
+        let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &rolls);
+        let lines = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
+        let meters = lines
+            .iter()
+            .filter(|line| line.to_string().contains('▣'))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(meters.len(), 3);
+        for meter in &meters[1..] {
+            let percent = meter.chars().position(|ch| ch == '%').unwrap();
+            assert_eq!(percent, width - if width >= 46 { 8 } else { 2 }, "{meter}");
+            let bar_start = meter.chars().position(|ch| ch == '▣').unwrap() + 2;
+            assert_eq!(
+                percent - 5 - bar_start,
+                width - 2 - if width >= 46 { 16 } else { 10 }
+            );
+        }
+        let stats = lines
+            .iter()
+            .map(ToString::to_string)
+            .filter(|line| line.contains('▤'))
+            .collect::<Vec<_>>();
+        assert_eq!(stats.len(), 1, "only the selected card has stats");
+        assert_eq!(
+            stats[0].contains("◔  7m"),
+            width < 46,
+            "below the wide tier the stats line pins the age: {}",
+            stats[0]
+        );
+        assert_eq!(meters[0].contains("◔  7m"), width >= 46, "{}", meters[0]);
+        if width >= 46 {
+            assert!(meters[1].contains(" ◔  7m"), "{}", meters[1]);
+            assert!(meters[2].ends_with("      🮇"), "{}", meters[2]);
+        } else {
+            assert!(!meters[1].contains('◔'));
+        }
+    }
+}
+
 fn assert_expired_meter(line: &Line<'_>, theme: &Theme) {
     let filled = line
         .spans
@@ -93,7 +156,23 @@ fn assert_expired_meter(line: &Line<'_>, theme: &Theme) {
         Some(theme.heat_tone(0.0)),
         "glyph keeps severity"
     );
-    assert!(line.to_string().trim_end().ends_with("40.0%"));
+    assert_eq!(
+        line.spans
+            .iter()
+            .find(|span| span.content.contains('%'))
+            .unwrap()
+            .content
+            .trim(),
+        "40.0%"
+    );
+}
+
+fn meter_fill(line: &Line<'static>) -> Vec<Span<'static>> {
+    line.spans
+        .iter()
+        .take_while(|span| !span.content.contains('%'))
+        .cloned()
+        .collect()
 }
 
 #[test]
@@ -142,8 +221,11 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
         (30 * 60, Some(half_hour_cache())),
     ] {
         assert_eq!(
-            cache_meter_line(&cache_meter_snapshot(quiet_secs, cache), &theme),
-            reference
+            meter_fill(&cache_meter_line(
+                &cache_meter_snapshot(quiet_secs, cache),
+                &theme
+            )),
+            meter_fill(&reference)
         );
     }
     let fills = reference
@@ -168,7 +250,7 @@ fn warm_held_and_unknown_lifetime_context_meters_keep_composition() {
         group_lines(&unknown, &theme, usize::MAX)
             .iter()
             .flat_map(|line| &line.spans)
-            .any(|span| span.content == "◉ 2h" && span.style.fg == theme.muted().fg)
+            .any(|span| span.content == "◉  2h" && span.style.fg == theme.muted().fg)
     );
 }
 
@@ -240,7 +322,10 @@ fn expired_empty_context_meter_stays_empty() {
     .as_agent_mut()
     .unwrap()
     .cache = None;
-    assert_eq!(empty, cache_meter_line(&expired, &theme));
+    assert_eq!(
+        meter_fill(&empty),
+        meter_fill(&cache_meter_line(&expired, &theme))
+    );
 }
 
 #[test]
@@ -286,7 +371,7 @@ fn expired_truecolor_context_meter_interns_one_flat_raster() {
     let theme = truecolor_sidebar_theme();
     let snapshot = cache_meter_snapshot(40 * 60, Some(half_hour_cache()));
     let cost_rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
+    let ctx = test_row_ctx(&snapshot, &theme, 46, 0, 0, &cost_rolls);
     let mut pixels = MeterPixels::new(0x120000);
     pixels.begin_frame();
     let lines =
@@ -295,6 +380,10 @@ fn expired_truecolor_context_meter_interns_one_flat_raster() {
     let rasters = pixels.visible_rasters().collect::<Vec<_>>();
     assert_eq!(rasters.len(), 1);
     let raster = rasters[0].1;
+    assert_eq!(
+        raster.width_cells, 28,
+        "the pixel bar reserves the age slot too"
+    );
     let health = theme
         .pixel_rgb(theme.component(Component::CacheExpired))
         .unwrap();
@@ -539,7 +628,7 @@ fn agent_context_line_renders_compaction_markers() {
 fn render_agent_card_context_line_pins_age_not_resource_stats() {
     // Resource stats are process-row vocabulary: even when the agent's
     // stamped pane carries a full `/proc` sample, none of it reaches the
-    // card — the context line keeps the age clock as its one right pin.
+    // card. The meter, not the stats line, carries the age clock.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -567,8 +656,11 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
         !rendered.contains("C 11%"),
         "the pane's resource stats stay off the card:\n{rendered}"
     );
+    let meter = rendered.lines().find(|line| line.contains('▣')).unwrap();
+    let stats = rendered.lines().find(|line| line.contains('▤')).unwrap();
+    assert!(!stats.contains('◔'), "{stats}");
     assert!(
-        rendered.contains("◔ 7m"),
+        meter.contains("◔  7m"),
         "the age clock keeps the right pin once a five-minute gap opens:\n{rendered}"
     );
     assert_snapshot("agent_card_context_age", rendered);
@@ -1137,7 +1229,11 @@ fn calm_context_bar_orders_segments_left_to_right() {
         lines
             .iter()
             .flat_map(|line| line.spans.iter())
-            .filter(|span| span.content.contains('━'))
+            .filter(|span| {
+                span.content
+                    .contains(theme.glyph(GlyphRole::MeterBarFilled))
+                    || span.content.contains(theme.glyph(GlyphRole::MeterBarCap))
+            })
             .map(|span| span.style.fg)
             .collect::<Vec<_>>()
     };
@@ -1320,9 +1416,9 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         codex.usage.total_tokens = Some(5_000);
         codex.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(vec![codex]);
-        group_lines(&snapshot, &theme, usize::MAX)
+        cache_meter_line(&snapshot, &theme)
+            .spans
             .iter()
-            .flat_map(|line| line.spans.iter())
             .find(|span| span.content.contains(clock))
             .map(|span| span.style)
             .unwrap_or_else(|| panic!("the context line carries the {clock} age"))
@@ -1389,9 +1485,9 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
                 card.cache = cache;
             }
         }
-        group_lines(&snapshot, &theme, usize::MAX)
+        cache_meter_line(&snapshot, &theme)
+            .spans
             .iter()
-            .flat_map(|line| line.spans.iter())
             .find(|span| {
                 ['◔', '◑', '◕', '●', '◉']
                     .iter()
@@ -1565,11 +1661,11 @@ fn render_agent_card_age_pin_holds_the_parent_own_clock_while_children_work() {
             "the parent's own clock survives the fold"
         );
         let rendered = snapshot_to_screen(&snapshot, 56, 24);
-        // The pin rides the context line; the child entry below carries its own
+        // The pin rides the meter; the child entry below carries its own
         // elapsed clock in the same glyph vocabulary.
         let context_line = rendered
             .lines()
-            .find(|line| line.contains('▤'))
+            .find(|line| line.contains('▣'))
             .unwrap_or_else(|| panic!("the card draws its context line:\n{rendered}"))
             .to_owned();
         (context_line, rendered)
@@ -1650,7 +1746,7 @@ fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
 
     let rendered = snapshot_to_screen(&snapshot_with(vec![claude.clone()]), 58, 17);
     assert!(
-        rendered.contains(" 0%▐") && rendered.contains('▢') && rendered.contains("▤ 0 · ↻ 1"),
+        rendered.contains(" 0%      ▐") && rendered.contains('▢') && rendered.contains("▤ 0 · ↻ 1"),
         "no reading survives the close:\n{rendered}"
     );
 
@@ -1658,7 +1754,7 @@ fn completed_compaction_empties_the_gauge_until_a_fresh_reading() {
     tokens.expect("sidecar tokens").used_percentage = Some(3);
     let rendered = snapshot_to_screen(&snapshot_with(vec![claude]), 58, 17);
     assert!(
-        rendered.contains(" 3%▐") && rendered.contains("▤ 0 · ↻ 1"),
+        rendered.contains(" 3%      ▐") && rendered.contains("▤ 0 · ↻ 1"),
         "the fresh statusline percentage draws alone:\n{rendered}"
     );
 }

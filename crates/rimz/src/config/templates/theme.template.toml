@@ -39,6 +39,7 @@
 ## max_percent = 50                   # share cap including user widths; clamped to 10-90
 ## scrollbar = "auto"                 # "auto", "always", or "never"
 ## card_density = "auto"              # "auto", "expanded", or "compact"
+# expanded keeps every engaged card's stats line and opens subagents and waits
 ## recent_subagent_secs = 900         # finished subagents stay listed this long before folding behind +K older
 ## max_recent_subagents = 5           # cap on finished subagents listed; running ones are never capped
 ## provider_tabs = "auto"             # "auto", "always", or "never"
