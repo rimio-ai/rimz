@@ -16,7 +16,7 @@ pub(crate) mod memory;
 mod pane_probe;
 
 pub(crate) use bounded::{
-    BoundedOutput, KillScope, pump_child, run_bounded_output, run_bounded_output_interruptible,
+    BoundedOutput, KillScope, pump_child, run_bounded_output, run_bounded_output_hosted,
 };
 pub(crate) use command::{command_program_basename, program_label, rimz_exec_worktree_path};
 

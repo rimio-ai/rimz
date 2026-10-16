@@ -295,6 +295,7 @@ pub(in crate::cli) fn relaunch_request(
         role: agent.role.clone(),
         team: agent.team.clone(),
         loop_task: agent.loop_task.clone(),
+        workflow: agent.workflow.clone(),
         launch_group: agent.launch_group.clone(),
         launch_ordinal: agent.launch_ordinal,
         channel: agent.channel.clone(),

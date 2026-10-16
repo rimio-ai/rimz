@@ -143,6 +143,7 @@ fn picker_argv_has_no_session_or_prompt_and_preserves_posture() {
     assert!(compile_provider_argv(adapter, "grok", &action, Path::new("/repo")).is_err());
     let adapter = crate::agents::find_definition("claude").unwrap();
     let headless = crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
@@ -292,6 +293,7 @@ fn headless_provider_argv(kind: &str) {
         }
     }
     request.headless = Some(crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),
@@ -359,6 +361,7 @@ fn headless_provider_compiler_refuses_unsupported_forms() {
     let root = tempfile::tempdir().unwrap();
     let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("amp"), Vec::new());
     request.headless = Some(crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: root.path().join("schema.json"),
         verdict_file: root.path().join("verdict.json"),

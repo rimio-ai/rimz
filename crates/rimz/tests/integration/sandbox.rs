@@ -274,6 +274,7 @@ fn skill_prepare(
 ) -> Result<SandboxPlan, SandboxErr> {
     let state = env.store();
     let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
         env: vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -435,6 +436,7 @@ fn sandbox_unusable_unlisted_skill_is_omitted_with_warning() {
     let vars = environment(&env);
     let state = env.store();
     let prepared = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
         env: &vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -940,6 +942,7 @@ fn sandbox_prepare_preserves_symlinked_skill_sources() {
     let callable = ["visible".parse().unwrap()];
     let state = env.store();
     let mut inputs = SandboxInputs {
+        read_only: Vec::new(),
         env: &vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -1209,6 +1212,7 @@ fn sandbox_prepare_rebinds_tmp_rooted_runtime() {
     let vars = environment(&env);
     let state = env.store();
     let mut inputs = SandboxInputs {
+        read_only: Vec::new(),
         env: &vars,
         cwd: &env.project_root,
         project_root: &env.project_root,
@@ -2319,6 +2323,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
     let vars = environment(&env);
     let state = env.store();
     let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
         env: &vars,
         cwd: &env.project_root,
         project_root: &env.project_root,

@@ -688,6 +688,7 @@ fn execute_attempt(
     }
     record.retry_of = retry_of.cloned();
     record.loop_task.clone_from(&request.loop_task);
+    record.workflow.clone_from(&request.workflow);
     let run_id = record.run_id.clone();
     let mut launch_requests = launch_identity_requests(
         &prepared.layout,
@@ -704,6 +705,7 @@ fn execute_attempt(
         prepared.ancestry.as_ref(),
     )?;
     for request in &mut launch_requests {
+        request.launch.workflow.clone_from(&record.workflow);
         request.launch.checkout.clone_from(&prepared.checkout);
         request.login = LaunchLogin::Pinned(prepared.login.clone());
         if attempt > 0

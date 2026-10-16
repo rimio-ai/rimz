@@ -149,10 +149,6 @@ pub struct PreparedDelivery {
 }
 
 #[derive(Clone, Debug)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "one fire plan keeps its completed history inline without another allocation"
-)]
 pub enum TaskFirePlan {
     Done(TaskFireFinished),
     AlreadyLaunched,

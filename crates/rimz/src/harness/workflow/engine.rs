@@ -114,6 +114,7 @@ pub fn create(
         attempt: None,
         prev_attempt: None,
         terminal_at: None,
+        check_retry: 0,
     };
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
@@ -362,6 +363,12 @@ fn prepare(
             start: crate::proc::process_start_token(std::process::id()),
         },
         woken: false,
+        child: None,
+        run: None,
+        head_start: None,
+        digests: BTreeMap::new(),
+        ending: None,
+        retry: None,
     });
     persist(&t, &guard)?;
     write_context(&t.record, paths, spec)?;

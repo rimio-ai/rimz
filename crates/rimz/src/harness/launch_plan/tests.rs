@@ -33,6 +33,53 @@ fn compile_prompt_request(
 }
 
 #[test]
+fn workflow_env_pins_survive_both_isolations() {
+    let project = tempfile::tempdir().unwrap();
+    let state = StatePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .unwrap();
+    let runtime = RuntimePaths::under(state.workspace_id.clone(), project.path()).unwrap();
+    let machine = crate::config::MachineConfig::default();
+    let workflow = crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 3,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    };
+    for sandboxed in [false, true] {
+        let mut request = request("claude", action_with_args("launch", vec![]));
+        request.identity.params.workflow = Some(workflow.clone());
+        let plan = compile(LaunchPlanInputs {
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: None,
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
+            agents: Ok(&[]),
+            ambient_env: &BTreeMap::new(),
+            agent_shell: None,
+            hibernate: false,
+            recorded_system_prompt_digest: None,
+        })
+        .unwrap();
+        assert_eq!(
+            plan.process().env.get("RIMZ_WORKFLOW_RUN"),
+            Some(&workflow.run.to_string())
+        );
+        assert_eq!(
+            plan.process().env.get("RIMZ_WORKFLOW_DIR"),
+            Some(&state.workflow(&workflow.run).work.display().to_string())
+        );
+    }
+}
+
+#[test]
 fn configured_prompt_changes_control_snapshot_reuse() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -2027,8 +2074,11 @@ fn a_provider_temp_root_follows_tmpdir() {
                 .unset
                 .iter()
                 .map(String::as_str)
-                // The runtime switch is cleared or stamped by its own rule, which is not this test's subject.
-                .filter(|key| *key != crate::harness::launch::ENV_RUNTIME_ENV)
+                // Runtime and workflow identity pins have their own rules, not temp-root policy.
+                .filter(|key| {
+                    !matches!(*key, "RIMZ_WORKFLOW_RUN" | "RIMZ_WORKFLOW_DIR")
+                        && *key != crate::harness::launch::ENV_RUNTIME_ENV
+                })
                 .collect::<Vec<_>>(),
             unset,
             "{kind} over {ambient:?}"

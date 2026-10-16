@@ -895,6 +895,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         verify: None,
         max_attempts: None,
         loop_task: None,
+        workflow: None,
         loop_reminder: None,
         passthrough: Vec::new(),
         managed_launch: rimz::agents::ManagedLaunchState::PendingResolution,

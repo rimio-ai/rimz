@@ -3,6 +3,70 @@ use std::time::{Duration, SystemTime};
 use super::*;
 
 #[test]
+fn pre_workflow_cache_refolds_attempt_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let workflow = crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 7,
+        role: crate::agents::WorkflowAttemptRole::Step,
+    };
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "claude",
+            "agent",
+            "agent.launched",
+            serde_json::json!({"agent_id":"attempt", "agent_name":"sweeper", "workflow":workflow}),
+        ),
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::agent_lifecycle(
+            workspace,
+            "session",
+            "claude",
+            "UserPromptSubmit",
+            &crate::agents::AgentLifecycleObservation::new(
+                Some("attempt".into()),
+                crate::agents::LifecycleSignal::TurnStarted { turn_id: None },
+            ),
+        ),
+    )
+    .unwrap();
+    write_rollup_cache(
+        &paths.rollup_cache,
+        &RollupCache {
+            version: 32,
+            extent: event_log::LogExtent {
+                generation: 0,
+                offset: std::fs::metadata(&paths.events_log).unwrap().len(),
+            },
+            raw_agents: vec![agent("claude", "attempt", AgentStatus::Running, 0)],
+            resume_outcomes: Vec::new(),
+            agent_identity: AgentIdentityState::default(),
+            saw_session_rebirth: false,
+        },
+    )
+    .unwrap();
+    let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "attempt")
+            .unwrap()
+            .workflow
+            .as_ref(),
+        Some(&workflow)
+    );
+}
+
+#[test]
 fn pre_molt_rollup_cache_refolds_the_succession_link() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

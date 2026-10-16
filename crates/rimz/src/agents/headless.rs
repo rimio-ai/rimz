@@ -12,6 +12,8 @@ pub const CHECK_VERDICT_SCHEMA: &str = r#"{"type":"object","properties":{"pass":
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadlessRequest {
     pub schema: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub schema_open: bool,
     pub schema_file: PathBuf,
     pub verdict_file: PathBuf,
 }
@@ -36,11 +38,32 @@ fn bounded_reason<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<S
 
 #[derive(Debug, Default, PartialEq)]
 pub struct HeadlessResult {
-    pub verdict: Option<HeadlessVerdict>,
+    pub verdict: Option<serde_json::Value>,
     pub cost_usd: Option<f64>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
-    pub error: Option<String>,
+    pub error: Option<HeadlessError>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadlessErrorKind {
+    ProviderLimit,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadlessError {
+    pub kind: HeadlessErrorKind,
+    pub text: String,
+}
+
+impl From<String> for HeadlessError {
+    fn from(text: String) -> Self {
+        Self {
+            kind: HeadlessErrorKind::Other,
+            text,
+        }
+    }
 }
 
 pub trait HeadlessForm: std::fmt::Debug + Sync {

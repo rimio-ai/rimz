@@ -129,11 +129,39 @@ pub(super) fn evaluate(
     if interrupted() {
         return result;
     }
-    match crate::proc::run_bounded_output_interruptible(
+    let mut guard = match crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock) {
+        Ok(guard) => Some(guard),
+        Err(error) => {
+            result.object = Err(error.to_string());
+            return result;
+        }
+    };
+    // Admission, spawn, and child publication share the lock with cancel and bounds.
+    if interrupted() {
+        return result;
+    }
+    let output = crate::proc::run_bounded_output_hosted(
         &mut command,
         Duration::from_secs(u32::MAX.into()),
         interrupted,
-    ) {
+        |pid| {
+            let mut current = workflow::load(paths).map_err(std::io::Error::other)?;
+            // The lock prevents another transition between admission and publication.
+            current
+                .attempt
+                .as_mut()
+                .expect("admitted live attempt")
+                .child = Some(workflow::HostChild {
+                pid,
+                start: crate::proc::process_start_token(pid),
+            });
+            workflow::write(paths, &current, guard.as_ref().expect("spawn lock held"))
+                .map_err(std::io::Error::other)?;
+            guard.take();
+            Ok(())
+        },
+    );
+    match output {
         Ok(output) => {
             result.stderr_tail = Some(
                 String::from_utf8_lossy(&output.stderr[output.stderr.len().saturating_sub(4096)..])

@@ -735,6 +735,9 @@ fn carried_base(
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(workflow) = &launch.workflow {
+        state.workflow = Some(workflow.clone());
+    }
     if let Some(predecessor) = &launch.molted_from {
         state.molted_from = Some(predecessor.clone());
     }

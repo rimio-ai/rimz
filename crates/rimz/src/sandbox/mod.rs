@@ -118,6 +118,7 @@ pub struct SandboxInputs<'a> {
     pub cwd: &'a Path,
     pub project_root: &'a Path,
     pub worktree: Option<&'a Path>,
+    pub read_only: Vec<PathBuf>,
     pub tmp_dir: &'a Path,
     pub skills_dir: &'a Path,
     pub provider_home: Option<ProviderHome>,
@@ -403,6 +404,13 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         });
         bound.push(path);
     }
+    for path in &inputs.read_only {
+        validate_path(path)?;
+        mounts.push(Mount::RoBind {
+            source: path.clone(),
+            target: path.clone(),
+        });
+    }
     if let Some(view) = views.dir {
         mounts.push(Mount::Tmpfs {
             target: view.root.clone(),
@@ -582,6 +590,7 @@ mod tests {
             cwd,
             project_root: Path::new("/project"),
             worktree: None,
+            read_only: Vec::new(),
             tmp_dir: unit,
             skills_dir: &state().agent_skills_dir(Some("otter")),
             provider_home: None,
@@ -594,6 +603,52 @@ mod tests {
                 callable: None,
             },
         })
+    }
+
+    #[test]
+    fn read_only_checkout_follows_temp_reach_rebinds() {
+        let checkout = tempfile::tempdir().unwrap();
+        let plan = plan(&SandboxInputs {
+            env: &BTreeMap::new(),
+            cwd: checkout.path(),
+            project_root: checkout.path(),
+            worktree: None,
+            read_only: vec![checkout.path().to_path_buf()],
+            tmp_dir: Path::new("/state/tmp/unit"),
+            skills_dir: Path::new("/state/skills"),
+            provider_home: None,
+            provider_home_env_keys: &[],
+            default_home: None,
+            skills: SkillInputs {
+                kind: "claude",
+                home: None,
+                manual: ManualSkill::Frontmatter,
+                callable: None,
+            },
+        })
+        .unwrap();
+        let mounts = &plan.plan.mounts;
+        let reach = mounts
+            .iter()
+            .position(
+                |mount| matches!(mount, Mount::Bind {target, ..} if target == checkout.path()),
+            )
+            .unwrap();
+        let readonly = mounts.iter().position(
+            |mount| matches!(mount, Mount::RoBind {target, ..} if target == checkout.path()),
+        );
+        assert!(
+            readonly.is_some(),
+            "the checkout must have a read-only overlay"
+        );
+        assert!(reach < readonly.unwrap());
+        let argv = bwrap_argv(
+            Path::new("/bin/bwrap"),
+            &plan.plan,
+            checkout.path(),
+            &["true".into()],
+        );
+        assert!(argv.windows(3).any(|args| args == ["--bind", "/", "/"]));
     }
 
     #[test]

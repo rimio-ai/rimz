@@ -1,20 +1,13 @@
 //! A loop judge's complete launch path, bounded process edge, and verdict record.
 
 use super::*;
-use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest, PermissionMode};
-use crate::config::{Judge, effective::ProfileScope};
-use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest, decode_exec_envelope};
-use crate::harness::launch_plan::{self, LaunchPlan};
-use crate::harness::plan::{LaunchAvailability, LaunchFinalizeOptions, PermissionModeChoice};
+use crate::agents::{CHECK_VERDICT_SCHEMA, HeadlessRequest};
+use crate::config::Judge;
+use crate::harness::headless::HeadlessProfile;
+pub(super) use crate::harness::headless::{ProcessErr, execute};
+use crate::harness::launch::{ExecAction, ExecIdentity, ExecRequest};
+use crate::harness::launch_plan::LaunchPlan;
 use crate::harness::schedule::run_log::JudgeRecord;
-
-#[derive(Debug, thiserror::Error)]
-pub(super) enum ProcessErr {
-    #[error(transparent)]
-    Directory(#[from] crate::agents::LaunchDirRefusal),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
 
 struct CheckFiles(PathBuf);
 
@@ -81,69 +74,24 @@ pub(super) fn run(
     let workspace = WorkspaceResolver::resolve(dir, Some(root.to_path_buf()))?;
     let state = StatePaths::for_project_root(&workspace.project_root)?;
     let runtime = RuntimePaths::for_state(&state)?;
-    let mut effective = crate::config::effective::load(&fire.config, &workspace.project_root)?;
-    let availability = LaunchAvailability::read(&runtime, &state, &fire.config, fire.now);
-    effective.route(
-        &fire.config.tiers,
-        ProfileScope::Agents,
-        Some(&judge.agent),
-        None,
-        None,
-        None,
-        |kind, model| availability.unavailable(kind, model),
+    let profile = HeadlessProfile::resolve(
+        &fire.config,
+        &judge.agent,
+        &workspace.project_root,
+        &state,
+        &runtime,
+        fire.now,
     )?;
-    let mut resolved = crate::harness::plan::resolve_launch(
-        &effective,
-        ProfileScope::Agents,
-        &fire.config.agents.commands,
-        Some(&judge.agent),
-        None,
-    )?;
-    let cells: usize = resolved
-        .layout
-        .columns
-        .iter()
-        .map(|column| column.rows.len())
-        .sum();
-    if cells != 1 || resolved.layout.agent_cells().count() != 1 {
-        bail!("judge profile `{}` must resolve to one agent", judge.agent);
-    }
-    let kind = resolved
-        .layout
-        .agent_cells()
-        .next()
-        .context("single judge cell missing")?
-        .kind
-        .clone();
-    let adapter = find_definition(&kind).with_context(|| format!("unknown judge kind `{kind}`"))?;
-    let form = adapter.spec().launch.headless.with_context(|| {
-        format!(
-            "judge profile `{}` resolves to `{kind}`; only claude and codex run headless judges",
-            judge.agent
-        )
-    })?;
-    let mut warnings: Vec<String> = crate::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            agent_base: Some(&judge.agent),
-            permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Auto)),
-            isolation: None,
-            preset: &crate::agents::LaunchPreset::default(),
-            passthrough: &[],
-            budget: None,
-            max_turns: None,
-        },
-    )?
-    .into_iter()
-    .map(|warning| warning.to_string())
-    .collect();
-    let cell = resolved
-        .layout
-        .agent_cells()
-        .next()
-        .context("single judge cell missing")?;
-    let accounts = crate::agents::room_accounts(&state.workspace_record, None, &fire.config)?;
-    let login = LaunchLogin::RoomDefault.resolve(&kind, &accounts, &fire.config.accounts)?;
+    let cell = &profile.cell;
+    let kind = cell.kind.clone();
+    let adapter = profile.adapter;
+    // HeadlessProfile admitted this adapter's headless form.
+    let form = adapter
+        .spec()
+        .launch
+        .headless
+        .expect("resolved headless profile");
+    let login = &profile.login;
     let mut scope = FireScope::new(
         kind.clone(),
         runtime.clone(),
@@ -167,7 +115,6 @@ pub(super) fn run(
         params: cell.launch.clone(),
         ..Default::default()
     };
-    identity.params.login = Some(login.key().name);
     identity.params.loop_task = Some(fire.name.clone());
     let mut request = ExecRequest::fresh(cell, identity, None, false);
     request.action = ExecAction::Launch {
@@ -184,33 +131,14 @@ pub(super) fn run(
     std::fs::create_dir(&path)?;
     let files = CheckFiles(path);
     let host_request = HeadlessRequest {
+        schema_open: false,
         schema: CHECK_VERDICT_SCHEMA.into(),
         schema_file: files.0.join("schema.json"),
         verdict_file: files.0.join("verdict.json"),
     };
     std::fs::write(&host_request.schema_file, CHECK_VERDICT_SCHEMA)?;
     request.headless = Some(host_request.clone());
-    let envelope = decode_exec_envelope(kind.as_str(), None, &serde_json::to_string(&request)?)?;
-    let prepared = launch_plan::prepare_exec(
-        envelope,
-        dir,
-        &workspace.project_root,
-        &crate::proc::rimz_exe(),
-        &fire.config,
-        Some(&effective),
-        &|| Err("no room".into()),
-        |_, login| {
-            let shared = crate::agents::account_links::reconcile(login, &ambient_env(), &|| {
-                crate::room::other_live_agents_on(&login.key(), &[]).ok()
-            })?;
-            Ok(shared.iter().flat_map(|shared| shared.warnings()).collect())
-        },
-    );
-    warnings.extend(prepared.link_warnings);
-    warnings.extend(prepared.model_warnings);
-    let (plan, _) = prepared.outcome?;
-    warnings.extend(plan.warnings.iter().map(ToString::to_string));
-    launch_plan::apply(&plan)?;
+    let (plan, warnings) = profile.prepare(request, &fire.config, dir, &workspace.project_root)?;
     let output = (fire.check_process)(adapter, &plan, &host_request, timeout, &|| {
         fire.check_interrupts
             .as_ref()
@@ -229,13 +157,17 @@ pub(super) fn run(
             );
             if output.timed_out {
                 result.verdict = None;
-                result.error = Some(format!(
-                    "judge timed out after {}",
-                    super::super::arm::duration_label(timeout)
-                ));
+                result.error = Some(
+                    format!(
+                        "judge timed out after {}",
+                        super::super::arm::duration_label(timeout)
+                    )
+                    .into(),
+                );
             }
             if result.verdict.is_none() && result.error.is_none() {
-                result.error = Some(format!("judge returned no verdict ({})", output.status));
+                result.error =
+                    Some(format!("judge returned no verdict ({})", output.status).into());
             }
             let tail = format!(
                 "{}\n{}",
@@ -250,7 +182,7 @@ pub(super) fn run(
         Err(ProcessErr::Directory(error)) => return Err(error.into()),
         Err(ProcessErr::Io(error)) => (
             crate::agents::HeadlessResult {
-                error: Some(format!("running judge: {error}")),
+                error: Some(format!("running judge: {error}").into()),
                 ..Default::default()
             },
             false,
@@ -258,30 +190,40 @@ pub(super) fn run(
             String::new(),
         ),
     };
-    let passed = result.verdict.as_ref().is_some_and(|verdict| verdict.pass);
-    let output = result.verdict.as_ref().map_or_else(
+    let verdict = result.verdict.take().and_then(|value| {
+        match serde_json::from_value::<crate::agents::HeadlessVerdict>(value) {
+            Ok(verdict) => Some(verdict),
+            Err(error) => {
+                result.error = Some(format!("invalid judge verdict: {error}").into());
+                None
+            }
+        }
+    });
+    let passed = verdict.as_ref().is_some_and(|verdict| verdict.pass);
+    let output = verdict.as_ref().map_or_else(
         || {
             format!(
                 "{}\n{tail}",
                 result
                     .error
-                    .as_deref()
+                    .as_ref()
+                    .map(|error| error.text.as_str())
                     .unwrap_or("judge returned no verdict")
             )
         },
         |verdict| verdict.reason.clone(),
     );
-    let error = if result.verdict.is_none() {
+    let error = if verdict.is_none() {
         Some(output.clone())
     } else {
-        result.error
+        result.error.map(|error| error.text)
     };
     let record = JudgeRecord {
         profile: judge.agent.clone(),
         kind,
         model: plan.request.identity.params.model.clone(),
-        verdict: result.verdict.as_ref().map(|verdict| verdict.pass),
-        reason: result.verdict.take().map(|verdict| verdict.reason),
+        verdict: verdict.as_ref().map(|verdict| verdict.pass),
+        reason: verdict.map(|verdict| verdict.reason),
         error,
         cost_usd: result.cost_usd,
         input_tokens: result.input_tokens,
@@ -330,44 +272,6 @@ pub(super) type ProcessRunner = fn(
     Duration,
     &dyn Fn() -> bool,
 ) -> std::result::Result<crate::proc::BoundedOutput, ProcessErr>;
-
-pub(super) fn execute(
-    adapter: &crate::agents::AgentDefinition,
-    plan: &LaunchPlan,
-    _request: &HeadlessRequest,
-    timeout: Duration,
-    interrupted: &dyn Fn() -> bool,
-) -> std::result::Result<crate::proc::BoundedOutput, ProcessErr> {
-    let process = plan.process();
-    crate::agents::preflight_launch_dir(
-        adapter,
-        &plan.cwd,
-        process
-            .env
-            .get(crate::workspace::ENV_PROJECT_ROOT)
-            .map(Path::new),
-        &plan.login.env(&ambient_env()),
-        crate::agents::LaunchDirMode::Headless,
-    )?;
-    let (program, args) = process
-        .argv
-        .split_first()
-        .ok_or_else(|| std::io::Error::other("empty headless command"))?;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(&plan.cwd)
-        .envs(&process.env)
-        .stdin(Stdio::null());
-    for key in &process.unset {
-        command.env_remove(key);
-    }
-    Ok(crate::proc::run_bounded_output_interruptible(
-        &mut command,
-        timeout,
-        interrupted,
-    )?)
-}
 
 #[cfg(test)]
 mod tests;

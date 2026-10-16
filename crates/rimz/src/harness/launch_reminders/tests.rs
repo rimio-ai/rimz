@@ -181,6 +181,7 @@ fn headless_check_section_replaces_loop_in_the_same_slot() {
         ExecRequest::bare_launch(crate::ids::AgentKind::new_unchecked("claude"), Vec::new());
     request.loop_reminder = Some("Decide without a user or pane.".into());
     request.headless = Some(crate::agents::HeadlessRequest {
+        schema_open: false,
         schema: crate::agents::CHECK_VERDICT_SCHEMA.into(),
         schema_file: "/check/schema.json".into(),
         verdict_file: "/check/verdict.json".into(),

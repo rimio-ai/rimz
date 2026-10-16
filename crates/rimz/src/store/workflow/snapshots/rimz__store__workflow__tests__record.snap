@@ -4,15 +4,22 @@ expression: value
 ---
 {
   "attempt": {
+    "child": null,
+    "digests": {},
+    "ending": null,
+    "head_start": null,
     "host": {
       "pid": 123,
       "start": "token"
     },
     "kind": "script",
     "node": "pr",
+    "retry": null,
+    "run": null,
     "seq": 1,
     "started_at": "2026-01-01T00:00:00Z"
   },
+  "check_retry": 0,
   "created_at": "2026-01-01T00:00:00Z",
   "deadline": null,
   "deadline_fired": false,

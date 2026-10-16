@@ -771,6 +771,8 @@ pub struct AgentState {
     /// Resident loop task whose subscriptions this prompt leader arms at registration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<super::observation::WorkflowAttemptRef>,
     /// Inline multi-agent launch cohort, stamped by `RIMZ_LAUNCH_GROUP` and
     /// carried forward like `team`. Team launches use `team` as their cohort
     /// key; inline layouts use this generated id.
@@ -1173,6 +1175,7 @@ impl AgentState {
             role: None,
             team: None,
             loop_task: None,
+            workflow: None,
             launch_group: None,
             launch_ordinal: None,
             channel: None,

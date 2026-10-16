@@ -2956,6 +2956,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
         .env
         .insert("CODEX_HOME".into(), home.path().display().to_string());
     let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
         env: &frame.env,
         cwd: &frame.cwd,
         project_root: &env.project_root,
@@ -3107,6 +3108,7 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
         })
         .collect();
     let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
         env: &captured,
         cwd: &env.project_root,
         project_root: &env.project_root,
