@@ -10,7 +10,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. This capture is shortened, with `…` where lines were dropped:
+The report reads top to bottom, machine setup first and live room state last. This capture predates Muse support and is shortened, with `…` where lines were dropped; the reporting-agent list reflects that machine at capture time, not the current built-in roster:
 
 ```
 RimZ doctor

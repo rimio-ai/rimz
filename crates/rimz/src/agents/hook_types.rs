@@ -16,6 +16,67 @@ use super::{
     ClassifiedHook, ContextObservation, LifecycleSignal,
 };
 
+// Shared with managed-hook installers without importing the stateful drainer.
+pub const HOOK_ENV_NAMES: &[&str] = &[
+    "RIMZ_AGENT_PID",
+    "RIMZ_HOOK_OWNER_KIND",
+    "RIMZ_RUN_ID",
+    "RIMZ_WORKSPACE_ID",
+    "RIMZ_PROJECT_ROOT",
+    "RIMZ_WORKTREE_PATH",
+    "RIMZ_CHANNEL",
+    "RIMZ_AGENT_KIND",
+    "RIMZ_AGENT_ID",
+    "RIMZ_AGENT_NAME",
+    "RIMZ_AGENT_PROFILE",
+    "RIMZ_AGENT_ROLE",
+    "RIMZ_AGENT_MODEL",
+    "RIMZ_AGENT_EFFORT",
+    "RIMZ_AGENT_BUDGET",
+    "RIMZ_TEAM",
+    "RIMZ_LAUNCH_GROUP",
+    "RIMZ_LAUNCH_ORDINAL",
+    "RIMZ_RUNTIME_ENV",
+    "RIMZ_LOOP_TASK",
+    "RIMZ_ZELLIJ_BIN",
+    "RIMZ_TMUX_BIN",
+    "RIMZ_MESSAGE_INTERVAL_MS",
+    "RIMZ_MESSAGE_SETTLE_MS",
+    #[cfg(feature = "testkit")]
+    "RIMZ_TEST_ZELLIJ_LOG",
+    "RIMZ_CODEX_SESSIONS",
+    "RIMZ_CODEX_APP_SERVER_SOCK",
+    "RIMZ_CODEX_CONFIG",
+    "TMUX",
+    "TMUX_TMPDIR",
+    "TMUX_PANE",
+    "ZELLIJ",
+    "ZELLIJ_SESSION_NAME",
+    "ZELLIJ_SOCKET_DIR",
+    "ZELLIJ_PANE_ID",
+    "CLAUDE_CODE_PROJECT_DIR_NAME",
+];
+
+pub(crate) const HOOK_ENV_EXTRA_NAMES: &[&str] = &[
+    "HOME",
+    "PATH",
+    "TMPDIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "RIMZ_HOME",
+    "RIMZ_AGENTS_HOME",
+    "RIMZ_SHARED",
+    "RIMZ_BIN",
+    "RIMZ_SANDBOX_HOST_PATHS",
+    crate::config::Isolation::ENV,
+    "RIMZ_USER_TMPDIR",
+    "RIMZ_TEMP_ROOT_KEYS",
+    "RIMZ_USER_SHELL",
+];
+
 /// Provider-neutral result of decoding one native hook payload.
 #[derive(Debug, PartialEq)]
 pub struct HookOutput {

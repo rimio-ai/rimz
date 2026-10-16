@@ -24,6 +24,7 @@ Each page names its upstream sources and the version or commit it was last refre
 | [grok-reference.md](./agent-adapter/grok-reference.md) | Grok Build | 1.0.52 (2026-10-11; source at sync commit `2bdd1d6a`, 2026-09-29) | [adapter_grok.md](../internals/agents/adapter_grok.md) |
 | [kimi-reference.md](./agent-adapter/kimi-reference.md) | Kimi Code | 2.1.1 (tag `@moonshot-ai/kimi-code@2.1.1`, 2026-09-24) | [adapter_kimi.md](../internals/agents/adapter_kimi.md) |
 | [kiro-reference.md](./agent-adapter/kiro-reference.md) | Kiro CLI | 2.30.0 (2026-10-12; engine `@kiro/agent` 0.66.33; turn-order captures: 2.12.1 and 2.21.4) | [adapter_kiro.md](../internals/agents/adapter_kiro.md) |
+| [muse-reference.md](./agent-adapter/muse-reference.md) | Meta Muse Code | 1.4.9 echo captured; docs read 2026-10-15, SDK docs 1.4 (hook checks: 1.3.0) | [adapter_muse.md](../internals/agents/adapter_muse.md) |
 | [opencode-reference.md](./agent-adapter/opencode-reference.md) | OpenCode | 2.0.27 (tag `v2.0.27`, 2026-10-12) | [adapter_opencode.md](../internals/agents/adapter_opencode.md) |
 | [pi-reference.md](./agent-adapter/pi-reference.md) | Pi | 1.2.0 (tag `v1.2.0`, 2026-10-12) | [adapter_pi.md](../internals/agents/adapter_pi.md) |
 | [qwen-reference.md](./agent-adapter/qwen-reference.md) | Qwen Code | 0.25.1 (tag `v0.25.1`, 2026-10-11) | [adapter_qwen.md](../internals/agents/adapter_qwen.md) |

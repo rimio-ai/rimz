@@ -16,6 +16,7 @@ use super::adapters::droid::DroidAdapter;
 use super::adapters::grok::GrokAdapter;
 use super::adapters::kimi::KimiAdapter;
 use super::adapters::kiro::KiroAdapter;
+use super::adapters::muse::MuseAdapter;
 use super::adapters::opencode::OpencodeAdapter;
 use super::adapters::pi::PiAdapter;
 use super::adapters::qwen::QwenAdapter;
@@ -39,6 +40,7 @@ static DROID: AgentDefinition = AgentDefinition::new(&DroidAdapter);
 static KIRO: AgentDefinition = AgentDefinition::new(&KiroAdapter);
 static QWEN: AgentDefinition = AgentDefinition::new(&QwenAdapter);
 static GROK: AgentDefinition = AgentDefinition::new(&GrokAdapter);
+static MUSE: AgentDefinition = AgentDefinition::new(&MuseAdapter);
 
 /// Every built-in definition, in stable display order.
 pub(super) static BUILTINS: &[&AgentDefinition] = &[
@@ -55,6 +57,7 @@ pub(super) static BUILTINS: &[&AgentDefinition] = &[
     &KIRO,
     &QWEN,
     &GROK,
+    &MUSE,
 ];
 
 /// Every built-in and valid machine-tier plugin definition, in display order.

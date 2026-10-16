@@ -418,6 +418,177 @@ fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally()
 }
 
 #[test]
+fn muse_managed_hooks_gate_versions_preserve_settings_and_route_root_turns_neutrally() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let home = env.config_root().join("muse");
+    let settings = home.join("settings.json");
+    let hooks = home.join("rimz-hooks.json");
+    let bin = env.home_root.join("muse-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let search_path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let stub_version = |version: &str| {
+        let path = bin.join("muse");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\necho 'Muse Code {version} ({version}-R6297.1)'\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &path,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+        )
+        .unwrap();
+    };
+    let install = || {
+        env.rimz()
+            .args(["hooks", "install", "muse"])
+            .env("PATH", &search_path)
+            .output()
+            .unwrap()
+    };
+    for version in ["1.4.8", "unparseable"] {
+        stub_version(version);
+        let output = install();
+        assert!(!output.status.success(), "unsupported version must refuse");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("1.4.9") && stderr.contains("update Muse"),
+            "{stderr}"
+        );
+        assert!(!settings.exists() && !hooks.exists());
+    }
+    stub_version("1.4.9");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(&settings, "{}").unwrap();
+    let output = install();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("schema_version"));
+    // Detection must find another agent for a skipped Muse to leave a successful run.
+    let claude = bin.join("claude");
+    std::fs::write(&claude, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(
+        &claude,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    let detected = env
+        .rimz()
+        .args(["hooks", "install", "--dry-run"])
+        .env("PATH", &search_path)
+        .output()
+        .unwrap();
+    assert!(detected.status.success(), "{detected:?}");
+    assert!(!hooks.exists());
+    let original = json!({"schema_version": 1, "theme":"mine", "hooks":{"Stop":[{"hooks":[{"type":"command","command":"user-hook"}]}]}});
+    std::fs::write(&settings, original.to_string()).unwrap();
+    let output = install();
+    assert!(output.status.success(), "{output:?}");
+    assert!(env.agent_hooks_installed("muse"));
+    let installed = std::fs::read(&settings).unwrap();
+    let catalog: Value = serde_json::from_slice(&std::fs::read(&hooks).unwrap()).unwrap();
+    assert_eq!(catalog["hooks"].as_object().unwrap().len(), 10);
+    assert!(install().status.success());
+    assert_eq!(std::fs::read(&settings).unwrap(), installed);
+    let run = |event: &str| {
+        assert_hook_succeeded_neutral("muse", env.run_installed_hook("muse", &json!({
+            "hook_event_name": event, "session_id":"muse-root", "turn_id":"turn", "cwd":env.project_root,
+        }).to_string()));
+    };
+    for (session_id, native_env) in [
+        (
+            "reminder-child",
+            vec![
+                ("MUSE_SESSION_ID", "muse-root"),
+                ("MUSE_THREAD_ID", "reminder-child"),
+            ],
+        ),
+        (
+            "equal-root",
+            vec![
+                ("MUSE_SESSION_ID", "muse-root"),
+                ("MUSE_THREAD_ID", "muse-root"),
+            ],
+        ),
+        ("absent-root", vec![]),
+    ] {
+        let output = env.run_installed_hook_in_pane("muse", &json!({"hook_event_name":"UserPromptSubmit", "session_id":session_id, "cwd":env.project_root}).to_string(), &native_env);
+        assert_hook_succeeded_neutral("muse", output);
+        let snapshot = env.snapshot_json();
+        if native_env.len() == 2 && native_env[1].1 == "reminder-child" {
+            assert!(
+                snapshot["agents"].as_array().unwrap().is_empty(),
+                "child ingress must not register"
+            );
+        } else {
+            assert_eq!(
+                snapshot["agents"].as_array().unwrap().len(),
+                1,
+                "root ingress must register: {native_env:?}"
+            );
+            assert_hook_succeeded_neutral(
+                "muse",
+                env.run_installed_hook(
+                    "muse",
+                    &json!({"hook_event_name":"SessionEnd", "session_id":session_id}).to_string(),
+                ),
+            );
+        }
+    }
+    run("SessionStart");
+    for sample in [
+        include_str!("../../src/agents/adapters/muse/fixtures/PreToolUse.json"),
+        include_str!("../../src/agents/adapters/muse/fixtures/PostToolUse.json"),
+        include_str!("../../src/agents/adapters/muse/fixtures/PostToolUseFailure.json"),
+    ] {
+        let mut payload: Value = serde_json::from_str(sample).unwrap();
+        payload["session_id"] = json!("muse-root");
+        payload["cwd"] = json!(env.project_root);
+        assert_hook_succeeded_neutral("muse", env.run_installed_hook("muse", &payload.to_string()));
+        assert_eq!(
+            env.snapshot_json()["agents"][0]["status"],
+            "idle",
+            "explicit user shell input must leave a resting card idle"
+        );
+    }
+    run("UserPromptSubmit");
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+    run("PermissionRequest");
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "waiting");
+    run("PostToolUse");
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+    run("Interrupt");
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "idle");
+    for event in ["PostToolUse", "PostToolUseFailure"] {
+        run(event);
+        assert_eq!(
+            env.snapshot_json()["agents"][0]["status"],
+            "idle",
+            "late {event} must not reopen the interrupted turn"
+        );
+    }
+    run("Stop");
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "success");
+    run("SessionEnd");
+    assert!(env.snapshot_json()["agents"].as_array().unwrap().is_empty());
+    let output = env
+        .rimz()
+        .args(["hooks", "uninstall", "muse"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(!hooks.exists());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(settings).unwrap()).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn session_start_hooks_write_lifecycle_rows() {
     for (source, payload, expected_id, expected_fields) in [
         (
