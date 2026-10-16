@@ -283,7 +283,7 @@ A card's lines are set by its stage, age, density, and selection reach. Within t
 
 | card | lines |
 |------|-------|
-| stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, or teammate reach restores the card |
+| stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, teammate reach, or a subagents and waits section clicked open restores the card |
 | fresh: idle, never prompted | identity, plus the description when it was launched with one |
 | fresh, selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
 | engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |

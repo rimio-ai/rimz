@@ -403,7 +403,13 @@ fn visible_delegation_motion(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
                         &ui.held_expansions,
                     ),
                 );
-                sections::delegation_motion(row, density, expansion)
+                sections::delegation_motion(
+                    row,
+                    density,
+                    expansion,
+                    snapshot.theme.display.stale_after_secs,
+                    snapshot.now,
+                )
             })
     })
 }

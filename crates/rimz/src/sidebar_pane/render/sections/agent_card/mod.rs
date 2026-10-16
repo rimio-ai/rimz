@@ -97,12 +97,15 @@ pub(in crate::sidebar_pane::render) fn delegation_motion(
     row: &SidebarRow,
     density: CardDensityMode,
     expansion: CardExpansion,
+    stale_after_secs: u64,
+    now: jiff::Timestamp,
 ) -> bool {
     let Some(agent) = row.as_agent() else {
         return false;
     };
     let status = row.status().unwrap_or(AgentStatus::Idle);
-    template(CardStage::of(row), status, density, expansion).contains(&CardSlot::DelegationEntries)
+    let stage = CardStage::resolve(row, density, expansion, stale_after_secs, now);
+    template(stage, status, density, expansion).contains(&CardSlot::DelegationEntries)
         && (agent
             .sub_agents
             .iter()
@@ -155,16 +158,13 @@ pub(super) fn row_lines(
             inner.push(line.into());
         }
     } else if let Some(agent) = row.as_agent() {
-        let stage = if !row.unread
-            && !expanded.reach.opens_card()
-            && ctx.card_density != CardDensityMode::Expanded
-            && ctx.stale_after_secs > 0
-            && age_secs(row.last_activity, ctx.now) as u64 > ctx.stale_after_secs
-        {
-            CardStage::Stale
-        } else {
-            CardStage::of(row)
-        };
+        let stage = CardStage::resolve(
+            row,
+            ctx.card_density,
+            expanded,
+            ctx.stale_after_secs,
+            ctx.now,
+        );
         for slot in template(stage, status, ctx.card_density, expanded) {
             match slot {
                 CardSlot::Stale => inner.push(stale_line(ctx, row, attention, cost_usd).into()),
