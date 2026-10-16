@@ -52,6 +52,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
     let id = format!("agent-{group}-{index}");
     let sub_agents = (0..3).map(|sub| sub_agent(&id, sub)).collect::<Vec<_>>();
     SidebarRow {
+        checkout: None,
         id: id.clone(),
         name: "claude".to_owned(),
         pane: Some(crate::pane::PaneRef {

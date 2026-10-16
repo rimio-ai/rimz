@@ -310,7 +310,7 @@ The header gives total reclaimed bytes and the area count/cutoff, ending in `· 
 
 The second line counts the areas that ran: normally `checked 7 of 8 areas` for a room, with `workspaces` skipped and a hint to use `--all`. Dry runs skip another four store and schedule areas. The header adds a problem count (`· 1 problem`) when a worktree removal failed, a workspace record was unreadable, or the event log needed repair. Problems do not change the exit code: `gc` exits 0 whenever the sweep completes. Automatic-sweep assist records carry `scope` (`room` or `machine`) and `class_bytes`, reclaimed bytes by class for the helper's own room only, even in a machine sweep. Other assist totals cover the run's full scope.
 
-Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. `--older-than` does not change those policies. Rooms written by an older RimZ are removed along with their runtime trees.
+Owned state has a seven-day grace; audit files expire after 30 days or oldest-first above 64 MiB. The `empty` class keeps an agent's empty working directory while any retained session records it, then removes it once its directory mtime is older than seven days; the room-level directory stays. `--older-than` does not change those policies. Rooms written by an older RimZ are removed along with their runtime trees.
 
 ### JSON output
 

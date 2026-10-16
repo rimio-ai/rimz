@@ -88,6 +88,7 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
         name,
         pane: Some(pane.clone()),
         worktree_path,
+        checkout: None,
         worktree_branch: None,
         channel: None,
         unread: false,

@@ -774,8 +774,7 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_ordinal: Option<u32>,
     /// The routing lane stamped by `RIMZ_CHANNEL` at launch and carried forward
-    /// like `team`. When absent, read paths fall back to the worktree directory
-    /// basename.
+    /// like `team`. When absent, read paths fall back to the lane-path directory basename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Derived at the store fold exit from the workspace record's project root, never from an event.
@@ -822,6 +821,9 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launched_by: Option<crate::agents::LaunchedBy>,
     pub worktree_path: Option<String>,
+    /// Original checkout for an empty-dir agent, independent of its process cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
     /// Latest observed branch for this identity.
     pub worktree_branch: Option<String>,
     /// Every branch this identity was observed on, including its launch branch.
@@ -1065,6 +1067,11 @@ impl AgentState {
         }
     }
 
+    /// Checkout used for lane routing and grouping, not for process placement.
+    pub fn lane_path(&self) -> Option<&str> {
+        self.checkout.as_deref().or(self.worktree_path.as_deref())
+    }
+
     /// Whether an unstamped launch belongs to the project's root lane.
     pub fn is_root_lane(
         channel: Option<&str>,
@@ -1076,14 +1083,12 @@ impl AgentState {
     }
 
     /// The agent's channel — the lane it cooperates in: stamped lane, else
-    /// worktree directory basename.
+    /// lane-path directory basename.
     /// `None` when the agent runs outside any channel context.
     pub fn channel(&self) -> Option<String> {
         crate::ids::compose_channel(
             self.channel.as_deref(),
-            self.worktree_path
-                .as_deref()
-                .and_then(|path| path.rsplit('/').next()),
+            self.lane_path().and_then(|path| path.rsplit('/').next()),
         )
     }
 
@@ -1140,6 +1145,7 @@ impl AgentState {
             launch_depth: None,
             launched_by: None,
             worktree_path: None,
+            checkout: None,
             worktree_branch: None,
             worktree_branches: BTreeSet::new(),
             task: None,

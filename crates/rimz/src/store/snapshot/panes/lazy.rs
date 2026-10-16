@@ -770,6 +770,7 @@ fn idle_agent_row(
         name: definition.kind.to_owned(),
         pane: Some(pane.clone()),
         worktree_path: Some(worktree_path.to_owned()),
+        checkout: None,
         worktree_branch: None,
         channel: None,
         unread: false,

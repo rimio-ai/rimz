@@ -758,6 +758,7 @@ fn cohort_agent(
 
 fn process_row(id: &str, worktree: &str) -> SidebarRow {
     SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: id.to_owned(),
         pane: Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, id))),
@@ -777,6 +778,7 @@ fn process_row(id: &str, worktree: &str) -> SidebarRow {
 
 fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
     SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: id.to_owned(),
         pane: pane_raw.map(|raw| PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, raw))),

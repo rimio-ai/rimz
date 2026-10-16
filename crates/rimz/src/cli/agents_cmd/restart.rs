@@ -270,6 +270,7 @@ pub(in crate::cli) fn relaunch_request(
         Some(identity.name.as_str())
     });
     let restart_params = rimz::agents::LaunchParams {
+        checkout: agent.checkout.clone(),
         record: posture.launch.record.clone(),
         parent_agent_id: agent.parent_agent_id.clone(),
         parent_agent_kind: agent.parent_agent_kind.clone(),
@@ -361,6 +362,7 @@ fn restart_posture(
 /// the agent's durable identity.
 fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
     Cell::Agent(AgentCell {
+        empty_dir: None,
         resume_model_override: false,
         kind: agent.kind.clone(),
         args: posture.launch.args.clone(),
@@ -372,6 +374,7 @@ fn restart_cell(agent: &AgentState, posture: &ResumePosture) -> Cell {
         allowed_tools: posture.launch.allowed_tools.clone(),
         isolation_default: posture.launch.isolation_default,
         launch: rimz::agents::LaunchParams {
+            checkout: agent.checkout.clone(),
             profile: agent.profile.clone(),
             tier: posture.launch.tier.clone(),
             record: Some(rimz::agents::LaunchRecord::replay_or_new(
@@ -455,6 +458,7 @@ fn append_fresh_launch(
         AgentLaunchName::Soft(name.clone())
     });
     request.launch.profile = agent.profile.clone();
+    request.launch.checkout = agent.checkout.clone();
     request.launch.parent_agent_id = agent.parent_agent_id.clone();
     request.launch.parent_agent_kind = agent.parent_agent_kind.clone();
     request.launch.launch_depth = agent.launch_depth;

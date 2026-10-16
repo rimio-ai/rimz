@@ -277,6 +277,15 @@ impl SeatLoader<'_> {
                 DefinitionErr::new(path, format!("team '{name}' role '{handle}' selects unknown agent '{}'; team roles can select definitions from agents only", role.agent))
             })?;
         let original = &loaded.agent_profiles.0[&role.agent];
+        if original.empty_dir == Some(true) {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "team '{name}' selects definition '{}' with empty-dir; teams share the worktree",
+                    role.agent
+                ),
+            ));
+        }
         let mut fm = role.overlay();
         let mut ancestor = Some(definition);
         while let Some(definition) = ancestor {

@@ -622,6 +622,7 @@ mod tests {
 
     fn agent_row(id: &str, status: AgentStatus) -> SidebarRow {
         SidebarRow {
+            checkout: None,
             id: id.to_owned(),
             name: "codex".to_owned(),
             pane: Some(pane(&format!("%{id}"), "codex", "/repo/main")),

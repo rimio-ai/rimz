@@ -307,8 +307,7 @@ fn explicit_lanes(agents: &[AgentState]) -> std::collections::BTreeSet<&str> {
         .filter_map(|agent| {
             let lane = agent.channel.as_deref()?;
             let checkout = agent
-                .worktree_path
-                .as_deref()
+                .lane_path()
                 .and_then(|path| std::path::Path::new(path).file_name());
             (checkout != Some(std::ffi::OsStr::new(lane))).then_some(lane)
         })

@@ -1114,6 +1114,7 @@ fn idle_rows(count: usize) -> Vec<crate::store::snapshot::SidebarRow> {
 
 fn agent_row(id: &str, status: AgentStatus) -> crate::store::snapshot::SidebarRow {
     crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: id.to_owned(),
         pane: Some(pane(&format!("%{id}"), "codex", "/repo/main")),
@@ -1147,6 +1148,7 @@ fn agent_row_with_cost(id: &str, cost: f64) -> crate::store::snapshot::SidebarRo
 
 fn process_row(id: &str) -> crate::store::snapshot::SidebarRow {
     crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: id.to_owned(),
         name: "zsh".to_owned(),
         pane: Some(pane(&format!("%{id}"), "zsh", "/repo/main")),

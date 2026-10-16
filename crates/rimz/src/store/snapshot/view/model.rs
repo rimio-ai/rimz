@@ -581,6 +581,7 @@ mod tests {
 
     fn collapse_test_row(id: &str, agent: bool) -> SidebarRow {
         SidebarRow {
+            checkout: None,
             id: id.to_owned(),
             name: id.to_owned(),
             pane: None,

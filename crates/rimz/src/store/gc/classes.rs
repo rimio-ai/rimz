@@ -68,6 +68,18 @@ pub(super) fn collect_state(
             locks_would_check: report.locks_would_check,
         });
     }
+    let mut report = GcReport::default();
+    if let Some(agents) = &agents
+        && let Err(err) = collect_empty(paths, agents, &mut Sweep::new(dry_run), &mut report)
+    {
+        tracing::warn!(workspace = %paths.dir_name, error = %err, "empty-dir gc stopped at unreadable state");
+    }
+    classes.push(super::ClassReport {
+        class: "empty".to_owned(),
+        files_removed: report.sidecar_files_removed,
+        bytes_removed: report.bytes_removed,
+        locks_would_check: report.locks_would_check,
+    });
     Ok((classes, waits_removed))
 }
 
@@ -202,6 +214,70 @@ fn collect_tmp(
     collect_units(&paths.tmp_dir, Some(&unnamed), agents, sweep, report)
 }
 
+fn collect_empty(
+    paths: &crate::StatePaths,
+    agents: &crate::store::snapshot::AgentRollup,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<()> {
+    let dir = paths.empty_room_dir();
+    for parent in [paths.empty_dir_root(), dir.clone()] {
+        match fs::symlink_metadata(&parent) {
+            Ok(metadata) if !metadata.is_dir() => return Ok(()),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(GcErr::Io {
+                    path: parent,
+                    source,
+                });
+            }
+        }
+    }
+    let resolved_dir = dir.canonicalize().map_err(|source| GcErr::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    for entry in read_dir_if_exists(&dir)?.into_iter().flatten() {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| GcErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if !metadata.is_dir()
+            || agents.iter().any(|agent| {
+                agent
+                    .worktree_path
+                    .as_deref()
+                    .map(Path::new)
+                    .is_some_and(|recorded| {
+                        recorded.file_name() == path.file_name()
+                            && recorded
+                                .parent()
+                                .and_then(|parent| parent.canonicalize().ok())
+                                .as_deref()
+                                == Some(resolved_dir.as_path())
+                    })
+            })
+        {
+            continue;
+        }
+        let modified = metadata.modified().map_err(|source| GcErr::Io {
+            path: path.clone(),
+            source,
+        })?;
+        if expired(modified, SystemTime::now(), retention::OWNED_GRACE) {
+            let files = sweep.files_under(&path)?.len();
+            sweep.remove_tree(&path, files, report)?;
+        }
+    }
+    Ok(())
+}
+
 /// Result files past the grace: a wait's once its watcher is gone, a
 /// response once no run record names its agent; then empty reader dirs.
 fn collect_out(
@@ -256,6 +332,106 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn empty_dir_gc_does_not_follow_parent_symlinks() {
+        for machine_level in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let paths = crate::StatePaths::under(
+                crate::WorkspaceId::from_project_root(temp.path()),
+                temp.path(),
+            )
+            .unwrap();
+            let target = temp.path().join("elsewhere");
+            let foreign = if machine_level {
+                target.join(paths.dir_name.as_str()).join("saved")
+            } else {
+                target.join("saved")
+            };
+            fs::create_dir_all(&foreign).unwrap();
+            fs::write(foreign.join("report"), "keep").unwrap();
+            fs::File::open(&foreign)
+                .unwrap()
+                .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+                .unwrap();
+            let link = if machine_level {
+                paths.empty_dir_root()
+            } else {
+                paths.empty_room_dir()
+            };
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, link).unwrap();
+            collect_empty(
+                &paths,
+                &Vec::new().into(),
+                &mut Sweep::new(false),
+                &mut GcReport::default(),
+            )
+            .unwrap();
+            assert!(
+                foreign.join("report").exists(),
+                "GC must not follow a symlinked empty-dir parent"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_dirs_wait_for_record_pruning_and_use_cwd_not_handle() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&home, &link).unwrap();
+        let paths =
+            crate::StatePaths::under(crate::WorkspaceId::from_project_root(temp.path()), &link)
+                .unwrap();
+        let dir = home
+            .join("empty")
+            .join(paths.dir_name.as_str())
+            .join("original-name");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("report"), "saved").unwrap();
+        fs::File::open(&dir)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(8 * 86_400))
+            .unwrap();
+        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let mut retained = crate::testkit::agent_state("claude", "ended", now);
+        retained.name = Some("new-handle".into());
+        retained.worktree_path = Some(dir.display().to_string());
+        retained.ended_at = Some(now);
+        collect_empty(
+            &paths,
+            &vec![retained].into(),
+            &mut Sweep::new(false),
+            &mut GcReport::default(),
+        )
+        .unwrap();
+        assert!(dir.exists());
+        let recent = dir.with_file_name("recent");
+        fs::create_dir(&recent).unwrap();
+        let mut preview = GcReport::default();
+        collect_empty(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(true),
+            &mut preview,
+        )
+        .unwrap();
+        assert_eq!(preview.sidecar_files_removed, 1);
+        assert!(dir.exists());
+        let mut actual = GcReport::default();
+        collect_empty(
+            &paths,
+            &Vec::new().into(),
+            &mut Sweep::new(false),
+            &mut actual,
+        )
+        .unwrap();
+        assert_eq!(preview, actual);
+        assert!(!dir.exists());
+        assert!(recent.exists() && dir.parent().unwrap().exists());
+    }
 
     #[test]
     fn output_sweep_does_not_hold_the_store_lock() {

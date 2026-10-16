@@ -342,6 +342,7 @@ struct ProcessRowSpec {
 
 fn process_row(spec: ProcessRowSpec) -> SidebarRow {
     SidebarRow {
+        checkout: None,
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
         pane: Some(pane_ref(spec.pane, spec.command, spec.cwd, false)),
@@ -2128,6 +2129,7 @@ fn agent_row(spec: AgentRowSpec<'_>, now: jiff::Timestamp) -> SidebarRow {
     });
 
     SidebarRow {
+        checkout: None,
         id: spec.id.to_owned(),
         name: spec.name.to_owned(),
         pane: Some(pane_ref(

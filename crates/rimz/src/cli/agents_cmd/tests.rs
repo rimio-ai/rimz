@@ -183,6 +183,7 @@ fn planner_profiles() -> ProfilesConfig {
     profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            empty_dir: None,
             definition_renders: None,
             model_tier: None,
             tier_stamp: None,
@@ -396,6 +397,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.agents.profiles.0.insert(
         "planner".to_owned(),
         Profile {
+            empty_dir: None,
             definition_renders: None,
             model_tier: None,
             tier_stamp: None,
@@ -421,6 +423,7 @@ fn agent_profiles_list_only_agent_profiles_with_descriptions() {
     machine.subagents.profiles.0.insert(
         "child-only".to_owned(),
         Profile {
+            empty_dir: None,
             definition_renders: None,
             model_tier: None,
             tier_stamp: None,
@@ -1295,6 +1298,7 @@ fn refresh_targets_honor_channel_filter() {
     );
     let owner = &snapshot.agents[0];
     let owner_pane = rimz::store::snapshot::PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: owner.kind.clone(),
         kind_ordinal: owner.kind_ordinal,
@@ -1719,6 +1723,7 @@ mod launch_options {
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
+                empty_dir: None,
                 definition_renders: None,
                 model_tier: None,
                 tier_stamp: None,

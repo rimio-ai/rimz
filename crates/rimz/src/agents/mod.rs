@@ -19,6 +19,7 @@ pub mod credits;
 pub mod definition;
 pub(crate) mod delegated_account;
 mod emblems;
+pub mod empty_dir;
 mod folder_trust;
 mod headless;
 pub(crate) mod hook_types;

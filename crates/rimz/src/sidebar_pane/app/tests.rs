@@ -1045,6 +1045,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             pipeline: None,
             status_counts: Vec::new(),
             rows: vec![crate::store::snapshot::SidebarRow {
+                checkout: None,
                 id: "agent-1".to_owned(),
                 name: "claude".to_owned(),
                 pane: Some(pane("terminal_11", "tab_1", false)),

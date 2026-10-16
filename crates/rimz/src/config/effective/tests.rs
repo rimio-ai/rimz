@@ -555,6 +555,7 @@ fn load(machine: &AgentsConfig, project_root: &Path, config_root: &Path) -> Resu
 
 fn profile(agent: &str, args: Option<&str>) -> Profile {
     Profile {
+        empty_dir: None,
         allowed_tools: None,
         definition_renders: None,
         model_tier: None,
@@ -1126,6 +1127,34 @@ fn repo_profile_cannot_inherit_machine_profile() {
             ..
         } if profile == "child" && base == "machine-base"
     ));
+}
+
+#[test]
+fn repo_empty_dir_profiles_are_admitted_in_both_scopes() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(
+        &project,
+        "[profiles.searcher]\nagent = 'claude'\nempty-dir = true\n[subagents.profiles.searcher]\nagent = 'claude'\nempty-dir = true\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).unwrap();
+    let effective =
+        load_with_roots(&MachineConfig::default(), project.path(), config.path()).unwrap();
+    for profiles in [&effective.profiles, &effective.subagent_profiles] {
+        assert!(profiles.0.contains_key("searcher"));
+        assert_eq!(
+            serde_json::to_value(&profiles.0["searcher"]).unwrap()["empty-dir"],
+            true
+        );
+    }
+    let binding: RoleBinding = toml::from_str("role = 'lead'\nprofile = 'searcher'").unwrap();
+    let error = crate::harness::spec::resolve_role(&binding, &effective.profiles)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("searcher") && error.contains("empty-dir") && error.contains("share"),
+        "{error}"
+    );
 }
 
 #[test]

@@ -118,6 +118,9 @@ impl std::fmt::Display for TierSkipReason {
 /// Launcher-selected parameters shared by launch and lifecycle event payloads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LaunchParams {
+    /// Absolute host checkout displaced by empty-dir placement; absent when the key did not apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<Box<LaunchRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

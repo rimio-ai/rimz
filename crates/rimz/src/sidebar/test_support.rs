@@ -141,6 +141,7 @@ pub(crate) fn activity_row(
     worktree_path: &Path,
 ) -> crate::store::snapshot::SidebarRow {
     crate::store::snapshot::SidebarRow {
+        checkout: None,
         id: "row".to_owned(),
         name: "claude".to_owned(),
         pane: None,

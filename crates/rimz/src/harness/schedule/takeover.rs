@@ -98,7 +98,7 @@ fn occupies(agent: &AgentState, checkouts: &[PathBuf], nested: &[PathBuf]) -> bo
     if agent.ended_at.is_some() || agent.pane.is_none() || agent.is_provider_subagent() {
         return false;
     }
-    let Some(path) = agent.worktree_path.as_deref() else {
+    let Some(path) = agent.lane_path() else {
         return false;
     };
     let path = normalize_path_lexical(Path::new(path));

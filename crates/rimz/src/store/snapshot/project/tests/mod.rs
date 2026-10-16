@@ -505,6 +505,30 @@ fn legacy_attach_for_unknown_session_mints_no_card() {
 }
 
 #[test]
+fn checkout_survives_hooks_that_report_the_process_cwd() {
+    let launch = launch_event(
+        "codex",
+        AgentLaunchPayload {
+            launch: LaunchParams {
+                checkout: Some("/repo".into()),
+                ..LaunchParams::default()
+            },
+            ..launch_payload("sess-empty", "searcher")
+        },
+    );
+    let hook = raw_lifecycle(
+        "codex",
+        json!({"agent_id": "sess-empty", "signal": {"signal": "registered"}, "worktree_path": "/rimz/empty/room/searcher"}),
+    );
+    let states = reduce_agent_states(&[launch, hook]);
+    assert_eq!(states[0].checkout.as_deref(), Some("/repo"));
+    assert_eq!(
+        states[0].worktree_path.as_deref(),
+        Some("/rimz/empty/room/searcher")
+    );
+}
+
+#[test]
 fn attach_without_isolation_preserves_the_launch_setting() {
     for isolation in [None, Some(crate::config::Isolation::Host)] {
         let launch = launch_event(

@@ -419,7 +419,7 @@ impl std::str::FromStr for Isolation {
 
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
-/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (as `budget` and `keep_warm` only gate RimZ's own notices).
+/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (`budget` and `keep_warm` gate RimZ's own notices; `empty_dir` selects only the working directory).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
@@ -432,6 +432,8 @@ pub struct Profile {
     pub tier_stamp: Option<Box<crate::agents::TierStamp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
+    #[serde(default, rename = "empty-dir", skip_serializing_if = "Option::is_none")]
+    pub empty_dir: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

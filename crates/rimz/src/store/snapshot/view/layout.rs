@@ -818,7 +818,7 @@ pub fn group_live_agents_by_worktree<'a>(
         snapshot,
         agents.iter().map(|agent| GroupEntry {
             channel: agent.channel.as_deref(),
-            path: agent.worktree_path.as_deref(),
+            path: agent.lane_path(),
             branch: agent.worktree_branch.as_deref(),
         }),
     );
@@ -826,7 +826,7 @@ pub fn group_live_agents_by_worktree<'a>(
     for &agent in agents {
         let identity = resolver.resolve(GroupEntry {
             channel: agent.channel.as_deref(),
-            path: agent.worktree_path.as_deref(),
+            path: agent.lane_path(),
             branch: agent.worktree_branch.as_deref(),
         });
         by_key

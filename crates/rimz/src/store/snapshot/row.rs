@@ -25,6 +25,8 @@ pub struct SidebarRow {
     pub name: String,
     pub pane: Option<PaneRef>,
     pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
     pub worktree_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
@@ -56,6 +58,9 @@ fn is_zero(value: &u32) -> bool {
 }
 
 impl SidebarRow {
+    pub fn lane_path(&self) -> Option<&str> {
+        self.checkout.as_deref().or(self.worktree_path.as_deref())
+    }
     pub fn pane_ids(&self) -> impl Iterator<Item = &PaneId> {
         self.pane
             .as_ref()
@@ -227,6 +232,8 @@ impl SidebarRow {
 /// a wired pane before its session binds carries only its kind and pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneAgent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
     pub kind: AgentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
@@ -269,6 +276,9 @@ pub struct PaneAgent {
 }
 
 impl PaneAgent {
+    pub fn lane_path(&self) -> Option<&str> {
+        self.checkout.as_deref().or(self.worktree_path.as_deref())
+    }
     /// A human handle: role, explicit name, profile, pet name, `kind-ordinal`,
     /// else kind.
     pub fn label(&self) -> String {
@@ -296,14 +306,11 @@ impl PaneAgent {
         }
     }
 
-    /// The channel this pane participates in: stamped lane, else worktree
-    /// directory basename. `None` means the pane is outside a known worktree.
+    /// The channel this pane participates in: stamped lane, else lane-path directory basename. `None` means the pane is outside a known worktree.
     pub fn channel(&self) -> Option<String> {
         compose_channel(
             self.channel.as_deref(),
-            self.worktree_path
-                .as_deref()
-                .and_then(|path| path.rsplit('/').next()),
+            self.lane_path().and_then(|path| path.rsplit('/').next()),
         )
     }
 

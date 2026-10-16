@@ -1032,6 +1032,7 @@ impl ResumeCandidate {
                 launch_depth: None,
                 launched_by: None,
                 isolation: None,
+                checkout: None,
                 tier: None,
             },
             stamped_mode: None,
@@ -1044,6 +1045,14 @@ impl ResumeCandidate {
             // session belongs to the room's account.
             login_mismatch: None,
         })
+    }
+
+    fn lane_path(&self) -> &Path {
+        self.identity
+            .checkout
+            .as_deref()
+            .map(Path::new)
+            .unwrap_or(&self.cwd)
     }
 
     fn key(&self) -> ResumeCandidateKey {
@@ -2070,8 +2079,7 @@ fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> b
 
 fn normalized_agent_worktree(agent: &AgentState) -> Option<PathBuf> {
     agent
-        .worktree_path
-        .as_deref()
+        .lane_path()
         .filter(|path| !path.is_empty())
         .map(Path::new)
         .map(crate::utils::path::normalize_path_lexical)
@@ -2212,7 +2220,7 @@ fn plan_resume_candidates_detailed(
         let lane_label = candidate.lane_label.as_deref().or_else(|| {
             if AgentState::is_root_lane(
                 channel.as_deref(),
-                Some(candidate.cwd.as_path()),
+                Some(candidate.lane_path()),
                 ctx.project_root,
             ) {
                 Some("main")
@@ -2293,7 +2301,8 @@ fn plan_resume_candidates_detailed(
             &posture.launch,
             !ctx.in_place,
         );
-        let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
+        let lane_path = candidate.lane_path();
+        let tab_label = channel_label(channel.as_deref(), lane_path);
         let isolation = (
             crate::harness::plan::effective_resume_isolation(
                 posture.launch.isolation,
@@ -2301,7 +2310,7 @@ fn plan_resume_candidates_detailed(
             ),
             posture.launch.isolation_default,
         );
-        let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
+        let identity = resume_tab_identity(channel.as_deref(), lane_path);
         let resumed_key = (
             candidate.identity.kind.clone(),
             candidate.identity.session_id.clone(),
@@ -2373,7 +2382,7 @@ fn candidate_room_channel(
     match project_root {
         Some(project_root) => crate::harness::spec::resolve_room_channel(
             project_root,
-            &candidate.cwd,
+            candidate.lane_path(),
             candidate.identity.team.as_deref(),
             candidate.identity.channel.as_deref(),
         ),
@@ -2836,7 +2845,7 @@ pub enum TeamHoldReason {
 pub fn inspect_team_hold(agents: &[AgentState], checkout: &Path) -> Option<TeamHold> {
     let target = crate::utils::path::normalize_path_lexical(checkout);
     inspect_hold(agents, Some(checkout), |agent| {
-        agent.worktree_path.as_deref().is_some_and(|path| {
+        agent.lane_path().is_some_and(|path| {
             crate::utils::path::normalize_path_lexical(Path::new(path)) == target
         })
     })
@@ -2876,7 +2885,7 @@ fn inspect_hold(
     let members = crate::address::launch_occupants(agents.iter().filter(|agent| {
         cohort_admits(agent, crate::store::runtime::agent_liveness)
             && agent.team.is_some()
-            && agent.worktree_path.is_some()
+            && agent.lane_path().is_some()
             && matches(agent)
     }));
     if let Some(member) = members
@@ -2887,13 +2896,13 @@ fn inspect_hold(
         return Some(TeamHold {
             team: member.team.clone()?,
             channel: member.channel()?,
-            checkout: member.worktree_path.as_ref()?.into(),
+            checkout: member.lane_path()?.into(),
             reason: TeamHoldReason::LiveMember,
         });
     }
     let member = members.iter().max_by_key(|agent| agent.last_activity)?;
     let team = member.team.clone()?;
-    let checkout = PathBuf::from(member.worktree_path.as_ref()?);
+    let checkout = PathBuf::from(member.lane_path()?);
     let stage = super::scratch::board_stage(board_checkout.unwrap_or(&checkout))?;
     super::fleet::team_stage_pending(Some(&stage.name)).then_some(TeamHold {
         team,
@@ -2916,7 +2925,7 @@ pub fn inspect_cohort_relaunch(
         .iter()
         .filter(|agent| {
             cohort_admits(agent, crate::store::runtime::agent_liveness)
-                && agent.worktree_path.as_deref().is_some_and(|path| {
+                && agent.lane_path().is_some_and(|path| {
                     crate::utils::path::normalize_path_lexical(Path::new(path)) == target
                 })
         })

@@ -7,6 +7,53 @@
 use super::*;
 
 #[test]
+fn empty_dir_cwd_keeps_checkout_lane_group_and_address() {
+    for (checkout, root_lane, lane) in
+        [("/repo", true, "main"), ("/repo/feature", false, "feature")]
+    {
+        let mut bound = agent("codex", "sess-1", AgentStatus::Running, 1_000).in_pane("term1");
+        bound.worktree_path = Some("/rimz/empty/room/searcher".into());
+        bound.checkout = Some(checkout.into());
+        let snapshot = room(vec![bound])
+            .with_project_root(Some(PathBuf::from("/repo")))
+            .with_live_panes(
+                vec![pane("term1", "codex", "/rimz/empty/room/searcher")],
+                None,
+            );
+        assert_eq!(
+            snapshot.agents[0].channel().as_deref(),
+            Some(if root_lane { "repo" } else { lane })
+        );
+        assert_eq!(snapshot.agent_panes[0].root_lane, root_lane);
+        assert_eq!(snapshot.agent_panes[0].lane_label().as_deref(), Some(lane));
+        let row = rows(&snapshot)[0];
+        assert_eq!(serde_json::to_value(row).unwrap()["checkout"], checkout);
+        assert_eq!(
+            row.worktree_path.as_deref(),
+            Some("/rimz/empty/room/searcher")
+        );
+        assert!(
+            snapshot
+                .worktree_groups
+                .iter()
+                .all(|group| group.key != "external")
+        );
+        assert!(
+            crate::address::resolve_targets(
+                &snapshot,
+                &format!("@codex#{lane}"),
+                None,
+                &crate::address::AddressContext {
+                    channel: None,
+                    origin: crate::address::ChannelOrigin::Stamped
+                }
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn bound_pane_cwd_supplies_root_lane_when_the_agent_has_no_worktree() {
     for (cwd, root_lane) in [("/repo", true), ("/repo/feature", false)] {
         let mut bound = agent("codex", "sess-1", AgentStatus::Running, 1_000).in_pane("term1");

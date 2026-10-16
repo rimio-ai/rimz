@@ -189,6 +189,7 @@ pub struct HistoryPaths {
 
 #[derive(Clone, Debug)]
 pub struct StatePaths {
+    empty_root: PathBuf,
     pub workspace_id: WorkspaceId,
     pub dir_name: WorkspaceDirName,
     pub root: PathBuf,
@@ -232,6 +233,18 @@ pub struct StatePaths {
 }
 
 impl StatePaths {
+    /// The machine-wide parent used for empty-dir folder trust.
+    pub fn empty_dir_root(&self) -> PathBuf {
+        self.empty_root.clone()
+    }
+    /// This room's persistent empty agent directories, outside its temp units.
+    pub fn empty_room_dir(&self) -> PathBuf {
+        self.empty_root.join(self.dir_name.as_str())
+    }
+    /// The directory named by a validated candidate handle, which may differ from the final handle.
+    pub fn empty_agent_dir(&self, handle: &str) -> PathBuf {
+        self.empty_room_dir().join(handle)
+    }
     /// Paths for the workspace born at `project_root`: its existing dir, else
     /// a freshly minted `<basename>-<hex>` name. Creates nothing.
     pub fn for_project_root(project_root: &Path) -> Result<Self> {
@@ -276,6 +289,7 @@ impl StatePaths {
         let runs_dir = owned_dir.join("runs");
         let tmp_dir = root.join(Class::Tmp.dir_name());
         Self {
+            empty_root: home.join("empty"),
             workspace_id,
             dir_name,
             agents_dir: owned_dir.join("agents"),
@@ -1328,6 +1342,11 @@ pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Machine-wide parent of room-owned empty agent directories.
+pub fn empty_dir_root() -> PathBuf {
+    rimz_home().join("empty")
 }
 
 /// The one RimZ home: `$RIMZ_HOME`, else `$HOME/.rimz`.

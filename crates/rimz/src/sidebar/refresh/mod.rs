@@ -186,7 +186,7 @@ fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBu
         .iter()
         .flat_map(|group| group.rows.iter())
         .filter(|row| row.name == "codex")
-        .filter_map(|row| Some((row.id.as_str(), row.worktree_path.as_deref()?)))
+        .filter_map(|row| Some((row.id.as_str(), row.lane_path()?)))
         .collect();
     snapshot
         .agents
@@ -198,8 +198,7 @@ fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBu
                 return None;
             }
             let worktree = agent
-                .worktree_path
-                .as_deref()
+                .lane_path()
                 .or_else(|| row_worktrees.get(agent.agent_id.as_str()).copied());
             let origin = worktree
                 .and_then(|worktree| crate::agents::spending::origin_path(Some(worktree)))?;

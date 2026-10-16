@@ -235,7 +235,7 @@ pub(in crate::sidebar) fn worktree_group_path_fields<'a>(
         .filter(|key| Path::new(key).is_absolute())
         .or_else(|| {
             rows.iter()
-                .find_map(|row| row.worktree_path.as_deref())
+                .find_map(|row| row.lane_path())
                 .filter(|path| !path.is_empty())
         })
 }

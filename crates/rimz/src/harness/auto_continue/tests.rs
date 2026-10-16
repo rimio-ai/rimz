@@ -495,6 +495,7 @@ fn provider_limit_does_not_arm_without_spent_future_reset() {
 
 fn live_pane() -> PaneAgent {
     PaneAgent {
+        checkout: None,
         root_lane: false,
         kind: AgentKind::new_unchecked("claude"),
         kind_ordinal: None,

@@ -78,7 +78,7 @@ fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpend> {
             if now_secs.saturating_sub(row.last_activity.as_second()) >= SESSION_GAP_SECS as i64 {
                 return None;
             }
-            let origin = origin_path(row.worktree_path.as_deref())?;
+            let origin = origin_path(row.lane_path())?;
             if !scope.contains(&origin) {
                 return None;
             }

@@ -62,7 +62,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let source_name = source.name.as_deref().unwrap_or("unnamed").to_owned();
     let channel = rimz::harness::spec::resolve_room_channel(
         &workspace.project_root,
-        &seed.cwd,
+        source.lane_path().map(Path::new).unwrap_or(&seed.cwd),
         source.team.as_deref(),
         source.channel.as_deref(),
     );
@@ -347,6 +347,7 @@ fn validate_fork_source(
         source_session_id: agent.agent_id.clone(),
         cwd,
         launch: rimz::agents::LaunchParams {
+            checkout: agent.checkout.clone(),
             profile: agent.profile.clone(),
             login,
             record: agent.record.clone(),

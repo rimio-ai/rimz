@@ -23,7 +23,9 @@ pub(super) fn record_assistant_response(
     let agent_id = decoded.event_agent_id()?.clone();
     let state = agent_state(store, agent, &agent_id);
     let worktree_path = recorded
-        .and_then(|recorded| recorded.observation.worktree_path.as_deref())
+        .and_then(|recorded| recorded.observation.launch.checkout.as_deref())
+        .or_else(|| state.as_ref().and_then(|state| state.checkout.as_deref()))
+        .or_else(|| recorded.and_then(|recorded| recorded.observation.worktree_path.as_deref()))
         .or(decoded.worktree_path())
         .or_else(|| {
             state
@@ -129,7 +131,10 @@ pub(super) fn record_native_answer(
         .unwrap_or_else(|| Cow::Owned(workspace.worktree_root.display().to_string()));
     let channel = rimz::transcript::entry_channel(
         recorded.and_then(|recorded| recorded.observation.launch.channel.as_deref()),
-        Some(worktree_path.as_ref()),
+        recorded
+            .and_then(|recorded| recorded.observation.launch.checkout.as_deref())
+            .or_else(|| state.as_ref().and_then(|state| state.checkout.as_deref()))
+            .or(Some(worktree_path.as_ref())),
     );
     let mut entry = rimz::transcript::TranscriptEntry::new(
         jiff::Timestamp::now(),
@@ -222,7 +227,12 @@ pub(super) fn record_conversation(
         .and_then(|snapshot| find_agent(&snapshot.agents, &kind, &agent_id));
     let channel = rimz::transcript::entry_channel(
         observation.launch.channel.as_deref(),
-        observation.worktree_path.as_deref(),
+        observation
+            .launch
+            .checkout
+            .as_deref()
+            .or_else(|| state.and_then(|state| state.checkout.as_deref()))
+            .or(observation.worktree_path.as_deref()),
     )
     .or_else(|| {
         workspace

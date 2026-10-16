@@ -967,6 +967,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.agents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
+                empty_dir: None,
                 definition_renders: None,
                 model_tier: None,
                 tier_stamp: None,
@@ -994,6 +995,7 @@ fn profile_model_reminder_flag_reaches_launch_reminders() {
         machine_config.subagents.profiles.0.insert(
             name.to_owned(),
             crate::config::Profile {
+                empty_dir: None,
                 definition_renders: None,
                 model_tier: None,
                 tier_stamp: None,

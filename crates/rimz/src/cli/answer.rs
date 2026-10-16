@@ -464,8 +464,7 @@ fn record_answer_if_missing(
         rimz::transcript::answers_text(&answers),
     );
     entry.id = Some(ask_id.clone());
-    entry.channel =
-        rimz::transcript::entry_channel(agent.channel.as_deref(), agent.worktree_path.as_deref());
+    entry.channel = rimz::transcript::entry_channel(agent.channel.as_deref(), agent.lane_path());
     entry.name = agent.name.clone();
     entry.profile = agent.profile.clone();
     entry.role = agent.role.clone();

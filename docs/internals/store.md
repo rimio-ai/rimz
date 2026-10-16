@@ -78,6 +78,7 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `cache/` | State | Rebuildable; cleared on reset, no age sweep. |
 | `owned/` | State | Agent unit: 7 days after the latest session using its handle ends, never while its process owner is live or its directory or a direct child is newer than 7 days. Unknown handles use the same mtime grace. Runs: terminal and record mtime older than 7 days. Restorability does not extend the grace. |
 | `tmp/` | State | Agent temp unit `tmp/<handle>/`: the `owned/` agent-unit rule. `tmp/_unnamed/`, shared by handleless launches, stays until the room directory is pruned. |
+| `<home>/empty/<workspace-dir>/` | State (outside the room store) | Keep each agent directory while any retained row records it as `worktree_path`, even after that session ends. Otherwise remove it once its directory mtime is older than the 7-day owned grace. Keep the room-level directory. |
 | `shared/` | State | Room-wide files agents hand each other; no sweep. Hard reset removes it; otherwise it goes when the room directory is pruned. |
 | `out/` | State | RimZ-written results under `out/<reader>/`; `out/` and each reader directory are created at mode `0700`. A response file goes once it is older than 7 days and no run record names its agent (the stem before the first `.`); a `wait-` file once it is older than 7 days and its watcher is not live. An empty reader directory goes. |
 | `locks/` | State | Try-lock and unlink while held; keep busy files (including shared supervisor holds on `room.lock`) and every subdirectory, since a reopening waiter recreates only the file. Dry runs only count files as would-check, without locking. Every acquirer checks descriptor/path inode identity after flock and retries on replacement. Reset and teardown never remove this class. |
@@ -86,6 +87,8 @@ Room files have one lifetime class per directory, constructed by `disk/paths.rs`
 | `lanes/` | Runtime | No age sweep; reset, teardown, room death and reboot reclaim coordination state, including quiet schedules and user choices. |
 
 ### The workspace store
+
+An empty-dir launch carries its original checkout in `LaunchParams.checkout`, projected to `AgentState.checkout` and `SidebarRow.checkout`. Lane routing, root-lane stamps, and sidebar groups use the checkout before the process `worktree_path`; hooks can update that cwd without losing the lane. Older records omit `checkout` and keep their existing path semantics.
 
 The workspace store is `<home>/ws/<workspace-dir>/`, where `<home>` is `$RIMZ_HOME` or `~/.rimz`: durable truth plus the caches derived from it that should survive a reboot.
 

@@ -54,8 +54,7 @@ pub(super) fn attribution(
                 rimz::address::agent_in_worktree(agent, filter)
             } else if let Some(worktree) = default_worktree {
                 agent
-                    .worktree_path
-                    .as_deref()
+                    .lane_path()
                     .is_some_and(|path| std::path::Path::new(path) == worktree)
             } else {
                 true
@@ -73,7 +72,11 @@ pub(super) fn attribution(
         if default_worktree.is_some() {
             return ctx.workspace.worktree_branch.clone();
         }
-        let path = common_optional(roots.iter().map(|agent| agent.worktree_path.clone()))?;
+        let path = common_optional(
+            roots
+                .iter()
+                .map(|agent| agent.lane_path().map(str::to_owned)),
+        )?;
         let path = std::path::Path::new(&path);
         if path == ctx.workspace.worktree_root {
             ctx.workspace.worktree_branch.clone()
@@ -148,7 +151,13 @@ fn report_scope(
         branch,
         worktree: default_worktree
             .map(|path| path.display().to_string())
-            .or_else(|| common_optional(agents.iter().map(|agent| agent.worktree_path.clone()))),
+            .or_else(|| {
+                common_optional(
+                    agents
+                        .iter()
+                        .map(|agent| agent.lane_path().map(str::to_owned)),
+                )
+            }),
         since: lifetimes.common_since(agents),
     }
 }
