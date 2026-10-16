@@ -11,6 +11,10 @@ use super::validate_glyph_cells;
 /// `tokens`, `meter` bars, the age `clock`, compact `value` qualifiers, the
 /// `worktree` header, the agent `card`, `process` rows, help `keys`, and
 /// `chrome`.
+///
+/// A new role also lands in `config/templates/theme.template.toml` under both
+/// glyph sets, in catalog order; `template_lists_every_glyph_role_in_both_sets`
+/// fails the gate otherwise.
 macro_rules! glyph_roles {
     ($($namespace:literal { $($variant:ident => $name:literal,)+ })+) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
