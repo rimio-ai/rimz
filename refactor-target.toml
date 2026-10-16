@@ -1158,7 +1158,8 @@ path = "crates/rimz/src/store"
 # workflow::{RunRecord, JournalEntry, JournalEvent} and locked codecs serve the engine and inspection (+23).
 # gc::prune::OrphanEmptyTree, the trunk's orphan empty-dir report, takes the slack the workflow budget assumed (+1).
 # AgentCard::open_ask shares the displayed-wait gate with the sidebar (+1).
-surface-budget = 453
+# RuntimeProjection::runtime_from_refs lets address tests project molt chains so supersession is computed, not asserted in (+1).
+surface-budget = 454
 
 [[verdict]]
 kind = "item"

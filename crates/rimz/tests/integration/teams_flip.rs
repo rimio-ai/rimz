@@ -32,6 +32,86 @@ roles:
 "#;
 
 #[test]
+fn stage_wake_crosses_an_ended_molt_intermediate() {
+    let fixture = Fixture::new();
+    let workspace = fixture.env.resolve_workspace(&fixture.env.project_root);
+    for (name, predecessor) in [
+        ("first", None),
+        ("middle", Some("launch_first")),
+        ("successor", Some("launch_middle")),
+    ] {
+        fixture.seed_member(
+            "claude",
+            name,
+            "coder",
+            None,
+            "feature-team",
+            &fixture.env.project_root,
+        );
+        let mut observation = AgentLifecycleObservation::new(
+            Some(format!("session-{name}").into()),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some(name.to_owned());
+        observation.launch.molted_from = predecessor.map(AgentSessionId::from);
+        observation.pane_id = Some(PaneId::from_parts(
+            MuxName::Zellij,
+            match name {
+                "first" => "terminal_3",
+                "middle" => "terminal_4",
+                _ => "terminal_5",
+            },
+        ));
+        fixture
+            .env
+            .store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "seed",
+                &observation,
+            ))
+            .unwrap();
+    }
+    let observation =
+        AgentLifecycleObservation::new(Some("session-middle".into()), LifecycleSignal::Ended);
+    fixture
+        .env
+        .store()
+        .append_event(&EventEnvelope::agent_lifecycle(
+            workspace.workspace_id,
+            &workspace.session_name,
+            "claude",
+            "seed",
+            &observation,
+        ))
+        .unwrap();
+    std::fs::write(
+        fixture.board(),
+        BOARD.replace("Build (@coder)", "Review (@reviewer)"),
+    )
+    .unwrap();
+    fixture.live_panes(&["terminal_3", "terminal_5"]);
+    let snapshot = fixture.env.store().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| (agent.agent_id.as_str(), agent.molted_from.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("session-first", None),
+            ("session-successor", Some("launch_middle"))
+        ]
+    );
+    success(fixture.flip("Build", None, Some("Continue with the successor.")));
+    let records = fixture.stage_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].agent_id.as_str(), "session-successor");
+}
+
+#[test]
 fn stop_receipt_names_the_cohort_and_held_board() {
     let fixture = Fixture::new();
     fixture.running("coder", Some("terminal_3"));

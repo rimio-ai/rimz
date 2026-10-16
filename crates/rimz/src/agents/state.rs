@@ -704,6 +704,11 @@ fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
 pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub molted_from: Option<AgentSessionId>,
+    /// A standing successor exists on this row's molt chain, directly or through
+    /// ended intermediates. Derived by the runtime projection over every retained
+    /// row in both scopes; the fold never sets it, and projection overwrites it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub molt_superseded: bool,
     pub agent_id: AgentSessionId,
     /// Current RimZ launch identity. Unlike `agent_id`, this survives adoption
     /// of the provider's native session id and remains equal to the id exported
@@ -1061,20 +1066,16 @@ pub(crate) fn molt_stands(agent: &AgentState) -> bool {
         && !(agent.status == AgentStatus::Failed && agent.agent_id.is_provisional())
 }
 
-/// Superseded predecessors and non-standing successors yield their role seat.
-pub(crate) fn yields_molt_seat<'a>(
-    agent: &AgentState,
-    agents: impl IntoIterator<Item = &'a AgentState>,
-) -> bool {
-    (agent.molted_from.is_some() && !molt_stands(agent))
-        || standing_successor(agents, agent.launch_id.as_ref().unwrap_or(&agent.agent_id)).is_some()
-}
-
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
 impl AgentState {
+    /// Superseded predecessors and non-standing successors yield their role seat.
+    pub(crate) fn yields_molt_seat(&self) -> bool {
+        (self.molted_from.is_some() && !molt_stands(self)) || self.molt_superseded
+    }
+
     /// Record a prompt and own the set-once rule for the first usable prompt.
     pub fn observe_prompt(&mut self, prompt: &str) {
         self.prompt = Some(prompt.to_owned());
@@ -1153,6 +1154,7 @@ impl AgentState {
         Self {
             agent_id,
             molted_from: None,
+            molt_superseded: false,
             launch_id: None,
             prior_launch_ids: Vec::new(),
             system_prompt_digest: None,

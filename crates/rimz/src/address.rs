@@ -973,15 +973,11 @@ pub fn role_holders<'a>(
     members: impl IntoIterator<Item = &'a AgentState>,
     role: &str,
 ) -> Vec<&'a AgentState> {
-    let members: Vec<_> = members.into_iter().collect();
     prefer_claimed(
         members
-            .iter()
-            .copied()
+            .into_iter()
             .filter(|member| member.role.as_deref() == Some(role))
-            .filter(|member| {
-                !crate::agents::state::yields_molt_seat(member, members.iter().copied())
-            })
+            .filter(|member| !member.yields_molt_seat())
             .collect(),
     )
 }

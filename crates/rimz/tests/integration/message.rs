@@ -19,6 +19,84 @@ use rimz::store::message::{
 use crate::common::{Env, trust_codex_preflight_hooks, zellij_trace_shim};
 
 #[test]
+fn role_send_crosses_an_ended_molt_intermediate() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    for (id, predecessor) in [
+        ("old", None),
+        ("middle", Some("old")),
+        ("new", Some("middle")),
+    ] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "seed",
+            id,
+            LifecycleSignal::Registered,
+            |observation| {
+                observation.agent_name = Some(format!("{id}-coder"));
+                observation.launch.role = Some("coder".to_owned());
+                observation.launch.molted_from = predecessor.map(AgentSessionId::from);
+                observation.pane_id = Some(PaneId::from_parts(
+                    MuxName::Zellij,
+                    match id {
+                        "old" => "terminal_3",
+                        "middle" => "terminal_4",
+                        _ => "terminal_5",
+                    },
+                ));
+            },
+        );
+    }
+    append_lifecycle(
+        &env,
+        "claude",
+        "seed",
+        "middle",
+        LifecycleSignal::Ended,
+        |_| {},
+    );
+    for id in ["old", "new"] {
+        append_lifecycle(
+            &env,
+            "claude",
+            "seed",
+            id,
+            LifecycleSignal::TurnStarted { turn_id: None },
+            |_| {},
+        );
+    }
+    let snapshot = env.store().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .agents
+            .iter()
+            .map(|agent| (agent.agent_id.as_str(), agent.molted_from.as_deref()))
+            .collect::<Vec<_>>(),
+        [("new", Some("middle")), ("old", None)]
+    );
+    let panes = ["terminal_3", "terminal_5"].map(|id| {
+        let mut pane = agent_pane(&env, "claude");
+        pane.pane_id = PaneId::from_parts(MuxName::Zellij, id);
+        pane
+    });
+    let pane_fixture = env.write_pane_fixture(&panes);
+    let output = run_success(
+        traced_rimz(&env, "molt-role.log")
+            .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+            .args(["message", "@coder", "Review the handoff."]),
+        "send to molt successor",
+    );
+    let receipt = String::from_utf8_lossy(&output.stdout);
+    assert!(receipt.starts_with("queued for @coder"), "{receipt}");
+    assert!(!receipt.contains("@old-coder"), "{receipt}");
+    let messages = env.store().list_messages().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].agent_id.as_str(), "new");
+}
+
+#[test]
 fn targetless_send_flags_refuse_with_usage_error() {
     let env = Env::new();
     let mut failures = Vec::new();
