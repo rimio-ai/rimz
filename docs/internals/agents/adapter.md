@@ -1,8 +1,8 @@
 # The adapter layer
 
-Thirteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
+Fourteen built-in coding agents report to RimZ, and no code outside `crates/rimz/src/agents/` knows which one it is looking at. This page owns the seam that makes that true: what an adapter is, the contracts it implements, the path a native hook event takes from the agent's process to the durable store, and how each adapter declares what it supports.
 
-Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
+Read [model.md](./model.md) first. It defines the [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) an adapter produces and the rollup that consumes it; this page covers the producing side. What each native event means for one agent is on that agent's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and twelve siblings). Accounts and spend are in [providers.md](./providers.md), and the third-party process-plugin wire is in [plugin.md](./plugin.md).
 
 ## The one rule
 
@@ -24,7 +24,7 @@ Everything left of the boundary is provider knowledge, and everything right of i
 
 ## The registry
 
-[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
+[`registry::BUILTINS`](../../../crates/rimz/src/agents/registry.rs) holds one `AgentDefinition` per compiled-in adapter, in display order: `claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `hermes`. `all_definitions()` chains that slice with the validated machine-tier [process plugins](./plugin.md), and every lookup goes through it:
 
 | Function | Answers |
 | --- | --- |
@@ -196,7 +196,7 @@ An adapter declares one `managed_integration`, and that single interface drives 
 | Backend | Adapters |
 | --- | --- |
 | Shared [`ManagedSource`](../../../crates/rimz/src/agents/managed_source.rs): a JSON merge, or a whole file RimZ authors | Claude, Droid, Qwen, Grok, Amp, Pi, OpenCode, Kiro |
-| The adapter's own `install.rs`: a TOML rewrite or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity |
+| The adapter's own `install.rs`: a TOML or YAML rewrite, or a multi-file transaction | Codex, Cursor, Copilot, Kimi, Antigravity, Hermes |
 
 Copilot, Cursor, and Antigravity report their per-file rows in order through the shared [`install_report.rs`](../../../crates/rimz/src/agents/adapters/install_report.rs). Kiro wraps its whole-file `ManagedSource` in a thin `install.rs` that refuses a Kiro CLI older than 2.31.0 and reclaims the unmarked file earlier RimZ builds wrote. An adapter whose install is refused on this machine or in the login's provider home (Grok's managed-hooks policy) before any file is touched reports it through `install_blocker`, and detected installs (`rimz start`, `rimz setup`, bare `rimz hooks install`) skip it while an install that names the agent still refuses.
 
@@ -212,13 +212,13 @@ Every hook command enters the executable-surface hash, so a tampered hook config
 
 ## Context sources
 
-A session's context gauge (how full the window is, what the turn cost) is what no agent puts in its hook JSON. An adapter offers one to three sources, and any one alone is valid. All three normalize onto the same fields, so the rest of RimZ does not depend on the choice. Enrichment is never correctness: a missing file, a torn line, or an absent binary each leaves a field unset, never a failed hook or a wrong decision.
+A session's context gauge (how full the window is, what the turn cost) is what most agents leave out of their hook JSON. An adapter offers one to three sources, and any one alone is valid. All three normalize onto the same fields, so the rest of RimZ does not depend on the choice. Enrichment is never correctness: a missing file, a torn line, or an absent binary each leaves a field unset, never a failed hook or a wrong decision.
 
-The transcript or store tail is the universal floor. Every provider keeps a local usage store its spend parser already understands (JSONL for Claude, Codex, Grok, and Pi; SQLite for OpenCode). For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
+The transcript or store tail is the usual floor. Most providers keep a local usage store its spend parser already understands (JSONL for Claude, Codex, Grok, and Pi; SQLite for OpenCode). For Claude the tail is a low-frequency fallback, because the statusline owns the live reading. For Codex the rollout tail is the live token, cost, and effort source: progress hooks and the host fetch worker run a stat-gated refresh that reads a bounded tail only when the file's stat changes. On a turn-ended hook whose refresh produced no dollar total, the shared hook path prices the session store through `session_transcript` and the spend parser, unless the adapter declares `live$` unsupported (`supplement_realtime_cost` in [`cli/hooks/lifecycle/context.rs`](../../../crates/rimz/src/cli/hooks/lifecycle/context.rs)).
 
 A rich out-of-band transport is the provider-specific upgrade where one exists. It carries what a local read cannot derive (rate-limit windows, account plan, PR info, model display name, version) on the provider's own cadence. Claude pushes statusline JSON; Codex reads read-only app-server methods. Transport payloads normalize through `observe_context` into one typed session observation whose [`AgentContext`](../../../crates/rimz/src/agents/context.rs) carries no identity.
 
-A gauge stamped on the hook wire is available to any provider whose hook wire RimZ authors. Pi's extension stamps its in-process context API onto every envelope. OpenCode's plugin maintains its gauge from paired `session.step.started` and `session.step.ended` or `session.step.failed` events and stamps the latest split plus the model's window onto each lifecycle envelope. Neither needs a tail or a transport for the gauge.
+A gauge stamped on the hook wire is available to any provider whose hook wire RimZ authors. Pi's extension stamps its in-process context API onto every envelope. OpenCode's plugin maintains its gauge from paired `session.step.started` and `session.step.ended` or `session.step.failed` events and stamps the latest split plus the model's window onto each lifecycle envelope. Neither needs a tail or a transport for the gauge. Hermes's native `post_api_request` hook carries the request's prompt tokens, window, and model, so its adapter stamps the gauge from that payload and reads no tail.
 
 Two methods attach refreshes to the hook path. `local_context_refresh` takes a [`RefreshTrigger`](../../../crates/rimz/src/agents/mod.rs) (`Hook`, `Tick`, or `Watch` for transcript growth) and returns explicit keep, set, clear, and token-merge patches from a cheap bounded local read that runs inline. `context_refresh_spawn` returns argv for the detached `rimz agents refresh-context` helper when the provider's source needs network, a subprocess, or a broker connection; the caller spawns it with nulled stdio and never waits, so it adds no latency to the agent's turn, and `refresh_session_context` is the body of that helper. The store applies each patch under the sidecar record lock and owns persistence only; merge policy stays in the adapter.
 
@@ -339,5 +339,5 @@ Adding a [`LifecycleSignal`](../../../crates/rimz/src/agents/lifecycle.rs) varia
 - [plugin.md](./plugin.md): the third-party process-plugin manifest, wire, and probes.
 - [agent-adapters.md](../../contributing/agent-adapters.md): the step-by-step integration playbook and deliverables checklist.
 - [agent-support.md](../../reference/agent-support.md): the published capability, wiring, and lifecycle-hook matrices.
-- [adapter_claude.md](./adapter_claude.md) and its twelve siblings: per-kind native mappings.
+- [adapter_claude.md](./adapter_claude.md) and its thirteen siblings: per-kind native mappings.
 - [claude-reference.md](../../externals/agent-adapter/claude-reference.md) and its siblings: the raw upstream protocols adapters read, pinned to source URLs.
