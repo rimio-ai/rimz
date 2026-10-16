@@ -576,9 +576,7 @@ fn cancel_child_runs(
         }
     };
     for agent in candidates {
-        if agent.parent_agent_id.is_none()
-            || !affected.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-        {
+        if !affected.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
             continue;
         }
         let Some(run) =
@@ -586,8 +584,12 @@ fn cancel_child_runs(
         else {
             continue;
         };
+        if agent.parent_agent_id.is_none() && run.workflow.is_none() {
+            continue;
+        }
         if let Err(err) = crate::harness::run::cancel_and_wake(store, &run.run_id) {
             tracing::warn!(workspace = %paths.workspace_id, run_id = %run.run_id, error = %err, "rebirth: could not cancel unrecovered child run");
+            continue;
         }
     }
 }
@@ -952,7 +954,11 @@ fn plan_recovery(
     let logins = logins.unwrap_or(&recorded_logins);
     let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts).0;
     let (team, flat_agents, refilled) = split_team_and_flat(
-        agents,
+        &agents
+            .iter()
+            .filter(|agent| agent.workflow.is_none())
+            .cloned()
+            .collect::<Vec<_>>(),
         logins,
         &catalog,
         teams,

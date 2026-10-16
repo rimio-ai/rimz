@@ -12,6 +12,9 @@ use rimz::store::workflow::{self as records, RunRecord};
 
 use super::render;
 
+mod host;
+use host::Host;
+
 #[derive(Debug, Args)]
 pub(super) struct WorkflowArgs {
     #[command(subcommand)]
@@ -74,10 +77,10 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
             prompt,
         } => start(name, worktree, prompt, globals),
         Command::List { json } => list(json),
-        Command::Show { id, json } => show(&id, json),
+        Command::Show { id, json } => show(&id, json, globals),
         Command::Cancel { id } => {
             let (state, _) = locate(&id)?;
-            let changed = workflow::cancel(&state, &id, &PendingHost)?;
+            let changed = workflow::cancel(&state, &id, &Host::new(&state, globals))?;
             writeln!(
                 render::out(),
                 "{id}: {}",
@@ -97,7 +100,7 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         }
         Command::Advance { id: Some(id), .. } => {
             let (state, _) = locate(&id)?;
-            Ok(workflow::advance(&state, &id, &PendingHost)?)
+            Ok(workflow::advance(&state, &id, &Host::new(&state, globals))?)
         }
         Command::Advance {
             wake_signal: Some(signal),
@@ -109,55 +112,6 @@ pub(super) fn run(args: WorkflowArgs, globals: &super::GlobalFlags) -> Result<()
         Command::Advance { .. } => unreachable!("clap requires a run id or wake signal"),
         Command::Schema => render::json_pretty(&workflow::schema()),
         Command::Validate { dir, json } => validate(dir, json),
-    }
-}
-
-// Task 3 supplies the CLI lifecycle implementation of the engine's host seam.
-struct PendingHost;
-
-impl workflow::AttemptHost for PendingHost {
-    fn occupancy(
-        &self,
-        _: &std::path::Path,
-        _: &std::path::Path,
-    ) -> Result<workflow::Occupancy, workflow::WorkflowErr> {
-        Err(workflow::WorkflowErr::Refused(
-            "workflow agent hosting is not wired yet".into(),
-        ))
-    }
-
-    fn evict(
-        &self,
-        _: &std::path::Path,
-        _: &std::path::Path,
-    ) -> Result<Vec<String>, workflow::WorkflowErr> {
-        Err(workflow::WorkflowErr::Refused(
-            "workflow agent hosting is not wired yet".into(),
-        ))
-    }
-
-    fn launch(
-        &self,
-        _: workflow::StepLaunch,
-    ) -> Result<Result<records::AttemptRun, workflow::LaunchFailure>, workflow::WorkflowErr> {
-        Err(workflow::WorkflowErr::Refused(
-            "workflow agent hosting is not wired yet".into(),
-        ))
-    }
-
-    fn observe(
-        &self,
-        _: &records::AttemptRun,
-    ) -> Result<workflow::Observed, workflow::WorkflowErr> {
-        Err(workflow::WorkflowErr::Refused(
-            "workflow agent hosting is not wired yet".into(),
-        ))
-    }
-
-    fn stop(&self, _: &records::AttemptRun) -> Result<records::Children, workflow::WorkflowErr> {
-        Err(workflow::WorkflowErr::Refused(
-            "workflow agent hosting is not wired yet".into(),
-        ))
     }
 }
 
@@ -246,8 +200,13 @@ fn state_word(record: &RunRecord) -> &'static str {
 fn waiting(record: &RunRecord) -> Option<String> {
     record.wait.as_ref().map(|w| {
         format!(
-            "waiting: {}, said {}, since {}, ×{}, recheck {}",
+            "waiting: {}, {}{}, since {}, ×{}, recheck {}",
             w.node,
+            if matches!(w.outcome.as_str(), "window" | "takeover" | "occupied") {
+                ""
+            } else {
+                "said "
+            },
             w.outcome,
             w.first,
             w.count,
@@ -316,8 +275,8 @@ fn reason_word(reason: records::ParkReason) -> &'static str {
     }
 }
 
-fn show(id: &WorkflowRunId, json: bool) -> Result<()> {
-    let (_, paths) = locate(id)?;
+fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<()> {
+    let (state_paths, paths) = locate(id)?;
     let record = records::load(&paths)?;
     let journal = records::journal(&paths)?;
     if json {
@@ -354,6 +313,28 @@ fn show(id: &WorkflowRunId, json: bool) -> Result<()> {
         "current node",
         render::cell(format!("{}, since {}", record.node, record.entered_at)),
     );
+    if let Some(attempt) = &record.attempt
+        && let Some(run) = &attempt.run
+    {
+        header.push(
+            "attempt",
+            render::cell(format!("{} #{}", run.handle, attempt.seq)),
+        );
+    }
+    if record
+        .park
+        .as_ref()
+        .is_some_and(|park| park.reason == records::ParkReason::Asked)
+        && let Some(asked) = record
+            .prev_attempt
+            .as_ref()
+            .and_then(|previous| previous.asked.as_ref())
+    {
+        header.push(
+            "ask",
+            render::cell(format!("{} ({}): {}", asked.handle, asked.kind, asked.text)),
+        );
+    }
     header.push(
         "deadline",
         render::cell(record.deadline.map_or_else(
@@ -377,6 +358,32 @@ fn show(id: &WorkflowRunId, json: bool) -> Result<()> {
     header.render(&mut out)?;
     if let Some(waiting) = waiting(&record) {
         writeln!(out, "{waiting}")?;
+    }
+    if record
+        .wait
+        .as_ref()
+        .is_some_and(|wait| wait.outcome == "takeover")
+    {
+        match workflow::AttemptHost::occupancy(
+            &Host::new(&state_paths, globals),
+            &record.scope.path,
+            &record.project_root,
+        ) {
+            Err(_) => writeln!(out, "takeover: blockers unavailable")?,
+            Ok(workflow::Occupancy::Blocked(blockers)) => {
+                use rimz::harness::schedule::takeover::OpenTurn;
+                for (handle, turn) in blockers {
+                    let phrase = match turn {
+                        OpenTurn::Working => "is working",
+                        OpenTurn::WaitingOnUser => "is waiting on you",
+                        OpenTurn::Paused => "is paused on a limit",
+                        OpenTurn::Compacting => "is compacting",
+                    };
+                    writeln!(out, "takeover: {handle} {phrase}")?;
+                }
+            }
+            Ok(_) => {}
+        }
     }
     for (name, visits) in &record.visits {
         let max = spec.steps.get(name).and_then(|s| s.max_visits).map_or_else(
@@ -407,6 +414,73 @@ fn show(id: &WorkflowRunId, json: bool) -> Result<()> {
             entry.seq.map_or_else(|| "—".into(), |seq| seq.to_string()),
             entry.node
         )?;
+        if let records::JournalEvent::Attempt {
+            handle,
+            head_start,
+            head_end,
+            cost_usd,
+            children,
+            limited,
+            asked,
+            digests,
+            ..
+        } = &entry.event
+        {
+            let short = |head: &Option<String>| {
+                head.as_deref()
+                    .unwrap_or("—")
+                    .chars()
+                    .take(8)
+                    .collect::<String>()
+            };
+            writeln!(
+                out,
+                "    {} HEAD {} → {} cost {}",
+                handle.as_deref().unwrap_or("—"),
+                short(head_start),
+                short(head_end),
+                cost_usd.map_or_else(|| "unknown".into(), rimz::theme::fmt::dollars2)
+            )?;
+            if let Some(children) = children {
+                for (label, children) in [("stopped", &children.stopped), ("live", &children.live)]
+                {
+                    let handles = children
+                        .iter()
+                        .map(|child| {
+                            child.team.as_ref().map_or_else(
+                                || child.handle.clone(),
+                                |team| {
+                                    format!(
+                                        "{} ({}#{}, {})",
+                                        child.handle,
+                                        team.name,
+                                        team.channel,
+                                        team.stage.as_deref().unwrap_or("stage unknown")
+                                    )
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(out, "    {label} ({}): {handles}", children.len())?;
+                }
+            }
+            if let Some(limited) = limited {
+                writeln!(
+                    out,
+                    "    reset_at: {}",
+                    limited
+                        .reset_at
+                        .map_or_else(|| "unknown".into(), |at| at.to_string())
+                )?;
+            }
+            if let Some(asked) = asked {
+                writeln!(out, "    {} ({}): {}", asked.handle, asked.kind, asked.text)?;
+            }
+            for (path, digest) in digests {
+                writeln!(out, "    {path}: {digest}")?;
+            }
+        }
     }
     Ok(())
 }
@@ -445,13 +519,21 @@ fn validate(dir: Option<PathBuf>, json: bool) -> Result<()> {
     if json {
         render::json_pretty(&report)?;
     } else {
-        let mut table = render::Table::new(["WORKFLOW", "NODE", "KIND", "RUNNER", "EDGES"]);
+        let mut table =
+            render::Table::new(["WORKFLOW", "NODE", "KIND", "RUNNER", "BACKGROUND", "EDGES"]);
         for row in &report.rows {
             table.row([
                 render::cell(&row.workflow),
                 render::cell(&row.node),
                 render::cell(&row.kind),
                 render::cell(row.run.as_deref().or(row.agent.as_deref()).unwrap_or("—")),
+                render::cell(if row.agent.is_none() {
+                    "—"
+                } else if row.do_background {
+                    "yes"
+                } else {
+                    "no"
+                }),
                 render::cell(
                     row.edges
                         .iter()

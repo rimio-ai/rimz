@@ -4,6 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod attempts;
+mod judges;
+
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     let env = Env::new();
     env.record(&env.project_root);
@@ -915,7 +918,7 @@ fn validate_json_shape_errors_and_exit_status() {
     assert_eq!(
         report["rows"],
         json!([{
-            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "agent": null,
+            "workflow": "review", "node": "pr", "kind": "check", "runner": "run", "run": "true", "agent": null, "do_background": false,
             "edges": [
                 {"outcome":"deadline", "target":"@user", "source":"default"},
                 {"outcome":"invalid", "target":"@user", "source":"default"},
@@ -948,4 +951,59 @@ fn validate_json_shape_errors_and_exit_status() {
         !env.rimz_home().join("ws").exists(),
         "validation must not birth a room"
     );
+}
+
+#[test]
+fn babysit_fixture_validates_capabilities_and_missing_script() {
+    let env = Env::new();
+    let dir = env.rimz_home().join("workflows/babysit-pr");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workflows/babysit-pr");
+    for relative in [
+        "workflow.toml",
+        "checks/pr.py",
+        "checks/notes.py",
+        "checks/triage-judge.md",
+        "prompts/sweep.md",
+        "prompts/triage.md",
+    ] {
+        let target = dir.join(relative);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::copy(source.join(relative), target).unwrap();
+    }
+    for (name, kind) in [
+        ("haiku", "claude"),
+        ("sweeper", "codex"),
+        ("yagni", "claude"),
+    ] {
+        crate::common::write_definition(
+            &env,
+            "agents",
+            name,
+            &format!("description: Fixture {name}\nagent: {kind}\ntools: []"),
+            "",
+        );
+    }
+    let value: Value =
+        serde_json::from_str(&success(command(&env, &["workflow", "validate", "--json"]))).unwrap();
+    assert_eq!(value["errors"], json!([]));
+    let rows = value["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(
+        rows.iter().find(|row| row["node"] == "sweep").unwrap()["do_background"],
+        false
+    );
+    assert_eq!(
+        rows.iter().find(|row| row["node"] == "triage").unwrap()["do_background"],
+        true
+    );
+    assert_eq!(value["warnings"].as_array().unwrap().len(), 4);
+    fs::remove_file(dir.join("checks/notes.py")).unwrap();
+    let failed = command(&env, &["workflow", "validate", "--json"]);
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(
+        String::from_utf8(failed.stdout)
+            .unwrap()
+            .contains("checks.notes.run")
+    );
+    assert!(!env.rimz_home().join("ws").exists());
 }

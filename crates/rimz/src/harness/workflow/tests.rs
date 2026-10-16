@@ -12,6 +12,7 @@ pub(super) struct FakeHost {
     observed: Rc<RefCell<Observed>>,
     failure: RefCell<Option<LaunchFailure>>,
     evict_error: Cell<bool>,
+    stale_after_evict: Cell<bool>,
     stops: Cell<usize>,
     evictions: Cell<usize>,
     on_stop: RefCell<Option<Box<dyn Fn()>>>,
@@ -32,6 +33,7 @@ impl FakeHost {
             })),
             failure: RefCell::new(None),
             evict_error: Cell::new(false),
+            stale_after_evict: Cell::new(false),
             stops: Cell::new(0),
             evictions: Cell::new(0),
             on_stop: RefCell::new(None),
@@ -46,6 +48,12 @@ impl AttemptHost for FakeHost {
         _: &std::path::Path,
         _: &std::path::Path,
     ) -> Result<Occupancy, WorkflowErr> {
+        if self.stale_after_evict.get() && self.evictions.get() > 0 {
+            return Ok(Occupancy::Blocked(vec![(
+                "stale occupant".into(),
+                crate::harness::schedule::takeover::OpenTurn::Working,
+            )]));
+        }
         Ok(match &*self.occupancy.borrow() {
             Occupancy::Free => Occupancy::Free,
             Occupancy::Occupied(handles) => Occupancy::Occupied(handles.clone()),
@@ -310,6 +318,27 @@ fn validation_rejects_each_invalid_spec() {
 }
 
 #[test]
+fn validation_refuses_judges_without_a_headless_launch() {
+    let (home, dir) = fixture();
+    fs::write(
+        dir.join("workflow.toml"),
+        VALID.replace(
+            "run = \"python3 checks/pick.py\"",
+            "agent = 'pi'\nprompt-file = 'prompts/build.md'",
+        ),
+    )
+    .unwrap();
+    let report = validate(&dir, home.path(), &LoadedDefinitions::default());
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|issue| issue.path == "checks.pick.agent" && issue.message.contains("headless")),
+        "{report:?}"
+    );
+}
+
+#[test]
 fn validation_resolves_edges_and_warns_about_judge_independence() {
     let (home, dir) = fixture();
     let text = VALID.replace(
@@ -320,9 +349,24 @@ fn validation_resolves_edges_and_warns_about_judge_independence() {
     let report = validate(&dir, home.path(), &LoadedDefinitions::default());
     assert!(report.errors.is_empty(), "{report:?}");
     assert_eq!(report.rows.len(), 2);
-    assert_eq!(report.warnings.len(), 1);
-    assert!(report.warnings[0].message.contains("pick"));
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|issue| issue.message.contains("same profile"))
+    );
+    assert_eq!(
+        report
+            .warnings
+            .iter()
+            .filter(|issue| issue
+                .message
+                .contains("a provider limit mid-attempt ends the attempt as limited"))
+            .count(),
+        2
+    );
     let row = report.rows.iter().find(|row| row.node == "pick").unwrap();
+    assert_eq!(serde_json::to_value(row).unwrap()["do_background"], true);
     assert!(row.edges.iter().any(|edge| edge.outcome == "invalid"
         && edge.target == "@user"
         && edge.source == "default"));

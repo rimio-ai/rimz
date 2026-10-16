@@ -1,0 +1,3 @@
+Read context.json under RIMZ_WORKFLOW_DIR, then read only reflect-notes.md at the scope checkout root. Do not change the checkout. An entry is a ### heading under ## Backlog or ## User; an entry whose heading ends with a bracketed ruling is already settled.
+
+Return {"outcome":"skip","reason":"..."} when no unruled entry remains, otherwise {"outcome":"triage","reason":"..."}. When context.prev_attempt.asked is present, address its text and kind in the reason and include an "answer" field with the guidance the next triage attempt needs. If the triage prompt needs tuning, write only signs/triage.md under RIMZ_WORKFLOW_DIR with that guidance; do not edit prompts/triage.md or any file in the checkout. Return the object using structured output at context.output_path.

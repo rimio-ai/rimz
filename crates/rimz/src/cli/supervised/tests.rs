@@ -1101,6 +1101,39 @@ fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
 }
 
 #[test]
+fn stop_backstop_does_not_close_a_pre_rebirth_pane() {
+    let mut fixture = RunFixture::new(RunStatus::Canceled);
+    fixture.record.workflow = Some(rimz::agents::WorkflowAttemptRef {
+        run: rimz::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: rimz::agents::WorkflowAttemptRole::Step,
+    });
+    rimz::harness::run::create(&fixture.paths, &fixture.record).unwrap();
+    rimz::harness::run::record_pane(
+        fixture.store.paths(),
+        &fixture.record.run_id,
+        PaneId::from_parts(MuxName::Zellij, "terminal_8"),
+    )
+    .unwrap();
+    fixture
+        .store
+        .append_event(&rimz::EventEnvelope::session_rebirth(
+            fixture.record.workspace_id.clone(),
+            "rimz-test",
+        ))
+        .unwrap();
+    super::pane::settle_stopped_run_pane(
+        &fixture.store,
+        "rimz-test",
+        &fixture.record,
+        std::time::Duration::ZERO,
+        |_| Ok(true),
+        |_| panic!("a reused pane in the new session must not be closed"),
+    )
+    .unwrap();
+}
+
+#[test]
 fn stop_backstop_uses_late_recorded_pane_id() {
     let fixture = RunFixture::new(RunStatus::Canceled);
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%8");

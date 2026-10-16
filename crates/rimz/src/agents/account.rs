@@ -352,7 +352,7 @@ impl ProviderCapacity {
     }
 
     /// Latest reset of the account windows and this model's sub-caps.
-    pub(crate) fn latest_spent_window_reset_for_model(
+    pub fn latest_spent_window_reset_for_model(
         &self,
         now: Timestamp,
         model: Option<&str>,

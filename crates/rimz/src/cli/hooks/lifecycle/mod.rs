@@ -61,6 +61,7 @@ pub(super) fn handle_lifecycle_frame(
     globals: &GlobalFlags,
     recovered: &[rimz::store::event::EventEnvelope],
 ) -> Result<rimz::agents::HookReply> {
+    let workflow_edge = decoded.lifecycle().is_some() || decoded.turn_error().is_some();
     let replay = rimz::harness::hook_drain::is_replay();
     let agent_id = decoded.event_agent_id().cloned();
     let (released, recorded, derived) = if replay {
@@ -390,6 +391,22 @@ pub(super) fn handle_lifecycle_frame(
         },
         &events,
     );
+    if workflow_edge
+        && run_completion
+            .as_ref()
+            .is_none_or(|run| !run.status.is_terminal())
+        && let Some(raw) = rimz::harness::hook_drain::env_value("RIMZ_WORKFLOW_RUN")
+    {
+        match raw.parse::<rimz::ids::WorkflowRunId>() {
+            Ok(id) => {
+                if let Err(error) = rimz::harness::workflow::wake_run(&workspace.project_root, &id)
+                {
+                    warn!(%id, %error, "lifecycle: could not wake workflow attempt");
+                }
+            }
+            Err(error) => warn!(%raw, %error, "lifecycle: ignoring invalid workflow run id"),
+        }
+    }
     Ok(decoded.reply().clone())
 }
 

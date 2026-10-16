@@ -1699,6 +1699,8 @@ allowed-dependencies = [
     "harness::owed",
     # A loop spawn request carries its start-throttle turn to the launch commit.
     "harness::schedule::throttle",
+    # Terminal supervised attempts wake their workflow after releasing the lock.
+    "harness::workflow",
     "ids",
     "proc",
     "store",
@@ -7045,3 +7047,18 @@ reason = "All agent end causes share the off-lock stop and locked settlement pat
 kind = "item"
 key = "harness::workflow::script::judge::evaluate"
 reason = "Workflow judges use shared headless launch preparation and the same hosted-child boundary as scripts."
+
+[[verdict]]
+kind = "item"
+key = "cli::workflow::host::Host"
+reason = "Workflow handlers bind the harness attempt seam to existing CLI launch and stop operations."
+
+[[verdict]]
+kind = "item"
+key = "cli::workflow::host::Host::new"
+reason = "Only workflow dispatch constructs the CLI-private attempt host."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ProviderCapacity::latest_spent_window_reset_for_model"
+reason = "Workflow observations reuse the model-aware reset policy already used by auto-continue."

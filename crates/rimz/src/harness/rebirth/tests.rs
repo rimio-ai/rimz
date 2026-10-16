@@ -711,6 +711,72 @@ fn rebirth_fails_peer_turns_even_when_the_peer_is_recovered() {
 }
 
 #[test]
+fn rebirth_cancels_root_workflow_runs_but_not_ordinary_roots() {
+    use crate::agents::{PermissionMode, WorkflowAttemptRef, WorkflowAttemptRole};
+    use crate::store::run::{RunRecord, RunStatus};
+
+    let dir = tempfile::tempdir().unwrap();
+    for id in ["attempt", "ordinary"] {
+        let fixture = Fixture::new(&[(id, dir.path(), true)]);
+        let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
+        let snapshot = store.snapshot().unwrap();
+        let mut record = RunRecord::new(
+            fixture.paths.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "task".into(),
+            dir.path().into(),
+        );
+        record.agent_id = Some(id.into());
+        record.status = RunStatus::Running;
+        if id == "attempt" {
+            record.workflow = Some(WorkflowAttemptRef {
+                run: crate::ids::WorkflowRunId::new(),
+                seq: 1,
+                role: WorkflowAttemptRole::Step,
+            });
+            let mut observation =
+                AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+            observation.launch.workflow = record.workflow.clone();
+            let transcript = fixture.project.join("attempt.jsonl");
+            std::fs::write(&transcript, "{}\n").unwrap();
+            observation.transcript_path = Some(transcript.display().to_string());
+            store
+                .append_event(&crate::EventEnvelope::agent_lifecycle(
+                    fixture.paths.workspace_id.clone(),
+                    "rimz-test",
+                    "claude",
+                    "SessionStart",
+                    &observation,
+                ))
+                .unwrap();
+            let plan = fixture.inspect_with(&MachineConfig::default(), false);
+            assert!(
+                plan.planned.entries.is_empty(),
+                "workflow attempts must not be resumed by rebirth"
+            );
+        }
+        crate::harness::run::create(&fixture.paths, &record).unwrap();
+        cancel_child_runs(
+            &store,
+            &fixture.paths,
+            &snapshot.agents,
+            &BTreeSet::from([key(id)]),
+        );
+        assert_eq!(
+            crate::harness::run::load(&fixture.paths, &record.run_id)
+                .unwrap()
+                .status,
+            if id == "attempt" {
+                RunStatus::Canceled
+            } else {
+                RunStatus::Running
+            }
+        );
+    }
+}
+
+#[test]
 fn rebirth_cancels_unresumed_child_runs_and_wakes_waiters() {
     use crate::agents::PermissionMode;
     use crate::harness::run;

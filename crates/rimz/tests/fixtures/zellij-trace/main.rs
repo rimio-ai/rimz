@@ -108,6 +108,18 @@ fn main() {
         write_stderr("simulated zellij close-pane failure");
         std::process::exit(1);
     }
+    if has_pair(cli, "action", "close-pane")
+        && let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE")
+    {
+        let id = cli.windows(2).find(|pair| pair[0] == "--pane-id").unwrap()[1]
+            .trim_start_matches("terminal_")
+            .parse::<u64>()
+            .expect("closed pane id");
+        let mut panes: Vec<serde_json::Value> =
+            serde_json::from_slice(&std::fs::read(&path).expect("read panes")).expect("pane rows");
+        panes.retain(|pane| pane["id"].as_u64() != Some(id));
+        std::fs::write(path, serde_json::to_vec(&panes).unwrap()).expect("close traced pane");
+    }
     match classify_invocation(cli) {
         Invocation::Version => write_stdout(&format!(
             "zellij {}",
@@ -219,7 +231,13 @@ fn handle_action_query(query: ActionQuery, log_path: &Path) {
             &env::var("RIMZ_TEST_ZELLIJ_LIST_CLIENTS")
                 .unwrap_or_else(|_| "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n".to_owned()),
         ),
-        ActionQuery::Panes => write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES"),
+        ActionQuery::Panes => {
+            if let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE") {
+                write_stdout_raw(&std::fs::read_to_string(path).expect("read panes"));
+            } else {
+                write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES");
+            }
+        }
         ActionQuery::Tabs => {
             let trace = std::fs::read_to_string(log_path).expect("read tab launches");
             let mut tabs = vec![

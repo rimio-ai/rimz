@@ -21,6 +21,7 @@ pub struct NodeRow {
     pub runner: String,
     pub run: Option<String>,
     pub agent: Option<String>,
+    pub do_background: bool,
     pub edges: Vec<Edge>,
 }
 
@@ -133,6 +134,18 @@ pub(super) fn validate_spec(
             check.window.as_deref(),
             definitions,
         );
+        if let Some(agent) = &check.agent
+            && !definitions.failed.contains_key(agent)
+            && let Ok(profile) =
+                crate::harness::spec::resolve_profile(agent, &definitions.agent_profiles)
+            && let Some(adapter) = crate::agents::find_definition(profile.kind.as_str())
+            && adapter.spec().launch.headless.is_none()
+        {
+            report.error(
+                &format!("{path}.agent"),
+                format!("{agent} has no headless launch for judge checks"),
+            );
+        }
         report.timeout(&path, check.timeout.as_deref());
         if check.on.values().any(|target| target == "@wait") && check.timeout.is_none() {
             report.error(
@@ -177,6 +190,7 @@ pub(super) fn validate_spec(
             runner: if check.run.is_some() { "run" } else { "agent" }.into(),
             run: check.run.clone(),
             agent: check.agent.clone(),
+            do_background: do_background(check.agent.as_deref(), definitions).unwrap_or(false),
             edges: resolved_edges(spec, edges, |outcome| check.on.contains_key(outcome)),
         });
     }
@@ -192,6 +206,10 @@ pub(super) fn validate_spec(
             definitions,
         );
         report.timeout(&path, step.timeout.as_deref());
+        let do_background = do_background(Some(&step.agent), definitions);
+        if do_background == Some(false) {
+            report.warnings.push(issue(&path, "step adapter has no background reporting; a turn end may finish the attempt while provider background work remains"));
+        }
         if !step
             .then
             .as_ref()
@@ -234,6 +252,7 @@ pub(super) fn validate_spec(
             runner: "agent".into(),
             run: None,
             agent: Some(step.agent.clone()),
+            do_background: do_background.unwrap_or(false),
             edges: resolved_edges(spec, edges, |outcome| match outcome {
                 "then" => true,
                 "asked" => step.on.asked.is_some(),
@@ -241,6 +260,16 @@ pub(super) fn validate_spec(
                 _ => false,
             }),
         });
+    }
+    if !crate::config::MachineConfig::load_lenient()
+        .resume
+        .auto_continue
+    {
+        for row in &report.rows {
+            if row.agent.is_some() {
+                report.warnings.push(issue(&format!("{}.{}", if row.kind == "step" { "steps" } else { "checks" }, row.node), "auto-continue is off; a provider limit mid-attempt ends the attempt as limited"));
+            }
+        }
     }
     for (node, step) in &spec.steps {
         if step.max_visits.is_none()
@@ -355,6 +384,18 @@ impl Validation {
             self.error(&format!("{path}.window"), err);
         }
     }
+}
+
+/// `None` when the profile does not resolve; `agent_fields` reports that error.
+fn do_background(agent: Option<&str>, definitions: &LoadedDefinitions) -> Option<bool> {
+    let profile =
+        crate::harness::spec::resolve_profile(agent?, &definitions.agent_profiles).ok()?;
+    let adapter = crate::agents::find_definition(profile.kind.as_str())?;
+    Some(
+        adapter
+            .concern_coverage(crate::agents::IntegrationConcern::BackgroundParking)
+            .is_wired(),
+    )
 }
 
 fn resolved_edges(
