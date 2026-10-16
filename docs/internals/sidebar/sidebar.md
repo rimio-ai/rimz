@@ -356,7 +356,7 @@ Provider budgets are account-scoped: every session of a provider shares one acco
 
 ## The serve loop
 
-`rimz sidebar serve` is the pane's command. Its supervisor owns the pane command's PID and the pane's terminal, and hands the painting to the session's room host, so a painter crash, a reload, and a self-close request each resolve without losing the pane ([state.md → The room host and its attachments](./state.md#the-room-host-and-its-attachments)). The pane's loop runs on a fixed timestep, folds each wakeup through [`LoopState::step`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) as its per-iteration body, and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle). The frame-activity read that decides the paint follows wakeup dispatch, so an input that starts a glide keeps its 16 ms boundary.
+`rimz sidebar serve` is the pane's command. Its supervisor owns the pane command's PID and the pane's terminal, and hands the painting to the session's room host, so a painter crash and a reload resolve in place, while a confirmed self-close ends the pane ([state.md → The room host and its attachments](./state.md#the-room-host-and-its-attachments)). The pane's loop runs on a fixed timestep, folds each wakeup through [`LoopState::step`](../../../crates/rimz/src/sidebar_pane/app/loop_state.rs) as its per-iteration body, and paints from the last committed snapshot; data flow into it is [state.md](./state.md#one-fetch-cycle). The frame-activity read that decides the paint follows wakeup dispatch, so an input that starts a glide keeps its 16 ms boundary.
 
 A pane the host is painting reaches its supervisor over the attach stream ([`supervise.rs`](../../../crates/rimz/src/sidebar_pane/supervise.rs)):
 
@@ -389,6 +389,8 @@ Row emphasis has two depths. The read pulse is an OKLab lightness ramp on the ro
 ### Self-close
 
 A sidebar shares its tab with the user's panes and has no reason to outlive them. The pane's loop requests self-close, and the supervisor decides.
+
+On tmux the supervisor pins its own pane to `remain-on-exit off` at startup so its exit also closes the pane under the user's retention settings; a failed pin only warns and serving continues.
 
 The attachment reads the sibling count from the producer's own-view summary ([`SelfCloseState::should_close`](../../../crates/rimz/src/sidebar_pane/app/lifecycle.rs)). Once it has seen a working sibling, a zero count requests self-close immediately. When the sidebar's tab is listed, an authoritative server read that omits its sibling is final, even while that sibling's root process cleans up. A whole omitted tab keeps liveness and tab-coherence carry. A cached omission uses carry and a `PreferAuthoritative` re-pull before feeding the count; if that re-pull falls back to the cache, liveness carry still protects the sibling. A sidebar that has never seen a sibling (session birth or resurrection, before the mux materializes the tab) waits `SELF_CLOSE_EMPTY_CONFIRM` (5 seconds) of continuous emptiness first, so a tab born sidebar-only still cleans itself up. An unknown count never closes. A producer frame that omits the sidebar's own pane is also re-pulled through `PreferAuthoritative` before it feeds the count.
 

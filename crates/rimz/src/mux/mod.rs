@@ -673,9 +673,9 @@ pub struct SplitPaneOptions {
     /// Explicit pane name so the backend keeps its launch identity while
     /// foreground children churn.
     pub title: Option<String>,
-    /// Close the pane when its command exits, matching `close_on_exit true` on
-    /// layout-born managed panes. tmux already does this with its default
-    /// `remain-on-exit off` setting.
+    /// Close the pane when its command exits on Zellij, matching
+    /// `close_on_exit true` on layout-born managed panes. The tmux split backend
+    /// ignores this field; retention follows the user's `remain-on-exit`.
     pub close_on_exit: bool,
     pub env: BTreeMap<String, String>,
     pub placement: SplitPlacement,
@@ -982,6 +982,12 @@ pub enum SessionLiveness {
 /// Backend-neutral mux operations. Every Zellij/tmux command lives behind
 /// one of these methods.
 pub trait MuxBackend: Send + Sync {
+    /// Pin a pane to close when its command exits, whatever the user's retention
+    /// setting. The default is for backends whose managed panes already close on exit.
+    fn close_pane_on_exit(&self, _pane: &PaneId) -> Result<()> {
+        Ok(())
+    }
+
     /// Read hidden, non-manual views lagging the current attached view.
     fn lagging_views(&self, _session: &str) -> Result<Option<LaggingViews>> {
         Ok(None)

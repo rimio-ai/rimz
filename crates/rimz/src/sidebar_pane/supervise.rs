@@ -120,6 +120,15 @@ pub fn run(config: ServeConfig) -> Result<()> {
     let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
+    if let Some(pane) = &config.own_pane
+        && let Err(error) = crate::mux::backend_for(config.mux).close_pane_on_exit(pane)
+    {
+        tracing::warn!(
+            session = %config.session_name,
+            error = %error,
+            "sidebar pane retention pin failed; continuing with the user's setting",
+        );
+    }
     let stopped = Arc::new(AtomicBool::new(false));
     let _signal = StopSignal(signal_hook::flag::register(
         signal_hook::consts::SIGTERM,
