@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{FocusNonce, PaneId, SidebarInstanceId, WorkspaceId};
 
 pub(crate) fn log_path(state_root: &std::path::Path) -> std::path::PathBuf {
     crate::StatePaths::class_path(
@@ -25,9 +25,77 @@ pub(crate) enum FocusOrigin {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PushOutcome {
+    Painted,
+    Released,
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PushDelivery {
+    Sent,
+    InboxFull,
+    InboxClosed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PushVerdict {
+    Painted,
+    NotDestination,
+    Exiting,
+    Expired,
+    Superseded,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PushBlock {
+    PaintHold,
+    ConfirmingEmpty,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PushPeer {
+    instance_id: SidebarInstanceId,
+    delivery: PushDelivery,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    received_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folded_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    finished_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verdict: Option<PushVerdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_by: Option<PushBlock>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    unmatched_paints: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    misplaced_paints: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum FocusTraceEvent {
+    PushHandshake {
+        nonce: FocusNonce,
+        target: PaneId,
+        outcome: PushOutcome,
+        budget_ms: u64,
+        decided_ms: u64,
+        dispatched_ms: u64,
+        peers: Vec<PushPeer>,
+    },
     FramePublished {
         produced_at_ms: u64,
         observed_at_ms: u64,
@@ -120,6 +188,7 @@ pub(super) struct Edges {
 impl Edges {
     pub(super) fn admit(&mut self, event: &FocusTraceEvent, pane_ids: HashSet<PaneId>) -> bool {
         match event {
+            FocusTraceEvent::PushHandshake { .. } => {}
             FocusTraceEvent::FramePublished {
                 focused_pane,
                 focus_origin,
@@ -230,7 +299,7 @@ mod tests {
 
     #[test]
     fn trace_events_keep_wire_shape() {
-        let rows = [
+        let mut rows = vec![
             (
                 publication(10),
                 serde_json::json!({
@@ -269,6 +338,11 @@ mod tests {
                 }),
             ),
         ];
+        for expected in handshake_rows() {
+            let event = serde_json::from_value::<FocusTraceEvent>(expected.clone());
+            assert!(event.is_ok(), "push_handshake must decode: {event:?}");
+            rows.push((event.unwrap(), expected));
+        }
         for (event, expected) in rows {
             let json = serde_json::to_value(&event).unwrap();
             assert_eq!(json, expected);
@@ -285,6 +359,46 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(origin).unwrap(), expected);
         }
+    }
+
+    fn handshake_rows() -> [serde_json::Value; 2] {
+        let full = serde_json::json!({
+            "kind": "push_handshake",
+            "nonce": "019e8c56-5bbd-7080-97fc-e9514f79da04", "target": "tmux:%3",
+            "outcome": "painted", "budget_ms": 100, "decided_ms": 37, "dispatched_ms": 41,
+            "peers": [{
+                "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "sent",
+                "received_ms": 2, "snapshot_ms": 30, "folded_ms": 33, "finished_ms": 37,
+                "verdict": "painted", "blocked_by": "paint_hold", "unmatched_paints": 1,
+                "misplaced_paints": 1
+            }]
+        });
+        let mut minimal = full.clone();
+        minimal["outcome"] = "released".into();
+        minimal["peers"][0] = serde_json::json!({
+            "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "inbox_full"
+        });
+        [full, minimal]
+    }
+
+    #[test]
+    fn every_handshake_is_admitted_without_edge_gating_or_rate_limiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = DiagSink::under(
+            dir.path().to_owned(),
+            WorkspaceId::from_project_root(Path::new("/push-trace")),
+            "s",
+            Some(SidebarInstanceId::new()),
+        );
+        let event = serde_json::from_value::<FocusTraceEvent>(handshake_rows()[0].clone());
+        assert!(event.is_ok(), "push_handshake must decode: {event:?}");
+        let event = event.unwrap();
+        let mut edges = Edges::default();
+        for index in 0..130 {
+            assert!(edges.admit(&event, HashSet::new()));
+            sink.trace_focus_at_ms(event.clone(), HashSet::new(), index);
+        }
+        assert_eq!(records(dir.path()).len(), 130);
     }
 
     fn records(root: &Path) -> Vec<serde_json::Value> {
