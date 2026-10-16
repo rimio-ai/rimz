@@ -175,34 +175,56 @@ To share one build with every user on the machine, `cargo xtask install-system` 
 
 ## Run in Docker
 
-A plain container gives you a clean shell and leaves you to assemble the tools. The RimZ image starts as uid 1000 with RimZ, a current Zellij and tmux, ttyd, GitHub CLI, Node.js, Claude Code, Codex, Pi, and OpenCode on `PATH`, hooks already installed:
+A plain container leaves you to assemble the tools; the RimZ image includes RimZ, current Zellij and tmux, ttyd, GitHub CLI, Node.js, Claude Code, Codex, Pi, and OpenCode, with reporting hooks installed.
+
+From the repository you want to work on, install the image's host wrapper and start a shell:
 
 ```sh
-docker run --rm -it -v "$PWD":/workspace ghcr.io/rimio-ai/rimz
+mkdir -p ~/.local/bin
+docker run --rm ghcr.io/rimio-ai/rimz wrapper > ~/.local/bin/rimz-docker
+chmod +x ~/.local/bin/rimz-docker
+export PATH="$HOME/.local/bin:$PATH"
+rimz-docker
 ```
 
-The bind mount makes the current checkout the room at `/workspace`. Agent logins otherwise die with the container, so add a named home volume to keep logins, agent state, and RimZ configuration across runs:
+The wrapper runs `docker run --rm` with four pieces of setup:
+
+- It mounts the repository (the main checkout, even when you start from a subdirectory or a linked worktree) and its sibling `<repo>-worktrees` directory at their identical absolute host paths, creating the sibling first, and opens the shell in the directory you started from. Git records absolute worktree paths, so the host editor and host Git can use worktrees created inside the container. Outside a repository it mounts the current directory, and skips the sibling with a warning when its parent is not writable.
+- It mounts the named `rimz-home` volume at `/home/rimz`, keeping agent logins, agent state, and RimZ configuration across runs. Bundled tools live outside that volume, so a new image replaces them. Exiting removes the container, not the checkout or volume; `docker volume rm rimz-home` deletes that saved home when no container is using it.
+- It passes your Git name and email as author and committer environment variables, without copying host Git configuration. It forwards `TZ`, or detects the zone from the host's timezone files, and forwards `COLORTERM` for truecolor. It sets `TERM=xterm-256color` to a terminal type the image supports.
+- It adds `--init` to reap child processes and `-it` only when stdin is a terminal. Only a `web` run publishes a port.
+
+The entrypoint matches the `rimz` user's uid and gid to the checkout's owner, adjusts home ownership when needed, and drops root before starting tools. Files you create belong to your host user rather than a fixed container uid. A root-owned checkout keeps the image's non-root uid instead; running with Docker `--user` as a non-root user skips remapping. Shell and browser starts also refresh reporting hooks, including in a home volume from an older image, and remove the previous image's home-installed Claude, Codex, and OpenCode binaries so they cannot shadow the new tools.
+
+For browser mode, run this on the host:
 
 ```sh
-docker run --rm -it \
-  -v "$PWD":/workspace \
-  -v rimz-home:/home/rimz \
-  ghcr.io/rimio-ai/rimz
+rimz-docker web
 ```
+
+This opens the current checkout's room and publishes `127.0.0.1:8200:8200`, reachable only from the host. RimZ binds to every interface inside the container so port forwarding works. The authenticated writable daemon stays online, and the entrypoint prints the room URL and the `rimz` password via `rimz web token show rimz`, also available in the container log. If you revoked `rimz` while keeping another token, it lists the remaining token names instead and stays running. Stop the run with Ctrl-C.
 
 Codex keeps per-hook trust behind its own UI, so the image leaves that consent to you: after the first Codex launch, run `/hooks` inside Codex and trust the RimZ hooks. Until then `rimz doctor` reports them as installed but untrusted.
 
-The image takes a command as its argument. With none it opens a shell; `web` opens the `/workspace` room, binds RimZ to every container interface, and leaves the authenticated writable daemon online. The entrypoint then runs `rimz web token show rimz`, so that password remains available in the container log. If you revoked `rimz` while keeping another token, it lists the remaining token names instead and stays running. Anything else runs as an ordinary command in the container:
+For direct Docker control, a browser run without the wrapper uses same-path mounts and an explicit Git identity:
 
 ```sh
-docker run -d --name rimz-web \
-  -p 8200:8200 \
-  -v "$PWD":/workspace \
+repo="$(pwd -P)"
+worktrees="${repo}-worktrees"
+mkdir -p "$worktrees"
+docker run --rm --init -it \
+  -p 127.0.0.1:8200:8200 \
+  -v "$repo:$repo" \
+  -v "$worktrees:$worktrees" \
   -v rimz-home:/home/rimz \
+  -w "$repo" \
+  -e TERM=xterm-256color -e COLORTERM \
+  -e "GIT_AUTHOR_NAME=$(git config --get user.name)" \
+  -e "GIT_AUTHOR_EMAIL=$(git config --get user.email)" \
   ghcr.io/rimio-ai/rimz web
-docker logs rimz-web              # the room URL and rimz password, or remaining token names
-docker rm -f rimz-web             # stop and remove it
 ```
+
+With no command the image opens a shell; any command other than `shell`, `web`, or `wrapper` runs directly. Set `RIMZ_DOCKER_IMAGE` to a tagged image such as `ghcr.io/rimio-ai/rimz:<version>` to select it in the wrapper. Bundled agents do not auto-update; upgrade with `docker pull ghcr.io/rimio-ai/rimz` and start a new run.
 
 The default and `debian` tags run Debian 13, `ubuntu` runs Ubuntu 26.04 LTS, and a release carries its own `<version>`, `<version>-debian`, and `<version>-ubuntu` tags. The floating tags rebuild daily against the newest release so the bundled toolchain stays current; pin an image digest when the filesystem has to stay immutable. Both amd64 and arm64 are published.
 
