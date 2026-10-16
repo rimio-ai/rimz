@@ -27,7 +27,7 @@ fn widening_fit_preserves_sidebar_width_and_delivers_one_final_pty_resize() {
     server.ensure_with_shell(session);
     server.tmux(&["set-option", "-t", session, "status", "off"]);
     let _client = AttachedTmuxClient::attach(&server.socket, session, 180, 50);
-    for shape in ["zoomed", "alone", "duplicate", "normal"] {
+    for shape in ["zoomed", "alone", "duplicate", "clamped", "normal"] {
         let log = server._tempdir.path().join(format!("{shape}-resizes"));
         let env = format!("RIMZ_TEST_WINSIZE_FILE={}", log.display());
         let sidebar = server.stdout(&[
@@ -75,7 +75,7 @@ fn widening_fit_preserves_sidebar_width_and_delivers_one_final_pty_resize() {
                     cols: 240,
                     rows: 65,
                 },
-                std::num::NonZeroU16::new(60).unwrap(),
+                std::num::NonZeroU16::new(if shape == "clamped" { 300 } else { 60 }).unwrap(),
             )
             .unwrap()
             .unwrap();
@@ -83,7 +83,18 @@ fn widening_fit_preserves_sidebar_width_and_delivers_one_final_pty_resize() {
             server.display(view.as_str(), "#{window_width} #{window_height}"),
             "240 65"
         );
-        if shape == "normal" {
+        if shape == "clamped" {
+            let laid_out: u16 = server.display(&sidebar, "#{pane_width}").parse().unwrap();
+            assert!(laid_out < 300, "tmux must clamp an oversized sidebar width");
+            assert_eq!(
+                rows.get(&PaneId::from_parts(MuxName::Tmux, &sidebar)),
+                Some(&rimz::mux::FittedPane {
+                    rows: 65,
+                    cols: Some(laid_out)
+                }),
+                "a clamped width reassertion reports the width tmux laid out"
+            );
+        } else if shape == "normal" {
             assert_eq!(
                 server.display(&sidebar, "#{pane_width}"),
                 "60",

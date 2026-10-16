@@ -236,7 +236,7 @@ impl TmuxBackend {
         let sidebar_guard = "#{&&:#{==:#{window_zoomed_flag},0},#{&&:#{>:#{window_panes},1},#{==:#{P:#{?#{==:#{pane_title},rimz-sidebar},1,}},1}}}";
         let sidebar_resize = match sidebars.as_slice() {
             [pane] if panes > 1 => format!(
-                "if-shell -F -t {window} '{sidebar_guard}' 'resize-pane -t {pane} -x {sidebar_cols} ; display-message -p \"sidebar {pane} {sidebar_cols}\"' ; "
+                "if-shell -F -t {window} '{sidebar_guard}' 'resize-pane -t {pane} -x {sidebar_cols} ; display-message -p -t {pane} \"sidebar {pane} #{{pane_width}}\"' ; "
             ),
             _ => String::new(),
         };
