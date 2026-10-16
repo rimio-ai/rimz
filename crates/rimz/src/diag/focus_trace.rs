@@ -109,6 +109,8 @@ pub(crate) enum FocusTraceEvent {
         target: PaneId,
         outcome: PushOutcome,
         budget_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit_ms: Option<u64>,
         decided_ms: u64,
         dispatched_ms: u64,
         peers: Vec<PushPeer>,
@@ -382,7 +384,8 @@ mod tests {
         let full = serde_json::json!({
             "kind": "push_handshake",
             "nonce": "019e8c56-5bbd-7080-97fc-e9514f79da04", "target": "tmux:%3",
-            "outcome": "painted", "budget_ms": 100, "decided_ms": 37, "dispatched_ms": 41,
+            "outcome": "painted", "budget_ms": 100, "fit_ms": 25,
+            "decided_ms": 37, "dispatched_ms": 41,
             "peers": [{
                 "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "sent",
                 "received_ms": 2, "snapshot_ms": 30, "folded_ms": 33, "finished_ms": 37,
@@ -391,6 +394,7 @@ mod tests {
             }]
         });
         let mut minimal = full.clone();
+        minimal.as_object_mut().unwrap().remove("fit_ms");
         minimal["outcome"] = "released".into();
         minimal["peers"][0] = serde_json::json!({
             "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "inbox_full"

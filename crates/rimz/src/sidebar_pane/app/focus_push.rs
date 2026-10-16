@@ -107,7 +107,7 @@ impl FocusPeers {
         anchor: FocusAnchor,
         dispatch: impl FnOnce() -> T,
     ) -> T {
-        let (sent, until, rx, mut traces) = self.push(&anchor, Instant::now);
+        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, Instant::now);
         let mut reports = Vec::new();
         let outcome = wait_for_paint(
             until,
@@ -143,6 +143,7 @@ impl FocusPeers {
                 target: anchor.pane_id,
                 outcome,
                 budget_ms: duration_millis(until.duration_since(sent)),
+                fit_ms,
                 decided_ms: duration_millis(decided.duration_since(sent)),
                 dispatched_ms: duration_millis(dispatched.duration_since(sent)),
                 peers: traces,
@@ -155,8 +156,15 @@ impl FocusPeers {
     fn push(
         &self,
         anchor: &FocusAnchor,
-        now: impl FnOnce() -> Instant,
-    ) -> (Instant, Instant, Receiver<PushPeer>, Vec<PushPeer>) {
+        mut now: impl FnMut() -> Instant,
+    ) -> (
+        Instant,
+        Instant,
+        Option<u64>,
+        Receiver<PushPeer>,
+        Vec<PushPeer>,
+    ) {
+        let started = now();
         let expected_panes = self.fit.as_ref().and_then(|fit| fit(anchor)).map(Arc::new);
         let budget = if expected_panes.is_some() {
             STALE_PAINT_WAIT
@@ -188,7 +196,12 @@ impl FocusPeers {
             traces.push(trace);
         }
         drop(ack);
-        (sent, until, rx, traces)
+        let fit_ms = self
+            .fit
+            .as_ref()
+            .map(|_| duration_millis(sent.duration_since(started)))
+            .filter(|elapsed| *elapsed != 0);
+        (sent, until, fit_ms, rx, traces)
     }
 }
 

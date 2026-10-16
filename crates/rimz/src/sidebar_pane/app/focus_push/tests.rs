@@ -220,6 +220,7 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
         assert_eq!(event["target"], "tmux:%3");
         assert_eq!(event["outcome"], "released");
         assert_eq!(event["budget_ms"], 100);
+        assert!(event.get("fit_ms").is_none(), "no fit ran");
         assert!(event["dispatched_ms"].as_u64().unwrap() >= event["decided_ms"].as_u64().unwrap());
         let mut expected = if with_peers {
             vec![
@@ -261,6 +262,7 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
 fn dispatch_records_the_fitted_push_budget() {
     let rig = TraceRig::new();
     let peers = rig.peers.clone().with_fit(Some(Arc::new(|anchor| {
+        std::thread::sleep(Duration::from_millis(2));
         Some(HashMap::from([(
             anchor.pane_id.clone(),
             crate::mux::FittedPane {
@@ -271,6 +273,12 @@ fn dispatch_records_the_fitted_push_budget() {
     })));
     peers.dispatch(rig.anchor(), || assert!(rig.records().is_empty()));
     assert_eq!(rig.records()[0]["event"]["budget_ms"], 300);
+    assert!(
+        rig.records()[0]["event"]["fit_ms"]
+            .as_u64()
+            .is_some_and(|fit_ms| fit_ms >= 2),
+        "the fitted push must record the pre-send fit duration"
+    );
 }
 
 #[test]
@@ -358,13 +366,17 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
     use crate::sidebar_pane::app::plane::DataPlane;
     use std::sync::Mutex;
 
-    for painted in [true, false] {
+    for (painted, fit_time) in [
+        (true, Duration::ZERO),
+        (true, Duration::from_secs(2)),
+        (false, Duration::from_secs(2)),
+    ] {
         let plane = DataPlane::detached();
         let destination = serve_config(&workspace());
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let _subscription = plane.subscribe(&destination, tx);
         let start = Instant::now();
-        let returned = start + Duration::from_secs(2);
+        let returned = start + fit_time;
         let clock = Arc::new(Mutex::new(start));
         let fit_clock = clock.clone();
         let rows = HashMap::from([(
@@ -394,7 +406,11 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
             placement: None,
             order: None,
         };
-        let (sent, until, ack, _) = peers.push(&anchor, || *clock.lock().unwrap());
+        let (sent, until, fit_ms, ack, _) = peers.push(&anchor, || *clock.lock().unwrap());
+        assert_eq!(
+            fit_ms,
+            (fit_time != Duration::ZERO).then_some(duration_millis(fit_time))
+        );
         assert_eq!(sent, returned, "send timing starts only after the fit");
         assert_eq!(
             until,
