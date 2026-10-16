@@ -298,7 +298,7 @@ In text mode, stdout carries only the final assistant answer, rendered by the sh
 A supervised run refuses at entry, before it writes a run record or opens a pane, when:
 
 - RimZ's hooks for the agent are not installed and trusted, because hooks are the completion signal;
-- the working directory is the home directory (`$HOME` of the account it runs under), for every agent kind: nobody answers an unattended run's folder-trust prompt, and Claude never saves trust there. Run it from a project directory or pass `--cwd <DIR>`; a subdirectory of home passes;
+- the working directory is your home directory (`$HOME`), for every agent kind: nobody answers an unattended run's folder-trust prompt, and Claude never saves trust there. Run it from a project directory or pass `--cwd <DIR>`; a subdirectory of home passes;
 - a Codex project has no recorded trust decision, because Codex would open its directory-trust screen and never read the prompt (run `rimz trust grant --agents codex` there, or answer that screen once in an interactive `codex` session); a folder saved as untrusted also refuses, since its Folder access prompt recurs on every launch. RimZ leaves that decision alone; trust the folder in Codex before a supervised run. Projectless folders without a saved decision pass;
 - the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
