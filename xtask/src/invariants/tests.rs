@@ -847,6 +847,8 @@ fn ui_glyph_exemptions_cover_animation_and_tests() {
 fn ui_glyph_violations_flag_literals_but_skip_comments_and_tests() {
     assert_eq!(ui_glyph_violation_lines("let glyph = \"◇\";\n").len(), 1);
     assert_eq!(ui_glyph_violation_lines("let glyph = \"⋯ bg\";\n").len(), 1);
+    assert_eq!(ui_glyph_violation_lines("let chip = \"[ ▸ \";\n").len(), 1);
+    assert_eq!(ui_glyph_violation_lines("let chip = \"[ ▾ \";\n").len(), 1);
     assert!(ui_glyph_violation_lines("// `◇` in docs\n").is_empty());
     assert!(
         ui_glyph_violation_lines("mod tests {\nlet glyph = \"◇\";\n}\n").is_empty(),
