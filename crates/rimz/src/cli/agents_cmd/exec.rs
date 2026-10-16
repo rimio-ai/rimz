@@ -157,7 +157,6 @@ fn launch_and_supervise(
     let fresh_launch = matches!(
         envelope.request().action,
         rimz::harness::launch::ExecAction::Launch { .. }
-            | rimz::harness::launch::ExecAction::Pick { .. }
     );
     let relaunch_cap = machine_config.agents.startup_relaunches;
     let relaunch_wait = if fresh_launch {
@@ -630,8 +629,24 @@ fn settle_after_exit(
             request.kind
         );
     }
-    let startup_failure =
-        !status.success() && mark_launch_failed_if_provisional(invocation, launch_identity);
+    if matches!(
+        request.action,
+        rimz::harness::launch::ExecAction::Pick { .. }
+    ) {
+        // Picks skip startup retry evidence; consume any queued registration
+        // before deciding whether the picker ever bound a provider session.
+        if let Ok(store) = invocation.store()
+            && let Err(error) =
+                rimz::harness::hook_drain::drain_through(&store, 0, None, HOOK_DRAIN_WAIT)
+        {
+            tracing::debug!(%error, "could not drain hooks before picker exit");
+        }
+    }
+    let startup_failure = !matches!(
+        request.action,
+        rimz::harness::launch::ExecAction::Pick { .. }
+    ) && !status.success()
+        && mark_launch_failed_if_provisional(invocation, launch_identity);
 
     let session_name = run
         .map(|context| context.session_name.as_str())
@@ -656,7 +671,12 @@ fn settle_after_exit(
             tracing::warn!(error = %err, "could not retire the exiting session's deliveries");
         }
     }
-    if should_print_exit_hint(request, abrupt, linger) {
+    let unbound_pick = matches!(
+        request.action,
+        rimz::harness::launch::ExecAction::Pick { .. }
+    ) && launch_identity
+        .is_some_and(|identity| !picker_session_bound(invocation, identity).unwrap_or(false));
+    if !unbound_pick && should_print_exit_hint(request, abrupt, linger) {
         let resumable = std::env::current_dir()
             .is_ok_and(|cwd| exited_session_resumable(ended_session.as_ref(), &cwd));
         let hint = exit_hint(
@@ -1748,6 +1768,29 @@ fn launch_card_provisional(
                 agent_name = %identity.name,
                 error = %err,
                 "could not inspect launch card",
+            );
+            None
+        }
+    }
+}
+
+fn picker_session_bound(
+    invocation: &ExecInvocationContext<'_>,
+    identity: &LaunchIdentity,
+) -> Option<bool> {
+    match invocation.store().and_then(|store| {
+        let projection = store.runtime_projection(rimz::RuntimeScope::Audit)?;
+        Ok(
+            rimz::address::launch_row(&projection.agents, &identity.kind, &identity.agent_id)
+                .is_some_and(|agent| agent.agent_id != identity.agent_id),
+        )
+    }) {
+        Ok(bound) => Some(bound),
+        Err(err) => {
+            tracing::debug!(
+                agent_name = %identity.name,
+                error = %err,
+                "could not inspect picker session binding",
             );
             None
         }

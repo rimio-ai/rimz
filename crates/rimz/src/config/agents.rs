@@ -73,6 +73,7 @@ pub struct AgentsConfig {
     pub max_chain_length: u8,
     /// How many times a fresh launch whose provider dies before its session
     /// opens is relaunched; `0` disables the relaunch.
+    /// Pickers, resumes, and forks are never retried.
     #[serde(rename = "startup-relaunches")]
     pub startup_relaunches: u8,
     /// The wait before each startup relaunch, in the CLI duration syntax

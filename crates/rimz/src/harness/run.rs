@@ -466,7 +466,7 @@ pub fn record_provider_process(
 /// What the exec wrapper saw when one provider process exited.
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderExit {
-    /// A fresh launch, not a resume or a fork.
+    /// A fresh launch, not a picker, resume, or fork.
     pub fresh_launch: bool,
     pub success: bool,
     /// The wrapper ended the provider itself, or the launching parent ended.
@@ -529,7 +529,7 @@ pub fn startup_relaunch(exit: ProviderExit, evidence: StartupEvidence, cap: u8) 
     }
 }
 
-/// Whether a provider exit warrants startup diagnostics, including resumes and forks:
+/// Whether a provider exit warrants startup diagnostics, including pickers, resumes, and forks:
 /// an unsuccessful exit within the window that neither the wrapper nor a signal to it caused.
 pub fn provider_startup_exit(exit: ProviderExit) -> bool {
     !exit.success && !exit.abrupt && !exit.signaled && exit.startup <= CARD_EVIDENCE_WINDOW
