@@ -243,7 +243,7 @@ Agent-initiated launches, forks, resumes, and restarts leave your focus alone, s
 
 **Fork an agent to try another approach.** `rimz agents fork @coder` from your shell takes over the launching pane with the full conversation under a new provider-assigned session id, in the source worktree, leaving the original session untouched and keeping its permission mode. Pass `--new-pane` to keep the launching pane, or `--new-tab` for a separate view. The fork gets a fresh pet name; `rimz agents fork @coder --name twin` pins `@twin` when you want both approaches to have memorable handles.
 
-**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI accepts one (Claude, Grok, and Droid today):
+**Compact context before the next task.** You can type the agent's native compaction command in its pane; `rimz agents compact @coder` submits that same command from wherever you are: at once on an idle agent, and queued until the next turn boundary on a busy one. To choose what survives the summary, pass an instruction on an agent whose CLI accepts one (Claude, Grok, Droid, and OMP today):
 
 ```sh
 rimz agents compact @coder "keep the open questions and the exact file list"
@@ -284,7 +284,7 @@ rimz agents validate          # check every definition on this machine
 rimz agents planner           # launch it
 ```
 
-This profile has no body of its own, so it runs on the base's prompt alone; give it one and the two compose, base first. The base file is not optional on a provider whose CLI takes a system prompt, which covers Claude, Codex, Pi, and Qwen. Without it, `rimz agents validate` fails, naming the file to write: `runs on claude, whose kind base is missing — create /home/me/.rimz/agents/claude.md with a nonempty body, the system prompt every claude definition starts from`. Edit a file to change future launches, and delete it to retire the profile. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults; a field the provider cannot express fails the launch before any pane opens instead of being dropped in silence.
+This profile has no body of its own, so it runs on the base's prompt alone; give it one and the two compose, base first. The base file is not optional on a provider whose CLI takes a system prompt, which covers Claude, Codex, Pi, OMP, and Qwen. Without it, `rimz agents validate` fails, naming the file to write: `runs on claude, whose kind base is missing — create /home/me/.rimz/agents/claude.md with a nonempty body, the system prompt every claude definition starts from`. Edit a file to change future launches, and delete it to retire the profile. The [Markdown definition reference](../reference/definitions.md) covers the frontmatter, inheritance, tool translation, and defaults; a field the provider cannot express fails the launch before any pane opens instead of being dropped in silence.
 
 **See what a profile will actually run.** With a bare CLI you can read the flags you typed; after a profile inherits a base and adds prompt fragments, that final command is harder to see. `rimz agents explain planner` prints the resolved command, settings, prompt, and sandbox view without launching anything:
 

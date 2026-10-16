@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ has a built-in adapter for thirteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
+RimZ has a built-in adapter for fourteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
 Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
@@ -8,7 +8,7 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build, OMP | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -16,7 +16,7 @@ RimZ tracks each agent's latest release. Where a feature needs a minimum agent v
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
-The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
+The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, omp) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
 ## What the marks mean
 
@@ -36,17 +36,17 @@ Each capability is one thing a card or command shows you. State is the base the 
 
 | Capability | What it covers | ● full | ◐ partial | ✗ unsupported |
 | --- | --- | --- | --- | --- |
-| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | RimZ reads the lifecycle from a local store instead of being told, so the card can drift: a cancel or failure can read as an ordinary stop. | No live state; the pane shows as a plain process row. |
+| State | The card appears at session start, follows working, waiting, and idle, and clears when the session ends. | Every transition lands, and the card matches the pane. | The card can drift: local-store updates can lag, a cancel or failure can read as an ordinary stop, or background work can outlive a reported turn end. | No live state; the pane shows as a plain process row. |
 | Live | While a turn runs: context-window fill, the token breakdown (input, output, cache), and a dollar figure. | All three, moving during the turn. | Some of it: a fill percentage without token counts, totals without the breakdown, an estimated price instead of a billed one, or figures that update only at the turn boundary. | No numbers; the card carries state only. |
-| History | Past sessions readable end to end, with per-turn tokens and dollars feeding [`rimz stats`](./cli/stats.md), the provider dashboard, and the heatmap. | Transcripts, tokens, and dollars, complete across sessions. | Sessions read back, but dollars are estimated locally or missing. | No archive RimZ can read. |
+| History | Past sessions readable end to end, with per-turn tokens and dollars feeding [`rimz stats`](./cli/stats.md), the provider dashboard, and the heatmap. | Transcripts, tokens, and dollars, complete across sessions. | Sessions read back, but dollars are estimated locally, incomplete, or missing. | No archive RimZ can read. |
 | Account | Your login, plan, and usage windows (a 5-hour and weekly pair, monthly credits, a prepaid balance) with fill and reset time. | Plan and windows, with usage counted against them. | Identity and plan with no usage, windows with no plan, or a quota the provider publishes as display-only. | No readable account surface. |
-| Ask | An agent stops and needs you: the card raises Waiting and the cockpit counts it. | The question's text and options reach [`rimz asks`](./cli/asks.md) and the card, so you can read it without opening the pane. | The card raises Waiting and routes you to the pane, where the question stays in the agent's UI; `rimz asks` stays empty. | A blocked agent looks like a working one. |
+| Ask | An agent stops and needs you: the card raises Waiting and the cockpit counts it. | The question's text and options reach [`rimz asks`](./cli/asks.md) and the card, so you can read it without opening the pane. | Only some prompts are tracked, or Waiting routes you to the pane without question detail in `rimz asks`. | A blocked agent looks like a working one. |
 | Subagents | Child agents nested under the parent card. | Children appear as they start and update as they work, with name, task, and model. | Children arrive late (often when the parent's turn ends) or without part of that detail. | Children stay invisible; the parent shows a long turn. |
 
 A few cells need more than the table says:
 
 - State stays full for agents that publish no session-end event. Their card clears on the next sidebar refresh after the pane is gone, the same tick every card refreshes on.
-- A History partial splits reading from accounting. `rimz agents logs` and `rimz agents history` still replay the session, while the provider dashboard shows the agent's session count with tokens and dollars blank.
+- A History partial splits reading from accounting. `rimz agents logs` and `rimz agents history` still replay the session; the provider dashboard may show tokens and dollars blank or incomplete. OMP counts main-session usage but excludes task-child files.
 - Answering is separate from Ask. Every agent takes its answer in its own UI, and `rimz answer` adds an out-of-band path for Claude, Codex, and Pi ([what each agent accepts](./cli/asks.md#what-each-agent-accepts)).
 - Claude Code children also carry a running token count and an elapsed clock. The child row shows both for any agent that reports them.
 
@@ -71,6 +71,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| OMP | ◐ | ◐ | ◐ | ◐ | ◐ | ✗ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -145,6 +146,16 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - Idle notifications rest the card only when their timestamp is newer than its last activity.
 - Dollars land at each completed turn, native or locally priced. Mid-turn cost and account quota windows are unavailable.
 
+### OMP
+
+- OMP (Oh My Pi) is experimental, verified against the 18.11.1 prebuilt. Pi's adapter is independent.
+- Tool approvals and native `ask` questions raise Waiting; question text/options reach `rimz asks`. Answer in the OMP pane, not through `rimz answer`. Plan reviews are not tracked.
+- The card follows turn ends, but background work can continue afterwards. Failed manual compaction has no closing event, so the card can remain compacting until later activity.
+- Context, token split, model, and thinking level update live. Dollars reconcile at turn end from main-session assistant and standalone model-usage records; task-child files and rows are excluded.
+- Provider rate-limit windows appear when reported. Login identity and plan are not read, and named RimZ accounts are unsupported.
+- Only the default `~/.omp/agent` home is wired. Launch preflight refuses non-default `OMP_PROFILE` (or `PI_PROFILE` when `OMP_PROFILE` is unset), nonempty `PI_CONFIG_DIR`, and nonempty `PI_CODING_AGENT_DIR`, with an unset fix. Empty, whitespace, and `default` profiles select default; an empty `OMP_PROFILE` still overrides `PI_PROFILE`.
+- Raw `--no-extensions`, `--trusted-extension`, and `--profile` arguments can bypass reporting. Bun-run package installs are not detected; the prebuilt `omp` is.
+
 ## Config homes and skills
 
 Each built-in agent keeps its settings, sessions, and credentials in a config home. RimZ reads from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation).
@@ -164,6 +175,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
+| OMP | `~/.omp/agent` | none; relocated homes refused | `<home>/skills` | refused | none |
 | Process plugin | none | none | none | refused | none |
 
 Host launches link [RimZ library skills](../guide/configuration.md#skills) into the resolved skill root, including each named Claude account home, without replacing user-owned entries.
@@ -199,6 +211,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Qwen | `qwen --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
+| OMP | `omp --resume` | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
@@ -220,6 +233,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| OMP | `--approval-mode always-ask` | `--approval-mode write` | `--approval-mode always-ask` | `--approval-mode yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
@@ -241,6 +255,8 @@ Under `agents.isolation = "sandbox"` a Codex launch replaces any `--sandbox` cho
 
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 
+OMP Plan uses the same conservative approval flags as Ask, not native plan mode. OMP's `--plan` selects a model role; launching OMP without a permission mode keeps its native yolo default.
+
 ### Model and effort
 
 `--model` and `--effort` on `rimz agents`, and the `model` and `effort` profile fields, render as below. RimZ passes the value through without checking it, so effort levels are whatever the agent's CLI accepts.
@@ -260,6 +276,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Qwen | `--model <model>` | refused |
 | Kimi | `--model <model>` | refused |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
+| OMP | `--model <model>` | `--thinking <level>` |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
@@ -289,12 +306,15 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Claude Code | ✓ | `--system-prompt-file <path>` |
 | Codex | ✓ | `-c model_instructions_file=<path>` |
 | Pi | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
+| OMP | ✓ | the prompt text in `--system-prompt`, at most 120 KiB |
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
 | OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok | ✗ | no verified replacement flag |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
 Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills, and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
+
+OMP likewise retains its discovered append/context material after replacement, and the full replacement text is visible in process arguments. RimZ's launch reminders append through the extension without displacing `APPEND_SYSTEM.md`.
 
 ### Interrupt key
 
@@ -337,6 +357,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| OMP | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ◐ | ✓ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -383,6 +404,7 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| OMP | `session_start` | `before_agent_start` | `agent_end` without `willContinue` | `tool_execution_end` | `tool_call`; `tool_approval_requested` | ✗ | ✗ | `session_before_compact` | `session_compact`; failed `auto_compaction_end` | `session_shutdown` | ◐ derived |
 
 `lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
@@ -407,6 +429,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Qwen | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
+| OMP | [adapter_omp.md](../internals/agents/adapter_omp.md) | [omp-reference.md](../externals/agent-adapter/omp-reference.md) |
 
 ## Agents not yet supported
 

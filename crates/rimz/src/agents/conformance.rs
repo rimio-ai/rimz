@@ -239,6 +239,7 @@ fn builtin_config_homes_resolve_only_the_explicit_launch_env() {
         ("kiro", ".kiro"),
         ("qwen", ".qwen"),
         ("grok", ".grok"),
+        ("omp", ".omp/agent"),
     ];
     assert_eq!(defaults.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -272,6 +273,7 @@ fn builtin_skills_homes_follow_config_homes() {
         ("kiro", ".kiro/skills", ManualSkill::Unsupported),
         ("qwen", ".qwen/skills", ManualSkill::Frontmatter),
         ("grok", ".agents/skills", ManualSkill::Unsupported),
+        ("omp", ".omp/agent/skills", ManualSkill::Frontmatter),
     ];
     assert_eq!(table.len(), BUILTINS.len());
     for adapter in BUILTINS {
@@ -393,6 +395,7 @@ fn builtin_config_homes_do_not_follow_runtime_or_rimz_overrides() {
         ("claude", "RIMZ_CLAUDE_SETTINGS"),
         ("copilot", "RIMZ_COPILOT_SETTINGS"),
         ("pi", "RIMZ_PI_EXTENSION"),
+        ("omp", "RIMZ_OMP_EXTENSION"),
         ("qwen", "RIMZ_QWEN_SETTINGS"),
         ("opencode", "RIMZ_OPENCODE_PLUGIN"),
     ] {
@@ -702,6 +705,13 @@ system-prompt-file-flag = "--system-prompt-file"
     grok.empty-Effort=Ok([])
     grok.empty-AutoCompact=Ok([])
     grok.all=Ok(["--model", "model-x", "--reasoning-effort", "high"])
+    omp.Model=Ok(["--model", "model-x"])
+    omp.Effort=Ok(["--thinking", "high"])
+    omp.AutoCompact=Err(UnsupportedField { agent: "omp", field: "auto-compact" })
+    omp.empty-Model=Ok([])
+    omp.empty-Effort=Ok([])
+    omp.empty-AutoCompact=Ok([])
+    omp.all=Ok(["--model", "model-x", "--thinking", "high"])
     fixturebot.Model=Ok(["--model", "model-x"])
     fixturebot.Effort=Ok(["--effort", "high"])
     fixturebot.AutoCompact=Err(UnsupportedField { agent: "fixturebot", field: "auto-compact" })
@@ -763,6 +773,7 @@ fn fast_switch_characterization() {
     kiro: on=agent `kiro` has no fast-mode launch switch; launch without --fast off=Ok([])
     qwen: on=agent `qwen` has no fast-mode launch switch; launch without --fast off=Ok([])
     grok: on=agent `grok` has no fast-mode launch switch; launch without --fast off=Ok([])
+    omp: on=agent `omp` has no fast-mode launch switch; launch without --fast off=Ok([])
     fixturebot: on=agent `fixturebot` has no fast-mode launch switch; launch without --fast off=Ok([])
     "#);
 }
@@ -1730,7 +1741,7 @@ fn native_event_classifies(
 #[test]
 fn permission_mode_table_matches_the_declared_arguments() {
     const DOC: &str = "docs/reference/agent-support.md";
-    const AGENTS: [(&str, &str); 13] = [
+    const AGENTS: [(&str, &str); 14] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -1744,6 +1755,7 @@ fn permission_mode_table_matches_the_declared_arguments() {
         ("Qwen", "qwen"),
         ("Kimi", "kimi"),
         ("Grok", "grok"),
+        ("OMP", "omp"),
     ];
     let text = include_str!("../../../../docs/reference/agent-support.md");
 

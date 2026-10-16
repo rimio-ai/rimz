@@ -14,6 +14,8 @@ The integration starts as a document, not code. `docs/externals/agent-adapter/<k
 
 The pinned reference mirrors upstream prose, not observed behaviour. Before you rest a design on which hook a provider does or does not fire, read the provider's own recorded sessions on disk; they carry the outcome fields upstream never documented.
 
+Check whether the agent is installed (`command -v <bin>`, `<bin> --version`). A JS-bundled CLI embeds its source, so grep the installed bundle for the event names a design rests on before trusting a static reference.
+
 Read alongside it, in order: [adapter.md](../internals/agents/adapter.md) end to end (the boundary, the capability traits, the hook path, context sources, declared coverage), [model.md](../internals/agents/model.md) (the state machine and displayed status your observations drive), [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) (the authoring contract), then one small worked adapter ([`pi/`](../../crates/rimz/src/agents/adapters/pi/mod.rs) with its internals doc [adapter_pi.md](../internals/agents/adapter_pi.md)) and one large ([`claude/`](../../crates/rimz/src/agents/adapters/claude/mod.rs) with [adapter_claude.md](../internals/agents/adapter_claude.md)).
 
 ## Step 2 — Map the protocol onto the model
@@ -45,12 +47,14 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 
 ## Step 4 — Declare the definition
 
-`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml): `agents::emblems::tests::every_provider_has_curated_art_distinct_from_fallback` requires an entry for every built-in.
 
 Two coverage declarations sit side by side and answer different questions:
 
 - `CoverageAnnotations` — **mechanism**: what the adapter reads from its agent. One mark per `IntegrationConcern`, nineteen in all, each `Wired { via }`, `Partial { via, gap }`, or `Unsupported { reason }`. This is the worksheet's concern column transcribed.
 - `UserCoverage` — **behavior**: what the user sees, and when. One mark per `UserCapability`, six in all, each `Full { note }`, `Partial { shows, limit }`, or `Unsupported { reason }`. `ANTIGRAVITY_USER_COVERAGE` in [`antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs) is the worked example that splits both ways.
+
+A concern fed by a native event is Wired even when its behavior has a gap; the gap belongs on the user capability's limit and in the adapter's Known gaps.
 
 Conformance links the two one-directionally: a **full** mark rests on wired mechanism, and an **unsupported** mark rests on unsupported mechanism. Between those ends the roll-up is your judgement — mechanism that reports still reads **partial** when the user-visible result is incomplete or arrives late. Cursor's subagent hooks exist and the children land only when the parent's turn ends; Antigravity's dollar figure is live and covers the current turn rather than a session total. Name that limit in the mark.
 
@@ -141,7 +145,7 @@ Four rules keep those tests honest:
 - **A new mapping's test fails without the mapping.** Give the payload a fallback input that would classify differently, so removing the new match arm turns the test red.
 - **A keyed wait is tested across the settle.** A wait's clearing event must be dropped once the turn settles, because an unnamed `ToolUsed` on a settled row reopens a turn ([`lifecycle.rs`](../../crates/rimz/src/agents/lifecycle.rs) `reconcile_activity`). Test open, settle, then close.
 - **"An adapter without capability X" is an unregistered kind.** A shared test that borrows a real built-in as the negative case breaks the day that built-in gains the capability; use `"unregistered"`.
-- **Shared pins move with the definition.** Changing presets, hook events, or coverage marks moves counts and snapshots outside the adapter: the inline snapshot in `agents::conformance::render_preset_characterization`, the per-agent block in `cli/coverage.rs` `coverage_pins_agent_matrix`, the managed hook counts in `crates/rimz/tests/integration/hooks.rs`, and the adapter's own catalog test. Run `cargo xtask test 'agents::conformance' 'cli::coverage'` and the adapter's integration hooks test before the gate, and update each pin in the commit that moves it.
+- **Shared pins move with the definition.** Changing presets, hook events, or coverage marks moves counts and snapshots outside the adapter: the inline snapshots in `agents::conformance::render_preset_characterization` and `agents::conformance::fast_switch_characterization`, the per-agent block in `cli/coverage.rs` `coverage_pins_agent_matrix`, the managed hook counts in `crates/rimz/tests/integration/hooks.rs`, and the adapter's own catalog test. A new kind also joins the private-boundary `provider_names`/`concrete_types` lists in `xtask/src/invariants.rs`, the tables in `crates/rimz/src/agents/conformance.rs` that assert `len() == BUILTINS.len()`, and the display map in `crates/rimz/tests/integration/coverage.rs`. Add its curated art to `crates/rimz/src/agents/emblems.toml`. When it declares a home key, add that key to `xtask/src/sandbox.rs` `PROVIDER_HOME_ENV` and `crates/rimz/tests/integration/common/command.rs` `PROVIDER_SIDECAR_KEYS`; without a new key both lists stay unchanged. Run `cargo xtask test 'agents::conformance'`, `cargo xtask test 'cli::coverage'`, and the adapter's integration hooks test before the gate, and update each pin in the commit that moves it.
 
 Conformance, definition validation, and registry uniqueness tests enroll the adapter automatically — no opt-in. Unit tests follow the one-home rule: inline `#[cfg(test)] mod tests` until the size gate moves them to a sibling ([rust-conventions.md → Tests](./rust-conventions.md#tests)).
 
