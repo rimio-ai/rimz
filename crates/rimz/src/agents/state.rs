@@ -1260,6 +1260,12 @@ impl AgentState {
         self.parent_agent_id.is_some() && self.launch_depth.is_none()
     }
 
+    /// A parented session, excluded from standalone resume even when pane-backed.
+    /// Launch depth alone records a peer's chain budget, not child identity.
+    pub fn is_child_session(&self) -> bool {
+        self.parent_agent_id.is_some()
+    }
+
     /// The provider account this session belongs to.
     pub fn login_key(&self) -> LoginKey {
         LoginKey::new(self.kind.clone(), self.login.clone().unwrap_or_default())

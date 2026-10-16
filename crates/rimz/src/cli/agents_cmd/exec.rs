@@ -750,6 +750,7 @@ struct EndedSession {
     kind: AgentKind,
     agent_id: AgentSessionId,
     name: Option<String>,
+    is_child_session: bool,
 }
 
 /// Whether this exit closes the agent deliberately, and the session it then
@@ -908,11 +909,13 @@ fn relaunch_command(request: &rimz::harness::launch::ExecRequest) -> String {
     )
 }
 
-/// Whether the pane's ended session is one `--continue` can redeem: a real
-/// provider session id whose adapter compiles a resume command for this
-/// directory. The hint then teaches resume; anything else relaunches fresh.
+/// Whether the pane's ended session can resume outside the subagent lifecycle:
+/// a parentless provider session id whose adapter compiles a resume command for
+/// this directory. The hint then teaches resume; anything else relaunches fresh.
 fn exited_session_resumable(ended: Option<&EndedSession>, cwd: &Path) -> bool {
-    ended.is_some_and(|ended| agent_session_resumable(&ended.kind, &ended.agent_id, cwd))
+    ended.is_some_and(|ended| {
+        !ended.is_child_session && agent_session_resumable(&ended.kind, &ended.agent_id, cwd)
+    })
 }
 
 fn exit_hint(
@@ -1643,6 +1646,7 @@ fn exit_end_target(
                 kind: row.kind.clone(),
                 agent_id: row.agent_id.clone(),
                 name: row.name.clone(),
+                is_child_session: row.is_child_session(),
             });
         }
     }
@@ -1658,11 +1662,12 @@ fn exit_end_target(
     if session_bound_to_another_pane(agents, &kind, &session, own_pane) {
         return None;
     }
-    let name = find_agent(agents, kind.as_str(), &session).and_then(|agent| agent.name.clone());
+    let row = find_agent(agents, kind.as_str(), &session);
     Some(EndedSession {
         kind,
         agent_id: session,
-        name,
+        name: row.and_then(|agent| agent.name.clone()),
+        is_child_session: row.is_some_and(rimz::agents::AgentState::is_child_session),
     })
 }
 
