@@ -139,6 +139,18 @@ fn main() {
                     Value::Null
                 } else if message["params"]["query"] == "changes" {
                     changes.clone()
+                } else if message["params"]["query"] == "x" {
+                    let mut symbols: Vec<_> = [(216, "Real"), (214, "Fake")].into_iter().map(|(line, container)| json!({"name":"x","kind":6,"containerName":container,"location":{"uri":format!("{root}/scope/show.rs"),"range":{"start":{"line":line,"character":3},"end":{"line":line,"character":4}}}})).collect();
+                    symbols.extend((0..21).map(|n| json!({"name":"x","kind":6,"containerName":"Fake","location":{"uri":format!("{root}/other{n}.rs"),"range":{"start":{"line":214,"character":3},"end":{"line":214,"character":4}}}})));
+                    json!(symbols)
+                } else if let Some(name @ ("child" | "tests")) = message["params"]["query"].as_str()
+                {
+                    let lines = if name == "child" {
+                        vec![207, 209]
+                    } else {
+                        vec![208]
+                    };
+                    json!(lines.into_iter().map(|line| json!({"name":name,"kind":if name == "tests" {2} else {12},"location":{"uri":format!("{root}/scope/show.rs"),"range":{"start":{"line":line,"character":3},"end":{"line":line,"character":8}}}})).collect::<Vec<_>>())
                 } else if let Some(name @ ("Type" | "TwinType" | "UniqueMember" | "BroadType")) =
                     message["params"]["query"].as_str()
                 {
@@ -197,7 +209,35 @@ fn main() {
                         1,
                         json!([symbol("child", 6, 2, 4, 3, json!([]))])
                     ),
-                    symbol("child", 12, 207, 208, 207, json!([]))
+                    symbol("child", 12, 207, 208, 207, json!([])),
+                    symbol("conflict", 12, 205, 205, 205, json!([])),
+                    symbol("conflict", 12, 206, 206, 206, json!([])),
+                    symbol(
+                        "tests",
+                        2,
+                        208,
+                        214,
+                        208,
+                        json!([
+                            symbol("child", 12, 209, 209, 209, json!([])),
+                            symbol(
+                                "impl Fake",
+                                5,
+                                213,
+                                214,
+                                213,
+                                json!([symbol("x", 6, 214, 214, 214, json!([]))])
+                            )
+                        ])
+                    ),
+                    symbol(
+                        "impl Real",
+                        5,
+                        215,
+                        216,
+                        215,
+                        json!([symbol("x", 6, 216, 216, 216, json!([]))])
+                    )
                 ])
             }
             "textDocument/documentSymbol"
@@ -250,6 +290,14 @@ fn main() {
                 } else {
                     json!([{"uri":uri,"range":range}])
                 }
+            }
+            "textDocument/definition"
+                if message["params"]["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("/show.rs")) =>
+            {
+                let position = &message["params"]["position"];
+                json!([{"uri":message["params"]["textDocument"]["uri"],"range":{"start":position,"end":position}}])
             }
             "textDocument/definition"
                 if documents

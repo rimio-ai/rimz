@@ -397,7 +397,8 @@ mod tests {
         );
         assert_eq!(
             read("src/lib.rs::child ~4", false, false).0,
-            read("src/lib.rs::Parent::child", false, false).0
+            read("src/lib.rs:208-209", false, false).0,
+            "a hint does not select a nested namesake of a top-level item"
         );
         for argument in [
             "src/lib.rs::absent",
@@ -411,19 +412,30 @@ mod tests {
 
     #[test]
     fn show_prints_all_hits_unless_a_hint_selects_a_subset() {
-        let first = read("src/lib.rs::Parent::child", false, false).0;
-        let second = read("src/lib.rs:208-209", false, false).0;
+        let mut nodes = nodes();
+        nodes[2].path = vec!["Other".into(), "child".into()];
+        let read = |argument| {
+            let (anchor, position) = parse_argument(argument).unwrap();
+            render_item(
+                &anchor,
+                position,
+                Path::new("src/lib.rs"),
+                &nodes,
+                &source(),
+                false,
+                false,
+            )
+        };
+        let first = read("src/lib.rs::Parent::child").0;
+        let second = read("src/lib.rs::Other::child").0;
         for argument in [
             "src/lib.rs::child",
             "src/lib.rs::child ~100",
             "src/lib.rs::child ~4-208",
         ] {
-            assert_eq!(
-                read(argument, false, false),
-                (format!("{first}\n{second}"), 0)
-            );
+            assert_eq!(read(argument), (format!("{first}\n{second}"), 0));
         }
-        assert_eq!(read("src/lib.rs::child ~4", false, false), (first, 0));
+        assert_eq!(read("src/lib.rs::child ~4"), (first, 0));
     }
 
     #[test]

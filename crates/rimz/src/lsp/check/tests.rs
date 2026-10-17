@@ -380,6 +380,8 @@ fn fix_hints_insert_the_range_of_the_one_named_item() {
         ("`a.rs::Type::method`", "`a.rs::Type::method` (11-16)"),
         ("`a.rs::Type`", "`a.rs::Type` (1-3)"),
         ("`a.rs::Type::field`", "`a.rs::Type::field` (2)"),
+        ("`a.rs::load`", "`a.rs::load` (91-96)"),
+        ("`a.rs::field`", "`a.rs::field` (161-163)"),
     ] {
         assert_eq!(rewrite_hints(source, false), source);
         let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
@@ -390,24 +392,24 @@ fn fix_hints_insert_the_range_of_the_one_named_item() {
         assert_eq!(fixes[0].after, expected.replace('`', ""));
         assert!(ambiguous.is_empty());
     }
-    let source = "x\n`a.rs::load` and `a.rs::Type`";
+    let source = "x\n`a.rs::duplicate` and `a.rs::Type`";
     let (updated, fixes, ambiguous) = rewrite_with(source, false, true);
-    assert_eq!(updated, "x\n`a.rs::load` and `a.rs::Type` (1-3)");
+    assert_eq!(updated, "x\n`a.rs::duplicate` and `a.rs::Type` (1-3)");
     assert_eq!(fixes.len(), 1);
     assert_eq!(ambiguous.len(), 1);
     assert_eq!(
         (ambiguous[0].line, ambiguous[0].text.as_str()),
-        (2, "a.rs::load")
+        (2, "a.rs::duplicate")
     );
     let names: Vec<_> = ambiguous[0]
         .candidates
         .iter()
         .map(|node| node.name.as_str())
         .collect();
-    assert_eq!(names, ["load", "impl SeatLoader<'_>::load"]);
+    assert_eq!(names, ["Foo::duplicate", "Other::duplicate"]);
     assert_eq!(
         ambiguous[0].detail,
-        "function load is at 91-96; method impl SeatLoader<'_>::load is at 101-106"
+        "method Foo::duplicate is at 143-145; method Other::duplicate is at 173-175"
     );
 }
 
@@ -545,7 +547,7 @@ fn fix_preserves_hint_forms_and_every_other_byte() {
 fn fix_skips_dirty_ambiguous_and_unmappable_anchors() {
     let source = "`a.rs::Type::method ~90`";
     assert_eq!(rewrite_hints(source, true), source);
-    let source = "`a.rs::load ~98` `a.rs::load ~200` `a.rs::absent ~99` `a.rs::Type::method` `a.rs:99` `o/r@v1:a.rs::Type::method ~99` `a.rs::Type::method\n~99`";
+    let source = "`a.rs::duplicate ~200` `a.rs::absent ~99` `a.rs::Type::method` `a.rs:99` `o/r@v1:a.rs::Type::method ~99` `a.rs::Type::method\n~99`";
     assert_eq!(rewrite_hints(source, false), source);
     assert_eq!(
         rewrite_hints("``a.rs::Type::method()`` (~99-100)", false),
@@ -558,6 +560,8 @@ fn fix_uses_the_single_hit_selected_by_a_hint() {
     for (source, expected) in [
         ("`a.rs::Type ~4-5`", "`a.rs::Type ~1-3`"),
         ("`a.rs::load ~93`", "`a.rs::load ~91`"),
+        ("`a.rs::load ~98`", "`a.rs::load ~91`"),
+        ("`a.rs::load ~200`", "`a.rs::load ~91`"),
         // A type hint that drifted past every item returns to the type itself.
         ("`a.rs::Type (200-210)`", "`a.rs::Type (1-3)`"),
         // A hint on one impl block keeps naming that block.
@@ -617,7 +621,18 @@ fn symbols() -> Vec<Candidate> {
             5,
             130,
             150,
-            json!([node("bar", 6, 132, 140, json!([]))])
+            json!([
+                node("bar", 6, 132, 140, json!([])),
+                node("duplicate", 6, 142, 144, json!([]))
+            ])
+        ),
+        node("field", 12, 160, 162, json!([])),
+        node(
+            "Other",
+            5,
+            170,
+            180,
+            json!([node("duplicate", 6, 172, 174, json!([]))])
         )
     ]))
     .unwrap()
@@ -1013,6 +1028,9 @@ fn outlines_match_language_neutral_ancestor_subsequences() {
         "method",
         "Type::second",
         "tests::helper",
+        "helper",
+        "SeatLoader::load",
+        "field",
         "Type.field",
         "Type::field",
         "Foo.bar",
@@ -1024,7 +1042,11 @@ fn outlines_match_language_neutral_ancestor_subsequences() {
             "{name}"
         );
     }
-    for line in [93, 103] {
+    for (line, status) in [
+        (93, Status::Ok),
+        (103, Status::LineOutside),
+        (200, Status::LineOutside),
+    ] {
         assert_eq!(
             check_symbol(
                 anchor(&format!("a.rs::load (~{line})")),
@@ -1032,14 +1054,34 @@ fn outlines_match_language_neutral_ancestor_subsequences() {
                 &nodes
             )
             .status,
-            Status::Ok
+            status
         );
     }
+    for (name, names) in [
+        ("load", vec!["load"]),
+        ("field", vec!["field"]),
+        ("Type::field", vec!["Type::field"]),
+        (
+            "Type",
+            vec!["Type", "impl Type<'a>", "impl std::fmt::Trait for Type<T>"],
+        ),
+    ] {
+        let chain = anchor(&format!("a.rs::{name}")).symbol.unwrap();
+        assert_eq!(
+            symbol_hits(&nodes, &chain)
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+    }
+    let outside = check_symbol(anchor("a.rs::load ~200"), "a.rs".into(), &nodes);
+    assert_eq!(outside.detail, "function load is at 91-96");
     assert_eq!(
         check_symbol(anchor("a.rs::fmt::second"), "a.rs".into(), &nodes).status,
         Status::MissingSymbol
     );
-    let missing = check_symbol(anchor("a.rs::Other::load"), "a.rs".into(), &nodes);
+    let missing = check_symbol(anchor("a.rs::Absent::load"), "a.rs".into(), &nodes);
     assert_eq!(missing.status, Status::MissingSymbol);
     assert_eq!(missing.candidates.len(), 2);
     assert_eq!(missing.candidates[1].name, "impl SeatLoader<'_>::load");

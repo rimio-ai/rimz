@@ -5,6 +5,286 @@ fn range() -> Value {
     json!({"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 6}})
 }
 
+fn twin(name: &str, file: &str, container: Option<&str>, line: u32) -> SymbolInformation {
+    serde_json::from_value(json!({"name":name,"kind":12,"containerName":container,"location":{"uri":format!("file:///checkout/src/{file}.rs"),"range":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}}}})).unwrap()
+}
+
+#[test]
+fn written_containers_prefer_direct_items_without_losing_skipping() {
+    let root = Path::new("/checkout");
+    for file in ["a", "crate_root/a"] {
+        let symbols = vec![
+            twin("load", file, None, 1),
+            twin("load", file, Some("tests"), 3),
+        ];
+        for name in [format!("src/{file}.rs::load"), "a::load".into()] {
+            let matches = resolve_symbol(root, &name, serde_json::to_value(&symbols).unwrap())
+                .unwrap()
+                .into_symbols();
+            let preferred = prefer_exact(root, &name, matches).unwrap();
+            assert_eq!(preferred.len(), 1, "{name}");
+            assert_eq!(preferred[0].location.range.start.line, 1);
+        }
+        for name in ["load", "crate_root::load"] {
+            if file == "a" && name == "crate_root::load" {
+                continue;
+            }
+            let matches = resolve_symbol(root, name, serde_json::to_value(&symbols).unwrap())
+                .unwrap()
+                .into_symbols();
+            assert_eq!(
+                prefer_exact(root, name, matches).unwrap().len(),
+                2,
+                "{name}"
+            );
+        }
+        let nested = prefer_exact(root, "a::load", vec![symbols[1].clone()]).unwrap();
+        assert_eq!(nested.len(), 1);
+        assert_eq!(nested[0].container_name.as_deref(), Some("tests"));
+    }
+    let mut field = twin("subagents", "json", Some("StatsJson"), 3);
+    field.kind = 8;
+    let symbols = vec![twin("subagents", "json", None, 1), field];
+    for (name, kind) in [
+        ("src/json.rs::subagents", 12),
+        ("json.rs::StatsJson::subagents", 8),
+    ] {
+        let matches = resolve_symbol(root, name, serde_json::to_value(&symbols).unwrap())
+            .unwrap()
+            .into_symbols();
+        let preferred = prefer_exact(root, name, matches).unwrap();
+        assert_eq!(preferred.len(), 1);
+        assert_eq!(preferred[0].kind, kind);
+    }
+}
+
+fn twin_outline() -> Symbols {
+    let node = |name, line, children| json!({"name":name,"kind":12,"range":{"start":{"line":line,"character":0},"end":{"line":line+1,"character":8}},"selectionRange":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}},"children":children});
+    serde_json::from_value(json!([
+        node("load", 1, json!([])),
+        node("tests", 2, json!([node("load", 3, json!([]))])),
+        node("impl Store<T>", 4, json!([node("open", 5, json!([]))])),
+        node(
+            "impl Trait for Store<T>",
+            6,
+            json!([node("open", 7, json!([]))])
+        )
+    ]))
+    .unwrap()
+}
+
+#[test]
+fn enrichment_recovers_outline_ancestors_atomically() {
+    let uri = "file:///checkout/src/a.rs".to_owned();
+    let mut symbols = vec![
+        twin("load", "a", None, 1),
+        twin("load", "a", None, 3),
+        twin("open", "a", Some("wrong"), 5),
+        twin("open", "a", None, 7),
+    ];
+    let outlines = BTreeMap::from([(uri.clone(), twin_outline())]);
+    assert!(enrich_containers(&mut symbols, &outlines));
+    assert_eq!(
+        symbols
+            .iter()
+            .map(|symbol| symbol.container_name.as_deref())
+            .collect::<Vec<_>>(),
+        [None, Some("tests"), Some("Store"), Some("Store")]
+    );
+    for outlines in [
+        BTreeMap::new(),
+        BTreeMap::from([(uri.clone(), Symbols::Flat(symbols.clone()))]),
+        BTreeMap::from([(uri, twin_outline())]),
+    ] {
+        let mut partial = vec![
+            twin("load", "a", Some("unchanged"), 3),
+            twin("missing", "a", None, 99),
+        ];
+        let before = serde_json::to_value(&partial).unwrap();
+        assert!(!enrich_containers(&mut partial, &outlines));
+        assert_eq!(serde_json::to_value(partial).unwrap(), before);
+    }
+}
+
+#[test]
+fn enriched_twin_names_resolve_to_their_own_items() {
+    let root = Path::new("/checkout");
+    let indexed = vec![twin("load", "a", None, 1), twin("load", "a", None, 3)];
+    let mut enriched = indexed.clone();
+    let outline = twin_outline();
+    assert!(enrich_containers(
+        &mut enriched,
+        &BTreeMap::from([("file:///checkout/src/a.rs".into(), twin_outline())])
+    ));
+    let names = enriched
+        .iter()
+        .map(|symbol| Candidate::new(root, symbol).unwrap().name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["a::load", "a::tests::load"]);
+    let matches = resolve_symbol(root, &names[0], serde_json::to_value(&indexed).unwrap())
+        .unwrap()
+        .into_symbols();
+    let mut matches = matches;
+    assert!(enrich_containers(
+        &mut matches,
+        &BTreeMap::from([("file:///checkout/src/a.rs".into(), twin_outline())])
+    ));
+    assert_eq!(
+        prefer_exact(root, &names[0], matches).unwrap()[0]
+            .location
+            .range
+            .start
+            .line,
+        1
+    );
+    assert!(matches!(
+        resolve_symbol(root, &names[1], serde_json::to_value(&indexed).unwrap()).unwrap(),
+        SymbolResolution::Missing { .. }
+    ));
+    let members = outline_members(&twin("tests", "a", None, 2), "load", &outline);
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].location.range.start.line, 3);
+    assert_eq!(Candidate::new(root, &members[0]).unwrap().name, names[1]);
+}
+
+#[test]
+fn enriched_methods_rematch_qualified_names_and_file_filters() {
+    let root = Path::new("/checkout");
+    let node = |name, line, children| json!({"name":name,"kind":12,"range":{"start":{"line":line,"character":0},"end":{"line":line+1,"character":8}},"selectionRange":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}},"children":children});
+    let outline = json!([
+        node("impl Real", 0, json!([node("x", 1, json!([]))])),
+        node(
+            "tests",
+            2,
+            json!([
+                node("impl Fake", 3, json!([node("x", 4, json!([]))])),
+                node("impl Other", 5, json!([node("x", 6, json!([]))])),
+                node("load", 7, json!([]))
+            ])
+        )
+    ]);
+    let mut indexed = vec![
+        twin("x", "a", Some("Real"), 1),
+        twin("x", "a", Some("Fake"), 4),
+        twin("x", "a", Some("Other"), 6),
+        twin("x", "b", Some("Fake"), 4),
+    ];
+    let outlines = BTreeMap::from([
+        (
+            "file:///checkout/src/a.rs".into(),
+            serde_json::from_value(outline.clone()).unwrap(),
+        ),
+        (
+            "file:///checkout/src/b.rs".into(),
+            serde_json::from_value(outline).unwrap(),
+        ),
+    ]);
+    for name in ["a::tests::Fake::x", "src/a.rs::tests::Fake::x"] {
+        let SymbolResolution::Missing { candidates } =
+            resolve_symbol(root, name, serde_json::to_value(&indexed).unwrap()).unwrap()
+        else {
+            panic!("the workspace index omits the inline module");
+        };
+        let rematched = rematch_enriched(root, name, &candidates, &outlines).unwrap();
+        assert!(
+            matches!(rematched, Some(SymbolResolution::Unique(_))),
+            "{name}"
+        );
+        let Some(SymbolResolution::Unique(symbol)) = rematched else {
+            unreachable!()
+        };
+        assert_eq!(symbol.location.uri, "file:///checkout/src/a.rs");
+        assert_eq!(symbol.location.range.start.line, 4);
+        assert_eq!(
+            Candidate::new(root, &symbol).unwrap().name,
+            "a::tests::Fake::x"
+        );
+    }
+    let Some(SymbolResolution::Ambiguous(symbols)) =
+        rematch_enriched(root, "a::tests::x", &indexed, &outlines).unwrap()
+    else {
+        panic!("skipping qualifiers must retain both nested methods")
+    };
+    assert_eq!(symbols.len(), 2);
+    for name in ["src/absent.rs::tests::Fake::x", "a::absent::Fake::x"] {
+        assert!(
+            rematch_enriched(root, name, &indexed, &outlines)
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert!(
+        rematch_enriched(root, "a::tests::x", &indexed, &BTreeMap::new())
+            .unwrap()
+            .is_none()
+    );
+    indexed = vec![twin("load", "a", None, 7)];
+    assert!(matches!(
+        rematch_enriched(root, "a::tests::load", &indexed, &outlines).unwrap(),
+        Some(SymbolResolution::Unique(_))
+    ));
+}
+
+#[test]
+fn rematch_candidates_narrow_to_written_files_and_module_prefixes() {
+    let root = Path::new("/checkout");
+    let mut candidates = vec![
+        twin("x", "crate_root/a", Some("Real"), 1),
+        twin("x", "crate_root/a", Some("Fake"), 4),
+    ];
+    candidates.extend((0..21).map(|n| twin("x", &format!("other{n}"), Some("Fake"), 4)));
+    for name in [
+        "src/crate_root/a.rs::tests::Fake::x",
+        "a.rs::tests::Fake::x",
+        "crate_root::a::tests::Fake::x",
+        "a::tests::Fake::x",
+    ] {
+        let narrowed = narrow_candidates(root, name, &candidates).unwrap();
+        assert_eq!(narrowed.len(), 2, "{name}");
+        assert!(
+            narrowed
+                .iter()
+                .all(|symbol| symbol.location.uri.ends_with("/crate_root/a.rs"))
+        );
+        let outlines = BTreeMap::from([("file:///checkout/src/crate_root/a.rs".into(),
+            serde_json::from_value(json!([{
+                "name":"tests","kind":2,"range":range(),"selectionRange":range(),"children":[{
+                    "name":"impl Fake","kind":5,"range":range(),"selectionRange":range(),"children":[{
+                        "name":"x","kind":6,"range":range(),"selectionRange":{"start":{"line":4,"character":0},"end":{"line":4,"character":1}},"children":[]
+                    }]
+                }]
+            }, {"name":"x","kind":6,"range":range(),"selectionRange":{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},"children":[]}])).unwrap()
+        )]);
+        let Some(SymbolResolution::Unique(symbol)) =
+            rematch_enriched(root, name, &narrowed, &outlines).unwrap()
+        else {
+            panic!("the irrelevant files must not cancel enrichment")
+        };
+        assert_eq!(symbol.location.range.start.line, 4);
+    }
+    for name in ["absent::tests::Fake::x", "absent.rs::tests::Fake::x"] {
+        assert!(
+            narrow_candidates(root, name, &candidates)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn module_narrowing_keeps_overlapping_file_module_prefixes() {
+    let root = Path::new("/checkout");
+    let candidates = vec![
+        twin("x", "a", Some("Fake"), 4),
+        twin("x", "a/tests", Some("Fake"), 4),
+        twin("x", "a/other", Some("Fake"), 4),
+    ];
+    let narrowed = narrow_candidates(root, "a::tests::Fake::x", &candidates).unwrap();
+    assert_eq!(narrowed.len(), 2);
+    assert_eq!(narrowed[0].location.uri, candidates[0].location.uri);
+    assert_eq!(narrowed[1].location.uri, candidates[1].location.uri);
+}
+
 #[test]
 fn outline_members_use_selection_positions_and_direct_children() {
     let node = |name, kind, line, children| json!({"name":name,"kind":kind,"range":range(),"selectionRange":{"start":{"line":line,"character":0},"end":{"line":line,"character":4}},"children":children});
