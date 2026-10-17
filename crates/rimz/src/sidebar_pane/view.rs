@@ -239,14 +239,16 @@ fn project_group<'a>(
     {
         return projection;
     }
-    projection.rows.retain(|(row, _)| {
-        contains(&row.name)
+    // A row the query names is a match even where the status lens shows it as context.
+    projection.rows.retain_mut(|(row, matched)| {
+        *matched = contains(&row.name)
             || row.worktree_branch.as_deref().is_some_and(contains)
             || row.team().is_some_and(contains)
             || row
                 .as_agent()
                 .and_then(|agent| agent.handle.as_deref())
-                .is_some_and(|handle| contains(&format!("@{handle}")))
+                .is_some_and(|handle| contains(&format!("@{handle}")));
+        *matched
     });
     projection
 }
@@ -650,7 +652,14 @@ mod tests {
         };
         let roster = VisibleRoster::single(&group, &queried, false, None, None);
         assert_eq!(ids(&roster), ["context"]);
-        assert!(!roster.is_match(0));
+        assert!(roster.is_match(0), "a row the query names is a match");
+        let labelled = BodyLens {
+            query: Some("main".to_owned()),
+            ..lens.clone()
+        };
+        let roster = VisibleRoster::single(&group, &labelled, false, None, None);
+        assert_eq!(ids(&roster), ["context", "match"]);
+        assert!(!roster.is_match(0) && roster.is_match(1));
         let idle = BodyLens::from(BodyFilter::Status(AgentStatus::Sleeping));
         assert_eq!(
             VisibleRoster::single(&group, &idle, false, None, None).len(),
