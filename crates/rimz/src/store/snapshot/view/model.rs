@@ -72,6 +72,18 @@ pub fn needs_you(
     })
 }
 
+/// One parked workflow run, drawn as an inert cockpit line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ParkedWorkflow {
+    pub run: crate::ids::WorkflowRunId,
+    pub workflow: String,
+    pub node: String,
+    pub reason: crate::store::workflow::ParkReason,
+    pub text: Option<String>,
+    pub checkout: std::path::PathBuf,
+    pub since: jiff::Timestamp,
+}
+
 /// One configured local-day dollar cap and its current metered state.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DailyBudgetView {

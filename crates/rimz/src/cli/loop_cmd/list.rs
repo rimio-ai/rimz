@@ -95,6 +95,7 @@ pub(super) enum Attention {
     Held,
     Blocked,
     Invalid,
+    Parked,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -264,6 +265,8 @@ pub(super) struct TaskRow {
     spend_today_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     budget_per_day_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) workflow_runs: Vec<WorkflowRunRow>,
     #[serde(skip)]
     head: String,
     #[serde(skip)]
@@ -361,6 +364,10 @@ pub(super) fn load(
             .ok()
             .and_then(|paths| launch_ledger::load(&paths).ok())
             .unwrap_or_default();
+        let workflows = StatePaths::for_project_root(&root)
+            .ok()
+            .and_then(|paths| rimz::store::workflow::list(&paths).ok())
+            .unwrap_or_default();
         let mut tasks = Vec::new();
         for (name, task) in catalog
             .visible()
@@ -394,6 +401,7 @@ pub(super) fn load(
                 && workspace
                     .is_some_and(|workspace| task.entry().run_dir() == workspace.worktree_root);
             row.launched_count = ledger.get(name).map_or(0, BTreeMap::len);
+            row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
             row.watcher_live = runtime
                 .as_ref()
                 .is_some_and(|runtime| watcher_info(runtime, name).ok().flatten().is_some());
@@ -509,6 +517,7 @@ impl TaskRow {
                 .as_deref()
                 .and_then(|raw| raw.parse::<rimz::harness::budget::BudgetSpec>().ok())
                 .map(|budget| budget.cap_usd),
+            workflow_runs: Vec::new(),
             head,
             continuation,
             reason: String::new(),
@@ -561,6 +570,31 @@ impl TaskRow {
         .unwrap_or_else(|| "never fired".into())
     }
 
+    /// A task owning a parked run needs you, unless a stronger reason already does.
+    fn attach_workflow_runs(&mut self, runs: Vec<WorkflowRunRow>, now: Timestamp) {
+        self.workflow_runs = runs;
+        if self.attention.is_some() {
+            return;
+        }
+        let mut parked = self.workflow_runs.iter().filter(|run| run.reason.is_some());
+        let Some(first) = parked.next() else {
+            return;
+        };
+        let more = parked.count();
+        self.attention = Some(Attention::Parked);
+        self.section = Section::NeedsYou;
+        self.reason = format!(
+            "{} run(s) parked: {}{}",
+            more + 1,
+            first.summary(now),
+            if more > 0 {
+                format!(" (+{more} more)")
+            } else {
+                String::new()
+            }
+        );
+    }
+
     fn rowless(
         name: String,
         holder: Option<RunLockInfo>,
@@ -585,6 +619,7 @@ impl TaskRow {
             heard: None,
             spend_today_usd: 0.0,
             budget_per_day_usd: None,
+            workflow_runs: Vec::new(),
             head: "one-shot fired".into(),
             continuation: String::new(),
             reason: String::new(),
@@ -633,6 +668,7 @@ impl TaskRow {
                     | Attention::Strikes
                     | Attention::Blocked
                     | Attention::Invalid
+                    | Attention::Parked
             )
         ) {
             return self.reason.clone();
@@ -746,6 +782,71 @@ fn last_run_text(
                 .unwrap_or_default()
         )
     })
+}
+
+/// One nonterminal workflow run a loop task started.
+#[derive(Serialize)]
+pub(super) struct WorkflowRunRow {
+    pub(super) id: rimz::ids::WorkflowRunId,
+    pub(super) checkout: PathBuf,
+    pub(super) state: &'static str,
+    pub(super) node: String,
+    pub(super) since: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<String>,
+    #[serde(skip)]
+    workflow: String,
+    #[serde(skip)]
+    pub(super) detail: String,
+}
+
+impl WorkflowRunRow {
+    pub(super) fn of_task(
+        records: &[rimz::store::workflow::RunRecord],
+        task: &str,
+        root: &Path,
+    ) -> Vec<Self> {
+        records
+            .iter()
+            .filter(|record| {
+                !record.state.is_terminal()
+                    && record.task.as_deref() == Some(task)
+                    && record.project_root == root
+            })
+            .map(|record| Self {
+                id: record.id.clone(),
+                checkout: record.scope.path.clone(),
+                state: record.state.as_str(),
+                node: record.node.clone(),
+                since: record.entered_at,
+                reason: record.park.as_ref().map(|park| park.reason.as_str()),
+                text: record.park.as_ref().and_then(|park| park.text.clone()),
+                workflow: record.workflow.clone(),
+                detail: crate::cli::workflow::waiting(record)
+                    .or_else(|| record.park.as_ref().map(rimz::store::workflow::Park::label))
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// `<workflow> <node> <reason>[: <text>] <age> <checkout-name>`.
+    pub(super) fn summary(&self, now: Timestamp) -> String {
+        let text = self
+            .text
+            .as_ref()
+            .map(|text| format!(": {text}"))
+            .unwrap_or_default();
+        format!(
+            "{} {} {}{text} {} {}",
+            self.workflow,
+            self.node,
+            self.reason.unwrap_or(self.state),
+            elapsed(self.since, now),
+            checkout_name(&self.checkout)
+        )
+    }
 }
 
 fn checkout_name(path: &Path) -> String {

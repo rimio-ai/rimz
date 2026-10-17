@@ -1120,13 +1120,14 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             text,
             ..
         } => format!(
-            "{time} workflow {workflow} {node} parked: {reason:?}{}",
+            "{time} workflow {workflow} {node} parked: {}{}",
+            reason.as_str(),
             text.as_ref()
                 .map_or_else(String::new, |text| format!(": {}", first_line(text)))
         ),
         AssistEvent::WorkflowEnd {
             workflow, state, ..
-        } => format!("{time} workflow {workflow} {state:?}"),
+        } => format!("{time} workflow {workflow} {}", state.as_str()),
         AssistEvent::Molt {
             label,
             successor_label,

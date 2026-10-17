@@ -38,11 +38,11 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 use model::cohort_team;
 pub use model::{
-    DailyBudgetView, NeedsYou, PipelinePosition, PrStack, PresenceSample, RedeemForecast,
-    RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness, SidebarLinkHealth,
-    SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort, SidebarStatusCount,
-    SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi, WorktreePrQueue,
-    WorktreePrState, WorktreeTrunkSync, lead_unread_row, needs_you,
+    DailyBudgetView, NeedsYou, ParkedWorkflow, PipelinePosition, PrStack, PresenceSample,
+    RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
+    SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi,
+    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row, needs_you,
 };
 pub(crate) use model::{actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
@@ -78,7 +78,7 @@ fn agent_panes_is_empty(panes: &Arc<Vec<PaneAgent>>) -> bool {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 44;
+pub const SNAPSHOT_VERSION: u32 = 45;
 
 /// The first rollup row matching an exact provider and session identity.
 pub fn find_agent<'a>(
@@ -316,6 +316,10 @@ pub struct SidebarSnapshot {
     /// auto-continue producer reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_outcomes: Option<Arc<[ResumeOutcome]>>,
+    /// Every parked workflow run in the room, oldest park first. Enrich-only:
+    /// both producer and consumer read the records; the pure reducer leaves it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parked_workflows: Vec<ParkedWorkflow>,
 }
 
 impl SidebarSnapshot {
@@ -400,6 +404,7 @@ impl SidebarSnapshot {
             reflects_log: None,
             fenced_sessions: Arc::default(),
             resume_outcomes: Some(Arc::default()),
+            parked_workflows: Vec::new(),
         }
     }
 

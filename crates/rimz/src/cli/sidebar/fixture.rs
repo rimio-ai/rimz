@@ -57,6 +57,7 @@ pub(super) fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<Sid
         reflects_log: None,
         fenced_sessions: Default::default(),
         resume_outcomes: Some(Default::default()),
+        parked_workflows: Vec::new(),
     };
     snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
 

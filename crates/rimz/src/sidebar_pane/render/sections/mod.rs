@@ -40,7 +40,9 @@ pub(in crate::sidebar_pane) use agent_card::agent_card_cost_usd;
 pub(in crate::sidebar_pane::render) use agent_card::{
     awaiting_first_prompt_affordance, delegation_motion,
 };
-pub(super) use cockpit::{CockpitBadges, cockpit_spend_line, cockpit_summary_line};
+pub(super) use cockpit::{
+    CockpitBadges, cockpit_spend_line, cockpit_summary_line, parked_workflow_line,
+};
 pub(super) use fleet::{
     fleet_header_lines, fleet_size, open_pr_total, open_pr_worst_ci, unread_worktree_total,
 };

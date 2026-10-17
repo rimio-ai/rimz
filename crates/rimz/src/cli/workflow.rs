@@ -187,18 +187,7 @@ fn locate(id: &WorkflowRunId) -> Result<(rimz::StatePaths, paths::WorkflowPaths)
         .with_context(|| format!("unknown workflow run {id}"))
 }
 
-fn state_word(record: &RunRecord) -> &'static str {
-    use records::RunState;
-    match record.state {
-        RunState::Active => "active",
-        RunState::Parked => "parked",
-        RunState::Done => "done",
-        RunState::Failed => "failed",
-        RunState::Canceled => "canceled",
-    }
-}
-
-fn waiting(record: &RunRecord) -> Option<String> {
+pub(super) fn waiting(record: &RunRecord) -> Option<String> {
     record.wait.as_ref().map(|w| {
         let zone = jiff::tz::TimeZone::system();
         let detail = match w.outcome.as_str() {
@@ -237,24 +226,14 @@ fn list(json: bool) -> Result<()> {
                 continue;
             }
             let detail = waiting(&r)
-                .or_else(|| {
-                    r.park.as_ref().map(|p| {
-                        format!(
-                            "{}{}",
-                            reason_word(p.reason),
-                            p.text
-                                .as_ref()
-                                .map_or_else(String::new, |s| format!(": {s}"))
-                        )
-                    })
-                })
+                .or_else(|| r.park.as_ref().map(records::Park::label))
                 .unwrap_or_default();
             rows.push(serde_json::json!({"id":r.id,"workflow":r.workflow,"scope":r.scope.path,"state":r.state,"node":r.node,"since":r.entered_at,"detail":detail}));
             table.row([
                 render::cell(r.id.as_str()),
                 render::cell(&r.workflow),
                 render::cell(r.scope.path.display().to_string()),
-                render::cell(state_word(&r)).fg(render::status::workflow(r.state)),
+                render::cell(r.state.as_str()).fg(render::status::workflow(r.state)),
                 render::cell(&r.node),
                 render::cell(r.entered_at.to_string()),
                 render::cell(detail),
@@ -265,19 +244,6 @@ fn list(json: bool) -> Result<()> {
         render::json_pretty(&rows)
     } else {
         Ok(table.render(&mut render::out())?)
-    }
-}
-
-fn reason_word(reason: records::ParkReason) -> &'static str {
-    use records::ParkReason;
-    match reason {
-        ParkReason::User => "user",
-        ParkReason::Cap => "cap",
-        ParkReason::Deadline => "deadline",
-        ParkReason::Timeout => "timeout",
-        ParkReason::Invalid => "invalid",
-        ParkReason::Asked => "asked",
-        ParkReason::Check => "check",
     }
 }
 
@@ -300,16 +266,9 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
         render::cell(record.scope.path.display().to_string()),
     );
     let state = if let Some(park) = &record.park {
-        format!(
-            "{} ({}{})",
-            state_word(&record),
-            reason_word(park.reason),
-            park.text
-                .as_ref()
-                .map_or_else(String::new, |s| format!(": {s}"))
-        )
+        format!("{} ({})", record.state.as_str(), park.label())
     } else {
-        state_word(&record).into()
+        record.state.as_str().into()
     };
     header.push(
         "state",

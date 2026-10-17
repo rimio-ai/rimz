@@ -42,7 +42,7 @@ fn pre_workflow_cache_refolds_attempt_identity() {
     write_rollup_cache(
         &paths.rollup_cache,
         &RollupCache {
-            version: 32,
+            version: 33,
             extent: event_log::LogExtent {
                 generation: 0,
                 offset: std::fs::metadata(&paths.events_log).unwrap().len(),

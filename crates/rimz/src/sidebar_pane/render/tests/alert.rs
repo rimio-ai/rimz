@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn parked_workflows_keep_their_age_at_wide_and_l2_widths() {
+    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
+    value["parked_workflows"] = serde_json::json!([
+        {"run":"wf_0190b8172c0070008000000000000001","workflow":"babysit-pr","node":"triage","reason":"asked","text":"Which compatibility fix should ship before the release?","checkout":"/repo/fix","since":(fixed_now()-Duration::from_secs(300)).to_string()},
+        {"run":"wf_0190b8172c0070008000000000000002","workflow":"review","node":"sweep","reason":"cap","text":null,"checkout":"/repo/review","since":(fixed_now()-Duration::from_secs(120)).to_string()}
+    ]);
+    let mut snapshot: SidebarSnapshot = serde_json::from_value(value).unwrap();
+    snapshot.now = fixed_now();
+    for (width, name) in [(80, "parked_workflows_wide"), (46, "parked_workflows_l2")] {
+        let screen = snapshot_to_screen(&snapshot, width, 18);
+        assert!(
+            screen.contains("babysit-pr triage asked")
+                && screen.contains("review sweep cap")
+                && screen.contains("5m")
+                && screen.contains("2m"),
+            "parked runs and ages must survive at width {width}: {screen}"
+        );
+        assert_snapshot(name, screen);
+    }
+}
+
+#[test]
 fn render_active_alert_shows_banner_below_snapshot() {
     let snapshot = snapshot_with(Vec::new());
     let alert = Alert {

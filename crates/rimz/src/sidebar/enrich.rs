@@ -493,6 +493,33 @@ pub fn project_local(
     snapshot
 }
 
+/// The room's parked workflow runs, oldest park first; an unreadable run list
+/// shows none rather than failing the fold.
+fn parked_workflows(state: &StatePaths) -> Vec<crate::store::snapshot::ParkedWorkflow> {
+    let records = crate::store::workflow::list(state).unwrap_or_else(|err| {
+        tracing::warn!(error = %err, "workflow runs unreadable for the sidebar");
+        Vec::new()
+    });
+    let mut parked: Vec<_> = records
+        .into_iter()
+        .filter(|record| record.state == crate::store::workflow::RunState::Parked)
+        .filter_map(|record| {
+            let park = record.park?;
+            Some(crate::store::snapshot::ParkedWorkflow {
+                run: record.id,
+                workflow: record.workflow,
+                node: record.node,
+                reason: park.reason,
+                text: park.text,
+                checkout: record.scope.path,
+                since: park.at,
+            })
+        })
+        .collect();
+    parked.sort_by_key(|run| run.since);
+    parked
+}
+
 fn enrich_core(
     mut snapshot: SidebarSnapshot,
     frame: Option<&PaneFrame>,
@@ -599,6 +626,7 @@ fn enrich_core(
         crate::harness::idle_stop::project_requests(&mut snapshot, state);
         crate::harness::hibernate::project_hibernation(&mut snapshot, state);
     }
+    snapshot.parked_workflows = parked_workflows(state);
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load(runtime);

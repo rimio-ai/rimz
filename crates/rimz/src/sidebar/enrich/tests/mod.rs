@@ -23,6 +23,41 @@ mod labels;
 mod spend;
 
 #[test]
+fn parked_workflows_are_projected_without_agents_and_oldest_first() {
+    let (_dir, runtime, snapshot) = runtime();
+    let state = StatePaths::under(runtime.workspace_id.clone(), &runtime.root).unwrap();
+    for (suffix, status, entered) in [
+        (1, "parked", "2026-01-01T00:01:00Z"),
+        (2, "parked", "2026-01-01T00:00:00Z"),
+        (3, "active", "2026-01-01T00:00:00Z"),
+        (4, "done", "2026-01-01T00:00:00Z"),
+    ] {
+        let id = crate::ids::WorkflowRunId::parse(&format!(
+            "wf_0190b8172c007000800000000000000{suffix}"
+        ))
+        .unwrap();
+        let paths = state.workflow(&id);
+        std::fs::create_dir_all(&paths.home).unwrap();
+        std::fs::write(&paths.record, serde_json::to_vec(&serde_json::json!({
+            "version":1,"id":id,"workflow":"review","spec_dir":"/definitions/review","spec_digest":"abc",
+            "scope":{"kind":"worktree","path":"/repo"},"project_root":"/repo","created_at":entered,"state":status,
+            "park":{"reason":"asked","text":"Which fix?","at":entered},"node":"triage","entered_at":entered,
+            "visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1
+        })).unwrap()).unwrap();
+    }
+    let projected = serde_json::to_value(fold_cached(snapshot, None, &runtime)).unwrap();
+    assert_eq!(
+        projected["parked_workflows"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        projected["parked_workflows"][0]["run"],
+        "wf_0190b8172c0070008000000000000002"
+    );
+    assert_eq!(projected["parked_workflows"][0]["text"], "Which fix?");
+}
+
+#[test]
 fn provider_labels_include_only_non_default_logins() {
     let accounts = toml::from_str("[claude.work]\nhome = \"/srv/rimz-test-work\"\n").unwrap();
     let key: crate::ids::LoginKey = "claude@work".parse().unwrap();

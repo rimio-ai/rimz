@@ -314,6 +314,7 @@ struct ShowView {
     show_agent_runs: bool,
     worktrees: Vec<schedule::fanout::CheckoutCondition>,
     worktrees_error: Option<String>,
+    workflow_runs: Vec<list::WorkflowRunRow>,
     all: bool,
 }
 
@@ -938,6 +939,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     }
     writeln!(out)?;
     write_show_facts(out, view)?;
+    write_workflow_runs(out, &view.workflow_runs, now)?;
     if let ShowThrottle::Full(readings) = &view.throttle {
         write_throttle_readings(out, readings)?;
     }
@@ -1072,6 +1074,15 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         ShowThrottle::Compact(schedule::throttle::compact_load())
     };
+    let workflow_runs = if entry.workflow.is_some() {
+        list::WorkflowRunRow::of_task(
+            &rimz::store::workflow::list(&StatePaths::for_project_root(&root)?)?,
+            &args.name,
+            &root,
+        )
+    } else {
+        Vec::new()
+    };
     let view = ShowView {
         strike_count: strikes::load().get(&key).copied().unwrap_or(0),
         room_is_open,
@@ -1093,6 +1104,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         throttle,
         worktrees,
         worktrees_error,
+        workflow_runs,
         all: args.all,
     };
     if args.json {
@@ -1117,7 +1129,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             worktrees: Vec<WorktreeJson<'a>>,
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting }),
+            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs }),
             worktrees: worktrees_json(&view),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
@@ -1125,6 +1137,32 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         render_show(&mut ui::out(), &view, args.runs)?;
     }
     subscriptions_error.map_or(Ok(()), Err)
+}
+
+/// One line per nonterminal run the task started:
+/// `<id> <checkout-name> <state> <node> <waiting line | park reason> <age>`.
+fn write_workflow_runs(
+    out: &mut impl Write,
+    runs: &[list::WorkflowRunRow],
+    now: Timestamp,
+) -> Result<()> {
+    if runs.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "\nRUNS")?;
+    let mut table = ui::Table::new(["RUN", "CHECKOUT", "STATE", "NODE", "DETAIL", "AGE"]).indent(2);
+    for run in runs {
+        table.row([
+            ui::cell(run.id.as_str()),
+            ui::cell(display_path(&run.checkout)),
+            ui::cell(run.state),
+            ui::cell(&run.node),
+            ui::cell(&run.detail),
+            ui::cell(ui::rel_age(run.since, now)),
+        ]);
+    }
+    table.render(out)?;
+    Ok(())
 }
 
 fn load_subscriptions(name: &str, root: &Path, now: &jiff::Zoned) -> Result<Vec<SubscriptionView>> {

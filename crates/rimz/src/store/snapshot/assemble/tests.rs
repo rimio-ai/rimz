@@ -551,7 +551,7 @@ fn pre_workflow_snapshot_is_not_a_fresh_view() {
     paths.ensure_dirs().unwrap();
     let snapshot = rebuild(&paths).unwrap();
     let mut legacy = serde_json::to_value(snapshot).unwrap();
-    legacy["snapshot_version"] = serde_json::json!(43);
+    legacy["snapshot_version"] = serde_json::json!(44);
     atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
     assert!(
         read_fresh_latest_cold(&paths).is_none(),
