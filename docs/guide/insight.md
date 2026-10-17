@@ -55,7 +55,7 @@ Two of the cockpit's lines carry the spend:
 
 ```
  ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← sessions · token breakdown
- ¤ 16 (2)                                      $420.00    ← live agents · unread · spend
+ ¤ 16                                          $420.00    ← live agents · spend
 ```
 
 The token breakdown sums every session that ran in this room during the spend window, and the dollar figure below it is the room's cost over that same window, counting up in an eased roll the moment any agent's cost moves. Both lines are scoped to the room: the project root and the worktrees grouped under it, never your whole machine.

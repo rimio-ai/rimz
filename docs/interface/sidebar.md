@@ -12,9 +12,9 @@ The sidebar stacks three zones and a footer. The [cockpit](#the-cockpit) at the 
  ⌘ query-engine                     ~/code/query-engine     ← workspace name and path
 
  ◎ 91                           ◇ 32M ↘ 28M ↗ 3M ◌ 472M     ← sessions in the spend window, their tokens
- ¤ 16 (2) ⑃ 1                                   $420.00     ← live agents, unread count, open PRs, spend
+ ¤ 16 ⑃ 1                                       $420.00     ← live agents, open PRs, spend
  ──────────────────────────────────────────────────────
- ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: agents by status
+ ? 3   ! 0   ⏸︎ 0   ✓ 8                  ⢿ 3   ☾ 1   ○ 1     ← make-up line: units by status
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3  +127 -43  ⑃ main🮇    ← worktree header: branch, commits, diff, PR state
 ▌⣾ claude · Opus 4.8 · high · 200k                $1.27▐    ← status, handle, model, effort, window, cost
@@ -170,7 +170,6 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `⌘ name` | the workspace |
 | `◎ N` | sessions that ran in the spend window |
 | `¤ N` | agents alive right now |
-| `(2)` | worktrees holding unread cards |
 | `⑃ N` | open pull requests on the agents' branches, stacked pull requests included |
 | `↑ 2 need you` | the card that most needs you is scrolled out of view |
 | `▌` ... `▐` | the selected card's left and right spines |
@@ -195,7 +194,7 @@ The cockpit is the top block. Its lines stay put as agents change status; only t
  ⌘ query-engine                     ~/code/query-engine
 
  ◎ 12                           ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6 (2) ⑃ 1                                      $4.20
+ ¤ 6 ⑃ 1                                          $4.20
  ──────────────────────────────────────────────────────
  ? 2   ! 1   ⏸︎ 0   ✓ 0                  ⢿ 2   ☾ 0   ○ 1
  ↑ 2 need you
@@ -207,9 +206,9 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 |------|-------|
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
-| 3 | `¤` live agents, `(N)` worktrees holding unread cards when there are any (a team lane with four unread agents counts once), `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
+| 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
-| 4 | the make-up line: agents by status. |
+| 4 | the make-up line: units by status. |
 | 5 | the `↑ N need you` banner, only while it applies. |
 
 Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. It never decreases inside one window and resets when the window rolls. Antigravity reports current usage that cannot be summed over time, so its cost shows on its card and stays out of this total. How every figure is computed is [Token Insight](../guide/insight.md).
@@ -234,15 +233,19 @@ Each line is the waiting `?` glyph, the workflow, the node it parked at, and the
 
 ### The make-up line
 
-The left cluster counts agents that may want you: `?` waiting, `!` failed, `⏸︎` paused, `✓` done on work that has not landed. The right cluster counts the rest: `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results. `✓` excludes finished groups; a landed group with a working or blocked member is not finished, so its done cards still count. The other buckets and `¤` cover the whole room, so the buckets need not sum to `¤`.
+The make-up line counts units: a team's members within one worktree group, or one solo agent. Process rows are no unit. The left cluster is `?` waiting, `!` failed, `⏸︎` paused, `✓` done; the right is `⢿` working, `☾` sleeping, `○` idle. Every bucket shows even at zero, including a room holding only landed results.
 
-Click a non-zero bucket, the unread count, or the `⑃` count to filter the cards to it. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. The filter keys are in [Keys and mouse](#keys-and-mouse).
+The active buckets are `?`, `!`, `⏸︎`, and `⢿`. A unit counts in each active bucket holding at least one member. A unit with no active member counts in exactly one rest bucket: `○` if any member is idle, else `☾` if any member is sleeping, else `✓`. Only `✓` excludes finished groups. For example, a working team with idle teammates is `⢿ 1`, `○ 0`; a team with waiting and working members is `? 1`, `⢿ 1`. The same team name in two worktree groups counts twice; cards in `external` count solo. `¤` still counts agents, so the buckets need not sum to it.
+
+A row matches a bucket when its own status is that bucket and its unit counts there. Picking a status shows every member of every unit with a match. Matching names keep their provider colour; context teammates have muted names and do not open just because a teammate is selected. Selection keys (`j`/`k`, `g`/`G`, pages, `H`/`L`, `[`/`]`) land on matches. Clicks, digits, `Enter`, and the `n`/`N`/`Space` inbox walk can still focus context teammates. Picking a new lens moves a context selection to a match; later focus and status changes do not force it away. Unread and open-PR lenses keep their per-card and per-group membership, respectively.
+
+Click a non-zero bucket or the `⑃` count to filter the cards to it; press `u` to filter to unread cards. The filter applies in every tab of the room and stays on while you move between matching cards. The active filter is drawn as a filled chip, or in reverse video under `NO_COLOR`. To clear it, click it again, press its key again, press `A`, or pick another filter. It also clears when its count reaches zero. The filter keys are in [Keys and mouse](#keys-and-mouse).
 
 At narrow widths the right-hand buckets clip from the idle end. A bucket without room for its full click target is not clickable; existing filter keys still work when their bucket is clipped.
 
 ### The unread banner
 
-`↑ N need you` appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. During a wheel glide it reflects where the cards will land, so it does not appear or disappear midway through the motion. It is yellow for a waiting card and red for a failed one. Click it to snap back to the top of the cards, where ranking places that card, or press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
+`↑ N need you` counts units with at least one unread waiting or failed member. It appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. During a wheel glide it reflects where the cards will land, so it does not appear or disappear midway through the motion. It is yellow for a waiting card and red for a failed one. Click it to snap back to the top of the cards, where ranking places that card, or press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
 
 ### An empty room
 
@@ -305,7 +308,7 @@ A card's lines are set by its stage, age, density, and selection reach. Within t
 | engaged, with subagents or waits | adds the subagents and waits line, except on unreached idle and done cards with their entries closed |
 | selected or held, engaged | adds the stats line (`▤ 0` until data arrives) below the meter and lists the subagent and wait entries below the card; only the live selection lights the spines |
 
-Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its stats and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
+Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible matching teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. A previously selected card can keep its stats and entries, and its teammates' open shapes, until collapsing them would no longer move the selected card. A wheel tick, unread-banner jump, or toggle releases these held cards immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
 
 `[theme.display] card_density` changes how much a resting card shows:
 
@@ -583,7 +586,7 @@ Click anywhere on the chip's line to open it. If the receipts it reveals are bel
  ▸ ○ landed-a
 ```
 
-The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there still count in the cockpit; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
 
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -843,7 +846,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 |-------|--------|
 | click a card or process row | focus its pane |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
-| click a make-up bucket, the unread count, or `⑃ N` | filter the cards |
+| click a make-up bucket or `⑃ N` | filter the cards |
 | click `↑ N need you` | scroll to the top of the cards |
 | click a subagents and waits line | open or close its entries |
 | click either line of a subagent entry | focus the child's live pane, else the parent's pane |
