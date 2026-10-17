@@ -31,6 +31,25 @@ fn hibernate_reports_active_or_skipped() {
             "{text}"
         );
     }
+    let report = rimz::harness::hibernate::PreflightReport {
+        enabled: true,
+        skipped: Some("swap is absent; add a swapfile".into()),
+        checks: vec![rimz::harness::hibernate::Check {
+            name: "swap",
+            summary: None,
+            fix: None,
+            status: rimz::harness::hibernate::CheckStatus::Warning,
+            detail: "swap is absent; add a swapfile".into(),
+        }],
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_hibernate(w, &report, &mut tally));
+    assert!(body.contains("swap is absent; add a swapfile"), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing.contains("fix: repair the reported hibernation configuration"),
+        "{closing}"
+    );
 }
 
 fn terminal_fixture() -> Terminal {
@@ -134,17 +153,16 @@ fn startup_checks_count_failures_but_only_warn_for_timeouts() {
     });
     let mut tally = Tally::default();
     let rendered = strip(|w| render_lsp(w, &lsp, &mut tally));
-    assert_eq!(
-        rendered,
-        "\nLSP\nSTATE               CHECKOUT   SERVER    RSS  LEASES\n✓ ready             /checkout  running  1 KB       0\n✗ dormant: crashed  /checkout  crashed     -       0\n      /checkout crashed: exit code 1\n      one\n      two\n      three\n      four\n      five\n    ✗ failed cannot start in /checkout: exit code 1\n      one\n      two\n      three\n      four\n      five\n      fix: repair\n    ! slow did not answer initialize within 10s\n      one\n      two\n      three\n      four\n      five\n      fix: wait\n    ✗ bad: empty command\n      fix: configure\n    ✗ project: project configuration is untrusted\n      fix: run rimz trust\n    ✓ healthy starts (1.2)\n    ✓ live running\n    ✗ cannot check this checkout's language servers: bad project config\n    ! 2026-01-01T00:00:00Z: /other rust queue_timeout ({})\n"
-    );
+    assert!(!rendered.contains("fix:"), "{rendered}");
     assert_eq!(tally.alarms.len(), 5, "{rendered}");
     assert_eq!(tally.warns.len(), 2, "{rendered}");
     assert!(rendered.contains("failed cannot start in /checkout: exit code 1"));
     assert!(rendered.contains("slow did not answer initialize within 10s"));
     assert!(rendered.contains("healthy starts (1.2)"));
     assert!(rendered.contains("live running"));
-    assert!(rendered.contains("fix: repair"));
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("fix: repair"), "{closing}");
+    assert!(closing.contains("rimz trust grant"), "{closing}");
     assert!(!rendered.contains("hidden"));
     assert!(rendered.contains("cannot check this checkout's language servers: bad project config"));
 }
@@ -170,13 +188,41 @@ fn shared_language_servers_show_dormant_reason_and_last_refusal() {
             root: "/other".into(),
             server: "rust".into(),
             event: "queue_timeout".into(),
-            details: serde_json::json!({"estimate_bytes": 8_000_000_000_u64}),
+            details: serde_json::json!({"reason": "waiting for available memory"}),
         }),
     });
     let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
-    assert!(rendered.contains("dormant: memory pressure"));
-    assert!(rendered.contains("LEASES"));
-    assert!(rendered.contains("/other rust queue_timeout"));
+    assert!(
+        rendered.contains("1 more dormant or not started — rimz lsp list --all"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("dormant: memory pressure"), "{rendered}");
+    assert!(
+        rendered.contains("/other rust timed out in queue")
+            && rendered.contains("ago: waiting for available memory"),
+        "{rendered}"
+    );
+    let mut tally = Tally {
+        audit: true,
+        ..Tally::default()
+    };
+    let audit = strip(|w| render_lsp(w, &lsp, &mut tally));
+    assert!(audit.contains("· dormant: memory pressure"), "{audit}");
+    assert!(tally.alarms.is_empty() && tally.warns.len() == 1);
+    let Probe::Ready(mut lsp) = lsp else {
+        unreachable!()
+    };
+    let refusal = lsp.last_refusal.as_mut().unwrap();
+    refusal.event = "refused".into();
+    refusal.details = serde_json::json!({"estimate_bytes": 8_000_000_000_u64, "available_bytes": 3_000_000_000_u64, "reserve_bytes": 1_000_000_000_u64, "committed_bytes": 9_000_000_000_u64, "holders": [{"root": "/holder", "server": "rust", "rss_bytes": 4_000_000_000_u64}]});
+    refusal.details["root"] = serde_json::json!("/other");
+    refusal.details["server"] = serde_json::json!("rust");
+    let readable = strip(|w| render_lsp(w, &Probe::Ready(lsp), &mut Tally::default()));
+    assert!(
+        readable.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by /holder rust (4 GB)"),
+        "{readable}"
+    );
+    assert!(!readable.contains("committed_bytes"), "{readable}");
 }
 
 #[test]
@@ -225,7 +271,16 @@ fn shared_language_servers_read_like_lsp_list() {
         ],
         last_refusal: None,
     });
-    let rendered = strip(|w| render_lsp(w, &lsp, &mut Tally::default()));
+    let rendered = strip(|w| {
+        render_lsp(
+            w,
+            &lsp,
+            &mut Tally {
+                audit: true,
+                ..Tally::default()
+            },
+        )
+    });
     let rows: Vec<Vec<&str>> = rendered
         .lines()
         .map(|line| line.split_whitespace().collect())
@@ -266,7 +321,6 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
             "/usr/bin/bwrap",
             "bubblewrap 0.11.0",
             "probe failed",
-            "check user namespaces",
         ] {
             assert!(out.contains(expected), "missing {expected}: {out}");
         }
@@ -275,6 +329,13 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
             tally.alarms.is_empty(),
             mode == rimz::config::Isolation::Host
         );
+        assert!(out.contains("probe failed; check user namespaces"), "{out}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert_eq!(
+            closing.contains("fix: install bubblewrap, or set agents.isolation to host"),
+            mode == rimz::config::Isolation::Sandbox,
+            "{closing}"
+        );
     }
 }
 
@@ -282,14 +343,17 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
 fn machine_config_section_keeps_the_classified_problem_compact() {
     let config = MachineConfigHealth {
         broken_files: vec![MachineConfigProblem {
+            diagnosis: None,
             path: "/home/eddie/.rimz/config.toml".to_owned(),
-            error: "line 144: `auto_continue` is defined more than once in the same table; fix: remove the extra `auto_continue` at /home/eddie/.rimz/config.toml:144, then re-run".to_owned(),
+            error: "line 144: `auto_continue` is defined more than once in the same table"
+                .to_owned(),
             kind: MachineConfigProblemKind::Parse,
         }],
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_machine_config(w, &config, &mut tally)
+        render_machine_config(w, &config, &mut tally)?;
+        render_tally(w, &tally)
     });
 
     assert!(
@@ -298,7 +362,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
     );
     assert!(!out.contains("TOML parse error"), "{out}");
     assert!(
-        out.contains("fix: remove the extra `auto_continue`"),
+        out.contains("fix: repair the reported configuration file"),
         "{out}"
     );
     assert!(
@@ -311,6 +375,7 @@ fn machine_config_section_keeps_the_classified_problem_compact() {
 fn machine_config_definition_problem_names_launch_precondition() {
     let config = MachineConfigHealth {
         broken_files: vec![MachineConfigProblem {
+            diagnosis: None,
             path: "/home/eddie/.agents/teams/bad.md".to_owned(),
             error: "empty layout cell in `claude,,codex`".to_owned(),
             kind: MachineConfigProblemKind::Definition,
@@ -318,7 +383,8 @@ fn machine_config_definition_problem_names_launch_precondition() {
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_machine_config(w, &config, &mut tally)
+        render_machine_config(w, &config, &mut tally)?;
+        render_tally(w, &tally)
     });
 
     assert!(out.contains("cannot be used"), "{out}");
@@ -467,6 +533,7 @@ fn storage_fixture() -> Storage {
 
 fn report_fixture() -> DoctorReport {
     DoctorReport {
+        audit: false,
         hibernate: rimz::harness::hibernate::PreflightReport {
             enabled: false,
             skipped: Some("disabled".into()),
@@ -474,6 +541,7 @@ fn report_fixture() -> DoctorReport {
         },
         folder_trust: None,
         empty_dir: super::super::model::EmptyDir {
+            check_fix: "repair access to the empty root",
             rows: Vec::new(),
             check: Probe::Ready(()),
             profiles_error: None,
@@ -492,9 +560,11 @@ fn report_fixture() -> DoctorReport {
             binary: None,
         },
         workspace: Probe::Unavailable {
+            diagnosis: None,
             error: "test".to_owned(),
         },
         mux: Probe::Unavailable {
+            diagnosis: None,
             error: "test".to_owned(),
         },
         terminal: terminal_fixture(),
@@ -551,6 +621,66 @@ fn render_identity_shows_user_and_binary() {
 }
 
 #[test]
+fn agents_keep_actionable_rows_counted_and_account_limits_contextual() {
+    use super::super::model::AgentRow;
+    for (status, attributed, restartable, problems, warnings, fix) in [
+        (
+            AgentStatus::Failed,
+            false,
+            true,
+            1,
+            0,
+            "rimz agents restart @fox",
+        ),
+        (
+            AgentStatus::Failed,
+            false,
+            false,
+            1,
+            0,
+            "start a new codex agent",
+        ),
+        (AgentStatus::Paused, true, true, 0, 0, ""),
+        (AgentStatus::Waiting, false, true, 0, 0, ""),
+    ] {
+        let report = DoctorReport {
+            agents: Some(AgentRollup::Observed {
+                counts: AgentCounts::default(),
+                rows: vec![AgentRow {
+                    kind: "codex".into(),
+                    agent_id: "session".into(),
+                    branch: Some("main".into()),
+                    status,
+                    phase: rimz::agents::TurnPhase::default(),
+                    last_seen: Timestamp::now(),
+                    handle: "@fox".into(),
+                    account: "codex@team".into(),
+                    turn_error: Some("reason".into()),
+                    attributed_to_account: attributed,
+                    restartable,
+                    historical: false,
+                }],
+            }),
+            ..report_fixture()
+        };
+        let mut tally = Tally::default();
+        let body = strip(|w| render_agents(w, &report, &mut tally));
+        assert!(
+            body.contains("@fox") && body.contains("codex@team") && body.contains("reason"),
+            "{body}"
+        );
+        assert!(!body.contains("fix:"), "{body}");
+        assert_eq!(tally.alarms.len(), problems, "{body}");
+        assert_eq!(tally.warns.len(), warnings, "{body}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(closing.contains(fix), "{closing}");
+        if attributed {
+            assert!(!closing.contains("fix:"), "{closing}");
+        }
+    }
+}
+
+#[test]
 fn terminal_section_renders_depth_signals_and_fix() {
     let terminal = Terminal {
         truecolor_advertised: false,
@@ -562,7 +692,8 @@ fn terminal_section_renders_depth_signals_and_fix() {
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_terminal(w, &terminal, &mut tally)
+        render_terminal(w, &terminal, &mut tally)?;
+        render_tally(w, &tally)
     });
     assert!(out.contains("TERMINAL"), "section title:\n{out}");
     assert!(out.contains("256 (mode auto)"), "resolved depth:\n{out}");
@@ -590,6 +721,20 @@ fn hooks_section_renders_glyph_status_and_fix() {
                 detected: true,
                 status: HookStatus::NotInstalled {
                     fix: "run `rimz hooks install codex` to wire codex agents".to_owned(),
+                },
+            },
+            HookRow {
+                kind: "amp".to_owned(),
+                detected: true,
+                status: HookStatus::InstalledDisabled {
+                    fix: "enable hooks in the provider settings".into(),
+                },
+            },
+            HookRow {
+                kind: "droid".to_owned(),
+                detected: true,
+                status: HookStatus::InstalledDisabled {
+                    fix: "enable hooks in the provider settings".into(),
                 },
             },
             HookRow {
@@ -625,6 +770,21 @@ fn hooks_section_renders_glyph_status_and_fix() {
         assert!(out.contains(expected), "missing {expected}:\n{out}");
     }
     assert!(!out.contains("unsupported"), "{out}");
+    let (body, closing) = out.split_once("✗ 1 problem in HOOKS").unwrap();
+    assert!(
+        !body.contains("FIX") && !body.contains("rimz hooks install"),
+        "{out}"
+    );
+    assert!(closing.contains("✗ HOOKS: codex not installed"), "{out}");
+    assert!(out.contains("! 2 warnings in HOOKS"), "{out}");
+    let grouped = "! HOOKS: 2 findings: amp installed, disabled, droid installed, disabled";
+    assert!(closing.contains(grouped), "{out}");
+    assert!(closing.find("✗ HOOKS:").unwrap() < closing.find(grouped).unwrap());
+    assert_eq!(closing.matches("fix: enable hooks").count(), 1, "{out}");
+    assert!(
+        closing.contains("      fix: run `rimz hooks install codex`"),
+        "{out}"
+    );
     assert!(
         !out.lines()
             .any(|line| line.contains("claude") && line.contains('│')),
@@ -646,7 +806,8 @@ fn hooks_section_renders_blocked_upgrade_fix() {
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_hooks(w, &report, &mut tally)
+        render_hooks(w, &report, &mut tally)?;
+        render_tally(w, &tally)
     });
     assert!(out.contains("blocked"), "{out}");
     assert!(out.contains("opencode upgrade --major"), "{out}");
@@ -662,7 +823,8 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
         room,
         machine_default: false,
         default_for: rimz::room::Scopes::default(),
-        problem: problem.map(str::to_owned),
+        problem: problem.map(|text| text.to_owned().into()),
+        usage: None,
     };
     let accounts = Probe::Ready(Accounts {
         rows: vec![
@@ -698,7 +860,7 @@ fn accounts_section_alarms_only_for_the_room_account_it_cannot_launch_into() {
 
 #[test]
 fn accounts_section_speaks_the_accounts_list_vocabulary() {
-    let accounts = Probe::Ready(Accounts {
+    let mut accounts = Probe::Ready(Accounts {
         rows: vec![AccountRow {
             kind: "codex".to_owned(),
             name: "team".to_owned(),
@@ -707,6 +869,7 @@ fn accounts_section_speaks_the_accounts_list_vocabulary() {
             machine_default: true,
             default_for: rimz::room::Scopes::default(),
             problem: None,
+            usage: None,
         }],
     });
     let out = strip(|w| render_accounts(w, &accounts, &mut Tally::default()));
@@ -721,6 +884,100 @@ fn accounts_section_speaks_the_accounts_list_vocabulary() {
         !out.contains("launch default") && !out.contains("yes"),
         "{out}"
     );
+    use super::super::model::{AccountStanding, AccountUsage};
+    for standing in [
+        AccountStanding::Spent,
+        AccountStanding::Exhausted,
+        AccountStanding::Ready,
+    ] {
+        let Probe::Ready(rows) = &mut accounts else {
+            unreachable!()
+        };
+        rows.rows[0].usage = Some(AccountUsage {
+            read_at: Timestamp::now() - std::time::Duration::from_secs(120),
+            standing,
+            resets_at: (standing == AccountStanding::Spent)
+                .then(|| Timestamp::now() + std::time::Duration::from_secs(3600)),
+            agents: if standing == AccountStanding::Ready {
+                vec![]
+            } else {
+                vec!["@fox".into()]
+            },
+        });
+        let mut tally = Tally::default();
+        let body = strip(|w| render_accounts(w, &accounts, &mut tally));
+        assert!(body.contains("read 2m ago"), "{body}");
+        if standing != AccountStanding::Ready {
+            assert!(body.contains("1 agent paused or failed"), "{body}");
+        }
+        assert!(tally.alarms.is_empty(), "{body}");
+        assert_eq!(
+            tally.warns.len(),
+            usize::from(standing == AccountStanding::Exhausted),
+            "{body}"
+        );
+        match standing {
+            AccountStanding::Spent => assert!(
+                body.contains('▸') && body.contains("spent, resets in") && body.contains("@fox"),
+                "{body}"
+            ),
+            AccountStanding::Exhausted => {
+                let closing = strip(|w| render_tally(w, &tally));
+                assert!(closing.contains("read 2m ago"), "{closing}");
+                assert!(
+                    closing.contains("fix: add credits to the account\n"),
+                    "{closing}"
+                );
+                assert!(!closing.contains("move those agents"), "{closing}");
+            }
+            AccountStanding::Ready => assert!(body.contains("ready, read 2m ago"), "{body}"),
+        }
+    }
+}
+
+#[test]
+fn account_error_fixes_only_appear_in_the_closing_block() {
+    use rimz::agents::BirthLoginErr;
+    let kind = rimz::ids::AgentKind::new_unchecked("codex");
+    for error in [
+        BirthLoginErr::MachineUnknown {
+            kind: kind.clone(),
+            name: "work".parse().unwrap(),
+            configured: vec![],
+            path: "/accounts.toml".into(),
+        },
+        BirthLoginErr::MissingHome {
+            kind: kind.clone(),
+            name: "work".parse().unwrap(),
+            home: "/missing".into(),
+        },
+        BirthLoginErr::HooksMissing {
+            kind: kind.clone(),
+            name: "work".parse().unwrap(),
+            home: "/home/work".into(),
+        },
+    ] {
+        let accounts = Probe::Ready(Accounts {
+            rows: vec![AccountRow {
+                kind: "codex".into(),
+                name: "work".into(),
+                home: None,
+                room: true,
+                machine_default: false,
+                default_for: Default::default(),
+                usage: None,
+                problem: Some(error.into()),
+            }],
+        });
+        let mut tally = Tally::default();
+        let body = strip(|w| render_accounts(w, &accounts, &mut tally));
+        assert!(!body.contains("rimz accounts"), "{body}");
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(
+            closing.contains("fix: run `rimz accounts add codex work`"),
+            "{closing}"
+        );
+    }
 }
 
 #[test]
@@ -752,14 +1009,8 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
         render_loop(w, &loop_tasks, &mut tally)
     });
     assert!(out.contains("LOOP TASKS"), "section title:\n{out}");
-    assert!(
-        out.contains("room open") && out.contains("no room"),
-        "{out}"
-    );
-    assert!(
-        out.contains("morning") && out.contains("07:00 on weekdays"),
-        "{out}"
-    );
+    assert!(out.contains("2 tasks, 1 needs you"), "{out}");
+    assert!(!out.contains("morning"), "{out}");
     assert!(
         out.contains("broken") && out.contains("invalid: bad time"),
         "{out}"
@@ -798,7 +1049,8 @@ fn mux_section_names_a_stranded_legacy_session_with_its_fix() {
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_mux(w, &Probe::Ready(mux), &mut tally)
+        render_mux(w, &Probe::Ready(mux), &mut tally)?;
+        render_tally(w, &tally)
     });
 
     assert!(out.contains("legacy session"), "{out}");
@@ -1260,6 +1512,7 @@ fn mux_section_renders_multiple_presence_plugin_generations() {
 fn mux_section_renders_presence_plugin_listing_unavailable() {
     let mut mux = mux_fixture();
     mux.presence_plugins = Some(Probe::Unavailable {
+        diagnosis: None,
         error: "list-panes failed".to_owned(),
     });
 
@@ -1307,6 +1560,8 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         mux.presence = Some(Presence::Poll {
             reason: "no sidebar running in this workspace".to_owned(),
             expected: true,
+            summary: None,
+            fix: None,
         });
         render_mux(w, &Probe::Ready(mux), &mut tally)?;
         render_tally(w, &tally)
@@ -1318,8 +1573,10 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
         mux.presence = Some(Presence::Poll {
-            reason: "sidebar running but the live tmux watch is not attached".to_owned(),
+            reason: "sidebar running but the live tmux watch is not attached; reattach or run `rimz reload`".to_owned(),
             expected: false,
+            summary: Some("sidebar running but the live tmux watch is not attached"),
+            fix: Some("reattach or run `rimz reload`"),
         });
         render_mux(w, &Probe::Ready(mux), &mut tally)?;
         render_tally(w, &tally)
@@ -1329,6 +1586,12 @@ fn mux_section_tallies_poll_presence_by_expectedness() {
         "{out}"
     );
     assert!(out.contains("! 1 warning"), "{out}");
+    let (body, closing) = out.split_at(out.rfind("\n! ").unwrap());
+    assert!(!body.contains("rimz reload"), "{body}");
+    assert!(
+        closing.contains("fix: reattach or run `rimz reload`"),
+        "{closing}"
+    );
 }
 
 #[test]
@@ -1462,13 +1725,16 @@ fn loop_section_reports_scheduler_coverage() {
             unscheduled,
         };
         let mut tally = Tally::default();
-        let out = strip(|w| render_loop(w, &tasks, &mut tally));
+        let out = strip(|w| {
+            render_loop(w, &tasks, &mut tally)?;
+            render_tally(w, &tally)
+        });
         assert!(out.contains("loop timer") && out.contains(label), "{out}");
         assert_eq!(tally.warns.len(), warnings, "{out}");
         if !tasks.unscheduled.is_empty() {
             for text in [
                 "morning",
-                "no room is open for their root",
+                "no room is open for its root",
                 "rimz loop timer install",
                 "rimz loop timer status",
                 "rimz start",
@@ -1537,6 +1803,7 @@ fn messages_section_renders_stuck_and_failure_rows() {
             at: Timestamp::UNIX_EPOCH,
             problem: "pane rejected input".to_owned(),
         }],
+        failure_counts: std::collections::BTreeMap::from([("errored".to_owned(), 1)]),
     }));
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -1546,12 +1813,13 @@ fn messages_section_renders_stuck_and_failure_rows() {
     assert!(out.contains("MESSAGES"), "{out}");
     assert!(out.contains("3 open: 2 queued, 1 sent"), "{out}");
     assert!(out.contains("msg_stuck") && out.contains("@coder"), "{out}");
+    assert!(!out.contains("msg_failed"), "{out}");
     assert!(
-        out.contains("msg_failed") && out.contains("pane rejected input"),
+        out.contains("▸ 1 recent failure: 1 errored — rimz message list --all --system"),
         "{out}"
     );
     assert!(
-        out.contains("✗ 1 problem in MESSAGES") && out.contains("! 1 warning in MESSAGES"),
+        !out.contains("problem in MESSAGES") && out.contains("! 1 warning in MESSAGES"),
         "a mixed verdict counts message rows and names where they are:\n{out}"
     );
 }
@@ -1563,6 +1831,7 @@ fn messages_section_renders_empty_state() {
         open: OpenCounts::default(),
         stuck: Vec::new(),
         recent_failures: Vec::new(),
+        failure_counts: std::collections::BTreeMap::new(),
     }));
     let out = strip(|w| {
         let mut tally = Tally::default();
@@ -1654,6 +1923,22 @@ fn drain_lag_rows_count_only_while_investigative() {
                 "the row retains the episode span: {out}"
             );
         }
+        let audit = strip(|w| {
+            let mut tally = Tally {
+                audit: true,
+                ..Default::default()
+            };
+            render_diagnostics(w, &report, &mut tally)?;
+            render_tally(w, &tally)
+        });
+        assert!(audit.contains("worst lag 23m19s"), "{audit}");
+        if recovered {
+            assert!(
+                audit.contains('▸') && audit.contains("everything checked is healthy"),
+                "{audit}"
+            );
+            assert!(!audit.contains("handled and closed themselves"), "{audit}");
+        }
     }
 }
 
@@ -1688,11 +1973,14 @@ fn last_incident_section_renders_cause_agents_and_forensics() {
     assert!(out.contains("LAST INCIDENT"), "{out}");
     assert!(out.contains("crash"), "{out}");
     assert!(
-        out.contains("lucid-atlas") && out.contains("quiet-comet"),
+        !out.contains("lucid-atlas") && !out.contains("quiet-comet"),
         "{out}"
     );
-    assert!(out.contains("recovered: 2 of 2"), "{out}");
-    assert!(out.contains("forensics:"), "{out}");
+    assert!(
+        !out.contains("lost:") && !out.contains("recovered:") && !out.contains("forensics:"),
+        "{out}"
+    );
+    assert_eq!(out.lines().filter(|line| line.contains('▸')).count(), 1);
     assert!(
         out.contains("✓ everything checked is healthy"),
         "info incident does not affect tally:\n{out}"
@@ -1714,6 +2002,300 @@ fn last_incident_section_is_absent_without_marker() {
 fn tally_renders_clean_verdict() {
     let out = strip(|w| render_tally(w, &Tally::default()));
     assert!(out.contains("✓ everything checked is healthy"), "{out}");
+}
+
+#[test]
+fn audit_expands_routine_mux_groups_without_counting_them() {
+    let log = MuxLog::Ready {
+        path: "/tmp/log".into(),
+        scope: LogScope::Server,
+        size_bytes: 0,
+        scanned_bytes: 0,
+        logical_records: 5,
+        records_before_cutoff: 0,
+        since: None,
+        problem_records: 5,
+        omitted_issue_groups: 0,
+        log_text_omitted: false,
+        issues: (0..5)
+            .map(|i| {
+                log_issue(
+                    &format!("routine-{i}"),
+                    DoctorState::Expected,
+                    DoctorImpact::Info,
+                    1,
+                )
+            })
+            .collect(),
+    };
+    let mut tally = Tally {
+        audit: true,
+        ..Default::default()
+    };
+    let out = strip(|w| {
+        render_mux_log_notes(w, &log, &mut tally)?;
+        render_tally(w, &tally)
+    });
+    for i in 0..5 {
+        assert!(out.contains(&format!("routine-{i} (once)")), "{out}");
+    }
+    assert!(out.contains("everything checked is healthy"), "{out}");
+}
+
+#[test]
+fn outdated_presence_build_counts_with_a_reload_fix() {
+    let row = PresencePluginRow {
+        plugin_id: 1,
+        loaded_at_ms: Some(1),
+        build: Some("old".into()),
+        status: PresencePluginStatus::Active,
+        rejected_count: None,
+        outdated: true,
+        telemetry: None,
+    };
+    let mut tally = Tally::default();
+    presence_plugin_verdict(&mut tally, &row);
+    let out = strip(|w| render_tally(w, &tally));
+    assert!(out.contains("1 warning"), "{out}");
+    assert!(out.contains("fix: run `rimz reload`"), "{out}");
+}
+
+#[test]
+fn hibernate_uses_the_producers_structured_fix() {
+    let report = rimz::harness::hibernate::PreflightReport {
+        enabled: true,
+        skipped: Some("cgroup.freeze is absent; enable delegation".into()),
+        checks: vec![rimz::harness::hibernate::Check {
+            name: "cgroup.freeze",
+            status: rimz::harness::hibernate::CheckStatus::Warning,
+            detail: "cgroup.freeze is absent; enable delegation".into(),
+            summary: Some("cgroup.freeze is absent".into()),
+            fix: Some("enable delegation"),
+        }],
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_hibernate(w, &report, &mut tally));
+    assert!(!body.contains("enable delegation"), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("fix: enable delegation"), "{closing}");
+}
+
+#[test]
+fn topology_conflict_retains_its_uncounted_remedy() {
+    let writer = TopologyWriterHealth {
+        recorded_bin: None,
+        conflict: Some(super::super::model::TopologyWriterConflict {
+            stale: None,
+            accepted: None,
+            rejected_count: 1,
+            age_secs: 1,
+            fix: "reattach to retire the legacy plugin".into(),
+        }),
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| {
+        let mut kv = KeyVals::new();
+        push_topology_writer(&mut kv, &mut tally, &writer);
+        kv.render(w)
+    });
+    assert!(
+        out.contains("reattach to retire the legacy plugin"),
+        "{out}"
+    );
+    assert!(tally.warns.is_empty());
+}
+
+fn shortfall_details() -> serde_json::Value {
+    serde_json::json!({
+        "root": "/project", "server": "rust", "estimate_bytes": 8_000_000_000_u64,
+        "available_bytes": 3_000_000_000_u64, "reserve_bytes": 1_000_000_000_u64,
+        "holders": [{"root": "/holder", "server": "rust", "rss_bytes": 4_000_000_000_u64}]
+    })
+}
+
+fn assert_refusal_shape(event: &str, details: serde_json::Value, memory: bool) {
+    let record = rimz::diag::lsp::Record {
+        at: Timestamp::now(),
+        root: "/project".into(),
+        server: "rust".into(),
+        event: event.into(),
+        details,
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_lsp_refusal(w, &record, &mut tally));
+    assert!(
+        body.contains(if event == "queue_timeout" {
+            "timed out in queue"
+        } else {
+            "refused"
+        }),
+        "{body}"
+    );
+    assert!(body.contains("0s ago"), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    if memory {
+        assert!(
+            body.contains("needs 8 GB, 3 GB available, 1 GB reserved; held by /holder rust (4 GB)"),
+            "{event}: {body}"
+        );
+    } else {
+        assert!(body.contains("server command is not trusted"), "{body}");
+    }
+    assert_eq!(closing.contains("free memory"), memory, "{closing}");
+    assert!(!body.contains("committed_bytes"), "{body}");
+}
+
+#[test]
+fn refused_shortfall_reports_memory() {
+    assert_refusal_shape("refused", shortfall_details(), true);
+}
+
+#[test]
+fn queue_timeout_shortfall_reports_memory() {
+    assert_refusal_shape("queue_timeout", shortfall_details(), true);
+}
+
+#[test]
+fn refused_reason_does_not_prescribe_freeing_memory() {
+    assert_refusal_shape(
+        "refused",
+        serde_json::json!({"reason": "server command is not trusted"}),
+        false,
+    );
+}
+
+#[test]
+fn legacy_shortfall_ignores_committed_bytes() {
+    let mut details = shortfall_details();
+    details["committed_bytes"] = serde_json::json!(9_000_000_000_u64);
+    assert_refusal_shape("refused", details, true);
+}
+
+#[test]
+fn semicolons_in_probe_errors_are_not_remedies() {
+    let error = "transport unavailable; retry budget was 3";
+    let sandbox = super::super::model::Sandbox {
+        mode: rimz::config::Isolation::Sandbox,
+        path: None,
+        version: None,
+        error: Some(error.into()),
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_sandbox(w, &sandbox, &mut tally));
+    assert!(body.contains(error), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(!closing.contains("fix: retry budget was 3"), "{closing}");
+    let report = rimz::harness::hibernate::PreflightReport {
+        enabled: true,
+        skipped: Some(error.into()),
+        checks: vec![rimz::harness::hibernate::Check {
+            name: "swap",
+            status: rimz::harness::hibernate::CheckStatus::Warning,
+            detail: error.into(),
+            summary: None,
+            fix: None,
+        }],
+    };
+    let mut tally = Tally::default();
+    let body = strip(|w| render_hibernate(w, &report, &mut tally));
+    assert!(body.contains(error), "{body}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(!closing.contains("fix: retry budget was 3"), "{closing}");
+    for presence in [
+        Presence::Poll {
+            reason: error.into(),
+            expected: false,
+            summary: None,
+            fix: None,
+        },
+        Presence::Unavailable {
+            error: error.into(),
+        },
+    ] {
+        let mut tally = Tally::default();
+        presence_cell(&mut tally, &presence);
+        let closing = strip(|w| render_tally(w, &tally));
+        assert!(closing.contains(error), "{closing}");
+        assert!(!closing.contains("fix: retry budget was 3"), "{closing}");
+    }
+}
+
+#[test]
+fn audit_adds_agent_context_without_changing_findings() {
+    use super::super::model::AgentRow;
+    let row = |handle: &str, status, historical: bool| AgentRow {
+        kind: "codex".into(),
+        agent_id: handle.into(),
+        branch: None,
+        status,
+        phase: rimz::agents::TurnPhase::default(),
+        last_seen: Timestamp::now(),
+        handle: handle.into(),
+        account: "codex@team".into(),
+        turn_error: None,
+        attributed_to_account: false,
+        restartable: !historical,
+        historical,
+    };
+    let mut report = report_fixture();
+    let render = |report: &DoctorReport| {
+        let mut tally = Tally::default();
+        strip(|w| render_agents(w, report, &mut tally));
+        strip(|w| render_tally(w, &tally))
+    };
+    report.agents = Some(AgentRollup::Observed {
+        counts: AgentCounts::default(),
+        rows: vec![row("@failed", AgentStatus::Failed, false)],
+    });
+    let plain = render(&report);
+    report.audit = true;
+    let Some(AgentRollup::Observed { rows, .. }) = &mut report.agents else {
+        unreachable!()
+    };
+    rows.extend([
+        row("@waiting", AgentStatus::Waiting, false),
+        row("@ended", AgentStatus::Failed, true),
+    ]);
+    assert_eq!(render(&report), plain);
+}
+
+#[test]
+fn shared_fixes_group_within_their_section_without_changing_counts() {
+    let mut tally = Tally::default();
+    tally.enter("MACHINE CONFIG");
+    for name in ["one.md", "two.md", "three.md"] {
+        tally.record(
+            Severity::Warning,
+            format!("{name} cannot be used"),
+            "rimz agents validate",
+        );
+    }
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing.contains("3 warnings in MACHINE CONFIG"),
+        "{closing}"
+    );
+    assert_eq!(
+        closing.matches("fix: rimz agents validate").count(),
+        1,
+        "{closing}"
+    );
+    tally.enter("OTHER");
+    tally.record(Severity::Warning, "another subject", "rimz agents validate");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(
+        closing.contains("4 warnings in MACHINE CONFIG, OTHER"),
+        "{closing}"
+    );
+    assert!(closing.contains("MACHINE CONFIG: 3 findings"), "{closing}");
+    assert_eq!(
+        closing.matches("fix: rimz agents validate").count(),
+        2,
+        "{closing}"
+    );
+    for name in ["one.md", "two.md", "three.md"] {
+        assert!(closing.contains(name), "{closing}");
+    }
 }
 
 #[test]
@@ -1769,7 +2351,8 @@ fn remote_agent_fields_render_as_key_and_verdict() {
                 ],
             },
             &mut tally,
-        )
+        )?;
+        render_tally(w, &tally)
     });
     assert!(out.contains("claude"), "{out}");
     assert!(out.contains("enabled, blocked"), "{out}");

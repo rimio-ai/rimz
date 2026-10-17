@@ -20,7 +20,11 @@ use rimz::workspace::RootClass;
 #[serde(rename_all = "snake_case")]
 pub(super) enum Probe<T> {
     Ready(T),
-    Unavailable { error: String },
+    Unavailable {
+        error: String,
+        #[serde(skip)]
+        diagnosis: Option<rimz::config::ConfigFileDiagnosis>,
+    },
 }
 
 /// The whole report. Workspace-scoped sections are `None` when the workspace
@@ -28,6 +32,7 @@ pub(super) enum Probe<T> {
 #[derive(Debug, Serialize)]
 pub(super) struct DoctorReport {
     pub(super) schema: &'static str,
+    pub(super) audit: bool,
     pub(super) version: &'static str,
     pub(super) host: Host,
     pub(super) workspace: Probe<Workspace>,
@@ -72,6 +77,8 @@ pub(super) struct FolderTrust {
 pub(super) struct EmptyDir {
     pub(super) rows: Vec<EmptyDirRow>,
     pub(super) check: Probe<()>,
+    #[serde(skip)]
+    pub(super) check_fix: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) profiles_error: Option<String>,
 }
@@ -129,6 +136,8 @@ pub(super) struct MachineConfigHealth {
 pub(super) struct MachineConfigProblem {
     pub(super) path: String,
     pub(super) error: String,
+    #[serde(skip)]
+    pub(super) diagnosis: Option<rimz::config::ConfigFileDiagnosis>,
     #[serde(skip)]
     pub(super) kind: MachineConfigProblemKind,
 }
@@ -480,10 +489,23 @@ pub(super) struct SidebarGroup {
 #[derive(Debug, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub(super) enum Presence {
-    Event { poked_secs: u64 },
-    Poll { reason: String, expected: bool },
-    NotApplicable { reason: String },
-    Unavailable { error: String },
+    Event {
+        poked_secs: u64,
+    },
+    Poll {
+        reason: String,
+        expected: bool,
+        #[serde(skip)]
+        summary: Option<&'static str>,
+        #[serde(skip)]
+        fix: Option<&'static str>,
+    },
+    NotApplicable {
+        reason: String,
+    },
+    Unavailable {
+        error: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -547,7 +569,45 @@ pub(super) struct AccountRow {
     pub(super) default_for: rimz::room::Scopes,
     /// Why a room cannot launch into this account, with the fix.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) problem: Option<String>,
+    pub(super) problem: Option<AccountProblem>,
+    pub(super) usage: Option<AccountUsage>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+pub(super) struct AccountProblem {
+    pub(super) text: String,
+    #[serde(skip)]
+    pub(super) summary: String,
+    #[serde(skip)]
+    pub(super) fix: String,
+}
+
+impl From<String> for AccountProblem {
+    fn from(text: String) -> Self {
+        Self {
+            summary: text.clone(),
+            text,
+            fix: "repair this account's configuration and hooks, then run `rimz accounts list`"
+                .into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AccountUsage {
+    pub(super) read_at: Timestamp,
+    pub(super) standing: AccountStanding,
+    pub(super) resets_at: Option<Timestamp>,
+    pub(super) agents: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum AccountStanding {
+    Ready,
+    Spent,
+    Exhausted,
 }
 
 #[derive(Debug, Serialize)]
@@ -629,6 +689,8 @@ pub(super) struct LoopTaskRow {
 pub(super) enum RemoteControl {
     Unavailable {
         error: String,
+        #[serde(skip)]
+        diagnosis: Option<rimz::config::ConfigFileDiagnosis>,
     },
     Off,
     On {
@@ -671,9 +733,19 @@ pub(super) struct StorageRootView {
 pub(super) struct Protocols {
     pub(super) event: &'static str,
     pub(super) sidebar: &'static str,
-    pub(super) warnings: Vec<String>,
+    pub(super) warnings: Vec<ProtocolWarning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) build_drift: Option<BuildDrift>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+pub(super) struct ProtocolWarning {
+    pub(super) text: String,
+    #[serde(skip)]
+    pub(super) detail: Option<String>,
+    #[serde(skip)]
+    pub(super) fix: &'static str,
 }
 
 /// More than one rimz build is writing this workspace: the distinct builds seen
@@ -720,6 +792,14 @@ pub(super) struct AgentRow {
     pub(super) status: AgentStatus,
     pub(super) phase: rimz::agents::TurnPhase,
     pub(super) last_seen: Timestamp,
+    pub(super) handle: String,
+    pub(super) account: String,
+    pub(super) turn_error: Option<String>,
+    pub(super) attributed_to_account: bool,
+    #[serde(skip)]
+    pub(super) restartable: bool,
+    #[serde(skip)]
+    pub(super) historical: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -762,6 +842,7 @@ pub(super) struct Messages {
     pub(super) open: OpenCounts,
     pub(super) stuck: Vec<MessageProblemRow>,
     pub(super) recent_failures: Vec<MessageProblemRow>,
+    pub(super) failure_counts: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Default, Serialize)]

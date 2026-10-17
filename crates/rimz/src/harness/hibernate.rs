@@ -702,6 +702,10 @@ pub struct Check {
     pub name: &'static str,
     pub status: CheckStatus,
     pub detail: String,
+    #[serde(skip)]
+    pub summary: Option<String>,
+    #[serde(skip)]
+    pub fix: Option<&'static str>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -799,6 +803,8 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         report.skipped = Some(error.to_string());
         report.checks.push(Check {
             name: "schedule",
+            summary: None,
+            fix: None,
             status: CheckStatus::Error,
             detail: error.to_string(),
         });
@@ -812,31 +818,38 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         report.skipped = Some("disabled".into());
         return report;
     }
-    let mut check = |name, ok: bool, success: &str, failure: &str| {
-        if !ok && report.skipped.is_none() {
-            report.skipped = Some(failure.into());
-        }
-        report.checks.push(Check {
-            name,
-            status: if ok {
-                CheckStatus::Ok
-            } else {
-                CheckStatus::Warning
-            },
-            detail: if ok { success.into() } else { failure.into() },
-        });
-    };
+    let mut check =
+        |name, ok: bool, success: &str, failure: &str, remedy: Option<(&str, &'static str)>| {
+            if !ok && report.skipped.is_none() {
+                report.skipped = Some(failure.into());
+            }
+            report.checks.push(Check {
+                name,
+                summary: remedy
+                    .filter(|_| !ok)
+                    .map(|(summary, _)| summary.to_owned()),
+                fix: remedy.filter(|_| !ok).map(|(_, fix)| fix),
+                status: if ok {
+                    CheckStatus::Ok
+                } else {
+                    CheckStatus::Warning
+                },
+                detail: if ok { success.into() } else { failure.into() },
+            });
+        };
     check(
         "systemd-run",
         host.systemd_run(),
         "found",
         "systemd-run is unavailable; install systemd or set agents.hibernate.enabled = false",
+        None,
     );
     check(
         "user manager",
         host.manager(),
         "reachable",
         "systemd user manager is unreachable; run loginctl enable-linger <user> or log in through a systemd session, or, when XDG_RUNTIME_DIR is unset or overridden (an SSH login, a sandbox), export XDG_RUNTIME_DIR=/run/user/$(id -u)",
+        None,
     );
     let slice = host.app_slice();
     let memory = slice.as_ref().is_ok_and(|slice| {
@@ -852,6 +865,7 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         memory,
         "delegated app.slice is writable",
         "user app.slice is unavailable, unwritable or lacks memory; enable delegation with systemctl edit user@.service and Delegate=memory pids cpu",
+        None,
     );
     for (name, fix) in [
         (
@@ -870,6 +884,7 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
                 .is_ok_and(|slice| host.writable(&slice.join(name))),
             "available and writable",
             &format!("{name} is absent or unwritable; {fix}"),
+            Some((&format!("{name} is absent or unwritable"), fix)),
         );
     }
     let swap = host
@@ -881,6 +896,7 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         swap.is_some_and(|memory| memory.swap_total_bytes > 0),
         "configured",
         "swap is absent or unreadable; add zram, zswap or a swapfile; in a container, allow swap",
+        None,
     );
     // A namespace can hide tighter ancestors. Only a visible zero is proof of refusal.
     let limit = slice.as_ref().ok().map(|slice| {
@@ -902,10 +918,13 @@ fn inspect_with(config: &HibernateConfig, host: &impl Host) -> PreflightReport {
         limit != Some(false),
         "no visible zero limit (not proof of swap availability)",
         "ancestor memory.swap.max is zero or unreadable; raise the ancestor memory.swap.max limit",
+        None,
     );
     if swap.is_some_and(|memory| memory.swap_total_bytes > 0 && memory.swap_free_bytes == 0) {
         report.checks.push(Check {
             name: "free swap",
+            summary: None,
+            fix: None,
             status: CheckStatus::Warning,
             detail: "swap is configured but full; free swap space".into(),
         });

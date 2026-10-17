@@ -28,17 +28,28 @@ use super::model::{
 #[derive(Clone, Copy)]
 enum Health {
     Ok,
-    Warn,
-    Alarm,
     Info,
     Neutral,
+}
+
+#[derive(Clone, Copy)]
+enum Severity {
+    Warning,
+    Problem,
+}
+
+impl Severity {
+    fn parts(self) -> (&'static str, anstyle::Style) {
+        crate::cli::render::verdict(match self {
+            Self::Warning => status::StateRole::Waiting,
+            Self::Problem => status::StateRole::Failed,
+        })
+    }
 }
 
 fn parts(health: Health) -> (&'static str, anstyle::Style) {
     let role = match health {
         Health::Ok => status::StateRole::Success,
-        Health::Warn => status::StateRole::Waiting,
-        Health::Alarm => status::StateRole::Failed,
         Health::Info => status::StateRole::Working,
         Health::Neutral => status::StateRole::Neutral,
     };
@@ -50,8 +61,16 @@ fn parts(health: Health) -> (&'static str, anstyle::Style) {
 #[derive(Default)]
 struct Tally {
     section: &'static str,
-    warns: Vec<&'static str>,
-    alarms: Vec<&'static str>,
+    audit: bool,
+    warns: Vec<Finding>,
+    alarms: Vec<Finding>,
+}
+
+struct Finding {
+    section: &'static str,
+    text: String,
+    fix: String,
+    subject: String,
 }
 
 impl Tally {
@@ -59,37 +78,85 @@ impl Tally {
         self.section = section;
     }
 
-    fn record(&mut self, health: Health) {
-        let bucket = match health {
-            Health::Warn => &mut self.warns,
-            Health::Alarm => &mut self.alarms,
-            Health::Ok | Health::Info | Health::Neutral => return,
+    fn record(&mut self, severity: Severity, text: impl Into<String>, fix: impl Into<String>) {
+        let text = text.into();
+        self.record_subject(severity, text.clone(), fix, text);
+    }
+
+    fn record_subject(
+        &mut self,
+        severity: Severity,
+        text: String,
+        fix: impl Into<String>,
+        subject: String,
+    ) {
+        let bucket = match severity {
+            Severity::Warning => &mut self.warns,
+            Severity::Problem => &mut self.alarms,
         };
-        bucket.push(self.section);
+        bucket.push(Finding {
+            section: self.section,
+            text,
+            fix: fix.into(),
+            subject,
+        });
     }
 }
 
+fn counted(
+    tally: &mut Tally,
+    severity: Severity,
+    text: impl Into<String>,
+    fix: impl Into<String>,
+) -> Cell {
+    tally.record(severity, text, fix);
+    let (glyph, style) = severity.parts();
+    cell(glyph).fg(style)
+}
+
+fn counted_verdict(
+    tally: &mut Tally,
+    severity: Severity,
+    text: impl Into<String>,
+    fix: impl Into<String>,
+) -> Cell {
+    let text = text.into();
+    tally.record(severity, text.clone(), fix);
+    let (glyph, style) = severity.parts();
+    cell(format!("{glyph} {text}")).fg(style)
+}
+
+fn counted_note(
+    tally: &mut Tally,
+    w: &mut impl Write,
+    severity: Severity,
+    text: &str,
+    fix: impl Into<String>,
+) -> io::Result<()> {
+    tally.record(severity, text, fix);
+    let (glyph, style) = severity.parts();
+    writeln!(w, "    {}", paint(style, &format!("{glyph} {text}")))
+}
+
 /// The sections a bucket touched, in report order and named once each.
-fn sections(hits: &[&'static str]) -> String {
+fn sections(hits: &[Finding]) -> String {
     let mut seen = Vec::new();
     for hit in hits {
-        if !seen.contains(hit) {
-            seen.push(*hit);
+        if !seen.contains(&hit.section) {
+            seen.push(hit.section);
         }
     }
     seen.join(", ")
 }
 
 /// A glyph-only cell for a table's status column.
-fn badge(tally: &mut Tally, health: Health) -> Cell {
-    tally.record(health);
+fn badge(health: Health) -> Cell {
     let (glyph, style) = parts(health);
     cell(glyph).fg(style)
 }
 
 /// A `glyph text` value cell, both painted in the verdict's tone.
-fn verdict(tally: &mut Tally, health: Health, text: impl Into<String>) -> Cell {
-    tally.record(health);
+fn verdict(health: Health, text: impl Into<String>) -> Cell {
     let (glyph, style) = parts(health);
     cell(format!("{glyph} {}", text.into())).fg(style)
 }
@@ -98,21 +165,27 @@ fn unavailable_text(error: &str) -> String {
     format!("unavailable ({error})")
 }
 
-fn unavailable(tally: &mut Tally, health: Health, error: &str) -> Cell {
-    verdict(tally, health, unavailable_text(error))
+fn unavailable(tally: &mut Tally, severity: Severity, error: &str, fix: impl Into<String>) -> Cell {
+    counted_verdict(tally, severity, unavailable_text(error), fix)
 }
 
-fn fit_cell(tally: &mut Tally, fits: bool, used: usize, limit: usize, path: &str) -> Cell {
-    let (health, label) = if fits {
-        (Health::Ok, "OK")
+fn fit_cell(
+    tally: &mut Tally,
+    fits: bool,
+    used: usize,
+    limit: usize,
+    path: &str,
+    fix: &str,
+) -> Cell {
+    let text = format!(
+        "{} ({used}/{limit} bytes for {path})",
+        if fits { "OK" } else { "TOO LONG" }
+    );
+    if fits {
+        verdict(Health::Ok, text)
     } else {
-        (Health::Alarm, "TOO LONG")
-    };
-    verdict(
-        tally,
-        health,
-        format!("{label} ({used}/{limit} bytes for {path})"),
-    )
+        counted_verdict(tally, Severity::Problem, text, fix)
+    }
 }
 
 fn style_of(health: Health) -> anstyle::Style {
@@ -128,8 +201,7 @@ fn section(w: &mut impl Write, tally: &mut Tally, title: &'static str) -> io::Re
 }
 
 /// A hanging note under a section: an indented `glyph text` line.
-fn note(tally: &mut Tally, w: &mut impl Write, health: Health, text: &str) -> io::Result<()> {
-    tally.record(health);
+fn note(w: &mut impl Write, health: Health, text: &str) -> io::Result<()> {
     let (glyph, style) = parts(health);
     writeln!(w, "    {}", paint(style, &format!("{glyph} {text}")))
 }
@@ -144,11 +216,6 @@ fn render_sandbox(
     tally: &mut Tally,
 ) -> io::Result<()> {
     section(w, tally, "SANDBOX")?;
-    let health = match (sandbox.mode, sandbox.error.is_some()) {
-        (rimz::config::Isolation::Host, _) => Health::Info,
-        (rimz::config::Isolation::Sandbox, true) => Health::Alarm,
-        (rimz::config::Isolation::Sandbox, false) => Health::Ok,
-    };
     let mut kv = KeyVals::new().indent(2);
     kv.push("mode", cell(sandbox.mode.to_string()));
     kv.push(
@@ -164,15 +231,28 @@ fn render_sandbox(
     if let Some(version) = &sandbox.version {
         kv.push("version", cell(version));
     }
+    let error = sandbox.error.as_deref().unwrap_or("passed");
     kv.push(
         "probe",
-        verdict(tally, health, sandbox.error.as_deref().unwrap_or("passed")),
+        match (sandbox.mode, &sandbox.error) {
+            (rimz::config::Isolation::Sandbox, Some(_)) => counted_verdict(
+                tally,
+                Severity::Problem,
+                error,
+                "install bubblewrap, or set agents.isolation to host",
+            ),
+            (rimz::config::Isolation::Host, _) => verdict(Health::Info, error),
+            (_, None) => verdict(Health::Ok, "passed"),
+        },
     );
     kv.render(w)
 }
 
 pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Result<()> {
-    let mut tally = Tally::default();
+    let mut tally = Tally {
+        audit: report.audit,
+        ..Tally::default()
+    };
     render_identity(w, report.version, &report.host)?;
     render_workspace(w, &report.workspace, &mut tally)?;
     render_mux(w, &report.mux, &mut tally)?;
@@ -219,20 +299,30 @@ fn render_hibernate(
     kv.push("enabled", cell(report.enabled.to_string()));
     kv.push(
         "active",
-        cell(
-            report
-                .skipped
-                .as_ref()
-                .map_or_else(|| "yes".into(), |reason| format!("skipped: {reason}")),
-        ),
+        cell(report.skipped.as_ref().map_or_else(
+            || "yes".into(),
+            |reason| {
+                let summary = report
+                    .checks
+                    .iter()
+                    .find(|check| !matches!(check.status, CheckStatus::Ok))
+                    .and_then(|check| check.summary.as_deref())
+                    .unwrap_or(reason);
+                format!("skipped: {summary}")
+            },
+        )),
     );
     for check in &report.checks {
-        let health = match check.status {
-            CheckStatus::Ok => Health::Ok,
-            CheckStatus::Warning => Health::Warn,
-            CheckStatus::Error => Health::Alarm,
+        let fix = check
+            .fix
+            .unwrap_or("repair the reported hibernation configuration or missing prerequisite");
+        let text = check.summary.as_deref().unwrap_or(&check.detail);
+        let value = match check.status {
+            CheckStatus::Ok => verdict(Health::Ok, text),
+            CheckStatus::Warning => counted_verdict(tally, Severity::Warning, text, fix),
+            CheckStatus::Error => counted_verdict(tally, Severity::Problem, text, fix),
         };
-        kv.push(check.name, verdict(tally, health, &check.detail));
+        kv.push(check.name, value);
     }
     kv.render(w)
 }
@@ -244,137 +334,254 @@ fn render_lsp(
 ) -> io::Result<()> {
     section(w, tally, "LSP")?;
     let Probe::Ready(lsp) = lsp else {
-        if let Probe::Unavailable { error } = lsp {
-            note(tally, w, Health::Warn, &unavailable_text(error))?;
+        if let Probe::Unavailable { error, .. } = lsp {
+            counted_note(
+                tally,
+                w,
+                Severity::Warning,
+                error,
+                "run `rimz lsp list --json` to inspect the registry error",
+            )?;
         }
         return Ok(());
     };
-    if lsp.servers.is_empty() {
-        note(tally, w, Health::Neutral, "no shared language servers")?;
-    } else {
-        let mut servers: Vec<_> = lsp.servers.iter().collect();
-        servers.sort_by_key(|server| status::lsp_order(&server.entry));
-        let mut table = Table::new(["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"]).right(&[3, 4]);
-        for server in servers {
-            use status::StateRole;
-            let health = match status::lsp(&server.entry.state) {
-                StateRole::Success => Health::Ok,
-                StateRole::Working => Health::Info,
-                StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => Health::Warn,
-                StateRole::Failed => Health::Alarm,
-                StateRole::Neutral => Health::Neutral,
-            };
-            let rss = if server.entry.state.is_running() {
-                cell(rimz::utils::size::decimal_bytes(server.rss_bytes))
-            } else {
-                cell("-").dash()
-            };
-            table.row([
-                verdict(tally, health, lsp_state_label(&server.entry.state)),
-                cell(home_relative_path(&server.entry.root)),
-                cell(&server.entry.server),
-                rss,
-                cell(server.entry.leases.len().to_string()),
-            ]);
-        }
-        table.render(w)?;
-        for server in &lsp.servers {
-            if matches!(
-                server.entry.state,
-                rimz::lsp::registry::State::Dormant {
-                    reason: Some(rimz::lsp::registry::StopReason::Crashed),
-                    ..
-                }
-            ) && let Some(cause) = &server.entry.last_crash
-            {
-                detail(
-                    w,
-                    palette::muted(),
-                    &format!(
-                        "{} {}: {}",
-                        home_relative_path(&server.entry.root),
-                        server.entry.server,
-                        cause.exit_summary()
-                    ),
-                )?;
-                render_stderr(w, cause)?;
-            }
-        }
-    }
+    render_lsp_servers(w, &lsp.servers, tally)?;
     for check in &lsp.checks {
         use rimz::lsp::broker::probe::Outcome;
         let name = &check.server;
-        let (health, text, cause, fix) = match &check.outcome {
-            Outcome::Running { .. } => (Health::Ok, format!("{name} running"), None, None),
-            Outcome::Started { version } => (
+        match &check.outcome {
+            Outcome::Running { .. } => note(w, Health::Ok, &format!("{name} running"))?,
+            Outcome::Started { version } => note(
+                w,
                 Health::Ok,
-                format!(
+                &format!(
                     "{name} starts{}",
                     version
                         .as_ref()
                         .map_or_else(String::new, |version| format!(" ({version})"))
                 ),
-                None,
-                None,
-            ),
-            Outcome::Failed { cause, fix } => (
-                Health::Alarm,
-                format!(
-                    "{name} cannot start in {}: {}",
-                    home_relative_path(&check.root),
-                    cause.exit_summary()
-                ),
-                Some(cause),
-                Some(fix),
-            ),
-            Outcome::TimedOut { cause, fix } => (
-                Health::Warn,
-                format!("{name} did not answer initialize within 10s"),
-                Some(cause),
-                Some(fix),
-            ),
-            Outcome::Invalid { error, fix } => {
-                (Health::Alarm, format!("{name}: {error}"), None, Some(fix))
+            )?,
+            Outcome::Failed { cause, fix } => {
+                counted_note(
+                    tally,
+                    w,
+                    Severity::Problem,
+                    &format!(
+                        "{name} cannot start in {}: {}",
+                        home_relative_path(&check.root),
+                        cause.exit_summary()
+                    ),
+                    fix,
+                )?;
+                render_stderr(w, cause)?;
             }
-            Outcome::Untrusted { fix } => (
-                Health::Alarm,
-                format!("{name}: project configuration is untrusted"),
-                None,
-                Some(fix),
-            ),
-        };
-        note(tally, w, health, &text)?;
-        if let Some(cause) = cause {
-            render_stderr(w, cause)?;
-        }
-        if let Some(fix) = fix {
-            detail(w, palette::muted(), &format!("fix: {fix}"))?;
+            Outcome::TimedOut { cause, fix } => {
+                counted_note(
+                    tally,
+                    w,
+                    Severity::Warning,
+                    &format!("{name} did not answer initialize within 10s"),
+                    fix,
+                )?;
+                render_stderr(w, cause)?;
+            }
+            Outcome::Invalid { error, fix } => counted_note(
+                tally,
+                w,
+                Severity::Problem,
+                &format!("{name}: {error}"),
+                fix,
+            )?,
+            Outcome::Untrusted { .. } => counted_note(
+                tally,
+                w,
+                Severity::Problem,
+                &format!("{name}: project configuration is untrusted"),
+                "review the project's command paths, then run `rimz trust grant`",
+            )?,
         }
     }
     if let Some(error) = &lsp.checks_error {
-        note(
+        counted_note(
             tally,
             w,
-            Health::Alarm,
+            Severity::Problem,
             &format!("cannot check this checkout's language servers: {error}"),
+            "repair this checkout's LSP configuration, then re-run `rimz doctor`",
         )?;
     }
     if let Some(record) = &lsp.last_refusal {
+        render_lsp_refusal(w, record, tally)?;
+    }
+    Ok(())
+}
+
+fn render_lsp_servers(
+    w: &mut impl Write,
+    servers: &[super::model::LspServer],
+    tally: &mut Tally,
+) -> io::Result<()> {
+    use rimz::lsp::registry::{State, StopReason};
+    if servers.is_empty() {
+        return note(w, Health::Neutral, "no shared language servers");
+    }
+    let mut visible: Vec<_> = servers
+        .iter()
+        .filter(|server| {
+            tally.audit
+                || server.entry.state.is_running()
+                || matches!(
+                    server.entry.state,
+                    State::Dormant {
+                        reason: Some(StopReason::Crashed),
+                        ..
+                    }
+                )
+        })
+        .collect();
+    visible.sort_by_key(|server| status::lsp_order(&server.entry));
+    let hidden = servers.len() - visible.len();
+    let mut table = Table::new(["STATE", "CHECKOUT", "SERVER", "RSS", "LEASES"]).right(&[3, 4]);
+    for server in &visible {
+        let label = lsp_state_label(&server.entry.state);
+        let state = if matches!(
+            server.entry.state,
+            State::Dormant {
+                reason: Some(StopReason::Crashed),
+                ..
+            }
+        ) {
+            tally.record(
+                Severity::Problem,
+                format!(
+                    "{} {}: {label}",
+                    home_relative_path(&server.entry.root),
+                    server.entry.server
+                ),
+                "inspect the crash below and repair the language server, then retry the query",
+            );
+            let (glyph, style) = Severity::Problem.parts();
+            cell(format!("{glyph} {label}")).fg(style)
+        } else {
+            verdict(
+                match status::lsp(&server.entry.state) {
+                    status::StateRole::Success => Health::Ok,
+                    status::StateRole::Working => Health::Info,
+                    _ => Health::Neutral,
+                },
+                label,
+            )
+        };
+        table.row([
+            state,
+            cell(home_relative_path(&server.entry.root)),
+            cell(&server.entry.server),
+            if server.entry.state.is_running() {
+                cell(rimz::utils::size::decimal_bytes(server.rss_bytes))
+            } else {
+                cell("-").dash()
+            },
+            cell(server.entry.leases.len().to_string()),
+        ]);
+    }
+    if !visible.is_empty() {
+        table.render(w)?;
+    }
+    for server in visible {
+        if matches!(
+            server.entry.state,
+            State::Dormant {
+                reason: Some(StopReason::Crashed),
+                ..
+            }
+        ) && let Some(cause) = &server.entry.last_crash
+        {
+            detail(
+                w,
+                palette::muted(),
+                &format!(
+                    "{} {}: {}",
+                    home_relative_path(&server.entry.root),
+                    server.entry.server,
+                    cause.exit_summary()
+                ),
+            )?;
+            render_stderr(w, cause)?;
+        }
+    }
+    if hidden > 0 {
         note(
-            tally,
             w,
-            Health::Warn,
-            &format!(
-                "{}: {} {} {} ({})",
-                record.at,
-                home_relative_path(&record.root),
-                record.server,
-                record.event,
-                record.details
-            ),
+            Health::Neutral,
+            &format!("{hidden} more dormant or not started — rimz lsp list --all"),
         )?;
     }
     Ok(())
+}
+
+fn render_lsp_refusal(
+    w: &mut impl Write,
+    record: &rimz::diag::lsp::Record,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    let (reason, fix) = if let Ok(shortfall) =
+        serde_json::from_value::<rimz::lsp::admission::Shortfall>(record.details.clone())
+    {
+        let bytes = rimz::utils::size::decimal_bytes;
+        let mut text = format!(
+            "needs {}, {} available, {} reserved",
+            bytes(shortfall.estimate_bytes),
+            bytes(shortfall.available_bytes),
+            bytes(shortfall.reserve_bytes)
+        );
+        if !shortfall.holders.is_empty() {
+            let holders = shortfall
+                .holders
+                .iter()
+                .map(|holder| {
+                    format!(
+                        "{} {} ({})",
+                        home_relative_path(&holder.root),
+                        holder.server,
+                        bytes(holder.rss_bytes)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!("; held by {holders}"));
+        }
+        (
+            text,
+            "close unused programs or stop unused language servers to free memory, then retry the query",
+        )
+    } else {
+        (
+            record
+                .details
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("startup refused")
+                .to_owned(),
+            "inspect the startup cause in `rimz doctor --json`, repair that cause, then retry the query",
+        )
+    };
+    counted_note(
+        tally,
+        w,
+        Severity::Warning,
+        &format!(
+            "{} {} {} {}: {reason}",
+            home_relative_path(&record.root),
+            record.server,
+            if record.event == "queue_timeout" {
+                "timed out in queue"
+            } else {
+                "refused"
+            },
+            age_short(Timestamp::now(), record.at),
+        ),
+        fix,
+    )
 }
 
 fn render_stderr(w: &mut impl Write, cause: &rimz::lsp::registry::CrashCause) -> io::Result<()> {
@@ -401,7 +608,6 @@ fn render_home(w: &mut impl Write, home: &Home, tally: &mut Tally) -> io::Result
         kv.push(
             "RIMZ_AGENTS_HOME",
             verdict(
-                tally,
                 Health::Info,
                 format!(
                     "overrides RIMZ_HOME; profiles, teams, and skills read from {}",
@@ -410,23 +616,26 @@ fn render_home(w: &mut impl Write, home: &Home, tally: &mut Tally) -> io::Result
             ),
         );
     }
-    let legacy = if home.legacy_roots.is_empty() {
-        verdict(tally, Health::Ok, "none")
-    } else {
-        let roots = home
-            .legacy_roots
-            .iter()
-            .map(|root| home_relative(root))
-            .collect::<Vec<_>>()
-            .join(", ");
-        verdict(tally, Health::Warn, format!("{roots} (not read)"))
-    };
-    kv.push("legacy roots", legacy);
     kv.render(w)?;
-    if let Some(fix) = &home.fix {
-        detail(w, style_of(Health::Neutral), &format!("fix: {fix}"))?;
+    if home.legacy_roots.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    let roots = home
+        .legacy_roots
+        .iter()
+        .map(|root| home_relative(root))
+        .collect::<Vec<_>>()
+        .join(", ");
+    counted_note(
+        tally,
+        w,
+        Severity::Warning,
+        &format!("legacy roots {roots} are still on disk and not read"),
+        format!(
+            "move what you still need from {roots} into {} by hand, then delete them (docs/guide/configuration.md#moving-from-the-xdg-roots)",
+            home_relative(&home.path)
+        ),
+    )
 }
 
 fn render_machine_config(
@@ -439,40 +648,48 @@ fn render_machine_config(
         let mut kv = KeyVals::new().indent(2);
         kv.push(
             "config files",
-            verdict(tally, Health::Ok, "all present files parse"),
+            verdict(Health::Ok, "all present files parse"),
         );
         return kv.render(w);
     }
     for problem in &config.broken_files {
+        let summary = problem
+            .diagnosis
+            .as_ref()
+            .map(|diagnosis| diagnosis.summary());
+        let error = summary.as_deref().unwrap_or(&problem.error);
         let detail = match problem.kind {
-            MachineConfigProblemKind::Definition => format!(
-                "{} cannot be used: {}",
-                home_relative(&problem.path),
-                problem.error
-            ),
+            MachineConfigProblemKind::Definition => {
+                format!("{} cannot be used: {}", home_relative(&problem.path), error)
+            }
             MachineConfigProblemKind::Parse => format!(
                 "{} is unparseable: {}; settings in this file use built-in defaults",
                 home_relative(&problem.path),
-                problem.error,
+                error,
             ),
             MachineConfigProblemKind::Semantic => format!(
                 "{} is invalid: {}; settings in this file use built-in defaults",
                 home_relative(&problem.path),
-                problem.error,
+                error,
             ),
         };
-        note(tally, w, Health::Warn, &detail)?;
-    }
-    if config
-        .broken_files
-        .iter()
-        .any(|problem| matches!(problem.kind, MachineConfigProblemKind::Definition))
-    {
-        detail(
-            w,
-            style_of(Health::Neutral),
-            "fix: run `rimz agents validate`; launches selecting these definitions are refused until they pass",
-        )?;
+        let fix = if matches!(problem.kind, MachineConfigProblemKind::Definition) {
+            "run `rimz agents validate`; launches selecting these definitions are refused until they pass"
+        } else {
+            "repair the reported configuration file, then re-run `rimz doctor`"
+        };
+        let fix = problem
+            .diagnosis
+            .as_ref()
+            .map_or(fix, |diagnosis| diagnosis.fix());
+        tally.record_subject(
+            Severity::Warning,
+            detail.clone(),
+            fix,
+            home_relative(&problem.path),
+        );
+        let (glyph, style) = Severity::Warning.parts();
+        writeln!(w, "    {}", paint(style, &format!("{glyph} {detail}")))?;
     }
     Ok(())
 }
@@ -504,7 +721,6 @@ fn render_terminal(w: &mut impl Write, terminal: &Terminal, tally: &mut Tally) -
     kv.push(
         "depth",
         verdict(
-            tally,
             depth_health,
             format!(
                 "{} (mode {})",
@@ -525,7 +741,10 @@ fn render_terminal(w: &mut impl Write, terminal: &Terminal, tally: &mut Tally) -
         .fg(palette::faint()),
     );
     if let Some(fix) = &terminal.fix {
-        kv.push("fix", verdict(tally, Health::Warn, fix));
+        kv.push(
+            "color",
+            counted_verdict(tally, Severity::Warning, "truecolor is not advertised", fix),
+        );
     }
     kv.render(w)
 }
@@ -546,10 +765,15 @@ fn render_workspace(
     section(w, tally, "WORKSPACE")?;
     let mut kv = KeyVals::new().indent(2);
     match workspace {
-        Probe::Unavailable { error } => {
+        Probe::Unavailable { error, .. } => {
             kv.push(
                 "workspace",
-                verdict(tally, Health::Alarm, format!("could not resolve ({error})")),
+                counted_verdict(
+                    tally,
+                    Severity::Problem,
+                    format!("could not resolve ({error})"),
+                    "run `rimz doctor --root <project-path>` from an existing project directory",
+                ),
             );
             kv.render(w)
         }
@@ -570,17 +794,30 @@ fn render_workspace(
             );
             kv.push("session", cell(ws.session_name.as_str()));
             match &ws.sock_headroom {
-                Probe::Unavailable { error } => {
-                    kv.push("sock headroom", unavailable(tally, Health::Alarm, error))
-                }
+                Probe::Unavailable { error, .. } => kv.push(
+                    "sock headroom",
+                    unavailable(
+                        tally,
+                        Severity::Problem,
+                        error,
+                        "repair the runtime directory error, then re-run `rimz doctor`",
+                    ),
+                ),
                 Probe::Ready(budget) => {
                     kv.push(
                         "sock headroom",
-                        fit_cell(tally, budget.fits, budget.used, budget.limit, &budget.dir),
+                        fit_cell(
+                            tally,
+                            budget.fits,
+                            budget.used,
+                            budget.limit,
+                            &budget.dir,
+                            budget
+                                .remedy
+                                .as_deref()
+                                .unwrap_or("shorten the runtime root path, then restart the room"),
+                        ),
                     );
-                    if let Some(remedy) = &budget.remedy {
-                        kv.push("remedy", verdict(tally, Health::Warn, remedy));
-                    }
                 }
             }
             kv.render(w)
@@ -591,9 +828,17 @@ fn render_workspace(
 fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Result<()> {
     section(w, tally, "MULTIPLEXER")?;
     let mux = match mux {
-        Probe::Unavailable { error } => {
+        Probe::Unavailable { error, .. } => {
             let mut kv = KeyVals::new().indent(2);
-            kv.push("multiplexer", unavailable(tally, Health::Alarm, error));
+            kv.push(
+                "multiplexer",
+                unavailable(
+                    tally,
+                    Severity::Problem,
+                    error,
+                    "repair the multiplexer error, then re-run `rimz doctor --json`",
+                ),
+            );
             return kv.render(w);
         }
         Probe::Ready(mux) => mux,
@@ -605,7 +850,15 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     push_capabilities(&mut kv, tally, &mux.capabilities);
     match &mux.binaries.active {
         Some(active) => kv.push("binary", cell(binary_label(active)).fg(palette::body())),
-        None => kv.push("binary", verdict(tally, Health::Warn, "not found on PATH")),
+        None => kv.push(
+            "binary",
+            counted_verdict(
+                tally,
+                Severity::Warning,
+                "not found on PATH",
+                format!("install {} and make it available on PATH", mux.name),
+            ),
+        ),
     }
     push_mux_log(&mut kv, tally, &mux.log);
     if let Some(socket) = &mux.socket {
@@ -614,22 +867,29 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     if let Some(socket) = &mux.zellij_socket {
         kv.push(
             "zellij socket",
-            fit_cell(tally, socket.fits, socket.len, socket.limit, &socket.path),
+            fit_cell(
+                tally,
+                socket.fits,
+                socket.len,
+                socket.limit,
+                &socket.path,
+                socket
+                    .fix
+                    .as_deref()
+                    .unwrap_or("shorten the runtime root path, then restart the room"),
+            ),
         );
-        if let Some(fix) = &socket.fix {
-            kv.push("fix", verdict(tally, Health::Warn, fix));
-        }
     }
     if let Some(legacy) = &mux.legacy_session {
         kv.push(
             "legacy session",
-            verdict(
+            counted_verdict(
                 tally,
-                Health::Warn,
+                Severity::Warning,
                 format!("{} on {}", legacy.session, legacy.socket),
+                &legacy.fix,
             ),
         );
-        kv.push("fix", verdict(tally, Health::Warn, &legacy.fix));
     }
     if let Some(room) = &mux.room {
         kv.push("room", room_cell(tally, mux.name, room));
@@ -648,27 +908,30 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
             Probe::Ready(plugins) => {
                 push_presence_plugins(&mut kv, tally, plugins, server_version(&mux.version))
             }
-            Probe::Unavailable { error } => {
-                kv.push("presence plugin", unavailable(tally, Health::Warn, error))
-            }
+            Probe::Unavailable { error, .. } => kv.push(
+                "presence plugin",
+                unavailable(
+                    tally,
+                    Severity::Warning,
+                    error,
+                    "run `rimz reload`, then re-run `rimz doctor`",
+                ),
+            ),
         }
     }
     if let Some(ttyd) = &mux.ttyd {
         match ttyd {
             Probe::Ready(ttyd) => kv.push(
                 "ttyd web",
-                verdict(
-                    tally,
-                    Health::Ok,
-                    format!("{} ({})", ttyd.version, ttyd.path),
-                ),
+                verdict(Health::Ok, format!("{} ({})", ttyd.version, ttyd.path)),
             ),
-            Probe::Unavailable { error } => kv.push(
+            Probe::Unavailable { error, .. } => kv.push(
                 "ttyd web",
-                verdict(
+                counted_verdict(
                     tally,
-                    Health::Warn,
+                    Severity::Warning,
                     format!("missing — rimz web needs it; {error}"),
+                    "install ttyd and make it available on PATH",
                 ),
             ),
         }
@@ -693,15 +956,21 @@ fn room_cell(tally: &mut Tally, selected: rimz::MuxName, room: &Room) -> Cell {
         here
     };
     if room.conflict {
-        verdict(
+        counted_verdict(
             tally,
-            Health::Alarm,
+            Severity::Problem,
             format!("{label} (room ownership conflict)"),
+            "close the duplicate room on the other multiplexer, then run `rimz start` on the selected backend",
         )
     } else if matches!(room.selected_state, RoomState::Unavailable { .. }) {
-        verdict(tally, Health::Warn, label)
+        counted_verdict(
+            tally,
+            Severity::Warning,
+            label,
+            "repair the multiplexer probe error, then re-run `rimz doctor --json`",
+        )
     } else if matches!(room.selected_state, RoomState::Live) {
-        verdict(tally, Health::Ok, label)
+        verdict(Health::Ok, label)
     } else {
         cell(label).fg(palette::faint())
     }
@@ -720,7 +989,12 @@ fn mux_version_cell(tally: &mut Tally, version: &Version) -> Cell {
     match version {
         Version::Reported { version } => cell(version.as_str()),
         Version::Unknown => cell("unknown").fg(palette::faint()),
-        Version::Unavailable { error } => unavailable(tally, Health::Warn, error),
+        Version::Unavailable { error } => unavailable(
+            tally,
+            Severity::Warning,
+            error,
+            "check the multiplexer binary on PATH and re-run its version command",
+        ),
     }
 }
 
@@ -733,31 +1007,35 @@ fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabil
             );
             let graphics = match caps.kitty_graphics {
                 ZellijKittyGraphics::Supported => verdict(
-                    tally,
                     Health::Info,
                     "supported by the host terminal; Zellij rooms still draw cell art (Zellij rejects the placement the pixel tier uses)",
                 ),
                 ZellijKittyGraphics::Unsupported => {
-                    verdict(tally, Health::Info, "unsupported by host terminal")
+                    verdict(Health::Info, "unsupported by host terminal")
                 }
                 ZellijKittyGraphics::NoReply => verdict(
-                    tally,
                     Health::Info,
                     "no reply (graphics disabled or session predates Zellij 0.45)",
                 ),
-                ZellijKittyGraphics::BelowMinimum => verdict(
-                    tally,
-                    Health::Info,
-                    "unavailable (requires Zellij >= 0.45.0)",
-                ),
+                ZellijKittyGraphics::BelowMinimum => {
+                    verdict(Health::Info, "unavailable (requires Zellij >= 0.45.0)")
+                }
                 ZellijKittyGraphics::NotProbed => {
                     cell("not probed (outside Zellij or no controlling tty)").fg(palette::faint())
                 }
             };
             kv.push("zellij kitty graphics", graphics);
         }
-        Capabilities::Zellij(Probe::Unavailable { error }) => {
-            kv.push("zellij floor", unavailable(tally, Health::Warn, error));
+        Capabilities::Zellij(Probe::Unavailable { error, .. }) => {
+            kv.push(
+                "zellij floor",
+                unavailable(
+                    tally,
+                    Severity::Warning,
+                    error,
+                    "check `zellij --version` and repair the reported error",
+                ),
+            );
         }
         Capabilities::Tmux(Probe::Ready(caps)) => {
             kv.push(
@@ -766,18 +1044,29 @@ fn push_capabilities(kv: &mut KeyVals, tally: &mut Tally, capabilities: &Capabil
             );
             let (maj, min, patch) = caps.min_version;
             let popup = if caps.popup_supported {
-                verdict(tally, Health::Ok, "supported")
+                verdict(Health::Ok, "supported")
             } else {
-                verdict(
+                counted_verdict(
                     tally,
-                    Health::Warn,
+                    Severity::Warning,
                     format!("unavailable (requires tmux >= {maj}.{min}.{patch})"),
+                    format!(
+                        "upgrade tmux to at least {maj}.{min}.{patch}, then restart its sessions"
+                    ),
                 )
             };
             kv.push("tmux popup", popup);
         }
-        Capabilities::Tmux(Probe::Unavailable { error }) => {
-            kv.push("tmux floor", unavailable(tally, Health::Warn, error));
+        Capabilities::Tmux(Probe::Unavailable { error, .. }) => {
+            kv.push(
+                "tmux floor",
+                unavailable(
+                    tally,
+                    Severity::Warning,
+                    error,
+                    "check `tmux -V` and repair the reported error",
+                ),
+            );
         }
     }
 }
@@ -800,7 +1089,12 @@ fn push_mux_log(kv: &mut KeyVals, tally: &mut Tally, log: &MuxLog) {
         let value = match log {
             MuxLog::Missing { path } => cell(format!("none yet ({path})")).fg(palette::faint()),
             MuxLog::Disabled { hint } => cell(hint.as_str()).fg(palette::faint()),
-            MuxLog::Unavailable { error } => unavailable(tally, Health::Warn, error),
+            MuxLog::Unavailable { error } => unavailable(
+                tally,
+                Severity::Warning,
+                error,
+                "repair access to the multiplexer log, then re-run `rimz doctor`",
+            ),
             MuxLog::Ready { .. } => unreachable!("matched above"),
         };
         kv.push("log", value);
@@ -842,51 +1136,85 @@ fn push_mux_log(kv: &mut KeyVals, tally: &mut Tally, log: &MuxLog) {
 
 fn session_health_cell(tally: &mut Tally, health: &Probe<SessionHealth>) -> Cell {
     match health {
-        Probe::Unavailable { error } => unavailable(tally, Health::Warn, error),
-        Probe::Ready(SessionHealth::Ok) => verdict(tally, Health::Ok, "ok"),
-        Probe::Ready(SessionHealth::Stuck { fix }) => verdict(
+        Probe::Unavailable { error, .. } => unavailable(
             tally,
-            Health::Alarm,
-            format!("stuck (resurrected/suspended panes) — {fix}"),
+            Severity::Warning,
+            error,
+            "inspect the room with `rimz doctor --json`, then repair the reported multiplexer error",
         ),
-        Probe::Ready(SessionHealth::Unresponsive { fix }) => verdict(
+        Probe::Ready(SessionHealth::Ok) => verdict(Health::Ok, "ok"),
+        Probe::Ready(SessionHealth::Stuck { fix }) => counted_verdict(
             tally,
-            Health::Alarm,
-            format!("live but not responding — {fix}"),
+            Severity::Problem,
+            "stuck (resurrected/suspended panes)",
+            fix,
         ),
+        Probe::Ready(SessionHealth::Unresponsive { fix }) => {
+            counted_verdict(tally, Severity::Problem, "live but not responding", fix)
+        }
     }
 }
 
 fn presence_cell(tally: &mut Tally, presence: &Presence) -> Cell {
     match presence {
-        Presence::Event { poked_secs } => verdict(
-            tally,
-            Health::Ok,
-            format!("event mode (poked {poked_secs}s ago)"),
-        ),
-        Presence::Poll { reason, expected } => {
-            let health = if *expected { Health::Ok } else { Health::Warn };
-            verdict(tally, health, format!("polling — {reason}"))
+        Presence::Event { poked_secs } => {
+            verdict(Health::Ok, format!("event mode (poked {poked_secs}s ago)"))
+        }
+        Presence::Poll {
+            reason,
+            expected,
+            summary,
+            fix,
+        } => {
+            let reason = summary.unwrap_or(reason);
+            if *expected {
+                verdict(Health::Ok, format!("polling — {reason}"))
+            } else {
+                counted_verdict(
+                    tally,
+                    Severity::Warning,
+                    format!("polling — {reason}"),
+                    fix.unwrap_or("run `rimz reload` to restore event-driven pane discovery"),
+                )
+            }
         }
         Presence::NotApplicable { reason } => {
             cell(format!("not applicable — {reason}")).fg(palette::faint())
         }
-        Presence::Unavailable { error } => unavailable(tally, Health::Alarm, error),
+        Presence::Unavailable { error } => {
+            tally.record(
+                Severity::Problem,
+                format!("pane discovery unavailable ({error})"),
+                "inspect the pane-discovery error in `rimz doctor --json` and repair its cause",
+            );
+            let (glyph, style) = Severity::Problem.parts();
+            cell(format!("{glyph} unavailable")).fg(style)
+        }
     }
 }
 
 fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWriterHealth) {
     if let Some(bin) = &writer.recorded_bin {
-        let health = if bin.exists { Health::Ok } else { Health::Warn };
         let label = if bin.exists {
             bin.path.clone()
         } else {
             format!("missing ({})", bin.path)
         };
-        kv.push("room binary", verdict(tally, health, label));
-        if let Some(fix) = &bin.fix {
-            kv.push("room binary fix", verdict(tally, Health::Warn, fix));
-        }
+        kv.push(
+            "room binary",
+            if bin.exists {
+                verdict(Health::Ok, label)
+            } else {
+                counted_verdict(
+                    tally,
+                    Severity::Warning,
+                    label,
+                    bin.fix
+                        .as_deref()
+                        .unwrap_or("run `rimz reload` to replace the missing room binary"),
+                )
+            },
+        );
     }
     if let Some(conflict) = &writer.conflict {
         let stale = conflict
@@ -901,14 +1229,12 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
             .unwrap_or_else(|| "a legacy plugin".to_owned());
         kv.push(
             "topology writers",
-            verdict(
-                tally,
-                Health::Info,
+            verdict(Health::Info,
                 format!(
-                    "contained a stale writer: {stale} lost to {accepted}; {} writes rejected, last {} ago — {}",
+                    "contained a stale writer: {stale} lost to {accepted}; {} writes rejected, last {} ago; {}",
                     conflict.rejected_count,
                     age_label(conflict.age_secs),
-                    conflict.fix
+                    conflict.fix,
                 ),
             ),
         );
@@ -920,7 +1246,7 @@ fn push_topology_writer(kv: &mut KeyVals, tally: &mut Tally, writer: &TopologyWr
 ///
 /// The plugin is the sidebar's eyes on Zellij, so the reader's question is
 /// "does the sidebar still see my panes, and if not what do I run". Each row
-/// leads with that answer and its remedy; build hash, load time, and the
+/// leads with that answer; remedies live in the closing block. Build hash, load time, and the
 /// telemetry window follow as subordinate evidence. Counters the report can
 /// derive stay off the human surface — `--json` keeps every raw field.
 fn push_presence_plugins(
@@ -937,10 +1263,11 @@ fn push_presence_plugins(
             .unwrap_or_default();
         kv.push(
             "presence plugin",
-            verdict(
+            counted_verdict(
                 tally,
-                Health::Warn,
-                format!("none loaded{want} — the sidebar cannot see panes; run `rimz reload`"),
+                Severity::Warning,
+                format!("none loaded{want} — the sidebar cannot see panes"),
+                "run `rimz reload`",
             ),
         );
         push_presence_telemetry_log(kv, plugins);
@@ -951,13 +1278,14 @@ fn push_presence_plugins(
     if many {
         kv.push(
             "presence plugins",
-            verdict(
+            counted_verdict(
                 tally,
-                Health::Warn,
+                Severity::Warning,
                 format!(
-                    "{} loaded — only one may write pane topology; run `rimz reload`",
+                    "{} loaded — only one may write pane topology",
                     plugins.rows.len()
                 ),
+                "run `rimz reload`",
             ),
         );
     }
@@ -991,41 +1319,48 @@ fn push_presence_plugins(
 /// answer is unwelcome.
 fn presence_plugin_verdict(tally: &mut Tally, row: &PresencePluginRow) -> Cell {
     if row.status == PresencePluginStatus::Rejected {
-        return verdict(
+        return counted_verdict(
             tally,
-            Health::Warn,
+            Severity::Warning,
             format!(
-                "a newer plugin took over — {} of its topology writes were ignored; run `rimz reload`",
+                "a newer plugin took over — {} of its topology writes were ignored",
                 row.rejected_count.unwrap_or_default()
             ),
+            "run `rimz reload`",
         );
     }
     if row.status == PresencePluginStatus::Inactive {
-        return verdict(tally, Health::Info, "loaded; not writing pane topology");
+        return verdict(Health::Info, "loaded; not writing pane topology");
     }
     let telemetry = row.telemetry.as_ref();
     if telemetry.is_some_and(failing_recently) {
         // The traffic line below owns every count; this line owns the cause.
         let cause = telemetry
             .and_then(|telemetry| telemetry.last_failure.as_ref())
-            .map_or_else(
-                || "pane discovery lags; run `rimz reload`".to_owned(),
-                failure_cause,
-            );
-        return verdict(
+            .map_or_else(|| "pane discovery lags".to_owned(), failure_cause);
+        return counted_verdict(
             tally,
-            Health::Warn,
+            Severity::Warning,
             format!("writing pane topology; wakes are failing — {cause}"),
+            if telemetry
+                .and_then(|telemetry| telemetry.last_failure.as_ref())
+                .is_some()
+            {
+                "inspect the reported wake failure and repair its cause; capture `rimz doctor --json` if it persists"
+            } else {
+                "run `rimz reload`"
+            },
         );
     }
     if row.outdated {
-        return verdict(
+        return counted_verdict(
             tally,
-            Health::Info,
-            "writing pane topology on an outdated build; run `rimz reload`",
+            Severity::Warning,
+            "writing pane topology on an outdated build",
+            "run `rimz reload`",
         );
     }
-    verdict(tally, Health::Ok, "writing pane topology")
+    verdict(Health::Ok, "writing pane topology")
 }
 
 /// Whether the plugin reported command failures while its telemetry was still
@@ -1173,16 +1508,19 @@ fn render_duplicate_session_notes(
 ) -> io::Result<()> {
     if let Some(Probe::Ready(dup)) = duplicate_sessions {
         if dup.groups.is_empty() {
-            note(tally, w, Health::Ok, "duplicate sessions: none")?;
+            note(w, Health::Ok, "duplicate sessions: none")?;
         } else {
-            note(
+            counted_note(
                 tally,
                 w,
-                Health::Warn,
+                Severity::Warning,
                 &format!(
                     "duplicate sessions: {} live sessions share this workspace; pane updates can be held",
                     dup.groups.len()
                 ),
+                dup.advice
+                    .as_deref()
+                    .unwrap_or("close the duplicate room sessions, then run `rimz reload`"),
             )?;
             for group in &dup.groups {
                 let here = if group.is_current { "* " } else { "  " };
@@ -1200,16 +1538,14 @@ fn render_duplicate_session_notes(
                     ),
                 )?;
             }
-            if let Some(advice) = &dup.advice {
-                note(tally, w, Health::Warn, advice)?;
-            }
         }
-    } else if let Some(Probe::Unavailable { error }) = duplicate_sessions {
-        note(
+    } else if let Some(Probe::Unavailable { error, .. }) = duplicate_sessions {
+        counted_note(
             tally,
             w,
-            Health::Warn,
+            Severity::Warning,
             &format!("duplicate sessions: {}", unavailable_text(error)),
+            "repair the multiplexer probe error, then re-run `rimz doctor --json`",
         )?;
     }
     Ok(())
@@ -1234,14 +1570,15 @@ fn binary_label(row: &MuxBinaryRow) -> String {
 
 fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> io::Result<()> {
     if !mux.binaries.duplicates.is_empty() {
-        note(
+        counted_note(
             tally,
             w,
-            Health::Warn,
+            Severity::Warning,
             &format!(
-                "multiple {} binaries on PATH — clients and servers can mismatch; keep one, remove or shadow the rest",
+                "multiple {} binaries on PATH — clients and servers can mismatch",
                 mux.name
             ),
+            "keep one multiplexer binary on PATH; remove or shadow the rest",
         )?;
         if let Some(active) = &mux.binaries.active {
             detail(w, palette::body(), &format!("* {}", binary_label(active)))?;
@@ -1255,14 +1592,15 @@ fn render_mux_binary_notes(w: &mut impl Write, mux: &Mux, tally: &mut Tally) -> 
     }
     for server in &mux.binaries.server_mismatches {
         let deleted = if server.deleted { " (deleted)" } else { "" };
-        note(
+        counted_note(
             tally,
             w,
-            Health::Warn,
+            Severity::Warning,
             &format!(
-                "running {} server (pid {}) uses {}{} — restart its sessions on the PATH binary",
+                "running {} server (pid {}) uses {}{}",
                 mux.name, server.pid, server.exe, deleted
             ),
+            "restart this server's sessions on the PATH binary",
         )?;
     }
     Ok(())
@@ -1286,23 +1624,28 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
         return Ok(());
     };
     if *problem_records == 0 {
-        return note(tally, w, Health::Ok, "log: nothing to report");
+        return note(w, Health::Ok, "log: nothing to report");
     }
     let (expected, investigate): (Vec<_>, Vec<_>) = issues
         .iter()
         .partition(|issue| issue.state != DoctorState::Investigate);
 
     if investigate.is_empty() {
-        note(tally, w, Health::Ok, "log: nothing needing attention")?;
+        note(w, Health::Ok, "log: nothing needing attention")?;
     }
     for issue in investigate {
-        let health = doctor_health(issue.state, issue.impact);
-        note(
-            tally,
-            w,
-            health,
-            &format!("{} ({})", issue.summary, issue_span(issue)),
-        )?;
+        let text = format!("{} ({})", issue.summary, issue_span(issue));
+        if let Some(severity) = doctor_severity(issue.state, issue.impact) {
+            counted_note(
+                tally,
+                w,
+                severity,
+                &text,
+                "inspect the multiplexer log evidence; repair the reported cause, then run `rimz reload`",
+            )?;
+        } else {
+            note(w, Health::Info, &text)?;
+        }
         if issue.impact == DoctorImpact::Alarm {
             for sample in &issue.samples {
                 detail(w, palette::muted(), sample.trim_end())?;
@@ -1312,10 +1655,17 @@ fn render_mux_log_notes(w: &mut impl Write, log: &MuxLog, tally: &mut Tally) -> 
             }
         }
     }
-    if !expected.is_empty() {
+    if tally.audit {
+        for issue in &expected {
+            note(
+                w,
+                Health::Info,
+                &format!("{} ({})", issue.summary, issue_span(issue)),
+            )?;
+        }
+    } else if !expected.is_empty() {
         let occurrences: usize = expected.iter().map(|issue| issue.occurrences).sum();
         note(
-            tally,
             w,
             Health::Info,
             &format!(
@@ -1379,16 +1729,22 @@ fn naming<'a>(summaries: impl Iterator<Item = &'a str>) -> String {
 
 fn floor_cell(tally: &mut Tally, meets: bool, min: (u32, u32, u32)) -> Cell {
     let (maj, min_v, patch) = min;
-    let (health, label) = if meets {
-        (Health::Ok, "OK")
+    let text = format!(
+        "{} (>= {maj}.{min_v}.{patch} required)",
+        if meets { "OK" } else { "TOO OLD" }
+    );
+    if meets {
+        verdict(Health::Ok, text)
     } else {
-        (Health::Alarm, "TOO OLD")
-    };
-    verdict(
-        tally,
-        health,
-        format!("{label} (>= {maj}.{min_v}.{patch} required)"),
-    )
+        counted_verdict(
+            tally,
+            Severity::Problem,
+            text,
+            format!(
+                "upgrade the multiplexer to at least {maj}.{min_v}.{patch}, then restart its sessions"
+            ),
+        )
+    }
 }
 
 fn render_empty_dir(
@@ -1404,28 +1760,43 @@ fn render_empty_dir(
         return Ok(());
     }
     section(w, tally, "EMPTY-DIR")?;
-    if let Probe::Unavailable { error } = &empty_dir.check {
-        note(tally, w, Health::Warn, error)?;
+    if let Probe::Unavailable { error, .. } = &empty_dir.check {
+        counted_note(tally, w, Severity::Warning, error, empty_dir.check_fix)?;
     }
     if let Some(error) = &empty_dir.profiles_error {
-        note(tally, w, Health::Warn, error)?;
+        counted_note(
+            tally,
+            w,
+            Severity::Warning,
+            error,
+            "repair the reported profile configuration, then run `rimz agents validate`",
+        )?;
     }
     if empty_dir.rows.is_empty() {
         return Ok(());
     }
-    let mut table = Table::new(["", "AGENT", "LOGIN", "PROFILES", "STATUS", "FIX"]);
+    let mut table = Table::new(["", "AGENT", "LOGIN", "PROFILES", "STATUS"]);
     for row in &empty_dir.rows {
         let fix = match &row.trust.state {
             State::Decided => continue,
             State::Undecided { fix, .. } | State::Restricted { fix, .. } => fix,
         };
         table.row([
-            badge(tally, Health::Warn),
+            counted(
+                tally,
+                Severity::Warning,
+                format!(
+                    "{}@{} falls back to the parent directory for profiles {}",
+                    row.trust.kind,
+                    row.trust.login,
+                    row.profiles.join(", ")
+                ),
+                fix,
+            ),
             cell(row.trust.kind),
             cell(row.trust.login.as_str()),
             cell(row.profiles.join(", ")),
-            cell("they start in the parent's directory instead").fg(style_of(Health::Warn)),
-            cell(fix),
+            cell("they start in the parent's directory instead").fg(palette::warn()),
         ]);
     }
     table.render(w)
@@ -1440,7 +1811,15 @@ fn render_folder_trust(
     section(w, tally, "FOLDER TRUST")?;
     let trust = match trust {
         Probe::Ready(trust) => trust,
-        Probe::Unavailable { error } => return note(tally, w, Health::Warn, error),
+        Probe::Unavailable { error, .. } => {
+            return counted_note(
+                tally,
+                w,
+                Severity::Warning,
+                error,
+                "repair the reported account configuration, then re-run `rimz doctor`",
+            );
+        }
     };
     if trust.rows.is_empty() {
         return detail(w, palette::muted(), "no detected agent models folder trust");
@@ -1449,7 +1828,7 @@ fn render_folder_trust(
         .rows
         .iter()
         .filter(|row| matches!(row.state, State::Decided))
-        .map(|row| row.kind)
+        .map(|row| format!("{}@{}", row.kind, row.login))
         .collect();
     if !decided.is_empty() {
         detail(
@@ -1461,7 +1840,7 @@ fn render_folder_trust(
     if decided.len() == trust.rows.len() {
         return Ok(());
     }
-    let mut table = Table::new(["", "AGENT", "LOGIN", "STATUS", "FIX"]);
+    let mut table = Table::new(["", "AGENT", "LOGIN", "STATUS"]);
     for row in &trust.rows {
         let (status, fix) = match &row.state {
             State::Decided => continue,
@@ -1469,11 +1848,15 @@ fn render_folder_trust(
             State::Restricted { fix, .. } => ("restricted (saved untrusted)", fix),
         };
         table.row([
-            badge(tally, Health::Warn),
+            counted(
+                tally,
+                Severity::Warning,
+                format!("{}@{} folder trust is {status}", row.kind, row.login),
+                fix,
+            ),
             cell(row.kind),
             cell(row.login.as_str()),
-            cell(status).fg(style_of(Health::Warn)),
-            cell(fix),
+            cell(status).fg(palette::warn()),
         ]);
     }
     table.render(w)
@@ -1533,27 +1916,31 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
     }
 
     if !needs_action.is_empty() {
-        let mut table = Table::new(["", "AGENT", "STATUS", "FIX"]);
+        let mut table = Table::new(["", "AGENT", "STATUS"]);
         for row in needs_action {
-            let (health, fix) = match &row.status {
-                HookStatus::InstalledDisabled { fix } => (Health::Warn, fix.clone()),
+            let (severity, fix) = match &row.status {
+                HookStatus::InstalledDisabled { fix } => (Severity::Warning, fix.clone()),
                 HookStatus::InstalledUntrusted { events, fix } => (
-                    Health::Warn,
+                    Severity::Warning,
                     format!(
                         "silently skips untrusted hooks ({}) — {fix}",
                         events.join(", ")
                     ),
                 ),
                 HookStatus::NotInstalled { fix } | HookStatus::Blocked { fix } => {
-                    (Health::Alarm, fix.clone())
+                    (Severity::Problem, fix.clone())
                 }
                 _ => unreachable!("only actionable statuses reach the table"),
             };
             table.row([
-                badge(tally, health),
+                counted(
+                    tally,
+                    severity,
+                    format!("{} {}", row.kind, row.status.label()),
+                    fix,
+                ),
                 cell(row.kind.as_str()),
-                cell(row.status.label()).fg(style_of(health)),
-                cell(fix).dash(),
+                cell(row.status.label()).fg(severity.parts().1),
             ]);
         }
         table.render(w)?;
@@ -1561,7 +1948,6 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
 
     for (kind, reason) in unsupported {
         note(
-            tally,
             w,
             Health::Neutral,
             &format!("{kind} is installed but cannot carry RimZ hooks"),
@@ -1572,7 +1958,6 @@ fn render_hooks(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) ->
     if !absent.is_empty() {
         absent.sort_unstable();
         note(
-            tally,
             w,
             Health::Neutral,
             &format!("not found on this machine: {}", absent.join(", ")),
@@ -1596,21 +1981,88 @@ fn render_accounts(
     let accounts = match accounts {
         Probe::Ready(accounts) if accounts.rows.is_empty() => return Ok(()),
         Probe::Ready(accounts) => accounts,
-        Probe::Unavailable { error } => {
+        Probe::Unavailable { error, .. } => {
             section(w, tally, "ACCOUNTS")?;
-            return note(tally, w, Health::Alarm, error);
+            return counted_note(
+                tally,
+                w,
+                Severity::Problem,
+                error,
+                "repair the reported account configuration, then run `rimz accounts list`",
+            );
         }
     };
     section(w, tally, "ACCOUNTS")?;
     let mut table = Table::new(["", "KIND", "NAME", "HOME", "STATUS", "DEFAULT FOR"]);
     for row in &accounts.rows {
-        let (health, status) = match (&row.problem, row.room) {
-            (Some(problem), true) => (Health::Alarm, problem.as_str()),
-            (Some(problem), false) => (Health::Warn, problem.as_str()),
-            (None, _) => (Health::Ok, rimz::agents::AccountStatus::Ready.as_str()),
+        use super::model::AccountStanding;
+        let name = format!("{}@{}", row.kind, row.name);
+        let agents = row
+            .usage
+            .as_ref()
+            .filter(|usage| !usage.agents.is_empty())
+            .map(|usage| {
+                format!(
+                    "; {} paused or failed on it: {}",
+                    plural(usage.agents.len(), "agent"),
+                    usage.agents.join(", ")
+                )
+            })
+            .unwrap_or_default();
+        let (badge, status, style) = if let Some(problem) = &row.problem {
+            let text = &problem.summary;
+            let fix = &problem.fix;
+            let severity = if row.room {
+                Severity::Problem
+            } else {
+                Severity::Warning
+            };
+            (
+                counted(tally, severity, format!("{name}: {text}{agents}"), fix),
+                format!("{text}{agents}"),
+                severity.parts().1,
+            )
+        } else if let Some(usage) = &row.usage {
+            match usage.standing {
+                AccountStanding::Spent => (
+                    badge(Health::Info),
+                    format!(
+                        "spent, resets in {}, read {}{agents}",
+                        usage
+                            .resets_at
+                            .map(|at| rimz::theme::fmt::reset_countdown(at, Timestamp::now()))
+                            .unwrap_or_default(),
+                        age_short(Timestamp::now(), usage.read_at),
+                    ),
+                    style_of(Health::Info),
+                ),
+                AccountStanding::Exhausted => (
+                    counted(
+                        tally,
+                        Severity::Warning,
+                        format!(
+                            "{name} is out of credits with no reset coming, read {}{agents}",
+                            age_short(Timestamp::now(), usage.read_at)
+                        ),
+                        "add credits to the account",
+                    ),
+                    format!(
+                        "out of credits, no reset, read {}{agents}",
+                        age_short(Timestamp::now(), usage.read_at)
+                    ),
+                    palette::warn(),
+                ),
+                AccountStanding::Ready => (
+                    badge(Health::Ok),
+                    format!("ready, read {}", age_short(Timestamp::now(), usage.read_at)),
+                    palette::good(),
+                ),
+            }
+        } else {
+            (badge(Health::Ok), "ready".to_owned(), palette::good())
         };
         table.row([
-            badge(tally, health),
+            badge,
             cell(row.kind.as_str()).fg(palette::identity(&row.kind)),
             cell(row.name.as_str()),
             cell(
@@ -1619,7 +2071,7 @@ fn render_accounts(
                     .map_or_else(|| "-".to_owned(), home_relative),
             )
             .dash(),
-            cell(status).fg(style_of(health)),
+            cell(status).fg(style),
             cell(row.default_for.label()).dash(),
         ]);
     }
@@ -1633,11 +2085,28 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
     section(w, tally, "AGENT PLUGINS")?;
     let mut table = Table::new(["", "AGENT", "STATUS", "MANIFEST", "DETAIL"]);
     for plugin in &report.plugins {
-        let (health, status, detail) = plugin_verdict(plugin);
+        let (severity, status, detail) = plugin_verdict(plugin);
         table.row([
-            badge(tally, health),
+            match severity {
+                Some(severity) => counted(
+                    tally,
+                    severity,
+                    format!("{}: {status}", plugin.kind),
+                    plugin
+                        .setup_doc
+                        .as_deref()
+                        .map(|doc| format!("follow {doc}"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "repair the plugin manifest at {} and its probe commands",
+                                home_relative(&plugin.manifest)
+                            )
+                        }),
+                ),
+                None => badge(Health::Ok),
+            },
             cell(plugin.kind.as_str()).fg(palette::identity(&plugin.kind)),
-            cell(status).fg(style_of(health)),
+            cell(status).fg(severity.map_or(palette::good(), |severity| severity.parts().1)),
             cell(home_relative(&plugin.manifest)).fg(palette::body()),
             cell(detail).dash(),
         ]);
@@ -1646,10 +2115,10 @@ fn render_plugins(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) 
     table.render(w)
 }
 
-fn plugin_verdict(plugin: &PluginRow) -> (Health, &'static str, String) {
+fn plugin_verdict(plugin: &PluginRow) -> (Option<Severity>, &'static str, String) {
     if !plugin.valid {
         return (
-            Health::Alarm,
+            Some(Severity::Problem),
             "invalid",
             plugin
                 .error
@@ -1665,7 +2134,7 @@ fn plugin_verdict(plugin: &PluginRow) -> (Health, &'static str, String) {
         .collect::<Vec<_>>();
     if bad_probes.is_empty() {
         (
-            Health::Ok,
+            None,
             "valid",
             plugin
                 .setup_doc
@@ -1674,29 +2143,40 @@ fn plugin_verdict(plugin: &PluginRow) -> (Health, &'static str, String) {
         )
     } else {
         (
-            Health::Warn,
+            Some(Severity::Warning),
             "valid; probe unavailable",
-            format!("check {}", bad_probes.join(", ")),
+            bad_probes.join(", "),
         )
     }
 }
 
 fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
     for probe in &plugin.probes {
-        let probe_health = if probe.present && probe.executable {
-            Health::Ok
-        } else {
-            Health::Warn
-        };
         let status = match (probe.present, probe.executable) {
             (true, true) => "executable",
             (true, false) => "not executable",
             (false, _) => "missing",
         };
         table.row([
-            badge(tally, probe_health),
+            if probe.present && probe.executable {
+                badge(Health::Ok)
+            } else {
+                counted(
+                    tally,
+                    Severity::Warning,
+                    format!("{} {} probe {status}", plugin.kind, probe.name),
+                    format!(
+                        "install or make executable the configured probe command: {}",
+                        probe.command
+                    ),
+                )
+            },
             cell(format!("  {} probe", probe.name)).fg(palette::meta()),
-            cell(status).fg(style_of(probe_health)),
+            cell(status).fg(if probe.present && probe.executable {
+                palette::good()
+            } else {
+                palette::warn()
+            }),
             cell("-"),
             cell(probe.command.as_str()).fg(palette::body()),
         ]);
@@ -1705,23 +2185,67 @@ fn push_probe_rows(table: &mut Table, tally: &mut Tally, plugin: &PluginRow) {
 
 fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) -> io::Result<()> {
     use super::model::LoopTimer;
-
     section(w, tally, "LOOP TASKS")?;
     if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::faint(), "none configured"));
     }
+    let needs_you = loop_tasks
+        .tasks
+        .iter()
+        .filter(|row| !row.valid || loop_tasks.unscheduled.contains(&row.name))
+        .count();
+    let summary = if needs_you == 0 {
+        "none need you".to_owned()
+    } else {
+        format!(
+            "{} {} you",
+            needs_you,
+            if needs_you == 1 { "needs" } else { "need" }
+        )
+    };
+    note(
+        w,
+        Health::Neutral,
+        &format!(
+            "{}, {summary} — rimz loop list",
+            plural(loop_tasks.tasks.len(), "task")
+        ),
+    )?;
     let mut table = Table::new(["", "NAME", "TARGET", "WHEN", "ROOT", "ROOM"]);
+    let mut visible = 0;
     for row in &loop_tasks.tasks {
-        let health = if row.valid {
-            Health::Info
+        let unscheduled = loop_tasks.unscheduled.contains(&row.name);
+        if !tally.audit && row.valid && !unscheduled {
+            continue;
+        }
+        visible += 1;
+        let badge = if !row.valid {
+            counted(
+                tally,
+                Severity::Problem,
+                format!("{}: {}", row.name, row.when),
+                "repair the task's trigger or action in loop.toml, then inspect `rimz loop list`",
+            )
+        } else if unscheduled {
+            tally.record_subject(
+                Severity::Warning,
+                format!(
+                    "{} has no scheduler: no room is open for its root and the loop timer is not active",
+                    row.name
+                ),
+                "run `rimz loop timer install`, then `rimz loop timer status`, or `rimz start` in the task's root",
+                format!("{} (no scheduler)", row.name),
+            );
+            let (glyph, style) = Severity::Warning.parts();
+            cell(glyph).fg(style)
         } else {
-            Health::Alarm
+            badge(Health::Info)
         };
         table.row([
-            badge(tally, health),
-            cell(row.name.as_str()).fg(palette::accent()),
-            cell(row.spec.as_str()),
-            cell(row.when.as_str()).fg(style_of(health)),
+            badge,
+            cell(&row.name).fg(palette::accent()),
+            cell(&row.spec),
+            cell(&row.when),
             cell(home_relative(&row.root)).fg(palette::body()),
             if row.room_open {
                 cell("room open").fg(palette::good())
@@ -1730,47 +2254,28 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
             },
         ]);
     }
-    table.render(w)?;
-    let (label, cause, health) = match &loop_tasks.timer {
-        LoopTimer::NotInstalled => (
-            "not installed".to_owned(),
-            "is not installed",
+    if visible > 0 {
+        table.render(w)?;
+    }
+    let value = match &loop_tasks.timer {
+        LoopTimer::NotInstalled => verdict(Health::Neutral, "not installed"),
+        LoopTimer::Installed { backend, active } => verdict(
             Health::Neutral,
-        ),
-        LoopTimer::Installed { backend, active } => (
             format!(
                 "{} ({backend})",
                 if *active { "active" } else { "inactive" }
             ),
-            "is inactive",
-            Health::Neutral,
         ),
-        LoopTimer::Unavailable { error } => (
-            format!("unavailable ({error})"),
-            "is unavailable",
-            Health::Warn,
+        LoopTimer::Unavailable { error } => unavailable(
+            tally,
+            Severity::Warning,
+            error,
+            "run `rimz loop timer status` and repair the reported timer error",
         ),
     };
     let mut kv = KeyVals::new().indent(2);
-    kv.push("loop timer", verdict(tally, health, label));
-    kv.render(w)?;
-    if !loop_tasks.unscheduled.is_empty() {
-        note(
-            tally,
-            w,
-            Health::Warn,
-            &format!(
-                "{}: no room is open for their root and the loop timer {cause}; run `rimz loop timer install`, then `rimz loop timer status`, or `rimz start` in the task's root",
-                loop_tasks.unscheduled.join(", "),
-            ),
-        )?;
-    }
-    note(
-        tally,
-        w,
-        Health::Neutral,
-        "`rimz loop list` shows next fire and run history",
-    )
+    kv.push("loop timer", value);
+    kv.render(w)
 }
 
 fn render_remote_control(
@@ -1780,14 +2285,21 @@ fn render_remote_control(
 ) -> io::Result<()> {
     section(w, tally, "REMOTE CONTROL")?;
     match remote {
-        RemoteControl::Unavailable { error } => {
+        RemoteControl::Unavailable { error, diagnosis } => {
+            let summary = diagnosis.as_ref().map(|diagnosis| diagnosis.summary());
+            let error = summary.as_deref().unwrap_or(error);
+            let fix = diagnosis.as_ref().map_or(
+                "repair the remote-control configuration, then re-run `rimz doctor`",
+                |diagnosis| diagnosis.fix(),
+            );
             let mut kv = KeyVals::new().indent(2);
             kv.push(
                 "remote control",
-                verdict(
+                counted_verdict(
                     tally,
-                    Health::Alarm,
+                    Severity::Problem,
                     format!("config unavailable ({error})"),
+                    fix,
                 ),
             );
             kv.render(w)
@@ -1816,12 +2328,17 @@ fn render_remote_on(
 ) -> io::Result<()> {
     let mut kv = KeyVals::new().indent(2);
     for agent in agents {
-        let health = if agent.ready {
-            Health::Ok
+        let value = if agent.ready {
+            verdict(Health::Ok, &agent.detail)
         } else {
-            Health::Warn
+            counted_verdict(
+                tally,
+                Severity::Warning,
+                &agent.detail,
+                "repair the provider's remote-control configuration, or disable it in [remote-control]",
+            )
         };
-        kv.push(agent.kind, verdict(tally, health, &agent.detail));
+        kv.push(agent.kind, value);
     }
     kv.render(w)?;
     for agent in agents {
@@ -1838,32 +2355,31 @@ fn render_remote_on(
         }
     }
     for refusal in refusals {
-        note(tally, w, Health::Alarm, "`rimz start` refuses:")?;
-        for line in refusal.lines() {
-            detail(w, palette::muted(), line)?;
-        }
+        counted_note(
+            tally,
+            w,
+            Severity::Problem,
+            "`rimz start` refuses remote control",
+            refusal.lines().collect::<Vec<_>>().join(" "),
+        )?;
     }
     for skip in skipped {
-        note(
+        counted_note(
             tally,
             w,
-            Health::Warn,
-            "enabled but not installed — skipped (the room still starts):",
+            Severity::Warning,
+            "enabled but not installed — skipped (the room still starts)",
+            skip.lines().collect::<Vec<_>>().join(" "),
         )?;
-        for line in skip.lines() {
-            detail(w, palette::muted(), line)?;
-        }
     }
     for advisory in advisories {
-        note(
+        counted_note(
             tally,
             w,
-            Health::Warn,
-            "provider daemon advisory (no start impact):",
+            Severity::Warning,
+            "provider daemon advisory (no start impact)",
+            advisory.lines().collect::<Vec<_>>().join(" "),
         )?;
-        for line in advisory.lines() {
-            detail(w, palette::muted(), line)?;
-        }
     }
     Ok(())
 }
@@ -1886,7 +2402,7 @@ fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -
             "-".to_owned()
         };
         table.row([
-            badge(tally, Health::Neutral),
+            badge(Health::Neutral),
             cell(root.label),
             cell(size).dash(),
             cell(home_relative(&root.path)).fg(if root.present {
@@ -1910,17 +2426,24 @@ fn render_protocols(
     kv.push("sidebar", cell(protocols.sidebar));
     kv.render(w)?;
     for warning in &protocols.warnings {
-        note(tally, w, Health::Warn, warning)?;
-    }
-    if let Some(drift) = &protocols.build_drift {
-        note(
+        counted_note(
             tally,
             w,
-            Health::Warn,
+            Severity::Warning,
+            warning.detail.as_deref().unwrap_or(&warning.text),
+            warning.fix,
+        )?;
+    }
+    if let Some(drift) = &protocols.build_drift {
+        counted_note(
+            tally,
+            w,
+            Severity::Warning,
             &format!(
-                "mixed rimz builds writing this workspace: {} distinct builds; run `rimz reload` to converge",
+                "mixed rimz builds writing this workspace: {} distinct builds",
                 drift.writers.len(),
             ),
+            "run `rimz reload` to converge",
         )?;
         for writer in &drift.writers {
             let tag = if writer.is_running {
@@ -1953,27 +2476,36 @@ fn render_trust(w: &mut impl Write, trust: &Probe<Trust>, tally: &mut Tally) -> 
     section(w, tally, "TRUST")?;
     let mut kv = KeyVals::new().indent(2);
     let value = match trust {
-        Probe::Unavailable { error } => unavailable(tally, Health::Alarm, error),
+        Probe::Unavailable { error, diagnosis } => {
+            let summary = diagnosis.as_ref().map(|diagnosis| diagnosis.summary());
+            let error = summary.as_deref().unwrap_or(error);
+            let fix = diagnosis.as_ref().map_or(
+                "repair the trust-state error, then run `rimz trust status`",
+                |diagnosis| diagnosis.fix(),
+            );
+            unavailable(tally, Severity::Problem, error, fix)
+        }
         Probe::Ready(Trust { state, granted_at }) => match state {
             TrustState::Trusted => verdict(
-                tally,
                 Health::Ok,
                 format!(
                     "trusted (granted {})",
                     granted_at.as_deref().unwrap_or("<unknown>")
                 ),
             ),
-            TrustState::Stale => verdict(
+            TrustState::Stale => counted_verdict(
                 tally,
-                Health::Alarm,
-                "stale (executable surface drifted; run `rimz trust grant` to refresh)",
+                Severity::Problem,
+                "stale (executable surface drifted)",
+                "review the changed command paths, then run `rimz trust grant`",
             ),
-            TrustState::Untrusted => verdict(
+            TrustState::Untrusted => counted_verdict(
                 tally,
-                Health::Warn,
-                "untrusted (run `rimz trust grant` to enable command paths)",
+                Severity::Warning,
+                "untrusted (command paths disabled)",
+                "review the project's command paths, then run `rimz trust grant`",
             ),
-            TrustState::NoConfig => verdict(tally, Health::Neutral, "no project config"),
+            TrustState::NoConfig => verdict(Health::Neutral, "no project config"),
         },
     };
     kv.push("trust", value);
@@ -1986,30 +2518,73 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
     };
     section(w, tally, "AGENTS")?;
     match rollup {
-        AgentRollup::Unavailable { error } => {
-            note(tally, w, Health::Alarm, &unavailable_text(error))
-        }
+        AgentRollup::Unavailable { error } => counted_note(
+            tally,
+            w,
+            Severity::Problem,
+            &unavailable_text(error),
+            "inspect `rimz agents list --json` and repair the reported store error",
+        ),
         AgentRollup::None => writeln!(w, "  {}", paint(palette::faint(), "none observed")),
         AgentRollup::Observed { counts, rows } => {
             writeln!(
                 w,
                 "  {}",
-                paint(palette::muted(), &agent_counts_line(counts))
+                paint(palette::muted(), &agent_counts_line(counts, report.audit))
             )?;
             if rows.is_empty() {
                 return Ok(());
             }
             let now = Timestamp::now();
-            let mut table = Table::new(["", "KIND", "ID", "BRANCH", "STATUS", "SEEN"]);
+            let mut table = Table::new([
+                "", "HANDLE", "ACCOUNT", "BRANCH", "STATUS", "REASON", "SEEN",
+            ]);
             for agent in rows {
-                let health = status_health(agent.status);
+                let badge = if agent.attributed_to_account
+                    || agent.historical
+                    || agent.status == AgentStatus::Waiting
+                {
+                    badge(Health::Info)
+                } else if matches!(agent.status, AgentStatus::Failed | AgentStatus::Paused) {
+                    let fix = if agent.restartable {
+                        format!("rimz agents restart {}", agent.handle)
+                    } else {
+                        format!(
+                            "start a new {} agent; this session cannot be restarted in place",
+                            agent.kind
+                        )
+                    };
+                    counted(
+                        tally,
+                        if agent.status == AgentStatus::Failed {
+                            Severity::Problem
+                        } else {
+                            Severity::Warning
+                        },
+                        format!(
+                            "{} on {} is {}{}",
+                            agent.handle,
+                            agent.account,
+                            agent.status.as_str(),
+                            agent
+                                .turn_error
+                                .as_ref()
+                                .map(|reason| format!(": {reason}"))
+                                .unwrap_or_default()
+                        ),
+                        fix,
+                    )
+                } else {
+                    badge(status_health(agent.status))
+                };
                 let style = status::agent(agent.status, agent.phase);
                 table.row([
-                    badge(tally, health),
-                    cell(agent.kind.as_str()).fg(palette::identity(&agent.kind)),
-                    cell(agent.agent_id.as_str()).fg(palette::accent()),
+                    badge,
+                    cell(agent.handle.as_str()).fg(palette::accent()),
+                    cell(agent.account.as_str()).fg(palette::identity(&agent.kind)),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
                     cell(agent.status.as_str()).fg(style),
+                    cell(agent.turn_error.as_deref().unwrap_or("-")).dash(),
                     cell(age_short(now, agent.last_seen)),
                 ]);
             }
@@ -2018,7 +2593,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
     }
 }
 
-fn agent_counts_line(counts: &AgentCounts) -> String {
+fn agent_counts_line(counts: &AgentCounts, audit: bool) -> String {
     let mut parts = Vec::new();
     push_count(&mut parts, counts.running, "running");
     push_count(&mut parts, counts.waiting, "waiting");
@@ -2027,10 +2602,11 @@ fn agent_counts_line(counts: &AgentCounts) -> String {
     push_count(&mut parts, counts.failed, "failed");
     push_count(&mut parts, counts.paused, "paused");
     push_count(&mut parts, counts.sleeping, "sleeping");
+    let scope = if audit { "observed" } else { "live" };
     if parts.is_empty() {
-        "0 live".to_owned()
+        format!("0 {scope}")
     } else {
-        format!("{} live: {}", counts.total(), parts.join(", "))
+        format!("{} {scope}: {}", counts.total(), parts.join(", "))
     }
 }
 
@@ -2046,14 +2622,18 @@ fn render_messages(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally)
     };
     section(w, tally, "MESSAGES")?;
     let messages = match messages {
-        Probe::Unavailable { error } => {
-            return note(tally, w, Health::Alarm, &unavailable_text(error));
+        Probe::Unavailable { error, .. } => {
+            return counted_note(
+                tally,
+                w,
+                Severity::Problem,
+                &unavailable_text(error),
+                "inspect `rimz message list --all --system` and repair the reported store error",
+            );
         }
         Probe::Ready(messages) => messages,
     };
-    if messages.open.total() == 0
-        && messages.stuck.is_empty()
-        && messages.recent_failures.is_empty()
+    if messages.open.total() == 0 && messages.stuck.is_empty() && messages.failure_counts.is_empty()
     {
         return writeln!(w, "  {}", paint(palette::faint(), "no open messages"));
     }
@@ -2077,6 +2657,34 @@ fn render_messages(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally)
             )
         )?;
     }
+    if !messages.failure_counts.is_empty() {
+        let total = messages.failure_counts.values().sum();
+        let counts = messages
+            .failure_counts
+            .iter()
+            .map(|(status, count)| {
+                format!(
+                    "{count} {}",
+                    match status.as_str() {
+                        "timed_out" => "timed out",
+                        "errored" => "errored",
+                        "abandoned" => "abandoned",
+                        "expired" => "expired",
+                        other => other,
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        note(
+            w,
+            Health::Info,
+            &format!(
+                "{}: {counts} — rimz message list --all --system",
+                plural(total, "recent failure")
+            ),
+        )?;
+    }
     render_message_rows(w, messages, tally)
 }
 
@@ -2093,16 +2701,18 @@ fn render_message_rows(
     messages: &Messages,
     tally: &mut Tally,
 ) -> io::Result<()> {
-    if messages.stuck.is_empty() && messages.recent_failures.is_empty() {
+    if messages.stuck.is_empty() && (!tally.audit || messages.recent_failures.is_empty()) {
         return Ok(());
     }
     let now = Timestamp::now();
     let mut table = Table::new(["", "ID", "STATUS", "TARGET", "AGE", "PROBLEM"]);
     for row in &messages.stuck {
-        render_message_row(&mut table, tally, row, Health::Warn, now);
+        render_message_row(&mut table, tally, row, true, now);
     }
-    for row in &messages.recent_failures {
-        render_message_row(&mut table, tally, row, Health::Alarm, now);
+    if tally.audit {
+        for row in &messages.recent_failures {
+            render_message_row(&mut table, tally, row, false, now);
+        }
     }
     table.render(w)
 }
@@ -2111,13 +2721,32 @@ fn render_message_row(
     table: &mut Table,
     tally: &mut Tally,
     row: &MessageProblemRow,
-    health: Health,
+    stuck: bool,
     now: Timestamp,
 ) {
     table.row([
-        badge(tally, health),
+        if stuck {
+            counted(
+                tally,
+                Severity::Warning,
+                format!(
+                    "{} to {} is stuck: {}",
+                    row.message_id, row.target, row.problem
+                ),
+                format!(
+                    "inspect `rimz message show {}` and resolve the reported delivery problem",
+                    row.message_id
+                ),
+            )
+        } else {
+            badge(Health::Info)
+        },
         cell(row.message_id.as_str()).fg(palette::accent()),
-        cell(row.status.as_str()).fg(style_of(health)),
+        cell(row.status.as_str()).fg(if stuck {
+            palette::warn()
+        } else {
+            style_of(Health::Info)
+        }),
         cell(row.target.as_str()).fg(palette::meta()),
         cell(age_short(now, row.at)),
         cell(row.problem.as_str()).fg(palette::body()),
@@ -2155,7 +2784,7 @@ fn render_diagnostics(
         ),
         // An incident RimZ already understood — expected, contained, or
         // recovered — is evidence that the machinery worked. Those earn a
-        // counted line by kind; the table is for what is still open.
+        // summary by kind; audit includes them in the table as context.
         Diagnostics::Ready { path, incidents } => {
             let (settled, open): (Vec<_>, Vec<_>) = incidents
                 .iter()
@@ -2170,19 +2799,34 @@ fn render_diagnostics(
             )?;
             let now_ms = rimz::utils::time::unix_now_ms();
             let mut table = Table::new(["", "KIND", "SEEN", "SUMMARY"]).right(&[2]);
-            for incident in &open {
-                let health = doctor_health(incident.state, incident.impact);
+            let audit = tally.audit;
+            for incident in incidents
+                .iter()
+                .filter(|incident| audit || incident.state == DoctorState::Investigate)
+            {
+                let severity = doctor_severity(incident.state, incident.impact);
+                let badge = if let Some(severity) = severity {
+                    counted(
+                        tally,
+                        severity,
+                        format!("{}: {}", incident.kind, incident_summary(incident)),
+                        "inspect the diagnostic evidence in `rimz doctor --json`; repair the reported cause before clearing history",
+                    )
+                } else {
+                    badge(Health::Info)
+                };
                 table.row([
-                    badge(tally, health),
-                    cell(incident.kind.as_str()).fg(style_of(health)),
+                    badge,
+                    cell(incident.kind.as_str())
+                        .fg(severity.map_or(style_of(Health::Info), |severity| severity.parts().1)),
                     cell(incident_seen(now_ms, incident)),
                     cell(incident_summary(incident)).fg(palette::body()),
                 ]);
             }
-            if !open.is_empty() {
+            if tally.audit || !open.is_empty() {
                 table.render(w)?;
             }
-            if !settled.is_empty() {
+            if !tally.audit && !settled.is_empty() {
                 let mut kinds: Vec<_> = settled
                     .iter()
                     .map(|incident| incident.kind.as_str())
@@ -2190,7 +2834,6 @@ fn render_diagnostics(
                 kinds.sort_unstable();
                 kinds.dedup();
                 note(
-                    tally,
                     w,
                     Health::Info,
                     &format!(
@@ -2234,14 +2877,14 @@ fn incident_summary(incident: &super::model::DiagIncident) -> String {
     summary
 }
 
-fn doctor_health(state: DoctorState, impact: DoctorImpact) -> Health {
+fn doctor_severity(state: DoctorState, impact: DoctorImpact) -> Option<Severity> {
     if state != DoctorState::Investigate {
-        return Health::Info;
+        return None;
     }
     match impact {
-        DoctorImpact::Alarm => Health::Alarm,
-        DoctorImpact::Warn => Health::Warn,
-        DoctorImpact::Info => Health::Info,
+        DoctorImpact::Alarm => Some(Severity::Problem),
+        DoctorImpact::Warn => Some(Severity::Warning),
+        DoctorImpact::Info => None,
     }
 }
 
@@ -2256,7 +2899,6 @@ fn render_last_incident(
     section(w, tally, "LAST INCIDENT")?;
     let now = Timestamp::now();
     note(
-        tally,
         w,
         Health::Info,
         &format!(
@@ -2266,37 +2908,10 @@ fn render_last_incident(
             age_short(now, incident.at),
         ),
     )?;
-    if !incident.lost_agents.is_empty() {
-        let names = incident
-            .lost_agents
-            .iter()
-            .map(|agent| match &agent.name {
-                Some(name) => format!("{name} ({})", agent.kind),
-                None => agent.kind.clone(),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        detail(w, palette::body(), &format!("lost: {names}"))?;
-    }
-    if let Some(recovered) = incident.recovered {
-        detail(
-            w,
-            palette::body(),
-            &format!("recovered: {recovered} of {}", incident.lost_agents.len()),
-        )?;
-    }
-    if let Some(forensics) = &incident.forensics {
-        detail(
-            w,
-            palette::muted(),
-            &format!("forensics: {}", home_relative(forensics)),
-        )?;
-    }
     Ok(())
 }
 
-/// The closing line: how many findings, which sections hold them, and what the
-/// two glyphs mean, so the count is a place to go rather than a number.
+/// Counted findings in severity order, each paired with its next action.
 fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
     writeln!(w)?;
     if tally.alarms.is_empty() && tally.warns.is_empty() {
@@ -2327,14 +2942,50 @@ fn render_tally(w: &mut impl Write, tally: &Tally) -> io::Result<()> {
         palette::alarm()
     };
     writeln!(w, "{}", paint(headline, &parts.join("  ·  ")))?;
-    writeln!(
-        w,
-        "{}",
-        paint(
-            palette::muted(),
-            "  ✗ marks something broken, with the command that fixes it beside it; ! marks something degraded that still works",
-        )
-    )
+    for (severity, findings) in [
+        (Severity::Problem, &tally.alarms),
+        (Severity::Warning, &tally.warns),
+    ] {
+        let (glyph, style) = severity.parts();
+        let mut groups: Vec<Vec<&Finding>> = Vec::new();
+        for finding in findings {
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|group| group[0].section == finding.section && group[0].fix == finding.fix)
+            {
+                group.push(finding);
+            } else {
+                groups.push(vec![finding]);
+            }
+        }
+        for group in groups {
+            let finding = group[0];
+            let text = if group.len() == 1 {
+                finding.text.clone()
+            } else {
+                format!(
+                    "{} findings: {}",
+                    group.len(),
+                    group
+                        .iter()
+                        .map(|finding| finding.subject.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            writeln!(
+                w,
+                "  {}",
+                paint(style, &format!("{glyph} {}: {text}", finding.section))
+            )?;
+            writeln!(
+                w,
+                "      {}",
+                paint(palette::muted(), &format!("fix: {}", finding.fix))
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -2348,8 +2999,7 @@ fn plural(count: usize, noun: &str) -> String {
 fn status_health(status: AgentStatus) -> Health {
     match status {
         AgentStatus::Running | AgentStatus::Success => Health::Ok,
-        AgentStatus::Waiting | AgentStatus::Paused => Health::Warn,
-        AgentStatus::Failed => Health::Alarm,
+        AgentStatus::Waiting | AgentStatus::Paused | AgentStatus::Failed => Health::Info,
         AgentStatus::Idle | AgentStatus::Sleeping => Health::Neutral,
     }
 }

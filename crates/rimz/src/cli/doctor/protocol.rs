@@ -30,11 +30,18 @@ fn collect_build_drift(ws: &rimz::ResolvedWorkspace) -> Option<model::BuildDrift
     build_drift(&heartbeats, rimz::build_id::current())
 }
 
-fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
+fn collect_event_schema_warnings(
+    ws: &rimz::ResolvedWorkspace,
+    warnings: &mut Vec<model::ProtocolWarning>,
+) {
     let paths = match StatePaths::for_project_root(&ws.project_root) {
         Ok(paths) => paths,
         Err(err) => {
-            warnings.push(format!("event log unavailable ({err})"));
+            warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("event log unavailable ({err})"),
+                fix: "repair access to the event log, then re-run `rimz doctor --json`",
+            });
             return;
         }
     };
@@ -43,11 +50,19 @@ fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Ve
         // Mid-file corruption — the post-power-cut corpse. Doctor stays
         // read-only; the truncating repair is gc's job.
         Err(err) if err.is_corruption() => {
-            warnings.push(format!("event log needs repair ({err}); run `rimz gc`"));
+            warnings.push(model::ProtocolWarning {
+                detail: Some(format!("event log needs repair ({err})")),
+                text: format!("event log needs repair ({err}); run `rimz gc`"),
+                fix: "run `rimz gc`",
+            });
             return;
         }
         Err(err) => {
-            warnings.push(format!("event log unavailable ({err})"));
+            warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("event log unavailable ({err})"),
+                fix: "repair access to the event log, then re-run `rimz doctor --json`",
+            });
             return;
         }
     };
@@ -59,17 +74,28 @@ fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Ve
     }
     for (version, count) in mismatches {
         let noun = if count == 1 { "record" } else { "records" };
-        warnings.push(format!(
-            "event log schema {version} seen {count} {noun} (expected {EVENT_SCHEMA_VERSION})",
-        ));
+        warnings.push(model::ProtocolWarning {
+            detail: None,
+            text: format!(
+                "event log schema {version} seen {count} {noun} (expected {EVENT_SCHEMA_VERSION})",
+            ),
+            fix: "use a compatible RimZ build to read these event records",
+        });
     }
 }
 
-fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
+fn collect_heartbeat_warnings(
+    ws: &rimz::ResolvedWorkspace,
+    warnings: &mut Vec<model::ProtocolWarning>,
+) {
     let runtime = match RuntimePaths::for_project_root(&ws.project_root) {
         Ok(runtime) => runtime,
         Err(err) => {
-            warnings.push(format!("heartbeat dir unavailable ({err})"));
+            warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("heartbeat dir unavailable ({err})"),
+                fix: "repair access to the heartbeat directory, then re-run `rimz doctor --json`",
+            });
             return;
         }
     };
@@ -77,7 +103,11 @@ fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<S
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
         Err(err) => {
-            warnings.push(format!("heartbeat dir unavailable ({err})"));
+            warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("heartbeat dir unavailable ({err})"),
+                fix: "repair access to the heartbeat directory, then re-run `rimz doctor --json`",
+            });
             return;
         }
     };
@@ -96,10 +126,16 @@ fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<S
     for (name, kind, expected, path) in checks {
         match heartbeat_protocol_version(&path) {
             Ok(found) if found == expected => {}
-            Ok(found) => warnings.push(format!(
-                "{kind} heartbeat {name} uses {found} (expected {expected})",
-            )),
-            Err(err) => warnings.push(format!("{kind} heartbeat {name} unreadable ({err})")),
+            Ok(found) => warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("{kind} heartbeat {name} uses {found} (expected {expected})",),
+                fix: "run `rimz reload` to synchronize the room's protocol writers",
+            }),
+            Err(err) => warnings.push(model::ProtocolWarning {
+                detail: None,
+                text: format!("{kind} heartbeat {name} unreadable ({err})"),
+                fix: "repair access to the heartbeat file, then re-run `rimz doctor --json`",
+            }),
         }
     }
 }

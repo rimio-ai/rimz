@@ -3,6 +3,98 @@ use rimz::config::TaskEntry;
 use rimz::harness::schedule::{arming::Arming, catalog::TaskSource, parse_trigger};
 
 #[test]
+fn refusals_clear_only_for_matching_success_or_later_start() {
+    use rimz::lsp::broker::probe::{Check, Outcome};
+    let record = rimz::diag::lsp::Record {
+        at: jiff::Timestamp::from_millisecond(1000).unwrap(),
+        root: "/checkout".into(),
+        server: "rust".into(),
+        event: "refused".into(),
+        details: serde_json::json!({}),
+    };
+    for (root, server, outcome, expected) in [
+        (
+            "/checkout",
+            "rust",
+            Outcome::Started { version: None },
+            true,
+        ),
+        (
+            "/checkout",
+            "rust",
+            Outcome::Running {
+                state: rimz::lsp::registry::State::Ready,
+            },
+            true,
+        ),
+        ("/other", "rust", Outcome::Started { version: None }, false),
+        (
+            "/checkout",
+            "other",
+            Outcome::Started { version: None },
+            false,
+        ),
+        (
+            "/checkout",
+            "rust",
+            Outcome::Invalid {
+                error: "bad config".into(),
+                fix: "repair".into(),
+            },
+            false,
+        ),
+    ] {
+        assert_eq!(
+            super::refusal_recovered(
+                &record,
+                &[Check {
+                    root: root.into(),
+                    server: server.into(),
+                    outcome
+                }],
+                &[]
+            ),
+            expected,
+            "{root} {server}"
+        );
+    }
+    for (root, server, started, expected) in [
+        ("/checkout", "rust", 1001, true),
+        ("/checkout", "rust", 1000, false),
+        ("/checkout", "rust", 999, false),
+        ("/other", "rust", 1001, false),
+        ("/checkout", "other", 1001, false),
+    ] {
+        let entry = serde_json::from_value(serde_json::json!({
+            "root": root, "server": server, "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
+            "state": "ready", "started_at_ms": started, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
+        })).unwrap();
+        assert_eq!(
+            super::refusal_recovered(&record, &[], &[entry]),
+            expected,
+            "{root} {server} {started}"
+        );
+    }
+    for (state, started, ready, expected) in [
+        (
+            serde_json::json!({"dormant": {"reason": "memory pressure", "since_ms": 1001}}),
+            1001,
+            None,
+            false,
+        ),
+        (serde_json::json!("starting"), 1001, None, true),
+        (serde_json::json!("ready"), 999, Some(1001), true),
+        (serde_json::json!("ready"), 1001, Some(1000), false),
+    ] {
+        let entry = serde_json::from_value(serde_json::json!({
+            "root": "/checkout", "server": "rust", "nonce": "nonce", "broker_pid": 1, "broker_start_token": "token",
+            "state": state, "started_at_ms": started, "ready_at_ms": ready, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
+        })).unwrap();
+        assert_eq!(super::refusal_recovered(&record, &[], &[entry]), expected);
+    }
+}
+
+#[test]
 fn only_live_clock_tasks_without_a_scheduler_are_unscheduled() {
     let now = "2026-01-01T00:00:00Z".parse().unwrap();
     for (trigger, enabled, pause_until, room, timer, expected) in [
