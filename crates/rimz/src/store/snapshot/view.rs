@@ -44,7 +44,7 @@ pub use model::{
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi,
     WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row, needs_you,
 };
-pub(crate) use model::{actionable_unread_count, triage_key};
+pub(crate) use model::{SidebarUnitKey, actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;
 
 #[cfg(test)]

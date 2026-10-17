@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use crate::agents::AgentStatus;
+use crate::sidebar::body_filter::GroupFacts;
 use crate::store::snapshot::{SidebarWorktreeGroup, WorktreeCi, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
@@ -29,17 +30,17 @@ use super::{pin_right, trim_spans_to_width};
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?`, `failed` `!`, parked `paused` `⏸`, and
-/// `success` `✓` (each blinking only while a visible matching row is unread;
+/// `success` `✓` (each blinking only while a matching row is unread;
 /// read buckets hold their fixed status tone — `?` yellow, `!` red, `⏸` blue,
 /// `✓` green — at any age). The
 /// right cluster is the
-/// live-capacity tail — working `⢿` (every running agent; the thinking head
+/// live-capacity tail — working `⢿` (units with a running member; the thinking head
 /// is a per-row animation head, not a bucket), sleeping, then a free `idle` `○`. Every
 /// bucket renders even at zero; colored statuses use their semantic tone, idle rests at the
 /// soft stat gray, and every zero count sits at the same soft gray beside its
 /// glyph.
-/// Counts span the full snapshot roster (`status_counts`), except success,
-/// which excludes finished groups. The
+/// Counts span the full snapshot roster by team unit, except success,
+/// which excludes finished groups. Active units suppress their resting buckets. The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
@@ -296,15 +297,11 @@ fn bucket_style(
     let oldest_unread = groups
         .iter()
         .flat_map(|group| {
-            group.rows.iter().filter(move |row| {
-                BodyFilter::Status(status).matches(
-                    row,
-                    (
-                        group.pr_state == Some(WorktreePrState::Open),
-                        group.finished,
-                    ),
-                )
-            })
+            let facts = GroupFacts::new(group);
+            group
+                .rows
+                .iter()
+                .filter(move |row| BodyFilter::Status(status).matches(row, &facts))
         })
         .filter(|row| row.unread)
         .map(|row| age_secs(row.last_activity, now))

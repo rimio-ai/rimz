@@ -5,7 +5,8 @@ use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
+use crate::sidebar::body_filter::GroupFacts;
+use crate::store::snapshot::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup};
 
 pub(crate) use crate::sidebar::body_filter::BodyFilter;
 pub(super) use crate::sidebar::body_filter::BodyLens;
@@ -56,6 +57,7 @@ impl<'a> VisibleGroup<'a> {
 /// One body projection shared by render, browse, selection, and order holds.
 pub(super) struct VisibleRoster<'a> {
     rows: Vec<&'a SidebarRow>,
+    matches: Vec<bool>,
     groups: Vec<VisibleGroup<'a>>,
 }
 
@@ -67,6 +69,7 @@ impl<'a> VisibleRoster<'a> {
         held: Option<&HashSet<String>>,
     ) -> Self {
         let mut rows = Vec::new();
+        let mut matches = Vec::new();
         let mut groups = Vec::with_capacity(snapshot.worktree_groups.len());
         for group in snapshot.worktree_groups.iter() {
             let expanded = expanded_groups.contains(&group.key);
@@ -78,7 +81,10 @@ impl<'a> VisibleRoster<'a> {
             } else {
                 0
             };
-            rows.extend(projection.rows);
+            for (row, matched) in projection.rows {
+                rows.push(row);
+                matches.push(matched);
+            }
             groups.push(VisibleGroup {
                 source: group,
                 range: start..rows.len(),
@@ -91,7 +97,11 @@ impl<'a> VisibleRoster<'a> {
                 hidden_count,
             });
         }
-        Self { rows, groups }
+        Self {
+            rows,
+            matches,
+            groups,
+        }
     }
 
     pub(super) fn baseline(snapshot: &'a SidebarSnapshot) -> Self {
@@ -113,8 +123,10 @@ impl<'a> VisibleRoster<'a> {
             0
         };
         let len = projection.rows.len();
+        let (rows, matches) = projection.rows.into_iter().unzip();
         Self {
-            rows: projection.rows,
+            rows,
+            matches,
             groups: vec![VisibleGroup {
                 source: group,
                 range: 0..len,
@@ -139,6 +151,10 @@ impl<'a> VisibleRoster<'a> {
 
     pub(super) fn len(&self) -> usize {
         self.rows.len()
+    }
+
+    pub(super) fn is_match(&self, ordinal: usize) -> bool {
+        self.matches.get(ordinal).copied().unwrap_or(false)
     }
 
     pub(super) fn groups(&self) -> &[VisibleGroup<'a>] {
@@ -188,7 +204,7 @@ impl<'a> VisibleRoster<'a> {
 }
 
 struct GroupProjection<'a> {
-    rows: Vec<&'a SidebarRow>,
+    rows: Vec<(&'a SidebarRow, bool)>,
     natural_hidden_count: usize,
 }
 
@@ -199,16 +215,14 @@ fn project_group<'a>(
     held: Option<&HashSet<String>>,
     focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
+    let facts = lens.filter.map(|_| GroupFacts::new(group));
     let mut projection = project_rows(
         &group.rows,
         group.collapses(),
-        lens,
+        lens.query.is_some(),
         expanded,
         held,
-        (
-            group.pr_state == Some(WorktreePrState::Open),
-            group.finished,
-        ),
+        lens.filter.zip(facts.as_ref()),
         focused_pane,
     );
     let Some(query) = &lens.query else {
@@ -225,7 +239,7 @@ fn project_group<'a>(
     {
         return projection;
     }
-    projection.rows.retain(|row| {
+    projection.rows.retain(|(row, _)| {
         contains(&row.name)
             || row.worktree_branch.as_deref().is_some_and(contains)
             || row.team().is_some_and(contains)
@@ -240,10 +254,10 @@ fn project_group<'a>(
 fn project_rows<'a>(
     source: &'a [SidebarRow],
     collapses: bool,
-    lens: &BodyLens,
+    querying: bool,
     expanded: bool,
     held: Option<&HashSet<String>>,
-    group_facts: (bool, bool),
+    filter: Option<(BodyFilter, &GroupFacts<'_>)>,
     focused_pane: Option<&PaneId>,
 ) -> GroupProjection<'a> {
     let process_is_only_live_member = process_is_only_live_member(source);
@@ -278,9 +292,9 @@ fn project_rows<'a>(
         };
         natural_visible += usize::from(natural);
 
-        let visible = match lens.filter {
-            Some(filter) => filter.matches(row, group_facts),
-            None if lens.query.is_some() || expanded => true,
+        let visible = match filter {
+            Some((filter, facts)) => filter.shown(row, facts),
+            None if querying || expanded => true,
             None if collapses => revealed,
             None => {
                 essential
@@ -289,7 +303,10 @@ fn project_rows<'a>(
             }
         };
         if visible {
-            rows.push(row);
+            rows.push((
+                row,
+                filter.is_none_or(|(filter, facts)| filter.matches(row, facts)),
+            ));
             actual_visible += 1;
         }
     }
@@ -312,16 +329,11 @@ pub fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(
-        rows,
-        false,
-        &BodyLens::default(),
-        false,
-        held,
-        (false, false),
-        None,
-    )
-    .rows
+    project_rows(rows, false, false, false, held, None, None)
+        .rows
+        .into_iter()
+        .map(|(row, _)| row)
+        .collect()
 }
 
 fn row_is_focused(row: &SidebarRow, focused_pane: Option<&PaneId>) -> bool {
@@ -343,7 +355,7 @@ mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::pane;
-    use crate::store::snapshot::{AgentCard, RowCard, SidebarWorktreeKind};
+    use crate::store::snapshot::{AgentCard, RowCard, SidebarWorktreeKind, WorktreePrState};
     use jiff::Timestamp;
 
     #[test]
@@ -608,6 +620,54 @@ mod tests {
         assert_eq!(ids(&roster), ["running"]);
     }
 
+    #[test]
+    fn status_lens_shows_whole_units_with_match_bits_and_query_alignment() {
+        let mut rows = vec![
+            agent_row("context", AgentStatus::Waiting),
+            agent_row("match", AgentStatus::Running),
+            agent_row("solo", AgentStatus::Idle),
+        ];
+        for row in &mut rows[..2] {
+            row.as_agent_mut().unwrap().team = Some("crew".to_owned());
+            row.name = row.id.clone();
+        }
+        let mut group = group(rows);
+        let lens = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
+        let roster = VisibleRoster::single(&group, &lens, false, None, None);
+        assert_eq!(ids(&roster), ["context", "match"]);
+        assert!(!roster.is_match(0));
+        assert!(roster.is_match(1));
+        let queried = BodyLens {
+            query: Some("match".to_owned()),
+            ..lens.clone()
+        };
+        let roster = VisibleRoster::single(&group, &queried, false, None, None);
+        assert_eq!(ids(&roster), ["match"]);
+        assert!(roster.is_match(0));
+        let queried = BodyLens {
+            query: Some("context".to_owned()),
+            ..lens.clone()
+        };
+        let roster = VisibleRoster::single(&group, &queried, false, None, None);
+        assert_eq!(ids(&roster), ["context"]);
+        assert!(!roster.is_match(0));
+        let idle = BodyLens::from(BodyFilter::Status(AgentStatus::Sleeping));
+        assert_eq!(
+            VisibleRoster::single(&group, &idle, false, None, None).len(),
+            0
+        );
+        std::sync::Arc::make_mut(&mut group.rows)[0].unread = true;
+        let roster = VisibleRoster::single(
+            &group,
+            &BodyLens::from(BodyFilter::Unread),
+            false,
+            None,
+            None,
+        );
+        assert_eq!(ids(&roster), ["context"]);
+        assert!(roster.is_match(0));
+    }
+
     fn snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
         let workspace = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
         let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
@@ -625,7 +685,7 @@ mod tests {
             team: None,
             cohort_effort: None,
             pipeline: None,
-            status_counts: Vec::new(),
+            status_counts: crate::sidebar::test_support::status_counts_from_rows(&rows),
             rows: rows.into(),
             diff_added: None,
             diff_removed: None,

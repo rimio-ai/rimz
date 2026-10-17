@@ -432,7 +432,23 @@ pub struct SidebarWorktreeGroup {
     pub pr_stack: PrStack,
 }
 
+/// A work unit within one projected group; keys never merge across groups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SidebarUnitKey<'a> {
+    Team(&'a str),
+    Solo(&'a str),
+}
+
 impl SidebarWorktreeGroup {
+    pub(crate) fn unit_key<'a>(&self, row: &'a SidebarRow) -> SidebarUnitKey<'a> {
+        if self.kind != SidebarWorktreeKind::External
+            && let Some(team) = row.team()
+        {
+            return SidebarUnitKey::Team(team);
+        }
+        SidebarUnitKey::Solo(&row.id)
+    }
+
     /// A finished roster with any agent collapses behind the two-line receipt.
     /// Process-only groups stay open.
     pub fn collapses(&self) -> bool {
@@ -493,19 +509,26 @@ pub(crate) fn triage_key(row: &SidebarRow) -> Option<(u8, jiff::Timestamp)> {
     }
 }
 
-/// Rows the jump banner counts: unread rows that need an answer, matching
-/// [`lead_unread_row`]'s predicate.
+/// Units the jump banner counts: at least one unread member needs an answer,
+/// matching [`lead_unread_row`]'s row predicate.
 pub(crate) fn actionable_unread_count(groups: &[SidebarWorktreeGroup]) -> usize {
     groups
         .iter()
-        .flat_map(|group| group.rows.iter())
-        .filter(|row| {
-            row.unread
-                && row
-                    .attention_status()
-                    .is_some_and(AgentStatus::is_actionable)
+        .map(|group| {
+            group
+                .rows
+                .iter()
+                .filter(|row| {
+                    row.unread
+                        && row
+                            .attention_status()
+                            .is_some_and(AgentStatus::is_actionable)
+                })
+                .map(|row| group.unit_key(row))
+                .collect::<BTreeSet<_>>()
+                .len()
         })
-        .count()
+        .sum()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

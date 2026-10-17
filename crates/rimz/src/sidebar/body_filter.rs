@@ -1,5 +1,6 @@
 //! Shared room-runtime cockpit lens applied to sidebar body membership.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use tracing::debug;
 
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
-use crate::store::snapshot::{SidebarRow, SidebarWorktreeGroup, WorktreePrState};
+use crate::store::snapshot::{SidebarRow, SidebarUnitKey, SidebarWorktreeGroup, WorktreePrState};
 
 #[cfg(test)]
 thread_local! {
@@ -51,26 +52,89 @@ impl From<BodyFilter> for BodyLens {
     }
 }
 
-impl BodyFilter {
-    pub(crate) fn matches(self, row: &SidebarRow, (pr_open, finished): (bool, bool)) -> bool {
-        match self {
-            Self::Status(status) => {
-                (status != AgentStatus::Success || !finished)
-                    && row.attention_status() == Some(status)
+pub(crate) struct GroupFacts<'a> {
+    group: &'a SidebarWorktreeGroup,
+    buckets: BTreeMap<SidebarUnitKey<'a>, Vec<AgentStatus>>,
+}
+
+impl<'a> GroupFacts<'a> {
+    pub(crate) fn new(group: &'a SidebarWorktreeGroup) -> Self {
+        let mut buckets: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for row in group.rows.iter() {
+            let Some(status) = row.attention_status() else {
+                continue;
+            };
+            let statuses = buckets.entry(group.unit_key(row)).or_default();
+            if !statuses.contains(&status) {
+                statuses.push(status);
             }
+        }
+        let is_active = |status: &AgentStatus| {
+            matches!(
+                status,
+                AgentStatus::Waiting
+                    | AgentStatus::Failed
+                    | AgentStatus::Paused
+                    | AgentStatus::Running
+            )
+        };
+        for statuses in buckets.values_mut() {
+            if statuses.iter().any(is_active) {
+                statuses.retain(is_active);
+                continue;
+            }
+            let rest = [
+                AgentStatus::Idle,
+                AgentStatus::Sleeping,
+                AgentStatus::Success,
+            ]
+            .into_iter()
+            .find(|status| statuses.contains(status));
+            statuses.retain(|status| {
+                Some(*status) == rest && (*status != AgentStatus::Success || !group.finished)
+            });
+        }
+        Self { group, buckets }
+    }
+}
+
+impl BodyFilter {
+    /// Status lenses show a matching unit whole; other lenses keep row membership.
+    pub(crate) fn shown(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
+        match self {
+            Self::Status(status) => facts
+                .buckets
+                .get(&facts.group.unit_key(row))
+                .is_some_and(|buckets| buckets.contains(&status)),
             Self::Unread => row.unread,
-            Self::OpenPr => pr_open,
+            Self::OpenPr => facts.group.pr_state == Some(WorktreePrState::Open),
         }
     }
 
+    /// A status match has the bucket's own attention status and belongs to a unit counted there.
+    pub(crate) fn matches(self, row: &SidebarRow, facts: &GroupFacts<'_>) -> bool {
+        self.shown(row, facts)
+            && match self {
+                Self::Status(status) => row.attention_status() == Some(status),
+                Self::Unread | Self::OpenPr => true,
+            }
+    }
+
+    /// Full-roster matching units for status lenses, or matching rows for unread and open PRs.
     pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
         match self {
-            Self::Status(status) => groups
+            Self::Status(_) => groups
                 .iter()
-                .filter(|group| status != AgentStatus::Success || !group.finished)
-                .flat_map(|group| &group.status_counts)
-                .filter(|count| count.status == status)
-                .map(|count| count.count)
+                .map(|group| {
+                    let facts = GroupFacts::new(group);
+                    group
+                        .rows
+                        .iter()
+                        .filter(|row| self.matches(row, &facts))
+                        .map(|row| group.unit_key(row))
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                })
                 .sum(),
             Self::Unread => groups
                 .iter()
@@ -125,48 +189,107 @@ mod tests {
     use crate::ids::WorkspaceId;
 
     #[test]
-    fn success_count_and_lens_exclude_finished_groups_only() {
+    fn team_units_count_active_buckets_or_one_rest_bucket() {
+        use AgentStatus::*;
+        for (members, expected) in [
+            (vec![Running, Idle], vec![Running]),
+            (vec![Waiting, Running], vec![Waiting, Running]),
+            (vec![Failed, Paused, Running], vec![Failed, Paused, Running]),
+            (vec![Idle, Sleeping, Success], vec![Idle]),
+            (vec![Sleeping, Success], vec![Sleeping]),
+            (vec![Success, Success], vec![Success]),
+        ] {
+            let group = team_group(&members);
+            for status in [Waiting, Failed, Paused, Running, Idle, Sleeping, Success] {
+                assert_eq!(
+                    BodyFilter::Status(status).total(std::slice::from_ref(&group)),
+                    usize::from(expected.contains(&status)),
+                    "{members:?} in {status:?}"
+                );
+            }
+        }
+    }
+
+    fn team_group(statuses: &[AgentStatus]) -> SidebarWorktreeGroup {
         use crate::sidebar::test_support::{activity_row, worktree_group};
-        use crate::store::snapshot::SidebarStatusCount;
         let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let path = std::path::Path::new("/repo/lane");
+        let rows = statuses
+            .iter()
+            .enumerate()
+            .map(|(index, status)| {
+                let mut row = activity_row(true, Some(*status), now, path);
+                row.id = format!("member-{index}");
+                row.as_agent_mut().unwrap().team = Some("crew".to_owned());
+                row
+            })
+            .collect();
+        worktree_group(path, rows)
+    }
+
+    #[test]
+    fn unit_identity_stays_within_a_group_and_external_rows_are_solo() {
+        use AgentStatus::*;
+        let group = team_group(&[Running, Running]);
+        let mut other = group.clone();
+        other.key = "/repo/other".to_owned();
+        assert_eq!(
+            BodyFilter::Status(Running).total(&[group.clone(), other]),
+            2
+        );
+        let mut external = group.clone();
+        external.kind = crate::store::snapshot::SidebarWorktreeKind::External;
+        assert_eq!(BodyFilter::Status(Running).total(&[external]), 2);
+        let mut rows = group.rows.as_ref().clone();
+        let mut solo = rows[0].clone();
+        solo.id = "solo".to_owned();
+        solo.as_agent_mut().unwrap().team = None;
+        rows.push(solo);
+        let mixed =
+            crate::sidebar::test_support::worktree_group(std::path::Path::new("/repo/lane"), rows);
+        assert_eq!(BodyFilter::Status(Running).total(&[mixed]), 2);
+    }
+
+    #[test]
+    fn success_count_and_lens_exclude_finished_groups_only() {
         let groups = [true, false].map(|finished| {
-            let path = std::path::Path::new("/repo/lane");
-            let count = if finished { 2 } else { 1 };
-            let mut group = worktree_group(
-                path,
-                (0..count)
-                    .map(|_| activity_row(true, Some(AgentStatus::Success), now, path))
-                    .chain([activity_row(true, Some(AgentStatus::Idle), now, path)])
-                    .collect(),
-            );
+            let mut group = team_group(&[AgentStatus::Success, AgentStatus::Success]);
             group.finished = finished;
-            group.status_counts = vec![
-                SidebarStatusCount {
-                    status: AgentStatus::Success,
-                    count,
-                },
-                SidebarStatusCount {
-                    status: AgentStatus::Idle,
-                    count: 1,
-                },
-            ];
             group
         });
         let success = BodyFilter::Status(AgentStatus::Success);
         assert_eq!(success.total(&groups), 1);
         let idle = BodyFilter::Status(AgentStatus::Idle);
-        assert_eq!(idle.total(&groups), 2);
-        for filter in [success, idle] {
-            let matches = groups
-                .iter()
-                .flat_map(|group| {
-                    group
-                        .rows
-                        .iter()
-                        .filter(move |row| filter.matches(row, (false, group.finished)))
-                })
-                .count();
-            assert_eq!(filter.total(&groups), matches);
+        assert_eq!(idle.total(&groups), 0);
+        let mut idle_finished = team_group(&[AgentStatus::Idle, AgentStatus::Success]);
+        idle_finished.finished = true;
+        assert_eq!(idle.total(&[idle_finished]), 1);
+    }
+
+    #[test]
+    fn bucket_totals_and_shown_units_use_one_predicate() {
+        use AgentStatus::*;
+        let mut finished = team_group(&[Success, Success]);
+        finished.finished = true;
+        let groups = [
+            team_group(&[Running, Idle, Success]),
+            team_group(&[Waiting, Failed, Paused]),
+            team_group(&[Sleeping, Success]),
+            finished,
+        ];
+        let working = BodyFilter::Status(Running);
+        let facts = GroupFacts::new(&groups[0]);
+        assert!(
+            groups[0].rows.iter().all(|row| working.shown(row, &facts)),
+            "a matching unit is shown whole"
+        );
+        for status in [Waiting, Failed, Paused, Running, Idle, Sleeping, Success] {
+            let filter = BodyFilter::Status(status);
+            let shown = groups.iter().any(|group| {
+                let facts = GroupFacts::new(group);
+                group.rows.iter().any(|row| filter.shown(row, &facts))
+            });
+            assert_eq!(filter.total(&groups) == 0, !shown, "{status:?}");
         }
     }
 

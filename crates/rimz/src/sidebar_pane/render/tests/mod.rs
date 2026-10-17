@@ -527,6 +527,7 @@ fn test_row_ctx<'a>(
         card_density: snapshot.theme.display.card_density,
         stale_after_secs: snapshot.theme.display.stale_after_secs,
         selected_index: Some(selected_index),
+        matched: true,
         held_expansions: const { &std::collections::BTreeSet::new() },
         focused_pane: snapshot.focused_pane.as_ref(),
         animation_phase,

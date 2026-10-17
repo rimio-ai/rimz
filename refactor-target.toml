@@ -1081,6 +1081,36 @@ kind = "item"
 key = "sidebar::body_filter::BodyLens::is_empty"
 reason = "The lane writer and visible-roster projection share the empty-lens predicate."
 
+[[verdict]]
+kind = "item"
+key = "sidebar::body_filter::GroupFacts"
+reason = "Projection and bucket emphasis share the same per-group unit buckets."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::body_filter::GroupFacts::new"
+reason = "Each lens reader builds its group facts once before reading rows."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::body_filter::BodyFilter::shown"
+reason = "Status projection includes context teammates without changing row match membership."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarUnitKey"
+reason = "The cockpit lens, unread banner, and teammate reach share group-local unit identity."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::SidebarWorktreeGroup::unit_key"
+reason = "One method owns team-versus-solo identity including the external-group exception."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::view::VisibleRoster::is_match"
+reason = "Render emphasis and keyboard selection read the projected row match bit."
+
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
 surface-budget = 59
@@ -1185,7 +1215,8 @@ path = "crates/rimz/src/store"
 # FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
 # Workflow attempt process, run, ending, ask, limit and child vocabulary is shared with the harness (+8).
 # The sidebar snapshot carries parked workflow runs; the park reason, park phrase, and run state have one wording for every surface.
-surface-budget = 467
+# SidebarUnitKey and SidebarWorktreeGroup::unit_key share group-local unit identity (+1).
+surface-budget = 468
 
 [[verdict]]
 kind = "item"

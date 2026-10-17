@@ -65,7 +65,7 @@ pub use view::{
     SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr,
     TruthNotice, WorktreeCi, WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row,
 };
-pub(crate) use view::{actionable_unread_count, triage_key};
+pub(crate) use view::{SidebarUnitKey, actionable_unread_count, triage_key};
 pub(crate) use view::{format_plan_label, sort_windows};
 
 #[derive(Debug, thiserror::Error)]

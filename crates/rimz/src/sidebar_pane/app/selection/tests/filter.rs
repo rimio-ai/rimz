@@ -1,6 +1,129 @@
 use super::*;
 use std::time::Duration;
 
+fn filtered_team_snapshot() -> SidebarSnapshot {
+    use crate::agents::AgentStatus;
+    let mut snapshot = filterable_snapshot(&workspace());
+    for (group_index, group) in std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .enumerate()
+    {
+        let rows = [
+            AgentStatus::Waiting,
+            AgentStatus::Running,
+            AgentStatus::Idle,
+            AgentStatus::Running,
+            AgentStatus::Idle,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, status)| {
+            let id = format!("team-{group_index}-{index}");
+            let mut row = filter_row(true, &id, &id, Some(status), &id, &group.key);
+            row.as_agent_mut().unwrap().team = Some("crew".to_owned());
+            row.unread = status == AgentStatus::Waiting;
+            row
+        })
+        .collect();
+        group.rows = std::sync::Arc::new(rows);
+        group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
+    }
+    snapshot
+}
+
+#[test]
+fn selection_walkers_snap_to_matches_in_their_direction() {
+    use crate::agents::AgentStatus;
+    let snapshot = filtered_team_snapshot();
+    let mut ui = UiState::default();
+    reconcile_selection(
+        &mut ui,
+        &snapshot,
+        Some(
+            snapshot.worktree_groups[0].rows[1]
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .clone(),
+        ),
+    );
+    set_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+    );
+    for (action, expected) in [
+        (KeyAction::Down, 3),
+        (KeyAction::Up, 1),
+        (KeyAction::Bottom, 8),
+        (KeyAction::Top, 1),
+        (KeyAction::WorktreeDown, 6),
+        (KeyAction::WorktreeUp, 1),
+    ] {
+        handle_key(action, &mut ui, &snapshot);
+        assert_eq!(ui.selected_index, Some(expected), "{action:?}");
+    }
+    paint(&mut ui, &snapshot, 64);
+    for action in [KeyAction::PageDown, KeyAction::ScreenBottom] {
+        handle_key(action, &mut ui, &snapshot);
+        assert_eq!(ui.selected_index, Some(8), "{action:?}");
+    }
+    for action in [KeyAction::PageUp, KeyAction::ScreenTop] {
+        handle_key(action, &mut ui, &snapshot);
+        assert_eq!(ui.selected_index, Some(1), "{action:?}");
+    }
+}
+
+#[test]
+fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
+    use crate::agents::AgentStatus;
+    let snapshot = filtered_team_snapshot();
+    let context = snapshot.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let mut ui = UiState::default();
+    reconcile_selection(&mut ui, &snapshot, Some(context.clone()));
+    set_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+    );
+    assert_eq!(ui.selected_index, Some(1));
+    reconcile_selection(&mut ui, &snapshot, Some(context.clone()));
+    assert_eq!(ui.selected_index, Some(1), "lens snap is a browse pick");
+    paint(&mut ui, &snapshot, 64);
+    let row = (0..64)
+        .find(|row| ui.interactions.target_at(1, *row) == Some(HitTarget::Row(0)))
+        .expect("context card is clickable");
+    assert_eq!(
+        handle_mouse_click(1, row, &mut ui, &snapshot).effects,
+        vec![InputEffect::Focus(context.clone())]
+    );
+    assert_eq!(
+        handle_key(KeyAction::Digit(1), &mut ui, &snapshot).effects,
+        vec![InputEffect::Focus(context.clone())]
+    );
+    assert_eq!(
+        handle_key(KeyAction::InboxNext, &mut ui, &snapshot).effects,
+        vec![InputEffect::Focus(context.clone())]
+    );
+    ui.browse = None;
+    reconcile_selection(&mut ui, &snapshot, Some(context.clone()));
+    assert_eq!(
+        ui.selected_index,
+        Some(0),
+        "a focused context row stays selected on fold"
+    );
+    assert_eq!(
+        handle_key(KeyAction::Enter, &mut ui, &snapshot).effects,
+        vec![InputEffect::Focus(context)]
+    );
+}
+
 fn assert_search_selection(ui: &UiState, snapshot: &SidebarSnapshot) {
     assert_eq!(
         ui.selected_index
@@ -202,7 +325,8 @@ fn search_fold_removing_selected_row_reseats_enter_target() {
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
     )[1]
     .card = snapshot.worktree_groups[0].rows[0].card.clone();
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].status_counts[0].count = 2;
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     let mut ui = UiState::default();
     search_key(&mut ui, &snapshot, KeyCode::Char('w'));
     search_key(&mut ui, &snapshot, KeyCode::Char('/'));
@@ -217,7 +341,8 @@ fn search_fold_removing_selected_row_reseats_enter_target() {
     .as_agent_mut()
     .unwrap()
     .status = AgentStatus::Success;
-    std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].status_counts[0].count = 1;
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     reconcile_selection(&mut ui, &snapshot, None);
     assert_search_selection(&ui, &snapshot);
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_10");
@@ -1137,10 +1262,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
                 agent.status = AgentStatus::Success;
             }
         }
-        group.status_counts = vec![crate::store::snapshot::SidebarStatusCount {
-            status: AgentStatus::Success,
-            count: 1,
-        }];
+        group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     }
     groups[1].finished = true;
     ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Success));
