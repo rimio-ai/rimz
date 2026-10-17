@@ -157,7 +157,7 @@ fn selected_cache_line_counts_down_and_estimates_expiry_at_the_tier_boundary() {
 }
 
 #[test]
-fn cache_line_is_absent_outside_expiry_and_on_non_live_selections() {
+fn cache_line_follows_held_stats_and_stays_absent_outside_expiry() {
     let theme = Theme::fixed(false);
     let held = CacheClock {
         warm_until: Some(fixed_now() + Duration::from_secs(600)),
@@ -175,38 +175,62 @@ fn cache_line_is_absent_outside_expiry_and_on_non_live_selections() {
     for density in [
         crate::config::CardDensityMode::Auto,
         crate::config::CardDensityMode::Expanded,
+        crate::config::CardDensityMode::Compact,
     ] {
-        let mut snapshot = cache_meter_snapshot(1801, Some(half_hour_cache()));
-        snapshot.theme.display.card_density = density;
-        let rolls = CostRolls::default();
-        let mut ctx = test_row_ctx(&snapshot, &theme, 54, usize::MAX, 0, &rolls);
-        let held = [snapshot.rows().next().unwrap().id.clone()].into();
-        ctx.held_expansions = &held;
-        let text = line_texts(
-            &worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines,
-        )
-        .join("\n");
-        assert!(text.contains('▤'), "held cards still have stats");
-        assert!(
-            !text.contains("expired"),
-            "held selection is not live: {text}"
-        );
-        let text = line_texts(&group_lines(&snapshot, &theme, usize::MAX)).join("\n");
-        assert!(!text.contains("expired"), "unselected: {text}");
+        for (quiet, notice) in [(22 * 60 + 1, "expires in 8m"), (1801, "expired")] {
+            let mut snapshot = cache_meter_snapshot(quiet, Some(half_hour_cache()));
+            snapshot.theme.display.card_density = density;
+            let rolls = CostRolls::default();
+            let mut ctx = test_row_ctx(&snapshot, &theme, 54, usize::MAX, 0, &rolls);
+            let held = [snapshot.rows().next().unwrap().id.clone()].into();
+            ctx.held_expansions = &held;
+            let text = line_texts(
+                &worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines,
+            )
+            .join("\n");
+            assert!(text.contains('▤'), "held cards still have stats");
+            assert!(
+                text.contains(notice),
+                "held cards keep cache guidance: {text}"
+            );
+            let text = line_texts(&group_lines(&snapshot, &theme, usize::MAX)).join("\n");
+            assert_eq!(
+                text.contains(notice),
+                density == crate::config::CardDensityMode::Expanded,
+                "unselected: {text}"
+            );
+        }
     }
-    let mut snapshot = cache_meter_snapshot(1801, Some(half_hour_cache()));
-    let row = snapshot.rows_mut().next().unwrap();
-    row.as_agent_mut().unwrap().team = Some("crew".into());
-    let mut teammate = row.clone();
-    teammate.id = "teammate".into();
-    teammate.as_agent_mut().unwrap().cache = None;
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
-        .push(teammate);
-    let text = line_texts(&group_lines(&snapshot, &theme, 1)).join("\n");
-    assert!(
-        !text.contains("expired"),
-        "teammate reach is not live selection: {text}"
-    );
+}
+
+#[test]
+fn cache_line_follows_teammate_stats_at_expanded_density() {
+    let theme = Theme::fixed(false);
+    for density in [
+        crate::config::CardDensityMode::Auto,
+        crate::config::CardDensityMode::Expanded,
+        crate::config::CardDensityMode::Compact,
+    ] {
+        for (quiet, notice) in [(22 * 60 + 1, "expires in 8m"), (1801, "expired")] {
+            let mut snapshot = cache_meter_snapshot(quiet, Some(half_hour_cache()));
+            snapshot.theme.display.card_density = density;
+            let row = snapshot.rows_mut().next().unwrap();
+            row.as_agent_mut().unwrap().team = Some("crew".into());
+            let mut teammate = row.clone();
+            teammate.id = "teammate".into();
+            teammate.as_agent_mut().unwrap().cache = None;
+            std::sync::Arc::make_mut(
+                &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+            )
+            .push(teammate);
+            let text = line_texts(&group_lines(&snapshot, &theme, 1)).join("\n");
+            assert_eq!(
+                text.contains(notice),
+                density == crate::config::CardDensityMode::Expanded,
+                "teammate cache guidance follows stats: {text}"
+            );
+        }
+    }
 }
 
 fn cache_meter_line(snapshot: &SidebarSnapshot, theme: &Theme) -> Line<'static> {
