@@ -287,10 +287,11 @@ fn display_path(path: &Path) -> String {
     ui::home_relative(path.to_string_lossy().as_ref())
 }
 
-fn has_agent_runs_section(task: &LoadedTask) -> bool {
-    let guard = task.entry().guard();
-    (guard.shell.is_some() || !guard.judges.is_empty())
-        && task.action().ok().and_then(action_words).is_some()
+fn has_agent_runs_section(entry: &TaskEntry, action: Option<&TaskAction>) -> bool {
+    let guard = entry.guard();
+    !entry.stay
+        && (guard.shell.is_some() || !guard.judges.is_empty())
+        && action.and_then(action_words).is_some()
 }
 
 struct ShowView {
@@ -487,11 +488,21 @@ impl WorktreeRow<'_> {
         match self.condition.state {
             CheckoutState::Ready { .. } => 1,
             CheckoutState::Holding { .. } => 2,
-            CheckoutState::Declined { .. } => 3,
-            CheckoutState::Waiting { .. } if self.short.len() <= 1 => 4,
-            CheckoutState::Waiting { .. } => 5,
-            CheckoutState::Launched { .. } if self.leader_status.is_some() => 6,
-            CheckoutState::Launched { .. } => 7,
+            CheckoutState::Launched { .. }
+                if matches!(
+                    self.leader_status,
+                    Some(
+                        rimz::agents::AgentStatus::Running
+                            | rimz::agents::AgentStatus::Waiting
+                            | rimz::agents::AgentStatus::Failed
+                    )
+                ) =>
+            {
+                3
+            }
+            CheckoutState::Waiting { .. } => 4,
+            CheckoutState::Declined { .. } => 5,
+            CheckoutState::Launched { .. } => 6,
         }
     }
 }
@@ -575,7 +586,7 @@ fn write_worktrees(
     }
     let mut counts = vec![format!("{} owned", rows.len())];
     for state in [
-        "blocked", "ready", "holding", "declined", "waiting", "launched",
+        "blocked", "ready", "holding", "waiting", "declined", "launched",
     ] {
         let count = rows.iter().filter(|row| row.state_name() == state).count();
         if count > 0 {
@@ -611,10 +622,6 @@ fn write_worktrees(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut headers = vec!["WORKTREE", "STATE"];
-    headers.extend(terms.iter().map(|term| term.key.as_str()));
-    headers.push("LEADER");
-    let mut table = ui::Table::new(headers).indent(2);
     rows.sort_by(|a, b| {
         a.rank()
             .cmp(&b.rank())
@@ -626,11 +633,28 @@ fn write_worktrees(
             })
             .then(a.condition.name.cmp(&b.condition.name))
     });
+    let rendered = rows
+        .iter()
+        .filter(|row| view.all || row.rank() < 5)
+        .collect::<Vec<_>>();
+    let has_leader = rendered
+        .iter()
+        .any(|row| matches!(row.condition.state, CheckoutState::Launched { .. }));
+    let has_reason = rendered.iter().any(|row| {
+        row.blocked.is_some() || matches!(row.condition.state, CheckoutState::Declined { .. })
+    });
+    let mut headers = vec!["WORKTREE", "STATE"];
+    headers.extend(terms.iter().map(|term| term.key.as_str()));
+    if has_leader {
+        headers.push("LEADER");
+    }
+    if has_reason {
+        headers.push("REASON");
+    }
+    let width = ui::terminal_columns(120);
+    let mut table = ui::Table::new(headers).indent(2).max_width(width);
     let now = view.now_zoned.timestamp();
-    for row in &rows {
-        if !view.all && matches!(row.rank(), 5 | 7) {
-            continue;
-        }
+    for row in rendered {
         let state = if let Some((since, _)) = &row.blocked {
             format!("ready · blocked {}", ui::rel_age(*since, now))
         } else {
@@ -673,41 +697,145 @@ fn write_worktrees(
             let (glyph, style) = ui::verdict(role);
             cells.push(ui::cell(format!("{glyph} {}", value.unwrap_or("unknown"))).fg(style));
         }
-        let leader = if let Some((_, refusal)) = &row.blocked {
-            refusal.reason.to_owned()
-        } else if let CheckoutState::Declined {
-            profile, reason, ..
-        } = &row.condition.state
-        {
-            format!("judge {profile}: {}", first_line(reason))
-        } else if let CheckoutState::Launched { leader, .. } = &row.condition.state {
-            row.leader_status.map_or_else(
-                || format!("@{leader} ended"),
-                |status| format!("@{leader}  {} · {} armed", status.as_str(), row.armed),
-            )
-        } else {
-            String::new()
-        };
-        cells.push(ui::cell(leader));
+        if has_leader {
+            let leader = if let CheckoutState::Launched { leader, .. } = &row.condition.state {
+                row.leader_status.map_or_else(
+                    || format!("@{leader} ended"),
+                    |status| {
+                        let mut text = format!("@{leader}  {}", status.as_str());
+                        if !view.entry.subscribe.is_empty() {
+                            text.push_str(&format!(" · {} armed", row.armed));
+                        }
+                        text
+                    },
+                )
+            } else {
+                String::new()
+            };
+            cells.push(ui::cell(leader));
+        }
+        if has_reason {
+            let reason = if let Some((_, refusal)) = &row.blocked {
+                refusal.reason.to_owned()
+            } else if let CheckoutState::Declined {
+                profile, reason, ..
+            } = &row.condition.state
+            {
+                format!("judge {profile}: {}", first_line(reason))
+            } else {
+                String::new()
+            };
+            cells.push(ui::cell(reason));
+        }
         table.row(cells);
     }
     table.render(out)?;
     if !view.all {
-        for (rank, label) in [
-            (5, "more waiting on two or more terms"),
-            (7, "launched, leader ended"),
-        ] {
-            let count = rows.iter().filter(|row| row.rank() == rank).count();
-            if count > 0 {
-                writeln!(
-                    out,
-                    "  {}",
-                    ui::paint(ui::palette::muted(), &format!("… {count} {label}"))
-                )?;
-            }
-        }
+        write_worktree_folds(out, view, &rows, width)?;
     }
     Ok(())
+}
+
+fn write_worktree_folds(
+    out: &mut impl Write,
+    view: &ShowView,
+    rows: &[WorktreeRow<'_>],
+    width: usize,
+) -> Result<()> {
+    let now = view.now_zoned.timestamp();
+    let folds = [fold_declined(rows, now), fold_launched(rows, now)];
+    for line in folds.iter().flatten() {
+        writeln!(
+            out,
+            "{}",
+            ui::paint(
+                ui::palette::muted(),
+                &ui::clip_to_width(&format!("  {line}"), width)
+            )
+        )?;
+    }
+    if folds.iter().any(Option::is_some) {
+        writeln!(
+            out,
+            "  {}",
+            ui::paint(
+                ui::palette::muted(),
+                &format!("→ reasons and leaders: rimz loop show {} --all", view.name)
+            )
+        )?;
+    }
+    Ok(())
+}
+
+fn fold_declined(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
+    let mut count = 0;
+    let mut profiles = std::collections::BTreeSet::new();
+    let mut next_recheck = None;
+    let mut newest = None;
+    for row in rows {
+        let CheckoutState::Declined {
+            at,
+            profile,
+            reason,
+            recheck_at,
+        } = &row.condition.state
+        else {
+            continue;
+        };
+        count += 1;
+        profiles.insert(profile.as_str());
+        if let Some(recheck_at) = recheck_at {
+            next_recheck =
+                Some(next_recheck.map_or(*recheck_at, |next: Timestamp| next.min(*recheck_at)));
+        }
+        if newest.is_none_or(|(_, latest, _)| *at > latest) {
+            newest = Some((&row.condition.name, *at, reason));
+        }
+    }
+    let (name, at, reason) = newest?;
+    let judges = if profiles.len() == 1 {
+        "judge"
+    } else {
+        "judges"
+    };
+    let profiles = profiles.into_iter().collect::<Vec<_>>().join(", ");
+    let reopen = next_recheck.map_or_else(
+        || "re-judged when the guard changes".into(),
+        |at| format!("next recheck {}", ui::rel_until(at, now)),
+    );
+    Some(format!(
+        "… {count} declined by {judges} {profiles} · {reopen} · newest {name} {}: {}",
+        ui::rel_age(at, now),
+        first_line(reason)
+    ))
+}
+
+fn fold_launched(rows: &[WorktreeRow<'_>], now: Timestamp) -> Option<String> {
+    let mut counts = BTreeMap::new();
+    let mut newest = None;
+    for row in rows.iter().filter(|row| row.rank() == 6) {
+        let CheckoutState::Launched { at, leader } = &row.condition.state else {
+            continue;
+        };
+        let status = row.leader_status.map_or("ended", |status| status.as_str());
+        *counts.entry(status).or_insert(0usize) += 1;
+        if newest.is_none_or(|(_, _, latest)| *at > latest) {
+            newest = Some((&row.condition.name, leader, *at));
+        }
+    }
+    let (name, leader, at) = newest?;
+    let count: usize = counts.values().sum();
+    let mut counts = counts.into_iter().collect::<Vec<_>>();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let breakdown = counts
+        .into_iter()
+        .map(|(status, count)| format!("{count} {status}"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(format!(
+        "… {count} launched: {breakdown} · newest {name} @{leader} {}",
+        ui::rel_age(at, now)
+    ))
 }
 
 struct ConditionReadings<'a> {
@@ -740,6 +868,8 @@ struct WorktreeJson<'a> {
     profile: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     since: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recheck_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hold_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -780,6 +910,7 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                 reason: None,
                 profile: None,
                 since: None,
+                recheck_at: None,
                 hold_ms: None,
                 held_ms: None,
                 short: readings.as_ref().map(|_| row.short),
@@ -794,10 +925,12 @@ fn worktrees_json(view: &ShowView) -> Vec<WorktreeJson<'_>> {
                     at,
                     reason,
                     profile,
+                    recheck_at,
                 } => {
                     json.since = Some(*at);
                     json.reason = Some(reason);
                     json.profile = Some(profile);
+                    json.recheck_at = *recheck_at;
                 }
                 CheckoutState::Launched { leader, at } => {
                     json.since = Some(*at);
@@ -1075,7 +1208,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let view = ShowView {
         strike_count: strikes::load().get(&key).copied().unwrap_or(0),
         room_is_open,
-        show_agent_runs: has_agent_runs_section(&task),
+        show_agent_runs: has_agent_runs_section(task.entry(), task.action().ok()),
         name: args.name,
         entry: entry.clone(),
         source: task.source(),

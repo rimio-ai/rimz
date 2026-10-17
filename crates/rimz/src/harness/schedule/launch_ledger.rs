@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,25 @@ pub(super) fn load_declines_room(
     load_declines(&paths)
 }
 
+pub(super) fn judge_recheck(judge: &crate::config::Judge) -> Option<Duration> {
+    use crate::utils::time::{DurationUnit, parse_duration_units};
+    let raw = judge.recheck.as_deref()?;
+    if raw.trim() == "0" {
+        return None;
+    }
+    parse_duration_units(
+        raw,
+        &[
+            DurationUnit::Second,
+            DurationUnit::Minute,
+            DurationUnit::Hour,
+            DurationUnit::Day,
+        ],
+    )
+    .ok()
+    .filter(|duration| !duration.is_zero())
+}
+
 pub(super) fn holding_decline<'a>(
     declines: &'a Declines,
     name: &str,
@@ -78,7 +98,6 @@ pub(super) fn holding_decline<'a>(
     since: Option<Timestamp>,
     now: Timestamp,
 ) -> Option<&'a DeclineRecord> {
-    use crate::utils::time::{DurationUnit, parse_duration_units};
     let decline = declines.get(name)?.get(checkout)?;
     let guard = entry.guard();
     let judge = guard.judges.get(decline.tier)?;
@@ -88,23 +107,10 @@ pub(super) fn holding_decline<'a>(
     {
         return None;
     }
-    if let Some(raw) = &judge.recheck {
-        if raw.trim() == "0" {
-            return None;
-        }
-        let duration = parse_duration_units(
-            raw,
-            &[
-                DurationUnit::Second,
-                DurationUnit::Minute,
-                DurationUnit::Hour,
-                DurationUnit::Day,
-            ],
-        )
-        .ok()?;
-        if duration.is_zero()
-            || u128::try_from(now.duration_since(decline.at).as_millis()).unwrap_or(0)
-                >= duration.as_millis()
+    if judge.recheck.is_some() {
+        let duration = judge_recheck(judge)?;
+        if u128::try_from(now.duration_since(decline.at).as_millis()).unwrap_or(0)
+            >= duration.as_millis()
         {
             return None;
         }
