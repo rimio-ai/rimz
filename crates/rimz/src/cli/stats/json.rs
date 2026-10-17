@@ -4,6 +4,9 @@ use super::*;
 #[derive(Serialize)]
 struct StatsJson<'a> {
     as_of: String,
+    window: Window,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subagents_since: Option<String>,
     timezone: &'a str,
     unit: &'static str,
     sessions: u32,
@@ -16,7 +19,6 @@ struct StatsJson<'a> {
     models: Vec<ModelJson>,
     agents: Vec<AgentJson>,
     subagents: Vec<SubagentJson>,
-    unattributed: UnattributedJson,
     days: Vec<DayJson>,
     assists: &'a assists::AssistRollup,
 }
@@ -30,28 +32,8 @@ struct WindowsJson {
 }
 
 #[derive(Serialize)]
-struct UnattributedJson {
-    tally: WindowJson,
-    by_provider: BTreeMap<String, WindowJson>,
-}
-
-fn unattributed(stats: &Stats) -> UnattributedJson {
-    UnattributedJson {
-        tally: window(&stats.unattributed.tally.year),
-        by_provider: stats
-            .unattributed
-            .by_provider
-            .iter()
-            .filter(|(_, tally)| tally.year.usd > 0.0)
-            .map(|(kind, tally)| (kind.clone(), window(&tally.year)))
-            .collect(),
-    }
-}
-
-#[derive(Serialize)]
 struct SubagentJson {
     profile: String,
-    model: Option<String>,
     runs: u32,
     input: u64,
     output: u64,
@@ -62,33 +44,27 @@ struct SubagentJson {
     share: f64,
 }
 
-fn subagents(stats: &Stats) -> Vec<SubagentJson> {
+fn subagents(stats: &Stats, active: Window) -> Vec<SubagentJson> {
+    let total_usd = active.select(&stats.total).usd;
     let mut rows: Vec<_> = stats
         .subagents
         .iter()
-        .filter(|(_, row)| row.tally.year.usd > 0.0)
-        .map(|(profile, row)| {
-            let spend = &row.tally.year;
-            SubagentJson {
-                profile: profile.clone(),
-                model: row
-                    .models
-                    .iter()
-                    .max_by(|a, b| a.1.year.usd.total_cmp(&b.1.year.usd))
-                    .map(|(model, _)| model.clone()),
-                runs: spend.sessions,
-                input: spend.input,
-                output: spend.output,
-                cached: spend.cache_read,
-                cache_hit_pct: spend.cache_hit_percent(),
-                tokens: spend.display_tokens(),
-                usd: spend.usd,
-                share: if stats.total.year.usd > 0.0 {
-                    spend.usd / stats.total.year.usd
-                } else {
-                    0.0
-                },
-            }
+        .map(|(profile, tally)| (profile, active.select(tally)))
+        .filter(|(_, spend)| spend.usd > 0.0)
+        .map(|(profile, spend)| SubagentJson {
+            profile: profile.clone(),
+            runs: spend.sessions,
+            input: spend.input,
+            output: spend.output,
+            cached: spend.cache_read,
+            cache_hit_pct: spend.cache_hit_percent(),
+            tokens: spend.display_tokens(),
+            usd: spend.usd,
+            share: if total_usd > 0.0 {
+                spend.usd / total_usd
+            } else {
+                0.0
+            },
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -99,30 +75,24 @@ fn subagents(stats: &Stats) -> Vec<SubagentJson> {
     rows
 }
 
-fn window(spend: &SpendWindow) -> WindowJson {
-    WindowJson {
-        tokens: spend.display_tokens(),
-        usd: spend.usd,
-        tool_calls: spend.tool_calls,
-        tools: spend.tools.clone(),
-    }
-}
-
 fn stamp(at: &jiff::Zoned) -> String {
     at.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string()
 }
 
-pub(super) fn subagents_value(stats: &Stats) -> serde_json::Value {
-    serde_json::json!({
+pub(super) fn subagents_value(stats: &Stats, active: Window) -> serde_json::Value {
+    let mut value = serde_json::json!({
         "as_of": stamp(&stats.as_of()),
-        "window": "year",
-        "subagents": subagents(stats),
-        "unattributed": unattributed(stats),
-    })
+        "window": active,
+        "subagents": subagents(stats, active),
+    });
+    if let Some(since) = stats.recorded_since() {
+        value["subagents_since"] = since.strftime("%Y-%m-%d").to_string().into();
+    }
+    value
 }
 
-pub(super) fn emit_subagents(stats: &Stats) -> Result<()> {
-    render::json_pretty(&subagents_value(stats))
+pub(super) fn emit_subagents(stats: &Stats, active: Window) -> Result<()> {
+    render::json_pretty(&subagents_value(stats, active))
 }
 
 /// The `--assists --json` envelope, stamped in the zone spend history uses.
@@ -184,6 +154,8 @@ struct AgentJson {
     tools: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_hit_pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tokens_per_sec: Option<u64>,
     share: f64,
 }
 
@@ -203,17 +175,18 @@ fn stats_json<'a>(
     assists: &'a AssistStats,
     today_day: i64,
     dollars: bool,
+    active: Window,
 ) -> StatsJson<'a> {
-    let active = Window::Year;
-    let activity = Activity::of(&stats.by_day, today_day, active);
-    let total_usd = stats.total.year.usd;
+    // These history fields keep their meaning, notably active_days_28, on every tab.
+    let activity = Activity::of(&stats.by_day, today_day, Window::Year);
+    let total_usd = active.select(&stats.total).usd;
 
     let mut models: Vec<ModelJson> = stats
         .by_model
         .iter()
-        .filter(|(_, tally)| tally.year.usd > 0.0)
+        .filter(|(_, model)| active.select(&model.tally).usd > 0.0)
         .map(|(id, tally)| {
-            let spend = active.select(tally);
+            let spend = active.select(&tally.tally);
             ModelJson {
                 model: id.clone(),
                 name: if id.is_empty() {
@@ -249,6 +222,7 @@ fn stats_json<'a>(
         .into_iter()
         .map(|agent| AgentJson {
             cache_hit_pct: agent.window.cache_hit_percent(),
+            tokens_per_sec: agent.window.tokens_per_sec(),
             kind: agent.kind.to_owned(),
             name: agent.name,
             tokens: agent.window.display_tokens(),
@@ -272,9 +246,13 @@ fn stats_json<'a>(
 
     StatsJson {
         as_of: stamp(&stats.as_of()),
+        window: active,
+        subagents_since: stats
+            .recorded_since()
+            .map(|since| since.strftime("%Y-%m-%d").to_string()),
         timezone: &stats.timezone,
         unit: if dollars { "usd" } else { "tokens" },
-        sessions: stats.total.year.sessions,
+        sessions: active.select(&stats.total).sessions,
         active_days_28: activity.active_count,
         longest_streak: activity.longest_streak,
         current_streak: activity.current_streak,
@@ -309,8 +287,7 @@ fn stats_json<'a>(
         },
         models,
         agents,
-        subagents: subagents(stats),
-        unattributed: unattributed(stats),
+        subagents: subagents(stats, active),
         days,
         assists: &assists.rollup,
     }
@@ -321,8 +298,9 @@ pub(super) fn emit_json(
     assists: &AssistStats,
     today_day: i64,
     dollars: bool,
+    active: Window,
 ) -> Result<()> {
-    crate::cli::render::json_pretty(&stats_json(stats, assists, today_day, dollars))
+    crate::cli::render::json_pretty(&stats_json(stats, assists, today_day, dollars, active))
 }
 
 #[cfg(test)]
@@ -331,7 +309,8 @@ pub(super) fn stats_json_value(
     assists: &AssistStats,
     today_day: i64,
     dollars: bool,
+    active: Window,
 ) -> serde_json::Value {
-    serde_json::to_value(stats_json(stats, assists, today_day, dollars))
+    serde_json::to_value(stats_json(stats, assists, today_day, dollars, active))
         .expect("stats JSON is serializable")
 }

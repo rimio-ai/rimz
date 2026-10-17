@@ -134,6 +134,11 @@ fn warm_fleet_refresh_forks_zero_subprocesses() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: unix_now_ms(),
+            day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+                unix_now_ms() / 1000,
+                None,
+            )
+            .unwrap(),
             ..Default::default()
         },
     );

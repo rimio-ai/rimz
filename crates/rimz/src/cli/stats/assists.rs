@@ -938,7 +938,7 @@ impl AssistEvent {
 }
 
 impl Window {
-    fn assist_since(self, now: Timestamp, timezone: &str) -> Option<Timestamp> {
+    pub(super) fn assist_since(self, now: Timestamp, timezone: &str) -> Option<Timestamp> {
         let days = match self {
             Self::Today => {
                 let now_secs = u64::try_from(now.as_second()).ok()?;

@@ -61,7 +61,7 @@ fn session_role_spend_survives_run_and_room_removal() {
             .roles
             .subagents
             .get("fast")
-            .map(|profile| profile.tally.year.usd),
+            .map(|profile| profile.year.usd),
         Some(2.0)
     );
 }

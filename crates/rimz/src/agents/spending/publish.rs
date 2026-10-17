@@ -3,13 +3,14 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use super::aggregate::{DaySpend, SpendTally, SpendWindow, Spending};
 use super::cache::peek_cache_version;
-use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
+use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult, local_day_index};
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file cache version. An older stamp reads as stale, so the producer
@@ -36,7 +37,8 @@ use super::{SPENDING_TTL, ScopedSpending, SpendingWalkResult};
 // v16: response timing counters in per-model windows for the stats tok/s figure.
 // v17: local-date history with its timezone and durable session-role attribution.
 // v18: calendar-day windows on every tally, independent of the headline.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 18;
+// v19: per-model producing kind, subagent-only role tallies, and the ledger's first record time.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 19;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -86,8 +88,8 @@ pub struct ProviderSpendingCache {
     /// Account-global model buckets by trailing window, published so
     /// `rimz stats` can scope its model breakdown without walking transcripts.
     #[serde(default)]
-    pub models: BTreeMap<String, SpendTally>,
-    /// Session provenance partition of fleet spend, populated by history passes.
+    pub models: BTreeMap<String, super::ModelTally>,
+    /// Profile-attributed subagent spend and the first retained provenance time.
     #[serde(default)]
     pub roles: super::RoleTallies,
     #[serde(flatten)]
@@ -116,11 +118,21 @@ impl ProviderSpendingCache {
     }
 
     /// Whether the published walk is young enough that the producer skips the
-    /// transcript walk this tick. Saturating, so a clock that ran backwards
-    /// reads fresh rather than re-walking every tick.
+    /// transcript walk this tick.
     pub fn is_fresh(&self, now_ms: u64) -> bool {
+        self.is_fresh_within(now_ms, SPENDING_TTL)
+    }
+
+    /// Whether the published walk is no older than `max_age` and from the
+    /// current local day, using the walk's day cutoff rather than its completion
+    /// stamp, so crossing midnight expires it at once. Saturating,
+    /// so a clock that ran backwards within that day reads fresh rather than
+    /// re-walking every tick.
+    pub(crate) fn is_fresh_within(&self, now_ms: u64, max_age: Duration) -> bool {
         self.is_current_version()
-            && now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
+            && now_ms.saturating_sub(self.refreshed_at_ms) <= max_age.as_millis() as u64
+            && local_day_index(self.day_cutoff_secs, Some(&self.timezone))
+                == local_day_index(now_ms / 1000, Some(&self.timezone))
     }
 }
 

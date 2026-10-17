@@ -157,6 +157,7 @@ pub(super) struct PanelPlan {
     pub(super) header: bool,
     pub(super) model_rows: usize,
     pub(super) agent_rows: usize,
+    pub(super) subagent_rows: usize,
 }
 
 pub(super) const PANEL_FIXED_ROWS: usize = 19;
@@ -169,15 +170,19 @@ pub(super) fn fit(
     want_header: bool,
     models: usize,
     agents: usize,
+    subagents: usize,
     assist_rows: usize,
+    subagent_note_rows: usize,
 ) -> PanelPlan {
     let model_cap = models.min(MAX_MODELS);
     let agent_cap = agents.min(MAX_AGENTS);
+    let subagent_cap = subagents.min(MAX_AGENTS);
     if !want_header {
         return PanelPlan {
             header: false,
             model_rows: model_cap,
             agent_rows: agent_cap,
+            subagent_rows: subagent_cap,
         };
     }
     let Some(rows) = rows else {
@@ -185,89 +190,90 @@ pub(super) fn fit(
             header: true,
             model_rows: model_cap,
             agent_rows: agent_cap,
+            subagent_rows: subagent_cap,
         };
     };
 
     let budget = rows.saturating_sub(1);
     let assists = usize::from(assist_rows > 0) * (2 + assist_rows);
-    let section_chrome = SECTION_CHROME_ROWS * (usize::from(models > 0) + usize::from(agents > 0));
-    let fixed = PANEL_FIXED_ROWS + assists + section_chrome;
-    let model_floor = model_cap.min(SECTION_FLOOR_ROWS);
-    let agent_floor = agent_cap.min(SECTION_FLOOR_ROWS);
-    let floor_rows = model_floor + agent_floor;
+    let mut weights = [models, agents, subagents];
+    let caps = [model_cap, agent_cap, subagent_cap];
+    let mut floors = caps.map(|cap| cap.min(SECTION_FLOOR_ROWS));
+    let section_chrome = SECTION_CHROME_ROWS * weights.iter().filter(|&&rows| rows > 0).count();
+    let note_rows = usize::from(subagents > 0) * subagent_note_rows;
+    let mut fixed = PANEL_FIXED_ROWS + assists + section_chrome + note_rows;
+    let floor_rows = floors.iter().sum();
     let with_header = budget.saturating_sub(fixed + PANEL_HEADER_ROWS);
 
     if budget >= fixed + PANEL_HEADER_ROWS && with_header >= floor_rows {
-        let (model_rows, agent_rows) = allocate_breakdown_rows(
-            with_header,
-            [models, agents],
-            [model_cap, agent_cap],
-            [model_floor, agent_floor],
-        );
+        let [model_rows, agent_rows, subagent_rows] =
+            allocate_breakdown_rows(with_header, weights, caps, floors);
         return PanelPlan {
             header: true,
             model_rows,
             agent_rows,
+            subagent_rows,
         };
     }
 
+    let minimum_rows = weights.iter().filter(|&&rows| rows > 0).count();
+    if subagents > 0 && budget < fixed + minimum_rows {
+        weights[2] = 0;
+        floors[2] = 0;
+        fixed -= SECTION_CHROME_ROWS + note_rows;
+    }
     let without_header = budget.saturating_sub(fixed);
-    let (model_rows, agent_rows) = allocate_breakdown_rows(
+    let [model_rows, agent_rows, subagent_rows] = allocate_breakdown_rows(
         without_header,
-        [models, agents],
-        [model_floor, agent_floor],
-        [usize::from(models > 0), usize::from(agents > 0)],
+        weights,
+        floors,
+        weights.map(|rows| usize::from(rows > 0)),
     );
     PanelPlan {
         header: false,
         model_rows,
         agent_rows,
+        subagent_rows,
     }
 }
 
 fn allocate_breakdown_rows(
     available: usize,
-    weights: [usize; 2],
-    caps: [usize; 2],
-    floors: [usize; 2],
-) -> (usize, usize) {
-    let [model_weight, agent_weight] = weights;
-    let [model_cap, agent_cap] = caps;
-    let [model_floor, agent_floor] = floors;
-    let floor = model_floor + agent_floor;
-    let usable = available.min(model_cap + agent_cap).max(floor);
-    let weight = model_weight + agent_weight;
+    weights: [usize; 3],
+    caps: [usize; 3],
+    floors: [usize; 3],
+) -> [usize; 3] {
+    let usable = available.min(caps.iter().sum()).max(floors.iter().sum());
+    let weight: usize = weights.iter().sum();
     if weight == 0 {
-        return (0, 0);
+        return [0; 3];
     }
 
-    let mut model_rows = (usable * model_weight / weight).clamp(model_floor, model_cap);
-    let mut agent_rows = (usable * agent_weight / weight).clamp(agent_floor, agent_cap);
-    while model_rows + agent_rows > usable {
-        if model_rows > model_floor {
-            model_rows -= 1;
-        } else if agent_rows > agent_floor {
-            agent_rows -= 1;
-        }
+    let mut rows =
+        std::array::from_fn(|i| (usable * weights[i] / weight).clamp(floors[i], caps[i]));
+    while rows.iter().sum::<usize>() > usable {
+        // The sum exceeds usable, which is at least the sum of the floors.
+        let i = (0..3)
+            .find(|&i| rows[i] > floors[i])
+            .expect("a row exceeds its floor");
+        rows[i] -= 1;
     }
-    while model_rows + agent_rows < usable {
-        let model_open = model_rows < model_cap;
-        let agent_open = agent_rows < agent_cap;
-        if model_open && (!agent_open || model_weight >= agent_weight) {
-            model_rows += 1;
-        } else if agent_open {
-            agent_rows += 1;
-        } else {
+    while rows.iter().sum::<usize>() < usable {
+        let Some(i) = (0..3)
+            .filter(|&i| rows[i] < caps[i])
+            .max_by_key(|&i| (weights[i], 3 - i))
+        else {
             break;
-        }
+        };
+        rows[i] += 1;
     }
-    (model_rows, agent_rows)
+    rows
 }
 
 pub(super) struct PanelStats<'a> {
     pub(super) usage: &'a Stats,
     pub(super) assists: &'a AssistStats,
-    pub(super) active: Option<Window>,
+    pub(super) active: Window,
 }
 
 pub(super) fn render_panel(
@@ -284,10 +290,8 @@ pub(super) fn render_panel(
         assists,
         active,
     } = stats;
-    if active.is_none() {
-        return render_spend(w, stats, today_day, dollars, false, nl);
-    }
     let geometry = PanelGeometry::current();
+    let note = subagents_note(stats, today_day, active);
     let assist_categories = assists::category_rows(&assists.rollup);
     let mut lines: Vec<String> = Vec::new();
 
@@ -301,6 +305,9 @@ pub(super) fn render_panel(
             message.chars().count(),
             geometry.panel_width,
         ));
+        if let Some(note) = note {
+            lines.push(note);
+        }
         if !assist_categories.is_empty() {
             lines.push(String::new());
             assists::panel_lines(&mut lines, assists, geometry.panel_width);
@@ -308,15 +315,20 @@ pub(super) fn render_panel(
         return emit(w, &lines, geometry.outer, nl);
     }
 
-    let selected = active.unwrap_or(Window::Year);
+    let selected = active;
     let natural_models = model_breakdown_size(stats, selected);
     let natural_agents = agent_breakdown_size(stats, selected);
+    let natural_subagents =
+        breakdown_size(&stats.subagents, selected, subagent_usd(stats, selected));
     let plan = fit(
         geometry.rows,
         include_header,
         natural_models,
         natural_agents,
+        natural_subagents,
         assist_categories.len().div_ceil(2),
+        note.as_ref()
+            .map_or(0, |note| display_width(note).div_ceil(geometry.panel_width)),
     );
     if plan.header && include_header {
         lines.extend(header_lines(geometry.panel_width));
@@ -325,26 +337,33 @@ pub(super) fn render_panel(
     heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
     let models = model_breakdown(stats, selected, plan.model_rows);
     let agents = agent_breakdown(stats, selected, Some(plan.agent_rows));
+    let subagents = subagent_breakdown(stats, selected, Some(plan.subagent_rows));
     let name_w = models
         .iter()
-        .map(|(name, _)| display_width(name))
+        .map(|(name, _, _)| display_width(name))
         .chain(agents.iter().map(|agent| display_width(&agent.name)))
+        .chain(subagents.iter().map(|agent| display_width(&agent.name)))
         .max()
         .unwrap_or(0);
 
     lines.push(String::new());
-    windows_lines(&mut lines, stats, active);
+    windows_lines(&mut lines, stats, Some(active));
     let model_rows = model_cells(&models, name_w, glyphs, selected.select(&stats.total).usd);
     let agent_rows = agent_cells(&agents, name_w, glyphs);
-    let pct_w = stat_pct_width(&model_rows, &agent_rows);
-    let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, geometry.panel_width);
-    if !model_rows.is_empty() {
-        lines.push(String::new());
-        emit_stat_section(&mut lines, "Models", &model_rows, layout, glyphs);
+    let subagent_rows = spend_cells(&subagents, name_w, glyphs, false);
+    let sections = [&model_rows[..], &agent_rows[..], &subagent_rows[..]];
+    let pct_w = stat_pct_width(&sections);
+    let layout = stat_section_layout(&sections, pct_w, geometry.panel_width);
+    for (label, rows) in ["Models", "Agents", "Subagents"].into_iter().zip(sections) {
+        if !rows.is_empty() {
+            lines.push(String::new());
+            emit_stat_section(&mut lines, label, rows, layout, glyphs);
+        }
     }
-    if !agent_rows.is_empty() {
-        lines.push(String::new());
-        emit_stat_section(&mut lines, "Agents", &agent_rows, layout, glyphs);
+    if plan.subagent_rows > 0
+        && let Some(note) = note
+    {
+        lines.push(note);
     }
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width, selected);
@@ -362,10 +381,12 @@ pub(super) fn render_spend(
     today_day: i64,
     dollars: bool,
     subagents_only: bool,
+    active: Window,
     nl: &str,
 ) -> Result<()> {
     let mut lines = Vec::new();
     if !subagents_only {
+        let [_, week, month, year] = Window::TABS.map(|window| window.select(&stats.total));
         lines.push(format!(
             "  {:20} {:>12} {:>12} {:>12} {:>12}",
             "Spend", "Today", "Week", "Month", "Year"
@@ -375,91 +396,75 @@ pub(super) fn render_spend(
             "  {:20} {:>12} {:>12} {:>12} {:>12}",
             "dollars",
             fmt_usd(today.usd),
-            fmt_usd(stats.total.week.usd),
-            fmt_usd(stats.total.month.usd),
-            fmt_usd(stats.total.year.usd)
+            fmt_usd(week.usd),
+            fmt_usd(month.usd),
+            fmt_usd(year.usd)
         ));
         lines.push(format!(
             "  {:20} {:>12} {:>12} {:>12} {:>12}",
             "tokens",
             fmt_tokens(today.tokens),
-            fmt_tokens(stats.total.week.display_tokens()),
-            fmt_tokens(stats.total.month.display_tokens()),
-            fmt_tokens(stats.total.year.display_tokens())
+            fmt_tokens(week.display_tokens()),
+            fmt_tokens(month.display_tokens()),
+            fmt_tokens(year.display_tokens())
         ));
-        for (label, tallies) in [("Models", &stats.by_model), ("Agents", &stats.by_agent)] {
-            let rows = tallies
-                .iter()
-                .map(|(name, tally)| {
-                    let name = if label == "Models" {
-                        if name.is_empty() {
-                            "Unknown model".into()
-                        } else {
-                            rimz::agents::model_display::display_model(name)
-                        }
-                    } else {
-                        render::paint(render::palette::identity(name), &agent_display_name(name))
-                    };
-                    (name, tally.year.clone(), String::new())
-                })
-                .collect();
-            spend_section(&mut lines, label, rows, stats.total.year.usd, Some(3));
-        }
+        let models = stats
+            .by_model
+            .iter()
+            .map(|(id, model)| {
+                let name = if id.is_empty() {
+                    "Unknown model".into()
+                } else {
+                    render::paint(
+                        render::palette::identity(&model.kind),
+                        &rimz::agents::model_display::display_model(id),
+                    )
+                };
+                (name, active.select(&model.tally))
+            })
+            .collect();
+        let agents = stats
+            .by_agent
+            .iter()
+            .map(|(kind, tally)| {
+                (
+                    render::paint(render::palette::identity(kind), &agent_display_name(kind)),
+                    active.select(tally),
+                )
+            })
+            .collect();
+        spend_section(
+            &mut lines,
+            "Models",
+            models,
+            active.select(&stats.total).usd,
+            Some(3),
+            active,
+        );
+        spend_section(
+            &mut lines,
+            "Agents",
+            agents,
+            active.select(&stats.total).usd,
+            Some(3),
+            active,
+        );
     }
     let rows = stats
         .subagents
         .iter()
-        .map(|(profile, spend)| {
-            let model = spend
-                .models
-                .iter()
-                .max_by(|a, b| a.1.year.usd.total_cmp(&b.1.year.usd))
-                .map(|(model, _)| rimz::agents::model_display::display_model(model))
-                .unwrap_or_default();
-            (profile.clone(), spend.tally.year.clone(), model)
-        })
+        .map(|(profile, tally)| (profile.clone(), active.select(tally)))
         .collect();
     spend_section(
         &mut lines,
         "Subagents",
         rows,
-        stats.total.year.usd,
+        active.select(&stats.total).usd,
         if subagents_only { None } else { Some(3) },
+        active,
     );
-    if stats.unattributed.tally.year.usd > 0.0 {
-        let spend = &stats.unattributed.tally.year;
-        lines.push(format!(
-            "\n  Unattributed  {}  {:.1}%  spend not tied to a recorded agent or subagent session",
-            fmt_usd(spend.usd),
-            dollar_share(spend.usd, stats.total.year.usd) * 100.0
-        ));
-        let mut providers: Vec<_> = stats
-            .unattributed
-            .by_provider
-            .iter()
-            .filter(|(_, tally)| tally.year.usd > 0.0)
-            .map(|(kind, tally)| (kind, agent_display_name(kind), tally.year.usd))
-            .collect();
-        providers.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(b.0)));
-        let width = providers
-            .iter()
-            .map(|(_, name, _)| display_width(name))
-            .max()
-            .unwrap_or(0)
-            .max(display_width("Providers (year)"));
-        lines.push(format!(
-            "    {} {:>10}",
-            pad_to("Providers (year)", width),
-            "SPEND"
-        ));
-        for (kind, name, usd) in providers {
-            let amount = fmt_usd(usd);
-            lines.push(format!(
-                "    {} {:>10}",
-                render::paint(render::palette::identity(kind), &pad_to(&name, width)),
-                amount
-            ));
-        }
+    if let Some(note) = subagents_note(stats, today_day, active) {
+        lines.push(note);
     }
     if !subagents_only {
         lines.push(String::new());
@@ -484,14 +489,35 @@ fn dollar_share(usd: f64, total: f64) -> f64 {
     if total > 0.0 { usd / total } else { 0.0 }
 }
 
+fn subagents_note(stats: &Stats, today_day: i64, active: Window) -> Option<String> {
+    let since = stats.recorded_since()?;
+    let start = active.assist_since(stats.as_of().timestamp(), &stats.timezone)?;
+    if start >= since.timestamp() {
+        return None;
+    }
+    let today = Timestamp::from_second(today_day * DAY_SECS)
+        .ok()?
+        .to_zoned(jiff::tz::TimeZone::UTC);
+    let date = since.strftime(if since.year() == today.year() {
+        "%b %d"
+    } else {
+        "%b %d %Y"
+    });
+    Some(render::paint(
+        render::palette::muted(),
+        &format!("  subagent roles recorded since {date}; earlier spend shows under Agents only"),
+    ))
+}
+
 fn spend_section(
     lines: &mut Vec<String>,
     label: &str,
-    mut rows: Vec<(String, SpendWindow, String)>,
+    mut rows: Vec<(String, SpendWindow)>,
     total: f64,
     cap: Option<usize>,
+    active: Window,
 ) {
-    rows.retain(|(_, spend, _)| spend.usd > 0.0);
+    rows.retain(|(_, spend)| spend.usd > 0.0);
     rows.sort_by(|a, b| b.1.usd.total_cmp(&a.1.usd).then_with(|| a.0.cmp(&b.0)));
     if rows.is_empty() {
         return;
@@ -499,72 +525,85 @@ fn spend_section(
     if let Some(cap) = cap.filter(|cap| rows.len() > *cap) {
         let tail = rows.split_off(cap);
         let mut spend = SpendWindow::default();
-        for (_, row, _) in &tail {
+        for (_, row) in &tail {
             spend.merge(row);
         }
         rows.push((
             format!("{} other {}", tail.len(), label.to_lowercase()),
             spend,
-            String::new(),
         ));
     }
     let width = rows
         .iter()
-        .map(|(name, _, _)| display_width(name))
+        .map(|(name, _)| display_width(name))
         .max()
         .unwrap_or(0)
         .max(20);
     lines.push(String::new());
-    let detail_header = match label {
-        "Agents" => format!("{:>8} {:>8} {:>4}", "SESSIONS", "TOKENS", "HIT"),
-        "Subagents" if cap.is_some() => "   RUNS  MODEL".into(),
-        _ => format!(
+    let compact = label == "Agents" || label == "Subagents" && cap.is_some();
+    let detail_header = if compact {
+        format!(
+            "{:>8} {:>8} {:>4} {:>5}",
+            if label == "Agents" {
+                "SESSIONS"
+            } else {
+                "RUNS"
+            },
+            "TOKENS",
+            "HIT",
+            "TOK/S"
+        )
+    } else {
+        format!(
             "{:>8} {:>8} {:>8} {:>4}{}",
             "INPUT",
             "OUTPUT",
             "CACHED",
             "HIT",
-            if label == "Subagents" {
-                "    RUNS  MODEL"
-            } else {
-                ""
-            }
-        ),
+            if label == "Subagents" { "    RUNS" } else { "" }
+        )
     };
     lines.push(render::paint(
         render::palette::header(),
         &format!(
             "  {} {:>10} {:>7}  {detail_header}",
-            pad_to(&format!("{label} (year)"), width),
+            pad_to(
+                &format!("{label} ({})", active.label().to_ascii_lowercase()),
+                width
+            ),
             "SPEND",
             "SHARE",
         ),
     ));
-    for (name, spend, model) in rows {
+    for (name, spend) in rows {
         let hit = spend
             .cache_hit_percent()
             .map(|hit| format!("{hit}%"))
             .unwrap_or_else(|| "-".into());
-        let detail = match label {
-            "Agents" => format!(
-                "{:>8} {:>8} {:>4}",
+        let detail = if compact {
+            format!(
+                "{:>8} {:>8} {:>4} {:>5}",
                 spend.sessions,
                 fmt_tokens(spend.display_tokens()),
-                hit
-            ),
-            "Subagents" if cap.is_some() => format!("{:>7}  {model}", spend.sessions),
-            _ => format!(
+                hit,
+                spend
+                    .tokens_per_sec()
+                    .map(|rate| rate.to_string())
+                    .unwrap_or_else(|| "-".into()),
+            )
+        } else {
+            format!(
                 "{:>8} {:>8} {:>8} {:>4}{}",
                 fmt_tokens_precise(spend.input),
                 fmt_tokens_precise(spend.output),
                 fmt_tokens_precise(spend.cache_read),
                 hit,
                 if label == "Subagents" {
-                    format!(" {:>7}  {model}", spend.sessions)
+                    format!(" {:>7}", spend.sessions)
                 } else {
                     String::new()
                 }
-            ),
+            )
         };
         lines.push(format!(
             "  {} {} {:>6.1}%  {detail}",
@@ -791,13 +830,14 @@ pub(super) struct StatSectionLayout {
 
 /// The per-model token breakdown, before the shared share column is appended.
 pub(super) fn model_cells(
-    models: &[(String, SpendWindow)],
+    models: &[(String, SpendWindow, String)],
     name_w: usize,
     glyphs: &PanelGlyphs,
     total_usd: f64,
 ) -> Vec<StatCell> {
     struct ModelRow {
         name: String,
+        kind: String,
         usd: String,
         input: String,
         output: String,
@@ -809,7 +849,7 @@ pub(super) fn model_cells(
 
     let rows = models
         .iter()
-        .map(|(name, spend)| {
+        .map(|(name, spend, kind)| {
             let pct = if total_usd > 0.0 {
                 spend.usd / total_usd * 100.0
             } else {
@@ -817,6 +857,7 @@ pub(super) fn model_cells(
             };
             ModelRow {
                 name: name.clone(),
+                kind: kind.clone(),
                 usd: fmt_usd(spend.usd),
                 input: fmt_tokens_precise(spend.input),
                 output: fmt_tokens_precise(spend.output),
@@ -869,7 +910,12 @@ pub(super) fn model_cells(
 
     rows.iter()
         .map(|row| {
-            let name = pad_to(&render::paint(render::palette::muted(), &row.name), name_w);
+            let identity = if row.kind.is_empty() {
+                render::palette::muted()
+            } else {
+                render::palette::identity(&row.kind)
+            };
+            let name = pad_to(&render::paint(identity, &row.name), name_w);
             let mut left_full = format!(
                 "{} {name} {} {sep} {} {} {sep} {} {} {sep} {} {}",
                 render::paint(render::palette::cool(), "●"),
@@ -925,14 +971,14 @@ pub(super) fn model_breakdown_size(stats: &Stats, active: Window) -> usize {
     let total_usd: f64 = stats
         .by_model
         .values()
-        .map(|tally| active.select(tally))
+        .map(|model| active.select(&model.tally))
         .filter(|spend| spend.tokens > 0)
         .map(|spend| spend.usd)
         .sum();
     let mut named = 0;
     let mut other = false;
     for (id, tally) in &stats.by_model {
-        let spend = active.select(tally);
+        let spend = active.select(&tally.tally);
         if spend.tokens == 0 {
             continue;
         }
@@ -949,11 +995,11 @@ pub(super) fn model_breakdown(
     stats: &Stats,
     active: Window,
     cap: usize,
-) -> Vec<(String, SpendWindow)> {
+) -> Vec<(String, SpendWindow, String)> {
     let total: u64 = stats
         .by_model
         .values()
-        .map(|tally| active.select(tally).tokens)
+        .map(|model| active.select(&model.tally).tokens)
         .sum();
     if total == 0 {
         return Vec::new();
@@ -961,22 +1007,26 @@ pub(super) fn model_breakdown(
     let total_usd: f64 = stats
         .by_model
         .values()
-        .map(|tally| active.select(tally))
+        .map(|model| active.select(&model.tally))
         .filter(|spend| spend.tokens > 0)
         .map(|spend| spend.usd)
         .sum();
 
-    let mut named: Vec<(String, SpendWindow)> = Vec::new();
+    let mut named = Vec::new();
     let mut other = SpendWindow::default();
     for (id, tally) in &stats.by_model {
-        let spend = active.select(tally);
+        let spend = active.select(&tally.tally);
         if spend.tokens == 0 {
             continue;
         }
         if id.is_empty() || below_minimum_share(spend.usd, total_usd) {
             other.merge(&spend);
         } else {
-            named.push((rimz::agents::model_display::display_model(id), spend));
+            named.push((
+                rimz::agents::model_display::display_model(id),
+                spend,
+                tally.kind.clone(),
+            ));
         }
     }
     named.sort_by(|a, b| {
@@ -991,12 +1041,12 @@ pub(super) fn model_breakdown(
     }
     let natural_rows = named.len() + usize::from(other.tokens > 0);
     if natural_rows > cap {
-        for (_, spend) in named.split_off(cap - 1) {
+        for (_, spend, _) in named.split_off(cap - 1) {
             other.merge(&spend);
         }
     }
     if other.tokens > 0 {
-        named.push(("Other".to_string(), other));
+        named.push(("Other".to_string(), other, String::new()));
     }
     named
 }
@@ -1014,10 +1064,13 @@ pub(super) struct AgentBreakdown<'a> {
 }
 
 pub(super) fn agent_breakdown_size(stats: &Stats, active: Window) -> usize {
-    let total_usd = active.select(&stats.total).usd;
+    breakdown_size(&stats.by_agent, active, active.select(&stats.total).usd)
+}
+
+fn breakdown_size(tallies: &BTreeMap<String, SpendTally>, active: Window, total_usd: f64) -> usize {
     let mut named = 0;
     let mut other = false;
-    for tally in stats.by_agent.values() {
+    for tally in tallies.values() {
         let window = active.select(tally);
         if window.usd <= 0.0 {
             continue;
@@ -1038,7 +1091,7 @@ pub(super) fn agent_breakdown(
 ) -> Vec<AgentBreakdown<'_>> {
     let total_usd = active.select(&stats.total).usd;
 
-    let mut agents: Vec<_> = stats
+    let agents: Vec<_> = stats
         .by_agent
         .iter()
         .filter_map(|(kind, tally)| {
@@ -1053,6 +1106,47 @@ pub(super) fn agent_breakdown(
             })
         })
         .collect();
+    fold_breakdown(agents, total_usd, cap)
+}
+
+pub(super) fn subagent_breakdown(
+    stats: &Stats,
+    active: Window,
+    cap: Option<usize>,
+) -> Vec<AgentBreakdown<'_>> {
+    let total_usd = active.select(&stats.total).usd;
+    let rows = stats
+        .subagents
+        .iter()
+        .filter_map(|(profile, tally)| {
+            let window = active.select(tally);
+            (window.usd > 0.0).then(|| AgentBreakdown {
+                kind: "",
+                name: profile.clone(),
+                share: dollar_share(window.usd, total_usd),
+                window,
+                folded: false,
+            })
+        })
+        .collect();
+    fold_breakdown(rows, subagent_usd(stats, active), cap)
+}
+
+/// Profiles are a small subset of fleet spend, so the one-percent fold is
+/// measured against the section's own dollars; shares stay fleet-relative.
+fn subagent_usd(stats: &Stats, active: Window) -> f64 {
+    stats
+        .subagents
+        .values()
+        .map(|tally| active.select(tally).usd)
+        .sum()
+}
+
+fn fold_breakdown(
+    mut agents: Vec<AgentBreakdown<'_>>,
+    total_usd: f64,
+    cap: Option<usize>,
+) -> Vec<AgentBreakdown<'_>> {
     agents.sort_by(|a, b| {
         b.window
             .usd
@@ -1103,6 +1197,15 @@ pub(super) fn agent_cells(
     name_w: usize,
     glyphs: &PanelGlyphs,
 ) -> Vec<StatCell> {
+    spend_cells(agents, name_w, glyphs, true)
+}
+
+fn spend_cells(
+    agents: &[AgentBreakdown<'_>],
+    name_w: usize,
+    glyphs: &PanelGlyphs,
+    show_rate: bool,
+) -> Vec<StatCell> {
     if agents.is_empty() {
         return Vec::new();
     }
@@ -1116,6 +1219,7 @@ pub(super) fn agent_cells(
         cache_hit: Option<(u8, String)>,
         share_pct: f64,
         folded: bool,
+        rate: Option<String>,
     }
 
     let rows = agents
@@ -1132,6 +1236,11 @@ pub(super) fn agent_cells(
                 .map(|percent| (percent, format!("{percent}%"))),
             share_pct: agent.share * 100.0,
             folded: agent.folded,
+            rate: if show_rate {
+                agent.window.tokens_per_sec().map(|rate| rate.to_string())
+            } else {
+                None
+            },
         })
         .collect::<Vec<_>>();
     let sess_w = rows
@@ -1159,10 +1268,16 @@ pub(super) fn agent_cells(
         .max()
         .unwrap_or(0);
     let sep = render::paint(render::palette::muted(), "·");
+    let rate_w = rows
+        .iter()
+        .filter_map(|row| row.rate.as_ref())
+        .map(|rate| display_width(rate) + " tok/s".len())
+        .max()
+        .unwrap_or(0);
 
     rows.iter()
         .map(|row| {
-            let identity = if row.folded {
+            let identity = if row.folded || row.kind.is_empty() {
                 render::palette::muted()
             } else {
                 render::palette::identity(&row.kind)
@@ -1188,6 +1303,21 @@ pub(super) fn agent_cells(
                     " {sep} {}",
                     render::paint(style, &pad_left(cache_hit, cache_hit_w))
                 ));
+            } else if rate_w > 0 && cache_hit_w > 0 {
+                left_full.push_str(&format!(" {sep} {}", " ".repeat(cache_hit_w)));
+            }
+            if rate_w > 0 {
+                let rate = row.rate.as_ref().map_or_else(
+                    || pad_left("-", rate_w),
+                    |rate| {
+                        format!(
+                            "{} {}",
+                            pad_left(rate, rate_w - " tok/s".len()),
+                            render::paint(render::palette::muted(), "tok/s")
+                        )
+                    },
+                );
+                left_full.push_str(&format!(" {sep} {rate}"));
             }
             StatCell {
                 left_full,
@@ -1198,22 +1328,21 @@ pub(super) fn agent_cells(
         .collect()
 }
 
-pub(super) fn stat_pct_width(model_cells: &[StatCell], agent_cells: &[StatCell]) -> usize {
-    model_cells
+pub(super) fn stat_pct_width(sections: &[&[StatCell]]) -> usize {
+    sections
         .iter()
-        .chain(agent_cells)
+        .flat_map(|rows| rows.iter())
         .map(|cell| display_width(&format!("{:.1}", cell.share_pct)))
         .max()
         .unwrap_or(0)
 }
 
 pub(super) fn stat_section_layout(
-    model_cells: &[StatCell],
-    agent_cells: &[StatCell],
+    sections: &[&[StatCell]],
     pct_w: usize,
     panel_width: usize,
 ) -> StatSectionLayout {
-    let full_left_w = stat_left_width(model_cells, agent_cells, false);
+    let full_left_w = stat_left_width(sections, false);
     let prefix_w = stat_prefix_width(full_left_w, pct_w);
     if prefix_w + 1 + MIN_SHARE_BAR_WIDTH <= panel_width {
         StatSectionLayout {
@@ -1230,7 +1359,7 @@ pub(super) fn stat_section_layout(
             bar_w: 0,
         }
     } else {
-        let compact_left_w = stat_left_width(model_cells, agent_cells, true);
+        let compact_left_w = stat_left_width(sections, true);
         StatSectionLayout {
             compact: true,
             left_w: compact_left_w,
@@ -1240,14 +1369,10 @@ pub(super) fn stat_section_layout(
     }
 }
 
-pub(super) fn stat_left_width(
-    model_cells: &[StatCell],
-    agent_cells: &[StatCell],
-    compact: bool,
-) -> usize {
-    model_cells
+pub(super) fn stat_left_width(sections: &[&[StatCell]], compact: bool) -> usize {
+    sections
         .iter()
-        .chain(agent_cells)
+        .flat_map(|rows| rows.iter())
         .map(|cell| display_width(cell.left(compact)))
         .max()
         .unwrap_or(0)

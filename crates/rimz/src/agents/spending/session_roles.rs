@@ -36,8 +36,15 @@ pub struct SessionRoleRecord {
 pub(super) type RoleMap = BTreeMap<AgentKind, BTreeMap<AgentSessionId, SessionRole>>;
 
 #[derive(Default)]
+pub(super) struct RoleIndex {
+    pub(super) roles: RoleMap,
+    pub(super) recorded_since_secs: Option<u64>,
+}
+
+#[derive(Default)]
 struct Segment {
     roles: RoleMap,
+    recorded_since_secs: Option<u64>,
     unfinished_tail: bool,
 }
 
@@ -94,17 +101,22 @@ pub fn record(paths: &RuntimePaths, record: &SessionRoleRecord) -> Result<(), At
     Ok(())
 }
 
-pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleMap {
+pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleIndex {
     let Some(at) = i64::try_from(now_secs)
         .ok()
         .and_then(|second| Timestamp::from_second(second).ok())
     else {
-        return RoleMap::new();
+        return RoleIndex::default();
     };
     let year = at.to_zoned(jiff::tz::TimeZone::UTC).year();
     let mut roles = RoleMap::new();
+    let mut recorded_since_secs = None;
     for (slot, year) in [year - 1, year].into_iter().enumerate() {
         let segment = read_segment(&RuntimePaths::session_roles_for_cursor(cursor, year), slot);
+        recorded_since_secs = recorded_since_secs
+            .into_iter()
+            .chain(segment.recorded_since_secs)
+            .min();
         for (kind, sessions) in &segment.roles {
             let entries = roles.entry(kind.clone()).or_default();
             for (session, role) in sessions {
@@ -114,7 +126,10 @@ pub(super) fn load(cursor: &Path, now_secs: u64) -> RoleMap {
             }
         }
     }
-    roles
+    RoleIndex {
+        roles,
+        recorded_since_secs,
+    }
 }
 
 fn read_segment(path: &Path, slot: usize) -> Arc<Segment> {
@@ -133,10 +148,15 @@ fn read_segment(path: &Path, slot: usize) -> Arc<Segment> {
             return Arc::default();
         };
         let mut roles = RoleMap::new();
+        let mut recorded_since_secs = None;
         for line in bytes.split(|byte| *byte == b'\n') {
             let Ok(record) = serde_json::from_slice::<SessionRoleRecord>(line) else {
                 continue;
             };
+            recorded_since_secs = recorded_since_secs
+                .into_iter()
+                .chain(u64::try_from(record.at.as_second()).ok())
+                .min();
             roles
                 .entry(record.kind)
                 .or_default()
@@ -145,6 +165,7 @@ fn read_segment(path: &Path, slot: usize) -> Arc<Segment> {
         }
         let segment = Arc::new(Segment {
             roles,
+            recorded_since_secs,
             unfinished_tail: bytes.last().is_some_and(|byte| *byte != b'\n'),
         });
         memo.store(path, modified, meta.len(), Arc::clone(&segment));
@@ -187,7 +208,7 @@ mod tests {
     use super::*;
 
     fn load(paths: &RuntimePaths, at: Timestamp) -> RoleMap {
-        super::load(&paths.shared_spending_cursor_path(), at.as_second() as u64)
+        super::load(&paths.shared_spending_cursor_path(), at.as_second() as u64).roles
     }
 
     fn fixture() -> (tempfile::TempDir, RuntimePaths) {
@@ -249,6 +270,11 @@ mod tests {
         crate::disk::atomic::append_record_bytes(&paths.shared_session_roles(2026), b"{\"kind\":")
             .unwrap();
         let now = row(2026, agent()).at;
+        let loaded = super::load(&paths.shared_spending_cursor_path(), now.as_second() as u64);
+        assert_eq!(
+            loaded.recorded_since_secs,
+            Some(first.at.as_second() as u64)
+        );
         assert_eq!(
             load(&paths, now)
                 .get(&first.kind)

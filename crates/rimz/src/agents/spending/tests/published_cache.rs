@@ -34,7 +34,7 @@ fn workspace_cache_is_current_only_at_the_published_version() {
 
 #[test]
 fn provider_cache_staleness_and_error_cases_are_explicit() {
-    assert_eq!(PROVIDER_SPENDING_VERSION, 18);
+    assert_eq!(PROVIDER_SPENDING_VERSION, 19);
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
@@ -64,7 +64,10 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     )]);
     let models = BTreeMap::from([(
         "claude-opus-4-8".to_owned(),
-        model_tally(4_200, 1.25, 3_000, 1_200, 0),
+        ModelTally {
+            tally: model_tally(4_200, 1.25, 3_000, 1_200, 0),
+            kind: "claude".into(),
+        },
     )]);
     let local_day = BTreeMap::from([(
         "claude".to_owned(),

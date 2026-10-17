@@ -201,7 +201,7 @@ upward-dependencies = ["address"]
 # SettingsConflict, hooks_disabled, and ask_unenforced share provider settings refusals with launch and doctor (+3).
 # LaunchDirMode separates supervised folder-screen refusals from headless judges (+1).
 # SpendingCapability::spending_session_id and the spending role/history surface (+9).
-# UnattributedTally shares the provider split with the stats consumer (+1).
+# ModelTally shares the producing provider identity with the stats consumer.
 # LaunchCapability::changed_system_prompt_args lets launch compilation refresh changed prompts on resume (+1).
 # LaunchCapability::system_prompt_arg_matchers identifies native configured prompt inputs (+1).
 # AgentDefinition::is_foreign_hook_payload and HookCapability::recognizes_hook_payload keep native recognition in adapters (+2).
@@ -334,7 +334,7 @@ path = "crates/rimz/src/agents/spending"
 # ResponseTiming and the timed window counters/rate cross the adapter and stats seams.
 # SpendUpdate exposes the parser's three-way cache update policy (+1).
 # Local-day helpers, session-role module/record/writer, and published tallies (+8).
-# UnattributedTally carries the provider split across the publication/stats seam.
+# ModelTally carries the producing provider identity across the publication/stats seam.
 surface-budget = 97
 
 [[module]]
@@ -566,17 +566,12 @@ reason = "Shared local-midnight convention is reachable for spending consumers i
 [[verdict]]
 kind = "item"
 key = "agents::spending::RoleTallies"
-reason = "Published role partition shared with the stats reader, conserving fleet dollars and tokens."
+reason = "Published profile-attributed subagent spend and the first retained role record shared with the stats reader."
 
 [[verdict]]
 kind = "item"
-key = "agents::spending::SubagentTally"
-reason = "Published profile spend carries model breakdowns without duplicating SpendTally serialization."
-
-[[verdict]]
-kind = "item"
-key = "agents::spending::UnattributedTally"
-reason = "Published unattributed spend retains provider visibility without claiming a session role."
+key = "agents::spending::ModelTally"
+reason = "Published model spend carries the producing agent kind for stats identity colours."
 
 [[verdict]]
 kind = "item"

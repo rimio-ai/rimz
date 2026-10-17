@@ -52,8 +52,8 @@ fn history_days_follow_published_zone_including_rolled_rows() {
     assert_eq!(result.spending.total.day.sessions, 1);
     assert_eq!(result.spending.total.week.sessions, 2);
     assert_eq!(result.spending.total.headline.usd, 0.0);
-    assert_eq!(result.models[""].day.usd, 2.0);
-    assert_eq!(result.roles.unattributed.tally.day.usd, 2.0);
+    assert_eq!(result.models[""].tally.day.usd, 2.0);
+    assert!(result.roles.subagents.is_empty());
     assert_eq!(result.spending.by_provider["opencode"].day.usd, 2.0);
     assert_eq!(
         result.spending.by_login.values().next().unwrap().day.usd,
@@ -72,6 +72,64 @@ fn history_days_follow_published_zone_including_rolled_rows() {
         serde_json::to_value(publication).unwrap()["timezone"],
         "Asia/Shanghai"
     );
+}
+
+#[test]
+fn model_identity_uses_year_spend_then_tokens_then_kind() {
+    let paths = [
+        PathBuf::from("/x/claude.jsonl"),
+        PathBuf::from("/x/codex.jsonl"),
+    ];
+    let files = vec![
+        spending_file(claude_adapter(), paths[0].clone()),
+        spending_file(codex_adapter(), paths[1].clone()),
+    ];
+    for (claude_usd, claude_tokens, expected) in [
+        (2.0, 1, "claude"),
+        (1.0, 3, "claude"),
+        (1.0, 1, "claude"),
+        (0.5, 9, "codex"),
+    ] {
+        let mut claude = cached_entry(NOW_SECS, claude_usd, "claude-thread");
+        claude.model = Some("shared-model".into());
+        claude.input = claude_tokens;
+        let codex = CachedEntry {
+            cost_usd: 1.0,
+            input: 1,
+            thread_id: Some("codex-thread".into()),
+            ..claude.clone()
+        };
+        let cache = SpendingDiskCache {
+            files: HashMap::from([
+                cached_file(&paths[0], vec![claude]),
+                cached_file(&paths[1], vec![codex]),
+            ]),
+            ..Default::default()
+        };
+        let locations = dedup_cached_entry_locations(&files, &cache);
+        let counted = indexed_counted_entries(&files, &cache, &locations);
+        let result = aggregate_counted_rollups(
+            &files,
+            &cache,
+            &counted,
+            None,
+            HeadlineContext {
+                user_inputs: &[],
+                now_secs: NOW_SECS,
+                spec: &HeadlineSpec::default(),
+            },
+            Some(&Default::default()),
+        );
+        let models = serde_json::to_value(&result.models).unwrap();
+        assert_eq!(models["shared-model"]["kind"], expected);
+        let roles = serde_json::to_value(&result.roles).unwrap();
+        assert_eq!(
+            roles.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["recorded_since_secs", "subagents"]
+        );
+        assert!(roles["recorded_since_secs"].is_null());
+        assert!(roles["subagents"].as_object().unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -128,7 +186,7 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         ]),
         ..Default::default()
     };
-    let roles = BTreeMap::from([
+    let roles: super::super::session_roles::RoleMap = BTreeMap::from([
         (
             crate::ids::AgentKind::new_unchecked("claude"),
             BTreeMap::from([(parent.into(), SessionRole::Agent { profile: None })]),
@@ -152,6 +210,31 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
             )]),
         ),
     ]);
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::disk::paths::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    let first = NOW_SECS - 100;
+    for (kind, sessions) in &roles {
+        for (session, role) in sessions {
+            super::super::session_roles::record(
+                &runtime,
+                &super::super::session_roles::SessionRoleRecord {
+                    kind: kind.clone(),
+                    session: session.clone(),
+                    role: role.clone(),
+                    at: Timestamp::from_second(
+                        (first + u64::from(matches!(role, SessionRole::Subagent { .. }))) as i64,
+                    )
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        }
+    }
+    let roles = super::super::session_roles::load(&runtime.shared_spending_cursor_path(), NOW_SECS);
     let locations = dedup_cached_entry_locations(&files, &cache);
     let counted = indexed_counted_entries(&files, &cache, &locations);
     let result = aggregate_counted_rollups(
@@ -169,28 +252,13 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
         },
         Some(&roles),
     );
-    assert_eq!(
-        result.roles.agents.get("claude").map(|t| t.year.usd),
-        Some(3.0)
-    );
-    assert_eq!(result.roles.agents["opencode"].year.usd, 4.0);
-    assert_eq!(result.roles.subagents["fast"].tally.year.usd, 3.0);
-    assert_eq!(result.roles.subagents["fast"].tally.year.sessions, 1);
-    assert_eq!(
-        result.roles.subagents["fast"].models["child-model"]
-            .year
-            .usd,
-        3.0
-    );
-    assert_eq!(result.roles.unattributed.tally.year.usd, 5.0);
-    assert_eq!(result.roles.agents["claude"].day.usd, 3.0);
-    assert_eq!(result.roles.agents["claude"].day.sessions, 1);
-    assert_eq!(result.roles.subagents["fast"].tally.day.usd, 3.0);
-    assert_eq!(result.roles.subagents["fast"].tally.day.sessions, 1);
-    assert_eq!(
-        result.roles.subagents["fast"].models["child-model"].day.usd,
-        3.0
-    );
+    let published_roles = serde_json::to_value(&result.roles).unwrap();
+    assert_eq!(published_roles["recorded_since_secs"], first);
+    assert_eq!(published_roles["subagents"].as_object().unwrap().len(), 1);
+    for window in ["today", "day", "week", "month", "year"] {
+        assert_eq!(published_roles["subagents"]["fast"][window]["usd"], 3.0);
+        assert_eq!(published_roles["subagents"]["fast"][window]["sessions"], 1);
+    }
     let windows: [fn(&SpendTally) -> &SpendWindow; 5] = [
         |t| &t.headline,
         |t| &t.day,
@@ -200,23 +268,13 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
     ];
     for window in windows {
         let mut sum = SpendWindow::default();
-        for tally in result
-            .roles
-            .agents
-            .values()
-            .chain(result.roles.subagents.values().map(|p| &p.tally))
-            .chain([&result.roles.unattributed.tally])
-        {
-            sum.merge(window(tally));
+        for profile in published_roles["subagents"].as_object().unwrap().values() {
+            let tally = serde_json::from_value::<SpendTally>(profile.clone()).unwrap();
+            sum.merge(window(&tally));
         }
-        assert_eq!(sum.usd, window(&result.spending.total).usd);
-        assert_eq!(sum.tokens, window(&result.spending.total).tokens);
-        assert_eq!(sum.cache_read, window(&result.spending.total).cache_read);
-        let mut split = SpendWindow::default();
-        for tally in result.roles.unattributed.by_provider.values() {
-            split.merge(window(tally));
-        }
-        assert_eq!(&split, window(&result.roles.unattributed.tally));
+        assert!(sum.usd <= window(&result.spending.total).usd);
+        assert!(sum.tokens <= window(&result.spending.total).tokens);
+        assert!(sum.cache_read <= window(&result.spending.total).cache_read);
     }
     let empty = aggregate_counted_rollups(
         &files,
@@ -231,13 +289,11 @@ fn roles_join_native_sessions_after_dedup_and_conserve_every_window() {
                 timezone: Some("UTC".into()),
             },
         },
-        Some(&BTreeMap::new()),
+        Some(&Default::default()),
     );
-    assert_eq!(empty.roles.unattributed.tally, empty.spending.total);
-    assert_eq!(
-        empty.roles.unattributed.by_provider,
-        empty.spending.by_provider
-    );
+    let empty = serde_json::to_value(&empty.roles).unwrap();
+    assert!(empty["subagents"].as_object().unwrap().is_empty());
+    assert!(empty["recorded_since_secs"].is_null());
 }
 
 fn user_input(second: u64, kind: &str, origin: Option<&Path>) -> user_input::UserInputRecord {

@@ -996,6 +996,8 @@ fn forced_cycle_retains_the_reconciling_produce_for_a_stalled_renderer() {
         &runtime.shared_provider_spending_path(),
         &crate::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: now_ms,
+            day_cutoff_secs: crate::agents::spending::local_day_start_secs(now_ms / 1000, None)
+                .unwrap(),
             spending: crate::agents::spending::Spending::default(),
             ..Default::default()
         },

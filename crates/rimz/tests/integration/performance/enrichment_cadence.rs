@@ -114,6 +114,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: unix_now_ms(),
+            day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+                unix_now_ms() / 1000,
+                None,
+            )
+            .unwrap(),
             spending: rimz::agents::spending::Spending::default(),
             ..Default::default()
         },
@@ -153,6 +158,11 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: unix_now_ms(),
+            day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+                unix_now_ms() / 1000,
+                None,
+            )
+            .unwrap(),
             spending: rimz::agents::spending::Spending::default(),
             ..Default::default()
         },

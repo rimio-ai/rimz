@@ -235,6 +235,11 @@ mod tests {
             &runtime.shared_provider_spending_path(),
             &crate::agents::spending::ProviderSpendingCache {
                 refreshed_at_ms: walk_ms,
+                day_cutoff_secs: crate::agents::spending::local_day_start_secs(
+                    walk_ms / 1000,
+                    None,
+                )
+                .unwrap(),
                 spending: crate::agents::spending::Spending::default(),
                 ..Default::default()
             },

@@ -470,6 +470,11 @@ fn concurrent_clients_elect_one_private_socket_owner() {
         &runtime.shared_provider_spending_path(),
         &super::super::ProviderSpendingCache {
             refreshed_at_ms: crate::utils::time::unix_now_ms(),
+            day_cutoff_secs: super::super::local_day_start_secs(
+                super::super::unix_secs_now(),
+                None,
+            )
+            .unwrap(),
             ..Default::default()
         },
     );
@@ -616,6 +621,11 @@ fn fresh_publication_bypasses_busy_walker() {
         &runtime.shared_provider_spending_path(),
         &super::super::ProviderSpendingCache {
             refreshed_at_ms: crate::utils::time::unix_now_ms(),
+            day_cutoff_secs: super::super::local_day_start_secs(
+                super::super::unix_secs_now(),
+                None,
+            )
+            .unwrap(),
             ..Default::default()
         },
     );

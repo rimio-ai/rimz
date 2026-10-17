@@ -17,6 +17,38 @@ use std::time::Duration;
 
 use super::workspace_cache_from_shared_entries;
 
+#[test]
+fn provider_freshness_expires_at_local_midnight_inside_ttl() {
+    let midnight = "2026-06-01T16:00:00Z"
+        .parse::<Timestamp>()
+        .unwrap()
+        .as_millisecond() as u64;
+    let cache = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: midnight - 1,
+        day_cutoff_secs: midnight / 1000 - 86_400,
+        timezone: "Asia/Shanghai".into(),
+        ..Default::default()
+    };
+    assert!(cache.is_fresh_within(midnight - 1, SPENDING_TTL));
+    assert!(!cache.is_fresh_within(midnight, SPENDING_TTL));
+    let current = ProviderSpendingCache {
+        refreshed_at_ms: midnight,
+        day_cutoff_secs: midnight / 1000,
+        ..cache.clone()
+    };
+    assert!(current.is_fresh_within(midnight, SPENDING_TTL));
+    assert!(!current.is_fresh_within(midnight + SPENDING_TTL.as_millis() as u64 + 1, SPENDING_TTL));
+    let straddled = ProviderSpendingCache {
+        refreshed_at_ms: midnight,
+        ..cache
+    };
+    assert!(
+        !straddled.is_fresh_within(midnight, SPENDING_TTL),
+        "a walk ending after midnight still carries the previous day's windows"
+    );
+}
+
 fn published_workspace_fixture() -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -226,6 +258,7 @@ fn fresh_shared_publish_returns_without_walking() {
         &first.shared_provider_spending_path(),
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
+            day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None).unwrap(),
             spending: spending.clone(),
             ..Default::default()
         },
@@ -263,6 +296,8 @@ fn shared_spending_lock_serves_the_elected_publish_to_a_contender() {
                 &runtime.shared_provider_spending_path(),
                 &ProviderSpendingCache {
                     refreshed_at_ms: published_at,
+                    day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None)
+                        .unwrap(),
                     spending: spending.clone(),
                     ..Default::default()
                 },
@@ -313,6 +348,7 @@ fn produce_local_serves_published_within_grace() {
         &runtime.shared_provider_spending_path(),
         &ProviderSpendingCache {
             refreshed_at_ms: published_at,
+            day_cutoff_secs: super::super::local_day_start_secs(published_at / 1000, None).unwrap(),
             spending: spending.clone(),
             ..Default::default()
         },
