@@ -360,7 +360,7 @@ fn terminal_write_without_a_hook_wakes_the_workflow() {
     );
     let ended = until(&room.env, &id, |v| v["record"]["state"] == "done");
     assert_eq!(ended["record"]["prev_attempt"]["outcome"], "died");
-    let stats = assists(&room.env);
+    let stats = assists_once(&room.env, "workflow_ends", 1);
     assert_eq!(stats["rollup"]["workflow_steps"], 1);
     assert_eq!(stats["rollup"]["workflow_routes"], 3);
     assert_eq!(stats["rollup"]["workflow_ends"], 1);
