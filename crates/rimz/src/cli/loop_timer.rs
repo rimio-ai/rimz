@@ -187,6 +187,20 @@ fn task_roots() -> BTreeSet<PathBuf> {
         .map(|task| task.entry().resolved_root())
         .collect::<BTreeSet<_>>();
     roots.extend(rimz::harness::schedule::catalog::workspace_instance_roots());
+    match rimz::disk::paths::workflow_runs_under(&rimz::disk::paths::rimz_home()) {
+        Ok(runs) => {
+            for (_, paths) in runs {
+                match rimz::store::workflow::load(&paths) {
+                    Ok(run) if !run.state.is_terminal() => {
+                        roots.insert(run.project_root);
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!(%error, "loop tick could not read workflow run"),
+                }
+            }
+        }
+        Err(error) => tracing::warn!(%error, "loop tick could not enumerate workflow roots"),
+    }
     match rimz::trust::granted_roots() {
         Ok(granted) => roots.extend(granted.into_iter().filter(|root| {
             TaskCatalog::load_lenient(Some(root))

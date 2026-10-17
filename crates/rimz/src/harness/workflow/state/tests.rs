@@ -54,6 +54,36 @@ fn spec() -> WorkflowSpec {
     toml::from_str("[workflow]\nscope = 'worktree'\nstart = 'pr'\n[checks.pr]\nrun = 'true'\non.ok = '@done'\ntimeout = '1h'\n").unwrap()
 }
 
+#[test]
+fn wait_backoff_cannot_hide_an_unfired_deadline() {
+    let mut spec = spec();
+    spec.checks
+        .get_mut("pr")
+        .unwrap()
+        .on
+        .insert("pending".into(), "@wait".into());
+    let paths = paths();
+    let mut record = record();
+    let deadline = record.entered_at + jiff::SignedDuration::from_secs(30);
+    record.deadline = Some(deadline);
+    let mut t = Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: vec![],
+    };
+    t.finish_check(
+        1,
+        Ok(json!({"outcome":"pending","recheck_at":"2099-01-01T00:00:00Z"})),
+        BTreeMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(t.record.recheck_at, Some(deadline));
+    assert_eq!(t.record.wait.as_ref().unwrap().recheck_at, Some(deadline));
+}
+
 fn paths() -> WorkflowPaths {
     WorkflowPaths {
         home: "/run".into(),

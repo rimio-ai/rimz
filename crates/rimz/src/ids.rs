@@ -433,6 +433,19 @@ fn validate_uuid_id(
 
 uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
 uuid_v7_id!(WorkflowRunId, "wf", "Per-workflow-run identifier.");
+
+impl PartialOrd for WorkflowRunId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for WorkflowRunId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
     SidebarInstanceId,
