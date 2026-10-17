@@ -381,6 +381,8 @@ pub struct TaskEntry {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stay: bool,
     #[serde(rename = "each-worktree", skip_serializing_if = "std::ops::Not::not")]
@@ -490,6 +492,10 @@ pub struct Guard<'a> {
 }
 
 impl TaskEntry {
+    pub fn repeats_while_true(&self) -> bool {
+        self.stay || self.workflow.is_some()
+    }
+
     pub fn guard(&self) -> Guard<'_> {
         let (shell, legacy) = match &self.check {
             Some(TaskCheck::Shell(command)) => (Some(command.as_str()), None),

@@ -211,6 +211,7 @@ fn action(row: &TaskRow) -> String {
         ActionKind::Wake => TaskActionKind::Deliver,
         ActionKind::Start => TaskActionKind::Spawn,
         ActionKind::Check => TaskActionKind::CheckOnly,
+        ActionKind::Workflow => TaskActionKind::Workflow,
     };
     action_text(
         kind,
@@ -229,6 +230,7 @@ pub(in crate::cli::loop_cmd) fn action_text(
     let mut action = match kind {
         TaskActionKind::Deliver => subject.split('#').next().unwrap_or(subject).to_owned(),
         TaskActionKind::Spawn => format!("start {subject}"),
+        TaskActionKind::Workflow => format!("start workflow {subject}"),
         TaskActionKind::CheckOnly => "run check".into(),
     };
     if let Some(entry) = entry {

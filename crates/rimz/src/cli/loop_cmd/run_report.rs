@@ -94,7 +94,11 @@ fn write_manual_run_summary(
     } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
         write_completion_detail(out, name, summary)?;
     }
-    if !is_spawn_failure(record.result) && !keep && record.run_id.is_some() {
+    if action_kind.is_spawn()
+        && !is_spawn_failure(record.result)
+        && !keep
+        && record.run_id.is_some()
+    {
         writeln!(
             out,
             "{}",
@@ -206,6 +210,18 @@ fn success_result_label(record: &LoopRunRecord) -> String {
 }
 
 fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) -> String {
+    if action_kind == TaskActionKind::Workflow {
+        return summary.record.error.as_ref().map_or_else(
+            || {
+                format!(
+                    "{} {}",
+                    summary.record.result.label(),
+                    summary.record.run_id.as_deref().unwrap_or_default()
+                )
+            },
+            |error| format!("{}: {error}", summary.record.result.label()),
+        );
+    }
     if action_kind.is_check_only()
         && let Some(stage) = summary.record.stages().next()
     {

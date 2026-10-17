@@ -664,6 +664,7 @@ fn resolve_add_action(
             resolve_delivery_target(workspace, args, address)?
         }
         TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
+        TaskActionKind::Workflow => unreachable!("loop add has no workflow flag"),
     };
     reject_unsupported_action_flags(args, kind)?;
     if let AddTaskAction::Spawn { mode, .. } = &mut action {
@@ -1251,6 +1252,7 @@ fn write_add_feedback(
         TaskAction::CheckOnly => {
             writeln!(out, "action: runs check in {}", entry.run_dir().display())?;
         }
+        TaskAction::Workflow(name) => writeln!(out, "action: starts workflow {name}")?,
     }
     if action.kind().has_effect()
         && (entry.guard().shell.is_some() || !entry.guard().judges.is_empty())

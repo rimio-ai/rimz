@@ -58,7 +58,7 @@ fn scoped_tasks(
     let mut scoped = BTreeMap::new();
     for (name, task) in tasks {
         let entry = task.entry();
-        let launches = ledger.get(name);
+        let launches = entry.stay.then(|| ledger.get(name)).flatten();
         if !entry.each_worktree {
             if entry.stay
                 && (launches.is_some_and(|launches| launches.contains_key(&entry.run_dir()))
@@ -521,7 +521,7 @@ fn plan(
                 let elapsed =
                     u128::try_from(now.timestamp().duration_since(state.since).as_millis())
                         .unwrap_or(0);
-                let retry_due = task.entry().stay
+                let retry_due = task.entry().repeats_while_true()
                     && now.timestamp().duration_since(last_fire).as_secs() >= RESIDENT_RETRY_SECS;
                 if (!state.fired || retry_due)
                     && elapsed >= hold.map_or(0, |duration| duration.as_millis())
@@ -739,7 +739,7 @@ fn record_start_failed(
         payload: signal.payload.clone(),
     });
     record.condition = condition.cloned();
-    if task.entry().stay {
+    if task.entry().stay || task.entry().each_worktree {
         record.checkout = Some(
             checkout
                 .map(Path::to_path_buf)

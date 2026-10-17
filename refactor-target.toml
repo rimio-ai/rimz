@@ -412,7 +412,8 @@ upward-dependencies = [
 # Machine hibernation policy and its duration validation serve admission (+1 net).
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
-surface-budget = 201 # SpendOrder shares typed capacity ordering with harness and CLI.
+# TaskEntry::repeats_while_true shares sustained workflow/resident retry policy (+1).
+surface-budget = 202 # SpendOrder shares typed capacity ordering with harness and CLI.
 
 [[verdict]]
 kind = "item"
@@ -428,6 +429,11 @@ reason = "Renamed headless model guard shared by task files, trust, scheduling a
 kind = "item"
 key = "config::loop_::TaskEntry::guard"
 reason = "Single legacy-aware guard reader for the scheduler and loop presentation."
+
+[[verdict]]
+kind = "item"
+key = "config::loop_::TaskEntry::repeats_while_true"
+reason = "Workflow and resident tasks share the sustained-condition retry cadence."
 
 [[verdict]]
 kind = "item"
@@ -1820,6 +1826,7 @@ allowed-dependencies = [
     "harness::plan",
     "harness::run",
     "harness::schedule",
+    "harness::workflow",
     "ids",
     "proc",
     "store",

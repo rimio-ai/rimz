@@ -109,7 +109,7 @@ pub(super) fn run_one(
         if !entry.stay
             && (mode != LoopRunMode::Scheduled || !matches!(action, TaskAction::CheckOnly))
         {
-            if !matches!(action, TaskAction::Spawn(_)) {
+            if !matches!(action, TaskAction::Spawn(_) | TaskAction::Workflow(_)) {
                 return Ok(());
             }
             let workspace = WorkspaceResolver::resolve_participant(root, Some(root.to_path_buf()))?;
@@ -303,8 +303,8 @@ fn resident_checkout(
         }
         return Ok(None);
     }
-    if !entry.stay {
-        bail!("--each-worktree requires --stay");
+    if !entry.stay && entry.workflow.is_none() {
+        bail!("--each-worktree requires --stay or workflow");
     }
     let owned: Vec<_> = rimz::worktree::discover_owned(&entry.resolved_root())?
         .into_iter()

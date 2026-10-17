@@ -239,6 +239,7 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         let entry = TaskEntry {
             label: None,
             agent: Some("claude".to_owned()),
+            workflow: None,
             stay: false,
             each_worktree: false,
             takeover: false,

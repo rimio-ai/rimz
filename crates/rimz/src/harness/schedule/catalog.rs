@@ -438,7 +438,9 @@ impl TaskCatalog {
         for (name, task) in self.runnable.clone() {
             let target = match task.action() {
                 Ok(TaskAction::Deliver(target)) => target.clone(),
-                Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
+                Ok(TaskAction::Spawn(_) | TaskAction::Workflow(_) | TaskAction::CheckOnly) => {
+                    continue;
+                }
                 // RimZ is the only writer of instance rows, so one that no
                 // longer compiles can never fire or retire: reap it. User-owned
                 // rows keep rendering `<invalid>` for the user to fix.

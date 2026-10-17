@@ -292,6 +292,13 @@ fn names_are_validated() {
 /// action fields contradict each other and the message that names the fix.
 #[test]
 fn task_action_from_entry_maps_field_combinations() {
+    let workflow: TaskEntry = toml::from_str("workflow = 'review'").unwrap();
+    let action = TaskAction::from_entry("task", &workflow);
+    assert!(action.is_ok(), "workflow is an action: {action:?}");
+    let action = action.unwrap();
+    assert_eq!(action.subject(), "review");
+    assert!(action.kind().has_effect());
+    assert!(!action.kind().is_spawn());
     // (entry, kind, (has_effect, is_spawn, is_check_only))
     for (entry, kind, predicates) in [
         (spawn_entry(), TaskActionKind::Spawn, (true, true, false)),
@@ -376,6 +383,38 @@ fn task_action_from_entry_maps_field_combinations() {
     ] {
         let err = TaskAction::from_entry("task", &entry).expect_err("invalid action");
         assert_eq!(err.to_string(), message);
+    }
+}
+
+#[test]
+fn workflow_rejects_action_and_node_owned_fields() {
+    for (field, hint) in [
+        ("agent = 'codex'", "keep exactly one"),
+        (
+            "wait = {kind='codex', session='s', handle='@x'}",
+            "keep exactly one",
+        ),
+        ("stay = true", "not a resident agent"),
+        ("takeover = true", "[steps.<name>] takeover = true"),
+        (
+            "subscribe = [{signal='ready', stage='Done'}]",
+            "check names what it waits for",
+        ),
+        ("check = 'true'", "[checks.<name>]"),
+        ("check = {agent='codex', prompt='judge'}", "[checks.<name>]"),
+        (
+            "judge = [{agent='codex', prompt='judge'}]",
+            "[checks.<name>]",
+        ),
+    ] {
+        let entry: TaskEntry = toml::from_str(&format!("workflow='review'\n{field}")).unwrap();
+        let error = TaskAction::from_entry("task", &entry)
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains(hint)),
+            "{field}: {error:?}"
+        );
     }
 }
 

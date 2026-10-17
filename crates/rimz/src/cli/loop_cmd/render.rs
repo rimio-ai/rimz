@@ -51,7 +51,7 @@ struct ActionWords {
 
 fn action_words(action: &TaskAction) -> Option<ActionWords> {
     match action {
-        TaskAction::Spawn(subject) => Some(ActionWords {
+        TaskAction::Spawn(subject) | TaskAction::Workflow(subject) => Some(ActionWords {
             subject: subject.clone(),
             base: "start",
             third_person: "starts",
@@ -1237,6 +1237,7 @@ fn is_refused_fire(record: &LoopRunRecord) -> bool {
     matches!(
         record.result,
         LoopRunResult::Overlapped
+            | LoopRunResult::WorkflowSkipped
             | LoopRunResult::BudgetSkipped
             | LoopRunResult::AccountSkipped
             | LoopRunResult::ThrottleSkipped
@@ -2218,6 +2219,7 @@ pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
         | LoopRunResult::ThrottleSkipped => ("○", ui::palette::warn()),
         LoopRunResult::CheckSkipped
         | LoopRunResult::SignalSkipped
+        | LoopRunResult::WorkflowSkipped
         | LoopRunResult::SurplusSkipped => ("○", ui::palette::muted()),
     };
     ResultMark { glyph, style }
