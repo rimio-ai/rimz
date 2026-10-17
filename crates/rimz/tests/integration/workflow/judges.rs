@@ -92,10 +92,19 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
             }
             "limited" => {
                 // Capacity is consulted after the provider result, not as a launch gate.
-                let reset = capacity(&env, 100);
+                capacity(&env, 100);
                 success(invoke(&["workflow", "advance", id]));
                 let value = until(&env, id, |value| value["record"]["recheck_at"].is_string());
-                assert_eq!(value["record"]["recheck_at"], reset.to_string());
+                let entered: jiff::Timestamp = value["record"]["entered_at"]
+                    .as_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(
+                    value["record"]["recheck_at"],
+                    (entered + jiff::SignedDuration::from_hours(1)).to_string(),
+                    "provider backoff must not hide the check timeout from the ticker"
+                );
                 assert_eq!(value["record"]["check_retry"], 0);
                 let count = events(&value, "evaluation").len();
                 success(invoke(&["workflow", "advance", id]));

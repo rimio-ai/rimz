@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 mod attempts;
 mod judges;
+mod ticks;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
     let env = Env::new();

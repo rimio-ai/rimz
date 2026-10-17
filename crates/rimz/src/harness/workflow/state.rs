@@ -82,7 +82,8 @@ impl Transition<'_> {
         match failure {
             "canceled" => Ok(true),
             "limited" => {
-                self.record.recheck_at = result.limited.and_then(|limited| limited.reset_at);
+                self.record.recheck_at =
+                    self.bounded_recheck(result.limited.and_then(|limited| limited.reset_at))?;
                 Ok(false)
             }
             _ if self.record.check_retry == 0 => {
@@ -206,13 +207,13 @@ impl Transition<'_> {
             return Ok(());
         }
         if target == "@wait" {
-            let limit = self.timeout_at()?;
             let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
-            let recheck_at = object
-                .get("recheck_at")
-                .and_then(Value::as_str)
-                .and_then(|s| s.parse::<Timestamp>().ok())
-                .map(|at| limit.map_or(at, |limit| at.min(limit)));
+            let recheck_at = self.bounded_recheck(
+                object
+                    .get("recheck_at")
+                    .and_then(Value::as_str)
+                    .and_then(|s| s.parse::<Timestamp>().ok()),
+            )?;
             if self
                 .record
                 .wait
@@ -491,6 +492,13 @@ impl Transition<'_> {
                 },
             );
         }
+    }
+
+    fn bounded_recheck(&self, at: Option<Timestamp>) -> Result<Option<Timestamp>, TimeInputErr> {
+        let timeout = self.timeout_at()?;
+        let deadline = self.record.deadline.filter(|_| !self.record.deadline_fired);
+        let limit = timeout.into_iter().chain(deadline).min();
+        Ok(at.map(|at| limit.map_or(at, |limit| at.min(limit))))
     }
 
     pub(super) fn timeout_at(&self) -> Result<Option<Timestamp>, TimeInputErr> {

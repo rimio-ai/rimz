@@ -6,6 +6,56 @@ use crate::config::TaskEntry;
 const NAME: &str = "task";
 
 #[test]
+fn workflow_ticks_honor_backoff_pace_due_edges_and_retire_inactive_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root(root.path()).unwrap();
+    let runtime = RuntimePaths::for_state(&state).unwrap();
+    let mut record: crate::store::workflow::RunRecord = serde_json::from_value(serde_json::json!({
+        "version":1,"id":"wf_0190b8172c0070008000000000000001","workflow":"review",
+        "spec_dir":"/definitions/review","spec_digest":"abc","scope":{"kind":"worktree","path":root.path()},
+        "project_root":root.path(),"created_at":"2026-01-01T00:00:00Z","state":"active","node":"pr",
+        "entered_at":"2026-01-01T00:00:00Z","visits":{},"visit_grant":0,"deadline_fired":false,"next_seq":1
+    })).unwrap();
+    let paths = state.workflow(&record.id);
+    std::fs::create_dir_all(&paths.home).unwrap();
+    let cache = runtime.lane_path("workflow-tick.json");
+    for (now, recheck, expected) in [
+        (1000, None, 1000),
+        (1029, Some(1030), 1000),
+        (1030, Some(1030), 1030),
+        (1040, None, 1030),
+        (1090, None, 1090),
+    ] {
+        record.recheck_at = recheck.map(|second| Timestamp::from_second(second).unwrap());
+        std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+        tick_workflows(
+            &runtime,
+            root.path(),
+            Timestamp::from_second(now).unwrap(),
+            LoopRunHost::Detached,
+        );
+        let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
+            crate::disk::atomic::read_json_cache(&cache);
+        assert_eq!(
+            stamps.get(&record.id),
+            Some(&Timestamp::from_second(expected).unwrap()),
+            "tick {now}"
+        );
+    }
+    record.state = crate::store::workflow::RunState::Parked;
+    std::fs::write(&paths.record, serde_json::to_vec(&record).unwrap()).unwrap();
+    tick_workflows(
+        &runtime,
+        root.path(),
+        Timestamp::from_second(1100).unwrap(),
+        LoopRunHost::Detached,
+    );
+    let stamps: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
+        crate::disk::atomic::read_json_cache(&cache);
+    assert!(stamps.is_empty());
+}
+
+#[test]
 fn declined_scopes_wait_for_a_new_condition_clock_or_elapsed_recheck() {
     use super::super::launch_ledger::{DeclineRecord, Declines};
     let (_root, mut tasks, owned) = worktree_tasks(None);
@@ -948,6 +998,22 @@ fn condition_not_live_carries_both_maps() {
     assert_eq!(stamps, one(prior));
     assert_eq!(states, one(state));
     assert!(actions.is_empty());
+}
+
+#[test]
+fn workflow_tick_advances_leave_the_timer_service_like_loop_runs() {
+    let exe = Path::new("/opt/rimz");
+    let id = crate::ids::WorkflowRunId::new();
+    let advance = crate::harness::workflow::advance_args(Path::new("/repo"), Some(&id), None);
+    assert_eq!(
+        workflow_advance_command(LoopRunHost::Detached, exe, Path::new("/repo"), &id),
+        (exe.as_os_str().to_owned(), advance.clone()),
+    );
+    let (program, args) =
+        workflow_advance_command(LoopRunHost::TransientScope, exe, Path::new("/repo"), &id);
+    assert_eq!(program, "systemd-run");
+    assert_eq!(&args[..2], ["--user", "--scope"].map(OsString::from));
+    assert!(args.ends_with(&advance), "{args:?}");
 }
 
 #[test]

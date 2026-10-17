@@ -35,6 +35,7 @@ enum Action {
 
 const WATCH_LOST_GRACE_SECS: i64 = 30;
 const RESIDENT_RETRY_SECS: i64 = 5 * 60;
+const WORKFLOW_TICK_SECS: i64 = 60;
 
 struct ScopedTask {
     name: String,
@@ -156,6 +157,99 @@ pub fn fire_due_tasks(
         host,
         ci_source,
     );
+    if let Some(root) = project_root.as_deref() {
+        tick_workflows(runtime, root, now.timestamp(), host);
+    }
+}
+
+fn tick_workflows(runtime: &RuntimePaths, project_root: &Path, now: Timestamp, host: LoopRunHost) {
+    let records = match StatePaths::for_project_root(project_root)
+        .map_err(|error| error.to_string())
+        .and_then(|state| crate::store::workflow::list(&state).map_err(|error| error.to_string()))
+    {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(%error, "workflow tick could not read runs");
+            return;
+        }
+    };
+    let active: BTreeMap<_, _> = records
+        .into_iter()
+        .filter(|record| record.state == crate::store::workflow::RunState::Active)
+        .map(|record| (record.id.clone(), record))
+        .collect();
+    let path = runtime.lane_path("workflow-tick.json");
+    let previous: BTreeMap<crate::ids::WorkflowRunId, Timestamp> =
+        crate::disk::atomic::read_json_cache(&path);
+    let mut stamps = previous.clone();
+    stamps.retain(|id, _| active.contains_key(id));
+    let mut due = Vec::new();
+    for (id, record) in active {
+        // A deadline granted after `recheck_at` was published is not clamped
+        // into it, so an unfired deadline is a due edge of its own.
+        let deadline = record.deadline.filter(|_| !record.deadline_fired);
+        if record.recheck_at.is_some_and(|at| at > now) && !deadline.is_some_and(|at| at <= now) {
+            continue;
+        }
+        if stamps.get(&id).is_some_and(|last| {
+            now.duration_since(*last).as_secs() < WORKFLOW_TICK_SECS
+                && ![record.recheck_at, deadline]
+                    .into_iter()
+                    .flatten()
+                    .any(|at| *last < at && at <= now)
+        }) {
+            continue;
+        }
+        stamps.insert(id.clone(), now);
+        due.push(id);
+    }
+    if stamps == previous {
+        return;
+    }
+    if let Err(error) = write_temp_then_rename_cache(&path, &stamps) {
+        tracing::warn!(%error, "workflow tick could not publish pace cache");
+        return;
+    }
+    for id in due {
+        if cfg!(test) {
+            continue;
+        }
+        spawn_workflow_advance(runtime, project_root, &id, host);
+    }
+}
+
+/// An advance outlives the tick the way a loop run does: under the systemd
+/// timer it leaves the oneshot service's cgroup, which is killed on exit.
+fn workflow_advance_command(
+    host: LoopRunHost,
+    exe: &Path,
+    project_root: &Path,
+    id: &crate::ids::WorkflowRunId,
+) -> (OsString, Vec<OsString>) {
+    let args = crate::harness::workflow::advance_args(project_root, Some(id), None);
+    loop_run_command(host, exe, &args, &format!("workflow {id}"))
+}
+
+fn spawn_workflow_advance(
+    runtime: &RuntimePaths,
+    project_root: &Path,
+    id: &crate::ids::WorkflowRunId,
+    host: LoopRunHost,
+) {
+    let (program, args) =
+        workflow_advance_command(host, &crate::proc::rimz_exe(), project_root, id);
+    let spawned = if host == LoopRunHost::Detached {
+        crate::child_process::spawn_detached_rimz(runtime, &args, "workflow-tick").map(|()| None)
+    } else {
+        crate::child_process::spawn_detached_program(&program, &args, runtime, "workflow-tick")
+    };
+    match spawned {
+        Ok(Some(pid)) if host == LoopRunHost::TransientScope => {
+            wait_for_scope(pid, &format!("workflow {id}"));
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%id, %error, "workflow tick could not spawn advance"),
+    }
 }
 
 fn fire_tasks(
