@@ -44,6 +44,23 @@ pub(in crate::sidebar_pane::render) fn parked_workflow_line(
     pin_right(left, right, width)
 }
 
+/// `<waiting glyph> +<n> parked` closing a capped list of parked runs. Inert.
+pub(in crate::sidebar_pane::render) fn parked_overflow_line(
+    theme: &Theme,
+    more: usize,
+    width: usize,
+) -> Line<'static> {
+    let style = status_rest_style(theme, AgentStatus::Waiting);
+    let left = vec![Span::styled(
+        format!(
+            "{} +{more} parked",
+            status_glyph(theme, AgentStatus::Waiting)
+        ),
+        style,
+    )];
+    pin_right(left, Vec::new(), width)
+}
+
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run in the configured headline
 /// window, the glyph in the teal it shares with the W/M store rows — on the
