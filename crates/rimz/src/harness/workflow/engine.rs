@@ -50,20 +50,28 @@ pub fn create(
     spec_dir: &Path,
     scope: &Path,
     project_root: &Path,
-    prompt: Option<String>,
+    prompt: impl FnOnce() -> std::result::Result<Option<String>, String>,
     task: Option<String>,
 ) -> Result<RunRecord> {
     let spec_dir = spec_dir.canonicalize()?;
-    let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&spec_dir))?;
-    let spec: WorkflowSpec = toml::from_str(
-        std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?,
-    )
-    .map_err(|e| WorkflowErr::Refused(format!("invalid workflow spec: {e}")))?;
     let name = spec_dir
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| WorkflowErr::Refused("workflow directory needs a name".into()))?
         .to_owned();
+    let scope = Scope {
+        kind: ScopeKind::Worktree,
+        path: scope.canonicalize()?,
+    };
+    // A run already holding the scope wins before the definition or the
+    // prompt is read, so an edit to either mid-run reads as a skip.
+    refuse_existing(state, &name, &scope)?;
+    let prompt = prompt().map_err(WorkflowErr::Refused)?;
+    let bytes = std::fs::read(crate::disk::paths::workflow_spec_file(&spec_dir))?;
+    let spec: WorkflowSpec = toml::from_str(
+        std::str::from_utf8(&bytes).map_err(|e| WorkflowErr::Refused(e.to_string()))?,
+    )
+    .map_err(|e| WorkflowErr::Refused(format!("invalid workflow spec: {e}")))?;
     let machine = crate::config::MachineConfig::load_lenient();
     let definitions = crate::config::definitions::load(
         &crate::disk::paths::agents_home(),
@@ -90,7 +98,6 @@ pub fn create(
             project_root.display()
         )));
     }
-    let scope = scope.canonicalize()?;
     let now = Timestamp::now();
     let record = RunRecord {
         version: 1,
@@ -100,10 +107,7 @@ pub fn create(
         spec_dir,
         spec_digest: script::digest(&bytes),
         prompt,
-        scope: Scope {
-            kind: ScopeKind::Worktree,
-            path: scope,
-        },
+        scope,
         project_root: project_root.into(),
         created_at: now,
         state: RunState::Active,
@@ -133,19 +137,25 @@ pub fn create(
     };
     {
         let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
-        if let Some(existing) = workflow::list(state)?.into_iter().find(|r| {
-            !r.state.is_terminal() && r.workflow == record.workflow && r.scope == record.scope
-        }) {
-            return Err(WorkflowErr::Exists {
-                run: existing.id,
-                workflow: record.workflow,
-                scope: record.scope.path,
-            });
-        }
+        refuse_existing(state, &record.workflow, &record.scope)?;
         workflow::initialize(state, &record, &bytes, &guard)?;
     }
     spawn(&record)?;
     Ok(record)
+}
+
+fn refuse_existing(state: &StatePaths, name: &str, scope: &Scope) -> Result<()> {
+    match workflow::list(state)?
+        .into_iter()
+        .find(|r| !r.state.is_terminal() && r.workflow == name && r.scope == *scope)
+    {
+        Some(existing) => Err(WorkflowErr::Exists {
+            run: existing.id,
+            workflow: name.into(),
+            scope: scope.path.clone(),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn admit(spec: &WorkflowSpec) -> Result<()> {

@@ -97,8 +97,23 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
     assert_eq!(history()["workflow_runs"][0]["id"], id);
     let show = success(room.command(&["loop", "show", "review"]).output().unwrap());
     assert!(show.contains("RUNS") && show.contains(&id), "{show}");
+    // The run holding the scope wins before a broken definition is read.
+    let skipped = || {
+        history()["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["result"] == "workflow_skipped")
+            .count()
+    };
+    let before = skipped();
+    let spec_file = room.env.rimz_home().join("workflows/review/workflow.toml");
+    let spec = fs::read(&spec_file).unwrap();
+    fs::write(&spec_file, "not = [toml").unwrap();
     success(fire());
+    fs::write(&spec_file, spec).unwrap();
     assert_eq!(records::list(&paths).unwrap().len(), 1);
+    assert_eq!(skipped(), before + 1, "{}", history());
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
     success(fire());
     assert_eq!(records::list(&paths).unwrap().len(), 2);

@@ -680,17 +680,20 @@ impl<'a> TaskFire<'a> {
             "workflow must exist inside {}",
             home.display()
         );
-        let prompt = if self.entry.prompt.is_some() || self.entry.prompt_file.is_some() {
-            Some(self.resolve_effect_prompt()?)
-        } else {
-            None
+        let prompt = || {
+            if self.entry.prompt.is_none() && self.entry.prompt_file.is_none() {
+                return Ok(None);
+            }
+            self.resolve_effect_prompt()
+                .map(Some)
+                .map_err(|error| format!("{error:#}"))
         };
         let result = crate::harness::workflow::create(
             &state,
             &dir,
             &self.launch_checkout(),
             &root,
-            prompt.clone(),
+            prompt,
             Some(self.name.clone()),
         );
         let (result, id, error) = match result {
@@ -702,7 +705,7 @@ impl<'a> TaskFire<'a> {
                         workflow: run.workflow,
                         task: run.task,
                         checkout: run.scope.path,
-                        prompt: prompt.is_some(),
+                        prompt: run.prompt.is_some(),
                     },
                 });
                 (LoopRunResult::Launched, run.id, None)
