@@ -88,6 +88,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 assert_eq!(value["record"]["check_retry"], 1);
                 assert_eq!(events(&value, "evaluation").len(), 2);
                 assert_eq!(context(&value)["retry"]["outcome"], "died");
+                assert_eq!(workflow_diagnostics(&env, "workflow_retry").len(), 1);
             }
             "limited" => {
                 // Capacity is consulted after the provider result, not as a launch gate.
@@ -131,7 +132,19 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                         .iter()
                         .any(|entry| entry["outcome"] == "canceled")
                 );
+                assert_eq!(workflow_diagnostics(&env, "workflow_rerun").len(), 1);
             }
         }
     }
+}
+
+fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
+    let state = env.state_path_for(&env.project_root);
+    let sink = rimz::diag::DiagSink::under(state.root, state.workspace_id, "test", None);
+    fs::read_to_string(sink.log_path().unwrap())
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|record| record["event"]["kind"] == kind)
+        .collect()
 }

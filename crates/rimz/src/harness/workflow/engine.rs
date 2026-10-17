@@ -15,6 +15,8 @@ use crate::store::workflow::{
     RunRecord, RunState, Scope, ScopeKind,
 };
 
+mod accounting;
+
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
     #[error("workflow {workflow} already has run {run} for {}", scope.display())]
@@ -176,6 +178,7 @@ fn persist(t: &Transition<'_>, guard: &WorkspaceLock) -> Result<()> {
         workflow::append(t.paths, entry, guard)?;
     }
     workflow::write(t.paths, &t.record, guard)?;
+    accounting::transition(t);
     Ok(())
 }
 

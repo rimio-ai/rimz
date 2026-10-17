@@ -26,6 +26,41 @@ pub struct AssistRecord {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub enum Assist {
+    WorkflowStart {
+        run: crate::ids::WorkflowRunId,
+        workflow: String,
+        task: Option<String>,
+        checkout: std::path::PathBuf,
+        prompt: bool,
+    },
+    WorkflowStep {
+        run: crate::ids::WorkflowRunId,
+        workflow: String,
+        step: String,
+        visit: u64,
+        seq: u64,
+        handle: Option<String>,
+        run_id: Option<crate::ids::RunId>,
+    },
+    WorkflowRoute {
+        run: crate::ids::WorkflowRunId,
+        workflow: String,
+        node: String,
+        outcome: String,
+        to: String,
+    },
+    WorkflowPark {
+        run: crate::ids::WorkflowRunId,
+        workflow: String,
+        node: String,
+        reason: crate::store::workflow::ParkReason,
+        text: Option<String>,
+    },
+    WorkflowEnd {
+        run: crate::ids::WorkflowRunId,
+        workflow: String,
+        state: crate::store::workflow::RunState,
+    },
     Molt {
         kind: AgentKind,
         agent_id: AgentSessionId,

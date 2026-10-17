@@ -212,12 +212,13 @@ pub(super) fn launch(
     let reason = match launched {
         Ok(run) => {
             t.record.attempt.as_mut().expect("current launch").run = Some(run);
+            persist(&t, &guard)?;
+            accounting::step(&t.record);
             if t.record
                 .attempt
                 .as_ref()
                 .is_some_and(|attempt| attempt.ending.is_none())
             {
-                persist(&t, &guard)?;
                 // A terminal wake may have preceded publication of the run identity.
                 if !matches!(prepare_end(&mut t, host, &guard)?, Decision::End(_)) {
                     return Ok(false);
