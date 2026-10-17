@@ -8,23 +8,23 @@ The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.r
 
 ## What it renders
 
-The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then trailing-year Models, Agents and Subagents, an unfolded Unattributed line, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Every dollar figure in the panel shares one format: whole dollars from $10 up, cents below (`$0.12`), so a small fleet never reads `$0`. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
+The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then selected-window Models, Agents and Subagents, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Every dollar figure in the panel shares one format: whole dollars from $10 up, cents below (`$0.12`), so a small fleet never reads `$0`. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
 
-`panel::render_spend` owns one-shot and unfolded subagent text. `panel::render_panel` dispatches to it when no active held tab is supplied. Held frames retain their terminal fitting, wordmark, activity insights and assist counts.
+`panel::render_spend` owns one-shot and unfolded subagent text. `panel::render_panel` owns held frames, with terminal fitting, wordmark, activity insights and assist counts.
 
 ## Where the figures come from
 
-Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `roles.agents` become `by_day`, `by_model`, and `by_agent`; subagent tallies, unattributed spend, timezone and publication time travel with them.
+Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `spending.by_provider` become `by_day`, `by_model`, and `by_agent`; subagent profile tallies, the first retained role-record time, timezone and publication time travel with them.
 
 Three load paths in `mod.rs` answer a run:
 
 | Path | Runs when | What happens |
 | --- | --- | --- |
-| Published cache | a one-shot run finds a cache whose `is_current_version` holds | read and render, with no walk and no freshness check |
-| Cold walk | a one-shot run finds the cache missing or on another schema version | `refresh_global_spending_direct` walks with a fresh `SpendingWalker`, coalescing on `shared_spending_lock` |
+| Published cache | a one-shot run finds a current-version cache aggregated for today in its timezone | read and render, with no walk |
+| Cold walk | a one-shot run finds the cache missing, on another local day, or on another schema version | `refresh_global_spending_direct` walks with a fresh `SpendingWalker`, coalescing on `shared_spending_lock` |
 | Elected service | every refresh of the held `--refresh` dashboard | `spending::service::request` with `SpendingServiceStartup::HostEligible`, so the dashboard can host the warm walker ([spending.md](./agents/spending.md#one-walk-per-namespace)) |
 
-A one-shot run never refreshes a current-version cache, however old. Its figures are as fresh as the last walk a sidebar producer, a held dashboard, or a cold run published.
+A one-shot run refreshes when the local day of the cache's `day_cutoff_secs` differs from today's in the cache's timezone. This cutoff comes from the walk's aggregation time, not `refreshed_at_ms`, which can land after midnight when a walk straddles it. The producer's TTL and timeout grace use the same day rule. After refreshing, stats rechecks the version and cutoff day: a non-authoritative empty discovery can preserve an old nonzero publication, which the one-shot loader rejects with an error. Within the same day its figures are as fresh as the last walk a sidebar producer, a held dashboard, or a cold run published. The held error fallback deliberately accepts any current-version cache.
 
 The cold walk's single flight is short. A process that finds the lock held waits up to 15 steps of 20 ms (`SPENDING_WAIT_STEPS`, `SPENDING_WAIT_STEP` in `agents/spending/engine.rs`) for a fresh publication, then walks locally without publishing. Only the lock holder writes the cache, so concurrent cold runs each pay a full walk.
 
@@ -34,7 +34,7 @@ If the service call fails, the held dashboard falls back to any current-version 
 
 ## Windows
 
-`Window` has four variants in tab order: Today (local calendar day), Week, Month and Year (trailing 7/30/365 days). The held view starts on Year; Tab and Shift-Tab cycle the tabs. Today selects `SpendTally.day`, independently of the configured sidebar headline. The heatmap ignores selection. One-shot and JSON breakdowns use Year, while their Today figures still read the local-day bucket in the publication's timezone.
+`Window` has four variants in tab order: Today (local calendar day), Week, Month and Year (trailing 7/30/365 days). `--window` selects every breakdown and the held view's initial tab, defaulting to Today; Tab and Shift-Tab cycle the tabs. Today selects `SpendTally.day`, independently of the configured sidebar headline. The heatmap and four-window Spend row ignore selection. `--window` conflicts with the all-retained `--assists` timeline.
 
 Today and Year insights preserve the recent 28-day activity count under the explicit `RECENT_ACTIVITY_DAYS` constant; their most-active day and streaks use the cached history, and their daily average divides trailing-year spend by that year's active days. Today's sessions, cost per session and spend use the day window. Week and Month scope activity and compare spend with the preceding equal span. Today and Year have no spend trend. Held assist counts use local midnight in the publication's timezone for Today (label `today`), and the selected trailing window otherwise; the standalone assist timeline reads both retained log generations without a date cutoff.
 
@@ -54,19 +54,19 @@ The month row labels the column where each month begins, and the `Less · ░ �
 
 ## The breakdowns
 
-One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a counted tail (`N other models`, `N other agents`, `N other subagents`); `--subagents` and JSON are unfolded. All shares divide by the window's fleet dollars, unattributed included. Unattributed retains its own total and share, followed by every non-zero provider kind and its dollars, ranked by dollars with provider identity colours. Both JSON views expose `unattributed: {tally, by_provider}`, using trailing-year windows and provider-kind keys, omitting zero-dollar providers. Role semantics and native-child attribution belong to [spending](./agents/spending.md).
+One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a counted tail (`N other models`, `N other agents`, `N other subagents`); `--subagents` and JSON are unfolded. All shares divide by the selected window's fleet dollars. Agents includes all provider spend; Subagents is a profile-attributed subset, not an exclusive partition. Role semantics and native-child attribution belong to [spending](./agents/spending.md). Both text surfaces show a muted recorded-since note when the selected window starts before `recorded_since_secs`: `Window::assist_since` anchors Today at local midnight and the trailing windows at publication time minus 7/30/365 days. One-shot text keeps the note even with no profile rows. A held frame with usage history shows it only with the Subagents section; the empty-history frame keeps its explanatory note.
 
-The held view keeps its compact rows and geometry budget, with dollar shares for both models and agents. Agent names come from provider descriptors; model names use `model_display::display_model`. Token units are uppercase.
+The held view keeps its compact rows and geometry budget, with dollar shares for Models, Agents, and Subagents. Agent names come from provider descriptors; model names use `model_display::display_model`. Both use provider identity colours, with each model's published producing kind supplying its colour. Unknown and folded model names stay muted; profile names and bullets are muted. Token units are uppercase.
 
 The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
 
-The final Models column uses `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; when every row is untimed the column disappears. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
+The final Models and Agents column uses `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; in the held view, when every row is untimed the column disappears. Held Subagents omits the rate. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
 
-Both sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
+All three sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
 
 1. The full left column, the percentage, and a share bar of at least 10 cells.
 2. The full left column and the percentage, with no bar.
-3. The compact left column: models keep only dollars, agents drop the cache-hit column.
+3. The compact left column: models keep only dollars, agents and subagents drop cache-hit and rate columns.
 
 ## Fitting the terminal
 
@@ -79,6 +79,7 @@ The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` wri
 1. With room for everything, each breakdown gets its natural row count, capped at 6.
 2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
 3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
+4. If the three 1-row sections still do not fit, Subagents drops, including its chrome and recorded-since note. Models and Agents retain their rows. A visible note reserves enough rows for wrapping at the panel width.
 
 One-shot text is a scrollable report and does not use the held screen's row budget.
 
@@ -88,7 +89,7 @@ Glyphs come from `resolve_panel_glyphs`, which resolves the token, session, and 
 
 `--refresh` runs `hold::run_refresh`. `TerminalModeGuard` puts the terminal in raw mode on the alternate screen with mouse capture off, so the dashboard owns the pane without adding mux scrollback, and keypresses and stray mouse reports arrive as events the loop drains.
 
-Each cycle spawns a worker thread that loads through the elected service and sends back one `Result<Stats>`, with a panic caught and turned into an error. The foreground polls for events every 100 ms (`REFRESH_POLL_TICK`) and starts the next cycle once the refresh has landed and the 60-second deadline (`REFRESH_INTERVAL`) has passed. Until the first successful frame, a landed result moves the deadline to 5 seconds out (`EMPTY_REFRESH_RETRY`).
+One reusable worker thread loads through the elected service each cycle and sends back one `Result<Stats>`, with a panic caught and turned into an error. The foreground polls for events every 100 ms (`REFRESH_POLL_TICK`) and starts the next cycle once the refresh has landed and the 60-second deadline (`REFRESH_INTERVAL`) has passed. Until the first successful frame, a landed result moves the deadline to 5 seconds out (`EMPTY_REFRESH_RETRY`).
 
 A failed refresh never exits. The first failure in a streak logs a warning and later ones log at debug until a refresh succeeds. `main.rs` turns stderr logging off for `stats --refresh`, so warnings cannot smear the raw-mode frame; the reporting layer still receives them.
 
@@ -116,7 +117,7 @@ Reload re-execs `reload::current_reexec_target()` with the original arguments. T
 
 Molt records project to `molts` in the assist rollup and the `Molts:` dashboard category. They count as recorded after placement, retaining both agents' provider, identity, and label plus the inherited generation in timeline JSON and forensic text. The successor identity is a launch id, not a provider session id.
 
-`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, session and streak fields, `windows.today/week/month/year`, unfolded `models`, top-level `agents`, profile `subagents`, `unattributed`, local-date `days`, and the assist rollup only. `windows.week.usd` remains stable. This is a breaking change: agent membership and share semantics change, and assist events move to `--assists --json`. `--subagents --json` emits `{as_of, window: "year", subagents, unattributed}`.
+`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, `window`, optional local-date `subagents_since`, selected-window sessions, streak fields, `windows.today/week/month/year`, unfolded selected-window `models`, provider `agents`, profile `subagents`, local-date `days`, and the selected-window assist rollup only. Activity fields keep the full-history computation so `active_days_28` retains its meaning. Agents gains optional `tokens_per_sec`; profiles carry no model. `--subagents --json` emits `{as_of, window, subagents, subagents_since?}`.
 
 `--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`, with `as_of` the read time in the configured zone that spend history uses (`MachineConfig::time_zone`). The rollup covers all retained records, not just the displayed page.
 
@@ -129,7 +130,7 @@ Every attempt that did not take effect increments `held` under the count it woul
 | File | Owns |
 | --- | --- |
 | `mod.rs` | `StatsArgs`, `Window`, `Stats`, the three load paths, the shared constants, and the wordmark |
-| `panel.rs` | geometry, `fit`, the heatmap, the windows row, both breakdowns, the insights, the unavailable and empty frames, and `emit` |
+| `panel.rs` | geometry, `fit`, the heatmap, the windows row, all three breakdowns, the insights, the unavailable and empty frames, and `emit` |
 | `hold.rs` | the `--refresh` loop, key handling, the reload signal and re-exec, and the cold-walk spinner |
 | `assists.rs` | the assist fold, its panel rows, and the `--assists` timeline |
 | `json.rs` | the `--json` document |
