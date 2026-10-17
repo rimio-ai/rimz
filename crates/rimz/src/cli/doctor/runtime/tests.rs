@@ -265,7 +265,9 @@ fn tmux_poll_presence_is_expected_when_watch_attached() {
     for stamp_age_ms in [None, Some(61_000)] {
         let presence = tmux_poll_presence(stamp_age_ms, true, true);
         match presence {
-            model::Presence::Poll { reason, expected } => {
+            model::Presence::Poll {
+                reason, expected, ..
+            } => {
                 assert!(
                     expected,
                     "attached watch is the expected idle polling state"
@@ -425,7 +427,7 @@ fn presence_plugins_report_live_listing_unavailable_without_history_fallback() {
     );
 
     match value {
-        Some(model::Probe::Unavailable { error }) => assert_eq!(error, "list-panes failed"),
+        Some(model::Probe::Unavailable { error, .. }) => assert_eq!(error, "list-panes failed"),
         other => panic!("expected unavailable presence plugins, got {other:?}"),
     }
 }
@@ -467,7 +469,9 @@ fn tmux_poll_presence_is_expected_without_sidebar() {
     for stamp_age_ms in [None, Some(61_000)] {
         let presence = tmux_poll_presence(stamp_age_ms, false, false);
         match presence {
-            model::Presence::Poll { reason, expected } => {
+            model::Presence::Poll {
+                reason, expected, ..
+            } => {
                 assert!(expected, "no sidebar is the expected polling state");
                 assert!(reason.contains("no sidebar running"), "{reason}");
                 assert!(!reason.contains("last poke"), "{reason}");
@@ -482,7 +486,12 @@ fn tmux_poll_presence_is_expected_without_sidebar() {
 fn tmux_poll_presence_warns_when_sidebar_lacks_watch() {
     let presence = tmux_poll_presence(Some(61_000), true, false);
     match presence {
-        model::Presence::Poll { reason, expected } => {
+        model::Presence::Poll {
+            reason,
+            expected,
+            summary,
+            fix,
+        } => {
             assert!(!expected, "running sidebar without a watch is unhealthy");
             assert!(
                 reason.contains("live tmux watch is not attached"),
@@ -490,6 +499,8 @@ fn tmux_poll_presence_warns_when_sidebar_lacks_watch() {
             );
             assert!(!reason.contains("last poke"), "{reason}");
             assert!(!reason.contains("old tmux"), "{reason}");
+            assert!(!summary.unwrap().contains("rimz reload"));
+            assert_eq!(fix, Some("reattach or run `rimz reload`"));
         }
         other => panic!("expected poll verdict, got {other:?}"),
     }

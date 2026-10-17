@@ -219,7 +219,8 @@ upward-dependencies = ["address"]
 # pricing::cache_rewarm_cost_usd shares the spending cache-write price with the sidebar producer (+1).
 # WorkflowAttemptRef/Role and HeadlessError/Kind share workflow identity and typed headless failures (+4).
 # AgentState::is_child_session shares child eligibility between resume guards and exit hints (+1).
-surface-budget = 1088
+# account::cached_usage_read_at shares cache timestamps with doctor without a CLI codec (+1).
+surface-budget = 1089
 
 [[verdict]]
 kind = "item"
@@ -762,7 +763,8 @@ path = "crates/rimz/src/harness"
 # workflow::advance_args shares detached argv; WhenExpr::blocking_evidence formats typed window readings (+2).
 # Workflow transition and supervised-step accounting share a private emission seam (+2).
 # ScopeRoots and ScopeRoots::path resolve workflow scope across CLI and loop admission (+2).
-surface-budget = 898
+# hibernate::Check::{summary,fix} carry producer-owned remedies to doctor without changing JSON (+2).
+surface-budget = 900
 
 [[verdict]]
 kind = "item"
@@ -1943,6 +1945,16 @@ reason = "One strict cgroup memory reader serves freeze, deepen and wake telemet
 kind = "item"
 key = "harness::hibernate::Admission"
 reason = "Room birth publishes the capability verdict; launch planning and the detached helper consume the same cache."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::Check::summary"
+reason = "Doctor renders the producer's summary separately from its remedy while retaining the existing JSON detail."
+
+[[verdict]]
+kind = "item"
+key = "harness::hibernate::Check::fix"
+reason = "Doctor places producer-owned hibernation remedies in the closing fix block."
 
 [[verdict]]
 kind = "item"
@@ -3413,6 +3425,11 @@ reason = "Doctor's account-attribution contract needs the same limit classificat
 kind = "item"
 key = "agents::account::ProviderCapacity::latest_spent_window_reset"
 reason = "Doctor's cache-only standing contract needs the account's next recovery from the shared subscription-window projection."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::cached_usage_read_at"
+reason = "Doctor reads window and credits observation timestamps through their owning cache readers, including version rejection."
 
 [[verdict]]
 kind = "item"

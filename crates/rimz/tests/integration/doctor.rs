@@ -261,11 +261,29 @@ fn inject_lifecycle(
     signal: LifecycleSignal,
     branch: Option<&str>,
 ) {
+    inject_lifecycle_with_launch(
+        env,
+        agent_kind,
+        agent_id,
+        signal,
+        branch,
+        LaunchParams::default(),
+    );
+}
+
+fn inject_lifecycle_with_launch(
+    env: &Env,
+    agent_kind: &str,
+    agent_id: &str,
+    signal: LifecycleSignal,
+    branch: Option<&str>,
+    launch: LaunchParams,
+) {
     let obs = AgentLifecycleObservation {
         ask_queue: None,
         agent_id: Some(agent_id.into()),
         agent_name: None,
-        launch: LaunchParams::default(),
+        launch,
         signal,
         agent_pid: None,
         account_key: None,
@@ -304,6 +322,145 @@ fn doctor_json(output: &Output) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("doctor --json emits valid json")
+}
+
+#[test]
+fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhaustion() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let output = env
+        .rimz()
+        .args(["accounts", "add", "codex", "team"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let now = Timestamp::now();
+    let reset = now + std::time::Duration::from_secs(3600);
+    inject_lifecycle_with_launch(
+        &env,
+        "codex",
+        "limit-agent",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        Some("main"),
+        LaunchParams {
+            login: Some("team".parse().unwrap()),
+            ..LaunchParams::default()
+        },
+    );
+    let mut context = rimz::agents::AgentContext::new("codex", now);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: rimz::agents::TurnErrorClass::PausedRateLimit,
+        at: Timestamp::now(),
+        label: Some("limit reached".into()),
+    });
+    rimz::store::agent_context::write(&env.runtime_paths(), "codex", "limit-agent", &context)
+        .unwrap();
+    let key = "codex@team".parse().unwrap();
+    let mut cache = rimz::agents::account::RateLimitsCache::default();
+    cache.entries.insert(key, serde_json::from_value(json!({
+        "limits": {"windows": [{"duration_mins": 300, "used_percentage": 100, "resets_at": reset, "observed_at": now}]}
+    })).unwrap());
+    env.publish_rate_limits(&cache);
+    let credit_time = now - std::time::Duration::from_secs(60);
+    let credits = serde_json::to_vec(&json!({
+        "refreshed_at_ms": credit_time.as_millisecond(),
+        "logins": {"codex@team": {"ok": true, "observed_at_ms": credit_time.as_millisecond(),
+            "extra_credits": {"known": {"remaining_usd": 0.0}}}}
+    }))
+    .unwrap();
+    let credits_path = env.runtime_paths().shared_credits_path();
+    std::fs::write(&credits_path, &credits).unwrap();
+    for (used, resets_at, expected) in [
+        (100, Some(reset), "spent"),
+        (100, None, "exhausted"),
+        (84, Some(reset), "ready"),
+    ] {
+        let entry = cache.entries.values_mut().next().unwrap();
+        entry.limits.windows[0].used_percentage = Some(used);
+        entry.limits.windows[0].resets_at = resets_at;
+        env.publish_rate_limits(&cache);
+        let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+        let row = report["accounts"]["ready"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["kind"] == "codex" && row["name"] == "team")
+            .unwrap();
+        assert_eq!(row["usage"]["standing"], expected, "{row}");
+        assert_eq!(row["usage"]["read_at"], json!(now));
+        let agent = &report["agents"]["rows"][0];
+        assert_eq!(agent["account"], "codex@team", "{report}");
+        assert_eq!(
+            agent["attributed_to_account"],
+            expected != "ready",
+            "{report}"
+        );
+        assert_eq!(
+            row["usage"]["agents"].as_array().unwrap().len(),
+            usize::from(expected != "ready")
+        );
+        assert_eq!(
+            row["usage"]["resets_at"],
+            json!(if expected == "spent" { resets_at } else { None })
+        );
+        assert_eq!(std::fs::read(&credits_path).unwrap(), credits);
+    }
+    cache.entries.values_mut().next().unwrap().limits.windows[0].observed_at = None;
+    env.publish_rate_limits(&cache);
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let row = report["accounts"]["ready"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "codex" && row["name"] == "team")
+        .unwrap();
+    assert_eq!(
+        row["usage"]["read_at"],
+        json!(Timestamp::from_millisecond(credit_time.as_millisecond()).unwrap())
+    );
+}
+
+#[test]
+fn doctor_audit_widens_loop_and_language_server_tables() {
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.context-only]\ncheck = 'true'\nroot = '{}'\nsignal = 'ci.done'\n",
+            env.project_root.display()
+        ),
+    )
+    .unwrap();
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(rimz::lsp::registry::key(&env.project_root, "context-server").unwrap());
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("entry.json"), serde_json::to_vec(&json!({
+        "root": env.project_root, "server": "context-server", "nonce": "nonce", "broker_pid": std::process::id(),
+        "broker_start_token": rimz::proc::process_start_token(std::process::id()).unwrap(),
+        "state": {"dormant": {"since_ms": 0, "reason": "memory pressure"}},
+        "started_at_ms": 0, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
+    })).unwrap()).unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["loop_tasks"]["tasks"][0]["spec"], "check");
+    for (args, expanded) in [(vec!["doctor"], false), (vec!["doctor", "--audit"], true)] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(text.contains("context-only"), expanded, "{text}");
+        assert_eq!(text.contains("context-server"), expanded, "{text}");
+        if !expanded {
+            assert!(
+                text.contains("1 task, none need you — rimz loop list"),
+                "{text}"
+            );
+            assert!(
+                text.contains("1 more dormant or not started — rimz lsp list --all"),
+                "{text}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -479,6 +636,7 @@ fn doctor_does_not_create_state_for_an_unopened_project() {
                     "open": {"queued": 0, "claimed": 0, "sent": 0},
                     "stuck": [],
                     "recent_failures": []
+                    ,"failure_counts": {}
                 })
             );
         } else {
@@ -543,6 +701,14 @@ fn doctor_preserves_existing_workspace_record() {
     assert_eq!(report["agents"]["state"], "observed");
     assert_eq!(report["agents"]["counts"]["failed"], 1);
     assert_eq!(report["agents"]["rows"][0]["agent_id"], "read-only-agent");
+    for args in [["doctor", "--no-log-text"], ["doctor", "--audit"]] {
+        let home_before = tree_listing(&env.rimz_home());
+        let runtime_before = tree_listing(&env.runtime_root);
+        let output = env.rimz().args(args).output().expect("spawn doctor");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(tree_listing(&env.rimz_home()), home_before);
+        assert_eq!(tree_listing(&env.runtime_root), runtime_before);
+    }
 }
 
 #[test]
@@ -570,6 +736,18 @@ fn doctor_json_reports_legacy_roots_and_an_agents_home_override() {
     assert_eq!(home["legacy_roots"], json!([legacy.display().to_string()]));
     let fix = home["fix"].as_str().expect("fix beside legacy roots");
     assert!(fix.contains("moving-from-the-xdg-roots"), "{fix}");
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8(output.stdout).unwrap();
+    let (body, closing) = text.split_at(text.rfind("\n✗ ").or_else(|| text.rfind("\n! ")).unwrap());
+    assert!(
+        body.contains("legacy roots ~/state/rimz are still on disk and not read"),
+        "{body}"
+    );
+    assert!(!body.contains("fix:"), "{body}");
+    assert!(
+        closing.contains("move what you still need from ~/state/rimz"),
+        "{closing}"
+    );
 }
 
 #[test]
@@ -638,6 +816,13 @@ fn doctor_json_folds_one_row_per_agent() {
         &env,
         "claude",
         "claude-session-abc",
+        LifecycleSignal::TurnStarted { turn_id: None },
+        Some("main"),
+    );
+    inject_lifecycle(
+        &env,
+        "claude",
+        "claude-session-abc",
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
@@ -652,6 +837,20 @@ fn doctor_json_folds_one_row_per_agent() {
         LifecycleSignal::TurnStarted { turn_id: None },
         Some("feature-migration"),
     );
+    let now = Timestamp::now();
+    let mut context = rimz::agents::AgentContext::new("claude", now);
+    context.turn_error = Some(rimz::agents::AgentTurnError {
+        class: rimz::agents::TurnErrorClass::Failed,
+        at: now,
+        label: Some("request rejected".into()),
+    });
+    rimz::store::agent_context::write(
+        &env.runtime_paths(),
+        "claude",
+        "claude-session-abc",
+        &context,
+    )
+    .unwrap();
 
     let output = env
         .rimz()
@@ -660,6 +859,7 @@ fn doctor_json_folds_one_row_per_agent() {
         .expect("spawn doctor");
     let report = doctor_json(&output);
     assert_eq!(report["schema"], "rimz.doctor.v1");
+    assert_eq!(report["audit"], false);
 
     let agents = &report["agents"];
     assert_eq!(agents["state"], "observed");
@@ -675,6 +875,10 @@ fn doctor_json_folds_one_row_per_agent() {
     assert_eq!(rows[0]["agent_id"], "claude-session-abc");
     assert_eq!(rows[0]["branch"], "main");
     assert_eq!(rows[0]["status"], "failed");
+    assert_eq!(rows[0]["handle"], "@claude");
+    assert_eq!(rows[0]["account"], "claude@default");
+    assert_eq!(rows[0]["turn_error"], "request rejected");
+    assert_eq!(rows[0]["attributed_to_account"], false);
 
     let audit = doctor_json(
         &env.rimz()
@@ -683,6 +887,7 @@ fn doctor_json_folds_one_row_per_agent() {
             .expect("spawn audit doctor"),
     );
     let rows = audit["agents"]["rows"].as_array().expect("audit rows");
+    assert_eq!(audit["audit"], true);
     assert_eq!(
         rows.len(),
         2,
@@ -695,6 +900,113 @@ fn doctor_json_folds_one_row_per_agent() {
     assert_eq!(codex_row["agent_id"], "codex-session-xyz");
     assert_eq!(codex_row["branch"], "feature-migration");
     assert_eq!(codex_row["status"], "running");
+}
+
+#[test]
+fn doctor_audit_does_not_turn_ended_failures_into_findings() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    for id in ["active", "ended"] {
+        inject_lifecycle(
+            &env,
+            "claude",
+            id,
+            LifecycleSignal::TurnStarted { turn_id: None },
+            None,
+        );
+        inject_lifecycle(
+            &env,
+            "claude",
+            id,
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            None,
+        );
+    }
+    inject_lifecycle(&env, "claude", "ended", LifecycleSignal::Ended, None);
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::TurnStarted { turn_id: None },
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+            turn_id: None,
+        },
+        LifecycleSignal::Ended,
+    ] {
+        inject_lifecycle_with_launch(
+            &env,
+            "codex",
+            "ended-child",
+            signal,
+            None,
+            LaunchParams {
+                parent_agent_id: Some("active".into()),
+                parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+        );
+    }
+    let runtime = env
+        .store()
+        .runtime_projection(rimz::RuntimeScope::Runtime)
+        .unwrap();
+    let child = runtime
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "ended-child")
+        .expect("ended launched child remains visible under its live parent");
+    assert!(
+        child.ended_at.is_some() && child.is_launched_child(),
+        "{child:?}"
+    );
+    assert_eq!(child.status, rimz::agents::AgentStatus::Failed);
+    let closing = |audit| {
+        let mut command = env.rimz();
+        command.arg("doctor");
+        if audit {
+            command.arg("--audit");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        let start = text
+            .lines()
+            .position(|line| {
+                line.contains(" problems in ")
+                    || line.contains(" problem in ")
+                    || line.contains(" warnings in ")
+                    || line.contains(" warning in ")
+                    || line.starts_with("✓ everything")
+            })
+            .unwrap();
+        let closing = text.lines().skip(start).collect::<Vec<_>>().join("\n");
+        assert!(!closing.contains("on codex@default is failed"), "{closing}");
+        closing
+    };
+    assert_eq!(closing(false), closing(true));
+}
+
+#[test]
+fn doctor_counts_an_invalid_loop_action() {
+    let env = Env::new();
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.broken]\nroot = '{}'\nsignal = 'ci.done'\n",
+            env.project_root.display()
+        ),
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(report["loop_tasks"]["tasks"][0]["valid"], false, "{report}");
+    let output = env.rimz().arg("doctor").output().unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("✗ LOOP TASKS: broken:"), "{text}");
 }
 
 #[test]
@@ -843,7 +1155,20 @@ fn doctor_human_report_renders_titled_sections() {
     );
     assert!(
         stdout.contains("rimz hooks install claude"),
-        "the hooks table carries the wiring command:\n{stdout}"
+        "the closing block carries the wiring command:\n{stdout}"
+    );
+    let (body, closing) = stdout.split_at(stdout.rfind("\n✗ ").unwrap());
+    assert!(
+        !body.contains("fix:")
+            && !body
+                .lines()
+                .any(|line| line.split_whitespace().any(|word| word == "FIX")),
+        "{body}"
+    );
+    assert!(
+        closing.contains("✗ HOOKS: claude not installed")
+            && closing.contains("fix: run `rimz hooks install claude`"),
+        "{closing}"
     );
     let not_detected = stdout
         .lines()
@@ -916,9 +1241,12 @@ fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
         .lines()
         .find(|line| line.contains("config unavailable"))
         .expect("remote-control config failure");
+    assert!(!remote.contains("fix:"), "{remote}");
+    let (body, closing) = stdout.split_at(stdout.rfind("\n✗ ").unwrap());
+    assert!(!body.contains("fix:"), "{body}");
     assert!(
-        remote.contains("fix: remove the extra `max_cols`"),
-        "{remote}"
+        closing.contains("fix: remove the extra `max_cols`"),
+        "{closing}"
     );
 }
 
@@ -1234,10 +1562,58 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
     assert_eq!(failures[0]["message_id"], failed_id);
     assert_eq!(failures[0]["status"], "errored");
     assert_eq!(failures[0]["problem"], "pane rejected input");
+    assert_eq!(messages["failure_counts"], json!({"errored": 1}));
     assert!(
         !failures.iter().any(|row| row["message_id"] == delivered_id),
         "delivered terminal events stay out of doctor health rows: {failures:?}"
     );
+    let listed = env
+        .rimz()
+        .args(["message", "list", "--all", "--system"])
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "{listed:?}");
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    assert!(listed.contains(&failed_id), "{listed}");
+    for (args, show_failure) in [(vec!["doctor"], false), (vec!["doctor", "--audit"], true)] {
+        let output = env.rimz().args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(text.contains(&failed_id), show_failure, "{text}");
+        assert!(text.contains("1 recent failure: 1 errored"), "{text}");
+    }
+    for _ in 0..11 {
+        let mut failure = MessageRecord::new(
+            env.workspace_id.clone(),
+            agent,
+            "timed out".into(),
+            DeliveryGate::Done,
+        );
+        failure.status = MessageStatus::TimedOut;
+        let event = EventEnvelope::message_event(
+            &failure,
+            "test-session",
+            MessageEventMethod::TimedOut,
+            Some("deadline passed"),
+        );
+        env.store().append_event(&event).unwrap();
+        env.store().append_event(&event).unwrap();
+    }
+    for (args, expected_rows) in [
+        (vec!["doctor", "--json"], 10),
+        (vec!["doctor", "--json", "--audit"], 12),
+    ] {
+        let report = doctor_json(&env.rimz().args(args).output().unwrap());
+        let messages = &report["messages"]["ready"];
+        assert_eq!(
+            messages["failure_counts"],
+            json!({"errored": 1, "timed_out": 11})
+        );
+        assert_eq!(
+            messages["recent_failures"].as_array().unwrap().len(),
+            expected_rows
+        );
+    }
 }
 
 #[test]

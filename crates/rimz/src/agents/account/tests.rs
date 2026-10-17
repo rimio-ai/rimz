@@ -424,6 +424,48 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
 }
 
 #[test]
+fn usage_reading_age_uses_cache_readers_and_credits_fallback() {
+    let (_dir, runtime) = runtime();
+    let key = login_key("codex");
+    let stamp = Timestamp::from_millisecond(2_000_000_000_000).unwrap();
+    let credits = crate::agents::credits::CreditsCache {
+        logins: BTreeMap::from([(
+            key.clone(),
+            crate::agents::credits::ProviderCreditsEntry {
+                observed_at_ms: stamp.as_millisecond() as u64,
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    crate::disk::atomic::write_temp_then_rename_cache(&runtime.shared_credits_path(), &credits)
+        .unwrap();
+    assert_eq!(cached_usage_read_at(&runtime, &key), Some(stamp));
+    let newer = stamp + SignedDuration::from_secs(60);
+    let mut cache = RateLimitsCache {
+        entries: BTreeMap::from([(
+            key.clone(),
+            RateLimitCacheEntry {
+                limits: crate::agents::AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        observed_at: Some(newer),
+                        ..Default::default()
+                    }],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    write_cache(&runtime, &cache);
+    assert_eq!(cached_usage_read_at(&runtime, &key), Some(newer));
+    cache.version += 1;
+    write_cache(&runtime, &cache);
+    assert_eq!(cached_usage_read_at(&runtime, &key), Some(stamp));
+    assert_eq!(cached_usage_read_at(&runtime, &login_key("claude")), None);
+}
+
+#[test]
 fn model_capacity_matches_only_the_model_family() {
     let now = Timestamp::from_second(1_000_000).unwrap();
     let reset = now + SignedDuration::from_secs(3_600);

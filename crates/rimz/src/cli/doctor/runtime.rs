@@ -126,6 +126,7 @@ pub(super) fn collect_mux(
         Ok(mux) => mux,
         Err(err) => {
             return model::Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -246,6 +247,7 @@ fn collect_ttyd() -> model::Probe<model::TtydWeb> {
             version: diagnostic.version,
         }),
         Err(err) => model::Probe::Unavailable {
+            diagnosis: None,
             error: err.to_string(),
         },
     }
@@ -315,7 +317,12 @@ fn presence_plugins_view(
 ) -> Option<model::Probe<model::PresencePlugins>> {
     let live_ids = match live {
         Ok(ids) => ids,
-        Err(error) => return Some(model::Probe::Unavailable { error }),
+        Err(error) => {
+            return Some(model::Probe::Unavailable {
+                error,
+                diagnosis: None,
+            });
+        }
     };
     let active_writer = cache
         .filter(|cache| pane_topology::pane_topology_cache_is_fresh(cache, now_ms, None))
@@ -431,6 +438,7 @@ fn collect_session_health(
             })
         }
         Err(err) => model::Probe::Unavailable {
+            diagnosis: None,
             error: err.to_string(),
         },
     }
@@ -453,6 +461,7 @@ fn collect_zellij_capabilities() -> model::Probe<model::ZellijCaps> {
             })
         }
         Err(err) => model::Probe::Unavailable {
+            diagnosis: None,
             error: err.to_string(),
         },
     }
@@ -467,6 +476,7 @@ fn collect_tmux_capabilities() -> model::Probe<model::TmuxCaps> {
             popup_supported: caps.popup_supported,
         }),
         Err(err) => model::Probe::Unavailable {
+            diagnosis: None,
             error: err.to_string(),
         },
     }
@@ -494,6 +504,7 @@ fn collect_duplicate_sessions(
         Ok(runtime) => runtime,
         Err(err) => {
             return model::Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -502,6 +513,7 @@ fn collect_duplicate_sessions(
         Ok(heartbeats) => heartbeats,
         Err(err) => {
             return model::Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -749,6 +761,8 @@ fn tmux_poll_presence(
                 "live tmux watch attached, session idle{age}; events resume on activity"
             ),
             expected: true,
+            summary: None,
+            fix: None,
         };
     }
 
@@ -757,6 +771,8 @@ fn tmux_poll_presence(
             reason: "no sidebar running in this workspace; the live pane watch starts with the sidebar (`rimz start`)"
                 .to_owned(),
             expected: true,
+            summary: None,
+            fix: None,
         };
     }
 
@@ -765,6 +781,8 @@ fn tmux_poll_presence(
             "sidebar running but the live tmux watch is not attached; reattach or run `rimz reload`"
                 .to_owned(),
         expected: false,
+        summary: Some("sidebar running but the live tmux watch is not attached"),
+        fix: Some("reattach or run `rimz reload`"),
     }
 }
 
@@ -896,6 +914,7 @@ pub(super) fn collect_remote_control(
         Ok(config) => config,
         Err(err) => {
             return model::RemoteControl::Unavailable {
+                diagnosis: err.diagnosis().cloned(),
                 error: super::config_file_error_detail(&err, err.diagnosis()),
             };
         }
@@ -921,6 +940,7 @@ pub(super) fn collect_remote_control(
                 Ok(envs) => envs,
                 Err(err) => {
                     return model::RemoteControl::Unavailable {
+                        diagnosis: None,
                         error: err.to_string(),
                     };
                 }
@@ -979,6 +999,7 @@ pub(super) fn collect_socket_headroom(
         Ok(state) => RuntimePaths::for_state_under(&state, &rimz::disk::paths::runtime_home()),
         Err(err) => {
             return model::Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }

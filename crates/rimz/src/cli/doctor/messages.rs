@@ -19,6 +19,7 @@ const MAX_FAILURE_ROWS: usize = 10;
 pub(super) fn collect_messages(
     ws: &rimz::ResolvedWorkspace,
     cleared_at: Option<Timestamp>,
+    audit: bool,
 ) -> Probe<Messages> {
     let store = match open_existing_store(ws) {
         Ok(Some(store)) => store,
@@ -27,10 +28,12 @@ pub(super) fn collect_messages(
                 open: OpenCounts::default(),
                 stuck: Vec::new(),
                 recent_failures: Vec::new(),
+                failure_counts: BTreeMap::new(),
             });
         }
         Err(err) => {
             return Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -39,6 +42,7 @@ pub(super) fn collect_messages(
         Ok(messages) => messages,
         Err(err) => {
             return Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -66,6 +70,7 @@ pub(super) fn collect_messages(
         Ok(events) => events,
         Err(err) => {
             return Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             };
         }
@@ -102,12 +107,19 @@ pub(super) fn collect_messages(
             .cmp(&left.at)
             .then_with(|| right.message_id.cmp(&left.message_id))
     });
-    recent_failures.truncate(MAX_FAILURE_ROWS);
+    let mut failure_counts = BTreeMap::new();
+    for row in &recent_failures {
+        *failure_counts.entry(row.status.clone()).or_default() += 1;
+    }
+    if !audit {
+        recent_failures.truncate(MAX_FAILURE_ROWS);
+    }
 
     Probe::Ready(Messages {
         open,
         stuck,
         recent_failures,
+        failure_counts,
     })
 }
 

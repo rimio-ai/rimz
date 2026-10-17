@@ -37,7 +37,7 @@ use model::DoctorReport;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Widen the agent section to every observed session, not just live problem rows.
+    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure): the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.
@@ -79,13 +79,17 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         .and_then(|ws| rimz::StatePaths::for_project_root(&ws.project_root).ok())
         .as_ref()
         .and_then(watermark::read);
+    let mut accounts = agents::collect_accounts(ws);
+    let agents = ws.map(|ws| agents::collect_agent_rollup(ws, audit, &mut accounts));
     DoctorReport {
         schema: "rimz.doctor.v1",
+        audit,
         version: rimz::build_id::VERSION,
         host: runtime::collect_host(),
         workspace: match &workspace {
             Ok(ws) => model::Probe::Ready(workspace_view(ws)),
             Err(err) => model::Probe::Unavailable {
+                diagnosis: None,
                 error: err.to_string(),
             },
         },
@@ -98,7 +102,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
             &crate::cli::machine_config().agents.hibernate,
         ),
         hooks: agents::collect_hooks(),
-        accounts: agents::collect_accounts(ws),
+        accounts,
         plugins: agents::collect_plugins(),
         loop_tasks: collect_loop(),
         lsp: collect_lsp(ws, globals),
@@ -114,13 +118,14 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
                     .collect(),
             }),
             Err(error) => model::Probe::Unavailable {
+                diagnosis: None,
                 error: error.to_string(),
             },
         }),
         empty_dir: agents::collect_empty_dir(ws),
-        agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
+        agents,
         history_cleared_at,
-        messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at)),
+        messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at, audit)),
         diagnostics: ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)),
         last_incident: ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)),
     }
@@ -159,6 +164,11 @@ fn collect_lsp(
             Some(Ok(checks)) => (checks, None),
             Some(Err(error)) => (Vec::new(), Some(error.to_string())),
         };
+        let last_refusal = rimz::diag::lsp::recent()
+            .into_iter()
+            .rev()
+            .find(|record| matches!(record.event.as_str(), "refused" | "queue_timeout"))
+            .filter(|record| !refusal_recovered(record, &checks, &entries));
         Ok(model::Lsp {
             checks,
             checks_error,
@@ -175,18 +185,38 @@ fn collect_lsp(
                     model::LspServer { entry, rss_bytes }
                 })
                 .collect(),
-            last_refusal: rimz::diag::lsp::recent()
-                .into_iter()
-                .rev()
-                .find(|record| matches!(record.event.as_str(), "refused" | "queue_timeout")),
+            last_refusal,
         })
     };
     match collect() {
         Ok(lsp) => model::Probe::Ready(lsp),
         Err(error) => model::Probe::Unavailable {
+            diagnosis: None,
             error: error.to_string(),
         },
     }
+}
+
+fn refusal_recovered(
+    record: &rimz::diag::lsp::Record,
+    checks: &[rimz::lsp::broker::probe::Check],
+    entries: &[rimz::lsp::registry::Entry],
+) -> bool {
+    use rimz::lsp::broker::probe::Outcome;
+    checks.iter().any(|check| {
+        check.root == record.root
+            && check.server == record.server
+            && matches!(
+                check.outcome,
+                Outcome::Running { .. } | Outcome::Started { .. }
+            )
+    }) || entries.iter().any(|entry| {
+        entry.root == record.root
+            && entry.server == record.server
+            && entry.state.is_running()
+            && i128::from(entry.ready_at_ms.unwrap_or(entry.started_at_ms))
+                > i128::from(record.at.as_millisecond())
+    })
 }
 
 fn collect_home() -> model::Home {
@@ -218,6 +248,7 @@ fn collect_machine_config() -> model::MachineConfigHealth {
                 model::MachineConfigProblemKind::Semantic
             };
             model::MachineConfigProblem {
+                diagnosis: err.diagnosis().cloned(),
                 path: err.path().display().to_string(),
                 error: match &err {
                     rimz::config::ConfigErr::Definition(error) => error.message.clone(),
@@ -298,17 +329,24 @@ fn collect_loop() -> model::LoopTasks {
             ) {
                 unscheduled.push(name.clone());
             }
-            let (when, valid) = match task.trigger() {
-                Ok(trigger) => (trigger.describe(), true),
-                Err(err) => (format!("invalid: {err}"), false),
+            let (when, valid) = match (task.trigger(), task.action()) {
+                (_, Err(err)) => (format!("invalid: {err}"), false),
+                (Err(err), _) => (format!("invalid: {err}"), false),
+                (Ok(trigger), Ok(_)) => (trigger.describe(), true),
             };
             model::LoopTaskRow {
                 name: name.clone(),
-                spec: entry
-                    .agent
-                    .clone()
-                    .or_else(|| entry.wait.as_ref().map(|target| target.handle.clone()))
-                    .unwrap_or_else(|| "<invalid>".to_owned()),
+                spec: match task.action() {
+                    Ok(
+                        rimz::harness::schedule::TaskAction::Spawn(spec)
+                        | rimz::harness::schedule::TaskAction::Workflow(spec),
+                    ) => spec.clone(),
+                    Ok(rimz::harness::schedule::TaskAction::Deliver(target)) => {
+                        target.handle.clone()
+                    }
+                    Ok(rimz::harness::schedule::TaskAction::CheckOnly) => "check".to_owned(),
+                    Err(_) => "<invalid>".to_owned(),
+                },
                 when,
                 root: entry.root.display().to_string(),
                 valid,

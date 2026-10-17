@@ -658,6 +658,28 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
         .unwrap_or_default()
 }
 
+/// Latest cached window observation, falling back to the credits reading.
+pub fn cached_usage_read_at(runtime: &RuntimePaths, key: &LoginKey) -> Option<Timestamp> {
+    read_rate_limits_cache(&runtime.shared_rate_limits_path())
+        .entries
+        .get(key)
+        .and_then(|entry| {
+            entry
+                .limits
+                .windows
+                .iter()
+                .filter_map(|window| window.observed_at)
+                .max()
+        })
+        .or_else(|| {
+            crate::agents::credits::read_credits_cache(&runtime.shared_credits_path())
+                .logins
+                .get(key)
+                .and_then(|entry| i64::try_from(entry.observed_at_ms).ok())
+                .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        })
+}
+
 /// Best-effort credential-file mtime for provider usage ranking.
 pub(super) fn file_mtime_ms(path: &Path) -> Option<u64> {
     std::fs::metadata(path)

@@ -1024,6 +1024,13 @@ fn preflight_checks_each_precondition_and_ends_errors_with_fixes() {
         assert_eq!(failures.len(), 1, "{name}: {report:?}");
         assert_eq!(failures[0].name, name);
         assert!(failures[0].detail.ends_with(fix), "{report:?}");
+        if matches!(name, "cgroup.freeze" | "memory.reclaim") {
+            assert_eq!(failures[0].fix, Some(fix));
+            assert_eq!(
+                failures[0].summary.as_deref(),
+                Some(format!("{name} is absent or unwritable").as_str())
+            );
+        }
     }
     let host = FakeHost::new();
     let report = inspect_with(&config, &host);

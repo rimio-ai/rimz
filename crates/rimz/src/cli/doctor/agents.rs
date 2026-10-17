@@ -7,6 +7,212 @@ use super::model::{
     PluginRow, Probe, Trust,
 };
 
+impl From<rimz::agents::BirthLoginErr> for super::model::AccountProblem {
+    fn from(error: rimz::agents::BirthLoginErr) -> Self {
+        (&error).into()
+    }
+}
+
+impl From<&rimz::agents::BirthLoginErr> for super::model::AccountProblem {
+    fn from(error: &rimz::agents::BirthLoginErr) -> Self {
+        use rimz::agents::BirthLoginErr;
+        let text = error.to_string();
+        let (summary, fix) = match error {
+            BirthLoginErr::MachineUnknown {
+                kind,
+                name,
+                configured,
+                path,
+            } => (
+                format!(
+                    "unknown {kind} account `{name}` selected by [accounts.use] in {}; configured: {}",
+                    path.display(),
+                    configured
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                format!(
+                    "run `rimz accounts add {kind} {name}` or `rimz accounts use --global {kind} default`"
+                ),
+            ),
+            BirthLoginErr::MachineUnsupported { kind, name, path } => (
+                format!(
+                    "[accounts.use] in {} selects {kind} account `{name}`, but {kind} has no named accounts",
+                    path.display()
+                ),
+                format!("run `rimz accounts use --global {kind} default`"),
+            ),
+            BirthLoginErr::Login(error) => return error.into(),
+            BirthLoginErr::MissingHome { kind, name, home }
+            | BirthLoginErr::HooksMissing { kind, name, home } => (
+                if matches!(error, BirthLoginErr::MissingHome { .. }) {
+                    format!(
+                        "{kind} account `{name}` home `{}` is not a directory",
+                        home.display()
+                    )
+                } else {
+                    format!(
+                        "RimZ hooks are missing for {kind} account `{name}` at `{}`",
+                        home.display()
+                    )
+                },
+                if name.is_default() {
+                    format!("run `rimz hooks install {kind}`")
+                } else {
+                    format!("run `rimz accounts add {kind} {name}`")
+                },
+            ),
+            BirthLoginErr::HooksUntrusted {
+                kind,
+                name,
+                home,
+                hooks,
+                fix,
+                ..
+            } => (
+                format!(
+                    "RimZ hooks for {kind} account `{name}` at `{}` are untrusted ({hooks})",
+                    home.display()
+                ),
+                fix.to_string(),
+            ),
+            BirthLoginErr::HooksDisabled {
+                kind,
+                name,
+                reason,
+                fix,
+            } => (
+                format!("{kind} account `{name}` cannot run RimZ hooks: {reason}"),
+                fix.to_string(),
+            ),
+        };
+        Self { text, summary, fix }
+    }
+}
+
+impl From<rimz::agents::login::LoginErr> for super::model::AccountProblem {
+    fn from(error: rimz::agents::login::LoginErr) -> Self {
+        (&error).into()
+    }
+}
+
+impl From<&rimz::agents::login::LoginErr> for super::model::AccountProblem {
+    fn from(error: &rimz::agents::login::LoginErr) -> Self {
+        use rimz::agents::login::LoginErr;
+        let text = error.to_string();
+        let (summary, fix) = match error {
+            LoginErr::Unknown {
+                kind,
+                name,
+                configured,
+            } => (
+                format!(
+                    "unknown {kind} account `{name}`; configured: {}",
+                    configured
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                format!("run `rimz accounts add {kind} {name}`"),
+            ),
+            LoginErr::Unsupported { kind } => (
+                text.clone(),
+                format!("run `rimz accounts use --global {kind} default`"),
+            ),
+        };
+        Self { text, summary, fix }
+    }
+}
+
+impl From<rimz::agents::LoginConfigErr> for super::model::AccountProblem {
+    fn from(error: rimz::agents::LoginConfigErr) -> Self {
+        (&error).into()
+    }
+}
+
+impl From<&rimz::agents::LoginConfigErr> for super::model::AccountProblem {
+    fn from(error: &rimz::agents::LoginConfigErr) -> Self {
+        use rimz::agents::LoginConfigErr;
+        let text = error.to_string();
+        let (summary, fix) = match error {
+            LoginConfigErr::ReservedName { kind } => (
+                format!("`accounts.{kind}.default` is reserved for the provider's own home"),
+                format!("remove `accounts.{kind}.default` and declare another name"),
+            ),
+            LoginConfigErr::RelativeHome { kind, name, .. } => (
+                text.clone(),
+                format!("set `accounts.{kind}.{name}.home` to an absolute path"),
+            ),
+            LoginConfigErr::AmbiguousHome { kind, name, home } => (
+                format!(
+                    "`accounts.{kind}.{name}.home` is `{}`, ambiguous in provider home lists",
+                    home.display()
+                ),
+                format!(
+                    "choose a directory without a comma or trailing `projects` for `accounts.{kind}.{name}.home`"
+                ),
+            ),
+            LoginConfigErr::DuplicateHome {
+                kind,
+                name,
+                first,
+                home,
+            } => (
+                format!(
+                    "`accounts.{kind}.{name}.home` is `{}`, already used by `accounts.{kind}.{first}`",
+                    home.display()
+                ),
+                "give each account its own directory".into(),
+            ),
+            LoginConfigErr::NativeHome { kind, name, .. } => (
+                text.clone(),
+                format!("remove `accounts.{kind}.{name}` and use the provider's `default` account"),
+            ),
+            LoginConfigErr::ExportedHome {
+                kind,
+                name,
+                env_key,
+                home,
+            } => (
+                format!(
+                    "`{env_key}` is exported as `{}`, the home of {kind} account `{name}`, so the `default` account launches into it too",
+                    home.display()
+                ),
+                format!(
+                    "unset `{env_key}` and run `rimz accounts use --global {kind} {name}` for new rooms and rooms following the machine default"
+                ),
+            ),
+        };
+        Self { text, summary, fix }
+    }
+}
+
+impl From<rimz::agents::RoomLoginErr> for super::model::AccountProblem {
+    fn from(error: rimz::agents::RoomLoginErr) -> Self {
+        let mut error = &error;
+        while let rimz::agents::RoomLoginErr::Resolution(inner) = error {
+            error = inner;
+        }
+        match error {
+            rimz::agents::RoomLoginErr::Config(error) => error.into(),
+            rimz::agents::RoomLoginErr::Login(error) => error.into(),
+            rimz::agents::RoomLoginErr::Birth(error) => error.as_ref().into(),
+            _ => error.to_string().into(),
+        }
+    }
+}
+
+fn empty_dir_fix(error: &rimz::agents::empty_dir::EmptyDirErr) -> &'static str {
+    if matches!(error, rimz::agents::empty_dir::EmptyDirErr::Dirty(_)) {
+        "remove unexpected files from the empty root, then re-run `rimz doctor`"
+    } else {
+        "repair access to the empty root, then re-run `rimz doctor`"
+    }
+}
+
 pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::model::EmptyDir {
     use super::model::{EmptyDir, EmptyDirRow};
     use rimz::agents::{LoginCatalog, RoomLoginSet, empty_dir};
@@ -68,19 +274,30 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
             });
         }
     }
+    let mut check_fix = "repair the workspace state paths, then re-run `rimz doctor`";
     EmptyDir {
         rows,
         check: match ws.map_or_else(
-            || empty_dir::check_root().map_err(|error| error.to_string()),
+            || empty_dir::check_root().map_err(|error| (error.to_string(), empty_dir_fix(&error))),
             |ws| {
                 rimz::StatePaths::for_project_root(&ws.project_root)
-                    .map_err(|error| error.to_string())
-                    .and_then(|paths| empty_dir::check(&paths).map_err(|error| error.to_string()))
+                    .map_err(|error| (error.to_string(), check_fix))
+                    .and_then(|paths| {
+                        empty_dir::check(&paths)
+                            .map_err(|error| (error.to_string(), empty_dir_fix(&error)))
+                    })
             },
         ) {
             Ok(()) => Probe::Ready(()),
-            Err(error) => Probe::Unavailable { error },
+            Err((error, fix)) => {
+                check_fix = fix;
+                Probe::Unavailable {
+                    error,
+                    diagnosis: None,
+                }
+            }
         },
+        check_fix,
         profiles_error,
     }
 }
@@ -88,7 +305,11 @@ pub(super) fn collect_empty_dir(ws: Option<&rimz::ResolvedWorkspace>) -> super::
 /// Walk the snapshot's agent rollup into health counts and problem rows. The
 /// default scope is live runtime state; audit widens to durable history and
 /// emits every observed row.
-pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) -> AgentRollup {
+pub(super) fn collect_agent_rollup(
+    ws: &rimz::ResolvedWorkspace,
+    audit: bool,
+    accounts: &mut Probe<Accounts>,
+) -> AgentRollup {
     let store = match open_existing_store(ws) {
         Ok(Some(store)) => store,
         Ok(None) => return AgentRollup::None,
@@ -98,12 +319,7 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
             };
         }
     };
-    let scope = if audit {
-        rimz::RuntimeScope::Audit
-    } else {
-        rimz::RuntimeScope::Runtime
-    };
-    let projection = match store.runtime_projection(scope) {
+    let mut projection = match store.runtime_projection(rimz::RuntimeScope::Runtime) {
         Ok(projection) => projection,
         Err(err) => {
             return AgentRollup::Unavailable {
@@ -111,14 +327,78 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
             };
         }
     };
+    let live_keys = projection
+        .agents
+        .iter()
+        .map(|agent| (agent.kind.clone(), agent.agent_id.clone()))
+        .collect::<std::collections::BTreeSet<_>>();
+    if audit {
+        projection = match store.runtime_projection(rimz::RuntimeScope::Audit) {
+            Ok(projection) => projection,
+            Err(error) => {
+                return AgentRollup::Unavailable {
+                    error: error.to_string(),
+                };
+            }
+        };
+    }
     if projection.agents.is_empty() {
         return AgentRollup::None;
     }
-    let mut counts = AgentCounts::default();
-    for agent in &projection.agents {
-        counts.add(agent.status);
+    let snapshot = match rimz::sidebar::consumer::PublishedSnapshotReader::new(
+        store.runtime_paths().clone(),
+        &ws.session_name,
+        None,
+    )
+    .read(store.paths())
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return AgentRollup::Unavailable {
+                error: error.to_string(),
+            };
+        }
+    };
+    let mut contexts = rimz::store::agent_context::read_all(store.runtime_paths())
+        .into_iter()
+        .map(|record| ((record.kind, record.agent_id), record.context))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for agent in &mut projection.agents {
+        agent.context = contexts.remove(&(agent.kind.clone(), agent.agent_id.clone()));
     }
-    let mut agents: Vec<_> = projection.agents.iter().collect();
+    let config = rimz::config::MachineConfig::load_lenient();
+    let demotion = rimz::harness::park_demotion(
+        Some(&store),
+        store.paths(),
+        store.runtime_paths(),
+        &config,
+        &projection.agents,
+        &projection.resume_outcomes,
+        jiff::Timestamp::now(),
+    );
+    let reader = super::super::current_channel(ws, Some(&store)).address_context();
+    project_agent_rollup(
+        &projection.agents,
+        &snapshot,
+        &demotion,
+        &reader,
+        accounts,
+        audit,
+        &live_keys,
+    )
+}
+
+fn project_agent_rollup(
+    agents: &[rimz::agents::AgentState],
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    demotion: &rimz::agents::ParkDemotion,
+    reader: &rimz::address::AddressContext,
+    accounts: &mut Probe<Accounts>,
+    audit: bool,
+    live_keys: &std::collections::BTreeSet<(rimz::ids::AgentKind, rimz::ids::AgentSessionId)>,
+) -> AgentRollup {
+    let mut counts = AgentCounts::default();
+    let mut agents: Vec<_> = agents.iter().collect();
     agents.sort_by(|left, right| {
         left.kind
             .as_str()
@@ -127,14 +407,71 @@ pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) ->
     });
     let rows = agents
         .into_iter()
-        .filter(|agent| audit || matches!(agent.status, AgentStatus::Failed | AgentStatus::Paused))
-        .map(|agent| AgentRow {
-            kind: agent.kind.as_str().to_owned(),
-            agent_id: agent.agent_id.as_str().to_owned(),
-            branch: agent.worktree_branch.clone(),
-            status: agent.status,
-            phase: agent.phase,
-            last_seen: agent.last_seen,
+        .filter_map(|agent| {
+            let historical = agent.ended_at.is_some()
+                || !live_keys.contains(&(agent.kind.clone(), agent.agent_id.clone()));
+            let agent = if historical {
+                agent
+            } else {
+                snapshot
+                    .agents
+                    .iter()
+                    .find(|candidate| {
+                        candidate.kind == agent.kind && candidate.agent_id == agent.agent_id
+                    })
+                    .unwrap_or(agent)
+            };
+            let row = snapshot
+                .rows()
+                .find(|row| row.is_agent() && row.id == agent.agent_id.as_str());
+            let child = agent.parent_agent_id.as_ref().and_then(|parent| {
+                snapshot
+                    .rows()
+                    .find(|row| row.is_agent() && row.id == parent.as_str())?
+                    .sub_agents()
+                    .iter()
+                    .find(|child| child.id == agent.agent_id.as_str())
+            });
+            let (status, phase) = rimz::store::snapshot::card_status(agent, row, child, demotion);
+            counts.add(status);
+            if !audit && !matches!(status, AgentStatus::Failed | AgentStatus::Paused) {
+                return None;
+            }
+            let handle = rimz::address::paste_address(agent, snapshot, reader);
+            let account = agent.login_key().to_string();
+            let usage = match accounts {
+                Probe::Ready(accounts) => accounts
+                    .rows
+                    .iter_mut()
+                    .find(|row| format!("{}@{}", row.kind, row.name) == account)
+                    .and_then(|row| row.usage.as_mut()),
+                Probe::Unavailable { .. } => None,
+            };
+            let attributed_to_account = !historical
+                && matches!(status, AgentStatus::Failed | AgentStatus::Paused)
+                && agent
+                    .displayed_turn_error()
+                    .is_some_and(|(class, _)| class.is_limit())
+                && usage
+                    .as_ref()
+                    .is_some_and(|usage| usage.standing != super::model::AccountStanding::Ready);
+            if attributed_to_account && let Some(usage) = usage {
+                usage.agents.push(handle.clone());
+            }
+            Some(AgentRow {
+                kind: agent.kind.as_str().to_owned(),
+                agent_id: agent.agent_id.as_str().to_owned(),
+                branch: agent.worktree_branch.clone(),
+                status,
+                phase,
+                last_seen: agent.last_seen,
+                handle,
+                account,
+                turn_error: agent.displayed_turn_error_label(),
+                attributed_to_account,
+                restartable: agent.pane.is_some() && agent.ended_at.is_none(),
+                historical,
+            })
         })
         .collect();
     AgentRollup::Observed { counts, rows }
@@ -157,6 +494,7 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
                 Ok(standing) => standing,
                 Err(error) => {
                     return Probe::Unavailable {
+                        diagnosis: None,
                         error: format!("{error:#}"),
                     };
                 }
@@ -176,7 +514,8 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
                     room: false,
                     machine_default: false,
                     default_for: rimz::room::Scopes::default(),
-                    problem: Some(error.to_string()),
+                    problem: Some(error.into()),
+                    usage: None,
                 });
             }
             rows.sort_by(|a, b| (&a.kind, &a.name).cmp(&(&b.kind, &b.name)));
@@ -186,9 +525,54 @@ pub(super) fn collect_accounts(ws: Option<&rimz::ResolvedWorkspace>) -> Probe<Ac
                         standing.scopes(&rimz::ids::AgentKind::new_unchecked(&row.kind), &name);
                 }
             }
+            if let Some(runtime) =
+                ws.and_then(|ws| rimz::RuntimePaths::for_project_root(&ws.project_root).ok())
+            {
+                collect_account_usage(&mut rows, &runtime, &config);
+            }
             Probe::Ready(Accounts { rows })
         }
-        Err(error) => Probe::Unavailable { error },
+        Err(error) => Probe::Unavailable {
+            error,
+            diagnosis: None,
+        },
+    }
+}
+
+fn collect_account_usage(
+    rows: &mut [AccountRow],
+    runtime: &rimz::RuntimePaths,
+    config: &rimz::config::MachineConfig,
+) {
+    use super::model::{AccountStanding, AccountUsage};
+    use rimz::agents::account::{ProviderCapacity, cached_usage_read_at};
+    use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
+    let now = jiff::Timestamp::now();
+    for row in rows {
+        let Ok(name) = row.name.parse() else { continue };
+        let key = rimz::ids::LoginKey {
+            kind: rimz::ids::AgentKind::new_unchecked(&row.kind),
+            name,
+        };
+        let read_at = cached_usage_read_at(runtime, &key);
+        let Some(read_at) = read_at else { continue };
+        let resets_at = ProviderCapacity::read(runtime, &key)
+            .and_then(|capacity| capacity.latest_spent_window_reset(now));
+        let standing = if resets_at.is_some() {
+            AccountStanding::Spent
+        } else if SpendFacts::read(runtime, &key, now).step(&config.resume, None, now)
+            == SpendStep::Spent
+        {
+            AccountStanding::Exhausted
+        } else {
+            AccountStanding::Ready
+        };
+        row.usage = Some(AccountUsage {
+            read_at,
+            standing,
+            resets_at,
+            agents: Vec::new(),
+        });
     }
 }
 
@@ -223,12 +607,13 @@ fn account_rows(
             room: in_room(login.kind(), login.name()),
             machine_default: machine.get(login.kind()) == Some(login.name()),
             default_for: rimz::room::Scopes::default(),
+            usage: None,
             // A pane born on this account exports its home by design.
             problem: (!in_room(login.kind(), login.name()))
                 .then(|| login.check_exported_home(ambient).err())
                 .flatten()
-                .map(|err| err.to_string())
-                .or_else(|| login.preflight(ambient).err().map(|err| err.to_string())),
+                .map(Into::into)
+                .or_else(|| login.preflight(ambient).err().map(Into::into)),
         })
         .collect();
     for (room, kind) in room
@@ -240,7 +625,7 @@ fn account_rows(
                 let problem = match catalog.select(kind, &name) {
                     Ok(_) if !name.is_default() => continue,
                     Ok(_) => None,
-                    Err(error) => Some(error.to_string()),
+                    Err(error) => Some(error.into()),
                 };
                 (name, problem, true)
             }
@@ -249,7 +634,7 @@ fn account_rows(
                     .or_else(|| machine.get(kind))
                     .cloned()
                     .unwrap_or_default(),
-                Some(error.to_string()),
+                Some(error.into()),
                 false,
             ),
         };
@@ -268,12 +653,13 @@ fn account_rows(
             room: resolved,
             machine_default: !name.is_default() && machine.get(kind) == Some(&name),
             default_for: rimz::room::Scopes::default(),
+            usage: None,
             problem,
         });
     }
     for (kind, name) in machine {
         if let Err(error) = catalog.select_machine(kind, name) {
-            let problem = Some(error.to_string());
+            let problem = Some(error.into());
             if let Some(row) = rows
                 .iter_mut()
                 .find(|row| row.kind == kind.as_str() && row.name == name.as_str())
@@ -288,6 +674,7 @@ fn account_rows(
                 room: false,
                 machine_default: true,
                 default_for: rimz::room::Scopes::default(),
+                usage: None,
                 problem,
             });
         }
@@ -386,6 +773,7 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
             granted_at: report.granted_at.map(|at| at.to_string()),
         }),
         Err(err) => Probe::Unavailable {
+            diagnosis: err.diagnosis().cloned(),
             error: super::config_file_error_detail(&err, err.diagnosis()),
         },
     }
@@ -394,6 +782,172 @@ pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn account_config_remedies_are_separate_from_the_wire_problem() {
+        use rimz::agents::LoginConfigErr;
+        let kind = rimz::ids::AgentKind::new_unchecked("codex");
+        for (error, remedy) in [
+            (
+                LoginConfigErr::ReservedName { kind: kind.clone() },
+                "remove",
+            ),
+            (
+                LoginConfigErr::AmbiguousHome {
+                    kind: kind.clone(),
+                    name: "work".parse().unwrap(),
+                    home: "/home/one,two".into(),
+                },
+                "choose",
+            ),
+            (
+                LoginConfigErr::DuplicateHome {
+                    kind,
+                    name: "work".parse().unwrap(),
+                    first: "other".parse().unwrap(),
+                    home: "/home/work".into(),
+                },
+                "give",
+            ),
+        ] {
+            let text = error.to_string();
+            let problem = super::super::model::AccountProblem::from(error);
+            assert!(!problem.summary.contains(remedy), "{problem:?}");
+            assert!(problem.fix.contains(remedy), "{problem:?}");
+            assert_eq!(serde_json::to_value(problem).unwrap(), text);
+        }
+    }
+
+    #[test]
+    fn empty_dir_io_errors_do_not_prescribe_removing_files() {
+        let error = rimz::agents::empty_dir::EmptyDirErr::Io {
+            path: "/empty".into(),
+            source: std::io::ErrorKind::PermissionDenied.into(),
+        };
+        assert!(empty_dir_fix(&error).contains("repair access"));
+        assert!(
+            empty_dir_fix(&rimz::agents::empty_dir::EmptyDirErr::Dirty(
+                "/empty/file".into()
+            ))
+            .contains("remove unexpected files")
+        );
+    }
+
+    #[test]
+    fn rowless_budget_park_uses_the_published_agent() {
+        let now = jiff::Timestamp::now();
+        let mut raw = rimz::testkit::agent_state("codex", "session", now);
+        raw.status = AgentStatus::Running;
+        let mut published = raw.clone();
+        published.budget_park = Some(rimz::agents::BudgetPark {
+            cap_usd: 1.0,
+            spend_usd: 2.0,
+            window: rimz::agents::BudgetWindow::Session,
+            at: now,
+            scope: Default::default(),
+            account_kind: None,
+            resets_at: None,
+        });
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+            vec![published],
+            now,
+        );
+        let rollup = project_agent_rollup(
+            &[raw.clone()],
+            &snapshot,
+            &Default::default(),
+            &rimz::address::AddressContext {
+                channel: None,
+                origin: rimz::address::ChannelOrigin::Root,
+            },
+            &mut Probe::Ready(Accounts { rows: vec![] }),
+            false,
+            &[(raw.kind, raw.agent_id)].into(),
+        );
+        let AgentRollup::Observed { counts, rows } = rollup else {
+            panic!("missing rollup")
+        };
+        assert_eq!(counts.paused, 1);
+        assert_eq!(rows[0].status, AgentStatus::Paused);
+    }
+
+    #[test]
+    fn newer_published_activity_keeps_the_named_handle() {
+        let now = jiff::Timestamp::now();
+        let mut raw = rimz::testkit::agent_state("codex", "session", now);
+        raw.name = Some("otter".into());
+        raw.name_explicit = true;
+        let mut published = raw.clone();
+        published.last_activity = now + jiff::SignedDuration::from_secs(1);
+        let snapshot = rimz::store::snapshot::SidebarSnapshot::build_with_agents(
+            rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/project")),
+            vec![published],
+            now,
+        );
+        let rollup = project_agent_rollup(
+            &[raw.clone()],
+            &snapshot,
+            &Default::default(),
+            &rimz::address::AddressContext {
+                channel: None,
+                origin: rimz::address::ChannelOrigin::Root,
+            },
+            &mut Probe::Ready(Accounts { rows: vec![] }),
+            true,
+            &[(raw.kind, raw.agent_id)].into(),
+        );
+        let AgentRollup::Observed { rows, .. } = rollup else {
+            panic!("missing rollup")
+        };
+        assert_eq!(rows[0].handle, "@otter");
+    }
+
+    #[test]
+    fn invalid_account_names_do_not_read_default_login_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = rimz::RuntimePaths::under(
+            rimz::ids::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        let cache = rimz::agents::account::RateLimitsCache {
+            entries: std::collections::BTreeMap::from([(
+                rimz::ids::LoginKey::default_for(rimz::ids::AgentKind::new_unchecked("codex")),
+                rimz::agents::account::RateLimitCacheEntry {
+                    limits: rimz::agents::AgentRateLimits {
+                        windows: vec![rimz::agents::RateLimitWindow {
+                            observed_at: Some(jiff::Timestamp::now()),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        std::fs::write(
+            runtime.shared_rate_limits_path(),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        let mut rows = vec![AccountRow {
+            kind: "codex".into(),
+            name: "not@a-login".into(),
+            home: None,
+            room: false,
+            machine_default: false,
+            default_for: Default::default(),
+            problem: None,
+            usage: None,
+        }];
+        collect_account_usage(&mut rows, &runtime, &rimz::config::MachineConfig::default());
+        assert!(
+            rows[0].usage.is_none(),
+            "invalid login inherited default usage"
+        );
+    }
 
     #[test]
     fn account_rows_mark_machine_defaults_and_report_dangling_selections() {
