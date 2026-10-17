@@ -592,6 +592,16 @@ fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_parks() {
                 });
             }
             t.finish_judge(1, result).unwrap();
+            let evaluation = t
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| matches!(entry.event, JournalEvent::Evaluation { .. }))
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&evaluation.event).unwrap()["origin"],
+                if failure == "ok" { "check" } else { "engine" }
+            );
             if failure == "ok" {
                 assert_eq!(
                     t.record.state,
@@ -661,4 +671,43 @@ fn judge_routes_valid_objects_and_retries_died_or_invalid_once_then_parks() {
         t.record.check_retry_context.is_none(),
         "a successful object ends retry context"
     );
+}
+
+#[test]
+fn abandoned_checks_record_engine_origin() {
+    for outcome in ["canceled", "timeout"] {
+        let (spec, paths, record) = judge_fixture();
+        let mut t = super::super::state::Transition {
+            now: record.entered_at,
+            record,
+            spec: &spec,
+            paths: &paths,
+            entries: Vec::new(),
+        };
+        t.abandon_check(outcome);
+        let entry = serde_json::to_value(&t.entries[0]).unwrap();
+        assert_eq!(entry["event"], "evaluation");
+        assert_eq!(entry["outcome"], outcome);
+        assert_eq!(entry["origin"], "engine");
+    }
+}
+
+#[test]
+fn invalid_checks_record_engine_origin_and_legacy_rows_default_to_check() {
+    let (spec, paths, record) = judge_fixture();
+    let mut t = super::super::state::Transition {
+        now: record.entered_at,
+        record,
+        spec: &spec,
+        paths: &paths,
+        entries: Vec::new(),
+    };
+    t.finish_check(1, Err("bad JSON".into()), Default::default(), None)
+        .unwrap();
+    let mut entry = serde_json::to_value(&t.entries[0]).unwrap();
+    assert_eq!(entry["event"], "evaluation");
+    assert_eq!(entry["origin"], "engine");
+    entry.as_object_mut().unwrap().remove("origin");
+    let legacy: records::JournalEntry = serde_json::from_value(entry).unwrap();
+    assert_eq!(serde_json::to_value(legacy).unwrap()["origin"], "check");
 }
