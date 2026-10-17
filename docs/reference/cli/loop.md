@@ -204,7 +204,7 @@ next fire: 2026-09-05 14:00 (in 2h)
 
 A window that has not started reads `window: claude 5h · not started · 100% left` and `next fire: the next scheduler tick, since the window has not started`.
 
-A judge or a shell check before an action adds one `guard:` line. The watchdog above reads `guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail`.
+A judge or a shell check before an action adds one `guard:` line. The watchdog above reads `guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no verdict counting as a fail`.
 
 A `--wait` action reads ``action: waits @planner — pinned to claude session `<id>` now; skipped and removed if that session exits``, a check-only task `action: runs check in <dir>`, and a surplus gate adds a `gate:` line. The last line reads `the loop timer will keep time` when the timer is active.
 
@@ -399,7 +399,7 @@ The `[throttle]` table of `loop.toml` (`loop.throttle.*` to `rimz config set`) s
 
 `pace` and `max-wait` take `s`, `m`, or `h`. With `pace = "0s"` and no other key set the queue is off. An agent counts as active while its turn is running: one compacting its context, waiting on a prompt, resting, or ended does not. Starts are admitted in the order they queued, with one exception: once a waiting run is held by its task's own `max-active-per-task`, that run and every later waiting run of the task let runs of other tasks pass, and each keeps its place among the runs of its own task. Nothing else reorders: a run of another task held by any other limit, or a start that holds the turn, is never passed.
 
-A held fire holds its run lock, so the task shows as held rather than running and a later fire of it records `overlapped`. `loop fire` prints each new reason as `held: <reason>`, and Ctrl-C ends the wait: the fire records `canceled` with exit code `130`, keeps the check it ran, and starts nothing. A fire admitted after a hold records how long it waited, shown as `held 3m` in its `NOTE`. `loop stop` ends a held run like any other and leaves one `canceled` record.
+A held fire holds its run lock, so the task shows as held rather than running and a later fire of it records `overlapped`. `loop fire` prints each new reason as `held: <reason>`, and Ctrl-C ends the wait: the fire records `canceled` with exit code `130`, keeps the check it ran, and starts nothing. A fire admitted after a hold records how long it waited, shown as `queued 3m` in its `NOTE`. `loop stop` ends a held run like any other and leaves one `canceled` record.
 
 The pressure and memory readings are Linux's (`/proc/pressure`, `/proc/meminfo`). A configured limit this machine cannot read is refused rather than ignored: `rimz start` fails naming the key and the fix, and a fire records `error`. A workspace whose agents cannot be counted holds a capped start, with the workspace named in the reason. An unreadable queue file errors the fire; a malformed ticket is removed with a warning so other tasks can continue.
 
