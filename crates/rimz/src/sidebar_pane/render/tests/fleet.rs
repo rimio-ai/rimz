@@ -1,6 +1,146 @@
 use super::*;
 
 #[test]
+fn make_up_counts_a_working_team_once_without_its_rest_buckets() {
+    let mut members = vec![
+        agent(
+            "worker",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("working"),
+        ),
+        agent(
+            "rest",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        ),
+        agent(
+            "done",
+            "claude",
+            AgentStatus::Success,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        ),
+    ];
+    for member in &mut members {
+        member.team = Some("crew".to_owned());
+    }
+    let snapshot = snapshot_with(members);
+    let screen = snapshot_to_screen(&snapshot, 64, 30);
+    let buckets = screen.lines().nth(5).unwrap();
+    assert!(
+        buckets.contains("⢿ 1") && buckets.contains("○ 0") && buckets.contains("✓ 0"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn unread_done_context_does_not_animate_an_empty_success_bucket() {
+    let mut members = vec![
+        agent(
+            "worker",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        ),
+        agent(
+            "done",
+            "claude",
+            AgentStatus::Success,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        ),
+    ];
+    for member in &mut members {
+        member.team = Some("crew".to_owned());
+    }
+    let mut snapshot = snapshot_with(members);
+    for row in std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    ) {
+        row.unread = row.status() == Some(AgentStatus::Success);
+    }
+    let theme = Theme::fixed(false);
+    let styles: Vec<_> = (0..32)
+        .map(|phase| {
+            let (lines, _) = fleet_header_lines(
+                &theme,
+                &snapshot.worktree_groups,
+                snapshot.now,
+                &BodyLens::default(),
+                phase,
+                62,
+                None,
+            );
+            lines[0]
+                .spans
+                .iter()
+                .find(|span| span.content.starts_with('✓'))
+                .unwrap()
+                .style
+        })
+        .collect();
+    let mut read = snapshot.clone();
+    for row in
+        std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut read.worktree_groups)[0].rows)
+    {
+        row.unread = false;
+    }
+    let (lines, _) = fleet_header_lines(
+        &theme,
+        &read.worktree_groups,
+        read.now,
+        &BodyLens::default(),
+        0,
+        62,
+        None,
+    );
+    let rest = lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.starts_with('✓'))
+        .unwrap()
+        .style;
+    assert!(
+        styles.iter().all(|style| *style == rest),
+        "zero-count success bucket must stay at rest"
+    );
+}
+
+#[test]
+fn unread_banner_counts_two_actionable_teammates_as_one_unit() {
+    let mut snapshot = overflowing_fleet_with_unread_lead();
+    let group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups)
+        .iter_mut()
+        .find(|group| group.rows.iter().any(|row| row.unread))
+        .unwrap();
+    let rows = std::sync::Arc::make_mut(&mut group.rows);
+    let lead = rows.iter_mut().find(|row| row.unread).unwrap();
+    lead.as_agent_mut().unwrap().team = Some("crew".to_owned());
+    let mut sibling = lead.clone();
+    sibling.id.push_str("-sibling");
+    sibling.name.push_str("-sibling");
+    rows.insert(1, sibling);
+    group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
+    let ui = UiState {
+        scroll_offset: 99,
+        offset_authoritative: true,
+        ..selected_ui()
+    };
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(screen.contains("↑ 1 need you"), "{screen}");
+}
+
+#[test]
 fn frozen_fleet_keeps_its_real_status_bucket() {
     let mut sleeper = agent(
         "cold",

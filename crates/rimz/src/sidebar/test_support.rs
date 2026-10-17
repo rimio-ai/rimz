@@ -180,7 +180,7 @@ pub(crate) fn worktree_group(
         team: None,
         cohort_effort: None,
         pipeline: None,
-        status_counts: Vec::new(),
+        status_counts: status_counts_from_rows(&rows),
         rows: rows.into(),
         diff_added: None,
         diff_removed: None,
@@ -198,4 +198,22 @@ pub(crate) fn worktree_group(
         pr_number: None,
         pr_url: None,
     }
+}
+
+pub(crate) fn status_counts_from_rows(
+    rows: &[crate::store::snapshot::SidebarRow],
+) -> Vec<crate::store::snapshot::SidebarStatusCount> {
+    use crate::store::snapshot::SidebarStatusCount;
+    let mut counts: Vec<SidebarStatusCount> = Vec::new();
+    for status in rows
+        .iter()
+        .filter_map(crate::store::snapshot::SidebarRow::attention_status)
+    {
+        if let Some(count) = counts.iter_mut().find(|count| count.status == status) {
+            count.count += 1;
+        } else {
+            counts.push(SidebarStatusCount { status, count: 1 });
+        }
+    }
+    counts
 }

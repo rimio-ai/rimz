@@ -2,6 +2,78 @@ use super::*;
 use crate::sidebar_pane::render::layout::{spans_width, text_width};
 use crate::sidebar_pane::render::theme::Component;
 
+#[test]
+fn filtered_team_keeps_context_muted_and_closed() {
+    let members = [AgentStatus::Running, AgentStatus::Idle]
+        .into_iter()
+        .enumerate()
+        .map(|(index, status)| {
+            let mut member = agent(
+                if index == 0 { "worker" } else { "context" },
+                "claude",
+                status,
+                Some("/repo/main"),
+                Some("main"),
+                Some(if index == 0 {
+                    "matched task"
+                } else {
+                    "context task"
+                }),
+            );
+            member.team = Some("crew".to_owned());
+            member.model = Some("opus".to_owned());
+            member.usage.context_pct = Some(38);
+            member
+        })
+        .collect::<Vec<_>>();
+    let mut snapshot = snapshot_with(members);
+    for row in std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    ) {
+        let name = if row.status() == Some(AgentStatus::Running) {
+            "worker"
+        } else {
+            "context"
+        };
+        row.as_agent_mut().unwrap().handle = Some(name.to_owned());
+    }
+    snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let match_id = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .find(|row| row.status() == Some(AgentStatus::Running))
+        .unwrap()
+        .id
+        .clone();
+    let mut ui = UiState {
+        make_up_filter: BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+        ..Default::default()
+    };
+    ui.selected_index = ui.visible_roster(&snapshot).ordinal_of_id(&match_id);
+    let theme = Theme::fixed(false);
+    let block = super::super::compose_lines(&snapshot, None, &ui, &theme, 54, 40);
+    let context = block
+        .lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content == "context")
+        .expect("context teammate stays visible");
+    assert_eq!(context.style.fg, theme.muted().fg);
+    let matched = block
+        .lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content == "worker")
+        .unwrap();
+    assert_eq!(matched.style.fg, Some(theme.provider_brand_tone("claude")));
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 40);
+    assert!(
+        !screen.contains("context task"),
+        "context must stay closed: {screen}"
+    );
+    assert_snapshot("filtered_team_context", screen);
+}
+
 fn pipeline_snapshot() -> SidebarSnapshot {
     let agents = ["planner", "coder"].map(|role| {
         let mut member = agent(
@@ -313,6 +385,7 @@ fn render_pipeline_folded_stage() {
     for row in std::sync::Arc::make_mut(&mut group.rows) {
         row.as_agent_mut().unwrap().status = AgentStatus::Success;
     }
+    group.status_counts = crate::sidebar::test_support::status_counts_from_rows(&group.rows);
     let closed = snapshot_to_screen(&snapshot, 54, 20);
     assert!(
         closed.contains("[ ▸ 1 landed ]") && !closed.contains("forge · Done"),

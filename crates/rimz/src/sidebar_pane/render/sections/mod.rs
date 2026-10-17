@@ -22,7 +22,7 @@ use ratatui::text::{Line, Span};
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::ids::PaneId;
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
-use crate::store::snapshot::{SidebarRow, SidebarWorktreeKind};
+use crate::store::snapshot::SidebarRow;
 
 use super::CostRolls;
 use super::layout::{pin_right, spans_width, trim_spans_to_width};
@@ -77,8 +77,8 @@ impl SelectionReach {
 }
 
 /// The strongest reach from the live selection and held rows. A sibling is a
-/// teammate only when both rows belong to the same projected non-external group
-/// and share a named team.
+/// teammate only when both rows belong to the same unit in this projected group.
+/// Unselected context rows never open through live or held teammate reach.
 pub(super) fn row_selection_reach(
     roster: &VisibleRoster<'_>,
     group: &VisibleGroup<'_>,
@@ -88,6 +88,12 @@ pub(super) fn row_selection_reach(
 ) -> SelectionReach {
     let range = group.range();
     if !range.contains(&row_index) {
+        return SelectionReach::Unreached;
+    }
+    if selected_index == Some(row_index) {
+        return SelectionReach::Selected;
+    }
+    if !roster.is_match(row_index) {
         return SelectionReach::Unreached;
     }
     let sources = selected_index.into_iter().chain(
@@ -100,10 +106,9 @@ pub(super) fn row_selection_reach(
         if row_index == source {
             return SelectionReach::Selected;
         }
-        if group.source().kind != SidebarWorktreeKind::External
-            && range.contains(&source)
-            && let Some(team) = roster.row(source).and_then(SidebarRow::team)
-            && roster.row(row_index).and_then(SidebarRow::team) == Some(team)
+        if range.contains(&source)
+            && let (Some(source), Some(row)) = (roster.row(source), roster.row(row_index))
+            && group.source().unit_key(source) == group.source().unit_key(row)
         {
             reach = SelectionReach::Teammate;
         }
@@ -156,6 +161,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
     pub(in crate::sidebar_pane::render) stale_after_secs: u64,
     pub(in crate::sidebar_pane::render) selected_index: Option<usize>,
+    pub(in crate::sidebar_pane::render) matched: bool,
     pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
     pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
