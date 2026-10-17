@@ -243,6 +243,10 @@ pub struct WorkflowPaths {
 }
 
 impl WorkflowPaths {
+    pub fn notes(&self) -> PathBuf {
+        self.work.join("notes")
+    }
+
     pub fn check_output(&self, seq: u64) -> PathBuf {
         self.work.join(format!("{seq}.check.json"))
     }

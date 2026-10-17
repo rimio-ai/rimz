@@ -536,7 +536,8 @@ allowed-dependencies = [
 # Machine GC resolves empty roots under explicit homes (+1).
 # WorkflowPaths, its accessors, definition paths, and run discovery share the classed path boundary (+9).
 # WorkflowPaths::check_output owns per-attempt judge output paths (+1).
-surface-budget = 257
+# WorkflowPaths::notes owns cross-node scratch paths (+1).
+surface-budget = 258
 
 [[verdict]]
 kind = "item"
@@ -760,7 +761,8 @@ path = "crates/rimz/src/harness"
 # Transition finish_judge/stage_agent_end/settle_agent/step_wait replace the old step/stub helpers (+5 net).
 # workflow::advance_args shares detached argv; WhenExpr::blocking_evidence formats typed window readings (+2).
 # Workflow transition and supervised-step accounting share a private emission seam (+2).
-surface-budget = 896
+# ScopeRoots and ScopeRoots::path resolve workflow scope across CLI and loop admission (+2).
+surface-budget = 898
 
 [[verdict]]
 kind = "item"
@@ -1216,7 +1218,8 @@ path = "crates/rimz/src/store"
 # Workflow attempt process, run, ending, ask, limit and child vocabulary is shared with the harness (+8).
 # The sidebar snapshot carries parked workflow runs; the park reason, park phrase, and run state have one wording for every surface.
 # SidebarUnitKey and SidebarWorktreeGroup::unit_key share group-local unit identity (+1).
-surface-budget = 468
+# EvaluationOrigin distinguishes check answers from engine decisions in the journal (+1).
+surface-budget = 469
 
 [[verdict]]
 kind = "item"
@@ -7124,3 +7127,23 @@ reason = "Post-persist journal evidence emits workflow assists and internal repa
 kind = "item"
 key = "harness::workflow::engine::accounting::step"
 reason = "The launch owner records a step only after its supervised run is published."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::WorkflowPaths::notes"
+reason = "Workflow creation supplies node-owned scratch through the classed path boundary."
+
+[[verdict]]
+kind = "item"
+key = "store::workflow::EvaluationOrigin"
+reason = "Persist check versus engine provenance for accounting and journal inspection."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::ScopeRoots"
+reason = "CLI and loop admission supply both checkout and project roots for spec-selected scope."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::ScopeRoots::path"
+reason = "Admission compares existing runs using their recorded scope kind before reading the definition."

@@ -86,6 +86,14 @@ for           = "3m"
 
 Each firing starts a run in a worktree that has none. A worktree whose run is still active or parked is skipped, so you never get two. Once the PR merges `pr=open` goes false and the task stops firing there. Loop fields that belong to nodes (`stay`, `takeover`, `subscribe`, `check`, `judge`) are refused on a workflow task; the [loop task reference](../reference/cli/workflow.md#loop-tasks) lists what applies.
 
+## Project scope
+
+A monthly job or a Ralph loop that picks the next item from a project-wide list should not run once per PR. Set `[workflow] scope = "project"` instead: checks and steps run at the project root, with one active or parked run per workflow there. Starting from a worktree still selects the root; `-w` prints a notice, and loop tasks with `each-worktree` start one run and skip the rest.
+
+The root has the same occupancy rule as a worktree: agents at the root, including your room agents but excluding agents in owned nested worktrees, make a step wait; `takeover = true` may stop idle ones, while an open turn still blocks it. Judges remain read-only on the checkout and its Git directories, now at the root.
+
+Every run starts with `$RIMZ_WORKFLOW_DIR/notes/` and `signs/` already present. Use `notes/` as cross-node scratch, such as which items a foreach check has finished, and key writes by the sequence in `context.json` so a retry is a no-op. RimZ never reads those notes; your nodes do.
+
 ## When a run needs you
 
 A run parks instead of guessing: a step hit `max-visits`, a check timed out, a script failed, an agent asked a question no edge answers, or a check routed to `@user` with its own reason. A parked run shows up three ways:

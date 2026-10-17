@@ -139,7 +139,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
                 assert!(
                     events(&value, "evaluation")
                         .iter()
-                        .any(|entry| entry["outcome"] == "canceled")
+                        .any(|entry| entry["outcome"] == "canceled" && entry["origin"] == "engine")
                 );
                 assert_eq!(workflow_diagnostics(&env, "workflow_rerun").len(), 1);
             }
@@ -147,7 +147,7 @@ fn judge_process_objects_retry_limit_and_dead_host_policy() {
     }
 }
 
-fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
+pub(super) fn workflow_diagnostics(env: &Env, kind: &str) -> Vec<Value> {
     let state = env.state_path_for(&env.project_root);
     let sink = rimz::diag::DiagSink::under(state.root, state.workspace_id, "test", None);
     fs::read_to_string(sink.log_path().unwrap())

@@ -691,8 +691,10 @@ impl<'a> TaskFire<'a> {
         let result = crate::harness::workflow::create(
             &state,
             &dir,
-            &self.launch_checkout(),
-            &root,
+            crate::harness::workflow::ScopeRoots {
+                checkout: self.launch_checkout(),
+                project: root,
+            },
             prompt,
             Some(self.name.clone()),
         );

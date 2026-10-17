@@ -13,6 +13,119 @@ struct Room {
 }
 
 #[test]
+fn project_foreach_reads_root_and_tracks_one_visit_per_item() {
+    let room = Room::new("");
+    fs::write(room.env.project_root.join("items.txt"), "one\ntwo\n").unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["add", "items.txt"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "items",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&room.env.project_root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let dir = room.env.rimz_home().join("workflows/review");
+    fs::write(dir.join("workflow.toml"), "[workflow]\nscope='project'\nstart='pick'\n[checks.pick]\nrun='sh checks/pr.sh'\non.ready='build'\non.none='@done'\n[steps.build]\nagent='codex'\nprompt-file='prompt.md'\nthen='pick'\nmax-visits=2\n").unwrap();
+    fs::write(dir.join("checks/pr.sh"), "test -d \"$RIMZ_WORKFLOW_DIR/notes\" && test -d \"$RIMZ_WORKFLOW_DIR/signs\" || exit 1\nwhile read -r item; do\n if ! grep -qxF \"$item\" \"$RIMZ_WORKFLOW_DIR\"/notes/*.done 2>/dev/null; then printf '{\"outcome\":\"ready\",\"key\":\"%s\"}' \"$item\"; exit; fi\ndone < items.txt\nprintf '{\"outcome\":\"none\"}'\n").unwrap();
+    let id = room.start();
+    for item in ["one", "two"] {
+        let run = room.attempt(&id);
+        let value = show(&room.env, &id);
+        assert_eq!(
+            value["record"]["scope"],
+            json!({"kind":"project", "path":room.env.project_root})
+        );
+        assert_eq!(value["record"]["key"], item);
+        let work = value["dir"].as_str().unwrap();
+        let seq = value["record"]["attempt"]["seq"].as_u64().unwrap();
+        let note = Path::new(work).join(format!("notes/{seq}.done"));
+        fs::write(&note, item).unwrap();
+        fs::write(
+            room.env.project_root.join("panes.json"),
+            r#"[{"id":61,"is_plugin":false,"tab_id":1,"title":"codex"}]"#,
+        )
+        .unwrap();
+        room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+        room.hook(&id, &run, json!({"hook_event_name":"Stop"}));
+        until(&room.env, &id, |v| {
+            v["record"]["attempt"]["seq"].as_u64() != Some(seq)
+        });
+    }
+    let value = settled(&room.env, &id, "done");
+    assert_eq!(
+        value["record"]["visits"]["build"]["keys"],
+        json!([{"key":"one", "visits":1}, {"key":"two", "visits":1}])
+    );
+    let picked: Vec<_> = events(&value, "evaluation")
+        .into_iter()
+        .filter(|row| row["outcome"] == "ready")
+        .map(|row| row["object"]["key"].clone())
+        .collect();
+    assert_eq!(picked, vec![json!("one"), json!("two")]);
+}
+
+#[test]
+fn loop_project_scope_skips_before_reading_an_edited_definition() {
+    let room = Room::new("");
+    let dir = room.env.rimz_home().join("workflows/review");
+    fs::write(
+        dir.join("workflow.toml"),
+        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
+    )
+    .unwrap();
+    fs::write(dir.join("checks/pr.sh"), PENDING).unwrap();
+    fs::write(
+        room.env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.review]\nworkflow='review'\nroot={:?}\nevery='1h'\n",
+            room.env.project_root
+        ),
+    )
+    .unwrap();
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    let state = room.env.state_path_for(&room.env.project_root);
+    let runs = records::list(&state).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].scope.kind, records::ScopeKind::Project);
+    assert_eq!(runs[0].scope.path, room.env.project_root);
+    fs::write(dir.join("workflow.toml"), "not = [toml").unwrap();
+    success(room.command(&["loop", "run", "review"]).output().unwrap());
+    let history: Value = serde_json::from_str(&success(
+        room.command(&["loop", "show", "review", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        history["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == runs[0].id.as_str()),
+        "{history}"
+    );
+    success(
+        room.command(&["workflow", "cancel", runs[0].id.as_str()])
+            .output()
+            .unwrap(),
+    );
+}
+
+#[test]
 fn loop_workflow_creation_duplicate_and_finished_scopes() {
     let room = Room::new("");
     fs::write(
@@ -200,6 +313,49 @@ fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    for run in &records {
+        success(
+            room.command(&["workflow", "cancel", run.id.as_str()])
+                .output()
+                .unwrap(),
+        );
+    }
+    fs::write(&config, format!("{base}each-worktree=true\n")).unwrap();
+    fs::write(
+        room.env.rimz_home().join("workflows/review/workflow.toml"),
+        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
+    )
+    .unwrap();
+    for checkout in &owned {
+        success(
+            room.command(&["loop", "run", "review", "--cwd"])
+                .arg(&checkout.marker.worktree_path)
+                .output()
+                .unwrap(),
+        );
+    }
+    let runs = records::list(&room.env.state_path_for(&room.env.project_root)).unwrap();
+    let active: Vec<_> = runs.iter().filter(|run| !run.state.is_terminal()).collect();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].scope.kind, records::ScopeKind::Project);
+    assert_eq!(active[0].scope.path, room.env.project_root);
+    let history: Value = serde_json::from_str(&success(
+        room.command(&["loop", "show", "review", "--json"])
+            .output()
+            .unwrap(),
+    ))
+    .unwrap();
+    assert!(
+        history["runs"].as_array().unwrap().iter().any(
+            |row| row["result"] == "workflow_skipped" && row["run_id"] == active[0].id.as_str()
+        ),
+        "{history}"
+    );
+    success(
+        room.command(&["workflow", "cancel", active[0].id.as_str()])
+            .output()
+            .unwrap(),
+    );
 }
 
 impl Room {

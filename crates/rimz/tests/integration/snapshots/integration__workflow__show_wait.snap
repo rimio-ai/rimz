@@ -4,7 +4,7 @@ expression: normalized
 ---
 <work>
 workflow:       review
-scope checkout: <checkout>
+scope worktree: <checkout>
 state:          active
 current node:   pr, since <time>
 deadline:       none

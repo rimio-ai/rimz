@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn workflow_wait_counts_render_and_legacy_routes_still_parse() {
+    for count in [None, Some(7)] {
+        let mut wire = serde_json::json!({
+            "at":"2026-01-01T00:00:00Z", "assist":"workflow_route",
+            "run":"wf_0190b8172c0070008000000000000001", "workflow":"review",
+            "node":"pr", "outcome":"pending", "to":"@wait"
+        });
+        if let Some(count) = count {
+            wire["count"] = serde_json::json!(count);
+        }
+        let record: AssistRecord = serde_json::from_value(wire).unwrap();
+        let stats = AssistStats::from_records("all", vec![record]);
+        assert_eq!(stats.rollup.workflow_routes, 1);
+        let line = benefit_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+        if count.is_some() {
+            assert!(
+                line.contains("workflow review pr waited pending ×7"),
+                "{line}"
+            );
+            assert_eq!(serde_json::to_value(&stats.events[0]).unwrap()["count"], 7);
+        } else {
+            assert!(line.contains("said pending → @wait"), "{line}");
+            assert!(
+                serde_json::to_value(&stats.events[0])
+                    .unwrap()
+                    .get("count")
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
 fn molts_count_and_render_both_agents_and_the_inherited_generation() {
     let record = AssistRecord {
         at: Timestamp::UNIX_EPOCH,
