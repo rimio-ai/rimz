@@ -101,6 +101,19 @@ fn assists(env: &Env) -> Value {
     .unwrap()
 }
 
+/// The rollup once `key` reaches `count`: a detached advance appends its
+/// assists after it publishes the record a test waits on.
+fn assists_once(env: &Env, key: &str, count: u64) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let stats = assists(env);
+        if stats["rollup"][key] == count || std::time::Instant::now() > deadline {
+            return stats;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
     let (env, _) = fixture(
@@ -109,7 +122,7 @@ fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
     );
     let id = start(&env);
     settled(&env, &id, "parked");
-    let stats = assists(&env);
+    let stats = assists_once(&env, "workflow_parks", 1);
     assert_eq!(stats["rollup"]["workflow_routes"], 1);
     assert_eq!(stats["rollup"]["workflow_parks"], 1);
     let routes: Vec<_> = stats["events"]
