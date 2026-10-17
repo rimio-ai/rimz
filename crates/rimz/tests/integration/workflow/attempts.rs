@@ -94,6 +94,7 @@ fn loop_workflow_creation_duplicate_and_finished_scopes() {
         human.contains("NEEDS YOU") && human.contains("1 run(s) parked: review"),
         "{human}"
     );
+    assert_eq!(human.matches("review build asked").count(), 1, "{human}");
     assert_eq!(history()["workflow_runs"][0]["id"], id);
     let show = success(room.command(&["loop", "show", "review"]).output().unwrap());
     assert!(show.contains("RUNS") && show.contains(&id), "{show}");
