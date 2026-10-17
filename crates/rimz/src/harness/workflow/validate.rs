@@ -165,7 +165,7 @@ pub(super) fn validate_spec(
             if matches!(outcome.as_str(), "cap" | "deadline") {
                 report.error(
                     &format!("{path}.on.{outcome}"),
-                    "reserved engine outcome; only timeout and invalid are routable on checks",
+                    "reserved engine outcome; a check routes its own outcomes plus timeout and invalid",
                 );
             }
             if let Some(agent) = &check.agent

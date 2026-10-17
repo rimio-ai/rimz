@@ -149,6 +149,53 @@ fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
 }
 
 #[test]
+fn workflow_accounting_counts_check_canceled_as_a_route() {
+    check_outcome_route_is_accounted("canceled");
+}
+
+#[test]
+fn workflow_accounting_counts_check_limited_as_a_route() {
+    check_outcome_route_is_accounted("limited");
+}
+
+fn check_outcome_route_is_accounted(outcome: &str) {
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.{outcome}='@done'\n"),
+        &evaluation_script(outcome),
+    );
+    let id = start(&env);
+    let value = settled(&env, &id, "done");
+    let stats = assists_once(&env, "workflow_routes", 1);
+    let state =
+        rimz::StatePaths::for_project_root_under(&env.project_root, &env.rimz_home()).unwrap();
+    let log = rimz::diag::DiagSink::under(state.root, state.workspace_id, "test", None)
+        .log_path()
+        .unwrap();
+    if log.exists() {
+        for line in fs::read_to_string(log).unwrap().lines() {
+            let record: rimz::diag::record::DiagEnvelope = serde_json::from_str(line).unwrap();
+            assert!(
+                !matches!(record.event, rimz::diag::record::DiagEvent::WorkflowRerun { run, .. } if run.to_string() == id),
+                "a check's own outcome is not a dead-host rerun"
+            );
+        }
+    }
+    assert_eq!(stats["rollup"]["workflow_routes"], 1);
+    let routes: Vec<_> = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "workflow_route")
+        .collect();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["run"], id);
+    assert_eq!(routes[0]["node"], "pr");
+    assert_eq!(routes[0]["outcome"], outcome);
+    assert_eq!(routes[0]["to"], "@done");
+    assert_eq!(events(&value, "evaluation")[0]["origin"], "check");
+}
+
+#[test]
 fn happy_path_context_and_cross_directory_lookup() {
     let spec = format!(
         "{HEADER}[checks.pr]\nrun = 'sh checks/pr.sh'\non.ok = 'next'\n[checks.next]\nrun = 'sh checks/pr.sh'\non.ok = '@done'\n"
