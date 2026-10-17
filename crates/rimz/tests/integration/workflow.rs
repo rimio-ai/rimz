@@ -92,6 +92,47 @@ fn evaluation_script(outcome: &str) -> String {
     format!("printf '%s\\n' '{{\"outcome\":\"{outcome}\"}}'\n")
 }
 
+fn assists(env: &Env) -> Value {
+    serde_json::from_str(&success(command(
+        env,
+        &["stats", "--assists", "--json", "-n", "0"],
+    )))
+    .unwrap()
+}
+
+#[test]
+fn workflow_accounting_tracks_routes_parks_and_terminal_states() {
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nrun='sh checks/pr.sh'\non.ok='@user'\n"),
+        &evaluation_script("ok"),
+    );
+    let id = start(&env);
+    settled(&env, &id, "parked");
+    let stats = assists(&env);
+    assert_eq!(stats["rollup"]["workflow_routes"], 1);
+    assert_eq!(stats["rollup"]["workflow_parks"], 1);
+    let routes: Vec<_> = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["assist"] == "workflow_route")
+        .collect();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0]["run"], id);
+    assert_eq!(routes[0]["node"], "pr");
+    assert_eq!(routes[0]["to"], "@user");
+    success(command(&env, &["workflow", "cancel", &id]));
+    let stats = assists(&env);
+    assert_eq!(stats["rollup"]["workflow_ends"], 1);
+    assert!(
+        stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["assist"] == "workflow_end" && event["state"] == "canceled")
+    );
+}
+
 #[test]
 fn happy_path_context_and_cross_directory_lookup() {
     let spec = format!(

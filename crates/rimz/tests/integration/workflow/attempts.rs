@@ -170,6 +170,19 @@ fn terminal_write_without_a_hook_wakes_the_workflow() {
     );
     let ended = until(&room.env, &id, |v| v["record"]["state"] == "done");
     assert_eq!(ended["record"]["prev_attempt"]["outcome"], "died");
+    let stats = assists(&room.env);
+    assert_eq!(stats["rollup"]["workflow_steps"], 1);
+    assert_eq!(stats["rollup"]["workflow_routes"], 3);
+    assert_eq!(stats["rollup"]["workflow_ends"], 1);
+    let step = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["assist"] == "workflow_step")
+        .unwrap();
+    assert_eq!(step["run_id"], run.run_id.as_str());
+    assert_eq!(step["step"], "build");
+    assert_eq!(step["visit"], 1);
 }
 
 #[test]

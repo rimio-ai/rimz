@@ -269,6 +269,18 @@ impl LocalSessionBindRejectReason {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DiagEvent {
+    WorkflowRetry {
+        run: crate::ids::WorkflowRunId,
+        node: String,
+        seq: u64,
+        outcome: String,
+        reason: String,
+    },
+    WorkflowRerun {
+        run: crate::ids::WorkflowRunId,
+        node: String,
+        seq: u64,
+    },
     HookDrainLag {
         ingress: EventId,
         hook_event: Option<String>,
@@ -688,6 +700,8 @@ impl DiagEvent {
                 cause: RendererExitCause::DegradedGaveUp,
             } => DiagSeverity::Warn,
             Self::FrameShrinkVerified { .. }
+            | Self::WorkflowRetry { .. }
+            | Self::WorkflowRerun { .. }
             | Self::ResolutionFallback { .. }
             | Self::SidebarWidthIntent { .. }
             | Self::SidebarWidthNudge { .. }
@@ -733,6 +747,8 @@ impl DiagEvent {
 
     pub(super) fn kind_name(&self) -> &'static str {
         match self {
+            Self::WorkflowRetry { .. } => "workflow_retry",
+            Self::WorkflowRerun { .. } => "workflow_rerun",
             Self::HookDrainLag { .. } => "hook_drain_lag",
             Self::HookApplyFailed { .. } => "hook_apply_failed",
             Self::HookIngressSkipped { .. } => "hook_ingress_skipped",
@@ -794,6 +810,9 @@ impl DiagEvent {
 
     pub fn identity_key(&self) -> String {
         match self {
+            Self::WorkflowRetry { run, node, seq, .. } | Self::WorkflowRerun { run, node, seq } => {
+                format!("{}:{run}:{node}:{seq}", self.kind_name())
+            }
             Self::HookDrainLag { .. } => self.kind_name().to_owned(),
             Self::HookApplyFailed { ingress, .. } => format!("{}:{ingress}", self.kind_name()),
             Self::HookIngressSkipped { start, end, .. }
@@ -1107,6 +1126,16 @@ impl DiagEvent {
     /// A one-line human description of what this event records.
     pub fn summary(&self) -> String {
         match self {
+            Self::WorkflowRetry {
+                run,
+                node,
+                seq,
+                outcome,
+                reason,
+            } => format!("workflow {run} {node} #{seq} retry after {outcome}: {reason}"),
+            Self::WorkflowRerun { run, node, seq } => {
+                format!("workflow {run} {node} #{seq} rerun after host death")
+            }
             Self::HookDrainLag {
                 lag_ms,
                 pending_bytes,

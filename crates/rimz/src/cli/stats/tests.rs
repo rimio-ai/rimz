@@ -2220,6 +2220,11 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
     assert_eq!(
         stats.rollup,
         AssistRollup {
+            workflow_starts: 0,
+            workflow_steps: 0,
+            workflow_routes: 0,
+            workflow_parks: 0,
+            workflow_ends: 0,
             stall_notices: 0,
             resident_launches: 0,
             judge_declines: 0,

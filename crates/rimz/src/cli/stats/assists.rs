@@ -17,6 +17,16 @@ pub(super) struct AssistStats {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(super) struct AssistRollup {
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) workflow_starts: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) workflow_steps: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) workflow_routes: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) workflow_parks: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) workflow_ends: usize,
     pub(super) molts: usize,
     pub(super) stall_notices: usize,
     pub(super) resident_launches: usize,
@@ -48,6 +58,46 @@ pub(super) struct AssistRollup {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case", tag = "assist")]
 pub(super) enum AssistEvent {
+    WorkflowStart {
+        at: Timestamp,
+        run: rimz::ids::WorkflowRunId,
+        workflow: String,
+        task: Option<String>,
+        checkout: std::path::PathBuf,
+        prompt: bool,
+    },
+    WorkflowStep {
+        at: Timestamp,
+        run: rimz::ids::WorkflowRunId,
+        workflow: String,
+        step: String,
+        visit: u64,
+        seq: u64,
+        handle: Option<String>,
+        run_id: Option<rimz::ids::RunId>,
+    },
+    WorkflowRoute {
+        at: Timestamp,
+        run: rimz::ids::WorkflowRunId,
+        workflow: String,
+        node: String,
+        outcome: String,
+        to: String,
+    },
+    WorkflowPark {
+        at: Timestamp,
+        run: rimz::ids::WorkflowRunId,
+        workflow: String,
+        node: String,
+        reason: rimz::store::workflow::ParkReason,
+        text: Option<String>,
+    },
+    WorkflowEnd {
+        at: Timestamp,
+        run: rimz::ids::WorkflowRunId,
+        workflow: String,
+        state: rimz::store::workflow::RunState,
+    },
     Molt {
         at: Timestamp,
         kind: AgentKind,
@@ -306,6 +356,11 @@ impl AssistStats {
                 continue;
             }
             match event {
+                AssistEvent::WorkflowStart { .. } => rollup.workflow_starts += 1,
+                AssistEvent::WorkflowStep { .. } => rollup.workflow_steps += 1,
+                AssistEvent::WorkflowRoute { .. } => rollup.workflow_routes += 1,
+                AssistEvent::WorkflowPark { .. } => rollup.workflow_parks += 1,
+                AssistEvent::WorkflowEnd { .. } => rollup.workflow_ends += 1,
                 AssistEvent::Molt { .. } => rollup.molts += 1,
                 AssistEvent::ResidentLaunch { .. } => rollup.resident_launches += 1,
                 AssistEvent::JudgeDecline { .. } => rollup.judge_declines += 1,
@@ -404,6 +459,11 @@ impl AssistEvent {
             Self::Redeem { windows_reset, .. } => *windows_reset,
             Self::Gc { error, .. } => error.is_none(),
             Self::Molt { .. }
+            | Self::WorkflowStart { .. }
+            | Self::WorkflowStep { .. }
+            | Self::WorkflowRoute { .. }
+            | Self::WorkflowPark { .. }
+            | Self::WorkflowEnd { .. }
             | Self::JudgeDecline { .. }
             | Self::ResidentLaunch { .. }
             | Self::ModelAlias { .. }
@@ -416,6 +476,11 @@ impl AssistEvent {
     /// The `AssistRollup` field this event counts toward, named as it serializes.
     fn count_key(&self) -> &'static str {
         match self {
+            Self::WorkflowStart { .. } => "workflow_starts",
+            Self::WorkflowStep { .. } => "workflow_steps",
+            Self::WorkflowRoute { .. } => "workflow_routes",
+            Self::WorkflowPark { .. } => "workflow_parks",
+            Self::WorkflowEnd { .. } => "workflow_ends",
             Self::Molt { .. } => "molts",
             Self::JudgeDecline { .. } => "judge_declines",
             Self::StallNotice { .. } => "stall_notices",
@@ -442,6 +507,76 @@ impl AssistEvent {
 
     fn from_record(record: AssistRecord) -> Self {
         match record.assist {
+            Assist::WorkflowStart {
+                run,
+                workflow,
+                task,
+                checkout,
+                prompt,
+            } => Self::WorkflowStart {
+                at: record.at,
+                run,
+                workflow,
+                task,
+                checkout,
+                prompt,
+            },
+            Assist::WorkflowStep {
+                run,
+                workflow,
+                step,
+                visit,
+                seq,
+                handle,
+                run_id,
+            } => Self::WorkflowStep {
+                at: record.at,
+                run,
+                workflow,
+                step,
+                visit,
+                seq,
+                handle,
+                run_id,
+            },
+            Assist::WorkflowRoute {
+                run,
+                workflow,
+                node,
+                outcome,
+                to,
+            } => Self::WorkflowRoute {
+                at: record.at,
+                run,
+                workflow,
+                node,
+                outcome,
+                to,
+            },
+            Assist::WorkflowPark {
+                run,
+                workflow,
+                node,
+                reason,
+                text,
+            } => Self::WorkflowPark {
+                at: record.at,
+                run,
+                workflow,
+                node,
+                reason,
+                text,
+            },
+            Assist::WorkflowEnd {
+                run,
+                workflow,
+                state,
+            } => Self::WorkflowEnd {
+                at: record.at,
+                run,
+                workflow,
+                state,
+            },
             Assist::Molt {
                 kind,
                 agent_id,
@@ -777,6 +912,11 @@ impl AssistEvent {
     fn at(&self) -> Timestamp {
         match self {
             Self::Molt { at, .. }
+            | Self::WorkflowStart { at, .. }
+            | Self::WorkflowStep { at, .. }
+            | Self::WorkflowRoute { at, .. }
+            | Self::WorkflowPark { at, .. }
+            | Self::WorkflowEnd { at, .. }
             | Self::StallNotice { at, .. }
             | Self::ResidentLaunch { at, .. }
             | Self::JudgeDecline { at, .. }
@@ -894,6 +1034,16 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     };
     row("Stall notice:", "stall_notices", rollup.stall_notices, None);
     let launches = rollup.resident_launches;
+    row(
+        "Workflow:",
+        "workflow",
+        rollup.workflow_starts
+            + rollup.workflow_steps
+            + rollup.workflow_routes
+            + rollup.workflow_parks
+            + rollup.workflow_ends,
+        None,
+    );
     row("Resident launches:", "resident_launches", launches, None);
     let declines = rollup.judge_declines;
     row("Judge declines:", "judge_declines", declines, None);
@@ -945,6 +1095,38 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
     let at = event.at().to_zoned(zone.clone());
     let time = at.strftime("%H:%M");
     match event {
+        AssistEvent::WorkflowStart { workflow, task, .. } => format!(
+            "{time} workflow {workflow} started{}",
+            task.as_ref()
+                .map_or_else(String::new, |task| format!(" by loop {task}"))
+        ),
+        AssistEvent::WorkflowStep {
+            workflow,
+            step,
+            visit,
+            ..
+        } => format!("{time} workflow {workflow} {step} launched (visit {visit})"),
+        AssistEvent::WorkflowRoute {
+            workflow,
+            node,
+            outcome,
+            to,
+            ..
+        } => format!("{time} workflow {workflow} {node} said {outcome} → {to}"),
+        AssistEvent::WorkflowPark {
+            workflow,
+            node,
+            reason,
+            text,
+            ..
+        } => format!(
+            "{time} workflow {workflow} {node} parked: {reason:?}{}",
+            text.as_ref()
+                .map_or_else(String::new, |text| format!(": {}", first_line(text)))
+        ),
+        AssistEvent::WorkflowEnd {
+            workflow, state, ..
+        } => format!("{time} workflow {workflow} {state:?}"),
         AssistEvent::Molt {
             label,
             successor_label,
@@ -1307,6 +1489,11 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         .split_once(' ')
         .map_or_else(|| benefit_line(event, zone), |(_, rest)| rest.to_owned());
     match event {
+        AssistEvent::WorkflowStart { run, .. }
+        | AssistEvent::WorkflowStep { run, .. }
+        | AssistEvent::WorkflowRoute { run, .. }
+        | AssistEvent::WorkflowPark { run, .. }
+        | AssistEvent::WorkflowEnd { run, .. } => format!("{at} {benefit} · run {run}"),
         AssistEvent::Molt {
             kind,
             agent_id,
@@ -1445,6 +1632,10 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
 
 fn compact_token_count(tokens: u64) -> String {
     rimz::theme::fmt::compact_count(tokens)
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 fn compact_threshold(threshold: AutoCompact) -> String {

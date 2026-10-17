@@ -752,7 +752,8 @@ path = "crates/rimz/src/harness"
 # Agent identity/head/compose/prepare_end/launch/finish and judge evaluate share private orchestration;
 # Transition finish_judge/stage_agent_end/settle_agent/step_wait replace the old step/stub helpers (+5 net).
 # workflow::advance_args shares detached argv; WhenExpr::blocking_evidence formats typed window readings (+2).
-surface-budget = 894
+# Workflow transition and supervised-step accounting share a private emission seam (+2).
+surface-budget = 896
 
 [[verdict]]
 kind = "item"
@@ -7073,3 +7074,13 @@ reason = "Run and room-signal helpers share workflow advance argv with the sched
 kind = "item"
 key = "harness::schedule::when::WhenExpr::blocking_evidence"
 reason = "Workflow waits retain typed comparison readings without reparsing rendered conditions."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::accounting::transition"
+reason = "Post-persist journal evidence emits workflow assists and internal repair diagnostics once."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::engine::accounting::step"
+reason = "The launch owner records a step only after its supervised run is published."
