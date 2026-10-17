@@ -877,6 +877,18 @@ The rest tune what one fire is allowed to do:
 
 A task that starts an agent also takes a turn in the start throttle, tuned by the file's top-level `[throttle]` table: `pace` (default `"10s"`, `"0s"` off) and `max-wait` (default `"30m"`), the caps `max-active` and `max-active-per-task`, the pressure limits `cpu-pressure`, `io-pressure`, and `memory-pressure` in percent, and the floors `min-memory` and `min-disk`. `rimz config set loop.throttle.pace 30s` writes one. A task's own `throttle = "off"` exempts it. The keys are explained in [pace agent starts](./loops.md#pace-agent-starts).
 
+A task can start a [workflow](./workflows.md) run instead of an agent. `workflow` names a definition under `~/.rimz/workflows/`, `prompt` or `prompt-file` becomes the run's prompt, and `each-worktree = true` starts one run per worktree. `rimz loop add` has no flag for it, so this is the one action you only write by hand:
+
+```toml
+[tasks.babysit-pr]
+workflow = "babysit-pr"
+root = "/home/you/code/app"
+each-worktree = true
+when = ["pr=open"]
+```
+
+A workflow task refuses `stay`, `takeover`, `subscribe`, `check`, and `judge`, because the workflow's own steps and checks own them, and it takes no start-throttle turn. The [workflow reference](../reference/cli/workflow.md#loop-tasks) lists every field.
+
 Four things are worth knowing before you edit the file by hand:
 
 - `at` and `cron` resolve in the top-level [`timezone`](#sidebar-rendering), falling back to the system zone when it is unset.
