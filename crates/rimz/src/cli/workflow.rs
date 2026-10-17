@@ -168,7 +168,7 @@ fn start(
         &dir,
         &scope,
         &ctx.workspace.project_root,
-        prompt,
+        || Ok(prompt),
         None,
     )?;
     writeln!(

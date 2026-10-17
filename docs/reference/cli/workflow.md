@@ -94,7 +94,7 @@ for           = "3m"
 | `when`, `for`, schedules, `root` | As on any task. |
 | `budget`, `budget-per-day` | Ignored: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
 
-`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A fire that finds an active or parked run for its checkout records `workflow skipped` with the existing run id and adds no strike; a finished run does not block the next fire. While the task's `when` stays true it re-fires at the resident retry cadence and records a skipped row each time, so prefer a condition that goes false when the work is done (`pr=open`).
+`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A fire that finds an active or parked run for its checkout records `workflow skipped` with the existing run id and adds no strike, and it checks for that run before it reads the definition or the prompt, so editing either while a run holds the checkout never errors a fire; a finished run does not block the next fire. While the task's `when` stays true it re-fires at the resident retry cadence and records a skipped row each time, so prefer a condition that goes false when the work is done (`pr=open`).
 
 ## Park reasons
 

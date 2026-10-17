@@ -58,7 +58,15 @@ fn create_validates_the_spec_it_reads_before_publication() {
     let text = "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\ntimeout='tomorrow'\non.ok='@done'\n";
     let (home, state, record, _) = fixture(text);
     fs::write(crate::disk::paths::workflow_spec_file(home.path()), text).unwrap();
-    let error = create(&state, home.path(), home.path(), home.path(), None, None).unwrap_err();
+    let error = create(
+        &state,
+        home.path(),
+        home.path(),
+        home.path(),
+        || Ok(None),
+        None,
+    )
+    .unwrap_err();
     assert!(
         error.to_string().contains("checks.pr.timeout"),
         "the bytes to seal must be validated first: {error}"
@@ -118,7 +126,7 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
         }
-        let error = create(&state, &dir, home.path(), home.path(), None, None).unwrap_err();
+        let error = create(&state, &dir, home.path(), home.path(), || Ok(None), None).unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
