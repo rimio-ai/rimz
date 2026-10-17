@@ -189,7 +189,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 
 ## The cockpit
 
-The cockpit is the top block. Its lines stay put as agents change status, and only the unread banner adds or removes a row.
+The cockpit is the top block. Its lines stay put as agents change status; only the unread banner and [parked workflow runs](#parked-workflow-runs) add or remove rows.
 
 ```
  ⌘ query-engine                     ~/code/query-engine
@@ -208,6 +208,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 1 | `⌘` and the workspace name in green. The project path sits on the right with your home directory as `~`; when space runs out the path loses its left end behind `…`. |
 | 2 | `◎` sessions that ran in this room during the spend window, and their tokens on the right: `◇` total, which is `↘` input including cache creation plus `↗` output, then `◌` cache-read beside it. |
 | 3 | `¤` live agents, `(N)` worktrees holding unread cards when there are any (a team lane with four unread agents counts once), `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
+| then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
 | 4 | the make-up line: agents by status. |
 | 5 | the `↑ N need you` banner, only while it applies. |
 
@@ -216,6 +217,20 @@ Before any spend arrives the token breakdown shows zeroes and the spend shows `$
 The room's scope is a path prefix: the project root and each grouped worktree root. A checkout you reach through a symlink spelled differently from the path in the agent's transcript can count as outside the room until the two paths agree.
 
 The `⑃ N` colour reads each worktree's own pull request, since stacked pull requests carry no CI: red when any fails CI, yellow while one is running, green when every known verdict passes, and blue when CI is unknown.
+
+### Parked workflow runs
+
+A [workflow run](../guide/workflows.md) that parks for you adds one line under the spend line, oldest park first, and the line goes when you resume or cancel the run:
+
+```
+ ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                                                      $0.00
+ ? babysit-pr triage asked: Which compatibility fix should ship before the r 5m
+ ? review sweep cap                                                          2m
+ ──────────────────────────────────────────────────────────────────────────────
+```
+
+Each line is the waiting `?` glyph, the workflow, the node it parked at, and the park reason (`user`, `cap`, `deadline`, `timeout`, `invalid`, `asked`, or `check`), followed by its text when the park carries one: the question for `asked`, the check's own `reason` for `user`. The text loses its right end at the pane edge, and the time since the park stays on the right. The line is not a click target: `rimz workflow show <run>` and `rimz workflow resume <run>` act on it ([workflow commands](../reference/cli/workflow.md)). It appears within one data tick of the park.
 
 ### The make-up line
 
