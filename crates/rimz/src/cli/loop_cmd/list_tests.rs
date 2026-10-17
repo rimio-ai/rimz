@@ -12,6 +12,45 @@ fn shared_watch_state_preserves_strike_disabled_reason() {
 }
 
 #[test]
+fn needs_you_lists_parked_runs_under_a_stronger_attention() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut row = TaskRow::rowless("babysit".into(), None, None);
+    row.section = Section::NeedsYou;
+    row.attention = Some(Attention::Strikes);
+    row.reason = "disabled after 3 strikes".into();
+    row.workflow_runs = vec![WorkflowRunRow {
+        id: rimz::ids::WorkflowRunId::new(),
+        checkout: "/repo-worktrees/probe".into(),
+        state: "parked",
+        node: "gate".into(),
+        since: now,
+        reason: Some("user"),
+        text: Some("review the probe".into()),
+        workflow: "live".into(),
+        detail: String::new(),
+    }];
+    let model = ListModel {
+        rooms: vec![Room {
+            root: "/repo".into(),
+            open: true,
+            here: true,
+            spend_today_usd: 0.0,
+            tasks: vec![row],
+        }],
+        caller_root: Some("/repo".into()),
+        now,
+        warnings: Vec::new(),
+    };
+    let mut out = Vec::new();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    let rendered = String::from_utf8(out).unwrap();
+    assert!(
+        rendered.contains("  live gate user: review the probe"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn row_colors_follow_state_not_name_or_trigger_prefixes() {
     let now = Timestamp::from_second(1_000).unwrap();
     let tasks = [

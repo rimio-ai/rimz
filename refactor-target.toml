@@ -1183,7 +1183,8 @@ path = "crates/rimz/src/store"
 # RuntimeProjection::runtime_from_refs lets address tests project molt chains so supersession is computed, not asserted in (+1).
 # FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
 # Workflow attempt process, run, ending, ask, limit and child vocabulary is shared with the harness (+8).
-surface-budget = 463
+# The sidebar snapshot carries parked workflow runs; the park reason, park phrase, and run state have one wording for every surface.
+surface-budget = 467
 
 [[verdict]]
 kind = "item"

@@ -357,6 +357,7 @@ fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> boo
         reflects_log,
         fenced_sessions,
         resume_outcomes,
+        parked_workflows,
     } = left;
     shared_eq(worktree_groups, &right.worktree_groups)
         && shared_eq(agents, &right.agents)
@@ -405,6 +406,7 @@ fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> boo
         && fleet_budget == &right.fleet_budget
         && link == &right.link
         && reflects_log == &right.reflects_log
+        && parked_workflows == &right.parked_workflows
 }
 
 /// Record every production attempt so errors and forced refreshes bound the next ordinary attempt.

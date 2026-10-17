@@ -106,6 +106,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             )
             .into(),
         worktrees_error: None,
+        workflow_runs: Vec::new(),
         all: false,
     }
 }

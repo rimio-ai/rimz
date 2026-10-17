@@ -68,6 +68,17 @@ pub enum RunState {
 }
 
 impl RunState {
+    /// The state's wire word, as every surface prints it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Parked => "parked",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+        }
+    }
+
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Done | Self::Failed | Self::Canceled)
     }
@@ -85,11 +96,36 @@ pub enum ParkReason {
     Check,
 }
 
+impl ParkReason {
+    /// The reason's wire word, as every surface prints it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Cap => "cap",
+            Self::Deadline => "deadline",
+            Self::Timeout => "timeout",
+            Self::Invalid => "invalid",
+            Self::Asked => "asked",
+            Self::Check => "check",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Park {
     pub reason: ParkReason,
     pub text: Option<String>,
     pub at: Timestamp,
+}
+
+impl Park {
+    /// `<reason>[: <text>]`, the park as one phrase.
+    pub fn label(&self) -> String {
+        match &self.text {
+            Some(text) => format!("{}: {text}", self.reason.as_str()),
+            None => self.reason.as_str().to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

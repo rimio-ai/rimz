@@ -1,0 +1,22 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                                                            ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 0                                                                      $0.00
+ ? babysit-pr triage asked: Which compatibility fix should ship before the r 5m
+ ? review sweep cap                                                          2m
+ ──────────────────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+ ──────────────────────────────────────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                                                 $0.00
+
+                                                                     ? for help

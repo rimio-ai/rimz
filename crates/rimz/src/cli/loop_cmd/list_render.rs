@@ -33,7 +33,7 @@ pub(super) fn write(
             continue;
         }
         heading(out, room, model.now, timer)?;
-        needs_you(out, room, width)?;
+        needs_you(out, room, model.now, width)?;
         room_rows(out, room, model.now, width)?;
         worktree_rows(out, room, model.now, width)?;
     }
@@ -110,7 +110,12 @@ fn heading(out: &mut impl Write, room: &Room, now: Timestamp, timer: bool) -> Re
     Ok(())
 }
 
-fn needs_you(out: &mut impl Write, room: &Room, width: Option<usize>) -> Result<()> {
+fn needs_you(
+    out: &mut impl Write,
+    room: &Room,
+    now: Timestamp,
+    width: Option<usize>,
+) -> Result<()> {
     let rows = room
         .tasks
         .iter()
@@ -131,6 +136,13 @@ fn needs_you(out: &mut impl Write, room: &Room, width: Option<usize>) -> Result<
         })
         .collect::<Vec<_>>();
     write_table(out, &["", "", ""], &cells, 2, width)?;
+    for run in rows
+        .iter()
+        .flat_map(|row| &row.workflow_runs)
+        .filter(|run| run.reason.is_some())
+    {
+        writeln!(out, "  {}", run.summary(now))?;
+    }
     let mut hints: BTreeMap<Attention, Vec<&str>> = BTreeMap::new();
     for row in rows {
         if let Some(attention) = row.attention {
@@ -145,11 +157,13 @@ fn needs_you(out: &mut impl Write, room: &Room, width: Option<usize>) -> Result<
     for (attention, names) in hints {
         let command = match attention {
             Attention::CheckoutGone => format!("{rimz} loop remove {}", names.join(" ")),
-            Attention::Strikes | Attention::Failing | Attention::Invalid => names
-                .iter()
-                .map(|name| format!("{rimz} loop show {name}"))
-                .collect::<Vec<_>>()
-                .join(" · "),
+            Attention::Strikes | Attention::Failing | Attention::Invalid | Attention::Parked => {
+                names
+                    .iter()
+                    .map(|name| format!("{rimz} loop show {name}"))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            }
             Attention::Blocked => format!("{rimz} trust grant"),
             Attention::Held => continue,
         };
@@ -536,7 +550,7 @@ fn reason_style(attention: Option<Attention>) -> anstyle::Style {
         Some(
             Attention::CheckoutGone | Attention::Strikes | Attention::Failing | Attention::Invalid,
         ) => role(StateRole::Failed),
-        Some(Attention::Held | Attention::Blocked) => role(StateRole::Waiting),
+        Some(Attention::Held | Attention::Blocked | Attention::Parked) => role(StateRole::Waiting),
         None => ui::palette::body(),
     }
 }

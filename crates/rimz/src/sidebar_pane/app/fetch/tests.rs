@@ -7,6 +7,18 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 use std::path::PathBuf;
 
 #[test]
+fn parked_workflows_are_content_not_a_clock_only_change() {
+    let left = crate::sidebar_pane::app::fixtures::snapshot(&workspace());
+    let mut value = serde_json::to_value(&left).unwrap();
+    value["parked_workflows"] = serde_json::json!([{"run":"wf_0190b8172c0070008000000000000001","workflow":"review","node":"triage","reason":"asked","text":"Which fix?","checkout":"/repo","since":"2026-01-01T00:00:00Z"}]);
+    let right = serde_json::from_value(value).unwrap();
+    assert!(
+        !same_snapshot_content(&left, &right),
+        "a newly parked run must reach the renderer as content"
+    );
+}
+
+#[test]
 fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
     let fixture = FetchFixture::new();
     let frame = crate::testkit::fleet::seed_scale_room(
