@@ -1556,7 +1556,7 @@ mod tests {
         )
         .unwrap();
         let text = String::from_utf8(out).unwrap();
-        assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail"), "{text}");
+        assert!(text.lines().any(|line| line == "guard: runs cargo test (cap 10m), then asks haiku (cap 5m); acts when both fail, a judge with no verdict counting as a fail"), "{text}");
     }
 
     fn args(extra: &[&str]) -> AddArgs {

@@ -117,7 +117,17 @@ pub(super) fn guard_value(entry: &TaskEntry) -> String {
         (CheckOn::Fail, _) => "when all fail",
         (CheckOn::Success, _) => "when all pass",
     };
-    format!("{}; acts {condition}", stages.join(", then "))
+    let no_verdict = match (
+        guard.judges.is_empty(),
+        entry.on.unwrap_or_default(),
+        stages.len(),
+    ) {
+        (true, _, _) | (_, CheckOn::Any, _) => "",
+        (_, _, 1) => " or gives no verdict",
+        (_, CheckOn::Fail, _) => ", a judge with no verdict counting as a fail",
+        (_, CheckOn::Success, _) => ", a judge with no verdict counting as a pass",
+    };
+    format!("{}; acts {condition}{no_verdict}", stages.join(", then "))
 }
 
 pub(super) fn task_run_rule(entry: &TaskEntry, task_action: &TaskAction) -> String {
@@ -2433,12 +2443,12 @@ fn record_note(record: &LoopRunRecord) -> Option<String> {
         .or_else(|| record.target.as_deref().map(first_line))
         .map(|note| truncate_note(note, NOTE_MAX))
         .filter(|note| !note.is_empty());
-    let held = record
+    let queued = record
         .throttle_wait_ms
-        .map(|waited| format!("held {}", format_duration_ms(waited)));
-    let note = match (held, note) {
-        (Some(held), Some(note)) => Some(format!("{held} · {note}")),
-        (held, note) => held.or(note),
+        .map(|waited| format!("queued {}", format_duration_ms(waited)));
+    let note = match (queued, note) {
+        (Some(queued), Some(note)) => Some(format!("{queued} · {note}")),
+        (queued, note) => queued.or(note),
     };
     let checkout = record
         .checkout

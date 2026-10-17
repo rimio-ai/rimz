@@ -14,11 +14,84 @@ fn agent_check_rows_name_the_profile() {
     let action = TaskAction::Spawn("codex".into());
     assert_eq!(
         check_summary(&entry, Some(&action)).as_deref(),
-        Some("asks haiku (cap 5m); acts when it passes")
+        Some("asks haiku (cap 5m); acts when it passes or gives no verdict")
     );
     assert_eq!(
         task_run_rule(&entry, &action),
         "judge `haiku`, then start codex on success"
+    );
+}
+
+#[test]
+fn guard_value_single_judge_explains_no_verdict_on_failure() {
+    let entry: TaskEntry =
+        toml::from_str("on = 'fail'\n[check]\nagent = 'haiku'\nprompt = 'q'").unwrap();
+    assert_eq!(
+        guard_value(&entry),
+        "asks haiku (cap 5m); acts when it fails or gives no verdict"
+    );
+}
+
+#[test]
+fn guard_value_mixed_chain_explains_no_verdict_for_both_polarities() {
+    let mut entry: TaskEntry =
+        toml::from_str("check = 'cargo test'\n[[judge]]\nagent = 'haiku'\nprompt = 'q'").unwrap();
+    for (on, expected) in [(CheckOn::Fail, "fail"), (CheckOn::Success, "pass")] {
+        entry.on = Some(on);
+        assert_eq!(
+            guard_value(&entry),
+            format!(
+                "runs cargo test (cap 5m), then asks haiku (cap 5m); acts when both {expected}, a judge with no verdict counting as a {expected}"
+            )
+        );
+    }
+}
+
+#[test]
+fn guard_value_longer_chain_explains_no_verdict_for_all_stages() {
+    let mut entry: TaskEntry = toml::from_str("check = 'cargo test'\n[[judge]]\nagent = 'haiku'\nprompt = 'q'\n[[judge]]\nagent = 'codex'\nprompt = 'q'").unwrap();
+    for (on, expected) in [(CheckOn::Success, "pass"), (CheckOn::Fail, "fail")] {
+        entry.on = Some(on);
+        assert_eq!(
+            guard_value(&entry),
+            format!(
+                "runs cargo test (cap 5m), then asks haiku (cap 5m), then asks codex (cap 5m); acts when all {expected}, a judge with no verdict counting as a {expected}"
+            )
+        );
+    }
+}
+
+#[test]
+fn guard_value_keeps_shell_only_and_any_wording() {
+    let mut entry = TaskEntry {
+        check: Some("cargo test".into()),
+        ..Default::default()
+    };
+    for (on, expected) in [
+        (CheckOn::Fail, "when it fails"),
+        (CheckOn::Success, "when it passes"),
+        (CheckOn::Any, "whatever the outcome"),
+    ] {
+        entry.on = Some(on);
+        assert_eq!(
+            guard_value(&entry),
+            format!("runs cargo test (cap 5m); acts {expected}")
+        );
+    }
+    let mut entry: TaskEntry =
+        toml::from_str("on = 'any'\n[check]\nagent = 'haiku'\nprompt = 'q'").unwrap();
+    assert_eq!(
+        guard_value(&entry),
+        "asks haiku (cap 5m); acts whatever the outcome"
+    );
+    let Some(TaskCheck::Agent(judge)) = entry.check.take() else {
+        panic!("judge fixture");
+    };
+    entry.check = Some("cargo test".into());
+    entry.judge.push(judge);
+    assert_eq!(
+        guard_value(&entry),
+        "runs cargo test (cap 5m), then asks haiku (cap 5m); acts whatever the outcome"
     );
 }
 
@@ -1391,20 +1464,20 @@ fn last_run(records: &[LoopRunRecord]) -> String {
 }
 
 #[test]
-fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_held() {
+fn throttle_skip_is_a_refused_fire_with_a_visible_reason_and_a_waited_row_says_queued() {
     let mut skipped = record(0, LoopRunResult::ThrottleSkipped);
     skipped.error = Some("cpu pressure 41% >= 25%; held 30m".into());
     assert!(is_refused_fire(&skipped));
 
     let mut waited = record(0, LoopRunResult::Launched);
     waited.throttle_wait_ms = Some(192_000);
-    assert_eq!(record_note(&waited).as_deref(), Some("held 3m"));
+    assert_eq!(record_note(&waited).as_deref(), Some("queued 3m"));
     waited.target = Some("@fixer".into());
-    assert_eq!(record_note(&waited).as_deref(), Some("held 3m · @fixer"));
+    assert_eq!(record_note(&waited).as_deref(), Some("queued 3m · @fixer"));
     waited.checkout = Some(PathBuf::from("/repo/lane"));
     assert_eq!(
         record_note(&waited).as_deref(),
-        Some("lane held 3m · @fixer")
+        Some("lane queued 3m · @fixer")
     );
 }
 
