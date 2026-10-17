@@ -1,5 +1,52 @@
 use super::*;
-use crate::store::snapshot::view::model::needs_you;
+use crate::agents::{ParkDemotion, TurnErrorClass};
+use crate::store::snapshot::view::model::{card_status, needs_you};
+
+#[test]
+fn card_projection_status_honors_card_and_rowless_demotion() {
+    let now = epoch();
+    let mut state = agent("codex", "status", AgentStatus::Running, 0);
+    let mut context = crate::agents::AgentContext::new("codex", now);
+    context.turn_error = Some(crate::agents::AgentTurnError {
+        class: TurnErrorClass::PausedRateLimit,
+        at: now + jiff::SignedDuration::from_secs(1),
+        label: Some("limit reached".into()),
+    });
+    state.context = Some(context);
+    let demotion = ParkDemotion::default();
+    let mut row = row_from_agent(&state, now);
+    let card = row.as_agent_mut().unwrap();
+    card.status = AgentStatus::Sleeping;
+    card.phase = TurnPhase::Reasoning;
+    assert_eq!(
+        card_status(&state, Some(&row), None, &demotion),
+        (AgentStatus::Sleeping, TurnPhase::Reasoning)
+    );
+    assert_eq!(
+        card_status(&state, None, None, &demotion),
+        (AgentStatus::Paused, TurnPhase::Idle)
+    );
+    let spent = ParkDemotion::new(
+        &Default::default(),
+        [(state.kind.clone(), state.agent_id.clone())].into(),
+        now,
+    );
+    assert_eq!(
+        card_status(&state, None, None, &spent),
+        (AgentStatus::Failed, TurnPhase::Idle)
+    );
+    let mut child = sub_agent_from_state(&state, now, false, default_stall_secs() as u32);
+    child.status = AgentStatus::Running;
+    child.phase = TurnPhase::Acting;
+    assert_eq!(
+        card_status(&state, None, Some(&child), &spent),
+        (AgentStatus::Running, TurnPhase::Acting)
+    );
+    assert_eq!(
+        card_status(&state, Some(&row), Some(&child), &spent),
+        (AgentStatus::Sleeping, TurnPhase::Reasoning)
+    );
+}
 
 #[test]
 fn attention_uses_ask_age_and_error_description() {

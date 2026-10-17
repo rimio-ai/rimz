@@ -42,7 +42,7 @@ pub use model::{
     RedeemForecast, RemoteControlBadge, SidebarCohortEffort, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarPipeline, SidebarPresence, SidebarProviderPanel, SidebarSeatEffort,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, StackPr, WorktreeCi,
-    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, lead_unread_row, needs_you,
+    WorktreePrQueue, WorktreePrState, WorktreeTrunkSync, card_status, lead_unread_row, needs_you,
 };
 pub(crate) use model::{SidebarUnitKey, actionable_unread_count, triage_key};
 pub use reap::RuntimeReapInputs;

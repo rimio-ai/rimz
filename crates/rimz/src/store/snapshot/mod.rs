@@ -55,8 +55,8 @@ pub use row::{
     RowCard, SidebarRow, SidebarSubAgent, SubAgentTokens,
 };
 pub use view::{
-    AgentWorktreeGroup, NeedsYou, ParkedWorkflow, find_agent, group_live_agents_by_worktree,
-    needs_you,
+    AgentWorktreeGroup, NeedsYou, ParkedWorkflow, card_status, find_agent,
+    group_live_agents_by_worktree, needs_you,
 };
 pub use view::{
     DailyBudgetView, PipelinePosition, PrStack, PresenceSample, RedeemForecast, RemoteControlBadge,

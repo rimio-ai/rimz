@@ -7,13 +7,14 @@ use clap::Args;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use super::GlobalFlags;
-use super::report::{card_status, child_for_agent, row_for_agent};
+use super::report::{child_for_agent, row_for_agent};
 use crate::cli::render;
 use rimz::address;
 use rimz::agents::AgentStatus;
 use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
+use rimz::store::snapshot::card_status;
 use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::utils::time::{DurationUnit, parse_duration_units};
 use rimz::workspace::WorkspaceResolver;
@@ -167,11 +168,11 @@ fn sample_snapshot(
                 handle,
                 status: card_status(
                     agent,
-                    row_for_agent(snapshot, agent)
-                        .and_then(rimz::store::snapshot::SidebarRow::as_agent),
+                    row_for_agent(snapshot, agent),
                     child_for_agent(snapshot, agent),
                     demotion,
-                ),
+                )
+                .0,
                 context_pct: agent.context_fill_pct(),
                 tokens: agent.usage.total_tokens.unwrap_or(0),
                 age: render::age_short(agent.last_seen, now),

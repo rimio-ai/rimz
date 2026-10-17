@@ -1219,7 +1219,8 @@ path = "crates/rimz/src/store"
 # The sidebar snapshot carries parked workflow runs; the park reason, park phrase, and run state have one wording for every surface.
 # SidebarUnitKey and SidebarWorktreeGroup::unit_key share group-local unit identity (+1).
 # EvaluationOrigin distinguishes check answers from engine decisions in the journal (+1).
-surface-budget = 469
+# card_status shares displayed status and phase resolution with CLI consumers (+1).
+surface-budget = 470
 
 [[verdict]]
 kind = "item"
@@ -3397,6 +3398,21 @@ reason = "Read-only attention value shared by agents and teams; never persisted.
 kind = "item"
 key = "store::snapshot::view::model::needs_you"
 reason = "CLI scenes use the sidebar's attention membership, ask age, and rowless demotion."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::model::card_status"
+reason = "Agent reports and top share card, child, and rowless status and phase resolution, also exposed for doctor's card-status contract."
+
+[[verdict]]
+kind = "item"
+key = "agents::context::TurnErrorClass::is_limit"
+reason = "Doctor's account-attribution contract needs the same limit classification as resume policy."
+
+[[verdict]]
+kind = "item"
+key = "agents::account::ProviderCapacity::latest_spent_window_reset"
+reason = "Doctor's cache-only standing contract needs the account's next recovery from the shared subscription-window projection."
 
 [[verdict]]
 kind = "item"
