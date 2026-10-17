@@ -859,6 +859,19 @@ fn project_tasks_reject_machine_local_fields() {
 }
 
 #[test]
+fn project_tasks_accept_workflows() {
+    let project = tempdir().unwrap();
+    let config = tempdir().unwrap();
+    write_project_config(&project, "[tasks.review]\nworkflow='review'\nevery='1h'\n");
+    let tasks = project_tasks(project.path(), config.path());
+    assert!(tasks.is_ok(), "project workflow task: {tasks:?}");
+    assert_eq!(
+        serde_json::to_value(&tasks.unwrap().unwrap().tasks.0["review"]).unwrap()["workflow"],
+        "review"
+    );
+}
+
+#[test]
 fn project_tasks_require_prompt_for_spawn_tasks() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

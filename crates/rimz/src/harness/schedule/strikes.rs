@@ -63,6 +63,7 @@ pub(super) fn classify(record: &LoopRunRecord) -> Signal {
         | LoopRunResult::StartFailed
         | LoopRunResult::Canceled
         | LoopRunResult::SignalSkipped
+        | LoopRunResult::WorkflowSkipped
         | LoopRunResult::Expired
         | LoopRunResult::TargetGone => Signal::Neutral,
     }
@@ -227,6 +228,10 @@ mod tests {
         );
         assert_eq!(
             classify(&record(LoopRunResult::TakeoverBlocked, None)),
+            Signal::Neutral
+        );
+        assert_eq!(
+            classify(&record(LoopRunResult::WorkflowSkipped, None)),
             Signal::Neutral
         );
         for result in [

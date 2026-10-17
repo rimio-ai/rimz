@@ -2,6 +2,21 @@ use super::*;
 use std::io::Write as _;
 
 #[test]
+fn workflow_skip_round_trips_as_a_neutral_result() {
+    let value = serde_json::json!({"task":"review", "at":"2026-01-01T00:00:00Z", "result":"workflow_skipped", "run_id":"wf_existing"});
+    let row = serde_json::from_value::<LoopRunRecord>(value.clone());
+    assert!(row.is_ok(), "workflow skip is a persisted result: {row:?}");
+    let row = row.unwrap();
+    assert_eq!(row.result.label(), "skipped");
+    assert_eq!(row.polarity(), None);
+    assert_eq!(row.result.spawn_exit_code(), None);
+    assert_eq!(
+        serde_json::to_value(row).unwrap()["result"],
+        value["result"]
+    );
+}
+
+#[test]
 fn stages_fold_legacy_judges_and_use_the_last_answer() {
     let legacy: LoopRunRecord = serde_json::from_value(serde_json::json!({
         "task": "guard", "at": "2026-01-01T00:00:00Z", "result": "check_skipped",

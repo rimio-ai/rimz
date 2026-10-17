@@ -192,6 +192,36 @@ fn worktree_scopes_normalize_marker_components() {
 }
 
 #[test]
+fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
+    let (_root, mut tasks, owned) = worktree_tasks(None);
+    let mut entry = tasks[NAME].entry().clone();
+    entry.agent = None;
+    entry.stay = false;
+    entry.workflow = Some("review".into());
+    tasks.insert(NAME.into(), loaded(entry));
+    let now = Timestamp::from_second(1000).unwrap();
+    let ledger = one(BTreeMap::from([(
+        owned[0].clone(),
+        super::super::launch_ledger::LaunchRecord {
+            at: now,
+            leader: "old".into(),
+        },
+    )]));
+    assert_eq!(
+        scoped_tasks(
+            &tasks,
+            &ledger,
+            &owned,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            now
+        )
+        .len(),
+        2
+    );
+}
+
+#[test]
 fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
     let (_root, tasks, owned) = worktree_tasks(None);
     let now = zdt(2026, 6, 24, 8, 0, 0);
@@ -702,14 +732,19 @@ fn condition_tick(
 fn resident_conditions_retry_at_five_minutes_until_ledgered() {
     let root = tempfile::tempdir().unwrap();
     let now = zdt(2026, 6, 24, 8, 0, 0);
-    for stay in [true, false] {
+    for (stay, workflow) in [(true, false), (false, false), (false, true)] {
+        let workflow_entry: TaskEntry = toml::from_str("workflow='review'").unwrap();
         let tasks = one(loaded(TaskEntry {
             root: root.path().to_owned(),
-            agent: Some("claude".into()),
+            agent: (!workflow).then(|| "claude".into()),
             prompt: Some("repair".into()),
             stay,
             when: Some(vec!["team.stage=Done".into()]),
-            ..Default::default()
+            ..if workflow {
+                workflow_entry
+            } else {
+                Default::default()
+            }
         }));
         let verdicts = one(Verdict {
             ok: true,
@@ -726,9 +761,9 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
         for (minute, second, expected) in [
             (0, 0, true),
             (4, 59, false),
-            (5, 0, stay),
+            (5, 0, stay || workflow),
             (9, 59, false),
-            (10, 0, stay),
+            (10, 0, stay || workflow),
         ] {
             let tick = zdt(2026, 6, 24, 8, minute, second);
             let (actions, next_stamps, next_states) =

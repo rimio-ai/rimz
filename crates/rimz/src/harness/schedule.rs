@@ -49,6 +49,7 @@ pub(crate) const LOOP_TASK_ENV: &str = "RIMZ_LOOP_TASK";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TaskAction {
     Spawn(String),
+    Workflow(String),
     Deliver(TaskTarget),
     CheckOnly,
 }
@@ -57,13 +58,14 @@ pub enum TaskAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskActionKind {
     Spawn,
+    Workflow,
     Deliver,
     CheckOnly,
 }
 
 impl TaskActionKind {
     pub const fn has_effect(self) -> bool {
-        matches!(self, Self::Spawn | Self::Deliver)
+        matches!(self, Self::Spawn | Self::Deliver | Self::Workflow)
     }
 
     pub const fn is_spawn(self) -> bool {
@@ -92,6 +94,14 @@ pub enum TaskActionErr {
     ZeroAttempts { name: String },
     #[error("loop task `{name}` sets both `agent` and `wait`; keep exactly one")]
     ConflictingActions { name: String },
+    #[error("loop task `{name}` sets `workflow` with `agent` or `wait`; keep exactly one")]
+    ConflictingWorkflow { name: String },
+    #[error("loop task `{name}` sets `{field}` with `workflow`; {hint}")]
+    WorkflowField {
+        name: String,
+        field: &'static str,
+        hint: &'static str,
+    },
     #[error("loop task `{name}` needs `agent`, `wait`, or `check`")]
     MissingAction { name: String },
     #[error(
@@ -107,6 +117,48 @@ pub enum TaskActionErr {
 impl TaskAction {
     fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
         let guard = entry.guard();
+        if entry.workflow.is_some() {
+            if entry.agent.is_some() || entry.wait.is_some() {
+                return Err(TaskActionErr::ConflictingWorkflow {
+                    name: name.to_owned(),
+                });
+            }
+            for (set, field, hint) in [
+                (
+                    entry.stay,
+                    "stay",
+                    "a workflow run is not a resident agent; its steps launch and stop agents",
+                ),
+                (
+                    entry.takeover,
+                    "takeover",
+                    "takeover belongs to the workflow's steps (`[steps.<name>] takeover = true`)",
+                ),
+                (
+                    !entry.subscribe.is_empty(),
+                    "subscribe",
+                    "signals wake the run's checks; a check names what it waits for",
+                ),
+                (
+                    entry.check.is_some(),
+                    "check",
+                    "checks are the workflow's `[checks.<name>]` nodes",
+                ),
+                (
+                    !entry.judge.is_empty(),
+                    "judge",
+                    "checks are the workflow's `[checks.<name>]` nodes",
+                ),
+            ] {
+                if set {
+                    return Err(TaskActionErr::WorkflowField {
+                        name: name.to_owned(),
+                        field,
+                        hint,
+                    });
+                }
+            }
+        }
         if !guard.judges.is_empty() {
             if entry.on.is_none() {
                 return Err(TaskActionErr::JudgeWithoutOn {
@@ -139,6 +191,9 @@ impl TaskAction {
                 name: name.to_owned(),
             });
         }
+        if let Some(workflow) = &entry.workflow {
+            return Ok(Self::Workflow(workflow.clone()));
+        }
         match (entry.agent.as_deref(), entry.wait.as_ref()) {
             (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent.to_owned())),
             (None, Some(target)) => Ok(Self::Deliver(target.clone())),
@@ -154,7 +209,7 @@ impl TaskAction {
 
     pub fn subject(&self) -> &str {
         match self {
-            Self::Spawn(spec) => spec,
+            Self::Spawn(spec) | Self::Workflow(spec) => spec,
             Self::Deliver(target) => &target.handle,
             Self::CheckOnly => "check",
         }
@@ -163,6 +218,7 @@ impl TaskAction {
     pub const fn kind(&self) -> TaskActionKind {
         match self {
             Self::Spawn(_) => TaskActionKind::Spawn,
+            Self::Workflow(_) => TaskActionKind::Workflow,
             Self::Deliver(_) => TaskActionKind::Deliver,
             Self::CheckOnly => TaskActionKind::CheckOnly,
         }

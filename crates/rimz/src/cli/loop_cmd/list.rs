@@ -164,6 +164,7 @@ enum ActionKind {
     Check,
     Start,
     Wake,
+    Workflow,
 }
 
 impl From<&TaskAction> for ActionKind {
@@ -171,6 +172,7 @@ impl From<&TaskAction> for ActionKind {
         match action {
             TaskAction::CheckOnly => Self::Check,
             TaskAction::Spawn(_) => Self::Start,
+            TaskAction::Workflow(_) => Self::Workflow,
             TaskAction::Deliver(_) => Self::Wake,
         }
     }
@@ -444,7 +446,7 @@ impl TaskRow {
         let action = task.action().ok().map(|action| Action {
             kind: ActionKind::from(action),
             subject: match action {
-                TaskAction::Spawn(subject) => subject.clone(),
+                TaskAction::Spawn(subject) | TaskAction::Workflow(subject) => subject.clone(),
                 TaskAction::Deliver(target) => target.handle.clone(),
                 TaskAction::CheckOnly => "check".into(),
             },

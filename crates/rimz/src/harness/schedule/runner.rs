@@ -328,7 +328,7 @@ impl FireScope {
 impl FireContext {
     fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
         let root = entry.resolved_root();
-        if action.is_check_only() {
+        if matches!(action, TaskAction::CheckOnly | TaskAction::Workflow(_)) {
             return Ok(Self {
                 action,
                 root,
@@ -383,7 +383,9 @@ impl FireContext {
                     unresolved_managed_state(&entry.resolved_root(), &target.kind);
                 scope
             }
-            TaskAction::CheckOnly => unreachable!("check-only context returned above"),
+            TaskAction::CheckOnly | TaskAction::Workflow(_) => {
+                unreachable!("action without provider scope returned above")
+            }
         };
         Ok(Self {
             action,
@@ -575,6 +577,9 @@ impl<'a> TaskFire<'a> {
         &mut self,
         before_check: &mut dyn FnMut(&Path) -> Result<()>,
     ) -> Result<TaskFirePlan> {
+        if let Some(TaskAction::Workflow(name)) = self.action.as_ref() {
+            return self.prepare_workflow(name.clone(), before_check);
+        }
         if self.entry.stay {
             return self.prepare_resident(before_check);
         }
@@ -642,7 +647,86 @@ impl<'a> TaskFire<'a> {
             TaskAction::CheckOnly => {
                 unreachable!("check-only action is completed by prepare_check")
             }
+            TaskAction::Workflow(_) => {
+                unreachable!("workflow action is completed by prepare_workflow")
+            }
         }
+    }
+
+    fn prepare_workflow(
+        &mut self,
+        name: String,
+        before_launch: &mut dyn FnMut(&Path) -> Result<()>,
+    ) -> Result<TaskFirePlan> {
+        super::validate_name(&name)?;
+        if let Some(done) = self.prepare_run_lock(true)? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        if let Some(done) = self.prepare_deadline()? {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        let root = self.entry.resolved_root();
+        before_launch(&root)?;
+        if self.run_lock.is_none()
+            && let Some(done) = self.prepare_run_lock(false)?
+        {
+            return Ok(TaskFirePlan::Done(done));
+        }
+        let state = StatePaths::for_project_root(&root)?;
+        let home = crate::disk::paths::workflows_dir().canonicalize()?;
+        let dir = home.join(&name).canonicalize()?;
+        anyhow::ensure!(
+            dir.starts_with(&home),
+            "workflow must exist inside {}",
+            home.display()
+        );
+        let prompt = if self.entry.prompt.is_some() || self.entry.prompt_file.is_some() {
+            Some(self.resolve_effect_prompt()?)
+        } else {
+            None
+        };
+        let result = crate::harness::workflow::create(
+            &state,
+            &dir,
+            &self.launch_checkout(),
+            &root,
+            prompt.clone(),
+            Some(self.name.clone()),
+        );
+        let (result, id, error) = match result {
+            Ok(run) => {
+                assist_log::append(&AssistRecord {
+                    at: Timestamp::now(),
+                    assist: Assist::WorkflowStart {
+                        run: run.id.clone(),
+                        workflow: run.workflow,
+                        task: run.task,
+                        checkout: run.scope.path,
+                        prompt: prompt.is_some(),
+                    },
+                });
+                (LoopRunResult::Launched, run.id, None)
+            }
+            Err(error) => match &error {
+                crate::harness::workflow::WorkflowErr::Exists { run, .. } => (
+                    LoopRunResult::WorkflowSkipped,
+                    run.clone(),
+                    Some(error.to_string()),
+                ),
+                _ => return Err(error.into()),
+            },
+        };
+        self.consume_ephemeral()?;
+        Ok(TaskFirePlan::Done(self.record_terminal_with(
+            result,
+            LoopRunPresentation::default(),
+            TaskFireNotice::None,
+            None,
+            |record| {
+                record.run_id = Some(id.to_string());
+                record.error = error;
+            },
+        )))
     }
 
     fn prepare_resident(
@@ -1525,7 +1609,7 @@ impl<'a> TaskFire<'a> {
         record.throttle_wait_ms = self
             .throttle_wait
             .map(|waited| u64::try_from(waited.as_millis()).unwrap_or(u64::MAX));
-        if self.entry.stay {
+        if self.entry.stay || self.entry.each_worktree {
             record.checkout = Some(self.launch_checkout());
         }
         add_check_usage(&mut record);
@@ -1762,7 +1846,7 @@ pub fn preflight_entry(
             preflight_kind(&resolved.kind, login)?;
         }
         TaskAction::Deliver(target) => preflight_kind(&target.kind, login)?,
-        TaskAction::CheckOnly => {}
+        TaskAction::CheckOnly | TaskAction::Workflow(_) => {}
     }
     Ok(())
 }

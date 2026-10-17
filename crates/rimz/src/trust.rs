@@ -866,6 +866,7 @@ pub struct ProjectProfile {
 #[serde(default)]
 pub struct ProjectTask {
     pub agent: Option<String>,
+    pub workflow: Option<String>,
     pub prompt: Option<String>,
     #[serde(rename = "prompt-file")]
     pub prompt_file: Option<PathBuf>,
@@ -1006,6 +1007,8 @@ struct ExecutableHook<'a> {
 struct ExecutableTask<'a> {
     name: &'a str,
     agent: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<&'a str>,
     prompt: Option<&'a str>,
     prompt_file: Option<String>,
     check: Option<&'a TaskCheck>,
@@ -1152,6 +1155,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .map(|(name, task)| ExecutableTask {
                     name: name.as_str(),
                     agent: task.agent.as_deref(),
+                    workflow: task.workflow.as_deref(),
                     prompt: task.prompt.as_deref(),
                     prompt_file: task
                         .prompt_file

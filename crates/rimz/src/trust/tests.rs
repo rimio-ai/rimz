@@ -576,6 +576,7 @@ fn hash_covers_every_documented_surface_field() {
         "[agents.teams.review]\nappend-system-prompt-files = [\"prompts/pipeline.md\"]\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
         "[tasks.x]\n",
         "[tasks.x]\nagent = \"codex\"\n",
+        "[tasks.x]\nworkflow = \"review\"\n",
         "[tasks.y]\nagent = \"codex\"\n",
         "[tasks.x]\nprompt = \"repair CI\"\n",
         "[tasks.x]\nprompt-file = \"prompts/ci.md\"\n",

@@ -12,6 +12,156 @@ struct Room {
     bin: PathBuf,
 }
 
+#[test]
+fn loop_workflow_creation_duplicate_and_finished_scopes() {
+    let room = Room::new("");
+    fs::write(
+        room.env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.review]\nworkflow='review'\nroot={:?}\nevery='1h'\n",
+            room.env.project_root
+        ),
+    )
+    .unwrap();
+    let fire = || room.command(&["loop", "run", "review"]).output().unwrap();
+    let output = fire();
+    assert!(
+        output.status.success(),
+        "workflow task fires: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let paths = room.env.state_path_for(&room.env.project_root);
+    let records = records::list(&paths).unwrap();
+    assert_eq!(records.len(), 1);
+    let id = records[0].id.to_string();
+    assert_eq!(records[0].task.as_deref(), Some("review"));
+    let manual = success(room.command(&["loop", "fire", "review"]).output().unwrap());
+    assert!(
+        manual.contains(&id) && !manual.contains("pane closed"),
+        "manual workflow receipt: {manual}"
+    );
+    success(fire());
+    let history = || -> Value {
+        serde_json::from_str(&success(
+            room.command(&["loop", "show", "review", "--json"])
+                .output()
+                .unwrap(),
+        ))
+        .unwrap()
+    };
+    let rows = history();
+    assert!(
+        rows["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["result"] == "launched" && row["run_id"] == id)
+    );
+    assert!(
+        rows["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["result"] == "workflow_skipped" && row["run_id"] == id)
+    );
+    // A supported permission prompt parks the active run, and still blocks a duplicate.
+    let run = room.attempt(&id);
+    room.hook(&id, &run, json!({"hook_event_name":"SessionStart"}));
+    room.hook(
+        &id,
+        &run,
+        serde_json::from_str(&crate::common::codex_permission_payload()).unwrap(),
+    );
+    until(&room.env, &id, |v| v["record"]["state"] == "parked");
+    success(fire());
+    assert_eq!(records::list(&paths).unwrap().len(), 1);
+    success(room.command(&["workflow", "cancel", &id]).output().unwrap());
+    success(fire());
+    assert_eq!(records::list(&paths).unwrap().len(), 2);
+    assert_eq!(assists(&room.env)["rollup"]["workflow_starts"], 2);
+}
+
+#[test]
+fn loop_workflow_fires_per_owned_checkout_and_rejects_node_fields() {
+    let room = Room::new("");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "base",
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&room.env.project_root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(
+        room.env.rimz_home().join("workflows/review/workflow.toml"),
+        format!("{HEADER}{WAIT}"),
+    )
+    .unwrap();
+    fs::write(
+        room.env.rimz_home().join("workflows/review/checks/pr.sh"),
+        PENDING,
+    )
+    .unwrap();
+    for lane in ["one", "two"] {
+        success(room.command(&["worktree", "new", lane]).output().unwrap());
+    }
+    let config = room.env.rimz_home().join("loop.toml");
+    let base = format!(
+        "[tasks.review]\nworkflow='review'\nroot={:?}\nevery='1h'\n",
+        room.env.project_root
+    );
+    fs::write(&config, format!("{base}each-worktree=true\n")).unwrap();
+    let owned = rimz::worktree::discover_owned(&room.env.project_root).unwrap();
+    assert_eq!(owned.len(), 2);
+    for checkout in &owned {
+        let output = room
+            .command(&["loop", "run", "review", "--cwd"])
+            .arg(&checkout.marker.worktree_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "per-checkout workflow starts: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let records = records::list(&room.env.state_path_for(&room.env.project_root)).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_ne!(records[0].scope.path, records[1].scope.path);
+    for (field, hint) in [
+        ("stay=true", "not a resident agent"),
+        ("takeover=true", "[steps.<name>]"),
+        (
+            "subscribe=[{signal='ci.done'}]",
+            "check names what it waits for",
+        ),
+        ("check='true'", "[checks.<name>]"),
+    ] {
+        fs::write(&config, format!("{base}{field}\n")).unwrap();
+        let output = room.command(&["loop", "run", "review"]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(hint),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 impl Room {
     fn new(extra: &str) -> Self {
         Self::with_kind(extra, "codex")
