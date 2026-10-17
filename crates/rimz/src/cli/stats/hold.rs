@@ -23,7 +23,7 @@ impl RefreshWorker {
     }
 }
 
-pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
+pub(super) fn run_refresh(dollars: bool, hold: bool, active: Window) -> Result<()> {
     install_reload_signal()?;
     let glyphs = resolve_panel_glyphs(&super::super::machine_config().theme);
     let paths = RuntimePaths::shared();
@@ -32,7 +32,7 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     // mux scrollback. Raw mode turns keypresses and stray mouse reports into
     // typed events that the loop drains instead of echoing them.
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
-    let mut state = HeldStats::new(dollars, glyphs, hold);
+    let mut state = HeldStats::new(dollars, glyphs, hold, active);
     let worker = RefreshWorker::new(move || load_or_refresh_stats_via_service(&paths))?;
     loop {
         worker
@@ -116,11 +116,11 @@ pub(super) struct HeldStats {
 }
 
 impl HeldStats {
-    pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool) -> Self {
+    pub(super) fn new(dollars: bool, glyphs: PanelGlyphs, hold: bool, active: Window) -> Self {
         Self {
             current: None,
             refresh_failure: None,
-            active: Window::Year,
+            active,
             dollars,
             glyphs,
             hold,
@@ -201,7 +201,7 @@ impl HeldStats {
                     panel::PanelStats {
                         usage: stats,
                         assists: &assists,
-                        active: Some(self.active),
+                        active: self.active,
                     },
                     today_day,
                     self.dollars,
@@ -325,7 +325,7 @@ pub(super) fn reexec(target: &Path) -> anyhow::Error {
     )
 }
 
-pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
+pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Stats> {
     let spinner = Spinner::delayed(
         progress_line(SpendProgress {
             finished_files: 0,
@@ -334,11 +334,7 @@ pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Loade
         SPINNER_MIN_AGE,
     );
     let mut progress = |progress| spinner.set(progress_line(progress));
-    let stats = load_direct_stats_with_progress(paths, &mut progress)?;
-    Ok(LoadedStats {
-        stats,
-        header_printed: false,
-    })
+    load_direct_stats_with_progress(paths, &mut progress)
 }
 
 pub(super) fn should_animate_cold_stats(human: bool, stdout_tty: bool, stderr_tty: bool) -> bool {

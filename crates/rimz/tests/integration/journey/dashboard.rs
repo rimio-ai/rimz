@@ -84,6 +84,11 @@ fn provider_dashboard_renders_published_spend_and_session_cost() {
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: published_at_ms,
+            day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+                unix_now_ms() / 1000,
+                None,
+            )
+            .unwrap(),
             spending: spending(),
             ..Default::default()
         },

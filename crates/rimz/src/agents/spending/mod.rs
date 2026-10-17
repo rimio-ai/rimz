@@ -131,28 +131,21 @@ pub struct SpendingWalkResult {
     pub day_cutoff_secs: u64,
     pub days: BTreeMap<i64, DaySpend>,
     pub timezone: String,
-    pub models: BTreeMap<String, SpendTally>,
+    pub models: BTreeMap<String, ModelTally>,
     pub roles: RoleTallies,
     pub stats: WalkStats,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RoleTallies {
-    pub agents: BTreeMap<String, SpendTally>,
-    pub subagents: BTreeMap<String, SubagentTally>,
-    pub unattributed: UnattributedTally,
+    pub subagents: BTreeMap<String, SpendTally>,
+    pub recorded_since_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct UnattributedTally {
+pub struct ModelTally {
     pub tally: SpendTally,
-    pub by_provider: BTreeMap<String, SpendTally>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SubagentTally {
-    pub tally: SpendTally,
-    pub models: BTreeMap<String, SpendTally>,
+    pub kind: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -683,7 +676,7 @@ fn aggregate_walk_publish(
     now_secs: u64,
     scope: Option<&SpendScope>,
     spec: &HeadlineSpec,
-    roles: &session_roles::RoleMap,
+    roles: &session_roles::RoleIndex,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache).into_counted();
     aggregate_counted_rollups(

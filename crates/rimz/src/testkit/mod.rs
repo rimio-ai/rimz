@@ -413,6 +413,8 @@ pub mod fleet {
             &runtime.shared_provider_spending_path(),
             &agents::spending::ProviderSpendingCache {
                 refreshed_at_ms: now_ms,
+                day_cutoff_secs: agents::spending::local_day_start_secs(now_ms / 1000, None)
+                    .expect("current timestamp has a local day start"),
                 spending: agents::spending::Spending::default(),
                 ..Default::default()
             },

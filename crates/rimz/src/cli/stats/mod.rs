@@ -6,11 +6,11 @@
 //! Account-global: it reads the producer's published provider aggregate when
 //! available. A standalone first launch takes the same shared spending election
 //! as the sidebar producer, publishes the same provider-spending rollups, and
-//! then subsequent runs return from the cache.
+//! then subsequent runs return from a cache aggregated for the same local day.
 //!
 //! Windows: the heatmap always reads the full available history (the cache spans
-//! the trailing year). In the held dashboard, the windows row is a tab bar that
-//! scopes the model breakdown, agent breakdown, and insights below it.
+//! the trailing year). `--window` scopes model, provider, and subagent breakdowns
+//! in every mode, defaulting to today. It sets the held dashboard's initial tab.
 //! `--refresh` recomputes on a background thread, retries an unavailable first
 //! frame after five seconds, then repaints in place every minute and re-centres
 //! promptly after a width change.
@@ -35,7 +35,7 @@ use crate::cli::render;
 use crate::cli::spinner::Spinner;
 use rimz::RuntimePaths;
 use rimz::agents::spending::{
-    DaySpend, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
+    DaySpend, ModelTally, ProviderSpendingCache, SpendProgress, SpendTally, SpendWindow, Spending,
     read_provider_spending_cache, refresh_global_spending_direct, unix_secs_now, utc_date,
 };
 use rimz::config::{GlyphRole, MachineConfig, ThemeConfig};
@@ -85,10 +85,13 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
+    /// Window for the model, agent, and subagent breakdowns (the Spend row always shows all four).
+    #[arg(long, value_enum, default_value = "today", conflicts_with = "assists")]
+    window: Window,
     /// Print effective system assists, newest first.
     #[arg(long, conflicts_with_all = ["subagents", "refresh"])]
     pub assists: bool,
-    /// Show every subagent profile's trailing-year spend.
+    /// Show every subagent profile's spend in the selected window.
     #[arg(long, conflicts_with = "refresh")]
     pub subagents: bool,
     /// Number of assists to show; 0 shows all retained events.
@@ -106,7 +109,8 @@ pub struct StatsArgs {
     pub hold: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum Window {
     Today,
     Week,
@@ -170,45 +174,36 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
         return render_full(&assists, args.limit, args.all, args.json);
     }
     if args.refresh {
-        return run_refresh(args.dollars, args.hold);
+        return run_refresh(args.dollars, args.hold, args.window);
     }
-    let loaded = load_stats(!args.json)?;
-    let today_day = loaded.stats.today_day(unix_secs_now());
-    let assists = AssistStats::load(
-        &logs_dir(),
-        Window::Year,
-        Timestamp::now(),
-        &loaded.stats.timezone,
-    );
+    let stats = load_stats(!args.json)?;
+    let today_day = stats.today_day(unix_secs_now());
     if args.subagents {
         if args.json {
-            return json::emit_subagents(&loaded.stats);
+            return json::emit_subagents(&stats, args.window);
         }
         return panel::render_spend(
             &mut render::out(),
-            &loaded.stats,
+            &stats,
             today_day,
             args.dollars,
             true,
+            args.window,
             "\n",
         );
     }
     if args.json {
-        return emit_json(&loaded.stats, &assists, today_day, args.dollars);
+        let assists =
+            AssistStats::load(&logs_dir(), args.window, Timestamp::now(), &stats.timezone);
+        return emit_json(&stats, &assists, today_day, args.dollars, args.window);
     }
-    let glyphs = resolve_panel_glyphs(&super::machine_config().theme);
-    let mut out = render::out();
-    render_panel(
-        &mut out,
-        panel::PanelStats {
-            usage: &loaded.stats,
-            assists: &assists,
-            active: None,
-        },
+    panel::render_spend(
+        &mut render::out(),
+        &stats,
         today_day,
         args.dollars,
-        &glyphs,
-        !loaded.header_printed,
+        false,
+        args.window,
         "\n",
     )
 }
@@ -222,23 +217,18 @@ mod panel;
 use assists::{AssistStats, render_full};
 use hold::{load_cold_stats_with_spinner, run_refresh, should_animate_cold_stats};
 use json::emit_json;
-use panel::{render_panel, resolve_panel_glyphs};
 #[cfg(test)]
 use {assists::*, fmt::*, hold::*, panel::*};
-struct LoadedStats {
-    stats: Stats,
-    header_printed: bool,
-}
-
 /// The deduplicated account-global history `rimz stats` renders: per-day buckets,
 /// the per-model and per-agent breakdowns, and producer-priced trailing windows.
 struct Stats {
     timezone: String,
     refreshed_at_ms: u64,
-    subagents: BTreeMap<String, rimz::agents::spending::SubagentTally>,
-    unattributed: rimz::agents::spending::UnattributedTally,
+    day_cutoff_secs: u64,
+    subagents: BTreeMap<String, SpendTally>,
+    recorded_since_secs: Option<u64>,
     by_day: BTreeMap<i64, DaySpend>,
-    by_model: BTreeMap<String, SpendTally>,
+    by_model: BTreeMap<String, ModelTally>,
     by_agent: BTreeMap<String, SpendTally>,
     total: SpendTally,
 }
@@ -251,18 +241,22 @@ impl Stats {
             spending,
             timezone,
             refreshed_at_ms,
+            day_cutoff_secs,
             roles,
             ..
         } = cache;
-        let Spending { total, .. } = spending;
+        let Spending {
+            total, by_provider, ..
+        } = spending;
         Stats {
             timezone,
             refreshed_at_ms,
+            day_cutoff_secs,
             subagents: roles.subagents,
-            unattributed: roles.unattributed,
+            recorded_since_secs: roles.recorded_since_secs,
             by_day: days,
             by_model: models,
-            by_agent: roles.agents,
+            by_agent: by_provider,
             total,
         }
     }
@@ -276,20 +270,31 @@ impl Stats {
             .unwrap_or(Timestamp::UNIX_EPOCH)
             .to_zoned(jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC))
     }
+
+    fn published_today(&self) -> bool {
+        self.today_day(self.day_cutoff_secs) == self.today_day(unix_secs_now())
+    }
+
+    fn recorded_since(&self) -> Option<jiff::Zoned> {
+        Some(
+            Timestamp::from_second(i64::try_from(self.recorded_since_secs?).ok()?)
+                .ok()?
+                .to_zoned(
+                    jiff::tz::TimeZone::get(&self.timezone).unwrap_or(jiff::tz::TimeZone::UTC),
+                ),
+        )
+    }
 }
 
-fn load_stats(human: bool) -> Result<LoadedStats> {
+fn load_stats(human: bool) -> Result<Stats> {
     let paths = RuntimePaths::shared();
     load_stats_from_paths(&paths, human)
 }
 
-fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStats> {
+fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<Stats> {
     ensure_shared_runtime(paths)?;
-    if let Some(stats) = load_published_stats(paths) {
-        return Ok(LoadedStats {
-            stats,
-            header_printed: false,
-        });
+    if let Some(stats) = load_today_stats(paths) {
+        return Ok(stats);
     }
 
     if should_animate_cold_stats(
@@ -300,11 +305,11 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStat
         return load_cold_stats_with_spinner(paths);
     }
 
-    let stats = load_or_refresh_stats(paths, None)?;
-    Ok(LoadedStats {
-        stats,
-        header_printed: false,
-    })
+    load_or_refresh_stats(paths, None)
+}
+
+fn load_today_stats(paths: &RuntimePaths) -> Option<Stats> {
+    load_published_stats(paths).filter(Stats::published_today)
 }
 
 fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
@@ -318,7 +323,7 @@ fn load_or_refresh_stats(
     paths: &RuntimePaths,
     progress: Option<&mut dyn FnMut(SpendProgress)>,
 ) -> Result<Stats> {
-    if let Some(stats) = load_published_stats(paths) {
+    if let Some(stats) = load_today_stats(paths) {
         return Ok(stats);
     }
     let spec = MachineConfig::load_lenient().headline_spec();
@@ -327,7 +332,15 @@ fn load_or_refresh_stats(
     } else {
         refresh_global_spending_direct(paths, &spec, &mut |_| {})
     };
-    Ok(Stats::from_provider(provider))
+    provider
+        .is_current_version()
+        .then(|| Stats::from_provider(provider))
+        .filter(Stats::published_today)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Spending refresh unavailable: could not read today's figures from session files; check their availability and retry"
+            )
+        })
 }
 
 fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {

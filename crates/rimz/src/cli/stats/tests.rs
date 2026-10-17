@@ -3,84 +3,339 @@ use rimz::theme::theme_glyphs;
 use std::path::{Path, PathBuf};
 
 #[test]
+fn window_flag_accepts_each_mode_and_rejects_assists() {
+    let command = || StatsArgs::augment_args(clap::Command::new("stats"));
+    for mode in [
+        vec![],
+        vec!["--json"],
+        vec!["--subagents"],
+        vec!["--subagents", "--json"],
+        vec!["--refresh"],
+    ] {
+        for window in ["today", "week", "month", "year"] {
+            let mut argv = vec!["stats", "--window", window];
+            argv.extend(&mode);
+            assert!(command().try_get_matches_from(argv).is_ok());
+        }
+    }
+    assert!(
+        command()
+            .try_get_matches_from(["stats", "--window", "today", "--assists"])
+            .is_err()
+    );
+}
+
+#[test]
+fn models_use_the_producing_kind_identity_on_both_surfaces() {
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        ..Default::default()
+    };
+    let mut spend = model_tally(100, 20.0, 60, 40, 0);
+    spend.day = spend.year.clone();
+    cache.models.insert("gpt-5".into(), produced(spend.clone()));
+    cache.spending.total = spend;
+    cache.days.insert(20_000, day(100, 20.0));
+    let stats = Stats::from_provider(cache);
+    let expected = render::paint(render::palette::identity("codex"), "GPT 5");
+    let mut plain = Vec::new();
+    panel::render_spend(
+        &mut plain,
+        &stats,
+        20_000,
+        false,
+        false,
+        Window::Today,
+        "\n",
+    )
+    .unwrap();
+    assert!(String::from_utf8(plain).unwrap().contains(&expected));
+    let mut held = Vec::new();
+    render_panel(
+        &mut held,
+        PanelStats {
+            usage: &stats,
+            assists: &AssistStats::default(),
+            active: Window::Today,
+        },
+        20_000,
+        false,
+        &panel_glyphs(),
+        false,
+        "\n",
+    )
+    .unwrap();
+    assert!(String::from_utf8(held).unwrap().contains(&expected));
+}
+
+#[test]
+fn one_shot_refreshes_previous_local_day_but_serves_today() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime =
+        RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+    ensure_shared_runtime(&runtime).unwrap();
+    let _discovery = rimz::agents::spending::override_discovered_spending_files_for_test(vec![]);
+    let mut cache = ProviderSpendingCache {
+        timezone: "Asia/Shanghai".into(),
+        refreshed_at_ms: Timestamp::now().as_millisecond() as u64,
+        day_cutoff_secs: rimz::agents::spending::local_day_start_secs(
+            unix_secs_now(),
+            Some("Asia/Shanghai"),
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    cache.spending.total = tally(100, 99.0, 1);
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &cache,
+    );
+    let today = load_stats_from_paths(&runtime, false).unwrap();
+    assert_eq!(today.total.year.usd, 99.0);
+    cache.day_cutoff_secs -= 86_400;
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &cache,
+    );
+    assert!(
+        load_today_stats(&runtime).is_none(),
+        "a walk ending today must not make yesterday's windows current"
+    );
+    assert!(load_stats_from_paths(&runtime, false).is_err());
+    cache.refreshed_at_ms -= 86_400_000;
+    rimz::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        &cache,
+    );
+    assert!(
+        load_stats_from_paths(&runtime, false).is_err(),
+        "a failed discovery must not return yesterday's publication"
+    );
+    let transcript = dir.path().join("empty.jsonl");
+    std::fs::write(&transcript, b"").unwrap();
+    let adapter = rimz::agents::definition_by_kind("claude").unwrap();
+    let _discovery = rimz::agents::spending::override_discovered_spending_files_for_test(vec![
+        rimz::agents::spending::SpendingFile {
+            adapter,
+            login: rimz::ids::LoginKey::default_for(adapter.spec().kind_id()),
+            path: transcript,
+        },
+    ]);
+    let refreshed = load_stats_from_paths(&runtime, false).unwrap();
+    assert_eq!(refreshed.total.year.usd, 0.0);
+    assert_eq!(
+        refreshed.today_day(refreshed.refreshed_at_ms / 1000),
+        refreshed.today_day(unix_secs_now())
+    );
+}
+
+#[test]
+fn subagent_note_includes_the_partial_oldest_day_of_a_trailing_window() {
+    let published = "2026-10-17T15:00:00Z".parse::<Timestamp>().unwrap();
+    let since = "2026-10-11T12:00:00Z".parse::<Timestamp>().unwrap();
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        refreshed_at_ms: published.as_millisecond() as u64,
+        ..Default::default()
+    };
+    cache.roles.recorded_since_secs = Some(since.as_second() as u64);
+    let mut stats = Stats::from_provider(cache);
+    let today = stats.today_day(published.as_second() as u64);
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, &stats, today, false, true, Window::Week, "\n").unwrap();
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .contains("recorded since Oct 11"),
+        "the week also includes Oct 10 afternoon, before roles were recorded"
+    );
+    stats.recorded_since_secs =
+        Some((published - Duration::from_secs(7 * 86_400)).as_second() as u64);
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, &stats, today, false, true, Window::Week, "\n").unwrap();
+    assert!(!String::from_utf8(out).unwrap().contains("recorded since"));
+}
+
+#[test]
+fn provider_breakdowns_default_to_today() {
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        ..Default::default()
+    };
+    let mut provider = tally(500, 50.0, 5);
+    provider.day = spend_window(100, 10.0, 60, 40, 0, 1);
+    provider.day.timed_ms = 2_000;
+    provider.day.timed_output = 40;
+    cache.spending.total = provider.clone();
+    cache.spending.by_provider.insert("codex".into(), provider);
+    let stats = Stats::from_provider(cache);
+    assert_eq!(stats.by_agent["codex"].day.usd, 10.0);
+    let value = json::stats_json_value(
+        &stats,
+        &AssistStats::default(),
+        20_000,
+        false,
+        Window::Today,
+    );
+    assert_eq!(value["window"], "today");
+    assert_eq!(value["agents"][0]["usd"], 10.0);
+    assert_eq!(value["agents"][0]["tokens_per_sec"], 20);
+    assert_eq!(value["sessions"], 1);
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, &stats, 20_000, false, false, Window::Today, "\n").unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("Agents (today)"));
+}
+
+#[test]
+fn agent_rate_is_optional_and_full_tier_only() {
+    let text = |cells: &[StatCell], compact| {
+        let mut lines = Vec::new();
+        emit_stat_section(
+            &mut lines,
+            "Agents",
+            cells,
+            StatSectionLayout {
+                compact,
+                left_w: stat_left_width(&[cells, &[]], compact),
+                pct_w: stat_pct_width(&[cells, &[]]),
+                bar_w: 0,
+            },
+            &panel_glyphs(),
+        );
+        strip_ansi(&lines.join("\n"))
+    };
+    let timed = AgentBreakdown {
+        kind: "codex",
+        name: "Codex".into(),
+        window: SpendWindow {
+            timed_ms: 2_000,
+            timed_output: 100,
+            ..spend_window(200, 5.0, 100, 100, 0, 1)
+        },
+        share: 1.0,
+        folded: false,
+    };
+    let untimed = AgentBreakdown {
+        kind: "claude",
+        name: "Claude".into(),
+        window: spend_window(50, 1.0, 30, 20, 0, 1),
+        share: 0.2,
+        folded: false,
+    };
+    let rows = agent_cells(&[timed, untimed], 6, &panel_glyphs());
+    let full = text(&rows, false);
+    assert!(full.contains("50 tok/s"));
+    assert!(
+        full.lines()
+            .any(|line| line.contains("Claude") && line.contains('-'))
+    );
+    assert!(!text(&rows, true).contains("tok/s"));
+    let untimed = agent_cells(
+        &[AgentBreakdown {
+            kind: "codex",
+            name: "Codex".into(),
+            window: SpendWindow::default(),
+            share: 0.0,
+            folded: false,
+        }],
+        5,
+        &panel_glyphs(),
+    );
+    assert!(!text(&untimed, false).contains("tok/s"));
+}
+
+#[test]
 fn spend_first_publication_has_compact_json_and_panel() {
     let mut cache = ProviderSpendingCache {
         timezone: "Asia/Shanghai".into(),
         refreshed_at_ms: 1_728_921_600_000,
         ..Default::default()
     };
-    cache.spending.total = tally(1_000_000, 100.0, 10);
+    cache.spending.total = every_window(tally(1_000_000, 100.0, 10));
     cache.days.insert(20_011, day(1_000_000, 100.0));
     cache
-        .roles
-        .agents
-        .insert("codex".into(), tally(100, 20.0, 9));
-    cache.roles.unattributed.tally = tally(100, 40.0, 1);
-    cache.roles.unattributed.by_provider = BTreeMap::from([
-        ("claude".into(), tally(10, 5.0, 1)),
-        ("codex".into(), tally(50, 20.0, 1)),
-        ("grok".into(), tally(25, 10.0, 1)),
-        ("pi".into(), tally(15, 5.0, 1)),
-        ("zero".into(), tally(0, 0.0, 0)),
-    ]);
+        .spending
+        .by_provider
+        .insert("codex".into(), every_window(tally(100, 60.0, 9)));
     cache.roles.subagents.insert(
         "fast".into(),
-        rimz::agents::spending::SubagentTally {
-            tally: model_tally(2_000_000, 40.0, 1_500_000, 500_000, 3_000_000),
-            models: BTreeMap::from([("model-0".into(), tally(100, 40.0, 1))]),
-        },
+        every_window(model_tally(2_000_000, 40.0, 1_500_000, 500_000, 3_000_000)),
     );
     for index in 0..5 {
-        cache
-            .models
-            .insert(format!("model-{index}"), tally(100, 20.0, 1));
+        cache.models.insert(
+            format!("model-{index}"),
+            produced(every_window(tally(100, 20.0, 1))),
+        );
     }
-    cache.models.insert("zero".into(), tally(100, 0.0, 1));
-    let stats = Stats::from_provider(cache);
+    cache
+        .models
+        .insert("zero".into(), produced(tally(100, 0.0, 1)));
+    let mut publication = serde_json::to_value(cache).unwrap();
+    publication["roles"]["recorded_since_secs"] = serde_json::json!(
+        "2024-10-14T00:00:00Z"
+            .parse::<Timestamp>()
+            .unwrap()
+            .as_second()
+    );
+    let mut stats = Stats::from_provider(serde_json::from_value(publication).unwrap());
     let assists = AssistStats::default();
-    let value = json::stats_json_value(&stats, &assists, 20_011, false);
+    let value = json::stats_json_value(&stats, &assists, 20_011, false, Window::Today);
     assert!(value["assists"].get("events").is_none());
     assert_eq!(value["timezone"], "Asia/Shanghai");
     assert!(value["as_of"].is_string());
     assert!(value["windows"]["today"].is_object());
-    assert_eq!(value["agents"][0]["share"], 0.2);
+    assert_eq!(value["window"], "today");
+    assert_eq!(value["subagents_since"], "2024-10-14");
+    assert_eq!(value["agents"][0]["usd"], 60.0);
+    assert_eq!(value["agents"][0]["share"], 0.6);
+    assert!(value["agents"][0].get("tokens_per_sec").is_none());
     assert_eq!(value["models"].as_array().unwrap().len(), 5);
     assert_eq!(value["subagents"][0]["profile"], "fast");
     assert_eq!(value["subagents"][0]["share"], 0.4);
-    assert_eq!(value["subagents"][0]["model"], "model-0");
-    assert_eq!(value["unattributed"]["tally"]["usd"], 40.0);
-    assert_eq!(value["unattributed"]["by_provider"]["claude"]["usd"], 5.0);
-    assert_eq!(value["unattributed"]["by_provider"]["codex"]["usd"], 20.0);
     assert_eq!(
-        value["unattributed"]["by_provider"]
-            .as_object()
-            .unwrap()
-            .len(),
-        4
+        keys(&value),
+        [
+            "active_days_28",
+            "agents",
+            "as_of",
+            "assists",
+            "current_streak",
+            "days",
+            "longest_streak",
+            "models",
+            "most_active_day",
+            "sessions",
+            "subagents",
+            "subagents_since",
+            "timezone",
+            "unit",
+            "window",
+            "windows"
+        ]
     );
-    assert!(value["unattributed"]["by_provider"].get("zero").is_none());
-    let envelope = json::subagents_value(&stats);
+    assert_eq!(
+        keys(&value["subagents"][0]),
+        [
+            "cache_hit_pct",
+            "cached",
+            "input",
+            "output",
+            "profile",
+            "runs",
+            "share",
+            "tokens",
+            "usd"
+        ]
+    );
+    let envelope = json::subagents_value(&stats, Window::Today);
     assert_eq!(
         keys(&envelope),
-        ["as_of", "subagents", "unattributed", "window"]
+        ["as_of", "subagents", "subagents_since", "window"]
     );
     assert_eq!(envelope["as_of"], "2024-10-15T00:00:00+08:00");
     assert_eq!(envelope["subagents"], value["subagents"]);
     let mut out = Vec::new();
-    render_panel(
-        &mut out,
-        PanelStats {
-            usage: &stats,
-            assists: &assists,
-            active: None,
-        },
-        20_012,
-        false,
-        &panel_glyphs(),
-        true,
-        "\n",
-    )
-    .unwrap();
+    panel::render_spend(&mut out, &stats, 20_012, false, false, Window::Today, "\n").unwrap();
     let panel = strip_ansi(std::str::from_utf8(&out).unwrap());
     for label in [
         "Spend",
@@ -88,26 +343,29 @@ fn spend_first_publication_has_compact_json_and_panel() {
         "Week",
         "Month",
         "Year",
-        "Models (year)",
-        "Agents (year)",
-        "Subagents (year)",
+        "Models (today)",
+        "Agents (today)",
+        "Subagents (today)",
         "SHARE",
         "2 other models",
-        "Unattributed",
+        "TOK/S",
+        "RUNS",
         "as of",
     ] {
         assert!(panel.contains(label), "missing {label}: {panel}");
     }
     assert!(!panel.contains(WORDMARK.lines().next().unwrap()));
     assert!(!panel.contains("zero"));
-    let unattributed = panel.split("Unattributed").nth(1).unwrap();
-    assert!(unattributed.contains("Providers"));
-    assert!(unattributed.find("Codex").unwrap() < unattributed.find("Grok").unwrap());
-    assert!(unattributed.find("Grok").unwrap() < unattributed.find("Claude").unwrap());
-    assert!(unattributed.find("Claude").unwrap() < unattributed.find("Pi").unwrap());
-    assert!(unattributed.contains("$20"));
-    assert!(unattributed.contains("$10"));
-    assert!(unattributed.contains("$5"));
+    assert!(
+        panel
+            .lines()
+            .any(|row| row.contains("Codex") && row.contains("$60"))
+    );
+    assert!(!panel.contains("MODEL"));
+    assert!(!panel.contains("recorded since"));
+    let mut year = Vec::new();
+    panel::render_spend(&mut year, &stats, 20_012, false, false, Window::Year, "\n").unwrap();
+    assert!(strip_ansi(std::str::from_utf8(&year).unwrap()).contains("recorded since Oct 14"));
     assert!(panel.contains("as of Oct"));
     let mut today = Vec::new();
     panel::render_spend(
@@ -116,6 +374,7 @@ fn spend_first_publication_has_compact_json_and_panel() {
         stats.today_day(stats.refreshed_at_ms / 1000),
         false,
         true,
+        Window::Today,
         "\n",
     )
     .unwrap();
@@ -123,14 +382,15 @@ fn spend_first_publication_has_compact_json_and_panel() {
     assert!(today.contains("1.5M"));
     assert!(!today.contains("as of Oct"));
     assert!(!today.contains("Models (year)"));
-    assert!(today.contains("RUNS  MODEL"));
+    assert!(today.contains("RUNS"));
+    assert!(!today.contains("MODEL"));
     let mut held = Vec::new();
     render_panel(
         &mut held,
         PanelStats {
             usage: &stats,
             assists: &assists,
-            active: Some(Window::Year),
+            active: Window::Year,
         },
         20_011,
         false,
@@ -139,7 +399,106 @@ fn spend_first_publication_has_compact_json_and_panel() {
         "\n",
     )
     .unwrap();
-    assert!(String::from_utf8(held).unwrap().contains(TAGLINE));
+    let held = String::from_utf8(held).unwrap();
+    assert!(held.contains(TAGLINE));
+    assert!(held.contains("Subagents"));
+    assert!(strip_ansi(&held).contains("recorded since Oct 14"));
+    stats.subagents.clear();
+    let mut empty_profiles = Vec::new();
+    panel::render_spend(
+        &mut empty_profiles,
+        &stats,
+        20_100,
+        false,
+        false,
+        Window::Year,
+        "\n",
+    )
+    .unwrap();
+    assert!(
+        strip_ansi(std::str::from_utf8(&empty_profiles).unwrap())
+            .contains("recorded since Oct 14 2024")
+    );
+}
+
+fn every_window(mut tally: SpendTally) -> SpendTally {
+    tally.day = tally.year.clone();
+    tally.week = tally.year.clone();
+    tally.month = tally.year.clone();
+    tally
+}
+
+fn produced(tally: SpendTally) -> ModelTally {
+    ModelTally {
+        tally,
+        kind: "codex".into(),
+    }
+}
+
+fn model_map<const N: usize>(models: [(String, SpendTally); N]) -> BTreeMap<String, ModelTally> {
+    models
+        .into_iter()
+        .map(|(id, tally)| (id, produced(tally)))
+        .collect()
+}
+
+#[test]
+fn week_scopes_plain_and_json_breakdowns_and_shares() {
+    let mut cache = ProviderSpendingCache {
+        timezone: "UTC".into(),
+        ..Default::default()
+    };
+    cache.spending.total = every_window(tally(1_000, 100.0, 10));
+    cache.spending.total.week = spend_window(200, 20.0, 100, 100, 0, 2);
+    let mut row = every_window(tally(500, 50.0, 5));
+    row.week = spend_window(50, 5.0, 30, 20, 0, 1);
+    cache.models.insert("gpt-5".into(), produced(row.clone()));
+    cache.roles.subagents.insert("fast".into(), row.clone());
+    cache
+        .models
+        .insert("old".into(), produced(tally(500, 50.0, 5)));
+    cache
+        .roles
+        .subagents
+        .insert("old".into(), tally(500, 50.0, 5));
+    cache.days = BTreeMap::from([
+        (20_000, day(100, 10.0)),
+        (19_990, day(100, 10.0)),
+        (19_900, day(900, 90.0)),
+    ]);
+    let mut stats = Stats::from_provider(cache);
+    stats.by_agent.insert("codex".into(), row);
+    let mut year_only = tally(500, 50.0, 5);
+    year_only.week = SpendWindow::default();
+    stats.by_agent.insert("old".into(), year_only);
+    let mut out = Vec::new();
+    panel::render_spend(&mut out, &stats, 20_000, false, false, Window::Week, "\n").unwrap();
+    let text = strip_ansi(std::str::from_utf8(&out).unwrap());
+    for label in ["Models (week)", "Agents (week)", "Subagents (week)"] {
+        assert!(text.contains(label), "{text}");
+    }
+    for name in ["GPT 5", "Codex", "fast"] {
+        assert!(
+            text.lines()
+                .any(|line| line.contains(name) && line.contains("$5") && line.contains("25.0%")),
+            "{text}"
+        );
+    }
+    let value =
+        json::stats_json_value(&stats, &AssistStats::default(), 20_000, false, Window::Week);
+    assert_eq!(value["window"], "week");
+    assert_eq!(value["sessions"], 2);
+    assert_eq!(value["active_days_28"], 2);
+    assert_eq!(value["most_active_day"], utc_date(19_900 * DAY_SECS as u64));
+    for section in ["models", "agents", "subagents"] {
+        assert_eq!(value[section].as_array().unwrap().len(), 1);
+        assert_eq!(value[section][0]["usd"], 5.0);
+        assert_eq!(value[section][0]["share"], 0.25);
+    }
+    let envelope = json::subagents_value(&stats, Window::Week);
+    assert_eq!(keys(&envelope), ["as_of", "subagents", "window"]);
+    assert_eq!(envelope["window"], "week");
+    assert_eq!(envelope["subagents"], value["subagents"]);
 }
 
 #[test]
@@ -360,7 +719,7 @@ fn published_stats_reads_rollups_and_windows() {
         RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     let today = 20_000;
     let by_day = BTreeMap::from([(today - 10, day(40, 4.0))]);
-    let by_model = BTreeMap::from([("gpt-5-codex".to_owned(), model_tally(100, 7.0, 70, 30, 5))]);
+    let by_model = model_map([("gpt-5-codex".to_owned(), model_tally(100, 7.0, 70, 30, 5))]);
     let mut spending = rimz::agents::spending::Spending::default();
     spending.total.week.tokens = 7;
     spending.total.week.usd = 0.7;
@@ -372,14 +731,11 @@ fn published_stats_reads_rollups_and_windows() {
     spending
         .by_provider
         .insert("claude".to_owned(), tally(120, 12.0, 3));
+    let expected_agents = spending.by_provider.clone();
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
             refreshed_at_ms: 123,
-            roles: rimz::agents::spending::RoleTallies {
-                agents: spending.by_provider.clone(),
-                ..Default::default()
-            },
             spending,
             days: by_day.clone(),
             models: by_model.clone(),
@@ -391,6 +747,7 @@ fn published_stats_reads_rollups_and_windows() {
 
     assert_eq!(stats.by_day, by_day);
     assert_eq!(stats.by_model, by_model);
+    assert_eq!(stats.by_agent, expected_agents);
     assert_eq!(stats.total.week.tokens, 7);
     assert_eq!(stats.total.month.usd, 3.0);
     assert_eq!(stats.total.year.sessions, 9);
@@ -405,7 +762,7 @@ fn stats_serves_published_cache_without_walking() {
         RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
     ensure_shared_runtime(&runtime).unwrap();
     let by_day = BTreeMap::from([(20_000, day(40, 4.0))]);
-    let by_model = BTreeMap::from([(
+    let by_model = model_map([(
         "claude-opus-4-8".to_owned(),
         model_tally(100, 7.0, 70, 30, 5),
     )]);
@@ -422,11 +779,9 @@ fn stats_serves_published_cache_without_walking() {
     rimz::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         &rimz::agents::spending::ProviderSpendingCache {
-            refreshed_at_ms: 1,
-            roles: rimz::agents::spending::RoleTallies {
-                agents: spending.by_provider.clone(),
-                ..Default::default()
-            },
+            refreshed_at_ms: Timestamp::now().as_millisecond() as u64,
+            day_cutoff_secs: rimz::agents::spending::local_day_start_secs(unix_secs_now(), None)
+                .unwrap(),
             spending,
             days: by_day.clone(),
             models: by_model.clone(),
@@ -507,8 +862,8 @@ fn cold_refresh_publishes_sidebar_provider_rollups() {
         published.spending.total.month.tokens,
         stats.total.month.tokens
     );
-    assert_eq!(published.roles.agents, stats.by_agent);
-    assert_eq!(published.roles.unattributed, stats.unattributed);
+    assert_eq!(published.spending.by_provider, stats.by_agent);
+    assert_eq!(published.roles.subagents, stats.subagents);
     for transcript in [first, second] {
         assert!(
             cursor
@@ -702,11 +1057,11 @@ fn refresh_key_outcome_ignores_other_keys() {
 
 #[test]
 fn held_stats_applies_window_keys_without_a_current_frame() {
-    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
     let mut out = Vec::new();
 
-    assert_eq!(state.active(), Window::Year);
-    for expected in ["Today", "Week", "Month", "Year", "Today", "Week"] {
+    assert_eq!(state.active(), Window::Today);
+    for expected in ["Week", "Month", "Year", "Today", "Week", "Month"] {
         assert_eq!(
             state
                 .apply_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut out,)
@@ -729,14 +1084,18 @@ fn held_stats_applies_window_keys_without_a_current_frame() {
             .unwrap(),
         KeyOutcome::PrevWindow
     );
-    assert_eq!(state.active().label(), "Today");
+    assert_eq!(state.active().label(), "Week");
     assert!(out.is_empty());
+    assert_eq!(
+        HeldStats::new(false, panel_glyphs(), false, Window::Month).active(),
+        Window::Month
+    );
 }
 
 #[test]
 fn held_stats_preserves_reload_quit_and_hold_outcomes() {
     let mut out = Vec::new();
-    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
 
     assert_eq!(
         state
@@ -757,7 +1116,7 @@ fn held_stats_preserves_reload_quit_and_hold_outcomes() {
         KeyOutcome::Quit
     );
 
-    let mut held = HeldStats::new(false, panel_glyphs(), true);
+    let mut held = HeldStats::new(false, panel_glyphs(), true, Window::Today);
     assert_eq!(
         held.apply_key(
             KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
@@ -771,14 +1130,15 @@ fn held_stats_preserves_reload_quit_and_hold_outcomes() {
 
 #[test]
 fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
-    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
     let mut out = Vec::new();
     let today = unix_secs_now() as i64 / DAY_SECS;
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -812,7 +1172,7 @@ fn held_stats_keeps_the_last_frame_after_a_refresh_failure() {
 
 #[test]
 fn held_stats_refresh_failure_streak_resets_after_success() {
-    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
     let mut out = Vec::new();
 
     state
@@ -828,8 +1188,9 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
             Ok(Stats {
                 timezone: "UTC".into(),
                 refreshed_at_ms: 0,
+                day_cutoff_secs: 0,
                 subagents: BTreeMap::new(),
-                unattributed: Default::default(),
+                recorded_since_secs: None,
                 by_day: BTreeMap::new(),
                 by_model: BTreeMap::new(),
                 by_agent: BTreeMap::new(),
@@ -843,7 +1204,7 @@ fn held_stats_refresh_failure_streak_resets_after_success() {
 
 #[test]
 fn hold_cycle_ends_when_the_refresh_worker_exits() {
-    let mut state = HeldStats::new(false, panel_glyphs(), true);
+    let mut state = HeldStats::new(false, panel_glyphs(), true, Window::Today);
     let (tx, rx) = mpsc::sync_channel::<Result<Stats>>(1);
     drop(tx);
 
@@ -868,7 +1229,7 @@ fn empty_dashboard_refreshes_early_until_a_frame_exists() {
 
 #[test]
 fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
-    let mut state = HeldStats::new(false, panel_glyphs(), false);
+    let mut state = HeldStats::new(false, panel_glyphs(), false, Window::Today);
     let mut out = Vec::new();
 
     state
@@ -896,8 +1257,9 @@ fn held_stats_paints_an_unavailable_first_refresh_then_replaces_it() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::from([(today, day(42, 0.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -932,8 +1294,9 @@ fn refresh_result_carries_success_error_and_panic() {
         let mut stats = Stats {
             timezone: "UTC".into(),
             refreshed_at_ms: 0,
+            day_cutoff_secs: 0,
             subagents: BTreeMap::new(),
-            unattributed: Default::default(),
+            recorded_since_secs: None,
             by_day: BTreeMap::new(),
             by_model: BTreeMap::new(),
             by_agent: BTreeMap::new(),
@@ -1005,8 +1368,9 @@ fn heatmap_cells_render_spaced() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day,
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1058,8 +1422,9 @@ fn windows_lines_fold_cache_read_for_trailing_windows() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1089,8 +1454,9 @@ fn windows_lines_paint_only_the_active_tab_as_a_chip() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1125,73 +1491,92 @@ fn panel_fit_preserves_data_before_header_chrome() {
             + usize::from(plan.header) * PANEL_HEADER_ROWS
             + usize::from(plan.model_rows > 0) * SECTION_CHROME_ROWS
             + usize::from(plan.agent_rows > 0) * SECTION_CHROME_ROWS
+            + usize::from(plan.subagent_rows > 0) * SECTION_CHROME_ROWS
             + plan.model_rows
             + plan.agent_rows
+            + plan.subagent_rows
             + usize::from(assist_rows > 0) * (2 + assist_rows)
     };
 
-    let tall = fit(Some(80), true, 4, 5, 2);
+    let tall = fit(Some(80), true, 4, 5, 4, 2, 0);
     assert_eq!(
         tall,
         PanelPlan {
             header: true,
             model_rows: 4,
             agent_rows: 5,
+            subagent_rows: 4,
         }
     );
     assert!(used(tall, 2) <= 79);
 
-    let floor = fit(Some(39), true, 8, 10, 0);
+    let floor = fit(Some(44), true, 8, 10, 7, 0, 0);
     assert_eq!(
         floor,
         PanelPlan {
             header: true,
             model_rows: 3,
             agent_rows: 3,
+            subagent_rows: 3,
         }
     );
-    assert!(used(floor, 0) <= 38);
+    assert!(used(floor, 0) <= 43);
 
-    let without_header = fit(Some(30), true, 8, 10, 0);
+    let without_header = fit(Some(35), true, 8, 10, 7, 0, 0);
     assert_eq!(
         without_header,
         PanelPlan {
             header: false,
             model_rows: 3,
             agent_rows: 3,
+            subagent_rows: 3,
         }
     );
-    assert!(used(without_header, 0) <= 29);
+    assert!(used(without_header, 0) <= 34);
 
-    let very_short = fit(Some(26), true, 8, 10, 0);
+    let very_short = fit(Some(29), true, 8, 10, 7, 0, 0);
     assert_eq!(
         very_short,
         PanelPlan {
             header: false,
             model_rows: 1,
             agent_rows: 1,
+            subagent_rows: 1,
         }
     );
-    assert!(used(very_short, 0) <= 25);
+    assert!(used(very_short, 0) <= 28);
 
-    let no_breakdowns = fit(Some(24), true, 0, 0, 0);
+    for note_rows in [0, 2] {
+        let short = fit(Some(26), true, 8, 10, 7, 0, note_rows);
+        assert!(
+            used(short, 0) <= 25,
+            "26-row pane must not overflow: {short:?}"
+        );
+        assert!(!short.header);
+        assert_eq!(short.subagent_rows, 0);
+        assert!(short.model_rows > 0 && short.agent_rows > 0);
+    }
+
+    let no_breakdowns = fit(Some(24), true, 0, 0, 0, 0, 0);
     assert!(!no_breakdowns.header);
     assert!(used(no_breakdowns, 0) <= 23);
 
     assert_eq!(
-        fit(None, true, 8, 10, 2),
+        fit(None, true, 8, 10, 7, 2, 0),
         PanelPlan {
             header: true,
             model_rows: MAX_MODELS,
             agent_rows: MAX_AGENTS,
+            subagent_rows: MAX_AGENTS,
         }
     );
     assert_eq!(
-        fit(Some(24), false, 8, 10, 0),
+        fit(Some(24), false, 8, 10, 7, 0, 0),
         PanelPlan {
             header: false,
             model_rows: MAX_MODELS,
             agent_rows: MAX_AGENTS,
+            subagent_rows: MAX_AGENTS,
         }
     );
 }
@@ -1203,10 +1588,11 @@ fn model_cells_show_usd_and_cache_read_detail() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("claude-opus-4-8".to_owned(), spend),
             ("gpt-5".to_owned(), model_tally(1_950_000, 0.0, 0, 0, 0)),
         ]),
@@ -1216,7 +1602,7 @@ fn model_cells_show_usd_and_cache_read_detail() {
     let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
     let name_w = models
         .iter()
-        .map(|(name, _)| display_width(name))
+        .map(|(name, _, _)| display_width(name))
         .max()
         .unwrap_or(0);
     let mut lines = Vec::new();
@@ -1225,10 +1611,10 @@ fn model_cells_show_usd_and_cache_read_detail() {
         &models,
         name_w,
         &glyphs,
-        models.iter().map(|(_, spend)| spend.usd).sum(),
+        models.iter().map(|(_, spend, _)| spend.usd).sum(),
     );
-    let pct_w = stat_pct_width(&cells, &[]);
-    let layout = stat_section_layout(&cells, &[], pct_w, 120);
+    let pct_w = stat_pct_width(&[&cells, &[]]);
+    let layout = stat_section_layout(&[&cells, &[]], pct_w, 120);
     emit_stat_section(&mut lines, "Models", &cells, layout, &glyphs);
     let raw_row = lines
         .iter()
@@ -1257,9 +1643,10 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
-        by_model: BTreeMap::from([
+        recorded_since_secs: None,
+        by_model: model_map([
             ("timed".to_owned(), timed.clone()),
             ("untimed".to_owned(), untimed.clone()),
         ]),
@@ -1268,12 +1655,12 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
         total: SpendTally::default(),
     };
     let glyphs = panel_glyphs();
-    let render_rows = |models: &[(String, SpendWindow)], compact| {
+    let render_rows = |models: &[(String, SpendWindow, String)], compact| {
         let cells = model_cells(
             models,
             7,
             &glyphs,
-            models.iter().map(|(_, spend)| spend.usd).sum(),
+            models.iter().map(|(_, spend, _)| spend.usd).sum(),
         );
         let mut lines = Vec::new();
         emit_stat_section(
@@ -1282,8 +1669,8 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
             &cells,
             StatSectionLayout {
                 compact,
-                left_w: stat_left_width(&cells, &[], compact),
-                pct_w: stat_pct_width(&cells, &[]),
+                left_w: stat_left_width(&[&cells, &[]], compact),
+                pct_w: stat_pct_width(&[&cells, &[]]),
                 bar_w: 0,
             },
             &glyphs,
@@ -1304,7 +1691,7 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
     assert!(compact.iter().all(|row| !row.contains("tok/s")));
     let untimed_models = models
         .iter()
-        .map(|(name, spend)| {
+        .map(|(name, spend, kind)| {
             (
                 name.clone(),
                 SpendWindow {
@@ -1312,6 +1699,7 @@ fn model_rate_column_is_windowed_optional_and_full_tier_only() {
                     timed_output: 0,
                     ..spend.clone()
                 },
+                kind.clone(),
             )
         })
         .collect::<Vec<_>>();
@@ -1353,10 +1741,11 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("claude-opus-4-8".to_owned(), claude_model),
             ("output-only".to_owned(), model_tally(10, 1.0, 0, 10, 0)),
         ]),
@@ -1364,7 +1753,7 @@ fn stats_json_includes_cache_hit_percent_only_with_input_side_data() {
         total,
     };
 
-    let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false);
+    let value = json::stats_json_value(&stats, &AssistStats::default(), 0, false, Window::Year);
     let models = value["models"].as_array().unwrap();
     let claude_model = models
         .iter()
@@ -1393,10 +1782,11 @@ fn model_breakdown_ranks_by_usd_before_tokens() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             (
                 "claude-opus-4-8".to_owned(),
                 model_tally(100, 12.0, 40, 60, 0),
@@ -1421,10 +1811,11 @@ fn model_breakdown_drops_models_without_selected_window_activity() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("claude-opus-4-8".to_owned(), week_model),
             ("gpt-5".to_owned(), year_only),
         ]),
@@ -1445,10 +1836,11 @@ fn model_breakdown_reserves_the_last_capped_row_for_other() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("model-a".to_owned(), model_tally(500, 5.0, 500, 0, 0)),
             ("model-b".to_owned(), model_tally(400, 4.0, 400, 0, 0)),
             ("model-c".to_owned(), model_tally(300, 3.0, 300, 0, 0)),
@@ -1473,10 +1865,11 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("model-a".to_owned(), model_tally(9_750, 97.5, 9_750, 0, 0)),
             ("model-b".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
             ("model-c".to_owned(), model_tally(100, 1.0, 100, 0, 0)),
@@ -1493,7 +1886,7 @@ fn model_breakdown_folds_rows_below_one_percent_into_other() {
     assert_eq!(
         models
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _, _)| name.as_str())
             .collect::<Vec<_>>(),
         ["Model A", "Model B", "Model C", "Other"]
     );
@@ -1507,10 +1900,11 @@ fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("model-a".to_owned(), model_tally(100, 0.0, 100, 0, 0)),
             ("model-b".to_owned(), model_tally(50, 0.0, 50, 0, 0)),
         ]),
@@ -1521,7 +1915,7 @@ fn model_breakdown_keeps_unpriced_rows_when_share_is_undefined() {
     let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
 
     assert_eq!(models.len(), 2);
-    assert!(models.iter().all(|(name, _)| name != "Other"));
+    assert!(models.iter().all(|(name, _, _)| name != "Other"));
 }
 
 #[test]
@@ -1548,8 +1942,9 @@ fn agent_cells_rank_by_dollars_and_skip_empty_agents() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1568,8 +1963,8 @@ fn agent_cells_rank_by_dollars_and_skip_empty_agents() {
         .unwrap_or(0);
 
     let cells = agent_cells(&agents, name_w, &glyphs);
-    let pct_w = stat_pct_width(&[], &cells);
-    let layout = stat_section_layout(&[], &cells, pct_w, 120);
+    let pct_w = stat_pct_width(&[&[], &cells]);
+    let layout = stat_section_layout(&[&[], &cells], pct_w, 120);
     emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
 
     assert!(lines[0].contains("Agents"));
@@ -1614,8 +2009,9 @@ fn agent_breakdown_folds_tail_totals_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1643,7 +2039,7 @@ fn agent_breakdown_folds_tail_totals_into_other() {
 
     let glyphs = panel_glyphs();
     let cells = agent_cells(&agents, "Agent A".len(), &glyphs);
-    let layout = stat_section_layout(&[], &cells, stat_pct_width(&[], &cells), 120);
+    let layout = stat_section_layout(&[&[], &cells], stat_pct_width(&[&[], &cells]), 120);
     let mut lines = Vec::new();
     emit_stat_section(&mut lines, "Agents", &cells, layout, &glyphs);
     let other = lines
@@ -1662,8 +2058,9 @@ fn agent_breakdown_folds_rows_below_one_percent_into_other() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::from([
@@ -1697,6 +2094,37 @@ fn agent_breakdown_folds_rows_below_one_percent_into_other() {
 }
 
 #[test]
+fn subagent_breakdown_folds_against_profile_spend_not_fleet() {
+    let stats = Stats {
+        timezone: "UTC".into(),
+        refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
+        subagents: BTreeMap::from([
+            ("implementer".to_owned(), tally(500, 0.5, 5)),
+            ("explorer".to_owned(), tally(300, 0.3, 3)),
+            ("finder".to_owned(), tally(1, 0.001, 1)),
+        ]),
+        recorded_since_secs: None,
+        by_day: BTreeMap::new(),
+        by_model: BTreeMap::new(),
+        by_agent: BTreeMap::new(),
+        total: tally(0, 100.0, 0),
+    };
+
+    let rows = subagent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
+
+    assert_eq!(
+        rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["implementer", "explorer", "Other"],
+        "profiles under 1% of the fleet stay named; only the section's own tail folds"
+    );
+    assert!(
+        (rows[0].share - 0.005).abs() < f64::EPSILON,
+        "share stays fleet-relative"
+    );
+}
+
+#[test]
 fn share_bar_fills_proportionally() {
     let glyphs = panel_glyphs();
     let counts = |share| {
@@ -1718,10 +2146,11 @@ fn stat_share_bar_stretches_to_panel_width() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             (
                 "claude-opus-4-8".to_owned(),
                 model_tally(1_000, 12.0, 200, 800, 50),
@@ -1734,18 +2163,18 @@ fn stat_share_bar_stretches_to_panel_width() {
     let models = model_breakdown(&stats, Window::Year, MAX_MODELS);
     let name_w = models
         .iter()
-        .map(|(name, _)| display_width(name))
+        .map(|(name, _, _)| display_width(name))
         .max()
         .unwrap_or(0);
     let cells = model_cells(
         &models,
         name_w,
         &glyphs,
-        models.iter().map(|(_, spend)| spend.usd).sum(),
+        models.iter().map(|(_, spend, _)| spend.usd).sum(),
     );
-    let pct_w = stat_pct_width(&cells, &[]);
+    let pct_w = stat_pct_width(&[&cells, &[]]);
     let panel_width = 120;
-    let layout = stat_section_layout(&cells, &[], pct_w, panel_width);
+    let layout = stat_section_layout(&[&cells, &[]], pct_w, panel_width);
     let mut lines = Vec::new();
 
     assert!(layout.bar_w > 0);
@@ -1766,10 +2195,11 @@ fn stat_sections_share_a_percent_column() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
-        by_model: BTreeMap::from([(
+        by_model: model_map([(
             "claude-opus-4-8".to_owned(),
             model_tally(1_000, 12.0, 200, 800, 50),
         )]),
@@ -1780,7 +2210,7 @@ fn stat_sections_share_a_percent_column() {
     let agents = agent_breakdown(&stats, Window::Year, Some(MAX_AGENTS));
     let name_w = models
         .iter()
-        .map(|(name, _)| display_width(name))
+        .map(|(name, _, _)| display_width(name))
         .chain(agents.iter().map(|agent| display_width(&agent.name)))
         .max()
         .unwrap_or(0);
@@ -1788,11 +2218,11 @@ fn stat_sections_share_a_percent_column() {
         &models,
         name_w,
         &glyphs,
-        models.iter().map(|(_, spend)| spend.usd).sum(),
+        models.iter().map(|(_, spend, _)| spend.usd).sum(),
     );
     let agent_rows = agent_cells(&agents, name_w, &glyphs);
-    let pct_w = stat_pct_width(&model_rows, &agent_rows);
-    let layout = stat_section_layout(&model_rows, &agent_rows, pct_w, 120);
+    let pct_w = stat_pct_width(&[&model_rows, &agent_rows]);
+    let layout = stat_section_layout(&[&model_rows, &agent_rows], pct_w, 120);
     let mut lines = Vec::new();
 
     emit_stat_section(&mut lines, "Models", &model_rows, layout, &glyphs);
@@ -1824,8 +2254,9 @@ fn insights_sessions_line_has_no_glyph() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1851,8 +2282,9 @@ fn insights_sessions_scope_to_the_active_window() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1889,14 +2321,15 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
     let stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::from([
             (today, day(35, 12.0)),
             (today - 1, day(50, 18.0)),
             (today - 100, day(900, 30.0)),
         ]),
-        by_model: BTreeMap::from([
+        by_model: model_map([
             ("current-model".into(), current.clone()),
             ("old-model".into(), old.clone()),
         ]),
@@ -1920,7 +2353,7 @@ fn today_panel_uses_day_breakdowns_and_year_activity_without_a_trend() {
         PanelStats {
             usage: &stats,
             assists: &AssistStats::default(),
-            active: Some(active),
+            active,
         },
         today,
         false,
@@ -1963,8 +2396,9 @@ fn insights_append_the_prior_window_spend_trend() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -1993,8 +2427,9 @@ fn year_daily_average_keeps_recent_activity() {
     let mut stats = Stats {
         timezone: "UTC".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::from([(today, day(1, 6.0)), (today - 100, day(1, 6.0))]),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),
@@ -2637,8 +3072,9 @@ fn today_index_uses_the_publications_zone() {
     let stats = Stats {
         timezone: "Asia/Shanghai".into(),
         refreshed_at_ms: 0,
+        day_cutoff_secs: 0,
         subagents: BTreeMap::new(),
-        unattributed: Default::default(),
+        recorded_since_secs: None,
         by_day: BTreeMap::new(),
         by_model: BTreeMap::new(),
         by_agent: BTreeMap::new(),

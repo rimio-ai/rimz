@@ -197,6 +197,9 @@ fn compute_model_breakdown(
         Some(&Default::default()),
     )
     .models
+    .into_iter()
+    .map(|(id, model)| (id, model.tally))
+    .collect()
 }
 
 fn compute_scoped_tally(

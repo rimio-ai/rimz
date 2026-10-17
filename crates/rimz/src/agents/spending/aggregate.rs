@@ -14,7 +14,7 @@ use crate::agents::definition::ThreadKey;
 use super::cache::{CachedEntry, FileCacheEntry, SpendingDiskCache};
 use super::session_roles::SessionRole;
 use super::user_input::UserInputRecord;
-use super::{RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult};
+use super::{ModelTally, RoleTallies, ScopedSpending, SpendingFile, SpendingWalkResult};
 use crate::ids::LoginKey;
 
 type FastHashMap<K, V> = HashMap<K, V, foldhash::fast::RandomState>;
@@ -229,7 +229,7 @@ pub(crate) fn aggregate_counted_rollups(
     counted: &[impl CountedPayload],
     workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
-    history_roles: Option<&super::session_roles::RoleMap>,
+    history_roles: Option<&super::session_roles::RoleIndex>,
 ) -> SpendingWalkResult {
     let HeadlineContext {
         user_inputs,
@@ -253,10 +253,15 @@ pub(crate) fn aggregate_counted_rollups(
     let mut workspace_session_totals = FastHashMap::<SessionKey<'_>, (u64, f64)>::default();
     let mut provider_day_sessions = BTreeMap::<String, FastHashSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
-    let mut models = BTreeMap::<&str, SpendTally>::new();
-    let mut roles = RoleTallies::default();
+    let mut models = BTreeMap::<&str, (SpendTally, BTreeMap<&str, SpendWindow>)>::new();
+    let mut roles = RoleTallies {
+        recorded_since_secs: history_roles.and_then(|index| index.recorded_since_secs),
+        ..Default::default()
+    };
     let mut role_sessions = FastHashMap::default();
-    let joined_roles = history_roles.filter(|roles| !roles.is_empty());
+    let joined_roles = history_roles
+        .map(|index| &index.roles)
+        .filter(|roles| !roles.is_empty());
     let file_sessions: FastHashMap<_, _> = if joined_roles.is_some() {
         files
             .iter()
@@ -367,44 +372,32 @@ pub(crate) fn aggregate_counted_rollups(
             cell.usd += entry.cost_usd;
             cell.tokens += entry.input + entry.cache_write + entry.output + entry.cache_read;
 
-            accum(
-                models
-                    .entry(entry.model.as_deref().unwrap_or_default())
-                    .or_default(),
-                entry,
-                now_secs,
-                u64::MAX,
-                history_day_cutoff,
-            );
+            let (tally, producers) = models
+                .entry(entry.model.as_deref().unwrap_or_default())
+                .or_default();
+            accum(tally, entry, now_secs, u64::MAX, history_day_cutoff);
+            let producer = producers.entry(provider).or_default();
+            if within_widest_window(entry.ts_secs, now_secs) {
+                producer.add(entry.cost_usd, entry);
+            }
             if let Some(index) = joined_roles {
                 let native = file_sessions
                     .get(counted.path())
                     .and_then(|id| id.as_deref())
                     .or(entry.thread_id.as_deref())
                     .filter(|id| !id.is_empty());
-                let role = native.and_then(|session| index.get(provider)?.get(session));
+                let Some(SessionRole::Subagent { profile }) =
+                    native.and_then(|session| index.get(provider)?.get(session))
+                else {
+                    continue;
+                };
                 accum(
-                    role_tally(&mut roles, provider, role),
+                    roles.subagents.entry(profile.clone()).or_default(),
                     entry,
                     now_secs,
                     cutoffs.total,
                     history_day_cutoff,
                 );
-                if let Some(SessionRole::Subagent { profile }) = role {
-                    accum(
-                        roles
-                            .subagents
-                            .entry(profile.clone())
-                            .or_default()
-                            .models
-                            .entry(entry.model.clone().unwrap_or_default())
-                            .or_default(),
-                        entry,
-                        now_secs,
-                        cutoffs.total,
-                        history_day_cutoff,
-                    );
-                }
                 let session = native
                     .map(|thread_id| SessionKey::Native {
                         kind: provider,
@@ -412,11 +405,9 @@ pub(crate) fn aggregate_counted_rollups(
                     })
                     .unwrap_or_else(|| counted.session_key());
                 role_sessions
-                    .entry((provider, session))
-                    .and_modify(|(youngest, _): &mut (u64, _)| {
-                        *youngest = (*youngest).max(entry.ts_secs)
-                    })
-                    .or_insert((entry.ts_secs, role));
+                    .entry((profile, session))
+                    .and_modify(|youngest: &mut u64| *youngest = (*youngest).max(entry.ts_secs))
+                    .or_insert(entry.ts_secs);
             }
         }
     }
@@ -429,24 +420,14 @@ pub(crate) fn aggregate_counted_rollups(
         cutoffs.total,
         history_day_cutoff,
     );
-    if history_roles.is_some() && joined_roles.is_none() {
-        roles.unattributed.by_provider = spending.by_provider.clone();
-    }
-    for ((provider, _), (youngest, role)) in role_sessions {
+    for ((profile, _), youngest) in role_sessions {
         bump_sessions(
-            role_tally(&mut roles, provider, role),
+            roles.subagents.entry(profile.clone()).or_default(),
             youngest,
             now_secs,
             cutoffs.total,
             history_day_cutoff,
         );
-    }
-    for tally in roles.unattributed.by_provider.values() {
-        roles.unattributed.tally.headline.merge(&tally.headline);
-        roles.unattributed.tally.day.merge(&tally.day);
-        roles.unattributed.tally.week.merge(&tally.week);
-        roles.unattributed.tally.month.merge(&tally.month);
-        roles.unattributed.tally.year.merge(&tally.year);
     }
     if let Some(scope) = workspace {
         add_scoped_sessions(
@@ -492,31 +473,31 @@ pub(crate) fn aggregate_counted_rollups(
         models: if history_roles.is_some() {
             models
                 .into_iter()
-                .map(|(model, tally)| (model.to_owned(), tally))
+                .map(|(model, (tally, producers))| {
+                    // Every model entry records at least one producer above.
+                    let (kind, _) = producers
+                        .into_iter()
+                        .max_by(|(a_kind, a), (b_kind, b)| {
+                            a.usd
+                                .total_cmp(&b.usd)
+                                .then_with(|| a.tokens.cmp(&b.tokens))
+                                .then_with(|| b_kind.cmp(a_kind))
+                        })
+                        .expect("each model has a producing kind");
+                    (
+                        model.to_owned(),
+                        ModelTally {
+                            tally,
+                            kind: kind.to_owned(),
+                        },
+                    )
+                })
                 .collect()
         } else {
             BTreeMap::new()
         },
         stats: Default::default(),
         roles,
-    }
-}
-
-fn role_tally<'a>(
-    roles: &'a mut RoleTallies,
-    provider: &str,
-    role: Option<&SessionRole>,
-) -> &'a mut SpendTally {
-    match role {
-        Some(SessionRole::Agent { .. }) => roles.agents.entry(provider.to_owned()).or_default(),
-        Some(SessionRole::Subagent { profile }) => {
-            &mut roles.subagents.entry(profile.clone()).or_default().tally
-        }
-        None => roles
-            .unattributed
-            .by_provider
-            .entry(provider.to_owned())
-            .or_default(),
     }
 }
 

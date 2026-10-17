@@ -66,6 +66,8 @@ impl Harness {
             &self.runtime_paths.shared_provider_spending_path(),
             &rimz::agents::spending::ProviderSpendingCache {
                 refreshed_at_ms: now_ms,
+                day_cutoff_secs: rimz::agents::spending::local_day_start_secs(now_ms / 1000, None)
+                    .unwrap(),
                 spending: rimz::agents::spending::Spending::default(),
                 ..Default::default()
             },

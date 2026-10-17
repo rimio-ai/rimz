@@ -25,7 +25,8 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// [`Spending`](crate::agents::spending::Spending), publishing the stamped
 /// result to the persistent shared `provider-spending.json` — the cache consumer
 /// tabs read instead of walking, and the producer's own global gate: a stamp
-/// younger than [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves
+/// from the current local day and younger than
+/// [`SPENDING_TTL`](crate::agents::spending::SPENDING_TTL) serves
 /// the published provider totals without a global transcript walk or price-book
 /// load.
 ///
@@ -55,7 +56,7 @@ pub(super) fn serve_request(
 }
 
 /// The one-shot answer with no owner: the current-version provider
-/// publication at any age, as `rimz stats` serves it, with the request's
+/// publication at any age, as held stats uses on a refresh error, with the request's
 /// matching workspace sidecar, the sole surviving sidecar, or an empty tally.
 /// `None` means nothing usable was ever published and the caller must walk.
 pub(super) fn current_publication(
@@ -370,6 +371,7 @@ fn walk_fleet_spending_files(
         }
         let refreshed_at_ms = unix_now_ms();
         let user_inputs = user_input::load();
+        let roles = super::session_roles::load(&runtime.shared_spending_cursor_path(), now_secs);
         let result = crate::agents::spending::aggregate_walk_publish(
             files,
             &Default::default(),
@@ -377,7 +379,7 @@ fn walk_fleet_spending_files(
             now_secs,
             None,
             context.headline,
-            &Default::default(),
+            &roles,
         );
         let scoped = compute_scoped_spending(
             files,
@@ -680,10 +682,7 @@ fn served_within_grace(
     let provider = crate::agents::spending::read_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
     );
-    if !provider.is_current_version()
-        || unix_now_ms().saturating_sub(provider.refreshed_at_ms)
-            > SPENDING_STALE_GRACE.as_millis() as u64
-    {
+    if !provider.is_fresh_within(unix_now_ms(), SPENDING_STALE_GRACE) {
         return None;
     }
     Some(crate::agents::spending::SpendingCaches {
