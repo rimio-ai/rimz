@@ -1,101 +1,146 @@
 # Troubleshooting
 
-Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess about which of them is lying. RimZ keeps the room's truth in one durable store, and `rimz doctor` reads it along with the machine around it in a single pass, printing the fix beside most of what it finds. Run it first. The rest of this page is the symptom catalogue: what went wrong, the command that fixes it, and the guide that owns the full story.
+Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess about which of them is lying. RimZ keeps the room's truth in one durable store, and `rimz doctor` reads it along with the machine around it in a single pass, collecting what needs your attention into a closing fix block. Run it first. The rest of this page is the symptom catalogue: what went wrong, the command that fixes it, and the guide that owns the full story.
 
 ## Start with `rimz doctor`
 
-`rimz doctor` probes the machine, the room, and RimZ's own state, then prints a verdict per row: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. A normal run writes nothing to disk and starts, stops, or moves nothing in the room, so run it as often as you like. Only `--clear` writes a history watermark and `--output` writes the report to the named file.
+`rimz doctor` probes the machine, the room, and RimZ's own state: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. A normal run changes no RimZ state and starts, stops, or moves no room agents. It may briefly start configured language servers to check startup, then terminate those probes; a server may write its own files. Only `--clear` writes a history watermark and `--output` writes the report to the named file.
 
 ```sh
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. This capture is shortened, with `…` where lines were dropped:
+The report reads top to bottom, machine setup first and live room state last. This capture uses a fresh home with hibernation disabled and legacy directories still present:
 
-```
+```console
 RimZ doctor
-  version: 0.4.3+g85a16b08cf04
+  version: 0.4.3+gd4a4fa34b3f4.dirty
   user:    marvin (uid 1000)
-  …
+  binary:  /tmp/doctor-round5.urAnxRtn/rimz
 
 WORKSPACE
-  id:              ws_f89e49906df0621ad2765112
-  project root:    /home/marvin/workspace/project-rimz/rimz
-  session:         rimz-f89e
-  …
+  id:              ws_225df3094012a213addf6b7d
+  project root:    /home/me/project
+  root class:      directory
+  worktree root:   /home/me/project
+  worktree branch: <detached>
+  session:         project-225d
+  sock headroom:   ✓ OK (67/108 bytes for /tmp/dr5uArT/rimz/ws/project-225d/sock)
 
 MULTIPLEXER
-  backend:        tmux
-  version:        tmux 3.7c
-  tmux floor:     ✓ OK (>= 3.5.0 required)
-  session health: ✓ ok
-  presence:       ✓ event mode (poked 94s ago)
-  ttyd web:       ✓ ttyd version 1.7.7 (/usr/bin/ttyd)
+  backend:    tmux
+  version:    tmux 3.7c
+  tmux floor: ✓ OK (>= 3.5.0 required)
+  tmux popup: ✓ supported
+  binary:     /home/me/bin/tmux — tmux 3.7c
+  log:        server logging off (start tmux with `-v` to enable)
+  socket:     /tmp/dr5uArT/rimz/tmux/server
+  room:       absent
+  presence:   not applicable — this workspace room is absent on tmux
+  ttyd web:   ✓ ttyd version 1.7.7 (/usr/bin/ttyd)
+    ✓ duplicate sessions: none
 
 TERMINAL
-  depth:   ✓ truecolor (mode truecolor)
-  …
+  depth:   ✓ truecolor (mode auto)
+  signals: truecolor-advertised=true COLORTERM=truecolor TERM=xterm-256color terminfo-truecolor=false
 
 HOME
-  home:         ~/.rimz (RIMZ_HOME)
-  legacy roots: ! ~/.config/rimz, ~/.local/state/rimz, ~/.local/share/rimz (not read)
-      fix: RimZ now keeps everything under /home/marvin/.rimz and no longer reads …
+  home: ~/.rimz (RIMZ_HOME)
+    ! legacy roots ~/.config/rimz, ~/.local/state/rimz are still on disk and not read
 
 MACHINE CONFIG
   config files: ✓ all present files parse
 
 SANDBOX
-  mode:    sandbox
+  mode:    host
   bwrap:   /usr/bin/bwrap
-  …
-  probe:   ✓ passed
+  version: bubblewrap 0.11.0
+  probe:   ▸ passed
+
+HIBERNATE
+  enabled: false
+  active:  skipped: disabled
 
 HOOKS
-  13 reporting to RimZ: amp, antigravity, claude, codex, copilot, cursor, droid, grok, kimi, kiro, opencode, pi, qwen
+  no agent reports to RimZ yet
+   AGENT   STATUS
+✗  claude  not installed
+    · not found on this machine: amp, antigravity, codex, copilot, cursor, droid, grok, kimi, kiro, opencode, pi, qwen
+      RimZ offers their hooks as soon as one appears
 
-…
+FOLDER TRUST
+   AGENT   LOGIN    STATUS
+!  claude  default  undecided
+
+ACCOUNTS
+   KIND    NAME     HOME  STATUS  DEFAULT FOR
+✓  claude  default  -     ready   new rooms
+✓  codex   default  -     ready   new rooms
+
+LOOP TASKS
+  none configured
+
+LSP
+    · no shared language servers
+
+REMOTE CONTROL
+  remote control: off
+
+STORAGE
+  rimz on disk: 38 B
+   AREA     SIZE  PATH
+·  home     38 B  ~/.rimz
+·  runtime     -  /tmp/dr5uArT/rimz
 
 PROTOCOLS
   event:   rimz.event.v2
   sidebar: rimz.plugin.v5
-    ! mixed rimz builds writing this workspace: 2 distinct builds; run `rimz reload` to converge
-      …
 
 TRUST
-  trust: ✓ trusted (granted 2026-09-16T05:39:29.842070054Z)
+  trust: · no project config
 
 AGENTS
-  10 live: 2 running, 1 waiting, 7 success
+  none observed
 
 MESSAGES
-  1 open: 1 queued — `rimz message list`
+  no open messages
 
 DIAGNOSTICS
-  12 recent incidents (/home/marvin/.rimz/ws/rimz-f89e/diag.log.jsonl)
-   KIND                               SEEN  SUMMARY
-!  mixed_build_writers             22m ago  prior frame from build 371a4cbf5aec; this producer is bf47174d6f7c · old build bf47174d6f7c
-    …
-    ▸ 1 handled and closed themselves: pane_carry
+  no recent records (/home/me/.rimz/ws/ws-225df3094012a213addf6b7d/audit/diag.log.jsonl)
 
-! 13 warnings in HOME, PROTOCOLS, DIAGNOSTICS
-  ✗ marks something broken, with the command that fixes it beside it; ! marks something degraded that still works
+✗ 1 problem in HOOKS  ·  ! 2 warnings in HOME, FOLDER TRUST
+  ✗ HOOKS: claude not installed
+      fix: run `rimz hooks install claude` to wire claude agents
+  ! HOME: legacy roots ~/.config/rimz, ~/.local/state/rimz are still on disk and not read
+      fix: move what you still need from ~/.config/rimz, ~/.local/state/rimz into ~/.rimz by hand, then delete them (docs/guide/configuration.md#moving-from-the-xdg-roots)
+  ! FOLDER TRUST: claude@default folder trust is undecided
+      fix: run `rimz trust grant --agents claude` in `/home/me/project`, or answer claude's folder-trust prompt once there
 ```
 
-Most symptoms below show up as a named doctor row with the fix already attached, so the report doubles as the fix list.
+Most symptoms below show up as a named doctor row, with the next action collected in the closing block, so the report doubles as the fix list.
 
 If agent state stays stale or messages wait behind queued hooks, look for a drain-lag warning in DIAGNOSTICS. It shows the episode's worst sampled delay and peak backlog size. The warning clears after 15 minutes without another lag report; `rimz doctor --clear` dismisses the retained history immediately without deleting the evidence.
 
 ### Reading the report
 
-Each row carries a glyph that sets its tone:
+Start at the closing block, not at the longest table. Rows have two tiers:
 
-- `✓` clear, `▸` informational, `·` a neutral background fact.
-- `!` degraded: working, but worth a look.
-- `✗` broken. In a table the command to run is in the `FIX` column; elsewhere it sits on the line beneath the row.
+- `!` warnings and `✗` problems need attention. Each counts once. Findings in the same section that share a fix are collected into one closing entry naming their count and subjects, with the fix printed once.
+- `▸` context and `·` neutral background facts do not count. `✓` means the check is healthy.
 
-The last line counts the findings and names the sections holding them, or reads `✓ everything checked is healthy` alone. Jump to the sections it names and clear the `✗` rows first.
+The closing headline counts findings and names their sections, followed by all problems and then all warnings with their fixes. Work down that list. If nothing counts, the report ends with `✓ everything checked is healthy`, even when context rows remain. `--audit` adds rows without changing that verdict: agents waiting for an answer belong in the sidebar, and ended sessions are history, not doctor findings.
 
-The tail sections report live state rather than machine setup: `AGENTS` counts the agents doctor observed, `MESSAGES` lists sends that failed to land, and `DIAGNOSTICS` lists incidents RimZ recorded about itself. An incident takes a row when RimZ has not yet explained it, and contributes its warning or problem to the tally; incidents it matched to an ordinary cause, a client leaving the session or a pane's terminal closing, are counted and named on one closing line instead. A busy room produces far more of the second kind than the first. Treat both as context for a bug report rather than a to-do list, and use `rimz doctor --json` when you want them structured.
+A spent account with a future reset is context, not another warning to clear. Its row names agents paused or failed on that limit, without counting them again under `AGENTS`. An account with no credits and no reset warns instead. Account readings come from the cache and show their age; doctor does not refresh provider usage. Agent rows use the same status as their cards.
+
+`MESSAGES` keeps past delivery failures in one context line grouped by status. Follow `rimz message list --all --system` to inspect them; stuck deliveries still earn a finding and fix. `DIAGNOSTICS` separates incidents still needing investigation from ones RimZ handled and closed itself. Only investigative warnings and problems count; settled incidents are context, not a to-do list. `--audit` expands those settled incidents with their times and summaries, and lists each routine multiplexer-log group with its span.
+
+Plain output keeps loop tasks that need attention and running or crashed language servers visible, summarizing the rest. Memory-pressure dormancy is neutral: the next query can restart the server. When reporting a bug, widen those sections, include retained message-failure rows and observed agent sessions, and omit multiplexer log text:
+
+```sh
+rimz doctor --audit --no-log-text --output doctor.txt
+```
+
+Use `rimz doctor --json` for structured evidence. The [doctor reference](../reference/cli/getting-started.md#diagnose-with-doctor) lists the sections and flags.
 
 The `MULTIPLEXER` section's `log` row names the server log, how far back the scan reached, and who writes into it. The Zellij log covers every Zellij session your user owns, so an issue it reports can come from a session that is not this room; the tmux log is scoped to RimZ's own server. Check that scope before attributing an issue to the room.
 
