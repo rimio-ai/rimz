@@ -466,7 +466,7 @@ Each heading names the home-relative root, whether its room is open, the task co
 
 Empty sections are omitted:
 
-- NEEDS YOU names missing checkouts, strike-disabled or failing tasks, throttle holds, trust blocks, invalid triggers, and workflow tasks with a parked run, with commands addressing the named tasks. A parked task reads `<n> run(s) parked: <workflow> <node> <reason>[: <text>] <age> <checkout>` and lists each parked run on its own line below the table. A missing checkout is flagged, not retired; the task returns to its normal section when the directory returns.
+- NEEDS YOU names missing checkouts, strike-disabled or failing tasks, throttle holds, trust blocks, invalid triggers, and workflow tasks with a parked run, with commands addressing the named tasks. A parked task reads `<n> run(s) parked: <workflow> <node> <reason>[: <text>] <age> <checkout>` and lists each parked run on its own line below the table, unless the task's one parked run is already its reason. A task that needs you for another reason, such as strikes, still lists its parked runs there. A missing checkout is flagged, not retired; the task returns to its normal section when the directory returns.
 - ROOM has NAME, TRIGGER, ACTION, LAST. Running rows come first. Actions read `run check`, `start <profile>`, or `check, then start <profile>`, with an account pin when set.
 - WORKTREES has WORKTREE, TRIGGER, WAKES, LAST, NAME. Deliveries and directory-bound tasks group by checkout, with the caller's checkout first and marked `(here)`. A target matching the calling agent is marked `(you)`. Owned signal subscriptions with the same target, owner, and non-path filters collapse; NAME reads `↳ team <team>` or `↳ <loop task>`. User-named rows without an owner never collapse.
 

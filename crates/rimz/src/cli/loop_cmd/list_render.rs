@@ -136,12 +136,19 @@ fn needs_you(
         })
         .collect::<Vec<_>>();
     write_table(out, &["", "", ""], &cells, 2, width)?;
-    for run in rows
-        .iter()
-        .flat_map(|row| &row.workflow_runs)
-        .filter(|run| run.reason.is_some())
-    {
-        writeln!(out, "  {}", run.summary(now))?;
+    for row in &rows {
+        let parked: Vec<_> = row
+            .workflow_runs
+            .iter()
+            .filter(|run| run.reason.is_some())
+            .collect();
+        // A lone parked run is already the row's reason.
+        if row.attention == Some(Attention::Parked) && parked.len() == 1 {
+            continue;
+        }
+        for run in parked {
+            writeln!(out, "  {}", run.summary(now))?;
+        }
     }
     let mut hints: BTreeMap<Attention, Vec<&str>> = BTreeMap::new();
     for row in rows {
