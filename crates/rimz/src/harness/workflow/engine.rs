@@ -716,6 +716,23 @@ pub fn resume(
     spawn(&record)
 }
 
+pub(crate) fn rename_task(state: &StatePaths, old: &str, new: &str) -> Result<Vec<WorkflowRunId>> {
+    if !state.root.exists() {
+        return Ok(Vec::new());
+    }
+    let guard = WorkspaceLock::acquire(&state.workspace_lock)?;
+    let mut renamed = Vec::new();
+    for mut record in workflow::list(state)? {
+        if !record.started_by(old) {
+            continue;
+        }
+        record.task = Some(new.into());
+        workflow::write(&state.workflow(&record.id), &record, &guard)?;
+        renamed.push(record.id);
+    }
+    Ok(renamed)
+}
+
 pub fn wake(state: &StatePaths, signal: &str) -> Result<()> {
     for record in workflow::list(state)? {
         let paths = state.workflow(&record.id);

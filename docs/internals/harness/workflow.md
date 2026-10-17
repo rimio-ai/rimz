@@ -109,7 +109,7 @@ A `workflow = "<name>"` task is the fourth loop action (`TaskAction::Workflow`).
 
 `each-worktree` takes `workflow` as well as `stay`: the fire runs per owned checkout with the checkout's run lock and stamps `checkout` on its row. `stay`, `takeover`, `subscribe`, `check`, and `judge` are refused on a workflow task, each naming the workflow node that owns the concept (`crates/rimz/src/harness/schedule.rs::TaskActionErr::WorkflowField`). The trust hash covers `workflow` (`crates/rimz/src/trust.rs::ExecutableTask`).
 
-`RunRecord.task` is the provenance `rimz loop list` and `rimz loop show` select by, together with the record's project root; a manual run has none, so it appears in `rimz workflow list` and the sidebar but under no task.
+`RunRecord.task` is the provenance `rimz loop list` and `rimz loop show` select by, together with the record's project root; a manual run has none, so it appears in `rimz workflow list` and the sidebar but under no task. `loop rename` rewrites it on the task's nonterminal records under the workspace lock through `crates/rimz/src/harness/workflow/engine.rs::rename_task`, leaving terminal records unchanged.
 
 ## Attention
 

@@ -6242,6 +6242,102 @@ fn loop_task_mutations_move_and_clear_overlays() {
 }
 
 #[test]
+fn loop_rename_moves_live_workflow_runs() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.old]\nworkflow = \"review\"\nroot = {:?}\nevery = \"15m\"\n",
+            env.project_root
+        ),
+    );
+    let paths = env.state_path_for(&env.project_root);
+    let records: Vec<(rimz::store::workflow::RunRecord, Vec<u8>)> = {
+        let guard = rimz::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock).unwrap();
+        [
+            ("parked", Some("old")),
+            ("active", Some("old")),
+            ("done", Some("old")),
+            ("failed", Some("old")),
+            ("canceled", Some("old")),
+            ("active", Some("other")),
+            ("active", None),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (state, task))| {
+            let record: rimz::store::workflow::RunRecord = serde_json::from_value(json!({
+                "version":1, "id":rimz::ids::WorkflowRunId::new(), "workflow":"review",
+                "task":task, "spec_dir":"/definitions/review", "spec_digest":"abc",
+                "prompt":null, "scope":{"kind":"worktree","path":env.project_root.join(index.to_string())},
+                "project_root":env.project_root, "created_at":"2026-01-01T00:00:00Z",
+                "state":state, "park":if state == "parked" {
+                    json!({"reason":"user","text":null,"at":"2026-01-01T00:00:00Z"})
+                } else { json!(null) },
+                "node":"pr", "entered_at":"2026-01-01T00:00:00Z", "input":null,
+                "key":null, "recheck_at":null, "wait":null, "visits":{}, "visit_grant":0,
+                "deadline":null, "deadline_fired":false, "next_seq":1, "attempt":null,
+                "prev_attempt":null, "terminal_at":if matches!(state, "done" | "failed" | "canceled") {
+                    json!("2026-01-01T00:00:00Z")
+                } else { json!(null) }
+            })).unwrap();
+            rimz::store::workflow::initialize(&paths, &record, b"spec", &guard).unwrap();
+            let bytes = std::fs::read(paths.workflow(&record.id).record).unwrap();
+            (record, bytes)
+        })
+        .collect()
+    };
+
+    let receipt = loop_ok(&env, &["loop", "rename", "old", "new"]);
+    assert_eq!(receipt.trim(), "renamed loop task `old` to `new`");
+    for (mut expected, bytes) in records.clone() {
+        let run_paths = paths.workflow(&expected.id);
+        if expected.task.as_deref() == Some("old") && !expected.state.is_terminal() {
+            expected.task = Some("new".into());
+        } else {
+            assert_eq!(std::fs::read(&run_paths.record).unwrap(), bytes);
+        }
+        assert_eq!(rimz::store::workflow::load(&run_paths).unwrap(), expected);
+    }
+    let shown = loop_ok(&env, &["loop", "show", "new"]);
+    assert!(shown.contains("RUNS"), "{shown}");
+    for (record, _) in &records[..2] {
+        assert!(shown.contains(record.id.as_str()), "{shown}");
+    }
+    let listed = loop_ok(&env, &["loop", "list"]);
+    assert!(listed.contains("NEEDS YOU"), "{listed}");
+    assert!(
+        listed.split_whitespace().any(|word| word == "new"),
+        "{listed}"
+    );
+    assert!(
+        !listed.split_whitespace().any(|word| word == "old"),
+        "{listed}"
+    );
+    let (_, error) = loop_fail(&env, &["loop", "show", "old"]);
+    assert!(error.contains("no loop task named `old`"), "{error}");
+}
+
+#[test]
+fn loop_rename_without_a_room_does_not_create_state() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.old]\ncheck = \"true\"\nroot = {:?}\nevery = \"15m\"\n",
+            env.project_root
+        ),
+    );
+    let paths = env.state_path_for(&env.project_root);
+    assert!(!paths.root.exists());
+
+    let receipt = loop_ok(&env, &["loop", "rename", "old", "new"]);
+    assert_eq!(receipt.trim(), "renamed loop task `old` to `new`");
+    assert!(!paths.root.exists(), "rename must not create room state");
+}
+
+#[test]
 fn loop_rename_rejects_collisions_and_reports_missing() {
     let env = Env::new();
     env.record(&env.project_root);

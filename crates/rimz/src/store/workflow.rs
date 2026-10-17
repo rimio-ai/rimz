@@ -327,6 +327,13 @@ pub struct RunRecord {
     pub check_retry_context: Option<Value>,
 }
 
+impl RunRecord {
+    /// The shared predicate for a live run of a loop task.
+    pub fn started_by(&self, task: &str) -> bool {
+        !self.state.is_terminal() && self.task.as_deref() == Some(task)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub seq: Option<u64>,

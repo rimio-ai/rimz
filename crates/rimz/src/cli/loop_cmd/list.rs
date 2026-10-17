@@ -810,11 +810,7 @@ impl WorkflowRunRow {
     ) -> Vec<Self> {
         records
             .iter()
-            .filter(|record| {
-                !record.state.is_terminal()
-                    && record.task.as_deref() == Some(task)
-                    && record.project_root == root
-            })
+            .filter(|record| record.started_by(task) && record.project_root == root)
             .map(|record| Self {
                 id: record.id.clone(),
                 checkout: record.scope.path.clone(),
