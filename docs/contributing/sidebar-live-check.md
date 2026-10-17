@@ -667,6 +667,142 @@ Before you read any timing, confirm from the shell that sends the messages that 
 
 A room built by hand, outside `cargo xtask sandbox`, needs `XDG_RUNTIME_DIR` set to a short path (a few characters under `/tmp`): socket paths under a long directory exceed the AF_UNIX limit and the room fails to start. The state root may be long.
 
+## Check a workflow against a real provider
+
+Use the [real-provider venue](#check-against-a-real-provider-login), not a held sandbox room. Keep the real `HOME` and account login, but isolate RimZ's state and runtime. Resolve the worktree's build directory rather than assuming `target/debug`:
+
+```sh
+cargo build -p rimz --bin rimz
+export LIVE_SOURCE="$PWD" LIVE_ROOT="$(mktemp -d /tmp/w4XXXXXX)"
+LIVE_BIN="$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/debug/rimz"
+mkdir -p "$LIVE_ROOT/bin" "$LIVE_ROOT/home/agents" "$LIVE_ROOT/home/cache" "$LIVE_ROOT/r"
+chmod 700 "$LIVE_ROOT" "$LIVE_ROOT/home" "$LIVE_ROOT/r"
+cp "$LIVE_BIN" "$LIVE_ROOT/bin/rimz"
+cp -R "$HOME/.rimz/cache/providers" "$LIVE_ROOT/home/cache/"
+mkdir -p "$LIVE_ROOT/home/workflows"
+cp -R "$LIVE_SOURCE/crates/rimz/tests/fixtures/workflows/babysit-pr" "$LIVE_ROOT/home/workflows/"
+git clone --quiet --no-hardlinks --branch "$(git branch --show-current)" "$LIVE_SOURCE" "$LIVE_ROOT/repo"
+git -C "$LIVE_ROOT/repo" remote set-url origin git@github.com:rimio-ai/rimz.git
+git -C "$LIVE_ROOT/repo" remote set-url --push origin disabled://workflow-live-proof
+export RIMZ_HOME="$LIVE_ROOT/home" XDG_RUNTIME_DIR="$LIVE_ROOT/r"
+export RIMZ_BIN="$LIVE_ROOT/bin/rimz" PATH="$LIVE_ROOT/bin:$PATH"
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$(realpath "$HOME/.claude")}"
+command -v rimz
+rimz --version
+sha256sum "$LIVE_BIN" "$RIMZ_BIN"
+```
+
+The clone's branch must already have a PR. The fixture reads that PR; the proof must not push, comment, merge, or otherwise edit it. Keep `prompts/sweep.md` unchanged. Put a `gh` shim at `$LIVE_ROOT/bin/gh`, make it executable, and allow only the read commands the check needs. For example, with the host's real `gh` at `/usr/bin/gh`:
+
+```text
+#!/bin/sh
+case "${1:-} ${2:-}" in
+    'pr view'|'pr checks'|'pr diff'|'run view'|'run list') exec /usr/bin/gh "$@" ;;
+    *) printf 'live-proof guard: gh writes and non-allowlisted commands are disabled\n' >&2; exit 97 ;;
+esac
+```
+
+Before starting the room, verify `command -v gh` names that shim. From the clone, `git push --dry-run origin HEAD` must fail against the disabled push URL, and both `gh pr comment <number> --body <text>` and `gh api --method POST <endpoint>` must be refused by the shim before any network request. Do not run those probes without first verifying the shim path.
+
+Do not copy the machine config or named accounts. They can select account homes absent from the isolated state, or trigger unrelated hook preconditions. Use the shell's real `CLAUDE_CONFIG_DIR`; when the shell has none, the fallback above resolves its existing default login. Do not copy credentials, print account files, or modify that home beyond the clone-path trust grant below and normal provider sessions.
+
+Create `$RIMZ_HOME/config.toml` with these contents, substituting the absolute `$LIVE_ROOT/agent-shell` path for the example path:
+
+```text
+[agents]
+isolation = "sandbox"
+shell = "/tmp/REPLACE/agent-shell"
+
+[agents.hibernate]
+enabled = false
+
+[accounts.use]
+claude = "default"
+
+[remote_control]
+claude = false
+codex = false
+```
+
+The `default` login is implicit; do not add an `[accounts.claude.default]` table. Remove unrelated project loop tasks from the disposable clone's `.rimz/config.toml` before granting project trust. Copy `$HOME/.rimz/agents/claude.md` into `$RIMZ_HOME/agents/claude.md` (a nonempty base is required), then create `$RIMZ_HOME/agents/live-claude.md`:
+
+```text
+---
+agent: claude
+model: haiku
+description: Claude-only workflow live proof.
+tools: [Bash, Edit, Glob, Grep, Read, Write]
+subagents: []
+---
+
+This is an isolated live check. Never modify remote objects, remove the write guards, or launch children. If a guard prevents progress, end the turn with a concise report rather than wait for input.
+```
+
+Set every fixture agent reference to `live-claude`, and select `scope = "project"`. Leave `prompts/sweep.md` byte-identical to the committed fixture. For deterministic retry routing, replace only the copied `checks/pr.py` with:
+
+```text
+# /// script
+# requires-python = ">=3.11"
+# ///
+import json
+import os
+import pathlib
+
+context = json.loads((pathlib.Path(os.environ["RIMZ_WORKFLOW_DIR"]) / "context.json").read_text())
+previous = context.get("prev_attempt") or {}
+outcome = "needs-sweep" if previous.get("outcome") in {None, "died"} else "merged"
+print(json.dumps({"outcome": outcome}))
+```
+
+Here `merged` is a synthetic routing result, not evidence that the real draft PR merged. The real sweep reads the PR but cannot merge it. Validate both profiles and the workflow before starting. Profiles need tools; omitting them fails validation. Do not add `skills: []` without the `Skill` tool.
+
+A login shell can reorder `PATH` after launch. The first provider did so despite the correct `RIMZ_BIN`. Create an executable `$LIVE_ROOT/agent-shell` with an absolute staging path substituted below:
+
+```text
+#!/bin/sh
+export PATH=/tmp/REPLACE/bin:$PATH
+exec /bin/bash --noprofile --norc "$@"
+```
+
+Verify the actual provider process's `PATH`, `RIMZ_BIN`, and `RIMZ_HOME`, not just the sending shell's. The configured shell also keeps provider tool shells on the staged binary.
+
+Start from a detached tmux driver so the room host can outlive the sending tool call. Create `$LIVE_ROOT/start.sh` with these contents. Keep `LIVE_ROOT` and `CLAUDE_CONFIG_DIR` exported to the driver:
+
+```text
+#!/bin/sh
+set -eu
+export RIMZ_HOME="$LIVE_ROOT/home" XDG_RUNTIME_DIR="$LIVE_ROOT/r"
+export RIMZ_BIN="$LIVE_ROOT/bin/rimz" PATH="$LIVE_ROOT/bin:$PATH"
+export RIMZ_ISOLATION="${1:-sandbox}"
+unset CODEX_HOME
+unset RIMZ_AGENT_ID RIMZ_AGENT_KIND RIMZ_AGENT_NAME RIMZ_AGENT_PROFILE
+unset RIMZ_AGENT_MODEL RIMZ_AGENT_EFFORT RIMZ_CHANNEL RIMZ_RUN_ID RIMZ_LOOP_TASK
+unset RIMZ_PROJECT_ROOT RIMZ_WORKTREE_PATH RIMZ_WORKSPACE_ID RIMZ_SHARED
+unset ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_SOCKET_DIR
+tmux -S "$LIVE_ROOT/driver.sock" set-window-option remain-on-exit on
+cd "$LIVE_ROOT/repo" || exit 1
+"$RIMZ_BIN" start --tmux "$LIVE_ROOT/repo" --no-attach
+```
+
+```sh
+env -u TMUX -u TMUX_PANE tmux -S "$LIVE_ROOT/driver.sock" -f /dev/null \
+  new-session -d -s workflow-m4-driver "sh '$LIVE_ROOT/start.sh'"
+```
+
+Before launch, use the same isolated environment with the parent agent's room identity removed to run `rimz trust grant --agents claude` from the clone. Grant only that clone path, not the provider home. An implicit Codex folder-trust prompt can still appear; decline it. No Codex account or workflow node is needed.
+
+Capture startup stdout, stderr, and exit status outside the disposable root. From inside a RimZ sandbox, start refuses with `this pane runs inside a RimZ sandbox; start the room from a host shell`. With permission to use host execution, change the isolated config's `agents.isolation` to `"host"` and respawn the driver with `sh '$LIVE_ROOT/start.sh' host`. Both the machine setting and ambient `RIMZ_ISOLATION=host` matter; `rimz start` has no isolation flag. If host birth also refuses, retain the refusal rather than fabricating room state.
+
+Run subsequent commands through a wrapper with the same isolated environment, `RIMZ_ISOLATION=host`, and parent identity variables unset, changing directory to the clone first. Preserve both human and JSON `workflow show` output:
+
+1. Run `workflow run babysit-pr`. Resolve the real step PID from its supervised run record and process tree, then `kill -KILL <pid>`. Do not manually advance this workflow. The room tick must journal `died` and launch a distinct attempt, within about a minute.
+2. Let the retry end normally through provider hooks. Its attempt row must have numeric `cost_usd`, and human detail must show cost. The `scope project` line names the clone root, and both `work/notes/` and `work/signs/` exist.
+3. Use a separate project-scoped workflow whose start node is a Claude judge using the fixture's `checks/triage-judge.md`. Set `window = "5h.left>=99"` and route both `skip` and `triage` to `@done`. With the account's left capacity below the threshold, `show` reports a merged window wait whose count grows. Rewrite only the isolated provider cache's `entries["claude@default"].limits.windows` 300-minute reading to `used_percentage = 0`, with fresh `observed_at` and `refreshed_at_ms`; preserve other entries. Immediately call `workflow advance <window-run-id>` so this consumer reads the changed cache before a provider refresh replaces it. This manual advance is for the window run only. The wait closes and a real Claude judge launches.
+
+The cache shape and reopen mechanism are exercised by `crates/rimz/tests/integration/workflow/attempts.rs::closed_window_merges_without_visits_then_reopens`. `resume` has no window-threshold option. Do not edit the sealed workflow to manufacture a reopen. Record the cache publication, the consumer's launched attempt, and final journal, not just the rewrite.
+
+Tear down the room with the isolated wrapper's `rimz --tmux reset --yes --no-start <clone>`, then kill the named driver with `tmux -S "$LIVE_ROOT/driver.sock" kill-session -t workflow-m4-driver`. Check child PIDs and any remaining processes belonging to this exact isolated home; stop only those PIDs. Save scripts and non-secret output, then remove `$LIVE_ROOT`. Do not copy provider account files into the evidence.
+
 ## Probe a loop judge against a real provider
 
 A [judge](../reference/cli/loop.md#waits-and-checks) asks a real Claude or Codex model, so it needs a provider login too, and a firing verdict then starts a real agent. Two choices keep the run to the judge alone:
