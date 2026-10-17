@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use super::WorkflowSpec;
 use crate::disk::paths::WorkflowPaths;
 use crate::store::workflow::{
-    AttemptKind, AttemptOutcome, Children, EndCause, Ending, JournalEntry, JournalEvent, Key, Park,
-    ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
+    AttemptKind, AttemptOutcome, Children, EndCause, Ending, EvaluationOrigin, JournalEntry,
+    JournalEvent, Key, Park, ParkReason, PreviousAttempt, RunRecord, RunState, Wait,
 };
 use crate::utils::time::{DurationUnit, TimeInputErr, parse_duration_units};
 
@@ -67,6 +67,7 @@ impl Transition<'_> {
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
+                origin: EvaluationOrigin::Engine,
                 outcome: failure.into(),
                 object: object.clone(),
                 digests: result.digests,
@@ -125,11 +126,17 @@ impl Transition<'_> {
         let check = &self.spec.checks[&self.record.node];
         let object =
             object.and_then(|object| normalize_object(object, check, self.record.key.as_ref()));
-        let (object, outcome, target, reason) = match object {
+        let (object, outcome, target, reason, origin) = match object {
             Ok(object) => {
                 let outcome = object["outcome"].as_str().unwrap_or_default().to_owned();
                 let target = check.on[&outcome].clone();
-                (object, outcome, target, ParkReason::User)
+                (
+                    object,
+                    outcome,
+                    target,
+                    ParkReason::User,
+                    EvaluationOrigin::Check,
+                )
             }
             Err(reason) => (
                 self.engine_object(
@@ -142,6 +149,7 @@ impl Transition<'_> {
                     .cloned()
                     .unwrap_or_else(|| "@user".into()),
                 ParkReason::Invalid,
+                EvaluationOrigin::Engine,
             ),
         };
         let started_at = self
@@ -153,6 +161,7 @@ impl Transition<'_> {
         self.push(
             Some(seq),
             JournalEvent::Evaluation {
+                origin,
                 outcome: outcome.clone(),
                 cost_usd: None,
                 retry: None,
@@ -481,6 +490,7 @@ impl Transition<'_> {
             self.push(
                 Some(attempt.seq),
                 JournalEvent::Evaluation {
+                    origin: EvaluationOrigin::Engine,
                     cost_usd: None,
                     retry: None,
                     outcome: outcome.into(),

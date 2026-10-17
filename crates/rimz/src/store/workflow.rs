@@ -336,10 +336,20 @@ pub struct JournalEntry {
     pub event: JournalEvent,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationOrigin {
+    #[default]
+    Check,
+    Engine,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum JournalEvent {
     Evaluation {
+        #[serde(default)]
+        origin: EvaluationOrigin,
         outcome: String,
         object: Value,
         digests: BTreeMap<String, String>,
@@ -433,6 +443,9 @@ pub fn initialize(
 ) -> Result<()> {
     let paths = state.workflow(&record.id);
     std::fs::create_dir_all(&paths.work).map_err(WorkflowStoreErr::io(&paths.work))?;
+    for dir in [paths.notes(), paths.signs(None)] {
+        std::fs::create_dir_all(&dir).map_err(WorkflowStoreErr::io(&dir))?;
+    }
     // Publish every new directory entry up to the already-existing room root.
     for dir in paths.work.ancestors().take_while(|dir| *dir != state.root) {
         crate::disk::atomic::sync_dir(dir)?;

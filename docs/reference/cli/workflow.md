@@ -23,16 +23,18 @@ The [global flags](../cli.md#global-flags) apply. Every subcommand except `run` 
 | Argument or flag | Meaning |
 | --- | --- |
 | `<NAME\|DIR>` | A single path component is a name under `~/.rimz/workflows/`; anything else is a directory, which must lie inside `~/.rimz/workflows/`. `.` is the current directory. |
-| `-w, --worktree <WORKTREE>` | Run in an existing RimZ-owned worktree of this room instead of the current checkout. It never creates one. |
+| `-w, --worktree <WORKTREE>` | Select an existing RimZ-owned worktree instead of the current checkout. It never creates one. Project scope overrides this selection. |
 | `--prompt <TEXT>` | Stored unchanged, appended to every step's prompt, and exposed as `prompt` in `context.json`. |
 
-The command validates the definition first and refuses on any error. It needs an existing room (`rimz start` creates one) and refuses `scope = "project"`, which this version does not run. One active or parked run holds each `(workflow, checkout)` pair; a second start refuses and names the existing run. On success it prints the run id, then the run's work directory (`RIMZ_WORKFLOW_DIR`), and the first advance starts in the background.
+Before creating a run, the command validates the definition and refuses on any error. It needs an existing room (`rimz start` creates one). With `scope = "worktree"`, nodes run in the selected checkout; with `scope = "project"`, they run at the project root, even when invoked from an owned worktree. One active or parked run holds each `(workflow, scope path)` pair; a second start refuses and names the existing run before reading the definition or prompt. On success it prints the run id, then the run's work directory (`RIMZ_WORKFLOW_DIR`), and the first advance starts in the background. The work directory includes `notes/` for node-owned cross-node scratch and `signs/` for step guidance; key scratch writes by sequence so retries are no-ops.
+
+When `-w` selects a project-scoped workflow, stderr prints `note: <workflow> has scope = project; the run is at <project root>, not <worktree path>`. The command still exits 0 and stdout is unchanged.
 
 ## Inspect runs
 
 `rimz workflow list [--json]` prints every active and parked run across rooms: `RUN`, `WORKFLOW`, `CHECKOUT`, `STATE`, `NODE`, `SINCE` (when the run entered its node), and `DETAIL`, which is the [waiting line](#the-waiting-line) for a waiting run and the [park reason](#park-reasons) for a parked one. Finished runs are omitted.
 
-`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope checkout`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the checkout when a step waits on takeover (`blockers unavailable` when the multiplexer cannot answer), one `step <name>: N visits of <max> + <grant> grant` line per step, and the history. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
+`rimz workflow show <RUN> [--json]` prints the work directory first, then `workflow`, `scope worktree` or `scope project`, `state` (with the park reason when parked), `current node` and since when, `attempt` (the live step's handle and sequence), `ask` (handle, kind, and text, on a run parked as `asked`), `deadline` (`armed` or `fired`), and `prompt`. Then the waiting line, `takeover:` lines naming the agents that hold the scope path when a step waits on takeover (`blockers unavailable` when the multiplexer cannot answer), one `step <name>: N visits of <max> + <grant> grant` line per step, and the history. Each history line is time, `#seq`, node, event, outcome, count, and the routed object; an attempt adds its handle, short HEAD before and after, cost, stopped and live children, a provider reset, the ask, and the digest of each prompt, sign, and run prompt it used.
 
 ### The waiting line
 
@@ -90,11 +92,11 @@ for           = "3m"
 | --- | --- |
 | `workflow` | The definition name under `~/.rimz/workflows/`. Conflicts with `agent` and `wait`. |
 | `prompt`, `prompt-file` | The run's prompt. |
-| `each-worktree` | Fire once per RimZ-owned checkout, one run each; without it the run scopes to the task root. |
+| `each-worktree` | Fire once per RimZ-owned checkout. A worktree-scoped run without it scopes to the task's `dir`, else its root; a project-scoped run always scopes to the root, so subsequent checkout fires skip the held run. |
 | `when`, `for`, schedules, `root` | As on any task. |
 | `budget`, `budget-per-day` | Ignored: a workflow fire is not gated on spend, and step costs are not counted against the task. The turn, room, and account caps still park a step agent like any agent in the room. |
 
-`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A fire that finds an active or parked run for its checkout records `workflow skipped` with the existing run id and adds no strike, and it checks for that run before it reads the definition or the prompt, so editing either while a run holds the checkout never errors a fire; a finished run does not block the next fire. While the task's `when` stays true it re-fires at the resident retry cadence and records a skipped row each time, so prefer a condition that goes false when the work is done (`pr=open`).
+`stay`, `takeover`, `subscribe`, `check`, and `judge` are refused, each with the workflow node that owns the concept. A fire that finds an active or parked run for its scope records `workflow skipped` with the existing run id and adds no strike, and it checks for that run before it reads the definition or the prompt, so editing either (including the scope kind) while a run holds the scope never errors a fire; a finished run does not block the next fire. While the task's `when` stays true it re-fires at the resident retry cadence and records a skipped row each time, so prefer a condition that goes false when the work is done (`pr=open`).
 
 ## Park reasons
 
@@ -110,13 +112,13 @@ A parked run waits for you under NEEDS YOU in `rimz loop list`, in the sidebar c
 | `asked` | A step's agent blocked on a question or permission prompt with no `on.asked` edge; the text is the prompt. |
 | `check` | A check evaluation failed twice. |
 
-Every transition also appends a `workflow_*` assist ([stats](./stats.md#the-assist-timeline)).
+Routes, step launches, parks, and ends append `workflow_*` assists ([stats](./stats.md#the-assist-timeline)). A merged wait appends one route assist when it closes, with its final `count`; an open wait has no route assist yet. Stats renders a closed wait as `workflow <workflow> <node> waited <outcome> ×<count>`.
 
 ## JSON shapes
 
-`list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the checkout path and `detail` the waiting line or park reason as printed.
+`list --json` prints an array of `{id, workflow, scope, state, node, since, detail}`, where `scope` is the scope path: the checkout, or the project root for `scope = "project"`; `detail` is the waiting line or park reason as printed. The human column remains `CHECKOUT` for both kinds.
 
-`show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries.
+`show --json` prints `{dir, record, journal}`: the work directory, the run record, and the history entries. Evaluation rows carry `origin = "check"` for a check's answer or `"engine"` for an engine-decided outcome.
 
 `rimz loop list --json` and `rimz loop show --json` carry `workflow_runs` for a workflow task: one object per active or parked run the task started in that room, `{id, checkout, state, node, since}` plus `reason` and `text` on a parked run. `since` is when the run entered its node.
 

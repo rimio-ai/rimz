@@ -60,6 +60,18 @@ fn durable_record_round_trip_and_json_shape() {
     assert_eq!(load(&paths).unwrap(), record);
     assert_eq!(fs::read(&paths.spec).unwrap(), b"[workflow]");
     assert!(paths.work.is_dir());
+    let children: Vec<_> = fs::read_dir(&paths.work)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        children.contains(&"notes".into()),
+        "nodes need notes/ at creation"
+    );
+    assert!(
+        children.contains(&"signs".into()),
+        "judges need signs/ at creation"
+    );
     assert_eq!(list(&state).unwrap(), vec![record.clone()]);
     let mut next = record.clone();
     next.next_seq = 3;
@@ -67,6 +79,17 @@ fn durable_record_round_trip_and_json_shape() {
     assert_eq!(load(&paths).unwrap().next_seq, 3);
     let value = serde_json::to_value(record).unwrap();
     insta::assert_json_snapshot!("record", value);
+}
+
+#[test]
+fn legacy_evaluations_default_to_check_origin() {
+    let row = json!({
+        "event":"evaluation", "seq":1, "at":"2026-01-01T00:00:00Z", "node":"pr",
+        "outcome":"ok", "object":{"outcome":"ok"}, "digests":{},
+        "started_at":"2026-01-01T00:00:00Z", "ended_at":"2026-01-01T00:00:00Z"
+    });
+    let entry: JournalEntry = serde_json::from_value(row).unwrap();
+    assert_eq!(serde_json::to_value(entry).unwrap()["origin"], "check");
 }
 
 #[test]

@@ -48,6 +48,8 @@ pub enum Assist {
         node: String,
         outcome: String,
         to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u64>,
     },
     WorkflowPark {
         run: crate::ids::WorkflowRunId,

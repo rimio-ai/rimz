@@ -83,6 +83,8 @@ pub(super) enum AssistEvent {
         node: String,
         outcome: String,
         to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<u64>,
     },
     WorkflowPark {
         at: Timestamp,
@@ -545,6 +547,7 @@ impl AssistEvent {
                 node,
                 outcome,
                 to,
+                count,
             } => Self::WorkflowRoute {
                 at: record.at,
                 run,
@@ -552,6 +555,7 @@ impl AssistEvent {
                 node,
                 outcome,
                 to,
+                count,
             },
             Assist::WorkflowPark {
                 run,
@@ -1111,8 +1115,12 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
             node,
             outcome,
             to,
+            count,
             ..
-        } => format!("{time} workflow {workflow} {node} said {outcome} → {to}"),
+        } => match count {
+            Some(count) => format!("{time} workflow {workflow} {node} waited {outcome} ×{count}"),
+            None => format!("{time} workflow {workflow} {node} said {outcome} → {to}"),
+        },
         AssistEvent::WorkflowPark {
             workflow,
             node,

@@ -1,5 +1,82 @@
+use super::super::ScopeKind;
 use super::*;
 use std::fs;
+
+#[test]
+fn accounting_uses_closed_waits_and_evaluation_origin() {
+    use crate::harness::assist_log;
+    if std::env::var_os("RIMZ_TEST_WORKFLOW_ACCOUNTING").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::workflow::engine::tests::accounting_uses_closed_waits_and_evaluation_origin", "--nocapture"])
+            .env("RIMZ_TEST_WORKFLOW_ACCOUNTING", "1")
+            .env("RIMZ_HOME", home.path())
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let (_home, state, record, spec) = fixture(
+        "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.pending='@wait'\n",
+    );
+    let paths = state.workflow(&record.id);
+    let mut t = Transition {
+        record,
+        spec: &spec,
+        paths: &paths,
+        now: Timestamp::UNIX_EPOCH,
+        entries: Vec::new(),
+    };
+    let evaluation = json!({"event":"evaluation", "seq":1, "node":"pr", "at":t.now, "outcome":"pending", "object":{}, "digests":{}, "started_at":t.now, "ended_at":t.now, "origin":"check"});
+    t.entries
+        .push(serde_json::from_value(evaluation.clone()).unwrap());
+    t.record.wait = Some(
+        serde_json::from_value(
+            json!({"node":"pr", "outcome":"pending", "first":t.now, "last":t.now, "count":3}),
+        )
+        .unwrap(),
+    );
+    accounting::transition(&t);
+    assert!(
+        assist_log::recent(&crate::disk::paths::logs_dir(), None).is_empty(),
+        "an open check wait is not an assist"
+    );
+    t.entries.clear();
+    t.close_wait();
+    accounting::transition(&t);
+    let records = assist_log::recent(&crate::disk::paths::logs_dir(), None);
+    assert_eq!(records.len(), 1, "{records:?}");
+    let value = serde_json::to_value(&records[0]).unwrap();
+    assert_eq!(value["to"], "@wait");
+    assert_eq!(value["count"], 3);
+    let mut canceled = evaluation.clone();
+    canceled["origin"] = json!("engine");
+    canceled["outcome"] = json!("canceled");
+    t.entries = vec![serde_json::from_value(canceled).unwrap()];
+    accounting::transition(&t);
+    let mut invalid = evaluation;
+    invalid["origin"] = json!("engine");
+    invalid["outcome"] = json!("invalid");
+    t.entries = vec![
+        serde_json::from_value(invalid).unwrap(),
+        serde_json::from_value(json!({"event":"route", "seq":1, "node":"pr", "at":t.now, "outcome":"invalid", "input":null})).unwrap(),
+    ];
+    t.record.wait = Some(
+        serde_json::from_value(
+            json!({"node":"pr", "outcome":"invalid", "first":t.now, "last":t.now, "count":1}),
+        )
+        .unwrap(),
+    );
+    accounting::transition(&t);
+    assert_eq!(
+        assist_log::recent(&crate::disk::paths::logs_dir(), None).len(),
+        1
+    );
+}
 
 fn fixture(text: &str) -> (tempfile::TempDir, StatePaths, RunRecord, WorkflowSpec) {
     let home = tempfile::tempdir().unwrap();
@@ -61,8 +138,10 @@ fn create_validates_the_spec_it_reads_before_publication() {
     let error = create(
         &state,
         home.path(),
-        home.path(),
-        home.path(),
+        ScopeRoots {
+            checkout: home.path().into(),
+            project: home.path().into(),
+        },
         || Ok(None),
         None,
     )
@@ -126,7 +205,17 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
             workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
         }
-        let error = create(&state, &dir, home.path(), home.path(), || Ok(None), None).unwrap_err();
+        let error = create(
+            &state,
+            &dir,
+            ScopeRoots {
+                checkout: home.path().into(),
+                project: home.path().into(),
+            },
+            || Ok(None),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
@@ -140,6 +229,49 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
             if run == &record.id && workflow == &record.workflow && scope == home.path()),
             "{error:?}"
         );
+    }
+}
+
+#[test]
+fn held_scope_kind_controls_early_admission_after_definition_edits() {
+    for (kind, held_checkout, duplicate) in [
+        (ScopeKind::Project, false, true),
+        (ScopeKind::Worktree, true, true),
+        (ScopeKind::Worktree, false, false),
+    ] {
+        let (home, state, mut record, _) = fixture(
+            "[workflow]\nscope='worktree'\nstart='pr'\n[checks.pr]\nrun='true'\non.ok='@done'\n",
+        );
+        let dir = home.path().join("review");
+        let checkout = home.path().join("feature");
+        fs::create_dir(&dir).unwrap();
+        fs::create_dir(&checkout).unwrap();
+        record.scope.kind = kind;
+        if held_checkout {
+            record.scope.path = checkout.clone();
+        }
+        let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        workflow::write(&state.workflow(&record.id), &record, &guard).unwrap();
+        drop(guard);
+        let error = create(
+            &state,
+            &dir,
+            ScopeRoots {
+                checkout,
+                project: home.path().into(),
+            },
+            || Err("prompt was read".into()),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            matches!(error, WorkflowErr::Exists { .. }),
+            duplicate,
+            "{error}"
+        );
+        if !duplicate {
+            assert!(error.to_string().contains("prompt was read"), "{error}");
+        }
     }
 }
 

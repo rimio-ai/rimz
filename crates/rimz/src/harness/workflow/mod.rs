@@ -19,6 +19,20 @@ pub use spec::{
 };
 pub use validate::{Edge, Issue, NodeRow, Validation, validate};
 
+pub struct ScopeRoots {
+    pub checkout: PathBuf,
+    pub project: PathBuf,
+}
+
+impl ScopeRoots {
+    pub fn path(&self, kind: ScopeKind) -> &Path {
+        match kind {
+            ScopeKind::Worktree => &self.checkout,
+            ScopeKind::Project => &self.project,
+        }
+    }
+}
+
 pub fn advance_args(
     project_root: &Path,
     id: Option<&crate::ids::WorkflowRunId>,

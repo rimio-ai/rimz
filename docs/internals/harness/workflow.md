@@ -1,6 +1,6 @@
 # Workflow engine
 
-A workflow is a durable run through a flat graph of checks and steps. The run record is truth; a wake only asks the engine to read it again. The engine hosts script checks and headless judges, and drives supervised agent attempts through the CLI's `AttemptHost` implementation. A loop task can start runs, and the scheduler tick re-drives every active run so its clock bounds fire on time. Project scope remains unsupported.
+A workflow is a durable run through a flat graph of checks and steps. The run record is truth; a wake only asks the engine to read it again. The engine hosts script checks and headless judges, and drives supervised agent attempts through the CLI's `AttemptHost` implementation. A loop task can start runs, and the scheduler tick re-drives every active run so its clock bounds fire on time.
 
 ## Where the code lives
 
@@ -15,7 +15,7 @@ A workflow is a durable run through a flat graph of checks and steps. The run re
 
 Machine definitions live at `~/.rimz/workflows/<name>/workflow.toml`. `rimz workflow schema` derives JSON Schema from the same Rust types that deserialize TOML. Every table rejects unknown fields. `rimz workflow validate [dir] [--json]` loads profiles through the machine definition catalog and reports dotted paths, resolved edges, warnings, and errors. Agent rows include `do_background`, derived from the adapter's background-parking coverage. Validation refuses judge profiles whose adapter has no headless launch. It warns about a step without background reporting, a judge sharing its target step's profile, and agent nodes when machine auto-continue is off. Validation never creates a room. A workflow directory must be inside the machine definitions directory. The committed `crates/rimz/tests/fixtures/workflows/babysit-pr/` fixture demonstrates script checks, supervised steps, a judge and signs; it is not installed automatically.
 
-`[workflow]` has required `scope` and `start`, optional `deadline`, and one header edge, `on.deadline`. Start names a check. Scope is `worktree` or `project`; run admission refuses project scope, which is not yet implemented. Deadlines accept RFC 3339 instants or local civil dates and datetimes. A bare date means local midnight; the record stores the resolved instant.
+`[workflow]` has required `scope` and `start`, optional `deadline`, and one header edge, `on.deadline`. Start names a check. Scope is `worktree` or `project`: worktree scope uses the selected checkout, and project scope runs every node at the room's project root. Deadlines accept RFC 3339 instants or local civil dates and datetimes. A bare date means local midnight; the record stores the resolved instant.
 
 `[checks.<name>]` has exactly one of `run` or `agent`, optional `prompt-file`, `window`, `timeout`, and `on.<outcome>` edges. An agent requires a prompt file; a window requires an agent and accepts only provider-window terms. The engine supplies `timeout` and `invalid`, each defaulting to `@user`. An edge may name another node, `@wait`, `@done`, `@failed`, or `@user`, except that `on.timeout` cannot wait on its already-expired clock. A check that can wait must have a timeout.
 
@@ -25,7 +25,9 @@ Machine definitions live at `~/.rimz/workflows/<name>/workflow.toml`. `rimz work
 
 ## Starting and inspecting
 
-`rimz workflow run <name|dir> [-w <worktree>] [--prompt <text>]` validates the parsed bytes it seals before creating a run. Only a single normal path component is a catalog name; `.` and `./` refer to the current definition directory. It requires an existing room (`rimz start` creates one), refuses project scope, and serializes the uniqueness check and creation under the room workspace lock. Active and parked runs both hold the `(workflow, scope checkout)` slot; a duplicate is the typed `WorkflowErr::Exists`, which `run` prints as a refusal and a loop fire records as `workflow_skipped`. Without `-w`, scope is the current checkout; `-w` resolves an existing RimZ-owned worktree, never creates one. The prompt is stored unchanged and exposed in context.
+`rimz workflow run <name|dir> [-w <worktree>] [--prompt <text>]` validates the parsed bytes it seals before creating a run. Only a single normal path component is a catalog name; `.` and `./` refer to the current definition directory. It requires an existing room (`rimz start` creates one) and serializes the uniqueness check and creation under the room workspace lock. Active and parked runs hold the `(workflow, scope path)` slot; a duplicate is the typed `WorkflowErr::Exists`, which `run` prints as a refusal and a loop fire records as `workflow_skipped`. Worktree scope selects the current checkout or the existing RimZ-owned worktree named by `-w`, never creating one. Project scope always selects the root, ignoring `-w` with a stderr notice; a loop with `each-worktree` creates one project run and skips subsequent fires. Root occupancy uses the same takeover read with owned nested worktrees excluded. The prompt is stored unchanged and exposed in context.
+
+`crates/rimz/src/harness/workflow/mod.rs::ScopeRoots` supplies both paths to `create`. Before reading the definition or prompt, and again under the creation lock, admission compares each existing run's path against the candidate path for that existing run's kind. A held project run therefore wins over a broken definition or a scope-kind edit, without making a worktree run at the root block a different worktree.
 
 Run ids are `wf_` UUIDv7 identities. `list` enumerates active and parked runs across rooms. `show`, `cancel`, `resume`, and hidden `advance` resolve an id from any directory. `show` starts with the work directory, then renders position, bounds, visits, prompt, waiting state, and the journal; JSON is `{dir, record, journal}`. The journal is inspection evidence, never an input to engine decisions.
 
@@ -41,13 +43,15 @@ journal.jsonl      append-only transition evidence
 workflow.toml      sealed specification bytes
 work/              RIMZ_WORKFLOW_DIR, writable by nodes
   context.json     replaced before every evaluation or attempt
+  notes/           node-owned cross-node scratch, created with the run
+  signs/           live step guidance, created with the run
 ```
 
-The engine-owned record, sealed spec, and history are outside the node-writable work directory. Signs and claims live under `work/`; the engine reads only `signs/<step>.md`, never claims. Soft reset retains workflow homes. Hard reset removes them, unlike supervised-run records. Class GC removes a terminal workflow's entire home when its record mtime is older than the seven-day owned grace; active, parked, and recent terminal records stay. A home without `record.json`, left by a crash during creation and skipped by every reader, goes once the home directory's own mtime passes the same grace.
+The engine-owned record, sealed spec, and history are outside the node-writable work directory. Notes, signs and claims live under `work/`; the engine reads only `signs/<step>.md`, never notes or claims. Nodes key `notes/` writes by sequence so a retry is a no-op. Soft reset retains workflow homes. Hard reset removes them, unlike supervised-run records. Class GC removes a terminal workflow's entire home when its record mtime is older than the seven-day owned grace; active, parked, and recent terminal records stay. A home without `record.json`, left by a crash during creation and skipped by every reader, goes once the home directory's own mtime passes the same grace.
 
 The record stores scope, project root, sealed-spec digest and original definition directory, prompt, current node and entry clock, state and park, routed input and key, open wait and recheck time, per-step totals and per-key visits, grants, deadline state, sequence allocator, live host identity, previous attempt, and terminal time. Keys preserve integer versus string identity.
 
-Journal entries carry time, node, optional attempt sequence, and an event: evaluation, attempt, merged wait, engine-bound route, park, terminal, cancel, resume, or signal wake. Evaluations retain the routed object and script digests; invalid results also retain a stderr tail. History appends are data-synced before record replacement under the same workspace lock. New run directories sync their new ancestors. A crash between append and record publication can duplicate an entry with the same sequence, never authorize a transition from history. Readers tolerate torn or unknown history rows.
+Journal entries carry time, node, optional attempt sequence, and an event: evaluation, attempt, merged wait, engine-bound route, park, terminal, cancel, resume, or signal wake. Evaluations retain the routed object, script digests, and `origin` (`check` or `engine`, defaulting to `check` for older rows); invalid results also retain a stderr tail. History appends are data-synced before record replacement under the same workspace lock. New run directories sync their new ancestors. A crash between append and record publication can duplicate an entry with the same sequence, never authorize a transition from history. Readers tolerate torn or unknown history rows.
 
 ## Evaluation and routing
 
@@ -81,7 +85,7 @@ Steps launch as detached root supervised runs, never as the advancing agent's ch
 
 Judges use the shared headless profile resolver and launch planner with automatic permission mode. The workflow prompt names `RIMZ_WORKFLOW_DIR`, `context.json`, and `output_path`, and requires exactly one JSON object with the check fields and no prose or Markdown fence. The schema stays open so extra fields remain routed input. Claude enforces it; Codex omits its strict structured-output switch for an open schema and reads the prompt-shaped last message from its output file. Closed schemas, including loop verdicts, retain Codex schema enforcement. The provider's structured value is saved to `output_path`; without one, the engine reads that file. The value goes through the same check-object normalizer as script stdout. Judges are read-only on the scope checkout and its Git admin and common directories: sandbox isolation overlays them read-only after all reach rebinds; host isolation enforces the rule only through the prompt. The ordinary root view and required-path rebinds already leave workflow work writable, including a room home under host `/tmp`. Signs are written only under `signs/<step>.md`. Headless permission requests are denied non-interactively, not surfaced as workflow asks. Claude classifies provider limits in its adapter; Codex supplies no typed limit result, so a failed limited Codex judge is `died`.
 
-Canceled evaluations re-run free. A typed provider limit consumes no retry and waits until the known reset, or the next wake when unknown. A process failure or missing object is `died`; an invalid object is `invalid`. Either gets one immediate retry with `context.retry = {outcome, reason}`, then parks as `check`. The run stores `check_retry` and serde-defaulted `check_retry_context`, so retry evidence survives a dead host without reading the journal. Both reset on node entry and parked resume. The check's entry-time timeout spans all evaluations and waits.
+Engine-decided canceled evaluations re-run free. A typed provider limit consumes no retry and waits until the known reset, or the next wake when unknown. A process failure or missing object is `died`; an invalid object is `invalid`. Either gets one immediate retry with `context.retry = {outcome, reason}`, then parks as `check`. The run stores `check_retry` and serde-defaulted `check_retry_context`, so retry evidence survives a dead host without reading the journal. Both reset on node entry and parked resume. The check's entry-time timeout spans all evaluations and waits.
 
 ## Wakes
 
@@ -113,4 +117,18 @@ A `workflow = "<name>"` task is the fourth loop action (`TaskAction::Workflow`).
 
 ## Accounting
 
-`crates/rimz/src/harness/workflow/engine/accounting.rs::transition` runs after `persist` publishes a transition and maps the journal entries it wrote, so a new transition writer cannot skip accounting. A routed evaluation, attempt end, or engine bound appends `workflow_route` (`to` is the next node or `@wait`, `@done`, `@failed`, `@user`); a park appends `workflow_park`; `done`, `failed`, and `canceled` append `workflow_end`. `crates/rimz/src/harness/workflow/engine/agent.rs` appends `workflow_step` after a step's supervised run is published, and the loop runner appends `workflow_start` when a task creates a run. All five are assist records counted by `rimz stats` under the workflow category. A failed evaluation that earns its one retry emits the `workflow_retry` diagnostic, and an evaluation abandoned by a dead host emits `workflow_rerun`. Diagnostics are forensics: the sink rate-limits and may drop them, and `rimz stats` never reads them.
+`crates/rimz/src/harness/workflow/engine/accounting.rs::transition` runs after `persist` publishes a transition and maps the journal entries it wrote. Accounting keys on evaluation origin, not outcome words: a check may legally route `canceled` or `limited`.
+
+| Journal entry | Accounting |
+| --- | --- |
+| Explicit `Route` | One `workflow_route`, unless the record now waits; suppress the transition's evaluation and attempt accounting. |
+| Check-origin evaluation | One `workflow_route`, unless the record now waits. |
+| Engine-origin `canceled`, run active | `workflow_rerun` diagnostic, no assist. |
+| Engine-origin `limited`, or run canceled | No assist. |
+| Other engine-origin evaluation, active with retry context | `workflow_retry` diagnostic, no assist. |
+| Other engine-origin evaluation | One `workflow_route` (including a second judge failure parking at `@user`). |
+| Attempt end | One `workflow_route`, unless the run was canceled or an explicit route accounts for it. |
+| Closed `Wait` | One `workflow_route` to `@wait` at the summary's timestamp, with `count` set to the final merged count, even on cancel. |
+| Park or terminal | `workflow_park` or `workflow_end`. |
+
+A still-open wait has no route assist yet; `list`, `show`, and the sidebar carry its live state. Closing a window, takeover, or occupied wait uses the same summary rule. Non-wait route records omit `count`. Explicit-route suppression also prevents a bound's engine evaluation from counting twice. `crates/rimz/src/harness/workflow/engine/agent.rs` appends `workflow_step` after a supervised run is published, and the loop runner appends `workflow_start` on creation. All five assist kinds count under the workflow category in `rimz stats`; diagnostics are rate-limited forensics that stats never reads.

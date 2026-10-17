@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 mod attempts;
 mod judges;
+mod scope;
 mod ticks;
 
 fn fixture(spec: &str, script: &str) -> (Env, PathBuf) {
@@ -274,6 +275,12 @@ fn wait_is_merged_clamped_and_cleared_by_signal() {
     );
     assert_eq!(value["record"]["wait"]["count"], 2);
     assert_eq!(
+        assists(&env)["rollup"]["workflow_routes"]
+            .as_u64()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(
         fs::read(&counter).unwrap(),
         b"x",
         "early advance must not run the script"
@@ -284,6 +291,27 @@ fn wait_is_merged_clamped_and_cleared_by_signal() {
     assert_eq!(events(&value, "wake")[0]["signal"], "review.ready");
     assert_eq!(events(&value, "wait")[0]["count"], 2);
     assert_eq!(events(&value, "evaluation").len(), 2);
+    let stats = assists_once(&env, "workflow_ends", 1);
+    let routes: Vec<_> = stats["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["assist"] == "workflow_route")
+        .collect();
+    assert_eq!(stats["rollup"]["workflow_routes"], 2, "{stats}");
+    assert_eq!(
+        routes
+            .iter()
+            .filter(|row| row["outcome"] == "pending" && row["to"] == "@wait" && row["count"] == 2)
+            .count(),
+        1,
+        "{stats}"
+    );
+    assert_eq!(
+        routes.iter().filter(|row| row["to"] == "@done").count(),
+        1,
+        "{stats}"
+    );
 }
 
 #[test]
@@ -906,14 +934,6 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     );
     assert_eq!(outside.status.code(), Some(1));
     success(command(&env, &["workflow", "cancel", &id]));
-    fs::write(
-        dir.join("workflow.toml"),
-        format!("[workflow]\nscope='project'\nstart='pr'\n{WAIT}"),
-    )
-    .unwrap();
-    let agent = command(&env, &["workflow", "run", "review"]);
-    assert_eq!(agent.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&agent.stderr).contains("scope = project"));
     fs::write(dir.join("workflow.toml"), format!("{HEADER}{WAIT}")).unwrap();
     let empty = Env::new();
     let missing = empty

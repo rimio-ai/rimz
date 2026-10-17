@@ -153,11 +153,11 @@ fn start(
         );
     }
     let ctx = super::ctx::Ctx::open(globals)?;
-    let scope = if let Some(name) = worktree {
+    let scope = if let Some(name) = &worktree {
         rimz::worktree::resolve_owned(
             &ctx.workspace.project_root,
             &super::machine_config().agents.worktree,
-            &name,
+            name,
         )?
         .path
     } else {
@@ -166,11 +166,22 @@ fn start(
     let record = workflow::create(
         ctx.store.paths(),
         &dir,
-        &scope,
-        &ctx.workspace.project_root,
+        workflow::ScopeRoots {
+            checkout: scope.clone(),
+            project: ctx.workspace.project_root.clone(),
+        },
         || Ok(prompt),
         None,
     )?;
+    if worktree.is_some() && record.scope.kind == records::ScopeKind::Project {
+        writeln!(
+            render::err(),
+            "note: {} has scope = project; the run is at {}, not {}",
+            record.workflow,
+            record.scope.path.display(),
+            scope.display()
+        )?;
+    }
     writeln!(
         render::out(),
         "{}\n{}",
@@ -262,7 +273,10 @@ fn show(id: &WorkflowRunId, json: bool, globals: &super::GlobalFlags) -> Result<
     let mut header = render::KeyVals::new();
     header.push("workflow", render::cell(&record.workflow));
     header.push(
-        "scope checkout",
+        match record.scope.kind {
+            records::ScopeKind::Worktree => "scope worktree",
+            records::ScopeKind::Project => "scope project",
+        },
         render::cell(record.scope.path.display().to_string()),
     );
     let state = if let Some(park) = &record.park {

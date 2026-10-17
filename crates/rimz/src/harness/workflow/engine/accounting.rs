@@ -2,6 +2,7 @@ use super::*;
 use crate::diag::DiagSink;
 use crate::diag::record::DiagEvent;
 use crate::harness::assist_log::{self, Assist, AssistRecord};
+use crate::store::workflow::EvaluationOrigin;
 
 pub(super) fn transition(t: &Transition<'_>) {
     let explicit_route = t
@@ -10,9 +11,19 @@ pub(super) fn transition(t: &Transition<'_>) {
         .any(|entry| matches!(entry.event, JournalEvent::Route { .. }));
     for entry in &t.entries {
         let route = match &entry.event {
-            JournalEvent::Route { outcome, .. } => Some(outcome.clone()),
+            JournalEvent::Route { outcome, .. } if t.record.wait.is_none() => {
+                Some((outcome.clone(), None))
+            }
             JournalEvent::Evaluation {
-                outcome, object, ..
+                origin: EvaluationOrigin::Check,
+                outcome,
+                ..
+            } if !explicit_route && t.record.wait.is_none() => Some((outcome.clone(), None)),
+            JournalEvent::Evaluation {
+                origin: EvaluationOrigin::Engine,
+                outcome,
+                object,
+                ..
             } if !explicit_route => {
                 if t.record.state == RunState::Active && outcome == "canceled" {
                     diagnostic(
@@ -41,12 +52,12 @@ pub(super) fn transition(t: &Transition<'_>) {
                     );
                     continue;
                 }
-                Some(outcome.clone())
+                Some((outcome.clone(), None))
             }
             JournalEvent::Attempt { outcome, .. }
                 if !explicit_route && t.record.state != RunState::Canceled =>
             {
-                Some(
+                Some((
                     match outcome {
                         AttemptOutcome::Ended => "ended",
                         AttemptOutcome::Died => "died",
@@ -56,8 +67,10 @@ pub(super) fn transition(t: &Transition<'_>) {
                         AttemptOutcome::Canceled => "canceled",
                     }
                     .into(),
-                )
+                    None,
+                ))
             }
+            JournalEvent::Wait { outcome, count, .. } => Some((outcome.clone(), Some(*count))),
             JournalEvent::Park { reason, text } => {
                 assist_log::append(&AssistRecord {
                     at: entry.at,
@@ -84,12 +97,13 @@ pub(super) fn transition(t: &Transition<'_>) {
             }
             _ => None,
         };
-        if let Some(outcome) = route {
-            let target = match t.record.state {
-                RunState::Parked => "@user",
-                RunState::Done => "@done",
-                RunState::Failed => "@failed",
-                RunState::Active if t.record.wait.is_some() => "@wait",
+        if let Some((outcome, count)) = route {
+            let target = match (count, t.record.state) {
+                (Some(_), _) => "@wait",
+                (_, RunState::Parked) => "@user",
+                (_, RunState::Done) => "@done",
+                (_, RunState::Failed) => "@failed",
+                (_, RunState::Active) if t.record.wait.is_some() => "@wait",
                 _ => &t.record.node,
             };
             assist_log::append(&AssistRecord {
@@ -100,6 +114,7 @@ pub(super) fn transition(t: &Transition<'_>) {
                     node: entry.node.clone(),
                     outcome,
                     to: target.into(),
+                    count,
                 },
             });
         }
