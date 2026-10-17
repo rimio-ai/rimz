@@ -28,6 +28,17 @@ mod list_tests;
 #[cfg(unix)]
 #[test]
 fn resident_agent_decline_is_shown_counted_and_held_without_another_check() {
+    resident_agent_decline_is_shown(None);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_agent_decline_shows_recheck_in_json_and_fold() {
+    resident_agent_decline_is_shown(Some("6h"));
+}
+
+#[cfg(unix)]
+fn resident_agent_decline_is_shown(recheck: Option<&str>) {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
     env.write_config(&env.project_root, "[agents]\nisolation = \"host\"\n");
@@ -65,8 +76,11 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     write_loop_config(
         &env,
         &format!(
-            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n",
-            env.project_root
+            "[tasks.guard]\nagent = \"codex\"\nprompt = \"repair\"\nroot = {:?}\nstay = true\neach-worktree = true\nwhen = [\"team.stage=Done\"]\non = \"success\"\n[tasks.guard.check]\nagent = \"codex\"\nprompt = \"Any work?\"\n{}",
+            env.project_root,
+            recheck
+                .map(|value| format!("recheck = {value:?}\n"))
+                .unwrap_or_default()
         ),
     );
     std::fs::write(checkout.join("blackboard.md"), "Stage: Done\n").unwrap();
@@ -113,9 +127,30 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":10,"output_token
     assert_eq!(shown["worktrees"][0]["state"], "declined", "{shown}");
     assert_eq!(shown["worktrees"][0]["reason"], "No actionable work.");
     assert_eq!(shown["worktrees"][0]["profile"], "codex");
+    if recheck.is_some() {
+        let at: Timestamp = shown["worktrees"][0]["since"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            shown["worktrees"][0]["recheck_at"],
+            (at + Duration::from_secs(6 * 3600)).to_string()
+        );
+    } else {
+        assert!(shown["worktrees"][0].get("recheck_at").is_none());
+    }
     let text = loop_ok(&env, &["loop", "show", "guard"]);
     assert!(
         text.contains("declined") && text.contains("No actionable work."),
+        "{text}"
+    );
+    assert!(
+        text.contains(if recheck.is_some() {
+            "next recheck in"
+        } else {
+            "re-judged when the guard changes"
+        }),
         "{text}"
     );
     let stats = loop_ok(&env, &["stats", "--json"]);

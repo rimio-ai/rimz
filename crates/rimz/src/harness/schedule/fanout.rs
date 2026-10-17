@@ -31,6 +31,7 @@ pub enum CheckoutState {
         at: Timestamp,
         reason: String,
         profile: String,
+        recheck_at: Option<Timestamp>,
     },
     Holding {
         since: Timestamp,
@@ -103,6 +104,12 @@ pub fn inspect(
                     at: decline.at,
                     reason: decline.reason.clone(),
                     profile: decline.profile.clone(),
+                    recheck_at: entry
+                        .guard()
+                        .judges
+                        .get(decline.tier)
+                        .and_then(|judge| launch_ledger::judge_recheck(judge))
+                        .and_then(|duration| decline.at.checked_add(duration).ok()),
                 }
             } else if let Some(hold) = hold
                 && u128::try_from(now.duration_since(since).as_millis()).unwrap_or(0)

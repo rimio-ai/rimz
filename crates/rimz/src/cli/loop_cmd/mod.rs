@@ -379,7 +379,7 @@ struct ShowArgs {
     /// Print the task, worktree conditions, launch ledger and run history as JSON.
     #[arg(long)]
     json: bool,
-    /// Show every owned worktree, including waiting checkouts and ended leaders.
+    /// Unfold the WORKTREES table: every declined checkout with its judge's reason, and every launched checkout with its leader.
     #[arg(long)]
     all: bool,
     #[arg(add = clap_complete::ArgValueCandidates::new(

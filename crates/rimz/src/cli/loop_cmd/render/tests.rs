@@ -50,6 +50,8 @@ fn show_view(each_worktree: bool) -> ShowView {
     );
     let mut failed = record(20, LoopRunResult::Errored);
     failed.error = Some("launch failed".into());
+    let show_agent_runs =
+        has_agent_runs_section(&entry, Some(&TaskAction::Spawn("sweeper".into())));
     ShowView {
         name: "sweep".into(),
         entry,
@@ -92,7 +94,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         throttle: ShowThrottle::Compact(Some(
             "cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)".into(),
         )),
-        show_agent_runs: true,
+        show_agent_runs,
         worktrees: [("older", "old-leader", 10), ("newer", "new-leader", 90)]
             .map(
                 |(name, leader, second)| schedule::fanout::CheckoutCondition {
@@ -204,14 +206,15 @@ fn show_fanout_verdict_precedes_worktrees_and_has_no_subscriptions_section() {
     let sections = [
         "WORKTREES (2 owned · 2 launched)",
         "LAST RUN",
-        "AGENT RUNS",
         "RECENT RUNS",
         "  action:",
     ];
     let positions = sections.map(|section| text.find(section).expect(section));
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
-    assert!(text.contains("… 2 launched, leader ended"), "{text}");
+    assert!(!text.contains("AGENT RUNS"), "{text}");
+    assert!(text.contains("… 2 launched: 2 ended"), "{text}");
+    assert!(show_text(&show_view(false)).contains("AGENT RUNS"));
     assert!(
         !text.contains("LAUNCHES") && !text.contains("condition:"),
         "{text}"
@@ -237,6 +240,45 @@ fn worktree_view() -> ShowView {
     };
     let since = Timestamp::from_second(3480).unwrap();
     view.worktrees = [
+        (
+            "declined-new",
+            CheckoutState::Declined {
+                at: since,
+                reason: "Nothing actionable.\nA whole judge paragraph.".into(),
+                profile: "haiku".into(),
+                recheck_at: Some(Timestamp::from_second(10800).unwrap()),
+            },
+        ),
+        (
+            "declined-old",
+            CheckoutState::Declined {
+                at: Timestamp::from_second(10).unwrap(),
+                reason: "Already handled.".into(),
+                profile: "haiku".into(),
+                recheck_at: None,
+            },
+        ),
+        (
+            "running",
+            CheckoutState::Launched {
+                leader: "running-leader".into(),
+                at: Timestamp::from_second(3599).unwrap(),
+            },
+        ),
+        (
+            "paused",
+            CheckoutState::Launched {
+                leader: "paused-leader".into(),
+                at: since,
+            },
+        ),
+        (
+            "success",
+            CheckoutState::Launched {
+                leader: "success-leader".into(),
+                at: Timestamp::from_second(3500).unwrap(),
+            },
+        ),
         (
             "ended",
             CheckoutState::Launched {
@@ -304,8 +346,11 @@ fn worktree_view() -> ShowView {
     refusal.error = Some("@busy is working".into());
     view.records = vec![refusal];
     view.leader_statuses = BTreeMap::from([
-        ("old-leader".into(), rimz::agents::AgentStatus::Idle),
+        ("old-leader".into(), rimz::agents::AgentStatus::Success),
         ("new-leader".into(), rimz::agents::AgentStatus::Failed),
+        ("running-leader".into(), rimz::agents::AgentStatus::Running),
+        ("paused-leader".into(), rimz::agents::AgentStatus::Paused),
+        ("success-leader".into(), rimz::agents::AgentStatus::Success),
     ]);
     view
 }
@@ -361,7 +406,7 @@ fn worktrees_order_counts_terms_and_fold_lines() {
     let text = show_text(&view);
     assert!(
         text.contains(
-            "WORKTREES (8 owned · 1 blocked · 1 ready · 1 holding · 2 waiting · 3 launched)"
+            "WORKTREES (13 owned · 1 blocked · 1 ready · 1 holding · 2 waiting · 2 declined · 6 launched)"
         ),
         "{text}"
     );
@@ -376,9 +421,10 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         "  blocked ",
         "  ready ",
         "  holding ",
-        "  waiting-one ",
+        "  running ",
         "  newer ",
-        "  older ",
+        "  waiting-many ",
+        "  waiting-one ",
     ]
     .map(|name| table.find(name).expect(name));
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
@@ -417,12 +463,34 @@ fn worktrees_order_counts_terms_and_fold_lines() {
         "{text}"
     );
     assert!(
-        table.contains("… 1 more waiting on two or more terms"),
+        table.contains("… 2 declined by judge haiku · next recheck in 2h · newest declined-new 2m ago: Nothing actionable."),
         "{text}"
     );
-    assert!(table.contains("… 1 launched, leader ended"), "{text}");
     assert!(
-        !table.contains("  waiting-many ") && !table.contains("  ended "),
+        table.contains(
+            "… 4 launched: 2 success · 1 ended · 1 paused · newest success @success-leader 1m ago"
+        ),
+        "{text}"
+    );
+    assert!(
+        table.contains("→ reasons and leaders: rimz loop show sweep --all"),
+        "{text}"
+    );
+    assert!(
+        header.find("LEADER").unwrap() < header.find("REASON").unwrap(),
+        "{text}"
+    );
+    assert!(
+        [
+            "ended",
+            "older",
+            "paused",
+            "success",
+            "declined-new",
+            "declined-old"
+        ]
+        .iter()
+        .all(|name| !table.contains(&format!("  {name} "))),
         "{text}"
     );
     assert!(
@@ -434,7 +502,7 @@ fn worktrees_order_counts_terms_and_fold_lines() {
 }
 
 #[test]
-fn worktrees_all_unfolds_waiting_and_ended_rows() {
+fn worktrees_all_unfolds_declined_and_launched_rows() {
     let mut view = worktree_view();
     view.all = true;
     view.room_is_open = true;
@@ -447,7 +515,11 @@ fn worktrees_all_unfolds_waiting_and_ended_rows() {
         .split("RECENT RUNS")
         .next()
         .unwrap();
-    assert!(!table.contains('…'), "{text}");
+    assert!(
+        !table.lines().any(|line| line.trim_start().starts_with('…'))
+            && !table.contains("→ reasons and leaders:"),
+        "{text}"
+    );
     let many = table
         .lines()
         .find(|line| line.starts_with("  waiting-many "))
@@ -457,14 +529,30 @@ fn worktrees_all_unfolds_waiting_and_ended_rows() {
         "{text}"
     );
     assert!(
-        table.find("  waiting-one ").unwrap() < table.find("  waiting-many ").unwrap(),
+        table.find("  waiting-many ").unwrap() < table.find("  waiting-one ").unwrap(),
         "{text}"
     );
     assert!(
-        table.find("  older ").unwrap() < table.find("  ended ").unwrap(),
+        table.find("  waiting-one ").unwrap() < table.find("  declined-new ").unwrap()
+            && table.find("  declined-new ").unwrap() < table.find("  declined-old ").unwrap()
+            && table.find("  declined-old ").unwrap() < table.find("  success ").unwrap()
+            && table.find("  success ").unwrap() < table.find("  ended ").unwrap()
+            && table.find("  ended ").unwrap() < table.find("  paused ").unwrap()
+            && table.find("  paused ").unwrap() < table.find("  older ").unwrap(),
         "{text}"
     );
     assert!(table.contains("@ended-leader ended"), "{text}");
+    for row in &view.worktrees {
+        assert!(table.contains(&format!("  {} ", row.name)), "{text}");
+    }
+    assert!(
+        table
+            .lines()
+            .any(|line| line.contains("LEADER") && line.ends_with("REASON")),
+        "{text}"
+    );
+    assert!(table.contains("judge haiku: Nothing"), "{text}");
+    assert!(!table.contains("A whole judge paragraph."), "{text}");
     assert!(!table.contains("ci and pr readings come"), "{text}");
 }
 
@@ -488,6 +576,172 @@ fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
         text.find("SUBSCRIPTIONS").unwrap() < text.find("  action:").unwrap(),
         "{text}"
     );
+}
+
+#[test]
+fn worktrees_declined_fold_names_next_recheck_and_newest_reason() {
+    let view = worktree_view();
+    let text = show_text(&view);
+    assert!(text.contains("… 2 declined by judge haiku · next recheck in 2h · newest declined-new 2m ago: Nothing actionable."), "{text}");
+    assert!(!text.contains("A whole judge paragraph."), "{text}");
+}
+
+#[test]
+fn worktrees_launched_fold_counts_only_folded_leaders() {
+    let view = worktree_view();
+    let text = show_text(&view);
+    assert!(
+        text.contains(
+            "… 4 launched: 2 success · 1 ended · 1 paused · newest success @success-leader 1m ago"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn worktrees_reason_cell_clips_to_terminal_width() {
+    use unicode_width::UnicodeWidthStr;
+    let mut view = worktree_view();
+    view.all = true;
+    view.worktrees.retain(|row| row.name == "declined-new");
+    let CheckoutState::Declined { reason, .. } = &mut view.worktrees[0].state else {
+        panic!("declined fixture");
+    };
+    *reason = "A long judge paragraph. ".repeat(20);
+    let text = show_text(&view);
+    let row = text
+        .lines()
+        .find(|line| line.starts_with("  declined-new "))
+        .unwrap();
+    assert!(
+        row.width() <= ui::terminal_columns(120) && row.ends_with('…'),
+        "{text}"
+    );
+}
+
+#[test]
+fn worktrees_declined_fold_without_recheck_names_reopening_and_first_line() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "declined-new");
+    let CheckoutState::Declined { recheck_at, .. } = &mut view.worktrees[0].state else {
+        panic!("declined fixture");
+    };
+    *recheck_at = None;
+    let text = show_text(&view);
+    assert!(text.contains("… 1 declined by judge haiku · re-judged when the guard changes · newest declined-new 2m ago:"), "{text}");
+    assert!(!text.contains("A whole judge paragraph."), "{text}");
+}
+
+#[test]
+fn worktrees_declined_fold_clips_reason_after_reopening() {
+    use unicode_width::UnicodeWidthStr;
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "declined-new");
+    let CheckoutState::Declined { reason, .. } = &mut view.worktrees[0].state else {
+        panic!("declined fixture");
+    };
+    *reason = "A long judge paragraph. ".repeat(20);
+    let rows = worktree_rows(&view, worktree_expr(&view));
+    let mut out = Vec::new();
+    write_worktree_folds(&mut out, &view, &rows, 80).unwrap();
+    let text = anstream::adapter::strip_str(std::str::from_utf8(&out).unwrap()).to_string();
+    let fold = text.lines().next().expect("declined fold");
+    assert!(fold.contains("next recheck in 2h"), "{text}");
+    assert!(fold.width() <= 80 && fold.ends_with('…'), "{text}");
+}
+
+#[test]
+fn worktrees_declined_fold_uses_earliest_recheck_and_sorted_profiles() {
+    let mut view = worktree_view();
+    let CheckoutState::Declined {
+        recheck_at,
+        profile,
+        ..
+    } = &mut view.worktrees[1].state
+    else {
+        panic!("declined fixture");
+    };
+    *recheck_at = Some(view.now_zoned.timestamp());
+    *profile = "codex".into();
+    let text = show_text(&view);
+    assert!(
+        text.contains(
+            "… 2 declined by judges codex, haiku · next recheck due · newest declined-new"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn worktrees_columns_follow_rendered_rows_and_armed_follows_subscribe() {
+    let mut view = worktree_view();
+    view.entry.subscribe.clear();
+    let text = show_text(&view);
+    let launched = text
+        .lines()
+        .find(|line| line.starts_with("  newer "))
+        .unwrap();
+    assert!(
+        launched.contains("@new-leader  failed") && !launched.contains("armed"),
+        "{text}"
+    );
+    view.worktrees.retain(|row| row.name == "ready");
+    let text = show_text(&view);
+    let header = text
+        .lines()
+        .find(|line| line.contains("WORKTREE "))
+        .unwrap();
+    assert!(
+        !header.contains("LEADER") && !header.contains("REASON"),
+        "{text}"
+    );
+    assert!(!text.contains("→ reasons and leaders:"), "{text}");
+}
+
+#[test]
+fn worktrees_keeps_waiting_leaders_and_folds_idle_and_sleeping() {
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "running");
+    for status in [
+        rimz::agents::AgentStatus::Waiting,
+        rimz::agents::AgentStatus::Idle,
+        rimz::agents::AgentStatus::Sleeping,
+    ] {
+        view.leader_statuses.insert("running-leader".into(), status);
+        let text = show_text(&view);
+        assert_eq!(
+            text.contains("  running "),
+            status == rimz::agents::AgentStatus::Waiting,
+            "{text}"
+        );
+        assert_eq!(
+            text.contains("… 1 launched:"),
+            status != rimz::agents::AgentStatus::Waiting,
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn worktrees_json_rechecks_are_optional_and_all_does_not_change_json() {
+    let mut view = worktree_view();
+    let json = serde_json::to_value(worktrees_json(&view)).unwrap();
+    let declined = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "declined-new")
+        .unwrap();
+    assert_eq!(declined["recheck_at"], "1970-01-01T03:00:00Z");
+    let old = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "declined-old")
+        .unwrap();
+    assert!(old.get("recheck_at").is_none());
+    view.all = true;
+    assert_eq!(serde_json::to_value(worktrees_json(&view)).unwrap(), json);
 }
 
 #[test]
