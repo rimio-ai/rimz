@@ -438,15 +438,8 @@ fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Optio
     }
 }
 
-/// Cache expiry guidance belongs to the live selection, not held or teammate reach.
-pub(super) fn cache_line(
-    ctx: &RowCtx<'_>,
-    row: &SidebarRow,
-    selected: bool,
-) -> Option<Line<'static>> {
-    if !selected {
-        return None;
-    }
+/// Cache expiry guidance follows the template's stats, including held cards.
+pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
     let theme = ctx.theme;
     let wide = ctx.tier == Tier::L2;
     let phase = cache_age(row, ctx.now).phase(ctx.now);

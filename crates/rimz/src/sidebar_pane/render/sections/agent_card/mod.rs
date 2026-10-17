@@ -1,6 +1,5 @@
 //! The per-agent card: identity line, description, the context meter and its
-//! token line on selected or held cards (every engaged card at expanded density), a
-//! cache-expiry line on the live selection alone,
+//! token and cache-expiry lines on selected or held cards (every engaged card at expanded density),
 //! and expanded subagent and wait entries. Read idle and done history can shrink to one line; closed, unreached resting history hides the delegation summary. A state-to-template table fixes
 //! the ordered line slots from lifecycle facts; late or absent data only fills
 //! that skeleton. The card anatomy is drawn in docs/interface/sidebar.md; the
@@ -206,7 +205,7 @@ pub(super) fn row_lines(
                     inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()).into());
                 }
                 CardSlot::Tokens => inner.push(context_tokens_line(ctx, row).into()),
-                CardSlot::Cache => inner.extend(cache_line(ctx, row, selected).map(CardLine::from)),
+                CardSlot::Cache => inner.extend(cache_line(ctx, row).map(CardLine::from)),
                 CardSlot::Delegation => {
                     inner.extend(delegation_line(ctx, agent).map(|line| CardLine {
                         line,

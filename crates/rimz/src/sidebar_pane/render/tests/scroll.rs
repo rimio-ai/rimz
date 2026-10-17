@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
     let now = fixed_now();
@@ -39,6 +40,92 @@ fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
 fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
     ui.selected_index = ui.visible_roster(snapshot).ordinal_of_id(id);
     assert!(ui.selected_index.is_some(), "selection exists");
+}
+
+fn assert_cache_notice_anchor(
+    density: crate::config::CardDensityMode,
+    offset: usize,
+    expired_cache: bool,
+    count: usize,
+    target: usize,
+) {
+    let mut snapshot = delegation_fleet(&[]);
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows).truncate(count);
+    snapshot.theme.display.card_density = density;
+    let row = snapshot.rows_mut().find(|row| row.id == "codex-0").unwrap();
+    row.last_activity = fixed_now() - Duration::from_secs(1801);
+    row.as_agent_mut().unwrap().cache =
+        expired_cache.then_some(crate::store::snapshot::CacheClock {
+            ceiling_secs: 1800,
+            last_request_at: Some(fixed_now() - Duration::from_secs(1801)),
+            warm_until: Some(fixed_now() - Duration::from_secs(1)),
+            held_since: None,
+            rewarm_cost_usd: None,
+        });
+    let mut ui = UiState {
+        scroll_offset: offset,
+        ..Default::default()
+    };
+    select_card(&snapshot, &mut ui, "codex-0");
+    let task = format!("task-{target}");
+    let before = paint_card_row(&snapshot, &mut ui, &task, 45);
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    assert_eq!(screen.contains("cache expired"), expired_cache, "{screen}");
+
+    select_card(&snapshot, &mut ui, &format!("codex-{target}"));
+    let after = paint_card_row(&snapshot, &mut ui, &task, 45);
+    assert_eq!(after, before, "cache notice above must not move the click");
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
+    let keeps_stats = offset == 0 || density == crate::config::CardDensityMode::Expanded;
+    assert_eq!(
+        screen.contains("cache expired"),
+        expired_cache && keeps_stats,
+        "cache notice follows the old card's stats: {screen}"
+    );
+    assert!(line_containing(&screen, &task).starts_with('▌'));
+    if expired_cache && keeps_stats {
+        assert!(!line_containing(&screen, "cache expired").starts_with('▌'));
+    }
+}
+
+#[test]
+fn cache_notice_anchor_auto_top() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Auto, 0, true, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_auto_with_room() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Auto, 2, true, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_expanded_top() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Expanded, 0, true, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_expanded_with_room() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Expanded, 2, true, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_auto_top_without_cache() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Auto, 0, false, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_expanded_top_without_cache() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Expanded, 0, false, 12, 2);
+}
+
+#[test]
+fn cache_notice_anchor_two_cards() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Auto, 0, true, 2, 1);
+}
+
+#[test]
+fn cache_notice_anchor_two_cards_without_cache() {
+    assert_cache_notice_anchor(crate::config::CardDensityMode::Auto, 0, false, 2, 1);
 }
 
 fn assert_collapse_hold(offset: usize, parent: usize, target: usize) {
