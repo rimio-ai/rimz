@@ -3,7 +3,9 @@
 mod client;
 pub use client::{Output, execute, select};
 
-use super::protocol::{CallHierarchyItem, Location, Position, Range, SymbolInformation, Symbols};
+use super::protocol::{
+    CallHierarchyItem, DocumentSymbol, Location, Position, Range, SymbolInformation, Symbols,
+};
 use super::{LspErr, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -166,38 +168,164 @@ impl SymbolResolution {
     }
 }
 
+fn prefer_exact(
+    root: &Path,
+    name: &str,
+    symbols: Vec<SymbolInformation>,
+) -> Result<Vec<SymbolInformation>> {
+    let (file, chain) =
+        file_qualified(name).map_or((None, name), |(file, chain)| (Some(file), chain));
+    let segments = name_segments(chain);
+    let container = segments.iter().rev().nth(1);
+    if container.is_none() && file.is_none() {
+        return Ok(symbols);
+    }
+    let mut exact = Vec::new();
+    let mut skipped = Vec::new();
+    for symbol in symbols {
+        let direct = match container {
+            Some(container) => symbol_path(root, &symbol)?.last() == Some(container),
+            None => container_path(&symbol).is_empty(),
+        };
+        if direct {
+            exact.push(symbol);
+        } else {
+            skipped.push(symbol);
+        }
+    }
+    Ok(if exact.is_empty() { skipped } else { exact })
+}
+
+fn enrich_containers(
+    symbols: &mut [SymbolInformation],
+    outlines: &BTreeMap<String, Symbols>,
+) -> bool {
+    let containers: Option<Vec<_>> = symbols
+        .iter()
+        .map(|symbol| {
+            let (_, ancestors) = outline_node(symbol, outlines.get(&symbol.location.uri)?)?;
+            let path: Vec<_> = ancestors
+                .into_iter()
+                .map(|name| {
+                    without_generics(name)
+                        .split_whitespace()
+                        .next_back()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect();
+            Some((!path.is_empty()).then(|| path.join("::")))
+        })
+        .collect();
+    let Some(containers) = containers else {
+        return false;
+    };
+    for (symbol, container) in symbols.iter_mut().zip(containers) {
+        symbol.container_name = container;
+    }
+    true
+}
+
+fn narrow_candidates(
+    root: &Path,
+    name: &str,
+    candidates: &[SymbolInformation],
+) -> Result<Vec<SymbolInformation>> {
+    let (file, chain) =
+        file_qualified(name).map_or((None, name), |(file, chain)| (Some(file), chain));
+    let mut qualifier = name_segments(chain);
+    let member = qualifier.pop().unwrap_or_default();
+    if let Some(file) = file {
+        return Ok(
+            match match_symbols(root, &format!("{file}::{member}"), candidates.to_vec())? {
+                SymbolResolution::Missing { .. } => Vec::new(),
+                found => found.into_symbols(),
+            },
+        );
+    }
+    let mut narrowed = Vec::new();
+    for mut symbol in candidates.iter().cloned() {
+        symbol.container_name = None;
+        let path = symbol_path(root, &symbol)?;
+        for length in (1..=qualifier.len()).rev() {
+            if path.last() != qualifier.get(length - 1) {
+                continue;
+            }
+            let target = format!("{}::{member}", qualifier[..length].join("::"));
+            if !matches!(
+                match_symbols(root, &target, vec![symbol.clone()])?,
+                SymbolResolution::Missing { .. }
+            ) {
+                narrowed.push(symbol);
+                break;
+            }
+        }
+    }
+    Ok(narrowed)
+}
+
+fn rematch_enriched(
+    root: &Path,
+    name: &str,
+    candidates: &[SymbolInformation],
+    outlines: &BTreeMap<String, Symbols>,
+) -> Result<Option<SymbolResolution>> {
+    let mut symbols = candidates.to_vec();
+    if !enrich_containers(&mut symbols, outlines) {
+        return Ok(None);
+    }
+    let matches = match match_symbols(root, name, symbols)? {
+        SymbolResolution::Missing { .. } => return Ok(None),
+        found => found.into_symbols(),
+    };
+    let mut matches = prefer_exact(root, name, matches)?;
+    Ok(Some(if matches.len() == 1 {
+        SymbolResolution::Unique(matches.remove(0))
+    } else {
+        SymbolResolution::Ambiguous(matches)
+    }))
+}
+
+fn outline_node<'a>(
+    symbol: &SymbolInformation,
+    outline: &'a Symbols,
+) -> Option<(&'a DocumentSymbol, Vec<&'a str>)> {
+    let Symbols::Tree(nodes) = outline else {
+        return None;
+    };
+    let mut all = Vec::new();
+    let mut pending: Vec<_> = nodes.iter().map(|node| (node, Vec::new())).collect();
+    while let Some((node, ancestors)) = pending.pop() {
+        let mut path = ancestors.clone();
+        path.push(node.name.as_str());
+        pending.extend(node.children.iter().map(|child| (child, path.clone())));
+        all.push((node, ancestors));
+    }
+    // rust-analyzer's `workspace/symbol` range is the item's name, so its
+    // start is the outline node's selection start. ty's range is the whole
+    // declaration: the node is then the first same-named one whose name falls
+    // inside it, which is the declaration's own name, not a nested namesake's.
+    let range = symbol.location.range;
+    all.iter()
+        .find(|(node, _)| node.selection_range.start == range.start)
+        .or_else(|| {
+            all.iter()
+                .filter(|(node, _)| {
+                    node.name == symbol.name
+                        && range.start <= node.selection_range.start
+                        && node.selection_range.start < range.end
+                })
+                .min_by_key(|(node, _)| node.selection_range.start)
+        })
+        .map(|(node, ancestors)| (*node, ancestors.clone()))
+}
+
 fn outline_members(
     container: &SymbolInformation,
     name: &str,
     outline: &Symbols,
 ) -> Vec<SymbolInformation> {
-    let Symbols::Tree(nodes) = outline else {
-        return Vec::new();
-    };
-    let mut all = Vec::new();
-    let mut pending: Vec<_> = nodes.iter().collect();
-    while let Some(node) = pending.pop() {
-        all.push(node);
-        pending.extend(&node.children);
-    }
-    // rust-analyzer's `workspace/symbol` range is the container's name, so its
-    // start is the outline node's selection start. ty's range is the whole
-    // declaration: the node is then the first same-named one whose name falls
-    // inside it, which is the declaration's own name, not a nested namesake's.
-    let range = container.location.range;
-    let node = all
-        .iter()
-        .find(|node| node.selection_range.start == range.start)
-        .or_else(|| {
-            all.iter()
-                .filter(|node| {
-                    node.name == container.name
-                        && range.start <= node.selection_range.start
-                        && node.selection_range.start < range.end
-                })
-                .min_by_key(|node| node.selection_range.start)
-        });
-    let Some(node) = node else {
+    let Some((node, _)) = outline_node(container, outline) else {
         return Vec::new();
     };
     let mut path = container_path(container);
@@ -434,16 +562,24 @@ fn symbol_path(root: &Path, symbol: &SymbolInformation) -> Result<Vec<String>> {
 /// A file-qualified `name` keeps only matches located in a file its head names; the
 /// `Missing` candidates stay every exact-name symbol.
 fn resolve_symbol(root: &Path, name: &str, result: Value) -> Result<SymbolResolution> {
+    let symbols = if result.is_null() {
+        Vec::new()
+    } else {
+        serde_json::from_value(result)?
+    };
+    match_symbols(root, name, symbols)
+}
+
+fn match_symbols(
+    root: &Path,
+    name: &str,
+    symbols: Vec<SymbolInformation>,
+) -> Result<SymbolResolution> {
     let (files, name) = file_qualified(name).map_or((None, name), |(file, name)| {
         (Some(NamedFiles::new(root, Path::new(file))), name)
     });
     let mut qualifier = name_segments(name);
     let name = qualifier.pop().unwrap_or_default();
-    let symbols: Vec<SymbolInformation> = if result.is_null() {
-        Vec::new()
-    } else {
-        serde_json::from_value(result)?
-    };
     let candidates: Vec<_> = symbols
         .into_iter()
         .filter(|symbol| symbol.name == name)

@@ -856,10 +856,24 @@ fn candidate_details(
 }
 
 fn symbol_hits<'a>(nodes: &'a [Candidate], chain: &[String]) -> Vec<&'a Candidate> {
-    nodes
+    let hits: Vec<_> = nodes
         .iter()
         .filter(|node| matches_chain(node, chain))
-        .collect()
+        .collect();
+    let exact: Vec<_> = hits
+        .iter()
+        .copied()
+        .filter(|node| match chain.iter().rev().nth(1) {
+            Some(container) => node
+                .path
+                .iter()
+                .rev()
+                .nth(1)
+                .is_some_and(|name| matches_segment(name, container)),
+            None => node.path.len() == 1,
+        })
+        .collect();
+    if exact.is_empty() { hits } else { exact }
 }
 
 fn overlaps(node: &Candidate, [start, end]: [u32; 2]) -> bool {

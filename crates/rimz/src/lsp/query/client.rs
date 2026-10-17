@@ -174,6 +174,34 @@ fn uri(root: &Path, path: &Path) -> Result<String> {
         .map_err(|()| LspErr::Protocol("invalid file URI".into()))
 }
 
+fn request_outlines(
+    entry: &Entry,
+    symbols: &[SymbolInformation],
+) -> std::result::Result<BTreeMap<String, Symbols>, QueryErr> {
+    let uris: BTreeSet<_> = symbols
+        .iter()
+        .map(|symbol| symbol.location.uri.as_str())
+        .collect();
+    if uris.len() > MEMBER_CONTAINER_CAP {
+        return Ok(BTreeMap::new());
+    }
+    let outlines = bounded_map(&uris.into_iter().collect::<Vec<_>>(), |uri| {
+        let outline = request(
+            entry,
+            "textDocument/documentSymbol",
+            json!({"textDocument": {"uri": uri}}),
+        )?;
+        if outline.is_null() {
+            return Ok::<_, QueryErr>(None);
+        }
+        Ok(Some((
+            uri.to_string(),
+            serde_json::from_value(outline).map_err(LspErr::from)?,
+        )))
+    })?;
+    Ok(outlines.into_iter().flatten().collect())
+}
+
 pub fn execute(
     entry: &Entry,
     verb: Verb,
@@ -208,7 +236,7 @@ pub fn execute(
         }
         (_, Target::Position { path, position }) => (uri(&entry.root, path)?, *position),
         (_, Target::Symbol(name)) => {
-            let resolution = resolve_symbol(
+            let mut resolution = resolve_symbol(
                 &entry.root,
                 name,
                 request(
@@ -217,6 +245,36 @@ pub fn execute(
                     json!({"query": name_segments(name).last().cloned().unwrap_or_default()}),
                 )?,
             )?;
+            let mut enriched = false;
+            if let SymbolResolution::Missing { candidates } = &resolution
+                && name_segments(name).len() > 1
+            {
+                let narrowed = narrow_candidates(&entry.root, name, candidates)?;
+                let mut outlines = request_outlines(entry, &narrowed)?;
+                let mut rematched = rematch_enriched(&entry.root, name, &narrowed, &outlines)?;
+                if rematched.is_none()
+                    && candidates
+                        .iter()
+                        .map(|symbol| &symbol.location.uri)
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        <= MEMBER_CONTAINER_CAP
+                {
+                    let requested: BTreeSet<_> =
+                        narrowed.iter().map(|symbol| &symbol.location.uri).collect();
+                    let remaining: Vec<_> = candidates
+                        .iter()
+                        .filter(|symbol| !requested.contains(&symbol.location.uri))
+                        .cloned()
+                        .collect();
+                    outlines.extend(request_outlines(entry, &remaining)?);
+                    rematched = rematch_enriched(&entry.root, name, candidates, &outlines)?;
+                }
+                if let Some(rematched) = rematched {
+                    resolution = rematched;
+                    enriched = true;
+                }
+            }
             // At most COLLAPSE_CAP ranked candidates, or one unique match.
             let definition = |symbols: &[SymbolInformation]| {
                 bounded_map(symbols, |symbol| {
@@ -257,28 +315,12 @@ pub fn execute(
                             containers.clear();
                         }
                         containers.sort_by(|a, b| a.location.uri.cmp(&b.location.uri));
-                        let groups: Vec<_> = containers
-                            .chunk_by(|a, b| a.location.uri == b.location.uri)
-                            .collect();
-                        // At most MEMBER_CONTAINER_CAP distinct-file outline requests.
-                        let outlines = bounded_map(&groups, |group| {
-                            let outline = request(
-                                entry,
-                                "textDocument/documentSymbol",
-                                json!({"textDocument": {"uri": group[0].location.uri}}),
-                            )?;
-                            if outline.is_null() {
-                                return Ok::<_, QueryErr>(None);
-                            }
-                            Ok(Some(
-                                serde_json::from_value::<Symbols>(outline).map_err(LspErr::from)?,
-                            ))
-                        })?;
-                        for (group, outline) in groups.into_iter().zip(outlines) {
-                            let Some(outline) = outline else { continue };
-                            for container in group {
-                                members.extend(outline_members(container, &member, &outline));
-                            }
+                        let outlines = request_outlines(entry, &containers)?;
+                        for container in &containers {
+                            let Some(outline) = outlines.get(&container.location.uri) else {
+                                continue;
+                            };
+                            members.extend(outline_members(container, &member, outline));
                         }
                     }
                     if members.is_empty() {
@@ -297,7 +339,13 @@ pub fn execute(
                     }
                 }
                 SymbolResolution::Unique(symbol) => collapse_symbols(vec![symbol], definition)?,
-                SymbolResolution::Ambiguous(symbols) => {
+                SymbolResolution::Ambiguous(mut symbols) => {
+                    if !enriched {
+                        let outlines = request_outlines(entry, &symbols)?;
+                        if enrich_containers(&mut symbols, &outlines) {
+                            symbols = prefer_exact(&entry.root, name, symbols)?;
+                        }
+                    }
                     let (resolution, remaining) =
                         collapse_ranked(&entry.root, name, symbols, definition)?;
                     unresolved = remaining;

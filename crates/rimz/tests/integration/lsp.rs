@@ -2,6 +2,7 @@
 
 use crate::common::Env;
 use assert_cmd::assert::OutputAssertExt;
+use predicates::prelude::PredicateBooleanExt;
 use rimz::config::{MachineConfig, effective};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -809,6 +810,66 @@ fn lsp_attach_survives_dormancy_and_terminal_stop_unblocks_readers() {
 }
 
 #[test]
+fn lsp_queries_prefer_written_containers_and_list_reusable_twins() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.project_root.join("scope")).unwrap();
+    std::fs::write(env.project_root.join("scope/show.rs"), "line\n".repeat(217)).unwrap();
+    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    for name in ["scope/show.rs::child", "show::child", "scope::show::child"] {
+        env.rimz()
+            .args(["lsp", "def", name])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("scope/show.rs:208:4"));
+    }
+    for (name, names) in [
+        (
+            "scope::child",
+            ["scope::show::child", "scope::show::tests::child"],
+        ),
+        (
+            "scope::show::x",
+            ["scope::show::Real::x", "scope::show::tests::Fake::x"],
+        ),
+    ] {
+        let output = env
+            .rimz()
+            .args(["lsp", "def", name, "--json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(6));
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let candidates = value["candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0]["name"], names[0]);
+        assert_eq!(candidates[1]["name"], names[1]);
+        for candidate in candidates {
+            for name in [
+                candidate["name"].as_str().unwrap().to_owned(),
+                format!(
+                    "scope/show.rs::{}",
+                    candidate["name"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("scope::show::")
+                        .unwrap()
+                ),
+            ] {
+                env.rimz()
+                    .args(["lsp", "def", &name])
+                    .assert()
+                    .success()
+                    .stdout(predicates::str::contains(
+                        candidate["position"].as_str().unwrap(),
+                    ));
+            }
+        }
+    }
+    broker.kill().unwrap();
+    broker.wait().unwrap();
+}
+
+#[test]
 fn lsp_show_batches_source_and_failures() {
     let env = Env::new();
     assert!(
@@ -868,8 +929,13 @@ fn lsp_show_batches_source_and_failures() {
         ])
         .assert()
         .code(5)
-        .stdout(predicates::str::contains("show.rs:210-210\n   210\t  line 210\n"))
-        .stdout(predicates::str::contains("show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n\nshow.rs:208-209\n   208\t  line 208\n   209\t  line 209\n"));
+        .stdout(predicates::str::contains(
+            "show.rs:210-210\n   210\t  line 210\n",
+        ))
+        .stdout(predicates::str::contains(
+            "show.rs:208-209\n   208\t  line 208\n   209\t  line 209\n",
+        ))
+        .stdout(predicates::str::contains("show.rs:3-5").not());
     env.rimz()
         .args([
             "lsp",
@@ -985,7 +1051,7 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
         std::fs::read_to_string(&notes).unwrap(),
         "`one/dup.rs::defined`\n"
     );
-    let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::child ~4-208`\n`show.rs::child ~100`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
+    let skipped = "`show.rs:999`\n`gone.rs::x ~99`\n`dup.rs::x ~99`\n`show.rs::absent ~99`\n`show.rs::conflict ~4-208`\n`show.rs::conflict ~100`\n`o/r@v1:show.rs::Parent ~99`\n`notes.py::x ~99`\n`show.rs::Parent`\n";
     std::fs::write(&notes, format!("{source}`show.rs::child ~4`\n{skipped}")).unwrap();
     let output = env
         .rimz()
@@ -997,7 +1063,7 @@ fn lsp_check_fixes_hints_without_rewriting_other_notes() {
     assert_eq!(value["fixes"].as_array().unwrap().len(), 3);
     assert_eq!(
         value["fixes"][2],
-        serde_json::json!({"line":3,"before":"show.rs::child ~4","after":"show.rs::child ~3"})
+        serde_json::json!({"line":3,"before":"show.rs::child ~4","after":"show.rs::child ~208"})
     );
     assert_eq!(
         value["fixes"][0],
@@ -1023,7 +1089,7 @@ fn lsp_check_fix_hints_inserts_hints_for_single_items() {
         std::fs::write(env.project_root.join(file), "line\n".repeat(210)).unwrap();
     }
     let notes = env.project_root.join("notes.md");
-    let hintless = "`show.rs::Parent::child`\n`lib.rs::Type`\n`lib.rs::saved`\n`show.rs::child`\n";
+    let hintless = "`show.rs::Parent::child`\n`lib.rs::Type`\n`lib.rs::saved`\n`show.rs::child`\n`show.rs::conflict`\n";
     std::fs::write(&notes, hintless).unwrap();
     std::os::unix::fs::symlink("notes.md", env.project_root.join("link.md")).unwrap();
     let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
@@ -1065,15 +1131,16 @@ fn lsp_check_fix_hints_inserts_hints_for_single_items() {
         "link.md:1  fixed  show.rs::Parent::child  show.rs::Parent::child (3-5)\n\
          link.md:2  fixed  lib.rs::Type  lib.rs::Type (1-2)\n\
          link.md:3  fixed  lib.rs::saved  lib.rs::saved (7)\n\
-         link.md:5  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\n\
-         link.md:4  ambiguous-symbol  show.rs::child  method Parent::child is at 3-5; function child is at 208-209\n\
+         link.md:4  fixed  show.rs::child  show.rs::child (208-209)\n\
+         link.md:6  fixed  show.rs::Parent::child (~90-99)  show.rs::Parent::child (~3-5)\n\
+         link.md:5  ambiguous-symbol  show.rs::conflict  function conflict is at 206-206; function conflict is at 207-207\n\
          1 anchor left without a hint: several items match\n\
-         5 anchors in link.md: 5 ok, 0 failed, 0 unchecked, 0 external\n"
+         6 anchors in link.md: 6 ok, 0 failed, 0 unchecked, 0 external\n"
     );
     assert!(env.project_root.join("link.md").is_symlink());
     assert_eq!(
         std::fs::read_to_string(&notes).unwrap(),
-        "`show.rs::Parent::child` (3-5)\n`lib.rs::Type` (1-2)\n`lib.rs::saved` (7)\n`show.rs::child`\n`show.rs::Parent::child (~3-5)`\n"
+        "`show.rs::Parent::child` (3-5)\n`lib.rs::Type` (1-2)\n`lib.rs::saved` (7)\n`show.rs::child` (208-209)\n`show.rs::conflict`\n`show.rs::Parent::child (~3-5)`\n"
     );
     let modified = std::fs::metadata(&notes).unwrap().modified().unwrap();
     let output = env
@@ -1878,9 +1945,11 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         ),
     ] {
         let before = definition_requests();
+        let outlines_before = outline_requests();
         let output = env.rimz().args(["lsp", "def", name]).output().unwrap();
         assert_eq!(output.status.code(), Some(code));
         assert_eq!(definition_requests() - before, 30, "{name}");
+        assert_eq!(outline_requests(), outlines_before, "{name}");
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(text.lines().next().unwrap(), header);
         assert_eq!(text.lines().count(), 22);
