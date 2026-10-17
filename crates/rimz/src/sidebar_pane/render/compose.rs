@@ -20,7 +20,7 @@ use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
     cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
     fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, parked_overflow_line,
-    parked_workflow_line, unread_worktree_total, worktree_group_lines_projected,
+    parked_workflow_line, worktree_group_lines_projected,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -863,8 +863,8 @@ pub(super) fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) ->
 /// Populated rooms end this fixed zone with a separator blank, so scrolled
 /// cards never touch the cockpit make-up line.
 /// Identity, summary, and the make-up line are never jump targets, so they map
-/// to `None`; the make-up line's status buckets and the summary's unread and
-/// open-PR counts are *filter* targets, returned as [`HitRegion`]s already
+/// to `None`; the make-up line's status buckets and the summary's open-PR
+/// count are *filter* targets, returned as [`HitRegion`]s already
 /// translated to this zone's line indices and the chrome-gutter column space.
 /// Fixed height for a given room population, never windowed, so the scroll zone
 /// below starts at a stable row.
@@ -887,7 +887,7 @@ pub(super) fn top_lines(
     header.push(Line::from(""));
     // The cockpit summary, two lines: line 1 is `◎` sessions in the configured
     // headline window on the left with its token breakdown pinned right; line 2
-    // is `¤` live agents, unread agents, and open lane PRs on the left with
+    // is `¤` live agents and open lane PRs on the left with
     // headline spend pinned right. The counts read from the live fleet and the
     // JSONL `workspace_value_tally`'s headline window, so the cockpit reflects
     // this room's sessions rather than account-global provider history.
@@ -903,7 +903,6 @@ pub(super) fn top_lines(
     // card sessions excluded plus their current costs — and falls back to the
     // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
-    let unread_worktrees = unread_worktree_total(&snapshot.worktree_groups);
     let open_prs = open_pr_total(&snapshot.worktree_groups);
     let open_pr_ci = open_pr_worst_ci(&snapshot.worktree_groups);
     let tripped = snapshot
@@ -913,13 +912,10 @@ pub(super) fn top_lines(
     let (today_usd, spend_epoch) = cockpit_spend_target(snapshot).unwrap_or((0.0, None));
     let today_usd = ui.spend_ratchet.display(spend_epoch, today_usd);
     let spend_line = header.len();
-    let unread_picked = ui.make_up_filter.filter == Some(BodyFilter::Unread);
-    let (spend, chip_hits) = cockpit_spend_line(
+    let (spend, pr_hit) = cockpit_spend_line(
         theme,
         live_agents,
         CockpitBadges {
-            unread_worktrees,
-            unread_picked,
             open_prs,
             open_pr_ci,
             pr_picked: ui.make_up_filter.filter == Some(BodyFilter::OpenPr),
@@ -949,15 +945,8 @@ pub(super) fn top_lines(
     }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();
-    let mut cockpit_hits = Vec::with_capacity(2);
-    if let Some((start, end)) = chip_hits.unread {
-        cockpit_hits.push(HitRegion::line(
-            spend_line,
-            start + 1..end + 1,
-            HitTarget::BodyFilter(BodyFilter::Unread),
-        ));
-    }
-    if let Some((start, end)) = chip_hits.open_pr {
+    let mut cockpit_hits = Vec::with_capacity(1);
+    if let Some((start, end)) = pr_hit {
         cockpit_hits.push(HitRegion::line(
             spend_line,
             start + 1..end + 1,

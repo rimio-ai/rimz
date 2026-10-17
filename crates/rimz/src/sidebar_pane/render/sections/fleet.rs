@@ -318,17 +318,6 @@ fn bucket_style(
     rest_style
 }
 
-/// Worktrees holding at least one unread card: a team lane with four unread
-/// agents counts once.
-pub(in crate::sidebar_pane::render) fn unread_worktree_total(
-    groups: &[SidebarWorktreeGroup],
-) -> usize {
-    groups
-        .iter()
-        .filter(|group| group.rows.iter().any(|row| row.unread))
-        .count()
-}
-
 /// Distinct open PRs across the room: each Open group's own PR plus every
 /// member of its stack. A PR is keyed by `(url, number)`, so a stacked PR that
 /// also has its own worktree counts once while two repos' same number count
