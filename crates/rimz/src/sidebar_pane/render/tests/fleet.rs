@@ -842,7 +842,7 @@ fn make_up_buckets_pulse_only_while_unread() {
 }
 
 #[test]
-fn render_cockpit_unread_count() {
+fn cockpit_spend_has_only_agents_prs_and_spend() {
     let mut snapshot = make_up_snapshot();
     std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].pr_state =
         Some(crate::store::snapshot::WorktreePrState::Open);
@@ -855,36 +855,17 @@ fn render_cockpit_unread_count() {
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
-        screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
-        "live-agent summary carries unread and open-PR counts in order:\n{screen}"
+        screen.lines().any(|line| line.contains("¤ 2 ⑃ 1")),
+        "live-agent summary carries no unread chip:\n{screen}"
     );
 
-    let unread_group = snapshot
-        .worktree_groups
-        .iter()
-        .position(|group| group.rows.iter().any(|row| row.unread))
-        .expect("unread group");
-    let mut sibling = snapshot.worktree_groups[unread_group].rows[0].clone();
-    sibling.id.push_str("-sibling");
-    sibling.name.push_str("-sibling");
-    std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[unread_group].rows,
-    )
-    .push(sibling);
-    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    let top =
+        super::super::compose::top_lines(&snapshot, &UiState::default(), 38, &Theme::fixed(false));
     assert!(
-        screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
-        "two unread cards in one worktree count once:\n{screen}"
-    );
-
-    std::sync::Arc::make_mut(
-        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[1 - unread_group].rows,
-    )[0]
-    .unread = true;
-    let screen = snapshot_to_screen(&snapshot, 38, 20);
-    assert!(
-        screen.lines().any(|line| line.contains("¤ 2 (2) ⑃ 1")),
-        "each worktree holding an unread card counts once:\n{screen}"
+        !top.interactions
+            .regions()
+            .iter()
+            .any(|hit| body_filter_hit(hit) == Some(&BodyFilter::Unread))
     );
 }
 

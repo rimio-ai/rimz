@@ -97,24 +97,16 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 }
 
 pub(in crate::sidebar_pane::render) struct CockpitBadges {
-    pub unread_worktrees: usize,
-    pub unread_picked: bool,
     pub open_prs: usize,
     pub open_pr_ci: Option<crate::store::snapshot::WorktreeCi>,
     pub pr_picked: bool,
 }
 
-pub(in crate::sidebar_pane::render) struct CockpitChipHits {
-    pub unread: Option<(u16, u16)>,
-    pub open_pr: Option<(u16, u16)>,
-}
-
-/// The cockpit's second summary line: `¤ {live} ({unread worktrees}) {⑃ open-PRs}` — the
+/// The cockpit's second summary line: `¤ {live} {⑃ open-PRs}` — the
 /// agents in the room right now, the glyph in the agents' own working clay —
 /// on the left, with headline fleet spend pinned to the right edge, counting up
-/// as a turn lands. The steady unread count and open-PR count are
-/// click-to-filter targets and paint as picked chips while their lenses are
-/// active. The open-PR count uses the worst known lane CI tone — failing,
+/// as a turn lands. The open-PR count is a click-to-filter target and paints as
+/// a picked chip while its lens is active. It uses the worst known lane CI tone — failing,
 /// pending, or all passing — and keeps the PR-open tone when CI is unknown. It
 /// appears only when an agent lane's branch has an open PR. The figure ticks toward the
 /// workspace tally's headline total via the shared [`TallyAnim`] roll — big decaying steps, then
@@ -131,7 +123,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     anim: &TallyAnim,
     phase: u64,
     width: usize,
-) -> (Line<'static>, CockpitChipHits) {
+) -> (Line<'static>, Option<(u16, u16)>) {
     let (today_usd, daily_budget) = spend;
     let usd = anim.today_usd.display(today_usd, phase);
     let (label, style) = match daily_budget {
@@ -156,30 +148,11 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         theme.clay(),
         &live_agents.to_string(),
     );
-    let mut unread_range = None;
     let CockpitBadges {
-        unread_worktrees,
-        unread_picked,
         open_prs,
         open_pr_ci,
         pr_picked,
     } = badges;
-    if unread_worktrees > 0 {
-        // A steady tally, not a blink — the attention blink lives on the cards
-        // and the make-up buckets; the cockpit count holds its attention tone.
-        let waiting = theme.animations.status(AgentStatus::Waiting).color();
-        let style = if unread_picked {
-            theme.picked_chip(waiting, Modifier::BOLD)
-        } else {
-            theme.style(waiting, Modifier::BOLD)
-        };
-        left.push(Span::styled(" ".to_owned(), theme.body()));
-        let start = spans_width(&left);
-        left.push(Span::styled(format!("({unread_worktrees})"), style));
-        let end = spans_width(&left);
-        let left_budget = width.saturating_sub(right_width + 1);
-        unread_range = (end <= left_budget).then_some((start as u16, end as u16));
-    }
     let mut open_pr_range = None;
     if open_prs > 0 {
         let component = match open_pr_ci {
@@ -208,11 +181,5 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         let left_budget = width.saturating_sub(right_width + 1);
         open_pr_range = (end <= left_budget).then_some((start as u16, end as u16));
     }
-    (
-        pin_right(left, right, width),
-        CockpitChipHits {
-            unread: unread_range,
-            open_pr: open_pr_range,
-        },
-    )
+    (pin_right(left, right, width), open_pr_range)
 }
