@@ -23,6 +23,25 @@ fn parked_workflows_keep_their_age_at_wide_and_l2_widths() {
 }
 
 #[test]
+fn parked_workflows_cap_at_three_lines_then_count_the_rest() {
+    let mut value = serde_json::to_value(snapshot_with(Vec::new())).unwrap();
+    value["parked_workflows"] = (1..=5)
+        .map(|n| {
+            serde_json::json!({"run":format!("wf_0190b8172c007000800000000000000{n}"),"workflow":format!("flow{n}"),"node":"gate","reason":"user","text":null,"checkout":"/repo","since":(fixed_now()-Duration::from_secs(60 * (6 - n))).to_string()})
+        })
+        .collect();
+    let mut snapshot: SidebarSnapshot = serde_json::from_value(value).unwrap();
+    snapshot.now = fixed_now();
+    let screen = snapshot_to_screen(&snapshot, 80, 18);
+    for shown in ["flow1 gate", "flow2 gate", "flow3 gate", "+2 parked"] {
+        assert!(screen.contains(shown), "{shown} missing: {screen}");
+    }
+    for hidden in ["flow4", "flow5"] {
+        assert!(!screen.contains(hidden), "{hidden} shown: {screen}");
+    }
+}
+
+#[test]
 fn render_active_alert_shows_banner_below_snapshot() {
     let snapshot = snapshot_with(Vec::new());
     let alert = Alert {

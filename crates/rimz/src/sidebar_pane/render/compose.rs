@@ -19,8 +19,8 @@ use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
     cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
-    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, parked_workflow_line,
-    unread_worktree_total, worktree_group_lines_projected,
+    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, parked_overflow_line,
+    parked_workflow_line, unread_worktree_total, worktree_group_lines_projected,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -930,12 +930,23 @@ pub(super) fn top_lines(
         inner,
     );
     header.push(spend);
+    // The top zone does not scroll, so the oldest parked runs show and the
+    // rest collapse into a count.
+    const PARKED_LINES: usize = 3;
+    let parked = &snapshot.parked_workflows;
     header.extend(
-        snapshot
-            .parked_workflows
+        parked
             .iter()
+            .take(PARKED_LINES)
             .map(|run| parked_workflow_line(theme, run, snapshot.now, inner)),
     );
+    if parked.len() > PARKED_LINES {
+        header.push(parked_overflow_line(
+            theme,
+            parked.len() - PARKED_LINES,
+            inner,
+        ));
+    }
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();
     let mut cockpit_hits = Vec::with_capacity(2);

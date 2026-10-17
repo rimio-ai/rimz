@@ -90,7 +90,7 @@ Each firing starts a run in a worktree that has none. A worktree whose run is st
 
 A run parks instead of guessing: a step hit `max-visits`, a check timed out, a script failed, an agent asked a question no edge answers, or a check routed to `@user` with its own reason. A parked run shows up three ways:
 
-- in the sidebar cockpit, one line per run with its workflow, node, and reason;
+- in the sidebar cockpit, one line per run with its workflow, node, and reason, for the three oldest parks, then a `+N parked` count;
 - under NEEDS YOU in `rimz loop list`, when a loop task started it;
 - in `rimz workflow list` and `show`.
 
