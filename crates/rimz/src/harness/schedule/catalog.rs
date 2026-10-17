@@ -371,6 +371,11 @@ impl TaskCatalog {
                 name,
                 new_name,
             )?;
+            crate::harness::workflow::rename_task(
+                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                name,
+                new_name,
+            )?;
         }
         let new_key = task.key(new_name);
         let cleared_arming = arming::rename(&old_key, &new_key)?;

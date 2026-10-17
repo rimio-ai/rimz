@@ -1222,7 +1222,8 @@ path = "crates/rimz/src/store"
 # SidebarUnitKey and SidebarWorktreeGroup::unit_key share group-local unit identity (+1).
 # EvaluationOrigin distinguishes check answers from engine decisions in the journal (+1).
 # card_status shares displayed status and phase resolution with CLI consumers (+1).
-surface-budget = 470
+# workflow::RunRecord::started_by shares live task-run selection with the CLI (+1).
+surface-budget = 471
 
 [[verdict]]
 kind = "item"
@@ -6623,6 +6624,11 @@ reason = "Store-owned workflow vocabulary and its serialized fields cross the en
 
 [[verdict]]
 kind = "item"
+key = "store::workflow::RunRecord::started_by"
+reason = "The loop selector and locked rename share one predicate for a task's live workflow runs."
+
+[[verdict]]
+kind = "item"
 key = "store::workflow::ParkReason"
 reason = "Store-owned workflow vocabulary and its serialized fields cross the engine and inspection boundary without importing harness policy."
 
@@ -6840,6 +6846,11 @@ reason = "Workflow run control reports typed storage, spec, lock and process fai
 kind = "item"
 key = "harness::workflow::create"
 reason = "The workflow CLI invokes harness-owned admission and locked run transitions without owning engine policy."
+
+[[verdict]]
+kind = "item"
+key = "harness::workflow::rename_task"
+reason = "The loop catalog delegates live workflow provenance rewrites to the locked transition owner."
 
 [[verdict]]
 kind = "item"
