@@ -149,6 +149,23 @@ fn select_to_index(
     select_to_index_in(ui, &roster, target, forward)
 }
 
+/// The matching ordinal nearest `target` in the direction of travel, else the
+/// nearest one behind it.
+fn nearest_match(roster: &VisibleRoster<'_>, target: usize, forward: bool) -> Option<usize> {
+    let len = roster.len();
+    let matched = |index: &usize| roster.is_match(*index);
+    if forward {
+        (target..len)
+            .find(matched)
+            .or_else(|| (0..target).rev().find(matched))
+    } else {
+        (0..=target)
+            .rev()
+            .find(matched)
+            .or_else(|| (target + 1..len).find(matched))
+    }
+}
+
 fn select_to_index_in(
     ui: &mut UiState,
     roster: &VisibleRoster<'_>,
@@ -159,19 +176,7 @@ fn select_to_index_in(
     if len == 0 {
         return InputOutcome::default();
     }
-    let target = target.min(len - 1);
-    let matched = |index: &usize| roster.is_match(*index);
-    let target = if forward {
-        (target..len)
-            .find(matched)
-            .or_else(|| (0..target).rev().find(matched))
-    } else {
-        (0..=target)
-            .rev()
-            .find(matched)
-            .or_else(|| (target + 1..len).find(matched))
-    };
-    let Some(target) = target else {
+    let Some(target) = nearest_match(roster, target.min(len - 1), forward) else {
         return InputOutcome::default();
     };
     if ui.selected_index == Some(target) {
@@ -337,7 +342,7 @@ pub(super) fn handle_key(
 
 fn select_first_search_match(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     let roster = ui.visible_roster(snapshot);
-    select_row_in(ui, &roster, 0);
+    select_row_in(ui, &roster, nearest_match(&roster, 0, true).unwrap_or(0));
     ui.browse = None;
 }
 

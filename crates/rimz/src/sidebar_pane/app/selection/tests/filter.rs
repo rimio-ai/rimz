@@ -124,6 +124,33 @@ fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
     );
 }
 
+#[test]
+fn draft_search_under_a_status_lens_highlights_a_match_and_cancel_keeps_one() {
+    use crate::agents::AgentStatus;
+    use ratatui::crossterm::event::KeyCode;
+    let snapshot = filtered_team_snapshot();
+    let mut ui = UiState::default();
+    set_make_up_filter(
+        &mut ui,
+        &snapshot,
+        BodyLens::from(BodyFilter::Status(AgentStatus::Running)),
+    );
+    search_key(&mut ui, &snapshot, KeyCode::Char('/'));
+    for ch in "main".chars() {
+        search_key(&mut ui, &snapshot, KeyCode::Char(ch));
+    }
+    let roster = ui.visible_roster(&snapshot);
+    assert!(
+        !roster.is_match(0),
+        "the group-label query keeps context first"
+    );
+    assert_eq!(ui.selected_index, Some(1));
+    assert_search_selection(&ui, &snapshot);
+    search_key(&mut ui, &snapshot, KeyCode::Esc);
+    let selected = ui.selected_index.expect("cancel keeps a selection");
+    assert!(ui.visible_roster(&snapshot).is_match(selected));
+}
+
 fn assert_search_selection(ui: &UiState, snapshot: &SidebarSnapshot) {
     assert_eq!(
         ui.selected_index
