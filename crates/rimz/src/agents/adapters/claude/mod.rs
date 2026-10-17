@@ -1646,7 +1646,10 @@ fn enrich_root_registration(
     observation.origin = match start.source {
         SessionSource::Startup | SessionSource::Clear => Some(SessionOrigin::Fresh),
         SessionSource::Fork => Some(SessionOrigin::Forked),
-        SessionSource::Resume | SessionSource::Compact | SessionSource::Unknown => None,
+        SessionSource::Resume
+        | SessionSource::Compact
+        | SessionSource::New
+        | SessionSource::Unknown => None,
     };
 }
 

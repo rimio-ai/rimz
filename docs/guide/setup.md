@@ -66,7 +66,7 @@ rimz hooks install claude       # one agent kind
 rimz hooks uninstall            # remove every RimZ-managed hook and restore any wrapped statusline
 ```
 
-With no agent named, install covers every one of the thirteen built-in adapters whose binary RimZ finds here; naming one installs that kind whether or not its binary is present. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
+With no agent named, install covers every one of the fourteen built-in adapters whose binary RimZ finds here; naming one installs that kind whether or not its binary is present. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
 
 Some agents gate a newly installed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them.
 

@@ -110,7 +110,7 @@ fn published_matrices_match_the_declared_capabilities() {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    const AGENTS: [(&str, &str); 13] = [
+    const AGENTS: [(&str, &str); 14] = [
         ("Claude Code", "claude"),
         ("Codex", "codex"),
         ("Pi", "pi"),
@@ -124,6 +124,7 @@ fn published_matrices_match_the_declared_capabilities() {
         ("Qwen", "qwen"),
         ("Kimi", "kimi"),
         ("Grok", "grok"),
+        ("Qoder", "qoder"),
     ];
     const CAPABILITIES: [&str; 6] = ["state", "live", "history", "account", "ask", "subagents"];
 

@@ -203,6 +203,7 @@ mod tests {
             "antigravity",
             "kimi",
             "kiro",
+            "qoder",
             "unregistered",
         ] {
             assert_eq!(stop_channel(kind), StopChannel::Pane, "{kind}");

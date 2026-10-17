@@ -134,6 +134,79 @@ fn statusline_outside_a_room_creates_no_locks() {
     assert!(!ws.exists() || std::fs::read_dir(ws).unwrap().next().is_none());
 }
 
+#[test]
+fn qoder_version_gate_and_config_root_work_under_both_pane_envs() {
+    let env = Env::new();
+    let bin = env.home_root.join("qoder-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("qodercli");
+    let search_path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let version = |value: &str| {
+        std::fs::write(&stub, format!("#!/bin/sh\necho 'qodercli {value}'\n")).unwrap();
+        std::fs::set_permissions(
+            &stub,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+        )
+        .unwrap();
+    };
+    let config = env.home_root.join("selected-qoder");
+    let install = || {
+        env.rimz()
+            .args(["hooks", "install", "qoder"])
+            .env("PATH", &search_path)
+            .env("QODER_CONFIG_DIR", &config)
+            .env_remove("XDG_CONFIG_HOME")
+            .output()
+            .unwrap()
+    };
+    version("1.1.71");
+    let old = install();
+    assert!(!old.status.success());
+    assert!(
+        String::from_utf8_lossy(&old.stderr).contains("1.1.72"),
+        "{old:?}"
+    );
+    assert!(!config.exists());
+    version("1.1.72");
+    let installed = install();
+    assert!(installed.status.success(), "{installed:?}");
+    assert!(config.join("settings.json").exists());
+    let definition = rimz::agents::definition_by_kind("qoder").unwrap();
+    for pinned in [false, true] {
+        let mut login_env = std::collections::BTreeMap::from([
+            ("HOME".into(), env.home_root.display().to_string()),
+            ("QODER_CONFIG_DIR".into(), config.display().to_string()),
+        ]);
+        if pinned {
+            login_env.insert(
+                "XDG_CONFIG_HOME".into(),
+                env.home_root.join(".config").display().to_string(),
+            );
+        }
+        assert!(definition.hooks_installed(&login_env), "pinned={pinned}");
+    }
+    for (event, payload) in [
+        ("PermissionRequest", json!({"tool_name":"Bash"})),
+        ("PermissionRequest", Value::Null),
+        ("unknown", json!({})),
+    ] {
+        let mut command = env.hook_command("qoder");
+        command.args(["--event", event]);
+        let output = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @"");
+        }
+    }
+}
+
 fn permission_cases() -> [(&'static str, String); 2] {
     [
         ("claude", permission_payload("Bash")),
