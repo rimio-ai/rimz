@@ -29,10 +29,10 @@ pub(crate) fn lsp(state: &rimz::lsp::registry::State) -> StateRole {
         State::Starting | State::Indexing => StateRole::Working,
         State::Dormant { reason, .. } => match reason {
             Some(StopReason::Crashed) => StateRole::Failed,
-            Some(StopReason::MemoryPressure) => StateRole::Waiting,
             None
             | Some(
                 StopReason::Idle
+                | StopReason::MemoryPressure
                 | StopReason::Evicted
                 | StopReason::TeamDone
                 | StopReason::StoppedByHand
@@ -194,7 +194,7 @@ mod tests {
         }
         for (reason, expected) in [
             (StopReason::Crashed, StateRole::Failed),
-            (StopReason::MemoryPressure, StateRole::Waiting),
+            (StopReason::MemoryPressure, StateRole::Neutral),
             (StopReason::Idle, StateRole::Neutral),
             (StopReason::Evicted, StateRole::Neutral),
             (StopReason::TeamDone, StateRole::Neutral),

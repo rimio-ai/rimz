@@ -976,6 +976,14 @@ mod tests {
                 },
             ),
             entry(
+                "/a",
+                "m",
+                State::Dormant {
+                    since_ms: 0,
+                    reason: Some(StopReason::MemoryPressure),
+                },
+            ),
+            entry(
                 "/c",
                 "rust",
                 State::Dormant {
@@ -1021,6 +1029,9 @@ mod tests {
                     "·", "not", "started", "/a", "a", "-", "-", "3", "-", "2", "0"
                 ],
                 vec![
+                    "·", "dormant:", "memory", "pressure", "/a", "m", "-", "-", "3", "-", "2", "0"
+                ],
+                vec![
                     "·", "dormant:", "idle", "/a", "z", "-", "-", "3", "-", "2", "0"
                 ],
                 vec![
@@ -1035,6 +1046,10 @@ mod tests {
         assert!(raw.contains(&render::paint(
             status::role(StateRole::Failed),
             "✗ dormant: crashed"
+        )));
+        assert!(raw.contains(&render::paint(
+            status::role(StateRole::Neutral),
+            "· dormant: memory pressure"
         )));
     }
 }

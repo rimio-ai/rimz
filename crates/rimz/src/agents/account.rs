@@ -330,7 +330,7 @@ impl ProviderCapacity {
     }
 
     /// Latest reset among subscription windows spent now with a future reset.
-    pub(crate) fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
+    pub fn latest_spent_window_reset(&self, now: Timestamp) -> Option<Timestamp> {
         self.projected_duration_windows(now)
             .filter(|window| window.spent_with_future_reset(now))
             .filter_map(|window| window.resets_at)

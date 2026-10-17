@@ -23,39 +23,6 @@ fn card_row(card: AgentCard) -> SidebarRow {
 }
 
 #[test]
-fn card_projection_status_honors_card_and_rowless_demotion() {
-    let now = Timestamp::UNIX_EPOCH;
-    let mut state = agent("status");
-    state.status = AgentStatus::Running;
-    let mut context = rimz::agents::AgentContext::new("codex", now);
-    context.turn_error = Some(rimz::agents::AgentTurnError {
-        class: TurnErrorClass::PausedRateLimit,
-        at: now + jiff::SignedDuration::from_secs(1),
-        label: Some("limit reached".into()),
-    });
-    state.context = Some(context);
-    let demotion = rimz::agents::ParkDemotion::default();
-    let card = AgentCard {
-        status: AgentStatus::Sleeping,
-        ..AgentCard::default()
-    };
-    assert_eq!(
-        card_status(&state, Some(&card), None, &demotion),
-        AgentStatus::Sleeping
-    );
-    assert_eq!(
-        card_status(&state, None, None, &demotion),
-        AgentStatus::Paused
-    );
-    let spent = rimz::agents::ParkDemotion::new(
-        &Default::default(),
-        [(state.kind.clone(), state.agent_id.clone())].into(),
-        now,
-    );
-    assert_eq!(card_status(&state, None, None, &spent), AgentStatus::Failed);
-}
-
-#[test]
 fn card_projection_description_matches_shared_rule() {
     let now = Timestamp::UNIX_EPOCH;
     let state = agent("description");

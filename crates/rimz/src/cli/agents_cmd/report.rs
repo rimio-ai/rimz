@@ -11,7 +11,7 @@ use rimz::agents::{
 use rimz::ids::{AgentKind, AgentSessionId, LoginKey, PaneId};
 use rimz::store::snapshot::{
     AgentCard, CardDescription, SidebarRow, SidebarSnapshot, SidebarSubAgent, SubAgentTokens,
-    WorktreeCi, WorktreePrState, group_live_agents_by_worktree,
+    WorktreeCi, WorktreePrState, card_status, group_live_agents_by_worktree,
 };
 #[cfg(test)]
 use rimz::store::snapshot::{PaneAgent, RowCard};
@@ -285,18 +285,6 @@ pub(super) fn slot_records_for_agent<'a>(
         .unwrap_or_else(|| vec![agent])
 }
 
-pub(super) fn card_status(
-    agent: &AgentState,
-    card: Option<&AgentCard>,
-    child: Option<&SidebarSubAgent>,
-    demotion: &rimz::agents::ParkDemotion,
-) -> AgentStatus {
-    card.map_or_else(
-        || child.map_or_else(|| agent.rowless_status(demotion).0, |child| child.status),
-        |card| card.status,
-    )
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "report projection keeps durable demotion and presentation overrides explicit"
@@ -313,11 +301,7 @@ pub(super) fn build_entry(
 ) -> AgentReportEntry {
     let card = row.and_then(SidebarRow::as_agent);
     let child = overrides.child;
-    let status = card_status(agent, card, child, demotion);
-    let phase = card.map_or_else(
-        || child.map_or_else(|| agent.rowless_status(demotion).1, |child| child.phase),
-        |card| card.phase,
-    );
+    let (status, phase) = card_status(agent, row, child, demotion);
     let displayed_error = agent.displayed_turn_error();
     let turn_error = displayed_error.map(|(class, error)| TurnErrorReport {
         class,

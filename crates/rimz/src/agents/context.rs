@@ -1260,7 +1260,7 @@ impl TurnErrorClass {
     }
 
     /// Whether the pause follows a resumable rate or spend window.
-    pub(crate) fn is_limit(self) -> bool {
+    pub fn is_limit(self) -> bool {
         matches!(self, Self::PausedRateLimit | Self::PausedSpendLimit)
     }
 

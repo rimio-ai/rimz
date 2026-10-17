@@ -3,13 +3,29 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::AgentStatus;
+use crate::agents::{AgentState, AgentStatus, ParkDemotion, TurnPhase};
 use crate::agents::{
     Entitlement, ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
 };
 use crate::config::PaletteRole;
 use crate::ids::LinkTier;
-use crate::store::snapshot::row::SidebarRow;
+use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
+
+/// The displayed status and phase: card first, then child, then rowless demotion.
+pub fn card_status(
+    agent: &AgentState,
+    row: Option<&SidebarRow>,
+    child: Option<&SidebarSubAgent>,
+    demotion: &ParkDemotion,
+) -> (AgentStatus, TurnPhase) {
+    if let Some(card) = row.and_then(SidebarRow::as_agent) {
+        return (card.status, card.phase);
+    }
+    if let Some(child) = child {
+        return (child.status, child.phase);
+    }
+    agent.rowless_status(demotion)
+}
 
 /// An actionable card, shared by the agent and team command scenes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +46,7 @@ pub fn needs_you(
 
     let status = row
         .and_then(SidebarRow::attention_status)
-        .unwrap_or_else(|| agent.rowless_status(demotion).0);
+        .unwrap_or_else(|| card_status(agent, row, None, demotion).0);
     if !status.is_attention() {
         return None;
     }
@@ -38,7 +54,7 @@ pub fn needs_you(
     let card = match row.and_then(SidebarRow::as_agent) {
         Some(card) => card,
         None => {
-            let (status, phase) = agent.rowless_status(demotion);
+            let (status, phase) = card_status(agent, row, None, demotion);
             fallback = AgentCard {
                 status,
                 phase,
