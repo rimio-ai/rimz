@@ -1767,7 +1767,7 @@ fn ensure_diag_writes_stay_in_diag(root: &Path, files: &[PathBuf]) -> Result<()>
             files,
             needle,
             |path| path == diag_module.as_path() || is_docs_or_xtask(root, path),
-            "diagnostic log paths belong in crates/rimz/src/diag.rs",
+            "diagnostic log paths belong in crates/rimz/src/diag.rs; read one through DiagSink::under(..).log_path()",
         )?;
     }
     Ok(())
