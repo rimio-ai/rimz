@@ -293,6 +293,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "cursor",
         "droid",
         "grok",
+        "hermes",
         "kimi",
         "kiro",
         "opencode",
@@ -308,6 +309,7 @@ fn ensure_private_agent_adapter_boundary(root: &Path, files: &[PathBuf]) -> Resu
         "CursorAdapter",
         "DroidAdapter",
         "GrokAdapter",
+        "HermesAdapter",
         "KimiAdapter",
         "KiroAdapter",
         "OpencodeAdapter",
@@ -1808,6 +1810,7 @@ fn ensure_provider_homes_resolve_from_login_env(root: &Path, files: &[PathBuf]) 
         "QWEN_RUNTIME_DIR",
         "GROK_HOME",
         "GROK_AUTH_PATH",
+        "HERMES_HOME",
     ] {
         for read in [concat!("var", "(\""), concat!("var", "_os(\"")] {
             ensure_no_match(

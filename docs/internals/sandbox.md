@@ -177,6 +177,7 @@ Each sandbox launch overlays at most one user skill root, declared by the adapte
 | Codex | `$HOME/.agents/skills` | `OpenAiPolicy` |
 | Cursor, Copilot, Droid, Kimi, Pi | `$HOME/.agents/skills` | `Frontmatter` |
 | Kiro | `KIRO_HOME` (default `$HOME/.kiro`), plus `/skills` | `Unsupported` |
+| Hermes | `HERMES_HOME` (default `$HOME/.hermes`), plus `/skills` | `Unsupported` |
 | Antigravity, Amp, OpenCode, Grok | `$HOME/.agents/skills` | `Unsupported` |
 | Plugins | None | `Unsupported` |
 

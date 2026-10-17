@@ -18,13 +18,13 @@ AgentState, one per (kind, agent_id)
 sidebar row                                                      sidebar.md
 ```
 
-Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and eleven siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts and balances are [providers.md](./providers.md), spend and pricing [spending.md](./spending.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
+Everything on this page is provider-neutral. An integration that emits well-formed observations gets the state machine, ranking, liveness, and attention routing without code of its own. Which native event carries which signal is each adapter's page ([adapter_claude.md](./adapter_claude.md), [adapter_codex.md](./adapter_codex.md), and twelve siblings). How a session binds to a pane and when RimZ declares it dead is [instances.md](./instances.md). Accounts and balances are [providers.md](./providers.md), spend and pricing [spending.md](./spending.md), and the credit report built over the audit rollup is [attribution.md](./attribution.md). The commitments behind the model are in [DESIGN.md](../../../DESIGN.md).
 
 ## Terms
 
 | Term | Meaning |
 | --- | --- |
-| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
+| agent kind | A wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`, `grok`, `hermes`), described by an [`AgentSpec`](../../../crates/rimz/src/agents/definition.rs). |
 | session | Identity: the id the agent's own hooks report. Every durable fact attaches to a session, keyed `(kind, agent_id)`. |
 | agent instance | Presence: a live local pane running a known agent right now, read from the multiplexer on every snapshot. Joining instances to sessions is [instances.md](./instances.md). |
 | rollup entry | The one `AgentState` per session that store replay derives. The sidebar enriches and renders it. |
@@ -103,7 +103,7 @@ idle ──── turn started ───► running ──── turn ended ─�
  │                           │  │
  └──── turn interrupted ─────┘  └── turn started, or a tool on idle / success
 
-awaiting input        any status ──► waiting; the next tool, turn, or compaction returns it to running
+awaiting input        any status ──► waiting; the next tool, turn, compaction, or ask resolved returns it to running
 clean end, bg work    running stays running in the parked phase; display shows success with ⋯ bg
 ended                 running or waiting ──► failed (a reaped end rests at idle); resting statuses hold
 ```
@@ -119,6 +119,7 @@ ended                 running or waiting ──► failed (a reaped end rests at
 | `turn_ended` clean, `parked_on_background` | → `running` | Moves the phase to `parked` ([turn endings](#turn-endings-and-parked-turns)) and stamps `turn_ended_at` unless ignored. |
 | `turn_interrupted` | any → `idle` | The provider or user canceled the turn, which closes it with no result and stamps `turn_ended_at`. Records the provider turn id when known. A [late report](#late-turn-reports) is ignored and stamps nothing. |
 | `awaiting_input` | any → `waiting` | Rests the phase, stamps `waiting_since`, and opens the ask ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question). A repeat restamps it. |
+| `ask_resolved` | `waiting` → `running`; every other status holds (ignored) | Closes the wait whose native key it carries; a different key leaves the open ask waiting. It is no proof of activity, so a close that arrives after its turn settled leaves the row settled. Declared under `awaiting_input` coverage. |
 | `subagent_started` | → `running` | Establishes the child row under the child's own id and opens `reasoning`. A child already at `success` or `failed` holds its verdict, so a late reordered start is ignored. |
 | `subagent_stopped` | any → `success` or `failed` | The child's verdict, by its error bit. |
 | `tool_used` | `idle`, `success`, or no row → `running` (reconciled); `running` and `waiting` → `running`; `failed` holds | Ignored when it carries the id of the turn just interrupted (trailing output). On a `waiting` row with a keyed ask, a tool carrying a different native key is a parallel sibling and is ignored. Moves the phase ([turn phase](#turn-phase)). |

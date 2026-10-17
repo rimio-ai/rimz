@@ -45,7 +45,7 @@ Register the module privately in [`adapters/mod.rs`](../../crates/rimz/src/agent
 
 ## Step 4 — Declare the definition
 
-`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add optional curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml); kinds without an entry render the shared fallback.
+`AgentSpec` is the immutable half of the integration contract. Fill its kind, aliases, display and brand identity, plan label, tool tables, operational policy, both coverage declarations, default context window and model, process and binary names, transcript thread key, and declarative launch shape. The editing tool set stays a subset of the mutating set, and definition validation pins that relationship together with alias uniqueness. Add curated art to [`emblems.toml`](../../crates/rimz/src/agents/emblems.toml): `emblems.rs::tests::every_provider_has_curated_art_distinct_from_fallback` requires it for every built-in, and only plugin kinds render the shared fallback.
 
 Two coverage declarations sit side by side and answer different questions:
 
@@ -64,7 +64,7 @@ Implement `CoreCapability`, then add `HookCapability` only when the provider has
 
 The contract rules, each owned by [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md) and [adapter.md → Hook stdout is the decision channel](../internals/agents/adapter.md#hook-stdout-is-the-decision-channel): blocking ask hooks install sync, neutral is the agent-native no-op on stdout with diagnostics on stderr, helper children get fresh piped stdio, install is idempotent by command-substring reclaim, and installed hook timeouts leave margin under the upstream deadline.
 
-Install is the visible security step ([adapter.md → Hook install](../internals/agents/adapter.md#hook-install)): declare one `managed_integration` so it drives install, preview, uninstall, installed, partial-artifact, upgrade, wiring-path, wrapped-statusline, and trust reporting. `ManagedSource` implements this Interface for shared backends; custom provider file transactions stay in that provider's `install.rs`. Include every installed hook command in the [trust hash](../internals/harness/trust.md).
+Install is the visible security step ([adapter.md → Hook install](../internals/agents/adapter.md#hook-install)): declare one `managed_integration` so it drives install, preview, uninstall, installed, partial-artifact, upgrade, wiring-path, wrapped-statusline, and trust reporting. `ManagedSource` implements this Interface for shared backends; custom provider file transactions stay in that provider's `install.rs`. The [trust hash](../internals/harness/trust.md) covers project config only; hook commands installed into a provider's own home stay out of it, and their visibility is the install diff and the preview.
 
 Install meets the machine, and five traps have each cost an upgrade pass a review round:
 
@@ -151,6 +151,7 @@ Conformance, definition validation, and registry uniqueness tests enroll the ada
 - Link it everywhere the existing kinds are linked: the per-kind list in [`crates/rimz/src/agents/AGENTS.md`](../../crates/rimz/src/agents/AGENTS.md), the per-provider table in [providers.md](../internals/agents/providers.md#per-provider-mapping), the root [AGENTS.md](../../AGENTS.md) documentation map, and the [internals index](../internals/README.md).
 - Update [agent-support.md](../reference/agent-support.md): a row in the six-capability compatibility matrix, a row in the wiring matrix, a per-agent detail section, and removal from *Agents not yet supported*.
 - Update the [README](../../README.md) agent compatibility matrix with the same six marks. The `published_matrices_match_the_declared_capabilities` integration test reads both published tables against `rimz coverage --json`, so a hand-edited cell that drifts from the declaration fails CI.
+- Correct every count the new kind raises. A census by a sibling's name (`rg -i kiro`) cannot reach a sentence that states only a total, so grep the old total word and the sibling count derived from it as well: with thirteen built-ins before the change, `rg -n -i '\b(thirteen|twelve siblings|eleven siblings)\b' AGENTS.md README.md docs crates --no-ignore-dot`, then skip the hits that count something else.
 
 ## Step 11 — Gate it
 
@@ -166,11 +167,12 @@ Done means: `cargo xtask gate` is green (format, invariants, docs-links, lint, f
 - [ ] `decode_hook` · typed canonical facts · explicit `HookReply` · complete classification corpus
 - [ ] One managed integration covering install / preview / uninstall / `hooks_installed` · machine and login-home refusals through `install_blocker` · provider paths checked under the tmux-pinned and inherited pane env
 - [ ] `permission_args` · `render_preset` · `resume_command` · `compact_command` with verified instruction support · launch prompt style proven live
-- [ ] Spend changes to existing transcripts bump `SPENDING_CACHE_VERSION` · shared pins (conformance preset snapshot, coverage matrix, integration hook counts) moved in the same commit
+- [ ] Spend changes to existing transcripts bump `SPENDING_CACHE_VERSION` · shared pins moved in the same commit: the conformance preset snapshot, `permission_mode_table_matches_the_declared_arguments`, the `builtin_config_homes_*` cases, the coverage matrices, integration hook counts, the provider-name lists in `xtask/src/invariants.rs`, `PROVIDER_HOME_ENV` in `xtask/src/sandbox.rs`, and the prompt-context reply-wait kinds in `cli/hooks.rs::run_feed_inner` when the adapter answers with context
 - [ ] `launch_reminders` coverage declared from `append_system_text_channel`
 - [ ] Context source(s): tail parse, `observe_context` transport, or payload-stamped gauge
 - [ ] `probe_account` · `spending_sources` + `parse_spend` · positive-cost conformance fixture
 - [ ] The step-9 test set, stdout shapes as inline `insta` goldens
 - [ ] `docs/internals/agents/adapter_<kind>.md` + links in the module contract, the providers table, and the root documentation map
+- [ ] Every agent and sibling count raised, found by grepping the old number words as well as a sibling's name
 - [ ] `agent-support.md` detail section and wiring-matrix row · the six-capability row in `agent-support.md` and the README, kept true by the `published_matrices_match_the_declared_capabilities` integration test
 - [ ] `cargo xtask gate` green · `rimz coverage` capability marks honest · `rimz coverage --wiring` mechanism grids honest · `rimz doctor` reporting

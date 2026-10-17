@@ -145,6 +145,14 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// Provider-native instructions for consenting to RimZ's installed hooks.
+    fn hook_trust_fix(&self) -> String {
+        format!(
+            "run /hooks inside {} and trust the RimZ hooks",
+            self.spec().kind
+        )
+    }
+
     /// A provider setting that disables installed hooks for this launch directory.
     fn hooks_disabled(
         &self,
@@ -426,6 +434,11 @@ pub trait LaunchCapability: CoreCapability {
     /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the sandbox.
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Whether a separate provider home also isolates its credentials.
+    fn supports_named_logins(&self) -> bool {
+        true
     }
 
     /// The provider's own temp-root override keys, which a launch sets to the

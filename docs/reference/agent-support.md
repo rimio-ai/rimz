@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ has a built-in adapter for thirteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
+RimZ has a built-in adapter for fourteen coding agents. Each adapter reads the agent's own hooks, transcripts, and local files, and turns them into the sidebar card, `rimz asks`, spend figures, and launch argv. The agent CLI runs stock, you answer it in its own UI, and the provider's web, desktop, and mobile apps keep working. This page answers, per agent: what the card shows, which files and flags RimZ touches, and where the gaps are. How the adapter boundary works is [the agent model](../internals/agents/model.md).
 
 Each agent sits in a support tier. The tier is how much the author runs it day to day; every agent in every tier is wired against its documented surface and covered by tests. An experimental agent can still carry a wide surface, as the [compatibility matrix](#the-compatibility-matrix) shows.
 
@@ -8,7 +8,7 @@ Each agent sits in a support tier. The tier is how much the author runs it day t
 | --- | --- | --- |
 | Supported | Claude Code, Codex | Wired end to end and run constantly. |
 | Alpha | Pi, OpenCode | Close behind the supported pair. |
-| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
+| Experimental | Antigravity, Copilot, Droid, Cursor, Amp, Kiro CLI, Qwen Code, Kimi Code, Grok Build, Hermes Agent | Mostly works; expect the occasional bug and [report it](https://github.com/rimio-ai/rimz/issues). |
 
 RimZ tracks each agent's latest release. Where a feature needs a minimum agent version, this page names it next to the feature.
 
@@ -16,7 +16,7 @@ RimZ tracks each agent's latest release. Where a feature needs a minimum agent v
 
 `rimz coverage` prints the capability grid with the limit behind every cell, and `rimz coverage --wiring` adds the [wiring matrix](#the-wiring-matrix) and the [lifecycle hook grid](#the-lifecycle-hook-surface). Every adapter declares its own coverage, and a test holds the declarations to the matrices on this page. The command's output, flags, and JSON shape are in [check adapter coverage](./cli/maintenance.md#check-adapter-coverage).
 
-The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
+The terminal grids differ from this page in two ways. Cells print `✓` where this page shows ● or ✓, `!` where it shows ◐, and `✗` for ✗. Rows follow the adapter registry (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, kiro, qwen, grok, hermes) instead of tier order, and loaded [process plugins](#third-party-plugins) follow the built-ins.
 
 ## What the marks mean
 
@@ -71,6 +71,7 @@ One row per agent, in tier order. Run `rimz coverage` for the limit behind every
 | Qwen | ● | ◐ | ◐ | ◐ | ● | ● |
 | Kimi | ● | ◐ | ◐ | ● | ● | ◐ |
 | Grok | ● | ◐ | ● | ◐ | ● | ◐ |
+| Hermes | ● | ◐ | ✗ | ✗ | ◐ | ◐ |
 
 <sub>● full · ◐ partial · ✗ unsupported</sub>
 
@@ -121,6 +122,15 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 - A pending tool approval or native question raises Waiting; answer it in Kiro's pane, not through `rimz asks` or `rimz answer`.
 - Live details show the model, effort, and session title; context usage is a percentage only.
 
+### Hermes
+
+- Hermes Agent 0.22.2 or later is required. RimZ merges its shell hooks into the top-level `hooks` key of `$HERMES_HOME/config.yaml` and launches the classic UI (`hermes chat --cli`); a `hermes --tui` session is not covered.
+- Hermes asks once per hook at the first interactive launch (`Allow this hook to run? [y/N]`). Answer `y` to each RimZ hook. Until you do, `rimz doctor` lists the unconsented events, and supervised runs, loops, and message replies refuse.
+- `hermes hooks doctor` reports `script missing or not executable` for `rimz hooks feed --source hermes`, as for any hook named by a bare command. Hermes still finds `rimz` on `PATH` when the hook runs.
+- Approvals, `sudo` prompts, and clarify questions raise Waiting; answer them in Hermes's pane. Memory-write approvals and the secret, vault, and confirmation panels raise nothing.
+- The card shows the model and the context fill of the latest model request. Cost, history, account, and launch reminders are unsupported, and `hermes-plan` launches plain Hermes.
+- Named logins are refused: a separate `HERMES_HOME` does not isolate Hermes credentials.
+
 ### Kimi
 
 - Kimi Code 2.1.1 or later is required. Installation refuses a detected older version with `kimi upgrade -y`; an unknown version does not block installation.
@@ -161,6 +171,7 @@ Each built-in agent keeps its settings, sessions, and credentials in a config ho
 | Cursor | `~/.cursor` | `CURSOR_CONFIG_DIR`, else `XDG_CONFIG_HOME/cursor` | `~/.agents/skills` | accepted | none |
 | Amp | `~/.config/amp` | `XDG_CONFIG_HOME` + `/amp` | `~/.agents/skills` | refused | none |
 | Kiro | `~/.kiro` | absolute `KIRO_HOME`, excluding root and ancestors of `HOME` (including itself) | `<home>/skills` | refused | none |
+| Hermes | `~/.hermes` | absolute `HERMES_HOME`, excluding root and ancestors of `HOME` (including itself) | `<home>/skills` | refused | none |
 | Qwen | `~/.qwen` | `QWEN_HOME` | `<home>/skills` | accepted | none |
 | Kimi | `~/.kimi-code` | `KIMI_CODE_HOME` | `~/.agents/skills` | accepted | none |
 | Grok | `~/.grok` | `GROK_HOME` | `~/.agents/skills` | refused | none |
@@ -199,6 +210,7 @@ Qwen requires 0.25.1 or newer. Launch refuses an older readable version with `np
 | Qwen | `qwen --resume` | Unsupported |
 | Kimi | `kimi --session` | Unsupported |
 | Grok | Unsupported (bare native resume selects the newest session) | Unsupported |
+| Hermes | Unsupported | Unsupported |
 | Process plugin | Unsupported | Unsupported |
 
 ### Permission modes
@@ -220,6 +232,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Qwen | `--approval-mode default` | `--approval-mode auto-edit` | `--approval-mode plan` | `--approval-mode yolo` |
 | Kimi | none | `--auto` | `--plan` | `--yolo` |
 | Grok | `--permission-mode default` | `--permission-mode auto` | none | `--yolo` |
+| Hermes | none | none | none | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
@@ -260,6 +273,7 @@ Grok Plan adds no arguments because Grok's `/plan` is an interactive command, an
 | Qwen | `--model <model>` | refused |
 | Kimi | `--model <model>` | refused |
 | Grok | `--model <model>` | `--reasoning-effort <level>` |
+| Hermes | `--model <model>` | `--reasoning <level>`; levels other than `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` are refused |
 | Process plugin | declared by bundle | declared by bundle |
 
 Amp has no model flag; its `--mode` selects the agent mode, and the `model` value is passed there. The `--max-turns` cap for supervised runs is in [supervised runs](./cli/agents.md#supervised-runs--p).
@@ -292,6 +306,7 @@ The profile fields `system-prompt-file` and `append-system-prompt-files` (and th
 | Qwen | ✓ | the composed file's path in `QWEN_SYSTEM_MD` |
 | Droid | ✗ | Droid only appends; pass its flag through profile `args` |
 | OpenCode, Antigravity, Copilot, Cursor, Amp, Kiro, Kimi, Grok | ✗ | no verified replacement flag |
+| Hermes | ✗ | its only system-text input, `HERMES_EPHEMERAL_SYSTEM_PROMPT`, discards the user's personality and `agent.system_prompt` |
 | Process plugin | declared by bundle | the composed file's path in `[launch].system-prompt-file-flag` |
 
 Pi's replacement is not complete: Pi still appends its own `APPEND_SYSTEM.md`, context files, skills, and working-directory material after RimZ's text. The full prompt is visible in Pi's process arguments.
@@ -337,6 +352,7 @@ The wiring matrix is the mechanism under the six capabilities: nineteen integrat
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ◐ | ✗ | ✗ |
 | Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ | ✗ |
+| Hermes | ✓ | ◐ | ✗ | ◐ | ✗ | ✗ | ◐ | ✗ | ✗ | ✗ | ◐ | ◐ | ✓ | ✗ | ◐ | ✓ | ✗ | ✗ | ✗ |
 
 <sub>✓ wired (the concern reaches a user-complete state) · ◐ partial (the adapter names the gap) · ✗ unsupported (out of reach of the agent's protocol). `rimz coverage --wiring` prints the gap behind every cell.</sub>
 
@@ -383,8 +399,9 @@ RimZ folds eleven lifecycle signals into every agent's state. The table names th
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ durable `subagent.spawned` records | ◐ durable subagent terminal records | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Grok | `SessionStart` | `UserPromptSubmit` | `Stop` / `StopFailure` / `StopCancelled` | `PostToolUse` | `Notification` | `SubagentStart` | ◐ child turn report + correlation | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Hermes | `on_session_start`; `on_session_reset` | `pre_llm_call` | `on_session_end` | `post_tool_call` | ◐ `on_human_input_request` | `subagent_start` | `subagent_stop` | ✗ | ✗ | ◐ derived | ◐ derived |
 
-`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
+`lost` means the agent's multiplexer session died under it. No agent reports that, because its hooks stop firing at the moment of death, so RimZ derives it from the `rimz exec` launch wrapper for every agent. Where `ended` is derived (Codex, Antigravity, Amp, Hermes), RimZ clears the card on the next snapshot tick after the pane is gone, not at the instant the agent exits.
 
 Codex's `Interrupt` hook ends the turn with an interrupted outcome. RimZ does not install Codex's `SessionEnd` hook, because Codex also fires it when an idle app server unloads while the pane stays open.
 
@@ -407,6 +424,7 @@ Each agent's mapping doc carries its full coverage rationale, install target, re
 | Qwen | [adapter_qwen.md](../internals/agents/adapter_qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [adapter_kimi.md](../internals/agents/adapter_kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 | Grok | [adapter_grok.md](../internals/agents/adapter_grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
+| Hermes | [adapter_hermes.md](../internals/agents/adapter_hermes.md) | [hermes-reference.md](../externals/agent-adapter/hermes-reference.md) |
 
 ## Agents not yet supported
 

@@ -50,6 +50,7 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | `cursor` | `~/.cursor/hooks.json`, `cli-config.json` in Cursor's config home (see [config homes](../agent-support.md#config-homes-and-skills)); with `XDG_CONFIG_HOME` unset, both `~/.cursor` and `~/.config/cursor`, where Cursor looks inside a tmux room | Merge of both files as one write; wraps the statusline |
 | `droid` | `~/.factory/settings.json` | Merge |
 | `grok` | `${GROK_HOME:-~/.grok}/hooks/rimz.json` | Merge |
+| `hermes` | `${HERMES_HOME:-~/.hermes}/config.yaml` | Merge under `hooks`; needs Hermes Agent 0.22.2 or later |
 | `kimi` | `${KIMI_CODE_HOME:-~/.kimi-code}/config.toml` | Merge into `[[hooks]]` |
 | `kiro` | `${KIRO_HOME:-~/.kiro}/hooks/rimz.json` | Whole file; needs Kiro CLI 2.31.0 or later |
 | `opencode` | `${XDG_CONFIG_HOME:-~/.config}/opencode/plugin/rimz.ts` | Whole file |
@@ -99,7 +100,7 @@ Both commands exit 0 on success and 1 on any of these:
 | --- | --- |
 | `install` with no `AGENT` finds no agent | `no supported coding agents detected on PATH (KINDS) - install an agent and rerun, or name one: rimz hooks install <agent>` |
 | `AGENT` is not a known kind | ``unknown agent integration `NAME` `` |
-| The named kind cannot take RimZ hooks (a plugin agent, a Kiro CLI below 2.31.0, or Grok's `allow_managed_hooks_only` policy engaged with no `rimz hooks feed --source grok` handler in `/etc/grok/managed_config.toml` or `/etc/grok/requirements.toml`) | `install failed for AGENT: REASON` |
+| The named kind cannot take RimZ hooks (a plugin agent, a Kiro CLI below 2.31.0, a Hermes Agent below 0.22.2 or a Hermes `config.yaml` RimZ cannot edit safely, or Grok's `allow_managed_hooks_only` policy engaged with no `rimz hooks feed --source grok` handler in `/etc/grok/managed_config.toml` or `/etc/grok/requirements.toml`) | `install failed for AGENT: REASON` |
 | A whole-file path holds a file without the marker | `refusing to overwrite an unmarked user plugin at PATH; move it aside or remove it to let RimZ manage this file` (`extension` for Pi, `hook file` for Copilot) |
 | `uninstall` with no `AGENT` finds the machine's accounts config invalid | `only the providers' own homes were unhooked; fix the accounts config and rerun`, after unhooking those homes |
 

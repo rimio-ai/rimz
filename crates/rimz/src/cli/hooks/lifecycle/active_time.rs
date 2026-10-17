@@ -129,8 +129,10 @@ fn active_time_op(
             | LifecycleSignal::Ended
             | LifecycleSignal::Lost,
         ) => Some(ActiveTimeOp::Stop),
+        // An ask close is no proof of activity; the next tool or turn resumes the clock.
         Some(
             LifecycleSignal::Registered
+            | LifecycleSignal::AskResolved { .. }
             | LifecycleSignal::SubagentStarted
             | LifecycleSignal::SubagentStopped { .. },
         ) => None,

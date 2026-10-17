@@ -510,12 +510,13 @@ fn cleanup_sandbox(root: &Path, env: &BTreeMap<&'static str, PathBuf>) {
 /// `PROVIDER_SIDECAR_KEYS` in
 /// `crates/rimz/tests/integration/common/command.rs`); xtask does not link the
 /// `rimz` crate, so a new adapter home key is added here by hand.
-const PROVIDER_HOME_ENV: [&str; 17] = [
+const PROVIDER_HOME_ENV: [&str; 18] = [
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
     "COPILOT_HOME",
     "CURSOR_CONFIG_DIR",
     "GROK_HOME",
+    "HERMES_HOME",
     "KIMI_CODE_HOME",
     "KIRO_HOME",
     "PI_CODING_AGENT_DIR",
