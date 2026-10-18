@@ -66,10 +66,10 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// line, so every consumer of the frame sees it.
 ///
 /// Compose without held expansion first. If that clamps the selected card's own
-/// anchor or shared click placement, compose again holding all previous
-/// selection sources; otherwise release them together. Authoritative inputs
-/// release in this paint. Steady frames without candidates compose the scroll
-/// zone once.
+/// anchor or shared click placement, compose again holding the local selection
+/// sources, or the carried opening set on an anchored paint; otherwise release
+/// them together. Authoritative inputs release in this paint. Steady frames
+/// without candidates compose the scroll zone once.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
@@ -145,8 +145,14 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         .selected_index
         .and_then(|index| roster.row(index))
         .map(|row| &row.id);
-    let mut held_expansions = ui.held_expansions.clone();
-    if selected_id != ui.drawn_selection.as_ref()
+    let shared_held = ui
+        .focus_placement
+        .as_ref()
+        .filter(|placement| Some(&placement.row_id) == selected_id)
+        .map(|placement| &placement.held);
+    let mut held_expansions = shared_held.unwrap_or(&ui.held_expansions).clone();
+    if shared_held.is_none()
+        && selected_id != ui.drawn_selection.as_ref()
         && let Some(previous) = &ui.drawn_selection
     {
         held_expansions.insert(previous.clone());

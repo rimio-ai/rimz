@@ -32,6 +32,140 @@ fn displacement(rx: &Receiver<ObserveMsg>, renderer: &SidebarInstanceId) -> obse
     *draft
 }
 
+fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<ObserveMsg>, String) {
+    let (mut rig, _, pane, _) = watched_row();
+    let (tx, rx) = sync_channel(8);
+    rig.state.observe_tx = tx;
+    rig.state.clicked_row = None;
+    rig.state.ui.selected_index = Some(0);
+    rig.state.ui.selected_pane = Some(pane.clone());
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    let (id, y) = rig.state.ui.painted_rows[0].clone();
+    if local_click {
+        rig.state
+            .apply_input(
+                [Wakeup::MouseClick {
+                    column: 2,
+                    row: y as u16,
+                }],
+                &mut rig.terminal,
+            )
+            .unwrap();
+        assert!(rig.state.clicked_row.is_some());
+    }
+    let anchor = serde_json::from_value(serde_json::json!({
+        "nonce": crate::ids::FocusNonce::new(),
+        "session_name": "rimz-test",
+        "pane_id": pane,
+        "origin": "user",
+        "issued_at_ms": crate::utils::time::unix_now_ms(),
+        "state": "requested",
+        "placement": {
+            "row_id": id,
+            "viewport_row": viewport_row.unwrap_or(y - rig.state.ui.scroll_zone_top as isize),
+        },
+    }))
+    .unwrap();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.state.apply_focus_anchor();
+    assert!(rig.state.ui.focus_placement.is_some());
+    (rig, rx, id)
+}
+
+#[test]
+fn displaced_landing_records_the_requested_row_once_and_watches_later_paints() {
+    let (mut rig, rx, id) = landing(Some(1_000), false);
+    rig.state.ui.banner_shown = !rig.state.ui.banner_shown;
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
+    let y = rig
+        .state
+        .ui
+        .painted_rows
+        .iter()
+        .find(|(row, _)| row == &id)
+        .unwrap()
+        .1;
+    assert_eq!(wire["row_id"], id);
+    assert_eq!(wire["from_y"], rig.state.ui.scroll_zone_top + 1_000);
+    assert_eq!(wire["to_y"], y);
+    assert_eq!(wire["cause"], "no_room_clamp");
+    assert!(rx.try_recv().is_err(), "one landing record");
+
+    rig.state.ui.anchor_clamped = false;
+    rig.state
+        .ui
+        .painted_rows
+        .iter_mut()
+        .find(|(row, _)| row == &id)
+        .unwrap()
+        .1 += 1;
+    rig.state.observe_paint(Instant::now());
+    let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
+    assert_eq!(wire["from_y"], y);
+    assert_eq!(wire["to_y"], y + 1);
+    assert_eq!(wire["cause"], "height_above_changed");
+}
+
+#[test]
+fn exact_landing_emits_no_displacement() {
+    let (mut rig, rx, _) = landing(None, false);
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    assert!(rig.state.ui.focus_placement.is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn same_tab_landing_keeps_the_local_click_watch_without_a_second_record() {
+    let (mut rig, rx, id) = landing(Some(1_000), true);
+    let clicked_at = rig.state.clicked_row.as_ref().unwrap().clicked_at;
+    // Exercise a real landing paint with a local watch already armed for this card.
+    rig.state.ui.painted_rows[0].1 -= 1;
+    rig.state.clicked_row.as_mut().unwrap().y -= 1;
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
+    assert_eq!(wire["row_id"], id);
+    assert_eq!(
+        rig.state.clicked_row.as_ref().unwrap().clicked_at,
+        clicked_at
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "the landing must not double the local detector"
+    );
+}
+
+#[test]
+fn missing_landing_row_records_null_from_the_post_paint_zone() {
+    let (mut rig, rx, id) = landing(Some(3), false);
+    rig.state.ui.focus_placement = None;
+    rig.state.ui.drawn_selection = Some(id);
+    rig.state.ui.painted_rows.clear();
+    rig.state.ui.scroll_zone_top = 7;
+    rig.state.ui.banner_shown = !rig.state.ui.banner_shown;
+    rig.state.hold_expired_since_paint = true;
+    rig.state
+        .observe_paint(Instant::now() + Duration::from_millis(120));
+    let wire = serde_json::to_value(displacement(&rx, &rig.state.config.instance_id).kind).unwrap();
+    assert_eq!(wire["from_y"], 10);
+    assert_eq!(wire["to_y"], serde_json::Value::Null);
+    assert_eq!(wire["cause"], "height_above_changed");
+    assert!(wire["dt_ms"].as_u64().unwrap() >= 120);
+    assert!(rig.state.clicked_row.is_none());
+}
+
 #[test]
 fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
     for cause in [

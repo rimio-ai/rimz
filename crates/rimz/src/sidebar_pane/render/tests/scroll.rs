@@ -42,6 +42,70 @@ fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
     assert!(ui.selected_index.is_some(), "selection exists");
 }
 
+#[test]
+fn shared_placement_preserves_the_sources_expanded_selection() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut source = selected_ui();
+    let before = paint_card_row(&snapshot, &mut source, "task-1", 45);
+    let mut target = UiState::default();
+    select_card(&snapshot, &mut target, "codex-1");
+    target.focus_placement = Some(
+        serde_json::from_value(serde_json::json!({
+            "row_id": "codex-1",
+            "viewport_row": before as isize - source.scroll_zone_top as isize,
+            "held": ["codex-0", "codex-1", "departed"],
+        }))
+        .unwrap(),
+    );
+
+    assert_eq!(paint_card_row(&snapshot, &mut target, "task-1", 45), before);
+    assert_eq!(target.held_expansions, ["codex-0".into()].into());
+}
+
+#[test]
+fn shared_placement_replaces_the_destinations_previous_selection() {
+    let mut snapshot = delegation_fleet(&[2]);
+    Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows).truncate(4);
+    let mut source = selected_ui();
+    let before = paint_card_row(&snapshot, &mut source, "task-3", 45);
+    let mut target = UiState::default();
+    select_card(&snapshot, &mut target, "codex-2");
+    paint_card_row(&snapshot, &mut target, "task-3", 45);
+    select_card(&snapshot, &mut target, "codex-3");
+    target.focus_placement = Some(
+        serde_json::from_value(serde_json::json!({
+            "row_id": "codex-3",
+            "viewport_row": before as isize - source.scroll_zone_top as isize,
+            "held": ["codex-0"],
+        }))
+        .unwrap(),
+    );
+
+    assert_eq!(paint_card_row(&snapshot, &mut target, "task-3", 45), before);
+    assert!(!target.held_expansions.contains("codex-2"));
+}
+
+#[test]
+fn shared_placement_with_no_opening_set_overrides_local_holds() {
+    let snapshot = delegation_fleet(&[0]);
+    let mut target = selected_ui();
+    paint_card_row(&snapshot, &mut target, "task-1", 45);
+    select_card(&snapshot, &mut target, "codex-1");
+    let held_row = paint_card_row(&snapshot, &mut target, "task-1", 45);
+    assert!(!target.held_expansions.is_empty());
+    target.focus_placement = Some(
+        serde_json::from_value(serde_json::json!({
+            "row_id": "codex-1",
+            "viewport_row": held_row as isize - target.scroll_zone_top as isize,
+            "held": [],
+        }))
+        .unwrap(),
+    );
+
+    paint_card_row(&snapshot, &mut target, "task-1", 45);
+    assert!(target.held_expansions.is_empty());
+}
+
 fn assert_cache_notice_anchor(
     density: crate::config::CardDensityMode,
     offset: usize,

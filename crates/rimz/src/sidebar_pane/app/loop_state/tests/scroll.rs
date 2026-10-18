@@ -106,10 +106,115 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
         placement: Some(FocusPlacement {
             row_id: target.id,
             viewport_row: 2,
+            held: std::collections::BTreeSet::new(),
         }),
         order: Some(rig.state.ui.last_order.clone()),
     };
     (rig, output, anchor)
+}
+
+#[test]
+fn shared_placement_captures_the_painted_opening_set() {
+    let (mut rig, _) = scroll_rig();
+    let target = rig.state.current.worktree_groups[0].rows[1]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    rig.state.ui.held_expansions = ["older-selection".into()].into();
+    rig.state.ui.drawn_selection = Some("source-selection".into());
+    let placement = rig.state.focus_placement(&target).expect("visible target");
+    assert_eq!(
+        serde_json::to_value(placement).unwrap()["held"],
+        serde_json::json!(["older-selection", "source-selection"])
+    );
+}
+
+fn assert_shared_placement_from_history(previous: usize) {
+    let (mut source, _) = scroll_rig();
+    let first = source.state.current.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    source.state.ui.selected_index = Some(0);
+    source.state.ui.selected_pane = Some(first.clone());
+    source.state.dirty = true;
+    paint_at(&mut source, 0);
+    let target = source.state.current.worktree_groups[0].rows[1].clone();
+    let target_pane = target.pane.as_ref().unwrap().pane_id.clone();
+    let placement = source
+        .state
+        .focus_placement(&target_pane)
+        .expect("source painted target");
+    let source_y = source
+        .state
+        .ui
+        .painted_rows
+        .iter()
+        .find(|(id, _)| id == &target.id)
+        .unwrap()
+        .1;
+
+    let (mut destination, _, mut anchor) = hidden_destination();
+    destination.state.current = source.state.current.clone();
+    destination.state.ui.selected_index = Some(previous);
+    destination.state.ui.selected_pane = Some(
+        destination.state.current.worktree_groups[0].rows[previous]
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .clone(),
+    );
+    destination.state.dirty = true;
+    destination
+        .state
+        .paint_now(&mut destination.terminal, Instant::now())
+        .unwrap();
+    destination.state.current.own_view = Some(SidebarOwnView {
+        sibling_count: 1,
+        working_pane_ids: vec![target_pane.clone()],
+        own_view_is_daemon: false,
+    });
+    destination.state.current.focused_pane = Some(first);
+    destination.state.current.viewed_panes.clear();
+    destination.state.optimistic_watch_until = None;
+    anchor.pane_id = target_pane.clone();
+    anchor.placement = Some(placement);
+    anchor.order = Some(source.state.ui.last_order.clone());
+    let (push, ack) = focus_push(anchor, destination.state.config.instance_id.clone());
+    destination
+        .state
+        .on_wakeup(&mut destination.fetch, &mut destination.terminal, push)
+        .unwrap();
+
+    assert_eq!(destination.state.ui.selected_pane, Some(target_pane));
+    assert!(destination.state.ui.focus_placement.is_none());
+    assert_eq!(
+        destination
+            .state
+            .ui
+            .painted_rows
+            .iter()
+            .find(|(id, _)| id == &target.id)
+            .unwrap()
+            .1,
+        source_y
+    );
+    assert_push_report(&ack, &destination, PushVerdict::Painted, true);
+}
+
+#[test]
+fn shared_placement_lands_after_the_destination_previously_selected_the_target() {
+    assert_shared_placement_from_history(1);
+}
+
+#[test]
+fn shared_placement_lands_after_the_destination_previously_selected_the_source() {
+    assert_shared_placement_from_history(0);
 }
 
 #[test]
@@ -323,6 +428,31 @@ fn fitted_push_before_resize_skips_only_the_exact_size_hold() {
 #[test]
 fn fitted_push_after_resize_releases_only_the_exact_size_hold() {
     fitted_grow_hold(true);
+}
+
+#[test]
+fn displaced_placement_reports_the_landing_in_both_ack_paths() {
+    for cached in [false, true] {
+        let (mut rig, _, mut anchor) = hidden_destination();
+        anchor.placement.as_mut().unwrap().viewport_row = 1_000;
+        if cached {
+            rig.state.fold_focus_intent(anchor.clone(), Instant::now());
+            rig.state
+                .paint_now(&mut rig.terminal, Instant::now())
+                .unwrap();
+        }
+        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+        rig.state
+            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .unwrap();
+
+        assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
+        assert!(rig.state.ui.focus_placement.is_none());
+        assert!(rig.state.ui.anchor_clamped);
+        let report = assert_push_report(&ack, &rig, PushVerdict::Displaced, !cached);
+        assert_eq!(report.misplaced_paints, 0);
+        assert_eq!(report.unmatched_paints, 0);
+    }
 }
 
 #[test]
@@ -545,6 +675,7 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
                 placement: Some(FocusPlacement {
                     row_id: target.id.clone(),
                     viewport_row,
+                    held: std::collections::BTreeSet::new(),
                 }),
                 order: None,
             },
@@ -569,7 +700,8 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
                 .focus_placement(&target.pane.as_ref().unwrap().pane_id),
             Some(FocusPlacement {
                 row_id: target.id.clone(),
-                viewport_row
+                viewport_row,
+                held: [target.id.clone()].into(),
             })
         );
         let offscreen = rig.state.current.worktree_groups[0].rows.last().unwrap();
@@ -604,6 +736,7 @@ fn shared_placement_never_leaves_the_selected_card_off_screen() {
         rig.state.ui.focus_placement = Some(FocusPlacement {
             row_id: placed_id,
             viewport_row,
+            held: std::collections::BTreeSet::new(),
         });
         rig.state.dirty = true;
         paint_at(&mut rig, 0);

@@ -28,6 +28,27 @@ fn paint_wait_returns_on_first_painted_without_waiting_for_other_peers() {
 }
 
 #[test]
+fn paint_wait_returns_on_a_displaced_landing() {
+    let now = Instant::now();
+    let mut reports = Vec::new();
+    let mut first = true;
+    let outcome = wait_for_paint(
+        now + PAINT_WAIT,
+        || now,
+        |_| {
+            if std::mem::take(&mut first) {
+                Ok(report(PushVerdict::Displaced))
+            } else {
+                Err(RecvTimeoutError::Disconnected)
+            }
+        },
+        &mut reports,
+    );
+    assert_eq!(outcome, PushOutcome::Painted);
+    assert_eq!(reports.len(), 1);
+}
+
+#[test]
 fn paint_wait_keeps_listening_through_every_non_painted_verdict() {
     let now = Instant::now();
     let mut verdicts = [
@@ -102,7 +123,11 @@ fn paint_wait_is_capped_even_when_a_peer_retains_its_ack() {
 fn paint_wait_classifies_release_and_paint_at_or_after_budget_as_timed_out() {
     let start = Instant::now();
     for elapsed in [PAINT_WAIT, PAINT_WAIT + Duration::from_millis(1)] {
-        for painted in [false, true] {
+        for verdict in [
+            None,
+            Some(PushVerdict::Painted),
+            Some(PushVerdict::Displaced),
+        ] {
             let clock = Cell::new(start);
             assert_eq!(
                 wait_for_paint(
@@ -110,8 +135,8 @@ fn paint_wait_classifies_release_and_paint_at_or_after_budget_as_timed_out() {
                     || clock.get(),
                     |_| {
                         clock.set(start + elapsed);
-                        if painted {
-                            Ok(report(PushVerdict::Painted))
+                        if let Some(verdict) = verdict {
+                            Ok(report(verdict))
                         } else {
                             Err(RecvTimeoutError::Disconnected)
                         }
@@ -119,7 +144,7 @@ fn paint_wait_classifies_release_and_paint_at_or_after_budget_as_timed_out() {
                     &mut Vec::new()
                 ),
                 PushOutcome::TimedOut,
-                "elapsed={elapsed:?}, painted={painted}"
+                "elapsed={elapsed:?}, verdict={verdict:?}"
             );
         }
     }
@@ -256,6 +281,27 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
     assert_eq!(rows[0]["event"]["outcome"], "painted");
     assert_eq!(rows[0]["event"]["peers"][0]["verdict"], "painted");
     assert_eq!(rows[0]["event"]["peers"][0]["delivery"], "sent");
+}
+
+#[test]
+fn dispatch_records_a_displaced_paint_after_the_jump() {
+    let rig = TraceRig::new();
+    let destination = serve_config(&workspace());
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let _subscription = rig.plane.subscribe(&destination, tx);
+    let destination_thread = std::thread::spawn(move || {
+        let Wakeup::FocusPush(push) = rx.recv().unwrap() else {
+            panic!("expected push")
+        };
+        push.finish(PushVerdict::Displaced);
+    });
+    rig.peers
+        .dispatch(rig.anchor(), || assert!(rig.records().is_empty()));
+    destination_thread.join().unwrap();
+    let rows = rig.records();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event"]["outcome"], "painted");
+    assert_eq!(rows[0]["event"]["peers"][0]["verdict"], "displaced");
 }
 
 #[test]

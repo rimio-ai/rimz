@@ -647,6 +647,7 @@ fn applied_focus_anchor(
         placement: Some(crate::mux::focus_anchor::FocusPlacement {
             row_id: pane_id.to_string(),
             viewport_row,
+            held: std::collections::BTreeSet::new(),
         }),
         pane_id,
         origin: crate::mux::focus_anchor::FocusOrigin::User,

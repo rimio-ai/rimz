@@ -220,7 +220,10 @@ fn wait_for_paint(
         let expired = now() >= until;
         match result {
             Ok(report) => {
-                let painted = report.verdict == Some(PushVerdict::Painted);
+                let painted = matches!(
+                    report.verdict,
+                    Some(PushVerdict::Painted | PushVerdict::Displaced)
+                );
                 reports.push(report);
                 if expired {
                     return PushOutcome::TimedOut;

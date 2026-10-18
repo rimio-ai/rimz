@@ -3,8 +3,10 @@
 //! The request supplies a short presentation overlay before mux dispatch.
 //! Command acceptance and native client observations confirm, supersede, or
 //! fence that overlay independently.
+//! A card placement carries the source frame's opening set so its landing paint
+//! can reproduce that geometry.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::time::Duration;
 
@@ -111,10 +113,18 @@ pub(crate) struct FocusActionRequest<'a> {
 }
 
 /// A card's own first line relative to the source pane's scroll-zone top; negative when clipped above it.
+/// Its opening set is consumed with the placement by the destination's landing
+/// paint.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FocusPlacement {
     pub(crate) row_id: String,
     pub(crate) viewport_row: isize,
+    /// Row ids the source frame had open by hold or selection: the opening
+    /// state `viewport_row` was measured under. The destination composes its
+    /// landing frame from this set in place of its own holds and previous
+    /// selection.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) held: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -577,6 +587,38 @@ mod tests {
             assert_eq!(file["placement"], placement);
             assert_eq!(load(&runtime), Some(anchor));
         }
+    }
+
+    #[test]
+    fn v4_placement_without_held_loads_with_an_empty_opening_set() {
+        let (_dir, runtime) = runtime();
+        let mut file = serde_json::to_value(anchor(1_000)).unwrap();
+        file["v"] = FOCUS_ANCHOR_VERSION.into();
+        file["placement"] = serde_json::json!({"row_id": "row-2", "viewport_row": 3});
+        atomic::write_temp_then_rename_cache(&runtime.focus_anchor_path(), &file).unwrap();
+
+        let loaded = load(&runtime).expect("v4 anchor without held");
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap()["placement"],
+            file["placement"]
+        );
+    }
+
+    #[test]
+    fn v4_placement_round_trip_preserves_the_opening_set() {
+        let (_dir, runtime) = runtime();
+        let mut value = serde_json::to_value(anchor(1_000)).unwrap();
+        value["placement"] = serde_json::json!({
+            "row_id": "row-2", "viewport_row": 3, "held": ["row-0", "row-1"],
+        });
+        let anchor: FocusAnchor = serde_json::from_value(value.clone()).unwrap();
+        store(&runtime, &anchor).unwrap();
+
+        let loaded = load(&runtime).expect("v4 anchor with held");
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap()["placement"],
+            value["placement"]
+        );
     }
 
     #[test]
