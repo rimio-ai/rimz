@@ -87,7 +87,6 @@ pub(crate) use gc::GcConfig;
 pub use gc::parse_older_than;
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
-pub(crate) use harness::PROMPT_CACHE_MARGIN;
 pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode, KeepWarm};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
@@ -490,6 +489,7 @@ pub struct MachineConfig {
     pub zellij: ZellijConfig,
     pub tmux: TmuxConfig,
     pub resume: ResumeConfig,
+    #[serde(deserialize_with = "harness::deserialize_checked")]
     pub harness: HarnessConfig,
     pub gc: GcConfig,
     pub sentry: SentryConfig,
@@ -1086,6 +1086,7 @@ struct CoreConfig {
     zellij: ZellijConfig,
     tmux: TmuxConfig,
     resume: ResumeConfig,
+    #[serde(deserialize_with = "harness::deserialize_checked")]
     harness: HarnessConfig,
     gc: GcConfig,
     sentry: SentryConfig,

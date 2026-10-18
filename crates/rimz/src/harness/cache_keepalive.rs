@@ -243,7 +243,7 @@ pub fn final_ping(agent: &AgentState, config: &HarnessConfig, now: Timestamp) ->
     let max = config.cache_keepalive_max?;
     let fire_after = config
         .prompt_cache_ttl(&agent.kind)?
-        .checked_sub(crate::config::PROMPT_CACHE_MARGIN)?;
+        .checked_sub(config.prompt_cache_margin)?;
     let since = agent.keepalive_since.or(agent.last_request_at())?;
     next_reaches_cap(since, now, fire_after, max).then_some(max)
 }
@@ -352,7 +352,7 @@ fn should_keepalive(
     ) else {
         return false;
     };
-    let Some(fire_after) = ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN) else {
+    let Some(fire_after) = ttl.checked_sub(config.prompt_cache_margin) else {
         return false;
     };
     let Ok(idle) = Duration::try_from(now.duration_since(anchor)) else {
@@ -369,7 +369,7 @@ fn run_reached_cap(agent: &AgentState, config: &HarnessConfig, ttl: Duration) ->
         config.cache_keepalive_max,
         agent.keepalive_since,
         agent.last_request_at(),
-        ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN),
+        ttl.checked_sub(config.prompt_cache_margin),
     ) else {
         return false;
     };
