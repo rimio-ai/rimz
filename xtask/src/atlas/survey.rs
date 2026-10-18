@@ -315,16 +315,10 @@ fn build_report(
     if let Some(ledger) = &ledger {
         flag_held_rows(root, scope, ledger, &mut rows, &mut ledger_note.problems);
     }
-    let (all_shapes, shape_families_dropped) = if include_all {
-        shapes::families_all_with_dropped(facts, scope)
-    } else {
-        shapes::families_with_dropped(facts, scope)
-    };
-    let (all_guards, guard_families_dropped) = if include_all {
-        detect::guard_families_all_with_dropped(facts, scope)
-    } else {
-        detect::guard_families_with_dropped(facts, scope)
-    };
+    let (mut all_shapes, shape_families_dropped) = shapes::families(facts, scope);
+    all_shapes.retain(|family| include_all || family.finding);
+    let (mut all_guards, guard_families_dropped) = detect::guard_families(facts, scope);
+    all_guards.retain(|family| include_all || family.finding);
     let shape_keys = all_shapes
         .iter()
         .map(|family| family.name.clone())
@@ -480,17 +474,10 @@ fn verdict_key_check(target: &Target, facts: &Facts, include_all: bool) -> Verdi
     let mut shape_collisions = BTreeMap::<String, BTreeSet<String>>::new();
     let mut guard_keys = BTreeSet::new();
     for view in &views {
-        let (shapes, guards) = if include_all {
-            (
-                shapes::families_all_with_dropped(facts, view).0,
-                detect::guard_families_all_with_dropped(facts, view).0,
-            )
-        } else {
-            (
-                shapes::families(facts, view),
-                detect::guard_families(facts, view),
-            )
-        };
+        let (mut shapes, _) = shapes::families(facts, view);
+        shapes.retain(|family| include_all || family.finding);
+        let (mut guards, _) = detect::guard_families(facts, view);
+        guards.retain(|family| include_all || family.finding);
         for (name, families) in shape_collisions_in(&shapes) {
             shape_collisions.entry(name).or_default().extend(families);
         }

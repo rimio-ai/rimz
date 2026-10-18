@@ -294,19 +294,17 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     let repeated = repeated_assembly(&references.edges, &module, &facts.syntax.files);
     let calls = call_shapes(&references.edges, &module, &facts.syntax.files);
     let flags = flag_section(&facts, &module, &surface);
-    let shape_families = if args.all {
-        shapes::families_all_with_dropped(&facts, Path::new(".")).0
-    } else {
-        shapes::families(&facts, Path::new("."))
-    }
-    .into_iter()
-    .filter(|family| {
-        family
-            .members
-            .iter()
-            .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
-    })
-    .collect::<Vec<_>>();
+    let shape_families = shapes::families(&facts, Path::new("."))
+        .0
+        .into_iter()
+        .filter(|family| args.all || family.finding)
+        .filter(|family| {
+            family
+                .members
+                .iter()
+                .any(|member| module.matches(&crate_module_for_path(&member.path), &member.path))
+        })
+        .collect::<Vec<_>>();
     let guard_families = module_item_guards(&facts, &module, args.all);
     let providers = providers(&facts, &module);
     let rules = target
@@ -574,11 +572,7 @@ fn module_item_guards(
                 .map(|item| item.name.as_str()),
         );
     }
-    let default_keys = detect::guard_families(facts, Path::new("."))
-        .into_iter()
-        .map(|family| family.key)
-        .collect::<BTreeSet<_>>();
-    detect::guard_families_all_with_dropped(facts, Path::new("."))
+    detect::guard_families(facts, Path::new("."))
         .0
         .into_iter()
         .filter(|family| {
@@ -611,8 +605,7 @@ fn module_item_guards(
                                 )
                         }
                     });
-            targets_module
-                && (include_all || qualified || default_keys.contains(family.key.as_str()))
+            targets_module && (include_all || qualified || family.finding)
         })
         .collect()
 }
