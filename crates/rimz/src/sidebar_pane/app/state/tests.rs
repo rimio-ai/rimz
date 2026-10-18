@@ -1038,7 +1038,7 @@ fn staying_on_tab_does_not_sweep_new_unread() {
 }
 
 #[test]
-fn new_ranked_first_unread_splices_at_front_during_freeze() {
+fn new_ranked_first_unread_appends_during_freeze() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =
@@ -1070,14 +1070,18 @@ fn new_ranked_first_unread_splices_at_front_during_freeze() {
         AgentStatus::Waiting,
         true,
     );
-    a.apply(with_new_unread);
+    a.apply(with_new_unread.clone());
 
     assert_eq!(
         row_ids(&a.current),
-        vec!["sess-new", "sess-1", "sess-2"],
-        "fresh unread rows splice into the frozen list at their producer rank"
+        vec!["sess-1", "sess-2", "sess-new"],
+        "fresh unread rows append within their frozen group"
     );
     assert!(row_unread_by_id(&a.current, "sess-new"));
+    a.ui.freeze.as_mut().unwrap().armed_ms = Timestamp::now().as_millisecond() - 5_000;
+    a.apply(with_new_unread);
+    assert!(a.ui.freeze.is_none());
+    assert_eq!(row_ids(&a.current), vec!["sess-new", "sess-1", "sess-2"]);
 }
 
 #[test]

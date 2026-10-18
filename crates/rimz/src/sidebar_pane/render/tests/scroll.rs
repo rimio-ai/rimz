@@ -38,6 +38,10 @@ fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
 }
 
 fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
+    ui.freeze = Some(LayoutFreeze {
+        frozen: FrozenOrder::default(),
+        armed_ms: fixed_now().as_millisecond(),
+    });
     ui.selected_index = ui.visible_roster(snapshot).ordinal_of_id(id);
     assert!(ui.selected_index.is_some(), "selection exists");
 }
@@ -140,7 +144,7 @@ fn assert_cache_notice_anchor(
     let after = paint_card_row(&snapshot, &mut ui, &task, 45);
     assert_eq!(after, before, "cache notice above must not move the click");
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45);
-    let keeps_stats = offset == 0 || density == crate::config::CardDensityMode::Expanded;
+    let keeps_stats = true;
     assert_eq!(
         screen.contains("cache expired"),
         expired_cache && keeps_stats,
@@ -253,7 +257,7 @@ fn collapse_below_at_bottom_keeps_clicked_card() {
 }
 
 #[test]
-fn collapse_with_room_releases_entries_immediately() {
+fn collapse_with_room_keeps_entries_until_freeze_expires() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = UiState {
         scroll_offset: 10,
@@ -263,6 +267,12 @@ fn collapse_with_room_releases_entries_immediately() {
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-2");
     assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 45), before);
+    assert!(!ui.held_expansions.is_empty());
+    assert!(
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+    );
+    ui.freeze = None;
+    paint_card_row(&snapshot, &mut ui, "task-2", 45);
     assert!(ui.held_expansions.is_empty());
     assert!(
         !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
@@ -270,7 +280,7 @@ fn collapse_with_room_releases_entries_immediately() {
 }
 
 #[test]
-fn authoritative_wheel_paint_releases_a_collapse_hold() {
+fn authoritative_wheel_paint_keeps_a_frozen_expansion() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 45);
@@ -280,6 +290,12 @@ fn authoritative_wheel_paint_releases_a_collapse_hold() {
     ui.offset_authoritative = true;
     ui.scroll_ease.arm();
     paint_card_row(&snapshot, &mut ui, "task-2", 45);
+    assert!(!ui.held_expansions.is_empty());
+    assert!(
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
+    );
+    ui.freeze = None;
+    paint_card_row(&snapshot, &mut ui, "task-2", 45);
     assert!(ui.held_expansions.is_empty());
     assert!(
         !snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 54, 45).contains("survey area")
@@ -287,7 +303,7 @@ fn authoritative_wheel_paint_releases_a_collapse_hold() {
 }
 
 #[test]
-fn growth_above_releases_a_collapse_hold_without_authoritative_input() {
+fn growth_above_keeps_expansions_until_freeze_expires() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
     ui.delegation_overrides.insert("codex-1".into(), true);
@@ -305,10 +321,16 @@ fn growth_above_releases_a_collapse_hold_without_authoritative_input() {
     assert!(!ui.offset_authoritative);
     assert_eq!(paint_card_row(&grown, &mut ui, "task-2", 45), before);
     assert!(!ui.anchor_clamped);
-    assert!(ui.held_expansions.is_empty());
+    assert!(!ui.held_expansions.is_empty());
     let screen = snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, 54, 45);
-    assert!(!screen.contains("survey area 0-"));
+    assert!(screen.contains("survey area 0-"));
     assert!(screen.contains("survey area 1-"));
+    ui.freeze = None;
+    paint_card_row(&grown, &mut ui, "task-2", 45);
+    assert!(ui.held_expansions.is_empty());
+    assert!(
+        !snapshot_to_screen_with_alert_and_ui(&grown, None, &ui, 54, 45).contains("survey area 0-")
+    );
 }
 
 #[test]
@@ -329,20 +351,30 @@ fn compact_collapse_at_zero_keeps_the_clicked_card_shape() {
     snapshot.theme.display.card_density = crate::config::CardDensityMode::Compact;
     let mut ui = selected_ui();
     let before = paint_card_row(&snapshot, &mut ui, "task-2", 30);
-    ui.selected_index = Some(2);
+    select_card(&snapshot, &mut ui, &snapshot.rows().nth(2).unwrap().id);
     assert_eq!(paint_card_row(&snapshot, &mut ui, "task-2", 30), before);
     assert!(!ui.anchor_clamped);
 }
 
 #[test]
-fn offscreen_selection_releases_the_previous_card_and_reveals() {
+fn offscreen_selection_keeps_the_previous_card_and_reveals() {
     let snapshot = delegation_fleet(&[0]);
     let mut ui = selected_ui();
     paint_card_row(&snapshot, &mut ui, "task-2", 45);
     select_card(&snapshot, &mut ui, "codex-11");
     paint_card_row(&snapshot, &mut ui, "task-11", 45);
-    assert!(ui.held_expansions.is_empty());
+    assert!(!ui.held_expansions.is_empty());
     let theme = Theme::fixed(false);
+    let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 200);
+    assert!(
+        composed
+            .lines
+            .iter()
+            .any(|line| line.to_string().contains("survey area"))
+    );
+    ui.freeze = None;
+    paint_card_row(&snapshot, &mut ui, "task-11", 45);
+    assert!(ui.held_expansions.is_empty());
     let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 200);
     assert!(
         !composed
@@ -417,7 +449,7 @@ fn stale_card_selection_and_threshold_crossing_keep_the_selected_row() {
         stale_line.to_string().contains("task-2"),
         "the unselected card has shrunk"
     );
-    ui.selected_index = Some(2);
+    select_card(&snapshot, &mut ui, &old.id);
     assert_eq!(paint_card_row(&snapshot, &mut ui, "card-2", 30), before);
 
     snapshot.rows_mut().next().unwrap().last_activity = fixed_now() - Duration::from_secs(86400);
