@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::inspect;
-use super::modules::module_is_within;
+use super::modules::{Boundary, module_is_within};
 use super::syntax::{FileSyntax, FnBody, join_module};
 
 #[derive(Clone, Debug, Deserialize)]
@@ -255,10 +255,10 @@ fn has_production_module(contract: &PassContract, files: &[FileSyntax], module: 
     files.iter().any(|file| {
         module_is_within(&file.module_path, module)
             && !crate::source_files::is_test_file(&file.path)
-            && contract.paths.iter().any(|scope| {
-                super::modules::path_in_scope(&file.path, scope)
-                    || file.path == scope.with_extension("rs")
-            })
+            && contract
+                .paths
+                .iter()
+                .any(|scope| Boundary::new(scope).covers(&file.path))
     })
 }
 
@@ -268,9 +268,11 @@ fn validate_cx_path(contract: &PassContract, path: &Path) -> Result<()> {
             .context("pass contract cx paths must contain valid UTF-8")?,
         "diff contract cx.path",
     )?;
-    if !contract.paths.iter().any(|scope| {
-        super::modules::path_in_scope(path, scope) || path == scope.with_extension("rs")
-    }) {
+    if !contract
+        .paths
+        .iter()
+        .any(|scope| Boundary::new(scope).covers(path))
+    {
         bail!(
             "pass contract cx path `{}` must be inside pass contract paths",
             path.display()

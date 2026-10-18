@@ -53,7 +53,7 @@ fn debt_keeps_upward_admissions_overlap_and_missing_rules() {
     };
     let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
     let ledger = ledger::load(root.path()).unwrap().unwrap();
-    let debt = recorded_debt(root.path(), &target, Some(&ledger), &facts, Path::new("."));
+    let debt = recorded_debt(&target, Some(&ledger), &facts, Path::new("."));
     assert_eq!(debt.rules.len(), 2);
     for row in &debt.rules {
         assert_eq!(row.upward_sites, 3);
@@ -190,10 +190,13 @@ fn survey_default_families_are_filtered_all_with_identical_drop_tallies() {
 #[test]
 fn assemblers_count_distinct_scope_modules_a_function_calls_into() {
     let report = super::super::syntax::analyze_sources(
-        &[Source::new(
-            "crates/demo/src/cli.rs",
-            "use crate::agents;\nuse crate::config::Config;\nuse crate::store::open;\nfn run() {\n    open();\n    agents::list();\n    agents::catalog::load();\n    Config::load();\n    crate::mux::attach();\n    crate::Paths::load();\n    self::helper();\n    value.finish();\n}\nfn light() { open(); Config::load(); }\nfn helper() {}\n",
-        )],
+        &[
+            Source::new(
+                "crates/demo/src/cli.rs",
+                "use crate::agents;\nuse crate::config::Config;\nuse crate::store::open;\nfn run() {\n    open();\n    agents::list();\n    agents::catalog::load();\n    Config::load();\n    crate::mux::attach();\n    crate::Paths::load();\n    self::helper();\n    value.finish();\n}\nfn light() { open(); Config::load(); }\nfn helper() {}\n",
+            ),
+            Source::new("crates/demo/src/agents.rs", ""),
+        ],
         &BTreeSet::new(),
     );
     let known = ["cli", "agents", "agents::catalog", "config", "store", "mux"]
