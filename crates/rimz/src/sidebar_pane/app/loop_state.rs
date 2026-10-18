@@ -130,6 +130,7 @@ pub(super) struct LoopState {
     observed_anchor: Option<(Instant, Option<crate::mux::focus_anchor::FocusAnchor>)>,
     last_folded_focus_intent: Option<FocusNonce>,
     pending_focus_push: Option<FocusPush>,
+    focus_landing: Option<(crate::mux::focus_anchor::FocusAnchor, Instant)>,
     painted_focus_anchor_ms: u64,
     painted_height: u16,
     retired_anchor: Option<(Instant, u64)>,
@@ -299,6 +300,7 @@ impl LoopState {
             observed_anchor: None,
             last_folded_focus_intent: None,
             pending_focus_push: None,
+            focus_landing: None,
             painted_focus_anchor_ms: 0,
             painted_height: 0,
             retired_anchor: None,
@@ -624,6 +626,7 @@ impl LoopState {
             observed_anchor: _,
             last_folded_focus_intent: _,
             pending_focus_push: _,
+            focus_landing: _,
             painted_focus_anchor_ms: _,
             painted_height: _,
             retired_anchor: _,
@@ -897,8 +900,8 @@ impl LoopState {
         if self.focus_push_size_matches(&push, terminal) {
             self.paint_hold.release();
         }
-        if self.painted_focus_matches(&push) {
-            push.finish(PushVerdict::Painted);
+        if let Some(verdict) = self.painted_focus_verdict(&push.anchor, Some(&push)) {
+            push.finish(verdict);
             return Ok(());
         }
         if let Some(pending) = self.pending_focus_push.replace(push) {
@@ -2185,6 +2188,13 @@ impl LoopState {
             .map(|(id, y)| crate::mux::focus_anchor::FocusPlacement {
                 row_id: id.clone(),
                 viewport_row: y - self.ui.scroll_zone_top as isize,
+                held: self
+                    .ui
+                    .held_expansions
+                    .iter()
+                    .chain(self.ui.drawn_selection.iter())
+                    .cloned()
+                    .collect(),
             })
     }
 
@@ -2217,36 +2227,42 @@ impl LoopState {
             .is_ok_and(|size| expected.cols == Some(size.width) && expected.rows == size.height)
     }
 
-    fn painted_focus_matches(&self, push: &FocusPush) -> bool {
-        let anchor = &push.anchor;
-        self.painted_focus_anchor_ms == anchor.issued_at_ms
-            && self.ui.last_focus_anchor_ms == anchor.issued_at_ms
-            && self.ui.focus_placement.is_none()
-            && push
-                .expected_panes
-                .as_ref()
+    fn painted_focus_verdict(
+        &self,
+        anchor: &crate::mux::focus_anchor::FocusAnchor,
+        push: Option<&FocusPush>,
+    ) -> Option<PushVerdict> {
+        if self.painted_focus_anchor_ms != anchor.issued_at_ms
+            || self.ui.last_focus_anchor_ms != anchor.issued_at_ms
+            || self.ui.focus_placement.is_some()
+            || push
+                .and_then(|push| push.expected_panes.as_ref())
                 .and_then(|rows| {
                     self.config
                         .own_pane
                         .as_ref()
                         .and_then(|pane| rows.get(pane))
                 })
-                .is_none_or(|pane| pane.rows == self.painted_height)
-            && self
-                .current
-                .row_owning_pane(&anchor.pane_id)
-                .is_some_and(|row| {
-                    self.ui.drawn_selection.as_ref() == Some(&row.id)
-                        && anchor.placement.as_ref().is_none_or(|placement| {
-                            self.ui.anchor_clamped
-                                || self.ui.painted_rows.iter().any(|(id, y)| {
-                                    id == &placement.row_id
-                                        && *y
-                                            == self.ui.scroll_zone_top as isize
-                                                + placement.viewport_row
-                                })
-                        })
+                .is_some_and(|pane| pane.rows != self.painted_height)
+        {
+            return None;
+        }
+        let row = self.current.row_owning_pane(&anchor.pane_id)?;
+        if self.ui.drawn_selection.as_ref() != Some(&row.id) {
+            return None;
+        }
+        Some(
+            if anchor.placement.as_ref().is_none_or(|placement| {
+                self.ui.painted_rows.iter().any(|(id, y)| {
+                    id == &placement.row_id
+                        && *y == self.ui.scroll_zone_top as isize + placement.viewport_row
                 })
+            }) {
+                PushVerdict::Painted
+            } else {
+                PushVerdict::Displaced
+            },
+        )
     }
 
     fn apply_focus_anchor(&mut self) {
@@ -2263,6 +2279,10 @@ impl LoopState {
             && anchor.issued_at_ms > self.ui.last_focus_anchor_ms
             && crate::mux::focus_anchor::is_fresh(presentation_at_ms, now_ms)
         {
+            self.focus_landing = anchor
+                .placement
+                .as_ref()
+                .map(|_| (anchor.clone(), Instant::now()));
             if let Some(placement) = anchor.placement {
                 self.ui.focus_placement = Some(placement);
                 self.ui.scroll_ease.cancel();
@@ -2418,13 +2438,42 @@ impl LoopState {
 
     fn observe_paint(&mut self, now: Instant) {
         self.painted_focus_anchor_ms = self.ui.last_focus_anchor_ms;
-        if self.pending_focus_push.as_ref().is_some_and(|push| {
-            now < push.until
-                && self.owns_focus_target(&push.anchor.pane_id)
-                && self.painted_focus_matches(push)
-        }) && let Some(push) = self.pending_focus_push.take()
+        // This paint consumed the placement, so the landing is judged here or never.
+        let landing = self.focus_landing.take().and_then(|(anchor, applied_at)| {
+            let push = self
+                .pending_focus_push
+                .as_ref()
+                .filter(|push| push.anchor.nonce == anchor.nonce);
+            let verdict = self.painted_focus_verdict(&anchor, push)?;
+            Some((verdict, anchor.placement?, applied_at))
+        });
+        let mut seeded_landing = false;
+        if let Some((PushVerdict::Displaced, placement, applied_at)) = landing
+            && !self
+                .clicked_row
+                .as_ref()
+                .is_some_and(|watch| watch.row_id == placement.row_id)
         {
-            push.finish(PushVerdict::Painted);
+            self.clicked_row = Some(ClickedRowWatch {
+                row_id: placement.row_id,
+                y: self.ui.scroll_zone_top as isize + placement.viewport_row,
+                clicked_at: applied_at,
+                selection: self.ui.drawn_selection.clone(),
+                banner_shown: self.ui.banner_shown,
+                gliding: false,
+            });
+            seeded_landing = true;
+        }
+        let verdict = self.pending_focus_push.as_ref().and_then(|push| {
+            if now >= push.until || !self.owns_focus_target(&push.anchor.pane_id) {
+                return None;
+            }
+            self.painted_focus_verdict(&push.anchor, Some(push))
+        });
+        if let Some(verdict) = verdict
+            && let Some(push) = self.pending_focus_push.take()
+        {
+            push.finish(verdict);
         }
         if let Some(push) = &mut self.pending_focus_push {
             push.peer.unmatched_paints = push.peer.unmatched_paints.saturating_add(1);
@@ -2441,7 +2490,7 @@ impl LoopState {
             return;
         };
         let elapsed = now.saturating_duration_since(watch.clicked_at);
-        if elapsed >= REORDER_HOLD {
+        if elapsed >= REORDER_HOLD && !seeded_landing {
             return;
         }
         let to_y = self
@@ -2452,7 +2501,7 @@ impl LoopState {
             .map(|(_, y)| *y);
         let cause = if self.ui.anchor_clamped {
             ClickedRowDisplacementCause::NoRoomClamp
-        } else if hold_expired {
+        } else if hold_expired && !seeded_landing {
             ClickedRowDisplacementCause::HoldExpired
         } else if watch.banner_shown != self.ui.banner_shown {
             ClickedRowDisplacementCause::BannerToggled

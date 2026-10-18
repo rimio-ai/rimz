@@ -94,6 +94,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// shapes, kept open until the hold-free layout preserves the selected
     /// card's row. Written back each draw; departed and live-selected ids drop
     /// out. Authoritative inputs release all holds.
+    /// A shared landing paint uses the source frame's carried set instead of
+    /// these local candidates and the previous selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
     /// Absolute pane row of the last draw's scroll-zone top.
     pub(in crate::sidebar_pane) scroll_zone_top: usize,
@@ -107,7 +109,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Armed only by opening the landed chip. The next draw reveals its first
     /// newly shown receipt while keeping the chip visible, then consumes it.
     pub(in crate::sidebar_pane) landed_reveal: bool,
-    /// A fresh shared click placement for the next draw to land, then consumed.
+    /// A fresh shared click placement and its source opening set for the next
+    /// draw to land, then consumed.
     pub(in crate::sidebar_pane) focus_placement: Option<FocusPlacement>,
     /// Request stamp of the last jump scroll anchor this renderer applied, so
     /// its later acceptance cannot seed the viewport a second time. `0` before

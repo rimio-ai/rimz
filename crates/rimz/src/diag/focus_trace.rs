@@ -45,6 +45,7 @@ pub(crate) enum PushDelivery {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PushVerdict {
     Painted,
+    Displaced,
     NotDestination,
     Exiting,
     Expired,
