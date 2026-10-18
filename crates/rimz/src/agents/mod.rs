@@ -158,6 +158,31 @@ use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 pub mod plugins;
 pub mod skills;
 
+const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
+    "rimz message",
+    "rimz agents",
+    "rimz subagents",
+    "rimz teams",
+    "rimz asks",
+    "rimz answer",
+    "rimz wait --in",
+    "rimz pane list",
+    "rimz pane capture",
+    "rimz loop show",
+    "rimz loop logs",
+    "rimz lsp def",
+    "rimz lsp refs",
+    "rimz lsp hover",
+    "rimz lsp impl",
+    "rimz lsp callers",
+    "rimz lsp callees",
+    "rimz lsp symbols",
+    "rimz lsp find",
+    "rimz lsp check",
+    "rimz lsp list",
+    "rimz lsp status",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentErr {
     #[error("unknown agent integration `{0}`")]
