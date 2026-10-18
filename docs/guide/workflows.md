@@ -1,12 +1,12 @@
 # Workflows
 
-A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and the next firing knows nothing about the last. That fits "every morning, sweep the PRs". It does not fit "fix this branch until the tests pass, but stop after three tries", or "keep this PR alive until it merges". That logic needs memory between turns, and in a loop task it ends up in prompts and in an agent's context, where a dead or compacted agent loses it.
+A [loop task](./loops.md) is a cron line for agents. On a clock or a signal it fires one turn, and `--verify` can re-prompt that turn until a command passes. That covers "every morning, sweep the PRs" and "fix until the tests pass". It does not cover work in stages that waits on the world between them: keep this PR alive until it merges, launch a fixer each time CI fails, stop after five tries, and call me when something needs a human. Written as loop tasks, that plan lives in prompts and in an agent's context, and a dead or compacted agent loses it.
 
-A workflow writes that logic down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (a script you write, or a read-only model call) and answers with an outcome word. A step launches one agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a durable record on disk, so a dead agent, a closed room, or a reboot costs at most one relaunch. The run keeps its place.
+A workflow writes the plan down as a small graph in `~/.rimz/workflows/<name>/workflow.toml`. Each node is a check or a step. A check reads the world (a script you write, or a model call) and answers with an outcome word. A step launches one fresh agent to do work. Edges send each outcome to the next node. RimZ keeps the run's position in a record on disk. When an agent dies or the machine reboots, the run continues at the node it was on, and at most the interrupted attempt runs again.
 
 ## Write a workflow
 
-This workflow runs the test suite, sends an agent to fix it when it fails, and tries three times at most. It works in any repository whose tests run from one command. Create these three files:
+The smallest useful workflow runs the test suite, sends an agent to fix it when it fails, and gives up after three tries. A loop task's `--verify` could do this one alone. It is shown first because every larger graph uses the same parts. Create three files:
 
 ```text
 ~/.rimz/workflows/fix-tests/
@@ -34,7 +34,7 @@ max-visits = 3
 timeout = "1h"
 ```
 
-`checks/tests.sh` is the check. It runs in the checkout and prints exactly one JSON object on stdout. The suite's own output goes to a file, so it cannot mix into the answer. Replace `cargo test` with your suite's command:
+`checks/tests.sh` is the check. It runs in the checkout, prints exactly one JSON object on stdout, and exits 0. The suite's own output goes to a file, so it cannot mix into the answer. Replace `cargo test` with your suite's command:
 
 ```sh
 log="$RIMZ_WORKFLOW_DIR/notes/tests.log"
@@ -45,22 +45,22 @@ else
 fi
 ```
 
-`prompts/fix.md` is what the agent receives each time the step launches:
+`prompts/fix.md` is what the agent receives each time the step launches. RimZ sets `RIMZ_WORKFLOW_DIR` in the agent's environment, and the agent reads it there. RimZ does not expand variables in the prompt text.
 
 ```markdown
 The test suite in this checkout fails. Read context.json in the directory
-$RIMZ_WORKFLOW_DIR names: its "input" object holds the check's answer, and
+$RIMZ_WORKFLOW_DIR names: its "input" object is the check's answer, and
 input.log is the file with the failing output. Fix the code until the suite
 passes, then commit. An earlier attempt may have left uncommitted changes:
 inspect them and continue from them. Do not report that the suite passes.
 The workflow runs it again after your turn.
 ```
 
-Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends, the step follows `then` back to `tests`, and the check decides whether the work is done. The agent never decides that. Any extra field in a check's answer (here `log`) travels to the next node as its input.
+Read the graph from `start`. The run begins at the `tests` check. An answer of `pass` goes to `@done`, which ends the run. An answer of `fail` goes to the `fix` step, which starts Claude Code in the checkout with the prompt file. When that agent's turn ends, RimZ stops the agent and follows `then` back to `tests`. The check decides whether the work is done, never the agent. The check's whole answer, `outcome` and `reason` included, becomes the next node's `input`. That is how `log` reaches the agent.
 
-Two fields bound the loop. `max-visits = 3` stops the fourth launch of `fix`: the run parks and waits for you instead. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Timeouts take `s`, `m`, `h`, and `d`.
+Two fields bound the loop. `max-visits = 3` refuses a fourth launch of `fix`, and the run parks to wait for you. `timeout = "1h"` ends an attempt that runs longer than an hour and follows `then` as if the turn had ended. Durations take `s`, `m`, `h`, and `d`.
 
-Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start it with `sh`, `uv run`, or another interpreter. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./configuration.md) you defined.
+Paths in `run` and `prompt-file` are relative to the workflow's directory and must stay inside it. `run` is a command line split into words, and no shell reads it. A pipe or a variable belongs inside the script, so start the command with `sh`, `uv run`, or another interpreter. `agent` takes an agent kind such as `claude` or `codex`, or the name of a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) you defined.
 
 ## Check it and start a run
 
@@ -74,47 +74,62 @@ fix-tests  fix    step   claude              yes         asked → @user (defaul
 warning: fix-tests: steps.fix: auto-continue is off; a provider limit mid-attempt ends the attempt as limited
 ```
 
-Every `(default)` edge to `@user` parks the run for you. The `tests` row shows that a broken script (`invalid`) parks. The `fix` row shows that the cap (`cap`) and a question from the agent (`asked`) park too. The warning appears on a default install. Without [auto-continue](./loops.md#auto-continue), an attempt that hits a provider rate limit ends there, and the run goes on to `then`. Turn auto-continue on to resume the agent in the same attempt.
+Every `(default)` edge to `@user` parks the run for you. The `tests` row says a broken script (`invalid`) parks. The `fix` row says the cap (`cap`) and a question from the agent (`asked`) park too. `BACKGROUND yes` means RimZ can see the agent's background work, so a turn that ends with background work still running does not end the attempt.
+
+The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A check can wait for the reset instead, as [the PR example](#wait-on-the-outside-world) does.
 
 A step is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The agent's reporting hooks must be installed, and a Codex step needs folder trust for the checkout. `rimz doctor` reports both.
 
-Start the run from inside the project while its room is open (`rimz start` opens one). Give it its own RimZ worktree so the agent's edits stay off your branch. `rimz worktree new feat-x` creates one, and the [worktrees guide](./worktrees.md) covers the rest:
+Then start the run:
 
-```sh
-rimz workflow run fix-tests -w feat-x
-```
+1. Open the project's room. The room is the multiplexer session RimZ manages for the project, and `rimz start` opens it and attaches to it. Run the next commands in the project, inside the room or in another terminal.
+2. Create a RimZ worktree, so the agent's edits stay off your branch. The [worktrees guide](./worktrees.md) covers what this creates.
 
-`run` validates again, creates the run, and prints two lines: the run id (`wf_` followed by a UUID) and the run's work directory. The first check starts in the background. Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ worktree and never creates one. Each workflow holds at most one active or parked run per checkout, so a second `run` there refuses and names the run that holds it.
+   ```sh
+   rimz worktree new feat-x
+   ```
 
-`--prompt 'keep the public API unchanged'` adds text to the end of every step's prompt for this run.
+3. Start the run in that worktree, and keep its id:
+
+   ```sh
+   RUN=$(rimz workflow run fix-tests -w feat-x | sed -n 1p)
+   ```
+
+`run` validates again, creates the run, and prints two lines: the run id (`wf_` and 32 hexadecimal digits) and the run's work directory. The first check starts in the background. If the suite already passes, the run ends at `@done` at once. Break a test first to watch the loop.
+
+Without `-w` the run uses the checkout you are in. `-w` selects an existing RimZ worktree and never creates one. A workflow holds at most one active or parked run per checkout, so a second `run` there refuses and names the run that holds it. `--prompt 'keep the public API unchanged'` adds text to the end of every step's prompt for this run.
 
 ## Watch a run
 
 ```sh
-rimz workflow list                 # every active and parked run, with its node and what it waits on
-rimz workflow show wf_0192...      # one run: position, visit counts, and its full history
+rimz workflow list         # every active and parked run, with its node and what it waits on
+rimz workflow show "$RUN"  # one run: position, visit counts, and its full history
 ```
 
-`show` lists each check's answer and each attempt in order. An attempt line names the agent's handle, the commit before and after, and its cost, so you can see what each visit changed. While a step runs, its agent is an ordinary agent in the room. Its card appears in the sidebar, and you can watch or answer it in its pane. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field the two commands print.
+`show` lists each check's answer and each attempt in order. An attempt line names the agent's handle, the commit before and after, and its cost, so you can see what each visit changed. While a step runs, its agent has a card in the sidebar and a pane you can watch. The [workflow reference](../reference/cli/workflow.md#inspect-runs) lists every field the two commands print.
+
+An attempt can end as `died` when the agent fails to start or crashes. `show` records that it died but not why. To see the cause, launch the same agent by hand in the worktree, for example `rimz agents claude -w feat-x -p 'say hello'`, and read the error it prints.
 
 ## What a run does on your machine
 
-`rimz workflow run` copies `workflow.toml` into the run's own directory, `~/.rimz/ws/<workspace-dir>/owned/workflows/<run-id>/`. That directory holds:
+`rimz workflow run` creates the run directory, `~/.rimz/ws/<workspace-dir>/owned/workflows/<run-id>/`, with four entries:
 
 - `record.json`, the run's current position, which is the truth the engine reads.
 - `journal.jsonl`, the append-only history `show` prints.
-- `workflow.toml`, the sealed copy. Editing the original changes later runs, never this one.
-- `work/`, the only directory your nodes may write. `RIMZ_WORKFLOW_DIR` points here. It starts with `notes/` and `signs/`, and holds `context.json`.
+- `workflow.toml`, a sealed copy of the definition. Editing the original changes later runs, never this one. Scripts and prompt files are not copied: each check and launch reads them fresh from `~/.rimz/workflows/<name>/`.
+- `work/`, the work directory, which `RIMZ_WORKFLOW_DIR` names. It holds `context.json`, `notes/`, and `signs/`. Your nodes keep their scratch here, and the engine's own files sit outside it.
 
-RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the input from the last check, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
+RimZ rewrites `work/context.json` before every check and every attempt. It names the run, the node, and this visit, carries the `input`, and describes how the last attempt ended. [The context file](#the-context-file) lists its fields.
 
-A check runs as a child process in the checkout, with no stdin, and `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads its stdout once it exits. A script that exits nonzero or prints anything other than one JSON object routes to `invalid`.
+A check runs as a child process in the checkout, with no stdin, and with `RIMZ_WORKFLOW_DIR` and `RIMZ_WORKFLOW_RUN` set. RimZ reads its stdout once it exits.
 
-A step launches its agent in a new pane, with the prompt file, then `signs/<step>.md` when it exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to it like any agent. When its turn ends, RimZ stops the agent and its subagents, records the commit before and after, and follows `then`. A peer or a team the agent launched keeps running.
+A step launches its agent in a new pane, with the same two variables set. Its prompt is the prompt file, then `signs/<step>.md` when that file exists, then the run's `--prompt`. The room's turn, room, and account [budgets](./budget.md) apply to it like any agent. When its turn ends, RimZ stops the agent and the subagents it launched, records the commit before and after, and follows `then`. A peer or a team the agent launched keeps running until you stop it.
 
-A step will not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait.
+A step does not start in a checkout another agent is using. It waits until the checkout is free. With `takeover = true` it stops an idle agent there to make room, but an agent in the middle of a turn still makes it wait. Agents in other RimZ worktrees do not count.
 
-The room's scheduler checks every active run about once a minute. A [signal](./loops.md#signals-the-rooms-event-bus) such as `pr.merged` wakes waiting checks at once. With the room closed, the run advances only while the [loop timer](./loops.md#who-keeps-time) ticks for the project. Your `~/.rimz/workflows/` directory is never written.
+A judge runs headless, with no pane, and [the judge section](#let-a-model-decide) covers what it may touch.
+
+While the room is open, it checks every active run about once a minute. With no room open for the project, only the [loop timer](./loops.md#who-keeps-time) does those checks, so keep the room open while a run works. Your `~/.rimz/workflows/` directory is never written.
 
 ## Wait on the outside world
 
@@ -148,13 +163,15 @@ timeout = "6h"
 {"outcome": "needs-sweep"}
 ```
 
-While CI runs, `ci-pending` holds the run at `pr` until `recheck_at`, and then the check runs again. Without `recheck_at`, a waiting check runs again about every minute. A signal clears `recheck_at` and runs the check at once, so a merge is seen when the room sees it. When CI fails, `needs-sweep` launches the `sweep` agent in the worktree to fix the failures and push. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`, which reads the PR again.
+While CI runs, `ci-pending` holds the run at `pr` until `recheck_at`, and then the check runs again. Without `recheck_at`, a waiting check runs again about once a minute. A signal in the room clears `recheck_at` and runs the check at once, so a merge is seen as soon as the room sees it. Every [signal](./loops.md#signals-the-rooms-event-bus) does this except the agent lifecycle signals such as `agent.idle`. When CI fails, `needs-sweep` launches the `sweep` agent in the worktree, with a prompt that tells it to fix the failures and push. `takeover = true` lets it stop an idle agent you left in that worktree. However the agent's turn ends, `then` sends the run back to `pr`, which reads the PR again.
 
-A check that can wait must have a `timeout`. It counts from the moment the run reaches the check, across every wait, and when it passes the run parks. The [RimZ repository's copy](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) of `pr.py` also waits ten minutes after a dead attempt and waits for the reset after a rate limit, both from `context.json`.
+A check that can wait must have a `timeout`. It starts each time the run enters the check and runs across every wait there. When it passes, the run parks. Here each return from `sweep` starts a new two days.
+
+A rate limit is another thing to wait for. When the last attempt ended as `limited`, `context.json` carries `prev_attempt.limited.reset_at`, and a check can answer `ci-pending` with that time as `recheck_at`. The [sample `pr.py` in the RimZ repository](../../crates/rimz/tests/fixtures/workflows/babysit-pr/checks/pr.py) does this, and waits ten minutes after an attempt that died.
 
 ## Let a model decide
 
-Some decisions need judgment that a script cannot give: whether review comments need a code change, or whether a diff matches its issue. A check with `agent` in place of `run` is a judge. It runs the agent headless with automatic permissions, and its prompt file names the outcomes it may return:
+Some decisions need judgment that a script cannot give: whether review comments need a code change, or whether a diff matches its issue. A check with `agent` in place of `run` is a judge:
 
 ```toml
 [checks.review]
@@ -165,11 +182,21 @@ on = { approve = "@done", revise = "fix" }
 timeout = "1d"
 ```
 
-RimZ tells the judge where `context.json` is and where to write its answer, which must be one JSON object of the same shape a script prints. A judge must leave the checkout alone. Under sandbox isolation RimZ mounts the checkout and its Git directories read-only for it. Under host isolation only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
+`checks/review.md` says what to judge and what each outcome means:
 
-`window` holds a judge or a step until the provider's usage window has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows `window 5h.left=12<40`.
+```markdown
+Read the review comments on this branch's PR with `gh pr view --comments`.
+Answer "revise" with a one-line reason when any comment asks for a code
+change that is not already on the branch. Otherwise answer "approve".
+```
 
-Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure` and routes that to a judge pays for a model only when it has to.
+A judge runs headless in the checkout. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. RimZ adds instructions to its prompt: where `context.json` is, and that the answer must be one JSON object of the same shape a script prints, written to `output_path`. A judge must leave the checkout alone. Under [sandbox isolation](./security.md#sandbox-isolation), RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation, which is the default, only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
+
+A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run.
+
+`window` holds a judge or a step until the provider's usage window has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows a line such as `waiting: review, window 5h.left=12<40, since 15:02, ×40`.
+
+Put the cheap case in a script and the unclear case in a judge. A script that answers `unsure`, routed to a judge, pays for a model only when it has to.
 
 ## When a run needs you
 
@@ -177,11 +204,13 @@ A run parks when it would otherwise have to guess:
 
 - a step reached `max-visits`,
 - a check's `timeout` passed,
-- a script failed or printed a bad answer,
+- a script exited nonzero or printed a bad answer,
 - a judge failed twice,
-- a step's agent asked a question or hit a permission prompt that no `on.asked` edge answers,
+- a step's agent stopped on a question or a permission prompt, and no `on.asked` edge answers it,
 - the run's `deadline` passed,
 - a check routed an outcome to `@user`, with its `reason` as the text.
+
+A question ends the attempt. RimZ notices it within about a minute, stops the agent, and parks the run with the question as its text, so an answer typed into the pane after that reaches nobody. Fix what made the agent ask (its permission mode, the prompt, or a [sign](#rules-for-writing-nodes)), then resume. The step relaunches, and `prev_attempt.asked` in `context.json` holds the question.
 
 `[workflow] deadline = "2026-11-01"` bounds the whole run. It takes a date (local midnight), a local date and time, or an RFC 3339 instant. When it passes, RimZ stops a live attempt and parks the run, unless `on.deadline` routes it somewhere else.
 
@@ -190,43 +219,46 @@ A parked run appears in three places: a line in the [sidebar cockpit](../interfa
 Fix what the reason names, then send the run back to work:
 
 ```sh
-rimz workflow resume wf_0192...                          # the same node, with a fresh timeout
-rimz workflow resume wf_0192... --at tests               # another node
-rimz workflow resume wf_0192... --extend visits=+2       # two more visits for every step
-rimz workflow resume wf_0192... --extend deadline=2026-11-08
+rimz workflow resume "$RUN"                          # the same node, with a fresh timeout
+rimz workflow resume "$RUN" --at tests               # another node
+rimz workflow resume "$RUN" --extend visits=+2       # two more visits for every step
+rimz workflow resume "$RUN" --extend deadline=2026-11-08
 ```
 
-An extension applies to this run only. The definition does not change.
+An extension is a grant on this run only, and the definition does not change. `show` then counts visits against both, as in `step fix: 3 visits of 3 + 2 grant`.
 
 ## Stop a run and clean up
 
 ```sh
-rimz workflow cancel wf_0192...
+rimz workflow cancel "$RUN"
 ```
 
-`cancel` ends the run as `canceled` and stops whatever it is running: the check's script, the judge, or the step's agent and its subagents. The commits and uncommitted edits in the checkout stay, and so does the run's directory. Remove the worktree when you are done with it ([cleanup](./worktrees.md#cleanup-once-work-lands)).
+`cancel` ends the run as `canceled` and stops whatever it is running: the check's script, the judge, or the step's agent and its subagents. A run that already ended prints `already terminal; unchanged`. The commits and uncommitted edits in the checkout stay, and so does the run directory.
 
-A run also ends on its own at `@done`, or as `failed` at `@failed`. A finished run leaves `rimz workflow list`, and its directory stays for seven days, where `rimz workflow show` can still read it. Then RimZ's garbage collection removes it. `rimz reset` keeps run directories, and `rimz reset --hard` removes them.
+A run started by a loop task can come back. The task starts a new run in any worktree that has none while its condition holds. To stop for good, end the condition or disable the task with `rimz loop disable <name>`.
+
+When you are done with the worktree, `rimz worktree remove feat-x` removes it. It refuses while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. `--force` removes it anyway and deletes those commits with the branch. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
+
+A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A finished run leaves `rimz workflow list`, and `rimz workflow show` still reads it for seven days. After that, RimZ's garbage collection removes its run directory. `rimz reset` keeps run directories, and `rimz reset --hard` removes them.
 
 ## Start runs from a loop
 
-A loop task can start the runs for you. This one starts a `babysit-pr` run in every RimZ worktree with an open PR:
+A loop task can start the runs for you. This one, in `~/.rimz/loop.toml`, starts a `babysit-pr` run in every RimZ worktree of one project that has an open PR:
 
 ```toml
 [tasks.babysit-pr]
+root          = "/home/you/code/app"
 workflow      = "babysit-pr"
 each-worktree = true
 when          = ["pr=open"]
 for           = "3m"
 ```
 
-Each firing starts a run in a worktree that has none. A worktree with an active or parked run is skipped, so it never gets two. After the merge, `pr=open` turns false and the task stops firing there. Write this task by hand in `loop.toml`, since `rimz loop add` has no flag for it. The task's own `budget` does not apply, because the steps are ordinary agents under the room's budgets. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
+Each firing starts a run in a worktree that has none. A worktree with an active or parked run is skipped, so it never gets two. A worktree whose run finished can get a new one. This differs from an agent task, which launches once per checkout. After the merge, `pr=open` turns false and the task stops firing there. Write this task by hand, since `rimz loop add` has no flag for it. The task's own `budget` does not apply, because the steps are ordinary agents under the room's budgets. The [loop task reference](../reference/cli/workflow.md#loop-tasks) lists the fields a workflow task takes.
 
 ## One run per project
 
 Some work is project-wide: a monthly dependency sweep, or a loop that takes the next item off a shared backlog. Set `[workflow] scope = "project"` for it. Every node then runs at the project root, and the workflow holds one active or parked run for the whole project. Starting it from a worktree still selects the root, and `-w` prints a notice that says so. A loop task with `each-worktree` starts one run and skips the other worktrees.
-
-A step at the root follows the same rule as in a worktree: agents working at the root make it wait, and `takeover = true` may stop the idle ones. Agents in RimZ worktrees do not count.
 
 ## Rules for writing nodes
 
@@ -234,23 +266,23 @@ The engine stays simple because nodes follow four rules.
 
 1. **Make every node safe to repeat.** A step launches the same prompt on every visit and learns how far things got from the world: the repository, the PR, `$RIMZ_WORKFLOW_DIR/notes/`. A check can run twice for one decision, because the process hosting it can die after the script ran.
 2. **Say what to do with a dirty tree.** A stopped attempt can leave uncommitted work behind. The step's prompt tells the agent to keep it, commit it, or discard it.
-3. **Tune a step through its sign, never its prompt file.** A judge that wants to steer the next attempt writes `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, and RimZ adds it after the step's prompt file. The prompt file is shared by every run of the workflow.
+3. **Tune a step through its sign, never its prompt file.** A sign is a file, `$RIMZ_WORKFLOW_DIR/signs/<step>.md`, that RimZ adds after the step's prompt at every launch until someone deletes it. A judge can write one to steer the next attempt, and so can you before a resume. The prompt file is shared by every run of the workflow.
 4. **Keep judges read-only.** A judge reads and answers. Work belongs in a step.
 
-`notes/` is scratch for your nodes, and RimZ never reads it. For example, a check that walks a list can record the items it finished there. To make a retry harmless, name each write after the `seq` in `context.json`: a retry has the same `seq`, so it overwrites its own file.
+`notes/` is scratch for your nodes, and RimZ never reads it. A check that walks a list can record there the items it finished. Name each file after the item it records, so a repeat overwrites its own file and never adds a second one.
 
 ### The check answer
 
-A script prints, and a judge writes, exactly one JSON object:
+A script prints, and a judge writes, exactly one JSON object. A script must also exit 0: a nonzero exit routes to `invalid`, so a script that uses `set -e` must catch the failures it expects.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `outcome` | yes | The edge to follow, from the check's `on` table. |
 | `reason` | no | Text for the history, and the park text when the outcome routes to `@user`. |
 | `recheck_at` | no | An RFC 3339 time. On `@wait`, nothing runs the check again before it, unless a signal arrives. |
-| `key` | no | A string or integer naming the item the run now works on. It appears as `key` in later context files. |
+| `key` | no | A string or integer naming the item the run now works on, such as an issue number. Later context files carry it. |
 
-Any other field goes to the next node as `input`. The edge targets are a node name, `@wait`, `@done`, `@failed`, and `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
+Any other field travels too: the whole object becomes the next node's `input`. An edge targets a node name, `@wait`, `@done`, `@failed`, or `@user`. A step's `then` must name a check. `rimz workflow schema` prints the JSON Schema of `workflow.toml`.
 
 ### The context file
 
@@ -260,10 +292,10 @@ Any other field goes to the next node as `input`. The edge targets are a node na
 | `prompt` | The run's `--prompt`, or null. |
 | `input` | The answer that routed here, or the engine's object after a cap, timeout, or deadline. |
 | `key` | The current item key, or null. |
-| `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. |
+| `visit`, `visits` | Steps only: this step's visits for the current key, and its visits in total, both including this launch. `max-visits` counts the total. |
 | `output_path` | Judges only: the file to write the answer to. Null for scripts and steps. |
 | `retry` | Judges only: set when the judge runs again after a failed first try, with that try's outcome and reason. |
-| `signs_path` | The `signs/` directory. |
+| `signs_path` | For a step, its sign file, `signs/<step>.md`. For a check, the `signs/` directory. |
 | `prev_attempt` | How the last step attempt ended, or null. |
 
 `prev_attempt.outcome` is `ended`, `died`, `timeout`, `asked`, `limited`, or `canceled`. The object also carries the attempt's start and end times (`started_at`, `ended_at`), the agent's handle, the commit before and after (`head_start`, `head_end`), its cost, and, when they apply, the question it asked (`asked`) and the provider's reset time (`limited.reset_at`).
