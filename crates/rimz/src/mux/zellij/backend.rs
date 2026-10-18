@@ -589,10 +589,11 @@ impl ZellijBackend {
         let spec = self
             .zellij_action(session_name)
             .args(["list-panes", "--all", "--json"]);
-        self.retry_action_list(
+        self.retry_action_reply(
             session_name,
             spec,
             timeout,
+            false,
             "`list-panes --all --json` returned no array on every attempt",
             |stdout| {
                 if is_transient_list_reply(stdout) {
@@ -605,12 +606,13 @@ impl ZellijBackend {
         )
     }
 
-    fn retry_action_list<T>(
+    fn retry_action_reply<T>(
         &self,
         session_name: &str,
         spec: CommandSpec,
         timeout: Duration,
-        foreign_reply_error: &str,
+        stdout_is_content: bool,
+        unanswered_error: &str,
         read: impl Fn(&[u8]) -> Option<Result<T>>,
     ) -> Result<T> {
         let deadline = Instant::now() + timeout;
@@ -635,7 +637,9 @@ impl ZellijBackend {
                 },
                 err => classify_session_not_found(err, session_name),
             })?;
-            if is_session_not_found(&output.stdout) || is_session_not_found(&output.stderr) {
+            if is_session_not_found(&output.stderr)
+                || (!stdout_is_content && is_session_not_found(&output.stdout))
+            {
                 return Err(MuxErr::SessionNotFound {
                     session: session_name.to_owned(),
                 });
@@ -644,7 +648,7 @@ impl ZellijBackend {
                 return answer;
             }
         }
-        Err(output_error(foreign_reply_error))
+        Err(output_error(unanswered_error))
     }
 
     fn live_session_health(&self, name: &str) -> SessionHealth {
@@ -1021,10 +1025,11 @@ impl ZellijBackend {
         let spec = self
             .zellij_action(session)
             .args(["list-tabs", "--json", "--panes"]);
-        self.retry_action_list(
+        self.retry_action_reply(
             session,
             spec,
             super::super::COMMAND_TIMEOUT,
+            false,
             "list-tabs returned no array on every attempt",
             |stdout| {
                 if is_transient_list_reply(stdout) {
@@ -1236,10 +1241,11 @@ impl MuxBackend for ZellijBackend {
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session = self.resolve_session(opts.session_name.as_deref())?;
         let spec = self.zellij_action(&session).arg("list-clients");
-        self.retry_action_list(
+        self.retry_action_reply(
             &session,
             spec,
             timeout,
+            false,
             "`list-clients` returned no header on every attempt",
             |stdout| {
                 tracing::debug!(session = %session, stdout = ?String::from_utf8_lossy(stdout), "zellij list-clients sample");
@@ -1523,8 +1529,19 @@ impl MuxBackend for ZellijBackend {
             spec = spec.arg("-f");
         }
         spec = spec.args(["-p".to_owned(), target]);
-        let output = spec.run()?;
-        let raw_text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let raw_text = self.retry_action_reply(
+            session,
+            spec,
+            super::super::COMMAND_TIMEOUT,
+            true,
+            "`dump-screen` returned nothing on every attempt",
+            |stdout| {
+                if stdout.is_empty() {
+                    return None;
+                }
+                Some(Ok(String::from_utf8_lossy(stdout).into_owned()))
+            },
+        )?;
         let (raw_text, lines) = crate::mux::capture_tail(raw_text, lines);
         Ok(PaneCapture {
             pane_id: pane.clone(),

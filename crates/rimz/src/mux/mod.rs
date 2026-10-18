@@ -1139,6 +1139,8 @@ pub trait MuxBackend: Send + Sync {
     /// `Some(n)` returns the last `n` lines of scrollback plus screen, after
     /// trailing blank rows are removed. `None` returns the visible screen
     /// unchanged. A trailing newline is preserved when the backend supplied it.
+    /// A backend that receives no reply returns `Err`. `Ok` with empty
+    /// `raw_text` means the pane is blank.
     fn capture_pane(
         &self,
         pane: &PaneId,

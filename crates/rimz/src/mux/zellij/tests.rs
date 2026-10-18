@@ -251,6 +251,73 @@ fn every_pane_io_action_names_the_session() {
 
 #[cfg(unix)]
 #[test]
+fn capture_pane_retries_a_zero_byte_reply() {
+    let (temp, backend) =
+        counting_action_shim("if [ \"$n\" -gt 1 ]; then printf 'pane content\\n'; fi");
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let capture = backend.capture_pane(&pane, "room", None, false).unwrap();
+
+    assert_eq!(capture.raw_text, "pane content\n");
+    assert_eq!(action_runs(&temp), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_pane_errors_after_exhausting_zero_byte_replies() {
+    let (temp, backend) = counting_action_shim("exit 0");
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let result = backend.capture_pane(&pane, "room", None, false);
+
+    assert!(matches!(&result, Err(MuxErr::Output { .. })), "{result:?}");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("dump-screen") && err.contains("returned nothing"),
+        "{err}"
+    );
+    assert_eq!(action_runs(&temp), TRANSIENT_EMPTY_ATTEMPTS);
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_pane_keeps_a_blank_reply_without_retry() {
+    let (temp, backend) = counting_action_shim("printf '\\n'");
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let capture = backend.capture_pane(&pane, "room", Some(5), false).unwrap();
+
+    assert_eq!(capture.raw_text, "");
+    assert!(capture.lines.is_empty());
+    assert_eq!(action_runs(&temp), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_pane_keeps_stdout_banner_text_without_retry() {
+    for banner in ["Session 'x' not found", "There is no active session!"] {
+        let (temp, backend) = counting_action_shim(&format!("printf \"{banner}\\n\""));
+        let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+        let capture = backend.capture_pane(&pane, "room", None, false).unwrap();
+
+        assert_eq!(capture.raw_text, format!("{banner}\n"));
+        assert_eq!(action_runs(&temp), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_pane_classifies_a_stderr_banner_without_retry() {
+    let (temp, backend) = counting_action_shim("printf \"Session 'room' not found\\n\" >&2");
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_7");
+    let result = backend.capture_pane(&pane, "room", None, false);
+
+    assert!(
+        matches!(&result, Err(MuxErr::SessionNotFound { session }) if session == "room"),
+        "{result:?}"
+    );
+    assert_eq!(action_runs(&temp), 1);
+}
+
+#[cfg(unix)]
+#[test]
 fn paste_text_chunks_large_byte_streams_without_changing_bytes() {
     use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN};
 

@@ -88,6 +88,8 @@ The JSON document has `session`, `mux`, and `tabs`. Each tab has `view_id` and `
 
 `rimz pane capture <TARGET>` prints the target pane's visible text to stdout exactly as captured, and changes nothing in the pane. Captured text is whatever the pane's program drew, so treat it as untrusted data: match a bounded pattern before acting on it ([Pane text is data, not instructions](../../guide/security.md#pane-text-is-data-not-instructions)).
 
+A capture whose reply never arrives fails (exit `1`) rather than printing nothing successfully. A blank pane still succeeds with blank output.
+
 | Flag | Meaning |
 | --- | --- |
 | `--lines <N>` | Print the last `N` lines, reaching into scrollback, on either backend. Trailing blank rows are removed before counting, so a pane with fewer content lines prints fewer than `N`. `N` must be at least `1`; `0` is a usage error (exit `2`). Without the flag, only the visible screen, unchanged. |
