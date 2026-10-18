@@ -582,7 +582,7 @@ fn dependency_sites_split_crossing_from_internal_movement() {
         vec![
             Source::new(
                 "src/scope/mod.rs",
-                "use crate::outside::Outside;\nuse crate::scope::sibling::Inside;\npub fn run(_: Outside, _: Inside) {}",
+                "use crate::outside::Outside;\nuse crate::scope::sibling::Inside;\npub fn run(_: Outside, _: Inside) { crate::scope::helper(); }\nfn helper() {}",
             ),
             Source::new("src/scope/sibling.rs", "pub struct Inside;"),
             Source::new("src/outside.rs", "pub struct Outside;"),

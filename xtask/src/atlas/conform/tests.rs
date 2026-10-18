@@ -112,6 +112,103 @@ fn conform_fixes_an_implicit_rule_at_its_measured_surface() {
     );
     assert!(error.contains("path = \"src/lower.rs\""), "{error}");
     assert!(error.contains("surface-budget = 1"), "{error}");
+    assert_eq!((report.rules[0].current, report.rules[0].budget), (0, 0));
+    assert!(
+        error.contains("upward-dependencies = [\"upper\"]"),
+        "{error}"
+    );
+}
+
+#[test]
+fn admission_modes_judge_downward_and_upward_sites() {
+    let root = fixture_root();
+    for (name, text) in [
+        ("lib", "mod low; mod middle; mod high;"),
+        ("low", "pub fn f() {}"),
+        ("middle", "fn f() { crate::low::f(); crate::high::f(); }"),
+        ("high", "pub fn f() {}"),
+    ] {
+        fs::write(root.path().join(format!("src/{name}.rs")), text).unwrap();
+    }
+    let mut rule = module_rule("src/middle.rs");
+    rule.allowed_dependencies = Some(vec![]);
+    let mut target = Target {
+        version: 5,
+        layers: vec![
+            vec!["low".into()],
+            vec!["middle".into()],
+            vec!["high".into()],
+        ],
+        modules: vec![rule],
+        strangler: vec![],
+        verdicts: vec![],
+    };
+    let path = root.path().join(TARGET_FILE);
+    let report = evaluate(root.path(), &target, &path).unwrap();
+    assert_eq!(report.rules[0].unallowed_dependencies, ["high", "low"]);
+    assert!(enforce(&report).is_err());
+    target.modules[0].allowed_dependencies = None;
+    target.modules[0].upward_dependencies = Some(vec![]);
+    let report = evaluate(root.path(), &target, &path).unwrap();
+    assert_eq!(report.rules[0].unallowed_dependencies, ["high"]);
+}
+
+#[test]
+fn tighten_refuses_parse_failures_and_missing_paths_name_config_line() {
+    let root = fixture_root();
+    fs::write(root.path().join("src/lib.rs"), "").unwrap();
+    let path = root.path().join(TARGET_FILE);
+    let raw = "version = 5\nlayers = []\n[[module]]\npath = 'src/broken.rs'\nsurface-budget = 10\n";
+    fs::write(&path, raw).unwrap();
+    let error = run(root.path(), &[]).unwrap_err().to_string();
+    assert!(
+        error.contains(&format!("{}:3: configured module path", path.display())),
+        "{error}"
+    );
+    fs::write(root.path().join("src/broken.rs"), "fn broken(").unwrap();
+    let error = run(root.path(), &["--tighten".into()])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cannot measure configured rules"), "{error}");
+    assert!(error.contains("src/broken.rs"), "{error}");
+    assert_eq!(fs::read_to_string(path).unwrap(), raw);
+}
+
+#[test]
+fn stranglers_exclude_directory_entry_and_keep_file_scope_exact() {
+    let root = fixture_root();
+    fs::create_dir(root.path().join("src/feature")).unwrap();
+    for (path, text) in [
+        ("src/lib.rs", "mod feature;"),
+        ("src/feature.rs", "fn legacy() { legacy(); legacy(); }"),
+        ("src/feature/detail.rs", "fn legacy() { legacy(); }"),
+        ("src/featured.rs", "fn legacy() {}"),
+    ] {
+        fs::write(root.path().join(path), text).unwrap();
+    }
+    let target = Target {
+        version: 5,
+        layers: vec![],
+        modules: vec![],
+        strangler: ["src/feature", "src/feature.rs"]
+            .map(|path| StranglerRule {
+                path: path.into(),
+                symbol: "legacy".into(),
+                baseline: 0,
+                config_line: 1,
+            })
+            .to_vec(),
+        verdicts: vec![],
+    };
+    let report = evaluate(root.path(), &target, &root.path().join(TARGET_FILE)).unwrap();
+    assert_eq!(
+        report
+            .rules
+            .iter()
+            .map(|rule| rule.current)
+            .collect::<Vec<_>>(),
+        [2, 3]
+    );
 }
 
 #[test]

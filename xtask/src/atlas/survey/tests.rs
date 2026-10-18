@@ -4,6 +4,190 @@ use super::super::sources::Source;
 use super::*;
 
 #[test]
+fn debt_keeps_upward_admissions_overlap_and_missing_rules() {
+    let root = tempfile::tempdir().unwrap();
+    for (path, text) in [
+        (
+            "Cargo.toml",
+            "[package]\nname='probe'\nversion='0.0.0'\nedition='2024'",
+        ),
+        (
+            "src/lib.rs",
+            "mod low; mod middle; mod high; mod reviewed; mod missing;",
+        ),
+        ("src/low.rs", "pub fn f() {}"),
+        (
+            "src/middle/child.rs",
+            "fn f() { crate::low::f(); crate::high::f(); crate::reviewed::f(); crate::missing::f(); }",
+        ),
+        ("src/high.rs", "pub fn f() {}"),
+        ("src/reviewed.rs", "pub fn f() {}"),
+        ("src/missing.rs", "pub fn f() {}"),
+        (
+            "docs/contributing/refactor-ledger.md",
+            "## Admission intents\n\n| edge | sites | intent |\n| --- | --- | --- |\n| `middle` → `reviewed` | 1 | keep |\n",
+        ),
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let target = Target {
+        version: 5,
+        layers: vec![
+            vec!["low".into()],
+            vec!["middle".into()],
+            vec!["high".into(), "reviewed".into(), "missing".into()],
+        ],
+        modules: ["src/middle", "src/middle/child.rs", "src/absent"]
+            .map(|path| target::ModuleRule {
+                path: path.into(),
+                allowed_dependencies: Some(vec!["high".into(), "reviewed".into()]),
+                upward_dependencies: None,
+                surface_budget: 10,
+                config_line: 1,
+            })
+            .to_vec(),
+        strangler: vec![],
+        verdicts: vec![],
+    };
+    let facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let ledger = ledger::load(root.path()).unwrap().unwrap();
+    let debt = recorded_debt(root.path(), &target, Some(&ledger), &facts, Path::new("."));
+    assert_eq!(debt.rules.len(), 2);
+    for row in &debt.rules {
+        assert_eq!(row.upward_sites, 3);
+        assert_eq!(
+            (
+                &*row.reviewed[0].provider,
+                row.reviewed[0].sites,
+                &*row.reviewed[0].intent
+            ),
+            ("reviewed", 1, "keep")
+        );
+        assert_eq!(
+            (&*row.unreviewed[0].provider, row.unreviewed[0].sites),
+            ("high", 1)
+        );
+        assert_eq!(
+            (&*row.unadmitted[0].provider, row.unadmitted[0].sites),
+            ("missing", 1)
+        );
+        assert_eq!(
+            (
+                row.reviewed.len(),
+                row.unreviewed.len(),
+                row.unadmitted.len()
+            ),
+            (1, 1, 1)
+        );
+    }
+}
+
+#[test]
+fn survey_default_families_are_filtered_all_with_identical_drop_tallies() {
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "--quiet"]);
+    for (path, text) in [
+        ("Cargo.toml", "[package]\nname='probe'\nversion='0.0.0'\nedition='2024'".to_owned()),
+        ("src/lib.rs", "mod store; mod a; mod b; mod c;".to_owned()),
+        ("src/store.rs", "pub fn first() {} pub enum Phase { Ready } pub struct S { pub phase: Phase } impl S { pub fn is_ready(&self) -> bool { true } }".to_owned()),
+        ("src/a.rs", "fn a(s: &crate::store::S, v: &[u8]) { if s.phase == crate::store::Phase::Ready {} if s.is_ready() {} if v.is_empty() {} }".to_owned()),
+        ("src/b.rs", "fn b(s: &crate::store::S, v: &[u8]) { if s.phase == crate::store::Phase::Ready {} if s.is_ready() {} if v.is_empty() {} }".to_owned()),
+        ("src/c.rs", "fn c(s: &crate::store::S, v: &[u8]) { if s.phase == crate::store::Phase::Ready {} if s.is_ready() {} if v.is_empty() {} }".to_owned()),
+    ] {
+        let path = root.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    for module in ["a", "b", "c"] {
+        let mut text =
+            std::fs::read_to_string(root.path().join(format!("src/{module}.rs"))).unwrap();
+        for (name, call) in [
+            (
+                "assembly",
+                "crate::store::first(); crate::other::second(); crate::other::third();",
+            ),
+            (
+                "vocabulary",
+                "std::fs::metadata(\"a\"); std::fs::read(\"a\"); std::fs::write(\"b\", \"c\");",
+            ),
+        ] {
+            text.push_str(&format!(
+                "\nfn {name}() {{\n{}\n}}\n",
+                format!("{call}\n").repeat(45)
+            ));
+        }
+        std::fs::write(root.path().join(format!("src/{module}.rs")), text).unwrap();
+    }
+    std::fs::write(
+        root.path().join("src/other.rs"),
+        "pub fn second() {} pub fn third() {} ",
+    )
+    .unwrap();
+    git(root.path(), &["add", "."]);
+    git(root.path(), &["commit", "-qm", "fixture"]);
+    let mut facts = Facts::load(
+        root.path(),
+        Path::new("."),
+        Facets {
+            history: true,
+            ..Facets::default()
+        },
+    )
+    .unwrap();
+    facts.metrics = Some(super::super::metrics::MetricsReport {
+        module_scores: BTreeMap::new(),
+        functions: vec![],
+    });
+    let default = build_report(
+        root.path(),
+        &facts,
+        Path::new("."),
+        RankBy::Accretion,
+        false,
+    )
+    .unwrap();
+    let all = build_report(root.path(), &facts, Path::new("."), RankBy::Accretion, true).unwrap();
+    assert_eq!(
+        serde_json::to_value(default.guard_families_dropped).unwrap(),
+        serde_json::to_value(all.guard_families_dropped).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(default.shape_families_dropped).unwrap(),
+        serde_json::to_value(all.shape_families_dropped).unwrap()
+    );
+    assert_eq!(
+        default
+            .guards
+            .iter()
+            .map(|family| &family.key)
+            .collect::<Vec<_>>(),
+        all.guards
+            .iter()
+            .filter(|family| family.key.contains("Phase::Ready"))
+            .map(|family| &family.key)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        default
+            .shapes
+            .iter()
+            .map(|family| &family.name)
+            .collect::<Vec<_>>(),
+        all.shapes
+            .iter()
+            .filter(|family| family.name.contains("first") && family.name.contains("second"))
+            .map(|family| &family.name)
+            .collect::<Vec<_>>()
+    );
+    assert!(!default.shapes.is_empty());
+    assert!(all.shapes.len() > default.shapes.len());
+    assert!(!default.guards.is_empty());
+    assert!(all.guards.len() > default.guards.len());
+}
+
+#[test]
 fn assemblers_count_distinct_scope_modules_a_function_calls_into() {
     let report = super::super::syntax::analyze_sources(
         &[Source::new(
