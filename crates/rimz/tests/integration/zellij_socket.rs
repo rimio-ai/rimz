@@ -241,7 +241,10 @@ fn rimz_start_pty_output(env: &Env, shim: &FakeZellij, session_name: &str) -> St
     cmd.env("RIMZ_TEST_ZELLIJ_MODE", shim.mode.env_value());
     if matches!(shim.mode, FakeZellijMode::RecoversAfterReset) {
         cmd.env("RIMZ_TEST_ZELLIJ_RECOVER_AFTER_RESET", "1");
-        cmd.env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#);
+        cmd.env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        );
     }
     cmd.env(
         "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",

@@ -190,12 +190,23 @@ fn child_cap_launch(explicit_host: bool) {
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
         .env(rimz::harness::launch::ENV_AGENT_NAME, "parent")
-        .env("SHELL", shell).env("PATH", path_with_front(&shim))
-        .env("RIMZ_ZELLIJ_BIN", crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")))
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&shim))
+        .env(
+            "RIMZ_ZELLIJ_BIN",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
         .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("mux.log"))
-        .env("RIMZ_PRESENCE_PLUGIN", presence).env("ZELLIJ_PANE_ID", "2")
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", format!("{} [Created 1s ago]\n", workspace.session_name))
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#);
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("ZELLIJ_PANE_ID", "2")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        );
     let launched = std::sync::atomic::AtomicBool::new(false);
     let trace = env.project_root.join("mux.log");
     let output = std::thread::scope(|scope| {

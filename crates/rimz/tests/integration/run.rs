@@ -688,7 +688,6 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     }
     assert!(rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None).is_empty());
     let trace = env.project_root.join("tier-launch.log");
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
     let workspace = env.resolve_workspace(&env.project_root);
     let store = env.store();
     store.record_workspace(&workspace).unwrap();
@@ -819,7 +818,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     seed_live_zellij_room(
         &runtime,
         &workspace.session_name,
-        serde_json::from_str(panes).unwrap(),
+        serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
     );
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").unwrap();
@@ -847,7 +846,10 @@ fn assert_tier_launch(routing: &str, surface: &str) {
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
         )
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes);
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        );
     if interactive {
         command.env_remove(rimz::harness::launch::ENV_AGENT_KIND);
         command.env_remove(rimz::harness::launch::ENV_AGENT_ID);
@@ -1084,9 +1086,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
 
     let output = env
         .rimz()
-        .args([
-            "--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg",
-        ])
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
         .env("SHELL", shell)
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -1097,7 +1097,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            crate::common::room::MATERIALIZED_ROOM_PANES,
         )
         .bounded_output()
         .expect("run background supervised birth");
@@ -1163,9 +1163,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     // Into the live room, a launch re-reads its accounts from the record.
     let live = env
         .rimz()
-        .args([
-            "--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg",
-        ])
+        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
         .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -1178,7 +1176,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         )
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            crate::common::room::MATERIALIZED_ROOM_PANES,
         )
         .bounded_output()
         .expect("run background supervised launch into the live room");
@@ -1564,9 +1562,15 @@ fn assert_subagent_checkout_case(
     }
     command
         .current_dir(&foreign)
-        .envs(rimz::workspace::pin_env(&env.workspace_id, &env.project_root))
+        .envs(rimz::workspace::pin_env(
+            &env.workspace_id,
+            &env.project_root,
+        ))
         .env(rimz::harness::launch::ENV_AGENT_KIND, parent_kind.as_str())
-        .env(rimz::harness::launch::ENV_AGENT_ID, parent_launch_id.as_str())
+        .env(
+            rimz::harness::launch::ENV_AGENT_ID,
+            parent_launch_id.as_str(),
+        )
         .env("SHELL", shell)
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -1579,7 +1583,7 @@ fn assert_subagent_checkout_case(
         )
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            crate::common::room::MATERIALIZED_ROOM_PANES,
         );
     let launched = std::sync::atomic::AtomicBool::new(false);
     let output = std::thread::scope(|scope| {
@@ -2147,11 +2151,10 @@ fn supervised_claude_refuses_before_records_or_panes_until_the_user_trusts() {
     let trace = env.home_root.join("mux.log");
     let workspace = env.resolve_workspace(&env.project_root);
     env.record(&env.project_root);
-    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
     seed_live_zellij_room(
         &env.runtime_paths(),
         &workspace.session_name,
-        serde_json::from_str(panes).unwrap(),
+        serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
     );
     let mut command = env.rimz();
     command
@@ -2164,7 +2167,10 @@ fn supervised_claude_refuses_before_records_or_panes_until_the_user_trusts() {
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
         .env("ZELLIJ_PANE_ID", "1")
         .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        )
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),

@@ -221,7 +221,6 @@ mod agent_ref {
 
     const SESSION: &str = "saved-session";
     const NAME: &str = "bright-otter";
-    const PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
     struct Fixture {
         env: Env,
@@ -332,7 +331,7 @@ mod agent_ref {
             seed_live_zellij_room(
                 &env.runtime_paths(),
                 &workspace.session_name,
-                serde_json::from_str(PANES).unwrap(),
+                serde_json::from_str(crate::common::room::MATERIALIZED_ROOM_PANES).unwrap(),
             );
             std::fs::write(env.home_root.join("presence.wasm"), b"test-presence").unwrap();
             Self {
@@ -376,7 +375,10 @@ mod agent_ref {
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 )
-                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", PANES);
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                    crate::common::room::MATERIALIZED_ROOM_PANES,
+                );
             command.env("ZELLIJ_SESSION_NAME", workspace.session_name);
             command
         }
