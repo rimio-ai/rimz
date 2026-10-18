@@ -44,6 +44,8 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) cost_rolls: CostRolls,
     /// Typed hit geometry from the most recently painted frame.
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    /// Row identity per roster ordinal in the last painted hit map.
+    pub(in crate::sidebar_pane) painted_roster: Vec<String>,
     /// The pane the highlight is pinned to — selection keyed by identity, not
     /// position. Re-derived each fold by `app::reconcile_selection` from the
     /// derived `baseline_pane` and any live `browse`. Keying on the pane means

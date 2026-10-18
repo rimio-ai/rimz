@@ -16,6 +16,15 @@ fn paint(ui: &mut UiState, snapshot: &SidebarSnapshot, height: u16) {
     render::draw_to_terminal(&mut terminal, snapshot, None, ui).unwrap();
 }
 
+fn remember_roster(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    ui.painted_roster = ui
+        .visible_roster(snapshot)
+        .rows()
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+}
+
 /// A browse pick of `pane`, begun while the derived baseline was `baseline`.
 fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
     Browse {

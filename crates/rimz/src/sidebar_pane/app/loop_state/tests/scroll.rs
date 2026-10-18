@@ -45,6 +45,136 @@ fn queued(wakeups: impl IntoIterator<Item = Wakeup>) -> WakeupInbox {
     WakeupInbox::new(rx)
 }
 
+fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Instant) {
+    rig.state.ui.freeze = None;
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows)
+        .swap(first, second);
+    rig.state.dirty = true;
+    rig.state.paint_now(&mut rig.terminal, now).unwrap();
+}
+
+#[test]
+fn automatic_moves_guard_the_first_frame_until_400ms_and_input_paints_clear_it() {
+    for (click_ms, input_paint, second_move, target) in [
+        (399, false, false, 1),
+        (400, false, false, 2),
+        (100, true, false, 2),
+        (399, false, true, 1),
+        (400, false, true, 3),
+    ] {
+        let (mut rig, _) = scroll_rig();
+        let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+        let now = Instant::now();
+        move_cards_without_input(&mut rig, 1, 2, now);
+        if input_paint {
+            rig.state
+                .apply_input_at(
+                    [Wakeup::Scroll { down: false }],
+                    &mut rig.terminal,
+                    now + Duration::from_millis(50),
+                )
+                .unwrap();
+        }
+        if second_move {
+            move_cards_without_input(&mut rig, 1, 3, now + Duration::from_millis(200));
+        }
+        let outcome = rig
+            .state
+            .apply_input_at(
+                [Wakeup::MouseClick { column: 1, row }],
+                &mut rig.terminal,
+                now + Duration::from_millis(click_ms),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome.effects,
+            vec![InputEffect::Focus(
+                pane(&format!("terminal_{target}"), "tab_0", false).pane_id
+            )],
+            "click={click_ms}, input={input_paint}, second move={second_move}",
+        );
+    }
+}
+
+#[test]
+fn a_guarded_card_that_left_is_swallowed_without_selection_paint_or_rearm() {
+    let (mut rig, output) = scroll_rig();
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    let now = Instant::now();
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows).remove(1);
+    rig.state.dirty = true;
+    rig.state.paint_now(&mut rig.terminal, now).unwrap();
+    layout_freeze::arm_freeze(&mut rig.state.ui, 1);
+    let selection = rig.state.ui.selected_pane.clone();
+    let before = paints(&output);
+    let outcome = rig
+        .state
+        .apply_input_at(
+            [Wakeup::MouseClick { column: 1, row }],
+            &mut rig.terminal,
+            now + Duration::from_millis(399),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome,
+        InputOutcome::default(),
+        "do not click the replacement card"
+    );
+    assert_eq!(rig.state.ui.selected_pane, selection);
+    assert_eq!(paints(&output), before);
+    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().armed_ms, 1);
+}
+
+#[test]
+fn resize_delivery_is_not_a_user_input_paint_for_the_click_guard() {
+    let (mut rig, _) = scroll_rig();
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    let now = Instant::now();
+    move_cards_without_input(&mut rig, 1, 2, now);
+    rig.state
+        .apply_input_at(
+            [Wakeup::Resize],
+            &mut rig.terminal,
+            now + Duration::from_millis(100),
+        )
+        .unwrap();
+    let outcome = rig
+        .state
+        .apply_input_at(
+            [Wakeup::MouseClick { column: 1, row }],
+            &mut rig.terminal,
+            now + Duration::from_millis(399),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.effects,
+        vec![InputEffect::Focus(
+            pane("terminal_1", "tab_0", false).pane_id
+        )]
+    );
+}
+
+#[test]
+fn row_click_resolves_painted_identity_through_an_unpainted_fold() {
+    let (mut rig, _) = scroll_rig();
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows).swap(1, 2);
+    let outcome = rig
+        .state
+        .apply_input_at(
+            [Wakeup::MouseClick { column: 1, row }],
+            &mut rig.terminal,
+            Instant::now(),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.effects,
+        vec![InputEffect::Focus(
+            pane("terminal_1", "tab_0", false).pane_id
+        )]
+    );
+}
+
 fn dispatch(rig: &mut Rig, inbox: &mut WakeupInbox) {
     inbox
         .dispatch_next(
@@ -80,17 +210,17 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
     let (mut rig, output) = scroll_rig();
     let target = rig.state.current.worktree_groups[0].rows[4].clone();
     let pane_id = target.pane.as_ref().unwrap().pane_id.clone();
-    rig.state.current.own_view = Some(SidebarOwnView {
+    let mut pulled = rig.state.current.clone();
+    pulled.own_view = Some(SidebarOwnView {
         sibling_count: 1,
         working_pane_ids: vec![pane_id.clone()],
         own_view_is_daemon: false,
     });
-    rig.state.current.focused_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
-    rig.state.current.viewed_panes.clear();
-    rig.state.current.pane_session_name = Some("rimz-test".to_owned());
+    pulled.focused_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+    pulled.viewed_panes.clear();
+    pulled.pane_session_name = Some("rimz-test".to_owned());
     rig.state.optimistic_watch_until = None;
     rig.state.ui.scroll_offset = 30;
-    let pulled = rig.state.current.clone();
     rig.fold(pulled, SnapshotSource::Produced);
     assert!(!rig.state.watched());
     let anchor = FocusAnchor {
@@ -848,6 +978,46 @@ fn wheel_run_eases_then_releases_the_animation_grid() {
     );
     paint_at(&mut rig, started + 2100);
     assert!(!rig.frame_active());
+}
+
+#[test]
+fn click_after_wheel_ease_hits_the_landed_frame() {
+    let (mut rig, _) = scroll_rig();
+    let now = Instant::now();
+    let mut inbox = queued((0..3).map(|_| Wakeup::Scroll { down: true }));
+    dispatch(&mut rig, &mut inbox);
+    let started = rig.state.ui.frame_ms;
+    for elapsed in [16, 48, 100] {
+        paint_at(&mut rig, started + elapsed);
+    }
+    assert!(!rig.state.ui.scroll_ease.in_flight());
+    let index = rig.state.ui.interactions.visible_row_span().unwrap().0 + 1;
+    let row = rig.state.ui.interactions.line_for_row(index).unwrap() as u16;
+    let id = &rig.state.ui.painted_roster[index];
+    let expected = rig
+        .state
+        .current
+        .rows()
+        .find(|row| &row.id == id)
+        .unwrap()
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let outcome = rig
+        .state
+        .apply_input_at(
+            [Wakeup::MouseClick { column: 1, row }],
+            &mut rig.terminal,
+            now + Duration::from_millis(200),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.effects,
+        vec![InputEffect::Focus(expected)],
+        "the glide continues the wheel input, not an automatic layout move"
+    );
 }
 
 #[test]

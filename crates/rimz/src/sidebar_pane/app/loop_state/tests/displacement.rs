@@ -37,6 +37,7 @@ fn landing(viewport_row: Option<isize>, local_click: bool) -> (Rig, Receiver<Obs
     let (tx, rx) = sync_channel(8);
     rig.state.observe_tx = tx;
     rig.state.clicked_row = None;
+    rig.state.ui.painted_rows.clear();
     rig.state.ui.selected_index = Some(0);
     rig.state.ui.selected_pane = Some(pane.clone());
     rig.state.dirty = true;

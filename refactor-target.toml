@@ -1102,7 +1102,13 @@ path = "crates/rimz/src/sidebar"
 # SidebarOwnView::from_frame also serves the renderer's projection-free preview (+1).
 # The host watch asks the presence state whether a layout belongs to the current window (+1).
 # pane_is_focused and LAYOUT_FREEZE_PARKED share native-focus freeze deadlines (+2).
-surface-budget = 242
+# CLICK_GUARD gives the renderer's stale-frame hit window its shared cadence (+1).
+surface-budget = 243
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::CLICK_GUARD"
+reason = "The renderer resolves clicks against their painted frame for a bounded automatic-move window."
 
 [[verdict]]
 kind = "item"

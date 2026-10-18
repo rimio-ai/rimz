@@ -86,6 +86,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
         ..Default::default()
     };
 
+    remember_roster(&mut ui, &snapshot);
     let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::Focus(jumped.clone())]);

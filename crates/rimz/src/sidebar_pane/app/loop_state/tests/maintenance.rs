@@ -4,6 +4,21 @@
 use super::*;
 
 #[test]
+fn resize_does_not_arm_or_retime_a_layout_freeze() {
+    let mut rig = Rig::new();
+    rig.fold(agent_snapshot(&rig.ws), SnapshotSource::Produced);
+    rig.state
+        .apply_input([Wakeup::Resize], &mut rig.terminal)
+        .unwrap();
+    assert!(rig.state.ui.freeze.is_none(), "resize is not user input");
+    layout_freeze::arm_freeze(&mut rig.state.ui, 1);
+    rig.state
+        .apply_input([Wakeup::Resize], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().armed_ms, 1);
+}
+
+#[test]
 fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
     let (snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
     let mut rig = Rig::new();

@@ -596,6 +596,7 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
             ui.interactions =
                 render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
             let row = ui.interactions.line_for_row(0).unwrap();
+            remember_roster(&mut ui, &snapshot);
             // Child entries carry pane identities, not roster ordinals.
             if matches!(target, HitTarget::SubAgentPane(_)) {
                 ui.interactions = render::FrameInteractions::from_parts(
@@ -627,6 +628,30 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
 }
 
 #[test]
+fn departed_painted_row_click_does_not_commit_a_search() {
+    use super::super::super::input::Wakeup;
+    use super::super::super::loop_state::handle_wakeup;
+    let snapshot = clickable_block_snapshot(&workspace());
+    let mut ui = UiState {
+        search_draft: Some("cla".to_owned()),
+        painted_roster: vec!["departed".into()],
+        interactions: render::FrameInteractions::from_parts(vec![Some(0)], Vec::new()),
+        ..Default::default()
+    };
+    let keymap = super::super::super::NavKeymap::from_config(&Default::default());
+    let outcome = handle_wakeup(
+        Wakeup::MouseClick { column: 1, row: 0 },
+        &mut ui,
+        &snapshot,
+        &keymap,
+        false,
+    );
+    assert_eq!(outcome, InputOutcome::default());
+    assert_eq!(ui.search_draft.as_deref(), Some("cla"));
+    assert_eq!(ui.selected_pane, None);
+}
+
+#[test]
 fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
     use super::super::super::input::Wakeup;
     use super::super::super::loop_state::handle_wakeup;
@@ -635,7 +660,10 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
     let snapshot = clickable_block_snapshot(&workspace());
     let keymap = super::super::super::NavKeymap::from_config(&Default::default());
     let filter = BodyFilter::Status(crate::agents::AgentStatus::Running);
-    for target in [HitTarget::BodyFilter(filter), HitTarget::Row(99)] {
+    for target in [
+        HitTarget::BodyFilter(filter),
+        HitTarget::Hyperlink("https://example.test".into()),
+    ] {
         let mut ui = UiState {
             search_draft: Some("cla".to_owned()),
             interactions: render::FrameInteractions::from_parts(
@@ -673,6 +701,7 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
     }
     search_key(&mut ui, &snapshot, KeyCode::Enter);
     ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
+    remember_roster(&mut ui, &snapshot);
     assert_eq!(
         handle_wakeup(
             Wakeup::MouseClick { column: 1, row: 0 },
@@ -738,6 +767,7 @@ fn search_navigation_click_scroll_and_zero_match_commit() {
     );
     assert_eq!(ui.search_draft.as_deref(), Some("c"));
     ui.interactions = render::FrameInteractions::from_parts(vec![Some(0)], Vec::new());
+    remember_roster(&mut ui, &snapshot);
     let outcome = super::super::super::loop_state::handle_wakeup(
         super::super::super::input::Wakeup::MouseClick { column: 1, row: 0 },
         &mut ui,
@@ -1717,6 +1747,7 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
     .unwrap();
     ui.interactions = composed.interactions;
 
+    remember_roster(&mut ui, &snapshot);
     let first = handle_mouse_click(0, first_row, &mut ui, &snapshot);
     assert_eq!(
         first,

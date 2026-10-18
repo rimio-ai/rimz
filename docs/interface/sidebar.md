@@ -856,3 +856,5 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |
+
+For 400 ms after cards move without your input, a click targets the card in the preceding frame, or does nothing if it has left. Scrolling, browsing, and other input paints clear that window.
