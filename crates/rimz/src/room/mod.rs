@@ -25,7 +25,8 @@ use crate::workspace::{ResolvedWorkspace, record};
 use crate::{RuntimePaths, StatePaths, Store, workspace::record::WorkspaceRecord};
 
 pub use birth::{
-    AttendedRecovery, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth, RoomResetReport,
+    AttendedRecovery, BirthAdmission, BirthOutcome, NormalRebirth, ResetRecoveryError, RoomBirth,
+    RoomResetReport, admit_birth,
 };
 pub use recovery::ParkedRecoveryOutcome;
 pub use standing::{
@@ -179,12 +180,13 @@ pub struct RoomContext {
 }
 
 impl RoomContext {
-    /// Prepare birth intent; owner and login writes wait for admission.
+    /// Prepare birth intent with admission carried until birth records the owner and login pins.
     pub fn prepare_birth(
         source: RoomBirthSource<'_>,
         machine_config: Arc<MachineConfig>,
         mux: MuxName,
         logins: Option<&crate::ids::RoomLogins>,
+        admission: BirthAdmission,
     ) -> Result<Self> {
         let mut context = match source {
             RoomBirthSource::Resolved(workspace) => {
@@ -198,6 +200,7 @@ impl RoomContext {
             }
         };
         context.birth_logins = logins.cloned();
+        context.birth_admission = Some(admission);
         Ok(context)
     }
 

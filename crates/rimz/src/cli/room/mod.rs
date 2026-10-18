@@ -529,6 +529,48 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         birth_socket_preflight(mux, was_live, project_root)?;
     }
 
+    let source = match &entry {
+        RoomEntry::Start { workspace, .. }
+        | RoomEntry::StartDetached { workspace, .. }
+        | RoomEntry::AttachCwd { workspace, .. } => Some(RoomBirthSource::Resolved(workspace)),
+        RoomEntry::WebSession { record, .. } => Some(RoomBirthSource::Recorded(record)),
+        // Only a session RimZ owns (a matching record) is force-reset; a bare
+        // external session by this name is never torn down.
+        RoomEntry::AttachSession {
+            record: Ok(Some(record)),
+            ..
+        } => Some(RoomBirthSource::Recorded(record)),
+        RoomEntry::AttachSession {
+            session, record, ..
+        } => {
+            if !was_live {
+                let message = unknown_session_message(mux, session);
+                if let RoomEntry::AttachSession {
+                    record: Err(error), ..
+                } = entry
+                {
+                    return Err(error).context(message);
+                }
+                bail!(message);
+            }
+            match record {
+                Ok(_) => tracing::warn!(
+                    session = %session,
+                    "no workspace record matches session; emitting attach command only",
+                ),
+                Err(err) => tracing::warn!(
+                    session = %session,
+                    error = %err,
+                    "workspace record lookup failed; emitting attach command only",
+                ),
+            }
+            None
+        }
+    };
+    let admitted = source
+        .map(|source| rimz::room::admit_birth(source, mux).map(|admission| (source, admission)))
+        .transpose()?;
+
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         ensure_detected_agent_hooks(start_attended())?
     } else {
@@ -622,47 +664,14 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         None
     };
 
-    let source = match &entry {
-        RoomEntry::Start { workspace, .. }
-        | RoomEntry::StartDetached { workspace, .. }
-        | RoomEntry::AttachCwd { workspace, .. } => Some(RoomBirthSource::Resolved(workspace)),
-        RoomEntry::WebSession { record, .. } => Some(RoomBirthSource::Recorded(record)),
-        // Only a session RimZ owns (a matching record) is force-reset; a bare
-        // external session by this name is never torn down.
-        RoomEntry::AttachSession {
-            record: Ok(Some(record)),
-            ..
-        } => Some(RoomBirthSource::Recorded(record)),
-        RoomEntry::AttachSession {
-            session, record, ..
-        } => {
-            if !was_live {
-                let message = unknown_session_message(mux, session);
-                if let RoomEntry::AttachSession {
-                    record: Err(error), ..
-                } = entry
-                {
-                    return Err(error).context(message);
-                }
-                bail!(message);
-            }
-            match record {
-                Ok(_) => tracing::warn!(
-                    session = %session,
-                    "no workspace record matches session; emitting attach command only",
-                ),
-                Err(err) => tracing::warn!(
-                    session = %session,
-                    error = %err,
-                    "workspace record lookup failed; emitting attach command only",
-                ),
-            }
-            None
-        }
-    };
-    let ready = if let Some(source) = source {
-        let mut context =
-            RoomContext::prepare_birth(source, machine_config.clone(), mux, Some(&requested))?;
+    let ready = if let Some((source, admission)) = admitted {
+        let mut context = RoomContext::prepare_birth(
+            source,
+            machine_config.clone(),
+            mux,
+            Some(&requested),
+            admission,
+        )?;
         // Every birth of a stopped room records its own choice, so a waiver
         // from an earlier run never outlives a detached birth gated without it.
         if matches!(
@@ -735,7 +744,6 @@ fn birth_managed_room(
     background_view: Option<rimz::remote_control::ReadinessSnapshot>,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
-    context.admit_birth()?;
     let was_live = preflight_health.is_some();
     let rebirth = if was_live {
         tracing::debug!(workspace = %context.workspace_id(), "rebirth: session already live, inspection skipped");

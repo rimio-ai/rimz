@@ -1070,7 +1070,18 @@ upward-dependencies = [
 # Admission before CLI recovery inspection carries the room claim through birth (+1).
 # Birth and reset share listed-session heartbeat-or-claim admission (+1).
 # Account-switch receipts count only rooms following the machine default (+1).
-surface-budget = 68
+# BirthAdmission and standalone admit_birth replace context admission across startup prompts (+1 net).
+surface-budget = 69
+
+[[verdict]]
+kind = "item"
+key = "room::birth::BirthAdmission"
+reason = "CLI carries the room claim across startup prompts before constructing its config-derived room context."
+
+[[verdict]]
+kind = "item"
+key = "room::birth::admit_birth"
+reason = "Normal entry admits before hook detection and prompts without constructing a room context."
 
 [[verdict]]
 kind = "item"

@@ -122,7 +122,7 @@ rimz
 
 That creates or reattaches the Zellij or tmux session for this project, docks the sidebar down the left, and drops you in a shell. Launch an agent the way you always do, `claude` or `codex` straight into a pane, and its card appears in the sidebar as its first hook fires. To read the zones and the cards, see [the sidebar](./sidebar.md); to drive the fleet, see [agents](./fleet.md).
 
-RimZ keeps one room per project while it is held. If you try to start another on a different backend, or after renaming the session without updating RimZ's record, it refuses: `This project's room ... is already held by another running room (another multiplexer, or a renamed session).` It leaves the running room unchanged and names these two fixes:
+RimZ keeps one room per project while it is held. If you try to start another on a different backend, or after renaming the session without updating RimZ's record, it refuses before asking about reporting hooks or setup: `This project's room ... is already held by another running room (another multiplexer, or a renamed session).` It leaves the running room unchanged and names these two fixes:
 
 ```sh
 rimz attach                  # enter the running room
