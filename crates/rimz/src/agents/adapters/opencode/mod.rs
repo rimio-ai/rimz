@@ -589,7 +589,11 @@ fn install_blocker_at(path: &Path) -> Option<String> {
 struct OpencodeManagedIntegration;
 
 impl super::ManagedIntegration for OpencodeManagedIntegration {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<super::HookInstallReport> {
         if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "opencode",
@@ -599,7 +603,11 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
         OPENCODE_MANAGED_SOURCE.install(env)
     }
 
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<super::HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<super::HookInstallPreview> {
         if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "opencode",
@@ -617,7 +625,11 @@ impl super::ManagedIntegration for OpencodeManagedIntegration {
         OPENCODE_MANAGED_SOURCE.installed(env)
     }
 
-    fn upgrade_available(&self, env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         OPENCODE_MANAGED_SOURCE.upgrade_available(env)
     }
 

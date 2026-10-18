@@ -24,11 +24,19 @@ pub(super) static MANAGED_INTEGRATION: KiroManagedIntegration = KiroManagedInteg
 pub(super) struct KiroManagedIntegration;
 
 impl ManagedIntegration for KiroManagedIntegration {
-    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install_at(&hooks_path(login_env)?, installed_cli_version())
     }
 
-    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview_at(&hooks_path(login_env)?, installed_cli_version())
     }
 
@@ -40,7 +48,11 @@ impl ManagedIntegration for KiroManagedIntegration {
         KIRO_MANAGED_SOURCE.installed(login_env)
     }
 
-    fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         KIRO_MANAGED_SOURCE.upgrade_available(login_env)
     }
 

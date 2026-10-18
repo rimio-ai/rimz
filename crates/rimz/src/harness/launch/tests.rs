@@ -169,7 +169,9 @@ fn copilot_disabled_hooks_refuse_a_modeless_launch_only_when_rimz_hooks_are_inst
     assert!(result.is_ok(), "no RimZ hooks to silence: {result:?}");
 
     let adapter = crate::agents::definition_by_kind("copilot").unwrap();
-    adapter.install_hooks(&login_env).unwrap();
+    adapter
+        .install_hooks(&login_env, Default::default())
+        .unwrap();
     assert!(adapter.hooks_installed(&login_env));
     let result = compile();
     assert!(

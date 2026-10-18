@@ -31,10 +31,10 @@ The summary after the agent name says what install found:
 | Summary | Meaning |
 | --- | --- |
 | `installed N hooks` | The agent had no RimZ hooks. |
-| `refreshed N hooks` | A RimZ-owned Pi or OpenCode file differed from the copy in the running build and was replaced. |
+| `refreshed N hooks` | A managed integration file needed an upgrade, or Codex's routine-command rules needed adding, updating, or removing. |
 | `hooks up to date (N)` | RimZ hooks were already installed. The row carries no file annotation. |
 
-The annotation is `(new file)` when install created the file and `(updated existing config)` when it edited one. An agent with two files prints the second as an indented `config → PATH` line.
+The annotation is `(new file)` when install created the file, `(updated existing config)` when it edited one, and `(removed)` when it deleted one. An agent with two files prints the second as an indented `config → PATH` line.
 
 Codex runs a new hook only after you trust it inside Codex. When its installed hooks are still untrusted, install and `rimz start` print `codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks`, and the `HOOKS` row of `rimz doctor` names the same fix.
 
@@ -43,7 +43,7 @@ Codex runs a new hook only after you trust it inside Codex. When its installed h
 | Agent | Files | Edit |
 | --- | --- | --- |
 | `claude` | `${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json` | Merge; wraps the statusline |
-| `codex` | `${CODEX_HOME:-~/.codex}/config.toml` | Merge |
+| `codex` | `${CODEX_HOME:-~/.codex}/config.toml`, `rules/rimz.rules` in the same home | Merge hooks; whole managed rules file when `allow-routine-rimz` is on |
 | `amp` | `${XDG_CONFIG_HOME:-~/.config}/amp/plugins/rimz.ts` | Whole file |
 | `antigravity` | `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/settings.json` | Merge; wraps the statusline |
 | `copilot` | `${COPILOT_HOME:-~/.copilot}/hooks/rimz.json`, `${COPILOT_HOME:-~/.copilot}/settings.json` | Whole hook file; wraps the statusline |
@@ -66,13 +66,15 @@ A merge adds RimZ's entries and keeps your own hooks and every other value. Rewr
 
 Muse installation sets `managed_hooks_path` and `managed_hooks_env_vars`, preserving user hooks and unrelated settings. A new settings file also gets `schema_version: 1`; an existing file without that version, an unreadable or older CLI version, or a path to another managed-hook source refuses installation. An unnamed install skips Muse on refusal. Uninstall deletes RimZ's hook file and removes the two settings only while the path names that file; other settings remain. Enterprise policy can override the user settings and is not checked by this installer. See [Muse support](../agent-support.md#muse).
 
-For Amp, Kiro, Pi, OMP, OpenCode, and Copilot, a whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Muse's separate hook file has no marker and is replaced whole. Pi, OMP, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
+For Amp, Kiro, Pi, OMP, OpenCode, and Copilot, a whole file belongs to RimZ, and its first line carries the `_rimz_managed` marker. Install replaces a marked file with the copy embedded in the running build, and refuses a file at that path without the marker. Codex's optional rules file carries the same marker, but an unmarked file there is left alone. Muse's separate hook file has no marker and is replaced whole. Pi, OMP, OpenCode, and Copilot report `refreshed` when the marked file differs from the build's copy, and `rimz start` offers that refresh in the same prompt as missing hooks; Amp is rewritten the same way but reports `hooks up to date`.
 
 Where the table says the statusline is wrapped, install puts RimZ's command in place of yours and runs yours inside it, so the sidebar reads live context and your statusline still shows. Uninstall restores the original value. Cursor keeps the displaced `statusLine` value in `~/.rimz/cursor-statusline.json` and deletes that file on uninstall. A Cursor install writes the single `~/.cursor/hooks.json` once per config home it resolves, pairing it each time with that home's `cli-config.json`, and commits each pass on its own: a failed write rolls back the pass it was in, while earlier passes and the statusline record stay. Fix the cause and rerun the install.
 
+Codex's `rules/rimz.rules` grants the [routine command prefixes](../agent-support.md#permission-modes), allowing matching commands to run unsandboxed without Guardian review. Existing hook installs get a consent row for the new file at the next `rimz start`. With machine-only `[agents] allow-routine-rimz = false`, install removes a marked rules file instead; the consent row says `removes file`. An unmarked file is left alone even during an explicit install and does not trigger a start-time refresh; your own rules still apply. `rimz hooks uninstall` and `rimz uninstall` remove only marked rules files. Named Codex accounts share `rules/`, including standalone accounts and Codex's own `default.rules` amendments.
+
 ### Preview with `--dry-run`
 
-`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file` or `updates existing config`, and a statusline note when install wraps one), then a unified diff per file, all on stdout:
+`--dry-run` writes nothing. For each agent it prints the row the `rimz start` consent prompt shows (hook count, path, `new file`, `updates existing config`, or `removes file`, and a statusline note when install wraps one), then a unified diff per file, all on stdout:
 
 ```console
 $ rimz hooks install --dry-run grok
@@ -82,7 +84,15 @@ $ rimz hooks install --dry-run grok
     @@ no changes @@
 ```
 
-A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole file, a Kiro CLI below 2.31.0, or Grok's `allow_managed_hooks_only` policy without RimZ's handler in `/etc/grok`), the dry run prints only the error and exits 1.
+A file install would create diffs from `/dev/null` under an `@@ new file @@` header. RimZ builds every preview before printing any, so when one agent fails (an unmarked whole-file hook integration, a Kiro CLI below 2.31.0, or Grok's `allow_managed_hooks_only` policy without RimZ's handler in `/etc/grok`), the dry run prints only the error and exits 1.
+
+To inspect Codex's hook merge and rules file as separate diffs:
+
+```sh
+rimz hooks install --dry-run codex
+```
+
+A new `rules/rimz.rules` gets its own `--- /dev/null`, `+++ <path>`, and `@@ new file @@` block. Turning the routine-command switch off shows that file's lines as deletions without writing anything.
 
 ### Uninstall hooks
 

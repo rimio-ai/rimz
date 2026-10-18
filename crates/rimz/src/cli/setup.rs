@@ -168,6 +168,7 @@ impl SetupReport {
             Err(err) => Err(err.to_string()),
         };
 
+        let hook_options = crate::cli::hook_install_options();
         let agents = rimz::agents::all_definitions()
             .map(|agent| {
                 let definition = agent.spec();
@@ -179,9 +180,9 @@ impl SetupReport {
                         integration.install_blocker(&login_env).is_some()
                     }),
                     hooks_installed: agent.hooks_installed(&login_env),
-                    hook_upgrade_available: agent
-                        .managed_integration()
-                        .is_some_and(|integration| integration.upgrade_available(&login_env)),
+                    hook_upgrade_available: agent.managed_integration().is_some_and(
+                        |integration| integration.upgrade_available(&login_env, hook_options),
+                    ),
                 }
             })
             .collect();

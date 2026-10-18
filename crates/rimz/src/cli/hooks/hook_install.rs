@@ -21,12 +21,13 @@ pub(super) enum InstallDisposition {
 fn install_disposition(
     agent: &rimz::agents::AgentDefinition,
     login_env: &BTreeMap<String, String>,
+    options: rimz::agents::HookInstallOptions,
 ) -> InstallDisposition {
     if !agent.hooks_installed(login_env) {
         InstallDisposition::Installed
     } else if agent
         .managed_integration()
-        .is_some_and(|integration| integration.upgrade_available(login_env))
+        .is_some_and(|integration| integration.upgrade_available(login_env, options))
     {
         InstallDisposition::Refreshed
     } else {
@@ -75,6 +76,7 @@ pub(super) fn detected_installable_adapters(
 
 pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
     let login_env = rimz::agents::ambient_env();
+    let options = crate::cli::hook_install_options();
     let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters(&login_env) {
@@ -82,9 +84,9 @@ pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool
         if !agent.hooks_installed(&login_env)
             || agent
                 .managed_integration()
-                .is_some_and(|integration| integration.upgrade_available(&login_env))
+                .is_some_and(|integration| integration.upgrade_available(&login_env, options))
         {
-            actionable.push(agent.preview_hook_install(&login_env)?);
+            actionable.push(agent.preview_hook_install(&login_env, options)?);
             continue;
         }
 
@@ -168,8 +170,9 @@ pub(in crate::cli) fn install_hooks_into(
     login_env: &BTreeMap<String, String>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let disposition = install_disposition(agent, login_env);
-    let report = agent.install_hooks(login_env)?;
+    let options = crate::cli::hook_install_options();
+    let disposition = install_disposition(agent, login_env, options);
+    let report = agent.install_hooks(login_env, options)?;
     write_install_result(out, &report, disposition)?;
     write_untrusted_hooks_notice(
         report.agent,
@@ -236,6 +239,26 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
         out,
         "To show {pronoun} live in the sidebar, RimZ installs or refreshes reporting hooks in each agent's config."
     )?;
+    if let Some(file) = previews
+        .iter()
+        .filter(|preview| preview.agent == "codex")
+        .flat_map(|preview| &preview.files)
+        .find(|file| {
+            file.path
+                .file_name()
+                .is_some_and(|name| name == "rimz.rules")
+        })
+    {
+        writeln!(
+            out,
+            "{}",
+            if file.existed && file.candidate.is_empty() {
+                "Removing Codex's RimZ permission rules file ends its prompt and sandbox bypass for routine `rimz` commands in every Codex session, including outside RimZ (`[agents] allow-routine-rimz = false`)."
+            } else {
+                "Codex also gets a permission rules file: routine `rimz` commands run without a prompt or sandbox in every Codex session, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`."
+            }
+        )?;
+    }
     Ok(())
 }
 
@@ -255,7 +278,9 @@ fn write_agent_table_entry(
     for (index, file) in preview.files.iter().enumerate() {
         let name = if index == 0 { preview.agent } else { "" };
         let cell = agent_file_cell(preview, file, index);
-        let annotation = if file.existed {
+        let annotation = if file.existed && file.candidate.is_empty() {
+            "removes file"
+        } else if file.existed {
             "updates existing config"
         } else {
             "new file"
@@ -333,7 +358,9 @@ pub(super) fn write_install_result(
         }
     };
     for (index, file) in report.files.iter().enumerate() {
-        let annotation = if file.existed {
+        let annotation = if file.existed && !file.path.exists() {
+            "(removed)"
+        } else if file.existed {
             "(updated existing config)"
         } else {
             "(new file)"
@@ -588,6 +615,50 @@ mod tests {
     }
 
     #[test]
+    fn codex_rules_consent_and_dry_run_show_creation_and_removal() {
+        for removed in [false, true] {
+            let mut codex = preview("codex", Some("hooks\n"), "hooks\n");
+            let path = home_config_path("codex")
+                .with_file_name("rules")
+                .join("rimz.rules");
+            codex.files.push(HookInstallFilePreview {
+                path,
+                original: removed.then(|| "# _rimz_managed\nrule\n".into()),
+                candidate: if removed {
+                    ""
+                } else {
+                    "# _rimz_managed\nrule\n"
+                }
+                .into(),
+                existed: removed,
+            });
+            let previews = [codex];
+            let (_, consent) = drive(&previews, b"n\n");
+            let notice = strip(|out| write_noninteractive_notice(out, &previews));
+            for rendered in [&consent, &notice] {
+                assert!(rendered.contains(if removed {
+                    "Removing Codex's RimZ permission rules file ends its prompt and sandbox bypass for routine `rimz` commands"
+                } else {
+                    "Codex also gets a permission rules file: routine `rimz` commands run without a prompt or sandbox"
+                }));
+                assert!(rendered.contains("in every Codex session, including outside RimZ"));
+                assert!(rendered.contains("[agents] allow-routine-rimz = false"));
+            }
+            let dry_run = strip(|out| render_dry_run(out, &previews));
+            for rendered in [&consent, &dry_run] {
+                assert!(rendered.contains("rules/rimz.rules"));
+                assert!(rendered.contains(if removed { "removes file" } else { "new file" }));
+            }
+            assert!(dry_run.contains(if removed {
+                "-# _rimz_managed"
+            } else {
+                "+# _rimz_managed"
+            }));
+            assert!(dry_run.contains(if removed { "-rule" } else { "@@ new file @@" }));
+        }
+    }
+
+    #[test]
     fn hook_notices_cover_interactive_and_noninteractive_workflows() {
         let mut additive = preview("claude", Some("{}\n"), "{\"hooks\": []}\n");
         additive.status_line_change = Some(StatusLineChange::Wrapping {
@@ -719,17 +790,25 @@ mod tests {
 
     #[test]
     fn completed_hook_reports_render_dispositions_files_and_footer() {
-        let cli_config = home_config_path("cursor").with_file_name("cli-config.json");
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = dir.path().join("hooks.json");
+        let cli_config = dir.path().join("cli-config.json");
+        std::fs::write(&hooks, "{}").unwrap();
+        std::fs::write(&cli_config, "{}").unwrap();
         let report = HookInstallReport {
             agent: "cursor",
             files: vec![
                 rimz::agents::HookInstallFileReport {
-                    path: home_config_path("cursor").with_file_name("hooks.json"),
+                    path: hooks.clone(),
                     existed: true,
                 },
                 rimz::agents::HookInstallFileReport {
-                    path: cli_config,
+                    path: cli_config.clone(),
                     existed: false,
+                },
+                rimz::agents::HookInstallFileReport {
+                    path: dir.path().join("rimz.rules"),
+                    existed: true,
                 },
             ],
             installed_events: vec!["stop".to_owned()],
@@ -742,14 +821,16 @@ mod tests {
         ] {
             let rendered = strip(|out| write_install_result(out, &report, disposition));
             assert!(rendered.contains(&format!("✓ cursor  {summary}")));
-            assert!(rendered.contains("~/.cursor/hooks.json"));
-            assert!(rendered.contains("config → ~/.cursor/cli-config.json"));
+            assert!(rendered.contains(&hooks.display().to_string()));
+            assert!(rendered.contains(&format!("config → {}", cli_config.display())));
             if disposition == InstallDisposition::Current {
                 assert!(!rendered.contains("(updated existing config)"));
                 assert!(!rendered.contains("(new file)"));
+                assert!(!rendered.contains("(removed)"));
             } else {
                 assert!(rendered.contains("(updated existing config)"));
                 assert!(rendered.contains("(new file)"));
+                assert!(rendered.contains("rimz.rules  (removed)"));
             }
         }
 
@@ -759,8 +840,8 @@ mod tests {
             removed_events: vec!["stop".to_owned()],
         };
         let rendered = strip(|out| write_uninstall_result(out, &uninstall));
-        assert!(rendered.contains("✓ cursor  removed 1 hooks → ~/.cursor/hooks.json"));
-        assert!(rendered.contains("config → ~/.cursor/cli-config.json"));
+        assert!(rendered.contains(&format!("✓ cursor  removed 1 hooks → {}", hooks.display())));
+        assert!(rendered.contains(&format!("config → {}", cli_config.display())));
 
         let empty = rimz::agents::HookUninstallReport {
             agent: "codex",

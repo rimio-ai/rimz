@@ -21,11 +21,19 @@ pub(super) static MANAGED_INTEGRATION: KimiManagedIntegration = KimiManagedInteg
 pub(super) struct KimiManagedIntegration;
 
 impl ManagedIntegration for KimiManagedIntegration {
-    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install(&config_path()?, installed_cli_version())
     }
 
-    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview(&config_path()?, installed_cli_version())
     }
 

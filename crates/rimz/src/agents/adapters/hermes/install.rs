@@ -18,11 +18,19 @@ pub(super) static MANAGED_INTEGRATION: HermesManagedIntegration = HermesManagedI
 pub(super) struct HermesManagedIntegration;
 
 impl ManagedIntegration for HermesManagedIntegration {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install_at(&config_path(env)?, installed_version())
     }
 
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview_at(&config_path(env)?, installed_version())
     }
 
@@ -48,7 +56,9 @@ impl ManagedIntegration for HermesManagedIntegration {
     }
 
     fn install_blocker(&self, env: &BTreeMap<String, String>) -> Option<String> {
-        self.preview(env).err().map(|error| error.to_string())
+        self.preview(env, Default::default())
+            .err()
+            .map(|error| error.to_string())
     }
 
     fn wiring_input_paths(

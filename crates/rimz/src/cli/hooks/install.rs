@@ -23,9 +23,10 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
     let login_env = rimz::agents::ambient_env();
+    let options = crate::cli::hook_install_options();
     let mut previews = Vec::new();
     for integration in install_definitions(agent, &login_env)? {
-        previews.push(integration.preview_hook_install(&login_env)?);
+        previews.push(integration.preview_hook_install(&login_env, options)?);
     }
     let mut out = crate::cli::render::out();
     crate::cli::render::finish(render_dry_run(&mut out, &previews))

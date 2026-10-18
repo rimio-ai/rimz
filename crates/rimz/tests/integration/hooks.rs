@@ -3603,6 +3603,17 @@ fn fake_agent_bin_dir(names: &[&str]) -> tempfile::TempDir {
 fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     let env = Env::new();
     let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
+    let rules = env.home_root.join(".codex/rules/rimz.rules");
+    let preview = env
+        .rimz()
+        .args(["hooks", "install", "--dry-run", "codex"])
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "{preview:?}");
+    let preview_stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(preview_stdout.contains("rules/rimz.rules"));
+    assert!(preview_stdout.contains("+prefix_rule(pattern=[\"rimz\", \"message\"]"));
+    assert!(!rules.exists());
 
     let install = env
         .rimz()
@@ -3622,6 +3633,8 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     assert!(install_stdout.contains("~/.codex/config.toml"));
     assert!(env.agent_hooks_installed("claude"));
     assert!(env.agent_hooks_installed("codex"));
+    assert!(rules.exists());
+    assert!(install_stdout.contains("rules/rimz.rules"));
 
     let rerun = env
         .rimz()
@@ -3657,6 +3670,8 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     assert!(uninstall_stdout.contains("~/.codex/config.toml"));
     assert!(!env.agent_hooks_installed("claude"));
     assert!(!env.agent_hooks_installed("codex"));
+    assert!(!rules.exists());
+    assert!(uninstall_stdout.contains("rules/rimz.rules"));
 
     let empty = env
         .rimz()

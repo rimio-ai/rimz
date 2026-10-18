@@ -204,9 +204,13 @@ pub trait InstallationCapability: CoreCapability {
     }
 
     /// Write or merge the adapter's hook config under the home `login_env` resolves. Defaults to an explicit "not implemented" error until an adapter owns installation.
-    fn install_hooks(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install_hooks(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: super::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         if let Some(integration) = self.managed_integration() {
-            return integration.install(login_env);
+            return integration.install(login_env, options);
         }
         Err(AgentErr::Install {
             agent: self.spec().kind,
@@ -218,9 +222,10 @@ pub trait InstallationCapability: CoreCapability {
     fn preview_hook_install(
         &self,
         login_env: &BTreeMap<String, String>,
+        options: super::HookInstallOptions,
     ) -> Result<HookInstallPreview> {
         if let Some(integration) = self.managed_integration() {
-            return integration.preview(login_env);
+            return integration.preview(login_env, options);
         }
         Err(AgentErr::Install {
             agent: self.spec().kind,

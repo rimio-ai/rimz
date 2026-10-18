@@ -223,7 +223,13 @@ upward-dependencies = ["address"]
 # SignalSet::ASK_RESOLVED lets adapters declare the Hermes ask-close lifecycle signal (+1).
 # Managed-hook installers share the ingress env names without importing the drainer (+2).
 # LaunchCapability::configure_room_permissions shares host room-root grants with the process compiler (+1).
-surface-budget = 1093
+# HookInstallOptions carries the machine's routine-command policy into managed install and preview (+1).
+surface-budget = 1094
+
+[[verdict]]
+kind = "item"
+key = "agents::HookInstallOptions"
+reason = "CLI install, preview and upgrade checks pass machine policy without adapters reading machine configuration."
 
 [[verdict]]
 kind = "item"

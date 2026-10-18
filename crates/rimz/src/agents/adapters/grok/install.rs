@@ -37,12 +37,20 @@ pub(super) fn catalog() -> &'static [HookEventSpec] {
 pub(super) struct GrokManagedIntegration;
 
 impl ManagedIntegration for GrokManagedIntegration {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         refuse_under_policy(env)?;
         MANAGED_SOURCE.install(env)
     }
 
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         refuse_under_policy(env)?;
         MANAGED_SOURCE.preview(env)
     }
@@ -59,7 +67,11 @@ impl ManagedIntegration for GrokManagedIntegration {
         MANAGED_SOURCE.managed_artifacts_present(env)
     }
 
-    fn upgrade_available(&self, env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         MANAGED_SOURCE.upgrade_available(env)
     }
 

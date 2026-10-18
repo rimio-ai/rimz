@@ -1646,7 +1646,7 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
         );
         let adapter = crate::agents::find_definition(kind).unwrap();
         if !matches!(hooks, Hooks::Absent) {
-            adapter.install_hooks(&ambient).unwrap();
+            adapter.install_hooks(&ambient, Default::default()).unwrap();
         }
         if matches!(hooks, Hooks::Wired) && kind == "codex" {
             // Codex keys a trusted hook by config path and lower_snake event.

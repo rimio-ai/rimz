@@ -19,6 +19,187 @@ const EXPECTED_EVENTS: &[&str] = &[
 ];
 
 #[test]
+fn install_includes_shared_routine_rules_golden() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let report = CodexAdapter
+        .install_hooks(&env, Default::default())
+        .unwrap();
+    let path = dir.path().join("rules/rimz.rules");
+    assert!(path.exists(), "install must publish routine command rules");
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.files[1].path, path);
+    insta::assert_snapshot!(std::fs::read_to_string(&path).unwrap(), @r###"
+        # _rimz_managed
+        # RimZ rewrites this file; controlled by [agents] allow-routine-rimz.
+        prefix_rule(pattern=["rimz", "message"], decision="allow")
+        prefix_rule(pattern=["rimz", "agents"], decision="allow")
+        prefix_rule(pattern=["rimz", "subagents"], decision="allow")
+        prefix_rule(pattern=["rimz", "teams"], decision="allow")
+        prefix_rule(pattern=["rimz", "asks"], decision="allow")
+        prefix_rule(pattern=["rimz", "answer"], decision="allow")
+        prefix_rule(pattern=["rimz", "wait", "--in"], decision="allow")
+        prefix_rule(pattern=["rimz", "pane", "list"], decision="allow")
+        prefix_rule(pattern=["rimz", "pane", "capture"], decision="allow")
+        prefix_rule(pattern=["rimz", "loop", "show"], decision="allow")
+        prefix_rule(pattern=["rimz", "loop", "logs"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "def"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "refs"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "hover"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "impl"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "callers"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "callees"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "symbols"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "find"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "check"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "list"], decision="allow")
+        prefix_rule(pattern=["rimz", "lsp", "status"], decision="allow")
+        "###);
+}
+
+#[test]
+fn rules_are_shared_even_for_standalone_accounts() {
+    assert!(
+        CodexAdapter
+            .shared_home_entries()
+            .iter()
+            .any(|entry| entry.name == "rules"
+                && matches!(entry.kind, crate::agents::capabilities::SharedHomeKind::Dir))
+    );
+}
+
+#[test]
+fn rules_preview_tracks_new_updated_and_removed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let on = crate::agents::HookInstallOptions {
+        allow_routine_rimz: true,
+    };
+    let off = crate::agents::HookInstallOptions {
+        allow_routine_rimz: false,
+    };
+    let new = integration.preview(&env, on).unwrap();
+    assert_eq!(new.files.len(), 2);
+    assert!(!new.files[1].existed);
+    let rules = dir.path().join("rules/rimz.rules");
+    assert!(!rules.exists(), "preview must not publish rules");
+    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    let stale = "# _rimz_managed\n# old rules\n";
+    std::fs::write(&rules, stale).unwrap();
+    let updated = integration.preview(&env, on).unwrap();
+    assert_eq!(updated.files[1].original.as_deref(), Some(stale));
+    assert_eq!(updated.files[1].candidate, new.files[1].candidate);
+    let removed = integration.preview(&env, off).unwrap();
+    assert_eq!(removed.files.len(), 2);
+    assert!(removed.files[1].existed);
+    assert_eq!(removed.files[1].original.as_deref(), Some(stale));
+    assert_eq!(removed.files[1].candidate, "");
+    assert_eq!(std::fs::read_to_string(&rules).unwrap(), stale);
+    std::fs::remove_file(&rules).unwrap();
+    assert_eq!(integration.preview(&env, off).unwrap().files.len(), 1);
+}
+
+#[test]
+fn rules_upgrade_detects_missing_stale_and_opted_out_artifacts() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let on = crate::agents::HookInstallOptions {
+        allow_routine_rimz: true,
+    };
+    let off = crate::agents::HookInstallOptions {
+        allow_routine_rimz: false,
+    };
+    let rules = dir.path().join("rules/rimz.rules");
+    assert!(integration.upgrade_available(&env, on));
+    assert!(!integration.upgrade_available(&env, off));
+    integration.install(&env, on).unwrap();
+    assert!(!integration.upgrade_available(&env, on));
+    assert!(integration.upgrade_available(&env, off));
+    std::fs::write(&rules, "# _rimz_managed\n# stale\n").unwrap();
+    assert!(integration.upgrade_available(&env, on));
+    assert!(integration.upgrade_available(&env, off));
+    std::fs::write(&rules, "# user rules\n").unwrap();
+    assert!(!integration.upgrade_available(&env, on));
+    assert!(!integration.upgrade_available(&env, off));
+    assert_eq!(integration.install(&env, on).unwrap().files.len(), 1);
+    assert_eq!(integration.preview(&env, on).unwrap().files.len(), 1);
+}
+
+#[test]
+fn user_rules_do_not_block_hook_preview_or_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let rules = dir.path().join("rules/rimz.rules");
+    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    let original = b"# user rules\nprefix_rule(pattern=[\"custom\"], decision=\"prompt\")\n";
+    std::fs::write(&rules, original).unwrap();
+    assert!(!integration.installed(&env));
+
+    let preview = integration.preview(&env, Default::default());
+    let report = integration.install(&env, Default::default());
+    assert_eq!(
+        (
+            preview.as_ref().map(|preview| preview.files.len()).ok(),
+            report.as_ref().map(|report| report.files.len()).ok(),
+        ),
+        (Some(1), Some(1)),
+        "preview: {preview:?}; install: {report:?}"
+    );
+    assert_eq!(
+        preview.unwrap().files[0].path,
+        dir.path().join("config.toml")
+    );
+    assert_eq!(
+        report.unwrap().files[0].path,
+        dir.path().join("config.toml")
+    );
+    assert!(integration.installed(&env));
+    assert_eq!(std::fs::read(&rules).unwrap(), original);
+}
+
+#[test]
+fn opting_out_removes_only_marked_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let off = crate::agents::HookInstallOptions {
+        allow_routine_rimz: false,
+    };
+    let rules = dir.path().join("rules/rimz.rules");
+    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    std::fs::write(&rules, "# _rimz_managed\n").unwrap();
+    let report = integration.install(&env, off).unwrap();
+    assert!(!rules.exists());
+    assert_eq!(report.files[1].path, rules);
+    std::fs::write(&rules, "# user rules\n").unwrap();
+    assert_eq!(integration.install(&env, off).unwrap().files.len(), 1);
+    assert_eq!(integration.preview(&env, off).unwrap().files.len(), 1);
+    assert_eq!(std::fs::read_to_string(&rules).unwrap(), "# user rules\n");
+}
+
+#[test]
+fn uninstall_finds_leftover_rules_without_hooks_and_keeps_foreign_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let rules = dir.path().join("rules/rimz.rules");
+    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
+    std::fs::write(&rules, "# _rimz_managed\n").unwrap();
+    assert!(!integration.installed(&env));
+    assert!(integration.managed_artifacts_present(&env));
+    let removed = integration.uninstall(&env).unwrap();
+    assert!(!rules.exists());
+    assert_eq!(removed.files[1].path, rules);
+    assert!(!integration.managed_artifacts_present(&env));
+    std::fs::write(&rules, "# user rules\n").unwrap();
+    integration.uninstall(&env).unwrap();
+    assert_eq!(std::fs::read_to_string(&rules).unwrap(), "# user rules\n");
+}
+
+#[test]
 fn install_into_empty_dir_creates_documented_inline_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");

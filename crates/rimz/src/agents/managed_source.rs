@@ -18,8 +18,16 @@ pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
 /// Provider-owned file transaction behind the adapter's managed integration seam.
 pub trait ManagedIntegration: Sync {
-    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport>;
-    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview>;
+    fn install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: super::HookInstallOptions,
+    ) -> Result<HookInstallReport>;
+    fn preview(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: super::HookInstallOptions,
+    ) -> Result<HookInstallPreview>;
     fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport>;
     fn installed(&self, login_env: &BTreeMap<String, String>) -> bool;
 
@@ -27,7 +35,11 @@ pub trait ManagedIntegration: Sync {
         self.installed(login_env)
     }
 
-    fn upgrade_available(&self, _login_env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: super::HookInstallOptions,
+    ) -> bool {
         false
     }
 
@@ -319,11 +331,19 @@ impl ManagedSource {
 }
 
 impl ManagedIntegration for ManagedSource {
-    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: super::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         ManagedSource::install(self, login_env)
     }
 
-    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: super::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         ManagedSource::preview(self, login_env)
     }
 
@@ -339,7 +359,11 @@ impl ManagedIntegration for ManagedSource {
         ManagedSource::managed_artifacts_present(self, login_env)
     }
 
-    fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: super::HookInstallOptions,
+    ) -> bool {
         ManagedSource::upgrade_available(self, login_env)
     }
 

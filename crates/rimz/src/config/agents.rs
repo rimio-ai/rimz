@@ -89,7 +89,7 @@ pub struct AgentsConfig {
     /// where the adapter can carry them, rather than a listing at launch.
     #[serde(rename = "runtime-env")]
     pub runtime_env: bool,
-    /// Allow routine RimZ coordination through provider launch settings.
+    /// Allow routine RimZ coordination through Claude launch settings and Codex installed rules.
     #[serde(rename = "allow-routine-rimz")]
     pub allow_routine_rimz: bool,
     /// The shell every agent launch runs under in place of the user's own;

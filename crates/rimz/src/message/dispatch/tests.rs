@@ -297,7 +297,7 @@ fn queue_preflight_checks_the_target_account_home() {
     ));
     crate::agents::find_definition(target.kind.as_str())
         .unwrap()
-        .install_hooks(&login_env)
+        .install_hooks(&login_env, Default::default())
         .unwrap();
     assert!(preflight_queue_hooks(&target, &login_env).is_ok());
     assert!(matches!(
