@@ -20,6 +20,82 @@ use crate::common::{
 };
 
 #[cfg(unix)]
+#[test]
+fn agents_list_reports_denied_socket_instead_of_missing_room() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let bin = env.home_root.join("denied-mux");
+    let socket = "/test/socket with spaces";
+    crate::common::write_path_shim(
+        &bin,
+        "tmux",
+        &format!(
+            r#"
+if [ "$1" = -S ]; then shift 3; fi
+if [ "$1" = -V ]; then printf 'tmux 3.5\n'; exit 0; fi
+if [ "$1" = list-sessions ]; then
+    printf '%s\n' 'error connecting to {socket} (Operation not permitted)' >&2
+    exit 1
+fi
+exit 1"#
+        ),
+    );
+    let output = env
+        .rimz()
+        .args(["--mux", "tmux", "agents", "list"])
+        .env("PATH", path_with_front(&bin))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(!stderr.contains("no live RimZ room"), "{stderr}");
+    for part in [
+        "denied",
+        socket,
+        "Operation not permitted",
+        "outside the sandbox",
+        "ask to escalate",
+    ] {
+        assert!(stderr.contains(part), "missing {part:?}: {stderr}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_list_keeps_missing_room_guidance_for_absent_sessions() {
+    for response in [
+        "printf 'no server running on /test/socket\\n' >&2; exit 1",
+        "printf 'other-room\\n'; exit 0",
+    ] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        let bin = env.home_root.join("absent-mux");
+        crate::common::write_path_shim(
+            &bin,
+            "tmux",
+            &format!(
+                r#"
+if [ "$1" = -S ]; then shift 3; fi
+if [ "$1" = -V ]; then printf 'tmux 3.5\n'; exit 0; fi
+if [ "$1" = list-sessions ]; then {response}; fi
+exit 1"#
+            ),
+        );
+        let output = env
+            .rimz()
+            .args(["--mux", "tmux", "agents", "list"])
+            .env("PATH", path_with_front(&bin))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("no live RimZ room"),
+            "{output:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
 fn init_launch_repo(path: &std::path::Path) -> bool {
     std::fs::create_dir_all(path).expect("mkdir repo");
     let run = |args: &[&str]| {

@@ -187,9 +187,10 @@ pub fn pick_mux_for_session(
             }
             Ok(_) => {}
             Err(crate::mux::MuxErr::NotInstalled { .. }) => {}
-            Err(err @ crate::mux::MuxErr::Timeout { .. }) => {
-                notices.push(format!("{err}; skipping {candidate} session lookup."))
-            }
+            Err(
+                err @ (crate::mux::MuxErr::Timeout { .. }
+                | crate::mux::MuxErr::SocketConnectDenied { .. }),
+            ) => notices.push(format!("{err}; skipping {candidate} session lookup.")),
             Err(err) => tracing::warn!(mux = %candidate, error = %err, "list_sessions failed"),
         }
     }
@@ -271,6 +272,7 @@ fn list_sessions_retrying(
             Ok(sessions) => return Ok(sessions),
             Err(err @ crate::mux::MuxErr::NotInstalled { .. }) => return Err(err),
             Err(err @ crate::mux::MuxErr::Timeout { .. }) => return Err(err),
+            Err(err @ crate::mux::MuxErr::SocketConnectDenied { .. }) => return Err(err),
             Err(err) if attempt + 1 == attempts => return Err(err),
             Err(_) => std::thread::sleep(retry_delay),
         }
@@ -594,6 +596,28 @@ mod tests {
 
         assert!(matches!(err, crate::mux::MuxErr::Timeout { .. }));
         assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn list_sessions_retrying_stops_on_socket_denial() {
+        let mut calls = 0;
+        let result = list_sessions_retrying(
+            || {
+                calls += 1;
+                Err(crate::mux::MuxErr::SocketConnectDenied {
+                    mux: MuxName::Tmux,
+                    socket: PathBuf::from("/test/socket"),
+                    reason: "Operation not permitted".to_owned(),
+                })
+            },
+            3,
+            Duration::ZERO,
+        );
+        assert!(matches!(
+            result,
+            Err(crate::mux::MuxErr::SocketConnectDenied { .. })
+        ));
+        assert_eq!(calls, 1, "a deterministic socket denial must not retry");
     }
 
     #[test]
