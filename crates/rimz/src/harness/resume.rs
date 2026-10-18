@@ -2323,11 +2323,15 @@ fn plan_resume_candidates_detailed(
             candidate.identity.kind.clone(),
             candidate.identity.session_id.clone(),
         );
+        let pane_name = crate::harness::spec::agent_pane_name(
+            candidate.identity.profile.as_deref(),
+            &candidate.identity.kind,
+        );
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd {
                     argv: command,
-                    name: Some(candidate.identity.kind.to_string()),
+                    name: Some(pane_name),
                 });
                 tab.resumed.insert(resumed_key.clone());
                 tab.isolations.push(isolation);
@@ -2352,7 +2356,7 @@ fn plan_resume_candidates_detailed(
                         columns: vec![crate::mux::LayoutColumn {
                             panes: vec![crate::mux::PaneCmd {
                                 argv: command,
-                                name: Some(candidate.identity.kind.to_string()),
+                                name: Some(pane_name),
                             }],
                             stacked: false,
                         }],
