@@ -15,8 +15,9 @@ use crate::{RuntimePaths, StatePaths};
 /// What the runtime teardown removed, for the user-facing `rimz reset` report.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TeardownReport {
-    /// The session was deleted (or was already gone).
-    pub session_killed: bool,
+    /// Why the session delete failed; `None` when it was deleted or was
+    /// already gone.
+    pub kill_error: Option<String>,
     /// Resurrection-cache paths removed.
     pub cache_removed: Vec<PathBuf>,
     /// Orphaned servers, daemons, and hook writers signalled.
@@ -119,7 +120,10 @@ pub fn teardown_room(
     let roster = crate::store::live_roster::read(&paths.live_roster);
     // Delete the session first, so the only server matching this exact name in
     // the sweep below is the corpse — never a freshly-born replacement.
-    let session_killed = backend.kill_session(session_name).is_ok();
+    let kill_error = backend
+        .kill_session(session_name)
+        .err()
+        .map(|err| err.to_string());
     let cache_removed = backend.purge_resurrection_cache(session_name);
     // The session is already a corpse (killed above), so sweeping its lingering
     // mux server is cleanup, not destruction.
@@ -147,7 +151,7 @@ pub fn teardown_room(
         }
     }
     TeardownReport {
-        session_killed,
+        kill_error,
         cache_removed,
         processes_swept,
     }

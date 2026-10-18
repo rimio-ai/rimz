@@ -62,6 +62,47 @@ exit 1"#
 
 #[cfg(unix)]
 #[test]
+fn reset_reports_a_denied_session_delete_instead_of_an_absent_session() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let session = env.state_path_for(&env.project_root).dir_name.to_string();
+    let bin = env.home_root.join("denied-kill-mux");
+    crate::common::write_path_shim(
+        &bin,
+        "tmux",
+        &format!(
+            r#"
+if [ "$1" = -S ]; then shift 3; fi
+if [ "$1" = -V ]; then printf 'tmux 3.5\n'; exit 0; fi
+if [ "$1" = list-sessions ]; then printf '%s\n' '{session}'; exit 0; fi
+if [ "$1" = kill-session ]; then
+    printf '%s\n' 'error connecting to /test/socket (Operation not permitted)' >&2
+    exit 1
+fi
+exit 1"#
+        ),
+    );
+    let output = env
+        .rimz()
+        .args(["--mux", "tmux", "reset", "--yes", "--no-start"])
+        .env("PATH", path_with_front(&bin))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Reset: session not deleted"), "{output:?}");
+    assert!(!stderr.contains("session absent"), "{stderr}");
+    for part in [
+        "could not delete the session",
+        "/test/socket",
+        "Operation not permitted",
+        "ask to escalate",
+    ] {
+        assert!(stderr.contains(part), "missing {part:?}: {stderr}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn agents_list_keeps_missing_room_guidance_for_absent_sessions() {
     for response in [
         "printf 'no server running on /test/socket\\n' >&2; exit 1",

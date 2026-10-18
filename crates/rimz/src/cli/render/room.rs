@@ -71,10 +71,10 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     writeln!(
         stderr,
         "Reset: session {}, {} cache entr{} removed, {} orphan process{} swept.",
-        if teardown.session_killed {
+        if teardown.kill_error.is_none() {
             "deleted"
         } else {
-            "absent"
+            "not deleted"
         },
         teardown.cache_removed.len(),
         if teardown.cache_removed.len() == 1 {
@@ -89,6 +89,9 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
             "es"
         },
     )?;
+    if let Some(err) = &teardown.kill_error {
+        writeln!(stderr, "Reset: could not delete the session: {err}")?;
+    }
     let ended = report.view_processes_ended.len();
     if ended > 0 {
         writeln!(
