@@ -2452,7 +2452,9 @@ fn user_prompt_submit_reply_arrives_through_the_drainer() {
         let mut drainer = drain_command(&env).spawn().unwrap();
         let _lease = drainer_connection(&store, Some(&mut drainer));
         let mut command = env.hook_command(source);
-        command.env("RIMZ_RUNTIME_ENV", "1");
+        command
+            .env("RIMZ_RUNTIME_ENV", "1")
+            .env("RIMZ_TEST_HOOK_REPLY_WAIT_MS", "30000");
         let output = env.spawn_payload(command, &json!({
             "hook_event_name": "UserPromptSubmit", "session_id": "reply-root", "prompt": "question"
         }).to_string()).wait_with_output().unwrap();
@@ -2650,7 +2652,9 @@ fn antigravity_hook_reply_arrives_through_the_drainer() {
     let store = env.store();
     let mut drainer = drain_command(&env).spawn().unwrap();
     let _lease = drainer_connection(&store, Some(&mut drainer));
-    let output = env.spawn_hook("antigravity", &json!({"hook_event_name": "Stop", "conversation_id": "native-reply", "invocationNum": 0}).to_string()).wait_with_output().unwrap();
+    let mut command = env.hook_command("antigravity");
+    command.env("RIMZ_TEST_HOOK_REPLY_WAIT_MS", "30000");
+    let output = env.spawn_payload(command, &json!({"hook_event_name": "Stop", "conversation_id": "native-reply", "invocationNum": 0}).to_string()).wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),

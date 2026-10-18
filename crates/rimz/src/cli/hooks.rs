@@ -244,14 +244,22 @@ fn process_in_child(
 }
 
 fn apply_timeout() -> std::time::Duration {
+    test_duration("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS", APPLY_TIMEOUT)
+}
+
+fn reply_wait() -> std::time::Duration {
+    test_duration("RIMZ_TEST_HOOK_REPLY_WAIT_MS", REPLY_WAIT)
+}
+
+/// A product duration, replaced under `testkit` by the milliseconds in `name`.
+fn test_duration(name: &str, default: std::time::Duration) -> std::time::Duration {
     #[cfg(feature = "testkit")]
-    if let Some(ms) = std::env::var("RIMZ_TEST_HOOK_APPLY_TIMEOUT_MS")
-        .ok()
-        .and_then(|raw| raw.parse().ok())
-    {
+    if let Some(ms) = std::env::var(name).ok().and_then(|raw| raw.parse().ok()) {
         return std::time::Duration::from_millis(ms);
     }
-    APPLY_TIMEOUT
+    #[cfg(not(feature = "testkit"))]
+    let _ = name;
+    default
 }
 
 fn map_sandbox_paths(store: &Store, frame: &mut HookIngress) -> Result<()> {
@@ -409,13 +417,10 @@ fn run_drain(project_root: PathBuf, once: bool) -> Result<()> {
     let store =
         open_existing_store(&workspace)?.context("hook drainer requires an existing room")?;
     if once {
-        let wait = std::time::Duration::from_secs(30);
-        #[cfg(feature = "testkit")]
-        let wait = std::env::var("RIMZ_TEST_HOOK_DRAIN_ONCE_WAIT_MS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(std::time::Duration::from_millis)
-            .unwrap_or(wait);
+        let wait = test_duration(
+            "RIMZ_TEST_HOOK_DRAIN_ONCE_WAIT_MS",
+            std::time::Duration::from_secs(30),
+        );
         rimz::harness::hook_drain::drain_through(&store, 0, None, wait)?;
     } else {
         rimz::harness::hook_drain::run(&store)?;
@@ -680,8 +685,8 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         || (matches!(source.as_str(), "claude" | "codex") && event_name == "UserPromptSubmit")
     {
         let receipt = match sandbox_connection {
-            Some(connection) => connection.reply(through, frame.event_id, REPLY_WAIT),
-            None => hook_drain::drain_through(&store, through, Some(frame.event_id), REPLY_WAIT),
+            Some(connection) => connection.reply(through, frame.event_id, reply_wait()),
+            None => hook_drain::drain_through(&store, through, Some(frame.event_id), reply_wait()),
         };
         match receipt {
             Ok(receipt) => {
@@ -707,7 +712,7 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
     }
     if let Err(error) = hook_drain::nudge(&store, through) {
         warn!(%error, "hooks feed: drainer unavailable; draining inline");
-        if let Err(error) = hook_drain::drain_through(&store, through, None, REPLY_WAIT) {
+        if let Err(error) = hook_drain::drain_through(&store, through, None, reply_wait()) {
             warn!(%error, "hooks feed: inline drain failed");
         }
     }
