@@ -307,6 +307,44 @@ fn statusline_outside_a_room_creates_no_locks() {
 }
 
 #[test]
+fn detected_dry_run_probes_each_cli_version_once() {
+    let env = Env::new();
+    let bin = env.home_root.join("qoder-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("qodercli");
+    let log = env.home_root.join("qoder-probes");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\necho probe >> '{}'\necho 'qodercli 1.1.72'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &stub,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    let search_path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let output = env
+        .rimz()
+        .args(["hooks", "install", "--dry-run"])
+        .env("PATH", search_path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("qoder"),
+        "{output:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+}
+
+#[test]
 fn qoder_version_gate_and_config_root_work_under_both_pane_envs() {
     let env = Env::new();
     let bin = env.home_root.join("qoder-bin");

@@ -153,6 +153,8 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         return;
     }
     let project = tempfile::tempdir().unwrap();
+    let probes = std::path::PathBuf::from(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap());
+    let cli = probes.with_file_name("claude");
     let fresh = request("claude", action_with_args("launch", vec![]));
     let baseline = compile_prompt_request(project.path(), &fresh, None, None).system_prompt_digest;
     for (action, recorded, expected) in [
@@ -163,6 +165,11 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         ("fork", Some("different"), true),
         ("fork", Some(baseline.as_str()), false),
     ] {
+        // Growing the stub changes its file stamp, so the per-binary version
+        // memo cannot hide a probe this compile makes.
+        let mut stub = std::fs::OpenOptions::new().append(true).open(&cli).unwrap();
+        std::io::Write::write_all(&mut stub, b"#\n").unwrap();
+        drop(stub);
         let request = request("claude", action_with_args(action, vec![]));
         let plan = compile_prompt_request(project.path(), &request, recorded, None);
         let flags: Vec<_> = plan
@@ -179,8 +186,7 @@ fn configured_prompt_changes_control_snapshot_reuse() {
         assert!(flags.iter().all(|args| args[1] == "off"));
         assert_eq!(plan.system_prompt_digest, baseline);
     }
-    let probes =
-        std::fs::read_to_string(std::env::var_os("RIMZ_TEST_SNAPSHOT_PROBES").unwrap()).unwrap();
+    let probes = std::fs::read_to_string(&probes).unwrap();
     assert_eq!(
         probes.lines().count(),
         3,
