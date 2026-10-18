@@ -2,7 +2,7 @@
 //!
 //! Ranking remains producer truth. This module reapplies the last painted order
 //! over a fresh, already-ranked snapshot for a short interaction window and
-//! splices items born during the hold into their producer-ranked position, so
+//! appends arrivals within their groups, with new groups after live groups, so
 //! read state and attention signals update without moving the cards under the
 //! user's eyes.
 
@@ -137,8 +137,12 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         )
     });
     for group in std::sync::Arc::make_mut(&mut current.worktree_groups) {
-        std::sync::Arc::make_mut(&mut group.rows)
-            .sort_by_key(|row| row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX));
+        std::sync::Arc::make_mut(&mut group.rows).sort_by_key(|row| {
+            (
+                row.is_process(),
+                row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX),
+            )
+        });
     }
 }
 
@@ -184,35 +188,22 @@ fn migrate_frozen_order(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
 }
 
 fn admit_new_items(current: &SidebarSnapshot, frozen: &mut FrozenOrder) {
-    // Held and producer order can disagree mid-hold; never walk the cursor
-    // backward past a known producer predecessor.
-    let mut cursor = 0;
     for group in current.worktree_groups.iter() {
-        if let Some(position) = frozen.groups.iter().position(|key| key == &group.key) {
-            cursor = cursor.max(position + 1);
-        } else {
-            frozen.groups.insert(cursor, group.key.clone());
-            cursor += 1;
+        if !frozen.groups.contains(&group.key) {
+            frozen.groups.push(group.key.clone());
         }
     }
 
-    cursor = 0;
     for row in current
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
     {
-        if let Some(position) = frozen.rows.iter().position(|frozen| frozen.id == row.id) {
-            cursor = cursor.max(position + 1);
-        } else {
-            frozen.rows.insert(
-                cursor,
-                FrozenRow {
-                    id: row.id.clone(),
-                    pane: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
-                },
-            );
-            cursor += 1;
+        if !frozen.rows.iter().any(|frozen| frozen.id == row.id) {
+            frozen.rows.push(FrozenRow {
+                id: row.id.clone(),
+                pane: row.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+            });
         }
     }
 }

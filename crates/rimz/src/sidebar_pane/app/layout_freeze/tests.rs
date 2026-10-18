@@ -2,6 +2,34 @@ use super::*;
 use crate::sidebar::timing::LAYOUT_FREEZE;
 
 #[test]
+fn arrivals_append_within_the_agent_and_process_partitions() {
+    let mut ui = UiState::default();
+    let mut current = snapshot_with_groups(vec![group(
+        "a",
+        vec![
+            agent_row("agent-a", "terminal_1", AgentStatus::Running),
+            row("shell", "terminal_2"),
+            row("build", "terminal_3"),
+        ],
+    )]);
+    arm_freeze(&mut ui, 1_000);
+    ui.freeze.as_mut().unwrap().frozen = capture_order(&current, &ui);
+    std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows = vec![
+        agent_row("agent-b", "terminal_4", AgentStatus::Waiting),
+        agent_row("agent-a", "terminal_1", AgentStatus::Running),
+        row("new-process", "terminal_5"),
+        row("shell", "terminal_2"),
+        row("build", "terminal_3"),
+    ]
+    .into();
+    apply_freeze(&mut ui, &mut current, false, 1_001, false);
+    assert_eq!(
+        row_ids(&current, "a"),
+        ["agent-a", "agent-b", "shell", "build", "new-process"]
+    );
+}
+
+#[test]
 fn freeze_deadline_counts_from_arming_for_both_focus_states() {
     let freeze = LayoutFreeze {
         frozen: FrozenOrder::default(),
@@ -278,7 +306,7 @@ fn prompt_on_an_unselected_row_is_ignored() {
 }
 
 #[test]
-fn reorder_pipeline_splices_unknowns_at_ranked_positions() {
+fn reorder_pipeline_appends_unknowns_after_frozen_items() {
     let mut current = snapshot_with_groups(vec![
         group("new", vec![row("x", "terminal_9")]),
         group(
@@ -306,14 +334,14 @@ fn reorder_pipeline_splices_unknowns_at_ranked_positions() {
     admit_new_items(&current, &mut frozen);
     reorder_to_frozen(&mut current, &frozen);
 
-    assert_eq!(group_keys(&current), vec!["new", "a", "b"]);
+    assert_eq!(group_keys(&current), vec!["a", "b", "new"]);
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
     assert_eq!(row_ids(&current, "b"), vec!["b1", "b2", "b-new"]);
     assert_eq!(row_ids(&current, "new"), vec!["x"]);
-    assert_eq!(frozen.groups, vec!["new", "a", "b"]);
+    assert_eq!(frozen.groups, vec!["a", "b", "new"]);
     assert_eq!(
         frozen_row_ids(&frozen),
-        vec!["x", "a1", "a2", "b1", "b2", "b-new"]
+        vec!["a1", "a2", "b1", "b2", "x", "b-new"]
     );
 }
 
@@ -338,7 +366,7 @@ fn mid_hold_group_churn_keeps_new_last_ranked_group_last() {
 }
 
 #[test]
-fn new_row_splices_between_ranked_neighbors() {
+fn new_row_appends_after_frozen_neighbors() {
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![
@@ -357,12 +385,12 @@ fn new_row_splices_between_ranked_neighbors() {
     admit_new_items(&current, &mut frozen);
     reorder_to_frozen(&mut current, &frozen);
 
-    assert_eq!(row_ids(&current, "a"), vec!["a1", "a2", "a3"]);
-    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a2", "a3"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a1", "a3", "a2"]);
+    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a3", "a2"]);
 }
 
 #[test]
-fn new_first_ranked_row_splices_at_front() {
+fn new_first_ranked_row_appends_at_tail() {
     let mut current = snapshot_with_groups(vec![group(
         "a",
         vec![row("a-new", "terminal_2"), row("a1", "terminal_1")],
@@ -377,8 +405,8 @@ fn new_first_ranked_row_splices_at_front() {
     admit_new_items(&current, &mut frozen);
     reorder_to_frozen(&mut current, &frozen);
 
-    assert_eq!(row_ids(&current, "a"), vec!["a-new", "a1"]);
-    assert_eq!(frozen_row_ids(&frozen), vec!["a-new", "a1"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a1", "a-new"]);
+    assert_eq!(frozen_row_ids(&frozen), vec!["a1", "a-new"]);
 }
 
 #[test]
@@ -476,22 +504,32 @@ fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
 }
 
 #[test]
-fn new_group_during_hold_stays_at_its_ranked_position_after_expiry() {
+fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
     let mut ui = UiState {
         last_order: FrozenOrder {
-            groups: vec!["main".to_owned()],
+            groups: vec![
+                "main".to_owned(),
+                "finished".to_owned(),
+                "external".to_owned(),
+            ],
             rows: vec![frozen_paneless_row("zsh")],
             visible: HashSet::from(["zsh".to_owned()]),
         },
         ..UiState::default()
     };
     let groups = || {
+        let mut finished = group("finished", vec![]);
+        finished.finished = true;
+        let mut external = group("external", vec![]);
+        external.kind = SidebarWorktreeKind::External;
         vec![
             group(
                 "team",
                 vec![agent_row("coder", "terminal_2", AgentStatus::Idle)],
             ),
             group("main", vec![row("zsh", "terminal_1")]),
+            finished,
+            external,
         ]
     };
     let now_ms = 1_000;
@@ -499,10 +537,17 @@ fn new_group_during_hold_stays_at_its_ranked_position_after_expiry() {
 
     apply_freeze(&mut ui, &mut current, true, now_ms, false);
 
-    assert_eq!(group_keys(&current), vec!["team", "main"]);
+    assert_eq!(
+        group_keys(&current),
+        vec!["main", "team", "finished", "external"]
+    );
     assert_eq!(
         ui.freeze.as_ref().map(|hold| hold.frozen.groups.clone()),
-        Some(vec!["team".to_owned(), "main".to_owned()])
+        Some(
+            ["main", "finished", "external", "team"]
+                .map(str::to_owned)
+                .to_vec()
+        )
     );
 
     let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
@@ -510,7 +555,10 @@ fn new_group_during_hold_stays_at_its_ranked_position_after_expiry() {
     apply_freeze(&mut ui, &mut current, false, expires_ms, false);
 
     assert!(ui.freeze.is_none());
-    assert_eq!(group_keys(&current), vec!["team", "main"]);
+    assert_eq!(
+        group_keys(&current),
+        vec!["team", "main", "finished", "external"]
+    );
 }
 
 #[test]
@@ -530,18 +578,15 @@ fn adopt_shared_hold_installs_reorders_and_recaptures() {
         visible: HashSet::from(["a2".to_owned()]),
     };
     let mut expected_order = order.clone();
-    expected_order.rows.insert(
-        0,
-        FrozenRow {
-            id: "a-new".to_owned(),
-            pane: Some("zellij:terminal_3".to_owned()),
-        },
-    );
+    expected_order.rows.push(FrozenRow {
+        id: "a-new".to_owned(),
+        pane: Some("zellij:terminal_3".to_owned()),
+    });
     let stamp_ms = 2_000;
 
     adopt_shared_hold(&mut ui, &mut current, order, stamp_ms);
 
-    assert_eq!(row_ids(&current, "a"), vec!["a-new", "a2", "a1"]);
+    assert_eq!(row_ids(&current, "a"), vec!["a2", "a1", "a-new"]);
     assert_eq!(
         ui.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
         Some(stamp_ms + LAYOUT_FREEZE.as_millis() as i64)
@@ -550,7 +595,7 @@ fn adopt_shared_hold_installs_reorders_and_recaptures() {
         ui.freeze.as_ref().map(|hold| &hold.frozen),
         Some(&expected_order)
     );
-    assert_eq!(frozen_row_ids(&ui.last_order), vec!["a-new", "a2", "a1"]);
+    assert_eq!(frozen_row_ids(&ui.last_order), vec!["a2", "a1", "a-new"]);
     assert_eq!(
         ui.last_order.visible,
         HashSet::from(["a-new".to_owned(), "a2".to_owned(), "a1".to_owned()])

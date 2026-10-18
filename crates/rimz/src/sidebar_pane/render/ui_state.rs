@@ -91,9 +91,9 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Row id the last draw treated as selected; a different id is a selection change.
     pub(in crate::sidebar_pane) drawn_selection: Option<String>,
     /// Renderer-local previous selection sources, including their teammates'
-    /// shapes, kept open until the hold-free layout preserves the selected
-    /// card's row. Written back each draw; departed and live-selected ids drop
-    /// out. Authoritative inputs release all holds.
+    /// shapes, kept open while the layout freeze is armed. Written back each
+    /// draw; departed and live-selected ids drop out. Scrolling and toggles
+    /// retain the set until the freeze releases it together with the order.
     /// A shared landing paint uses the source frame's carried set instead of
     /// these local candidates and the previous selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,

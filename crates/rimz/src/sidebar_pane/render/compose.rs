@@ -65,11 +65,10 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// carries a track/thumb glyph in the right rail column — part of the composed
 /// line, so every consumer of the frame sees it.
 ///
-/// Compose without held expansion first. If that clamps the selected card's own
-/// anchor or shared click placement, compose again holding the local selection
-/// sources, or the carried opening set on an anchored paint; otherwise release
-/// them together. Authoritative inputs release in this paint. Steady frames
-/// without candidates compose the scroll zone once.
+/// Compose the scroll zone once with the previous selections' expansions, or
+/// the carried opening set on a shared landing. An armed layout freeze retains
+/// them regardless of geometry or authoritative scrolling; its expiry releases
+/// them together with the frozen order.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
@@ -100,15 +99,6 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // the same frame the cards carry (see `with_gutter`).
     let roster = ui.visible_roster(snapshot);
     let mut top = top_lines(snapshot, ui, cells, theme);
-    let (mut scroll, mut landed_span) = scroll_lines(
-        snapshot,
-        ui,
-        &roster,
-        &BTreeSet::new(),
-        cells,
-        theme,
-        meter_pixels.as_deref_mut(),
-    );
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
@@ -126,21 +116,6 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         .sum::<usize>()
         .min(height);
 
-    let plan_scroll = |scroll: &RenderedBlock, landed_span| {
-        plan_zones(ZoneInputs {
-            snapshot,
-            ui,
-            roster: &roster,
-            scroll_map: scroll.interactions.row_map(),
-            card_starts: &scroll.card_starts,
-            landed_span,
-            scroll_len: scroll.lines.len(),
-            top_len: top.lines.len(),
-            height,
-            bottom_height,
-        })
-    };
-    let mut layout = plan_scroll(&scroll, landed_span);
     let selected_id = ui
         .selected_index
         .and_then(|index| roster.row(index))
@@ -158,27 +133,30 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         held_expansions.insert(previous.clone());
     }
     held_expansions.retain(|id| Some(id) != selected_id && roster.ordinal_of_id(id).is_some());
-    let selected_target = selected_id.is_some_and(|id| {
-        ui.anchored_rows.iter().any(|(anchor, _)| anchor == id)
-            || ui
-                .focus_placement
-                .as_ref()
-                .is_some_and(|placement| &placement.row_id == id)
-    });
-    if !held_expansions.is_empty() && layout.resolution.clamped && selected_target {
-        (scroll, landed_span) = scroll_lines(
-            snapshot,
-            ui,
-            &roster,
-            &held_expansions,
-            cells,
-            theme,
-            meter_pixels.as_deref_mut(),
-        );
-        layout = plan_scroll(&scroll, landed_span);
-    } else {
+    if ui.freeze.is_none() {
         held_expansions.clear();
     }
+    let (scroll, landed_span) = scroll_lines(
+        snapshot,
+        ui,
+        &roster,
+        &held_expansions,
+        cells,
+        theme,
+        meter_pixels.as_deref_mut(),
+    );
+    let layout = plan_zones(ZoneInputs {
+        snapshot,
+        ui,
+        roster: &roster,
+        scroll_map: scroll.interactions.row_map(),
+        card_starts: &scroll.card_starts,
+        landed_span,
+        scroll_len: scroll.lines.len(),
+        top_len: top.lines.len(),
+        height,
+        bottom_height,
+    });
     let scroll_len = scroll.lines.len();
     let placements = |offset| {
         scroll
