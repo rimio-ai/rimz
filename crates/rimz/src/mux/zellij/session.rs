@@ -11,10 +11,28 @@ use super::parse::{is_no_active_sessions, session_state_from_line};
 use super::{TOPOLOGY_CACHE_POLL_STEP, ZellijBackend, health_probe_timeout};
 use crate::disk::paths::{self, RuntimePaths, StatePaths};
 use crate::ids::WorkspaceId;
-use crate::mux::PaneReadConsistency;
-use crate::mux::{MuxErr, Result, SessionLiveness};
+use crate::mux::{CommandSpec, MuxErr, PaneReadConsistency, Result, SessionLiveness};
 use crate::utils::time::unix_now_ms;
 use crate::workspace::{self, KnownWorkspace};
+
+pub(super) fn session_listing(spec: &CommandSpec, timeout: Duration) -> Result<String> {
+    match spec.run_with_timeout(timeout) {
+        Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
+            Ok(String::new())
+        }
+        Err(MuxErr::Command { ref stderr, .. })
+            if stderr.trim() == "Error occurred: PermissionDenied" =>
+        {
+            Err(MuxErr::SocketConnectDenied {
+                mux: crate::ids::MuxName::Zellij,
+                socket: super::socket::spec_socket_path(spec, ""),
+                reason: "PermissionDenied".to_owned(),
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
 
 /// Remove Zellij's serialized-session cache for `name` under `cache_root`, across
 /// every `contract_version_*` child so it survives a Zellij contract bump.
@@ -356,29 +374,32 @@ impl ZellijBackend {
     }
 
     /// Classify `name` from `zellij list-sessions` while preserving command
-    /// failures. Zellij's exit-1 no-sessions response is definitive absence;
-    /// timeouts and every other failure remain unavailable to callers.
+    /// failures. A non-live verdict checks the named socket for a denied
+    /// connect before treating Zellij's listing as absence or resurrection.
     pub(super) fn session_state_checked(&self, name: &str) -> Result<SessionLiveness> {
-        let output = match self.cmd().args(["list-sessions", "--no-formatting"]).run() {
-            Ok(output) => output,
-            Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
-                return Ok(SessionLiveness::Absent);
-            }
-            Err(err) => return Err(err),
-        };
-        Ok(String::from_utf8_lossy(&output.stdout)
+        let spec = self.cmd().args(["list-sessions", "--no-formatting"]);
+        let listing = session_listing(&spec, super::super::COMMAND_TIMEOUT)?;
+        let state = listing
             .lines()
             .find_map(|line| session_state_from_line(line, name))
-            .unwrap_or(SessionLiveness::Absent))
+            .unwrap_or(SessionLiveness::Absent);
+        if state != SessionLiveness::Live {
+            self.check_socket_connect(super::socket::spec_socket_path(&spec, name))?;
+        }
+        Ok(state)
     }
 
     /// Force-delete a session (exited or live) so the next create births a clean
     /// one from the layout rather than resurrecting a stale serialized layout or
     /// attaching to a sidebar-less leftover. `--force` also kills a live session.
     /// A session that vanished between the liveness check and here is already in
-    /// the state we want, so "not found" is success.
+    /// the state we want, so "not found" is success. Zellij's delete ignores a
+    /// denied connect and still removes the resurrection cache, so the socket
+    /// is probed first.
     pub(super) fn delete_session(&self, name: &str) -> Result<()> {
-        match self.cmd().args(["delete-session", name, "--force"]).run() {
+        let spec = self.cmd().args(["delete-session", name, "--force"]);
+        self.check_socket_connect(super::socket::spec_socket_path(&spec, name))?;
+        match spec.run() {
             Ok(_) => Ok(()),
             Err(MuxErr::Command { stderr, .. })
                 if stderr.to_ascii_lowercase().contains("not found") =>

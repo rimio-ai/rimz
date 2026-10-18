@@ -1,10 +1,13 @@
-//! Zellij IPC socket path budgeting.
+//! Zellij IPC socket path budgeting and denied-connect evidence.
 //!
 //! Zellij derives an AF_UNIX socket path from its socket base, protocol
 //! contract directory, and session name. On macOS the path budget is especially
 //! tight, so RimZ checks the path before asking Zellij to birth a room and
 //! classifies the matching stderr if a different environment reaches Zellij
 //! first.
+//!
+//! A socket omitted from Zellij's live listing gets one nonblocking connect
+//! probe. Only a permission denial overrides the listing's classification.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -13,6 +16,75 @@ use crate::mux::command::CommandSpec;
 use crate::mux::{MuxErr, Result};
 
 const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
+
+fn connect_socket(path: &Path) -> std::io::Result<()> {
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    let socket = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
+    fcntl(&socket, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC))?;
+    let stream = UnixStream::from(socket);
+    // A full accept backlog must not turn a diagnostic probe into a wait.
+    stream.set_nonblocking(true)?;
+    let address = UnixAddr::new(path)?;
+    connect(stream.as_raw_fd(), &address).map_err(std::io::Error::from)
+}
+
+impl super::ZellijBackend {
+    pub(super) fn check_socket_connect(&self, socket: PathBuf) -> Result<()> {
+        use std::os::unix::fs::FileTypeExt;
+
+        if !socket
+            .symlink_metadata()
+            .is_ok_and(|meta| meta.file_type().is_socket())
+        {
+            return Ok(());
+        }
+        #[cfg(test)]
+        let connect = self.socket_connect.unwrap_or(connect_socket);
+        #[cfg(not(test))]
+        let connect = connect_socket;
+        if let Err(error) = connect(&socket)
+            && error.kind() == std::io::ErrorKind::PermissionDenied
+        {
+            return Err(MuxErr::SocketConnectDenied {
+                mux: crate::ids::MuxName::Zellij,
+                socket,
+                reason: error.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_unlisted_sockets(&self, spec: &CommandSpec, live: &[String]) -> Result<()> {
+        let directory = spec_socket_path(spec, "");
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return Err(MuxErr::SocketConnectDenied {
+                    mux: crate::ids::MuxName::Zellij,
+                    socket: directory,
+                    reason: error.to_string(),
+                });
+            }
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            if live.iter().any(|name| entry.file_name() == name.as_str()) {
+                continue;
+            }
+            self.check_socket_connect(entry.path())?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijSocketHeadroom {
@@ -177,6 +249,35 @@ fn current_uid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_connect_probe_reaches_a_listener_and_preserves_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(connect_socket(&path).is_ok());
+        drop(listener);
+        assert_eq!(
+            connect_socket(&path).unwrap_err().kind(),
+            std::io::ErrorKind::ConnectionRefused
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn socket_connect_probe_never_waits_for_a_full_backlog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("socket");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        nix::sys::socket::listen(&listener, nix::sys::socket::Backlog::new(0).unwrap()).unwrap();
+        let _pending = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(
+            connect_socket(&path).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     #[test]
     fn explicit_socket_dir_wins_verbatim() {

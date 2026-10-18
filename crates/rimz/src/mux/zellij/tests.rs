@@ -1,6 +1,156 @@
 use super::*;
 
 #[cfg(unix)]
+fn socket_listing_fixture(reply: &str) -> (tempfile::TempDir, ZellijBackend, PathBuf) {
+    let (temp, shim) = support::zellij_shim(&format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/zellij.log\"\n{reply}\n"
+    ));
+    let mut backend = ZellijBackend::with_program_and_runtime_for_test(&shim, temp.path());
+    // The fixture must never create an entry under an inherited socket root.
+    backend.socket_dir = Some(temp.path().join("sock"));
+    let socket = socket::spec_socket_path(&backend.cmd(), "room");
+    std::fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    (temp, backend, socket)
+}
+
+#[cfg(unix)]
+fn denied_connect(_: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from_raw_os_error(nix::libc::EACCES))
+}
+
+#[cfg(unix)]
+#[test]
+fn unlisted_socket_denial_is_not_an_absent_or_exited_session() {
+    let replies = [
+        "printf 'No active zellij sessions found.\\n' >&2; exit 1",
+        "printf 'There is no active session!\\n' >&2; exit 1",
+        "printf 'room [Created 1m ago] (EXITED - attach to resurrect)\\n'",
+    ];
+    let results: Vec<_> = replies.into_iter().map(|reply| {
+        let (temp, mut backend, socket) = socket_listing_fixture(reply);
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        backend.socket_connect = Some(denied_connect);
+        let listing = backend.list_sessions();
+        let liveness = backend.session_liveness("room");
+        let denied = |error: &MuxErr| matches!(error, MuxErr::SocketConnectDenied { mux: crate::MuxName::Zellij, socket: path, reason } if path == &socket && reason.contains("Permission denied"));
+        let correct = listing.as_ref().is_err_and(&denied) && liveness.as_ref().is_err_and(&denied);
+        let log = support::shim_log(&temp);
+        let attempts = if reply.contains("There is no active session!") { 6 } else { 1 };
+        assert_eq!(support::command_count(&log, "list-sessions"), 2 * attempts, "{log}");
+        (reply, correct, listing, liveness)
+    }).collect();
+    assert!(
+        results.iter().all(|(_, correct, _, _)| *correct),
+        "{results:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn listing_permission_denied_names_the_child_socket_directory() {
+    let (temp, backend, socket) =
+        socket_listing_fixture("printf 'Error occurred: PermissionDenied\\n' >&2; exit 1");
+    let results = [
+        backend.list_sessions().map(|_| ()),
+        backend.session_liveness("room").map(|_| ()),
+    ];
+    assert!(results.iter().all(|result| matches!(result, Err(MuxErr::SocketConnectDenied { socket: path, .. }) if path == socket.parent().unwrap())), "{results:?}");
+    assert_eq!(
+        support::command_count(&support::shim_log(&temp), "list-sessions"),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn delete_session_does_not_hide_socket_denial() {
+    // Upstream `delete-session --force` ignores a denied connect and still
+    // removes the resurrection cache, so the probe must run before it.
+    for reply in [
+        "printf 'Session room not found\\n' >&2; exit 1",
+        "printf 'Session: \"room\" successfully deleted.\\n'",
+    ] {
+        let (temp, mut backend, socket) = socket_listing_fixture(reply);
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        backend.socket_connect = Some(denied_connect);
+        let result = backend.kill_session("room");
+        assert!(
+            matches!(&result, Err(MuxErr::SocketConnectDenied { socket: path, .. }) if path == &socket),
+            "{reply}: {result:?}"
+        );
+        assert_eq!(
+            support::command_count(&support::shim_log(&temp), "delete-session"),
+            0,
+            "{reply}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn socket_probe_preserves_non_denial_classifications() {
+    for reply in [
+        "printf 'No active zellij sessions found.\\n' >&2; exit 1",
+        "printf 'There is no active session!\\n' >&2; exit 1",
+        "printf 'room [Created 1m ago] (EXITED - attach to resurrect)\\n'",
+    ] {
+        let (temp, mut backend, socket) = socket_listing_fixture(reply);
+        let expected = if reply.contains("EXITED") {
+            crate::mux::SessionLiveness::Exited
+        } else {
+            crate::mux::SessionLiveness::Absent
+        };
+        assert!(backend.list_sessions().unwrap().is_empty());
+        assert_eq!(backend.session_liveness("room").unwrap(), expected);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        for connect in [
+            (|_: &Path| Ok(())) as fn(&Path) -> std::io::Result<()>,
+            |_| Err(std::io::ErrorKind::ConnectionRefused.into()),
+            |_| Err(std::io::ErrorKind::NotFound.into()),
+            |_| Err(std::io::ErrorKind::Other.into()),
+        ] {
+            backend.socket_connect = Some(connect);
+            assert!(backend.list_sessions().unwrap().is_empty());
+            assert_eq!(backend.session_liveness("room").unwrap(), expected);
+        }
+        let attempts = if reply.contains("There is no active session!") {
+            6
+        } else {
+            1
+        };
+        assert_eq!(
+            support::command_count(&support::shim_log(&temp), "list-sessions"),
+            2 + 8 * attempts
+        );
+        drop(listener);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn socket_probe_skips_live_sessions_directories_and_regular_files() {
+    let (temp, mut backend, socket) = socket_listing_fixture("printf 'room [Created 1m ago]\\n'");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    std::fs::create_dir(socket.parent().unwrap().join("session_info")).unwrap();
+    std::fs::write(socket.parent().unwrap().join("regular"), "").unwrap();
+    backend.socket_connect = Some(|_| panic!("live sockets and non-sockets must not be probed"));
+    assert_eq!(backend.list_sessions().unwrap(), ["room"]);
+    assert_eq!(
+        backend.session_liveness("room").unwrap(),
+        crate::mux::SessionLiveness::Live
+    );
+    backend.socket_connect = Some(denied_connect);
+    assert_eq!(
+        backend.session_liveness("another").unwrap(),
+        crate::mux::SessionLiveness::Absent
+    );
+    assert_eq!(
+        support::command_count(&support::shim_log(&temp), "list-sessions"),
+        3
+    );
+}
+
+#[cfg(unix)]
 use super::backend::{off_spec_sidebars, reconcile_pane};
 pub(crate) mod support;
 
