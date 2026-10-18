@@ -86,7 +86,7 @@ Focus: target/debug/xtask sandbox in '/tmp/rimz-sandbox-wsZYXO' -- zellij --sess
 Run a sidebar's Look first, then capture or click it: an unwatched sidebar can hold a stale frame.
 ```
 
-## Six checks
+## Seven checks
 
 Run the sequence on both backends, using each room's own card.
 
@@ -191,6 +191,10 @@ The recorded run glided from an idle sidebar on 16 ms paints on both backends: t
 On each backend, use two tabs with at least two agent cards visible in each sidebar. In tab 1 select card A so it opens, with card B's pane in tab 2. Capture tab 1's sidebar with `rimz pane capture` and note B's first-line row, then click B. Capture the first frame in tab 2's sidebar: B must land on the same row and A must still be open. Repeat after tab 2's sidebar previously selected a card above B with an open delegation section, to catch a landing below the clicked row as well as one above it. Zellij's actual client tab switch needs an attached session, as in check 4.
 
 In `audit/focus.log.jsonl`, inspect the latest `push_handshake` records with `jq 'select(.event.kind=="push_handshake")'`: the source outcome and destination peer verdict must both be `painted`. The main diagnostic log must have no `clicked_row_displaced` for B. A `displaced` peer verdict means a frame was painted but missed the requested row, even when the source outcome is `painted`.
+
+### 7. Failed focus
+
+On each backend, force a focus dispatch to fail without racing a pane removal. Put an executable shim named after the mux (`tmux` or `zellij`) in a directory on the room's `PATH`, ahead of the real binary. It forwards every call to the real binary, except that while a marker directory exists it exits non-zero with a message on stderr for a focus of one target pane (`select-pane -t <pane>` on tmux, `action focus-pane-id` on Zellij). Kill the room's `sidebar host` by PID so its successor resolves the shim; the supervisors reattach. Create the marker, click the target's card, capture the sidebar, then remove the marker. The highlight must return to the session-focused card, and the bottom line must read `last alert 0s ago: focus failed: <card>: <error>` with `x dismiss`.
 
 ## Room host
 
