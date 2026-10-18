@@ -131,6 +131,7 @@ fn draw_into(
     ui.anchor_clamped = composed.anchor_clamped;
     ui.offset_authoritative = false;
     ui.landed_reveal = false;
+    ui.reveal_row = None;
     ui.focus_placement = None;
     // One paint consumes the focus reveal; later folds with unchanged selection
     // leave the viewport anchored to the card or scroll by hand.

@@ -1050,7 +1050,7 @@ fn wheel_scroll_steps_the_offset_without_moving_selection() {
 }
 
 #[test]
-fn banner_click_scrolls_to_top_without_focusing() {
+fn banner_without_a_lead_falls_back_to_top_without_focusing() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
@@ -1071,6 +1071,73 @@ fn banner_click_scrolls_to_top_without_focusing() {
     paint(&mut ui, &snapshot, 20);
     assert_eq!(ui.scroll_offset, 0);
     assert_eq!(outcome.effects, Vec::new());
+}
+
+#[test]
+fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
+    let ws = workspace();
+    let mut snapshot = snapshot_with_panes(
+        &ws,
+        (0..24)
+            .map(|index| pane(&format!("terminal_{index}"), "tab_0", false))
+            .collect(),
+    );
+    let agent = clickable_block_snapshot(&ws).worktree_groups[0].rows[0].clone();
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    rows[1].card = agent.card.clone();
+    rows[18].card = agent.card;
+    rows[18].as_agent_mut().unwrap().status = crate::agents::AgentStatus::Waiting;
+    rows[18].unread = true;
+    let selected = pane_of(&snapshot, 0);
+    let mut ui = UiState {
+        freeze: Some(render::LayoutFreeze {
+            frozen: Default::default(),
+            armed_ms: 1,
+        }),
+        ..Default::default()
+    };
+    ui.expanded_groups
+        .insert(snapshot.worktree_groups[0].key.clone());
+    reconcile_selection(&mut ui, &snapshot, Some(selected.clone()));
+    paint(&mut ui, &snapshot, 18);
+    assert!(ui.interactions.line_for_row(18).is_none());
+    let (column, row) = ui
+        .interactions
+        .line_for_target(&HitTarget::UnreadBanner)
+        .unwrap();
+    assert_eq!(
+        handle_mouse_click(column, row, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    paint(&mut ui, &snapshot, 18);
+    assert!(
+        ui.interactions.line_for_row(18).is_some(),
+        "reveal the lead, not producer rank zero"
+    );
+    assert!(ui.scroll_offset > 0);
+    assert_eq!(ui.selected_pane, Some(selected.clone()));
+    assert_eq!(ui.reveal_row, None, "one draw consumes the reveal");
+
+    ui.make_up_filter = BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running));
+    paint(&mut ui, &snapshot, 18);
+    let (column, row) = ui
+        .interactions
+        .line_for_target(&HitTarget::UnreadBanner)
+        .unwrap();
+    ui.scroll_offset = 42;
+    assert_eq!(
+        handle_mouse_click(column, row, &mut ui, &snapshot),
+        InputOutcome::redraw()
+    );
+    assert_eq!(
+        ui.scroll_offset, 0,
+        "a filter-hidden full-roster lead falls back to top"
+    );
+    assert_eq!(ui.selected_pane, Some(selected));
+    paint(&mut ui, &snapshot, 18);
+    assert_eq!(ui.reveal_row, None);
 }
 #[test]
 fn selection_change_reveals_an_offscreen_card_after_a_wheel_peek() {
