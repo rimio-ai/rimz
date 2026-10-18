@@ -224,7 +224,8 @@ upward-dependencies = ["address"]
 # Managed-hook installers share the ingress env names without importing the drainer (+2).
 # LaunchCapability::configure_room_permissions shares host room-root grants with the process compiler (+1).
 # HookInstallOptions carries the machine's routine-command policy into managed install and preview (+1).
-surface-budget = 1094
+# `AgentState::compacted_since_prompt` gates keep-warm and idle compaction in harness (+1).
+surface-budget = 1095
 
 [[verdict]]
 kind = "item"

@@ -190,8 +190,9 @@ pub enum LifecycleSignal {
     /// (Claude/Codex `PostCompact`, Claude/Codex `SessionStart` with
     /// `source = "compact"`, Pi `session_compact`/`session_compact_failed`). The
     /// transient compacting head lifts here when one is open. When the provider
-    /// reports the trigger, automatic compaction resumes the interrupted turn
-    /// and manual `/compact` rests to idle. A provider with no trigger bit
+    /// reports the trigger, automatic compaction resumes the turn it
+    /// interrupted (a resting row stays resting) and manual `/compact` rests
+    /// to idle. A provider with no trigger bit
     /// preserves the prior state. A failed close only lifts the transient head
     /// and preserves status.
     CompactionEnded {
@@ -582,14 +583,7 @@ fn opened_turn(
                 prior_status,
                 Some(AgentStatus::Running | AgentStatus::Waiting)
             )
-            && matches!(
-                signal,
-                LifecycleSignal::ToolUsed { .. }
-                    | LifecycleSignal::CompactionEnded {
-                        auto: Some(true),
-                        failed: false,
-                    }
-            ))
+            && matches!(signal, LifecycleSignal::ToolUsed { .. }))
 }
 
 fn map_status(
@@ -697,7 +691,12 @@ fn map_status(
         LifecycleSignal::CompactionEnded {
             auto: Some(true),
             failed: false,
-        } => reconcile_activity(prior_status, "auto-compaction resumed a turn", kind),
+        } => match prior_status {
+            // An automatic close resumes only the turn it interrupted; one that
+            // lands on a resting row interrupted nothing, so it opens no turn.
+            Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
+            other => other.unwrap_or(AgentStatus::Idle),
+        },
         LifecycleSignal::CompactionEnded {
             auto: Some(false),
             failed: false,

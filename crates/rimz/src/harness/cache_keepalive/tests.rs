@@ -20,6 +20,35 @@ fn sleeping() -> AgentState {
     agent
 }
 
+/// The fold restamps `turn_ended_at` at a compaction close and sets the
+/// marker (`store::snapshot::fold::tests::compact`); this is that row.
+#[test]
+fn compaction_close_restarts_the_clock_but_cannot_restart_keep_warm() {
+    let mut agent = sleeping();
+    agent.turn_started_at = Some(ts(110));
+    agent.turn_ended_at = Some(ts(110));
+    agent.compacted_awaiting_prompt = Some(ts(110));
+    assert_eq!(agent.last_request_at(), Some(ts(110)));
+    let config = HarnessConfig::default();
+    let horizon = Some(Duration::from_secs(7200));
+    let now = ts(3650);
+    assert!(!should_keepalive(&agent, &config, None, now));
+    agent.pending_waits.clear();
+    assert_eq!(holds(&agent, horizon, &config, now), None);
+
+    agent.compacted_awaiting_prompt = None;
+    assert_eq!(holds(&agent, horizon, &config, now), horizon);
+    agent.pending_waits = sleeping().pending_waits;
+    assert!(should_keepalive(&agent, &config, None, now));
+
+    agent.compacted_awaiting_prompt = Some(ts(110));
+    agent.kind = AgentKind::new_unchecked("unregistered");
+    assert!(
+        pingable(&agent),
+        "no native turn-start hook can clear this marker"
+    );
+}
+
 #[test]
 fn frozen_agents_never_receive_cache_pings() {
     let mut agent = sleeping();
