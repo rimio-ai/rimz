@@ -530,6 +530,9 @@ fn prepare_supervised(
     else {
         return Ok(None);
     };
+    if cwd.is_some() {
+        launch.repo_root = workspace.at_launch_dir(&launch.cwd)?.cwd_project_root;
+    }
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
     let logins = rimz::agents::room_accounts(

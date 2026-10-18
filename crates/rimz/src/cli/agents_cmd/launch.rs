@@ -309,21 +309,26 @@ pub(in crate::cli) fn launch_resolved<'a>(
     }
     let pick_session = args.launch.resume.is_some();
     let team = team_name.as_deref().and_then(|name| teams.0.get(name));
+    let mut preflight_workspace = match cwd.as_deref() {
+        Some(cwd) => workspace.at_launch_dir(cwd)?,
+        None => workspace.clone(),
+    };
+    if worktree_launch {
+        preflight_workspace.cwd_project_root = Some(workspace.launch_repo_root().to_path_buf());
+    }
     if !args.launch.cohort.continue_cohort
         && args.launch.cohort.from_pr.is_none()
         && let Some(name) = team_name.as_deref()
         && let Some(team) = team
     {
-        let mut launch_workspace = workspace.clone();
-        if loop_task.is_some()
-            && let Some(cwd) = &cwd
-        {
-            launch_workspace.worktree_root = cwd.clone();
-        }
         rimz::harness::schedule::team::validate_launch(
             name,
             team,
-            &launch_workspace,
+            if loop_task.is_some() {
+                &preflight_workspace
+            } else {
+                workspace
+            },
             explicit_worktree_name.as_deref(),
         )?;
     }
@@ -417,18 +422,6 @@ pub(in crate::cli) fn launch_resolved<'a>(
         allow_in_place,
     );
     let in_place = placement == Placement::SamePane;
-    let preflight_workspace = if loop_fire.is_some()
-        && let Some(cwd) = &cwd
-    {
-        let mut launch_workspace = rimz::workspace::WorkspaceResolver::resolve_participant(
-            cwd,
-            Some(workspace.project_root.clone()),
-        )?;
-        launch_workspace.worktree_root = cwd.clone();
-        launch_workspace
-    } else {
-        workspace.clone()
-    };
     let empty_dir_eligible = single_cell && !worktree_launch && args.launch.cwd.is_none();
     if !single_cell
         && !worktree_launch
@@ -460,6 +453,11 @@ pub(in crate::cli) fn launch_resolved<'a>(
             &mut checked_folder_trust,
             loop_fire
                 .map(|_| crate::cli::folder_trust::Unattended::Loop)
+                .or_else(|| {
+                    caller
+                        .as_ref()
+                        .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                })
                 .or_else(|| {
                     team_name
                         .as_ref()
@@ -1081,7 +1079,7 @@ fn preflight_cell(
     cell: &rimz::harness::spec::AgentCell,
     isolation: rimz::config::Isolation,
     start: CellStart<'_>,
-    checked_folder_trust: &mut HashSet<rimz::ids::LoginKey>,
+    checked_folder_trust: &mut HashSet<(rimz::ids::LoginKey, PathBuf)>,
     unattended: Option<crate::cli::folder_trust::Unattended>,
     empty_dir: Option<(&[AgentState], Option<&str>)>,
 ) -> Result<(
@@ -1173,17 +1171,16 @@ fn preflight_cell(
     {
         rimz::agents::version::check_launch_version_floor(adapter, &path)?;
     }
-    if prepared.is_some()
-        || cell.launch.checkout.is_some()
-        || checked_folder_trust.insert(login.key())
-    {
+    if checked_folder_trust.insert((login.key(), cwd.to_path_buf())) {
         crate::cli::folder_trust::preflight(
             cell.kind.as_str(),
             cwd,
             adapter.folder_trust(
                 cwd,
-                (prepared.is_none() && cell.launch.checkout.is_none())
-                    .then(|| workspace.launch_repo_root()),
+                workspace
+                    .cwd_project_root
+                    .as_deref()
+                    .filter(|_| prepared.is_none() && cell.launch.checkout.is_none()),
                 &login.env(&rimz::agents::ambient_env()),
             ),
             unattended,
@@ -1207,7 +1204,7 @@ fn launch_resume_layout(
     worktree_filter: Option<&Path>,
     ancestry: Option<&rimz::harness::ancestry::LaunchAncestry>,
     focus: LaunchFocus,
-    mut checked_folder_trust: HashSet<rimz::ids::LoginKey>,
+    mut checked_folder_trust: HashSet<(rimz::ids::LoginKey, PathBuf)>,
 ) -> Result<()> {
     let workspace = &ctx.workspace;
     let store = &ctx.store;
@@ -1270,10 +1267,15 @@ fn launch_resume_layout(
             unavailable: Some(&unavailable),
         },
     )?;
+    let cwd = plan
+        .cwd
+        .clone()
+        .context("cohort resume matched no working directory")?;
+    let preflight_workspace = workspace.at_launch_dir(&cwd)?;
     let mut preflighted_logins = Vec::new();
     for (cell, seed) in layout.agent_cells().zip(&plan.seeds) {
         let mut cell = cell.clone();
-        let mut preflight_workspace = workspace.clone();
+        let mut preflight_workspace = preflight_workspace.clone();
         if let rimz::harness::plan::CohortSeed::Resume(agent) = seed {
             cell.launch.checkout.clone_from(&agent.checkout);
             cell.launch.login.clone_from(&agent.login);
@@ -1307,19 +1309,19 @@ fn launch_resume_layout(
             ),
             CellStart::Launch(None),
             &mut checked_folder_trust,
-            team_name
-                .as_ref()
-                .map(|_| crate::cli::folder_trust::Unattended::Team),
+            ancestry
+                .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                .or_else(|| {
+                    team_name
+                        .as_ref()
+                        .map(|_| crate::cli::folder_trust::Unattended::Team)
+                }),
             None,
         )?;
         if matches!(seed, rimz::harness::plan::CohortSeed::Fresh) {
             preflighted_logins.push(login);
         }
     }
-    let cwd = plan
-        .cwd
-        .clone()
-        .context("cohort resume matched no working directory")?;
     crate::cli::lsp_admission::admit(&cwd, machine_config)?;
     if let Some(team) = team {
         rimz::worktree::exclude_team_scratch(&cwd, &team.scratch_patterns());
