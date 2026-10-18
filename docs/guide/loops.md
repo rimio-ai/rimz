@@ -198,6 +198,8 @@ rimz loop add follow-up --when 'pr[sidebar-ordering]=merged && pr[sidebar-cards]
 
 Both branches belong to the origin repository of the checkout where you add the task. The room sidebar keeps those branch readings live without local checkouts; removing `follow-up` releases them.
 
+Before adding a task, use `rimz loop explain 'ci=passed && pr=open'` to inspect its current readings and truth without creating it. For selected branches, add the task first so the sidebar starts probing them.
+
 ## Guard a turn with a check
 
 Most recurring automation should stay a plain script. A cron job that runs the test suite, syncs a mirror, or checks a certificate's expiry is deterministic, instant, and free; spending an agent turn to re-check a world that has not changed is burning tokens on `true`. What a script cannot do is recover. When the command that was supposed to pass fails at 2 a.m., the script's whole error path is "page a human."

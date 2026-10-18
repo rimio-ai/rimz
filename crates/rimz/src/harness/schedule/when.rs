@@ -681,6 +681,23 @@ impl Parser<'_> {
 
     fn key(&mut self) -> Result<String, WhenError> {
         let mut key = self.word()?;
+        if key != "team.stage" && window_span(&key).is_none() && ForgeKey::parse(&key).is_none() {
+            let keys = [
+                "team.stage",
+                "ci",
+                "pr",
+                "pr.queue",
+                "window.5h.left",
+                "window.7d.left",
+            ];
+            let suggestion = crate::utils::suggest::nearest_name(&key, keys)
+                .map(|name| format!("did you mean {name}? "))
+                .unwrap_or_default();
+            return Err(self.error(format!(
+                "{suggestion}unknown key; keys: {}; ci, pr, pr.queue also accept [branch]",
+                keys.join(", ")
+            )));
+        }
         if !self.take("[") {
             return Ok(key);
         }
@@ -757,11 +774,6 @@ impl Parser<'_> {
                 return self.window_term(key);
             }
             let forge_key = ForgeKey::parse(&key);
-            if key != "team.stage" && forge_key.is_none() {
-                return Err(self.error(
-                    "unknown key; keys: team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left; ci, pr, pr.queue also accept [branch]",
-                ));
-            }
             if Op::COMPARISONS.iter().any(|op| self.take(op.token())) {
                 let value = self.word()?;
                 return Err(self.error(format!(
@@ -784,20 +796,33 @@ impl Parser<'_> {
             {
                 for value in &values {
                     if value != "unknown" && !stages.contains(value) {
+                        let suggestion = crate::utils::suggest::nearest_name(
+                            value,
+                            stages
+                                .iter()
+                                .map(String::as_str)
+                                .chain(std::iter::once("unknown")),
+                        )
+                        .map(|name| format!("did you mean {name}? "))
+                        .unwrap_or_default();
                         return Err(self.error(format!(
-                            "no team defines stage {value}; stages: {}",
+                            "{suggestion}no team defines stage {value}; stages: {}",
                             stages.iter().cloned().collect::<Vec<_>>().join(", ")
                         )));
                     }
                 }
             }
             if let Some(allowed) = forge_key.map(ForgeKey::values)
-                && values
+                && let Some(value) = values
                     .iter()
-                    .any(|value| !allowed.contains(&value.as_str()))
+                    .find(|value| !allowed.contains(&value.as_str()))
             {
+                let suggestion =
+                    crate::utils::suggest::nearest_name(value, allowed.iter().copied())
+                        .map(|name| format!("did you mean {name}? "))
+                        .unwrap_or_default();
                 return Err(self.error(format!(
-                    "unknown {key} value; values: {}",
+                    "{suggestion}unknown {key} value; values: {}",
                     allowed.join(", ")
                 )));
             }

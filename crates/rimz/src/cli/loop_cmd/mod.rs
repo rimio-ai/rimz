@@ -52,6 +52,7 @@ use super::render as ui;
 
 mod add;
 mod condition;
+mod explain;
 mod list;
 mod render;
 mod run_report;
@@ -89,6 +90,8 @@ enum LoopSubcmd {
     Watch(WatchArgs),
     /// Show one task's trigger, next fire, and recent run forensics.
     Show(ShowArgs),
+    /// Evaluate condition expressions without adding a task.
+    Explain(ExplainArgs),
     /// Print full forensics for a task's recent runs.
     Logs(LogsArgs),
     /// Fire one task now in the foreground for testing; one-shots and subscriptions stay put.
@@ -117,6 +120,22 @@ struct ListArgs {
     /// Print structured, uncollapsed task rows.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Debug, Args)]
+struct ExplainArgs {
+    /// Condition clauses, ANDed together.
+    #[arg(required = true, num_args = 1.., value_name = "EXPR")]
+    expressions: Vec<String>,
+    /// Checkout whose board and forge readings to inspect.
+    #[arg(long, default_value = ".")]
+    root: PathBuf,
+    /// Provider kind for window readings.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Provider account for window readings.
+    #[arg(long)]
+    account: Option<rimz::ids::LoginName>,
 }
 
 #[derive(Debug, Args)]
@@ -415,6 +434,31 @@ struct WatchArgs {
     hold: bool,
 }
 
+/// The start directory's workspace, or an empty-dir caller's checkout, which holds its lane.
+///
+/// The caller's record decides, not the start path: a symlinked RimZ home
+/// resolves the empty dir to a path outside `empty_dir_root()`.
+fn resolve_caller_workspace() -> Result<rimz::ResolvedWorkspace> {
+    let workspace = WorkspaceResolver::resolve(".", None)?;
+    let Ok(room) = WorkspaceResolver::resolve_participant(".", None) else {
+        return Ok(workspace);
+    };
+    let Ok(Some(store)) = crate::cli::open_existing_store(&room) else {
+        return Ok(workspace);
+    };
+    let Ok(snapshot) = store.snapshot_cached() else {
+        return Ok(workspace);
+    };
+    let Ok(caller) = rimz::harness::ancestry::resolve_calling_agent(&snapshot.agents) else {
+        return Ok(workspace);
+    };
+    let Some(checkout) = caller.checkout.as_deref() else {
+        return Ok(workspace);
+    };
+    WorkspaceResolver::resolve(checkout, None)
+        .with_context(|| format!("resolving the caller's checkout `{checkout}`"))
+}
+
 pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         LoopSubcmd::CheckExec { command } => {
@@ -439,6 +483,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::List(args) => list::run(args, globals),
         LoopSubcmd::Watch(args) => watch::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
+        LoopSubcmd::Explain(args) => explain::run(args),
         LoopSubcmd::Logs(args) => render::logs(args, globals),
         LoopSubcmd::Fire(args) => run_tasks::run_one(
             &args.name,

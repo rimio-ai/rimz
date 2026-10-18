@@ -10642,3 +10642,141 @@ fn branch_conditions_show_distinct_live_readings() {
         assert!(line.contains(glyph) && line.ends_with(reading), "{line}");
     }
 }
+
+#[test]
+fn explain_reports_live_terms_truth_and_leaves_inputs_unchanged() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "explain",
+    );
+    let cache = runtime.lane_path("pr-state.json");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    let bytes = json!({"branch_ci": {env.project_root.to_string_lossy().to_string(): "passing"}, "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"}, "branches": {"repo": {"a": {"pr": {"state": "merged"}}}}}).to_string();
+    std::fs::write(&cache, &bytes).unwrap();
+    for (condition, code, truth) in [
+        ("pr[a]=merged && ci=passed", 0, "true"),
+        ("pr[a]=open && ci=passed", 1, "false"),
+    ] {
+        let output = env
+            .rimz()
+            .args(["loop", "explain", condition])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.starts_with(&format!(
+                "when: {condition}\nscope: {}\n",
+                env.project_root.display()
+            )),
+            "{text}"
+        );
+        assert!(text.contains("  ci=passed   ✓ passed"), "{text}");
+        assert!(text.contains(&format!("now: {truth}\n")), "{text}");
+        let term = text
+            .lines()
+            .find(|line| line.starts_with("  pr[a]"))
+            .unwrap();
+        assert!(term.ends_with("merged"), "{text}");
+    }
+    assert_eq!(std::fs::read_to_string(cache).unwrap(), bytes);
+    assert!(!runtime.lane_path("loop-when.json").exists());
+    assert!(loop_ok(&env, &["loop", "list", "--json"]).contains("[]"));
+}
+
+#[test]
+fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
+    let env = Env::new();
+    let output = env
+        .rimz()
+        .args(["loop", "explain", "ci=unknown", "window.5h.left>=40"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("when: ci=unknown && window.5h.left>=40"),
+        "{text}"
+    );
+    assert!(text.contains("  ci=unknown   ✓ unknown"), "{text}");
+    assert!(text.contains("  window.5h.left>=40   ✗ unknown"), "{text}");
+    assert!(
+        text.contains(
+            "ci and pr readings come from the room's sidebar; the loop timer alone never sees them"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("--provider"), "{text}");
+    assert!(text.contains("now: false"), "{text}");
+    let output = env
+        .rimz()
+        .args(["loop", "explain", "ci=pased"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("clause 1, position") && error.contains("did you mean passed?"),
+        "{error}"
+    );
+}
+
+#[test]
+fn explain_root_and_account_select_the_same_readings_as_tasks() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    let other = env.project_root.join("checkout");
+    std::fs::create_dir(&other).unwrap();
+    assert!(init_git_repo(&other));
+    std::fs::write(other.join("blackboard.md"), "Stage: Done\n").unwrap();
+    let text = loop_ok(
+        &env,
+        &[
+            "loop",
+            "explain",
+            "team.stage=Done",
+            "--root",
+            other.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        text.contains(&format!("scope: {}", other.display())),
+        "{text}"
+    );
+    assert!(text.contains("now: true"), "{text}");
+    let output = env
+        .rimz()
+        .args([
+            "loop",
+            "explain",
+            "window.5h.left>=40",
+            "--provider",
+            "claude",
+            "--account",
+            "work",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("now: false") && !text.contains("need --provider"),
+        "{text}"
+    );
+}

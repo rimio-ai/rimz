@@ -19,7 +19,7 @@ pub(super) fn validate(clauses: &[String], root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
+pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> Verdict {
     let root = entry.resolved_root();
     let runtime = runtime_for_root(&root);
     let source = runtime
@@ -125,6 +125,10 @@ pub(super) fn write_show(
                 .unwrap_or_else(|| "-".to_owned()),
         });
     writeln!(out, "condition: {label}")?;
+    write_terms(out, expr, &verdict)
+}
+
+pub(super) fn write_terms(out: &mut impl Write, expr: &WhenExpr, verdict: &Verdict) -> Result<()> {
     for term in expr.terms() {
         let value = verdict
             .readings

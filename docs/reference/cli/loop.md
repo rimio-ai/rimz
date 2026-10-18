@@ -27,6 +27,7 @@ rimz loop fire watchdog
 | `rimz loop list [--all] [--json]` | List the current room's tasks, grouped by attention and checkout. |
 | `rimz loop watch` | Hold a live dashboard open with countdowns and running tasks. |
 | `rimz loop show <NAME>` | One task's trigger, health, spend, and recent runs. |
+| `rimz loop explain <EXPR>...` | Current condition readings and truth, without adding a task. |
 | `rimz loop logs <NAME>` | Full forensics for a task's recent runs. |
 | `rimz loop timer install\|status\|remove` | Manage the machine-wide timer. |
 
@@ -123,6 +124,23 @@ Scope is the checkout where the task was added, or `--root <worktree path>`. For
 The receipt adds `trigger: when <expression>, for <duration>`, `scope: <checkout>`, and `now: waiting · team.stage: Review, ci: unknown` (or `holding 0s/30m` when already true); a window term reads as `now: waiting · window.5h.left: 8`. Without a room, a CI or PR condition also prints `ci and pr readings come from the room's sidebar; the loop timer alone never sees them`.
 
 `--wait --when` pins the live session like other waits. A live subscription with the same target session, canonical expression, hold, project root, and scoped checkout prints `already subscribed as <name>` without rewriting it, even if its prompt, label, or `--once` differs. Identical conditions on different worktrees remain separate waits.
+
+### `loop explain`
+
+`rimz loop explain <EXPR>... [--root <PATH>] [--provider <KIND>] [--account <NAME>]` evaluates the current readings without adding a task, starting probes, or writing state. Repeat positional clauses to AND them together, just like repeated `--when`. Scope resolves like `loop add`: the caller's checkout, overridden by `--root`. Use `--` before a positional value that is exactly a flag, including `-h` or `--help`.
+
+Output shape:
+
+```text
+when: <canonical expression>
+scope: <checkout>
+  <term>   ✓|✗ <reading or unknown>
+now: true|false
+```
+
+Each leaf term gets the same line as in `loop show`, in expression order. Exit 0 means true; exit 1 means false; exit 2 means a refused expression. Refused expressions use the same clause, position, and fix diagnostics as `loop add --when`; mistyped keys, forge values, and configured stages within two edits get a `did you mean` suggestion.
+
+Forge terms read the existing room cache only: explain does not keep a selected branch probed. Outside a room they read unknown and print the sidebar hint. Window terms use `--provider` and optionally `--account`, or the room's default account for that provider. Without `--provider`, window readings are unknown and a hint names the missing flag.
 
 ### Flags
 
