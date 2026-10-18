@@ -142,15 +142,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;
     login.health(&catalog.native_ambient(&seed.kind, &rimz::agents::ambient_env()))?;
+    let repo_root = if seed.launch.checkout.is_none() {
+        workspace.at_launch_dir(&seed.cwd)?.cwd_project_root
+    } else {
+        None
+    };
     crate::cli::folder_trust::preflight(
         seed.kind.as_str(),
         &seed.cwd,
         adapter.folder_trust(
             &seed.cwd,
-            seed.launch
-                .checkout
-                .is_none()
-                .then(|| workspace.launch_repo_root()),
+            repo_root.as_deref(),
             &login.env(&rimz::agents::ambient_env()),
         ),
         None,

@@ -235,6 +235,17 @@ mod agent_ref {
     impl Fixture {
         fn new(launch: LaunchParams, live: bool, parent: Option<&str>) -> Self {
             let env = Env::new();
+            let cwd = env.project_root.join("checkout");
+            Self::at_cwd(env, cwd, launch, live, parent)
+        }
+
+        fn at_cwd(
+            env: Env,
+            cwd: PathBuf,
+            launch: LaunchParams,
+            live: bool,
+            parent: Option<&str>,
+        ) -> Self {
             env.install_agent_hooks("claude");
             std::fs::write(
                 env.rimz_home().join("config.toml"),
@@ -250,7 +261,6 @@ mod agent_ref {
             );
             let shim = write_env_dump_shim(&env, "claude");
             let shell = write_fake_login_shell(&env, "resume-shell", &[]);
-            let cwd = env.project_root.join("checkout");
             std::fs::create_dir_all(&cwd).unwrap();
             let transcript = cwd.join("saved.jsonl");
             std::fs::write(&transcript, "{}\n").unwrap();
@@ -377,6 +387,86 @@ mod agent_ref {
 
         fn trace(&self) -> String {
             std::fs::read_to_string(&self.trace).unwrap_or_default()
+        }
+    }
+
+    #[test]
+    fn agent_resume_warns_for_its_own_untrusted_repo() {
+        assert_relaunch_folder_trust(&["resume", "@bright-otter"], false);
+    }
+
+    #[test]
+    fn agent_resume_accepts_its_own_trusted_repo() {
+        assert_relaunch_folder_trust(&["resume", "@bright-otter"], true);
+    }
+
+    #[test]
+    fn lane_resume_warns_for_its_own_untrusted_repo() {
+        assert_relaunch_folder_trust(&["resume", "#saved"], false);
+    }
+
+    #[test]
+    fn lane_resume_accepts_its_own_trusted_repo() {
+        assert_relaunch_folder_trust(&["resume", "#saved"], true);
+    }
+
+    #[test]
+    fn fork_warns_for_its_own_untrusted_repo() {
+        assert_relaunch_folder_trust(&["fork", "@bright-otter", "--new-tab"], false);
+    }
+
+    #[test]
+    fn fork_accepts_its_own_trusted_repo() {
+        assert_relaunch_folder_trust(&["fork", "@bright-otter", "--new-tab"], true);
+    }
+
+    #[test]
+    fn molt_warns_for_its_own_untrusted_repo() {
+        assert_relaunch_folder_trust(&["molt", "continue the work"], false);
+    }
+
+    #[test]
+    fn molt_accepts_its_own_trusted_repo() {
+        assert_relaunch_folder_trust(&["molt", "continue the work"], true);
+    }
+
+    fn assert_relaunch_folder_trust(args: &[&str], agent_trusted: bool) {
+        if crate::common::git::git_missing() {
+            return;
+        }
+        let env = Env::new();
+        crate::common::git::init_repo(&env.project_root);
+        let cwd = env.home_root.join("agent-repo");
+        std::fs::create_dir_all(&cwd).unwrap();
+        crate::common::git::init_repo(&cwd);
+        crate::common::trust_claude_project(
+            &env,
+            if agent_trusted {
+                &cwd
+            } else {
+                &env.project_root
+            },
+        );
+        let fixture = Fixture::at_cwd(env, cwd, LaunchParams::default(), args[0] == "molt", None);
+        let mut command = fixture.command_args(args);
+        if args[0] == "molt" {
+            command
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "saved-launch");
+        }
+        let output = command.bounded_output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        if agent_trusted {
+            assert!(!stderr.contains("no trust decision"), "{stderr}");
+        } else {
+            assert!(
+                stderr.contains(&format!(
+                    "claude has no trust decision for `{}`",
+                    fixture.cwd.display()
+                )),
+                "{stderr}"
+            );
         }
     }
 

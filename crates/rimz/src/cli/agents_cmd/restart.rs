@@ -92,15 +92,17 @@ pub(in crate::cli) fn restart_resolved(
     let provider_login =
         rimz::agents::session_login(&agent.kind, login.as_ref(), &machine_config.accounts)?;
     provider_login.health(&catalog.native_ambient(&agent.kind, &rimz::agents::ambient_env()))?;
+    let repo_root = if agent.checkout.is_none() {
+        workspace.at_launch_dir(&cwd)?.cwd_project_root
+    } else {
+        None
+    };
     crate::cli::folder_trust::preflight(
         agent.kind.as_str(),
         &cwd,
         adapter.folder_trust(
             &cwd,
-            agent
-                .checkout
-                .is_none()
-                .then(|| workspace.launch_repo_root()),
+            repo_root.as_deref(),
             &provider_login.env(&rimz::agents::ambient_env()),
         ),
         unattended,
