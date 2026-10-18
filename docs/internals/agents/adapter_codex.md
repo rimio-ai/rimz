@@ -71,6 +71,8 @@ Message interrupts follow durable `TurnInterrupted` events after the key, even i
 
 The async decoder accepts the hook's JSON-string response only when it reports `accepted: true`. It attaches an `ask_queue` edit to the ordinary `ToolUsed` observation, not a waiting signal. Reply envelopes attach answered keys to `TurnStarted` and are excluded from the card prompt. Every other `UserPromptSubmit` clears the queue while preserving the prompt and task, without a version gate. A pasted reply envelope still counts as a partial answer because the hook cannot distinguish the composer from the question editor. The ingestion path mints AskIds and joins answered keys before folding; transcript entries join each question by its exact AskId. Clear-all adds no question or answer entry. The `AskUserQuestion` profile switch does not disable the async tool: upstream exposes no switch for it. Pane answering and delayed observation limits are in [the asks reference](../../reference/cli/asks.md#questions-while-codex-works).
 
+Guardian reviews in Auto also fire `PermissionRequest` before the automatic reviewer runs. RimZ therefore briefly shows permission waiting until the next activity hook; the hook payload does not identify the reviewer, and Guardian needs no `rimz answer`. Rule-allowed routine commands skip both the hook and Guardian.
+
 ### Install
 
 [`install.rs`](../../../crates/rimz/src/agents/adapters/codex/install.rs) rewrites Codex's `config.toml` in place. `codex_config_path` resolves the file the way Codex does: `RIMZ_CODEX_CONFIG` (a test and tooling override), then `$CODEX_HOME/config.toml`, then `~/.codex/config.toml`. It reads those keys from the login env its caller passes, so a named account's `CODEX_HOME` applies without touching the process env. Hook install, hook trust, and the [directory trust preflight](#directory-trust-preflight) all share it.
@@ -85,24 +87,28 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
 
+`LaunchReminders.permission_roots` carries the three classed room roots from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` only for host launches with roots. Codex fills the profile only when `PresetArgMatcher::ConfigKey` finds `default_permissions="rimz"`. It reads the parent from `codex_config_path(login_env)`, like the configured model, and renders the inline table through `toml_edit`. This read consults only the base config, not the `default_permissions` of a Codex `--profile`/`-p` selection. Legacy `sandbox_mode` and `[sandbox_workspace_write]` settings are ignored by Codex when the profile is selected; their network setting cannot widen this profile. Codex validates invalid parents and cycles at startup. A user-defined `[permissions.rimz]` table can merge underneath the CLI value, so the name is reserved by convention rather than enforced by RimZ.
+
 | Intent | Codex argv |
 | --- | --- |
-| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; unreadable versions pass |
+| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0 for permission profiles and Guardian review, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; unreadable versions pass |
 | Question editor Escape | `-c tui.question_esc_back=false` follows `--no-daemon` on launch, resume, pick and fork; Escape interrupts instead of collapsing the expanded editor; later user overrides win; headless exec does not inherit these TUI args |
 | Resume a session | `codex resume <id> --no-daemon -c tui.question_esc_back=false` |
 | Pick a session | `codex resume --no-daemon -c tui.question_esc_back=false`; binding waits for the first prompt's resume hooks |
 | Fork a session | `codex fork <id> --no-daemon -c tui.question_esc_back=false` |
 | Remote app-server | `--remote X` and `--remote=X` are refused at compile time; remove the flag because managed panes run embedded |
-| Permission `ask`, `plan` | no flags |
-| Permission `auto` | `--ask-for-approval never --sandbox workspace-write` |
+| Permission `ask` | `--ask-for-approval on-request -c approvals_reviewer="user" -c default_permissions="rimz"` |
+| Permission `auto` | `--ask-for-approval on-request -c approvals_reviewer="auto_review" -c default_permissions="rimz"` |
+| Permission `plan` | no flags |
 | Permission `yolo` | `--dangerously-bypass-approvals-and-sandbox` |
+| Host Ask/Auto with room paths | `-c permissions.rimz=<inline table>` extends the user's `default_permissions` (or `:workspace` when unset or `rimz`), grants writes to `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root`, and sets `network.enabled=false`; preflight compiles have no roots and omit it |
 | Model | `--model <model>` |
 | Effort | `-c model_reasoning_effort=<effort>` |
 | Profile `auto-compact` | `-c model_auto_compact_token_limit=<tokens>`; Codex caps it at 90% of the context window ([upstream](../../externals/agent-adapter/codex-reference.md#cli-config-overrides)) |
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
 | Supervised child lockdown | drops every `features.multi_agent` override, then appends `-c features.multi_agent=false` |
-| Sandbox isolation | drops every `--sandbox`/`-s` flag and `sandbox_mode` override, replaces `--approve-for-me`/`--not-so-yolo` (which clap refuses beside `--sandbox`) with `-c approvals_reviewer="auto_review" -c approval_policy="on-request"`, then appends `--sandbox danger-full-access`; argv already carrying `--dangerously-bypass-approvals-and-sandbox` is left as is ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
+| Sandbox isolation | drops every `default_permissions` override, `--sandbox`/`-s` flag and `sandbox_mode` override, replaces `--approve-for-me`/`--not-so-yolo` (which clap refuses beside `--sandbox`) with `-c approvals_reviewer="auto_review" -c approval_policy="on-request"`, then appends `--sandbox danger-full-access`; approval flags and Guardian review stay. Yolo only drops `default_permissions`, since its bypass flag already disables the sandbox ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 

@@ -222,12 +222,21 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
             after_id: &["--no-daemon", "-c", "tui.question_esc_back=false"],
         }),
         permission: super::LaunchPermissionArgs {
-            ask: &[],
+            ask: &[
+                "--ask-for-approval",
+                "on-request",
+                "-c",
+                r#"approvals_reviewer="user""#,
+                "-c",
+                r#"default_permissions="rimz""#,
+            ],
             auto: &[
                 "--ask-for-approval",
-                "never",
-                "--sandbox",
-                "workspace-write",
+                "on-request",
+                "-c",
+                r#"approvals_reviewer="auto_review""#,
+                "-c",
+                r#"default_permissions="rimz""#,
             ],
             yolo: &["--dangerously-bypass-approvals-and-sandbox"],
             plan: &[],
@@ -1008,10 +1017,51 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
     }
 
-    /// Yolo's bypass flag already runs commands unsandboxed, so its argv stays
-    /// as rendered. `--approve-for-me` conflicts with `--sandbox` in clap, so it
+    fn configure_room_permissions(
+        &self,
+        extra_args: &mut Vec<String>,
+        login_env: &BTreeMap<String, String>,
+        roots: &[PathBuf; 3],
+    ) {
+        let selected = crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "default_permissions".to_owned(),
+        };
+        if !selected
+            .occurrences(extra_args)
+            .iter()
+            .any(|entry| entry.value == r#""rimz""#)
+        {
+            return;
+        }
+        let parent = install::codex_config_path(login_env)
+            .ok()
+            .and_then(|path| install::read_existing_table(&path).ok())
+            .and_then(|root| root.get("default_permissions")?.as_str().map(str::to_owned))
+            .filter(|parent| parent != "rimz")
+            .unwrap_or_else(|| ":workspace".to_owned());
+        let mut filesystem = toml_edit::InlineTable::new();
+        for root in roots {
+            filesystem.insert(root.to_string_lossy().into_owned(), "write".into());
+        }
+        let mut network = toml_edit::InlineTable::new();
+        network.insert("enabled", false.into());
+        let mut profile = toml_edit::InlineTable::new();
+        profile.insert("extends", parent.into());
+        profile.insert("filesystem", filesystem.into());
+        profile.insert("network", network.into());
+        extra_args.extend(["-c".to_owned(), format!("permissions.rimz={profile}")]);
+    }
+
+    /// Yolo's bypass flag already runs commands unsandboxed, so it needs no
+    /// sandbox flag. `--approve-for-me` conflicts with `--sandbox` in clap, so it
     /// is replaced by the approval half of its upstream expansion.
     fn disable_native_sandbox_args(&self, extra_args: &mut Vec<String>) {
+        crate::agents::PresetArgMatcher::ConfigKey {
+            flags: vec!["-c".to_owned(), "--config".to_owned()],
+            key: "default_permissions".to_owned(),
+        }
+        .remove_occurrences(extra_args);
         if extra_args
             .iter()
             .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")

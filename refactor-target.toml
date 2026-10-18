@@ -222,7 +222,13 @@ upward-dependencies = ["address"]
 # account::cached_usage_read_at shares cache timestamps with doctor without a CLI codec (+1).
 # SignalSet::ASK_RESOLVED lets adapters declare the Hermes ask-close lifecycle signal (+1).
 # Managed-hook installers share the ingress env names without importing the drainer (+2).
-surface-budget = 1092
+# LaunchCapability::configure_room_permissions shares host room-root grants with the process compiler (+1).
+surface-budget = 1093
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::configure_room_permissions"
+reason = "The process compiler delegates provider-native host room permission profiles to the adapter."
 
 [[verdict]]
 kind = "item"
