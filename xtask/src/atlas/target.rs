@@ -1,4 +1,4 @@
-//! Target loading and in-place tightening that preserves untouched TOML text.
+//! Target loading, in-place tightening that preserves untouched TOML text, and rule measurement: layer direction, admissions, and strangler counts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Formatted, Item, Table, Value};
 
 use crate::files;
+
+use super::facts::Facts;
+use super::modules::{Boundary, escaping_items_for_boundary, module_is_within};
+use super::sources::Source;
+use super::syntax::{self, DependencySite, FileSyntax};
 
 pub(super) const TARGET_FILE: &str = "refactor-target.toml";
 
@@ -64,6 +69,129 @@ pub(super) struct ModuleRule {
     pub(super) config_line: usize,
 }
 
+impl ModuleRule {
+    pub(super) fn admissions<'a>(&'a self, to: &'a str) -> impl Iterator<Item = &'a String> {
+        self.allowed_dependencies
+            .as_ref()
+            .or(self.upward_dependencies.as_ref())
+            .into_iter()
+            .flatten()
+            .filter(move |prefix| module_is_within(to, prefix))
+    }
+}
+
+pub(super) struct Measurement<'a> {
+    pub(super) rules: Vec<RuleMeasure<'a>>,
+    pub(super) uncovered: Vec<RuleMeasure<'a>>,
+}
+
+pub(super) struct RuleMeasure<'a> {
+    pub(super) boundary: Boundary<'a>,
+    pub(super) esc: usize,
+    pub(super) parse_failures: Vec<PathBuf>,
+    pub(super) sites: Vec<RuleSite<'a>>,
+}
+
+pub(super) struct RuleSite<'a> {
+    pub(super) file: &'a FileSyntax,
+    pub(super) dependency: &'a DependencySite,
+    pub(super) to: &'a str,
+    pub(super) direction: Option<Direction>,
+    pub(super) admission: Admission,
+}
+
+pub(super) enum Admission {
+    Admitted(Vec<String>),
+    Unadmitted,
+    Ungoverned,
+}
+
+pub(super) fn measure<'a>(target: &'a Target, facts: &'a Facts) -> Measurement<'a> {
+    let ranks = target.layer_ranks();
+    let rules = target
+        .modules
+        .iter()
+        .map(|rule| measure_rule(Boundary::new(&rule.path), Some(rule), facts, &ranks))
+        .collect::<Vec<_>>();
+    let uncovered = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| !rules.iter().any(|rule| rule.boundary.covers(&file.path)))
+        .map(|file| measure_rule(Boundary::new(&file.path), None, facts, &ranks))
+        .filter(|rule| !rule.sites.is_empty())
+        .collect();
+    Measurement { rules, uncovered }
+}
+
+fn measure_rule<'a>(
+    boundary: Boundary<'a>,
+    rule: Option<&ModuleRule>,
+    facts: &'a Facts,
+    ranks: &LayerRanks,
+) -> RuleMeasure<'a> {
+    let module = boundary.module();
+    let files = facts
+        .syntax
+        .files
+        .iter()
+        .filter(|file| boundary.covers(&file.path))
+        .collect::<Vec<_>>();
+    let mut sites = Vec::new();
+    for file in &files {
+        for dependency in &file.dependencies {
+            let Some(to) = dependency.resolved.as_deref() else {
+                continue;
+            };
+            let direction = layer_direction(ranks, &file.module_path, to);
+            if module_is_within(to, &module)
+                || (rule.is_none() && direction != Some(Direction::Upward))
+            {
+                continue;
+            }
+            let admission = if rule.is_some_and(|rule| rule.allowed_dependencies.is_some())
+                || direction == Some(Direction::Upward)
+            {
+                let prefixes = rule
+                    .into_iter()
+                    .flat_map(|rule| rule.admissions(to))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if prefixes.is_empty() {
+                    Admission::Unadmitted
+                } else {
+                    Admission::Admitted(prefixes)
+                }
+            } else {
+                Admission::Ungoverned
+            };
+            sites.push(RuleSite {
+                file,
+                dependency,
+                to,
+                direction,
+                admission,
+            });
+        }
+    }
+    RuleMeasure {
+        boundary,
+        esc: if rule.is_none() && sites.is_empty() {
+            0
+        } else {
+            escaping_items_for_boundary(&files, &module, &facts.mod_index).len()
+        },
+        parse_failures: facts
+            .syntax
+            .parse_failures
+            .iter()
+            .filter(|path| boundary.covers(path))
+            .cloned()
+            .collect(),
+        sites,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(super) struct StranglerRule {
     pub(super) symbol: String,
@@ -87,6 +215,69 @@ pub(super) enum VerdictKind {
     PassThrough,
     Guard,
     Shape,
+}
+
+pub(super) fn top_module(module: &str) -> &str {
+    module
+        .split("::")
+        .next()
+        .filter(|part| !part.is_empty())
+        .unwrap_or("(crate)")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Direction {
+    Upward,
+    Same,
+    Downward,
+}
+
+pub(super) fn layer_direction(
+    ranks: &LayerRanks,
+    from_module: &str,
+    to_module: &str,
+) -> Option<Direction> {
+    let from = ranks.get(top_module(from_module))?;
+    let to = ranks.get(top_module(to_module))?;
+    Some(match to.cmp(&from) {
+        std::cmp::Ordering::Greater => Direction::Upward,
+        std::cmp::Ordering::Equal => Direction::Same,
+        std::cmp::Ordering::Less => Direction::Downward,
+    })
+}
+
+pub(super) fn sources_for_path(sources: &[Source], boundary: &Boundary<'_>) -> Vec<Source> {
+    sources
+        .iter()
+        .filter(|source| boundary.covers_without_entry(&source.path))
+        .cloned()
+        .collect()
+}
+
+pub(super) fn count_in_sources(
+    sources: &[Source],
+    syntax_files: &[syntax::FileSyntax],
+    symbol: &str,
+) -> usize {
+    sources
+        .iter()
+        .filter(|source| source.is_production())
+        .map(|source| {
+            let file_syntax = syntax_files.iter().find(|file| file.path == source.path);
+            source
+                .text
+                .split_inclusive('\n')
+                .enumerate()
+                .filter(|(index, _)| {
+                    file_syntax.is_none_or(|file| file.cfg_kind_at(index + 1).is_none())
+                })
+                .flat_map(|(_, line)| {
+                    line.split(|character: char| character != '_' && !character.is_alphanumeric())
+                })
+                .filter(|identifier| *identifier == symbol)
+                .count()
+        })
+        .sum()
 }
 
 pub(super) fn load(path: &Path) -> Result<Option<Target>> {
@@ -335,6 +526,40 @@ fn key_line(raw: &str, key: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_direction_classifies_upward_same_downward_and_unknown() {
+        let ranks = LayerRanks::new(&[
+            vec!["store".to_owned()],
+            vec!["agents".to_owned(), "harness".to_owned()],
+            vec!["cli".to_owned()],
+        ]);
+
+        assert_eq!(
+            layer_direction(&ranks, "store::writer", "cli::render"),
+            Some(Direction::Upward)
+        );
+        assert_eq!(
+            layer_direction(&ranks, "agents::state", "harness::target"),
+            Some(Direction::Same)
+        );
+        assert_eq!(
+            layer_direction(&ranks, "cli", "store"),
+            Some(Direction::Downward)
+        );
+        assert_eq!(layer_direction(&ranks, "remote", "store"), None);
+    }
+
+    #[test]
+    fn count_in_sources_excludes_inline_test_regions() {
+        let source = Source::new(
+            "src/lib.rs",
+            "fn legacy() {}\n#[cfg(test)]\nmod tests { fn check() { legacy(); } }\n",
+        );
+        let syntax = syntax::analyze_sources(std::slice::from_ref(&source), &BTreeSet::new());
+
+        assert_eq!(count_in_sources(&[source], &syntax.files, "legacy"), 1);
+    }
 
     #[test]
     fn target_v5_rejects_goal_debt_and_older_versions() {

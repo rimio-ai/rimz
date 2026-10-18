@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{runner, source_files};
 
-use super::modules::module_for_path;
+use super::modules::{Boundary, module_for_path};
 use super::sources::Source;
 use super::syntax::FileSyntax;
 
@@ -157,10 +157,9 @@ pub(super) fn analyze_snapshot(
         .iter()
         .filter(|source| {
             source.is_production()
-                && paths.iter().any(|path| {
-                    super::modules::path_in_scope(&source.path, path)
-                        || source.path == path.with_extension("rs")
-                })
+                && paths
+                    .iter()
+                    .any(|path| Boundary::new(path).covers(&source.path))
         })
         .cloned()
         .collect::<Vec<_>>();

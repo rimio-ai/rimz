@@ -75,6 +75,8 @@ struct UseLeaf {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct DependencySite {
+    #[serde(skip)]
+    pub(super) resolved: Option<String>,
     pub(super) module_path: String,
     pub(super) item: String,
     pub(super) line: usize,
@@ -276,6 +278,12 @@ pub(super) fn analyze_sources(sources: &[Source], crate_names: &BTreeSet<String>
         match syn::parse_file(&source.text) {
             Ok(file) => files.push(analyze_file(&source.path, &source.text, &file, crate_names)),
             Err(_) => parse_failures.push(source.path.clone()),
+        }
+    }
+    let known_modules = files.iter().map(|file| file.module_path.clone()).collect();
+    for file in &mut files {
+        for dependency in &mut file.dependencies {
+            dependency.resolved = resolved_internal_import(dependency, &known_modules, crate_names);
         }
     }
     SyntaxReport {
@@ -891,6 +899,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
             }
             if !module_path.is_empty() {
                 self.push(DependencySite {
+                    resolved: None,
                     module_path,
                     item: leaf.name,
                     line: item.span().start().line,
@@ -922,6 +931,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
                 module_path = "(crate)".to_owned();
             }
             self.push(DependencySite {
+                resolved: None,
                 module_path,
                 item: segments
                     .last()
@@ -973,7 +983,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
     }
 }
 
-pub(super) fn resolved_internal_import(
+fn resolved_internal_import(
     import: &DependencySite,
     known_modules: &BTreeSet<String>,
     workspace_crates: &BTreeSet<String>,

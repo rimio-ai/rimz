@@ -9,6 +9,22 @@ fn analyze_sources(sources: &[Source]) -> SyntaxReport {
 }
 
 #[test]
+fn analyzed_dependencies_cache_use_and_qualified_resolution() {
+    let report = analyze_sources(&[
+        Source::new(
+            "src/lower.rs",
+            "use crate::upper; fn run() { crate::upper::call(); }",
+        ),
+        Source::new("src/upper.rs", "pub fn call() {}"),
+    ]);
+    let sites = &report.files[0].dependencies;
+    for spelling in [Spelling::Use, Spelling::Qualified] {
+        let site = sites.iter().find(|site| site.spelling == spelling).unwrap();
+        assert_eq!(site.resolved.as_deref(), Some("upper"));
+    }
+}
+
+#[test]
 fn functions_carry_their_enclosing_inline_modules() {
     let report = analyze_sources(&[source(
         "mod a { mod b { fn f() {} } struct Owner; impl Owner { fn new() {} } }

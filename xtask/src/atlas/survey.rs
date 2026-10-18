@@ -6,19 +6,18 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Map, json};
 
-use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
 use super::inspect;
 use super::ledger::{self, LEDGER_FILE, Ledger};
 use super::modules::{
-    crate_module_for_path, crate_module_for_row, module_is_within, path_in_scope,
+    Boundary, crate_module_for_path, crate_module_for_row, module_is_within, path_in_scope,
 };
 use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
-use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path, resolved_internal_import};
-use super::target::{self, LayerRanks, TARGET_FILE, Target, Verdict, VerdictKind};
+use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path};
+use super::target::{self, Direction, LayerRanks, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
@@ -376,7 +375,7 @@ fn build_report(
         .context("survey metric facts missing")?;
     let hot = rank::hotspots(metrics, &log.file_shares(&facts.root, scope));
     let debt = configured.as_ref().map_or_else(Debt::default, |target| {
-        recorded_debt(root, target, ledger.as_ref(), facts, scope)
+        recorded_debt(target, ledger.as_ref(), facts, scope)
     });
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
     let ranks = configured.as_ref().map(Target::layer_ranks);
@@ -641,68 +640,35 @@ fn ledger_prefix(scope: &Path) -> String {
 /// the scope, grouped by the admission it matches and whether a ledger row
 /// reviews it, and every strangler's current count against its baseline.
 /// Syntax-only, so it needs no index.
-fn recorded_debt(
-    root: &Path,
-    target: &Target,
-    ledger: Option<&Ledger>,
-    facts: &Facts,
-    scope: &Path,
-) -> Debt {
-    let ranks = target.layer_ranks();
+fn recorded_debt(target: &Target, ledger: Option<&Ledger>, facts: &Facts, scope: &Path) -> Debt {
+    let measurement = target::measure(target, facts);
     let touches_scope = |path: &Path| path_in_scope(path, scope) || path_in_scope(scope, path);
     let mut rules = Vec::new();
-    for rule in target
+    for (rule, measured) in target
         .modules
         .iter()
-        .filter(|rule| touches_scope(&rule.path))
+        .zip(&measurement.rules)
+        .filter(|(rule, _)| touches_scope(&rule.path))
     {
-        let admissions = rule
-            .allowed_dependencies
-            .as_deref()
-            .or(rule.upward_dependencies.as_deref())
-            .unwrap_or_default();
         let mut reviewed = BTreeMap::<(String, String), usize>::new();
         let mut unreviewed = BTreeMap::<String, usize>::new();
         let mut unadmitted = BTreeMap::<String, usize>::new();
-        let files = facts
-            .syntax
-            .files
+        for site in measured
+            .sites
             .iter()
-            .filter(|file| conform::rule_covers_path(root, &rule.path, &file.path));
-        let target_module =
-            super::modules::crate_module_for_path(&if root.join(&rule.path).is_dir() {
-                rule.path.join("mod.rs")
-            } else {
-                rule.path.clone()
-            });
-        for file in files {
-            for dependency in &file.dependencies {
-                let Some(resolved) =
-                    resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
-                else {
-                    continue;
-                };
-                if module_is_within(&resolved, &target_module)
-                    || conform::layer_direction(&ranks, &file.module_path, &resolved)
-                        != Some(Direction::Upward)
-                {
-                    continue;
+            .filter(|site| site.direction == Some(Direction::Upward))
+        {
+            if !matches!(site.admission, target::Admission::Admitted(_)) {
+                *unadmitted.entry(site.to.to_owned()).or_default() += 1;
+                continue;
+            }
+            match ledger.and_then(|ledger| ledger.intent_for(&site.file.module_path, site.to)) {
+                Some((provider, intent)) => {
+                    *reviewed
+                        .entry((provider.to_owned(), intent.to_owned()))
+                        .or_default() += 1;
                 }
-                if !admissions
-                    .iter()
-                    .any(|prefix| module_is_within(&resolved, prefix))
-                {
-                    *unadmitted.entry(resolved).or_default() += 1;
-                    continue;
-                }
-                match ledger.and_then(|ledger| ledger.intent_for(&file.module_path, &resolved)) {
-                    Some((provider, intent)) => {
-                        *reviewed
-                            .entry((provider.to_owned(), intent.to_owned()))
-                            .or_default() += 1;
-                    }
-                    None => *unreviewed.entry(resolved).or_default() += 1,
-                }
+                None => *unreviewed.entry(site.to.to_owned()).or_default() += 1,
             }
         }
         let upward_sites = reviewed.values().sum::<usize>()
@@ -744,16 +710,11 @@ fn recorded_debt(
         .iter()
         .filter(|strangler| touches_scope(&strangler.path))
         .map(|strangler| {
-            let is_file = root.join(&strangler.path).is_file();
-            let sources = conform::sources_for_path(&facts.sources, &strangler.path, is_file);
+            let sources = target::sources_for_path(&facts.sources, &Boundary::new(&strangler.path));
             StranglerRow {
                 path: strangler.path.clone(),
                 symbol: strangler.symbol.clone(),
-                current: conform::count_in_sources(
-                    &sources,
-                    &facts.syntax.files,
-                    &strangler.symbol,
-                ),
+                current: target::count_in_sources(&sources, &facts.syntax.files, &strangler.symbol),
                 baseline: strangler.baseline,
             }
         })
@@ -819,11 +780,7 @@ fn build_probes(
                 .rules
                 .iter()
                 .filter(|rule| {
-                    let rule_module = if rule.path.extension().is_some() {
-                        crate_module_for_path(&rule.path)
-                    } else {
-                        crate_module_for_path(&rule.path.join("mod.rs"))
-                    };
+                    let rule_module = Boundary::new(&rule.path).module();
                     module_is_within(&crate_module, &rule_module)
                 })
                 .collect::<Vec<_>>();
@@ -865,13 +822,13 @@ fn scope_row<'a>(module: &'a str, scope_module: &str) -> &'a str {
         return if module == "(crate)" {
             "(root)"
         } else {
-            conform::top_module(module)
+            target::top_module(module)
         };
     }
     module
         .strip_prefix(scope_module)
         .and_then(|rest| rest.strip_prefix("::"))
-        .map_or("(root)", conform::top_module)
+        .map_or("(root)", target::top_module)
 }
 
 /// Resolves one syntax callee to the crate module that defines it: a
@@ -938,7 +895,9 @@ fn assemblers(
             .iter()
             .filter(|dependency| dependency.spelling == Spelling::Use)
             .filter_map(|dependency| {
-                resolved_internal_import(dependency, known_modules, crate_names)
+                dependency
+                    .resolved
+                    .clone()
                     .map(|module| (dependency.item.as_str(), module))
             })
             .collect::<BTreeMap<_, _>>();
@@ -970,7 +929,7 @@ fn assemblers(
                     // The library root reads as the crate-wide survey's row.
                     "(root)".to_owned()
                 } else {
-                    conform::top_module(&module).to_owned()
+                    target::top_module(&module).to_owned()
                 };
                 providers
                     .entry(row)
@@ -1031,24 +990,23 @@ fn module_cycles(facts: &Facts, scope: &Path, ranks: Option<&LayerRanks>) -> Vec
 /// Top-level module pairs that import each other, same-layer pairs first.
 fn cycles_from_syntax(
     files: &[super::syntax::FileSyntax],
-    known_modules: &BTreeSet<String>,
-    crate_names: &BTreeSet<String>,
+    _known_modules: &BTreeSet<String>,
+    _crate_names: &BTreeSet<String>,
     scope: &Path,
     ranks: Option<&LayerRanks>,
 ) -> Vec<Cycle> {
     let scope_module = crate_module_for_row(scope, "(root)");
     let mut pairs = BTreeMap::<(String, String), (usize, usize)>::new();
     for file in files.iter().filter(|file| path_in_scope(&file.path, scope)) {
-        let from = conform::top_module(&file.module_path);
+        let from = target::top_module(&file.module_path);
         for dependency in &file.dependencies {
-            let Some(resolved) = resolved_internal_import(dependency, known_modules, crate_names)
-            else {
+            let Some(resolved) = dependency.resolved.clone() else {
                 continue;
             };
             if !module_is_within(&resolved, &scope_module) {
                 continue;
             }
-            let to = conform::top_module(&resolved);
+            let to = target::top_module(&resolved);
             if from == to {
                 continue;
             }
@@ -1070,7 +1028,7 @@ fn cycles_from_syntax(
         .filter_map(|((a, b), (a_to_b, b_to_a))| {
             (a_to_b > 0 && b_to_a > 0).then(|| Cycle {
                 same_layer: ranks.and_then(|ranks| {
-                    conform::layer_direction(ranks, &a, &b)
+                    target::layer_direction(ranks, &a, &b)
                         .map(|direction| direction == Direction::Same)
                 }),
                 a,

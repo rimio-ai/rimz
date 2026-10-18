@@ -578,6 +578,45 @@ pub(super) fn file_module(path: &Path) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Boundary<'a>(&'a Path);
+
+impl<'a> Boundary<'a> {
+    pub(super) fn new(path: &'a Path) -> Self {
+        Self(path)
+    }
+
+    pub(super) fn path(&self) -> &Path {
+        self.0
+    }
+
+    pub(super) fn is_file(&self) -> bool {
+        self.0
+            .extension()
+            .is_some_and(|extension| extension == "rs")
+    }
+
+    pub(super) fn module(&self) -> String {
+        crate_module_for_path(&if self.is_file() {
+            self.0.to_path_buf()
+        } else {
+            self.0.join("mod.rs")
+        })
+    }
+
+    pub(super) fn covers(&self, path: &Path) -> bool {
+        self.covers_without_entry(path) || (!self.is_file() && path == self.0.with_extension("rs"))
+    }
+
+    pub(super) fn covers_without_entry(&self, path: &Path) -> bool {
+        if self.is_file() {
+            path == self.0
+        } else {
+            path_in_scope(path, self.0)
+        }
+    }
+}
+
 pub(super) fn crate_module_for_path(path: &Path) -> String {
     let mut after_src = false;
     let mut parts = Vec::new();
@@ -680,12 +719,7 @@ pub(super) fn reference_module_label(module: &str, scope_module: &str) -> String
 }
 
 pub(super) fn crate_module_for_row(scope: &Path, row: &str) -> String {
-    let scope_entry = if scope.extension().is_some_and(|extension| extension == "rs") {
-        scope.to_path_buf()
-    } else {
-        scope.join("mod.rs")
-    };
-    let scope_module = crate_module_for_path(&scope_entry);
+    let scope_module = Boundary::new(scope).module();
     if row == "(root)" {
         scope_module
     } else if scope_module.is_empty() {

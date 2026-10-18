@@ -7,7 +7,6 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use super::conform::{self, Direction};
 use super::contract::{
     AssemblyExpectation, CxExpectation, DeleteExpectation, DependencyExpectation, EscExpectation,
     PassContract, PassKind, RehomeExpectation, RehomeForm,
@@ -16,14 +15,14 @@ use super::facts::{Facets, Facts};
 use super::inspect;
 use super::metrics::FunctionMetric;
 use super::modules::{
-    ItemId, bounded_names, crate_module_for_path, escaping_items_for_boundary, is_declaration_only,
-    module_is_within, path_in_scope,
+    Boundary, ItemId, bounded_names, crate_module_for_path, escaping_items_for_boundary,
+    is_declaration_only, module_is_within,
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind, FunctionId};
 use super::sources::{self, SourceKind};
 use super::syntax::{FileSyntax, Spelling};
-use super::target::{self, LayerRanks, TARGET_FILE};
+use super::target::{self, Direction, LayerRanks, TARGET_FILE};
 use super::{positive_usize, set_once, validate_scope, value};
 
 const DEFAULT_TOP: usize = 20;
@@ -266,7 +265,7 @@ fn cx_value(facts: &Facts, expectation: &CxExpectation) -> Result<Option<f64>, &
         metrics
             .functions
             .iter()
-            .filter(|metric| in_boundary(&metric.path, path))
+            .filter(|metric| Boundary::new(path).covers(&metric.path))
             .map(|metric| metric.score)
             .sum(),
     ))
@@ -651,13 +650,7 @@ fn build_report(
 }
 
 fn in_paths(path: &Path, paths: &[PathBuf]) -> bool {
-    paths.iter().any(|scope| in_boundary(path, scope))
-}
-
-fn in_boundary(path: &Path, scope: &Path) -> bool {
-    path_in_scope(path, scope)
-        || (!scope.extension().is_some_and(|extension| extension == "rs")
-            && path == scope.with_extension("rs"))
+    paths.iter().any(|scope| Boundary::new(scope).covers(path))
 }
 
 fn size_delta(base: &Facts, current: &Facts, paths: &[PathBuf], tests: bool) -> ValueDelta {
@@ -686,18 +679,14 @@ fn boundary_surfaces(facts: &Facts, paths: &[PathBuf]) -> Vec<BoundarySurface> {
 }
 
 fn boundary_surface(facts: &Facts, scope: &Path) -> BoundarySurface {
+    let boundary = Boundary::new(scope);
     let files = facts
         .syntax
         .files
         .iter()
-        .filter(|file| in_boundary(&file.path, scope))
+        .filter(|file| boundary.covers(&file.path))
         .collect::<Vec<_>>();
-    let entry = if scope.extension().is_some_and(|extension| extension == "rs") {
-        scope.to_path_buf()
-    } else {
-        scope.join("mod.rs")
-    };
-    let module = crate_module_for_path(&entry);
+    let module = boundary.module();
     let items = escaping_items_for_boundary(&files, &module, &facts.mod_index)
         .into_iter()
         .map(|item| SurfaceItem {
@@ -749,11 +738,11 @@ fn dependencies(
         .collect::<BTreeSet<_>>();
     for file in files {
         for dependency in &file.dependencies {
-            let Some((key, to)) = resolved_dependency(facts, file, dependency) else {
+            let Some((key, to)) = resolved_dependency(file, dependency) else {
                 continue;
             };
             let direction = ranks
-                .and_then(|ranks| conform::layer_direction(ranks, &file.module_path, &to))
+                .and_then(|ranks| target::layer_direction(ranks, &file.module_path, &to))
                 .map_or("unranked", direction_label);
             let crossing = !scope_modules
                 .iter()
@@ -770,15 +759,10 @@ fn dependencies(
 }
 
 fn resolved_dependency(
-    facts: &Facts,
     file: &super::syntax::FileSyntax,
     dependency: &super::syntax::DependencySite,
 ) -> Option<(DependencyKey, String)> {
-    let to = super::syntax::resolved_internal_import(
-        dependency,
-        &facts.known_modules,
-        &facts.crate_names,
-    )?;
+    let to = dependency.resolved.clone()?;
     if file.module_path == to {
         return None;
     }
@@ -802,7 +786,7 @@ fn contract_dependency_sites(facts: &Facts, expectation: &DependencyExpectation)
         .filter(|file| module_is_within(&file.module_path, &expectation.from))
         .flat_map(|file| {
             file.dependencies.iter().filter_map(move |dependency| {
-                let (key, to) = resolved_dependency(facts, file, dependency)?;
+                let (key, to) = resolved_dependency(file, dependency)?;
                 module_is_within(&to, &expectation.to).then_some(key)
             })
         })
@@ -1062,7 +1046,7 @@ fn evidence(base: &Facts, current: &Facts, paths: &[PathBuf]) -> Evidence {
                 .then(|| SurfaceItem {
                     scope: paths
                         .iter()
-                        .find(|scope| in_boundary(&file.path, scope))
+                        .find(|scope| Boundary::new(scope).covers(&file.path))
                         .cloned()
                         .unwrap_or_default(),
                     id,

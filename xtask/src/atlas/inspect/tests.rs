@@ -274,7 +274,7 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
         verdicts: Vec::new(),
     };
 
-    let rows = target_rules(root.path(), &target, &facts, &selector("store"));
+    let rows = target_rules(&target, &facts, &selector("store"));
 
     let admitted = rows
         .iter()
@@ -282,7 +282,7 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
         .unwrap();
     assert_eq!(admitted.admitted.as_deref(), Some("harness::target"));
     assert_eq!(admitted.direction, "upward");
-    let rows_from_atomic = target_rules(root.path(), &target, &facts, &selector("store::atomic"));
+    let rows_from_atomic = target_rules(&target, &facts, &selector("store::atomic"));
     assert_eq!(
         rows_from_atomic
             .iter()

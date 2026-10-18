@@ -5,19 +5,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use super::conform::{self, Direction};
 use super::detect::{self, GuardFamily, IdentifierRole};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
 use super::modules::{
-    self, crate_module_for_path, module_is_within, path_in_scope, reference_module_label,
+    self, Boundary, crate_module_for_path, module_is_within, path_in_scope, reference_module_label,
 };
 use super::output::{self, OutputArgs};
 use super::references::{Edge, EdgeKind};
 use super::shapes::{self, ShapeFamily};
 use super::sources::SourceKind;
-use super::syntax::{FileSyntax, FnBody, PrivateItem, resolved_internal_import};
-use super::target::{self, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
+use super::syntax::{FileSyntax, FnBody, PrivateItem};
+use super::target::{self, Direction, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{positive_usize, set_once, value};
 
 mod calls;
@@ -310,9 +309,9 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     .collect::<Vec<_>>();
     let guard_families = module_item_guards(&facts, &module, args.all);
     let providers = providers(&facts, &module);
-    let rules = target.as_ref().map_or_else(Vec::new, |target| {
-        target_rules(root, target, &facts, &module)
-    });
+    let rules = target
+        .as_ref()
+        .map_or_else(Vec::new, |target| target_rules(target, &facts, &module));
     let verdicts = target
         .as_ref()
         .map_or_else(VerdictDiagnostics::default, |target| {
@@ -626,9 +625,7 @@ fn providers(facts: &Facts, target: &ModuleSelector) -> Vec<Provider> {
         .filter(|file| target.matches(&file.module_path, &file.path))
     {
         for dependency in &file.dependencies {
-            let Some(resolved) =
-                resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
-            else {
+            let Some(resolved) = dependency.resolved.clone() else {
                 continue;
             };
             if module_is_within(&resolved, &target.module) {
@@ -657,12 +654,7 @@ fn providers(facts: &Facts, target: &ModuleSelector) -> Vec<Provider> {
     rows
 }
 
-fn target_rules(
-    root: &Path,
-    target: &Target,
-    facts: &Facts,
-    module: &ModuleSelector,
-) -> Vec<RuleRow> {
+fn target_rules(target: &Target, facts: &Facts, module: &ModuleSelector) -> Vec<RuleRow> {
     let files = facts
         .syntax
         .files
@@ -673,19 +665,13 @@ fn target_rules(
     target
         .modules
         .iter()
-        .filter(|rule| {
-            files
-                .iter()
-                .any(|file| conform::rule_covers_path(root, &rule.path, &file.path))
-        })
         .flat_map(|rule| {
+            let boundary = Boundary::new(&rule.path);
             files
                 .iter()
-                .filter(|file| conform::rule_covers_path(root, &rule.path, &file.path))
+                .filter(|file| boundary.covers(&file.path))
                 .flat_map(|file| &file.dependencies)
-                .filter_map(|dependency| {
-                    resolved_internal_import(dependency, &facts.known_modules, &facts.crate_names)
-                })
+                .filter_map(|dependency| dependency.resolved.clone())
                 .filter(|provider| !module_is_within(provider, &module.module))
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -695,17 +681,12 @@ fn target_rules(
 }
 
 fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to: &str) -> RuleRow {
-    let direction = match conform::layer_direction(ranks, from, to) {
+    let direction = match target::layer_direction(ranks, from, to) {
         Some(Direction::Upward) => "upward",
         Some(Direction::Same) => "same",
         Some(Direction::Downward) => "downward",
         None => "unranked",
     };
-    let admissions = rule
-        .allowed_dependencies
-        .as_deref()
-        .or(rule.upward_dependencies.as_deref())
-        .unwrap_or_default();
     RuleRow {
         path: rule.path.clone(),
         provider: to.to_owned(),
@@ -715,10 +696,7 @@ fn rule_row(rule: &ModuleRule, ranks: &super::target::LayerRanks, from: &str, to
             "upward-dependency"
         },
         direction,
-        admitted: admissions
-            .iter()
-            .find(|prefix| module_is_within(to, prefix))
-            .cloned(),
+        admitted: rule.admissions(to).next().cloned(),
     }
 }
 

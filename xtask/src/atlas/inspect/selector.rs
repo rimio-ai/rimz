@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
-use super::super::modules::{crate_module_for_path, module_is_within, path_in_scope};
+use super::super::modules::{Boundary, module_is_within};
 use super::super::syntax::FileSyntax;
 
 #[cfg(test)]
@@ -22,9 +22,7 @@ impl ModuleSelector {
             return false;
         }
         match &self.path {
-            Some(scope) if self.directory => {
-                path_in_scope(path, scope) || path == scope.with_extension("rs")
-            }
+            Some(scope) if self.directory => Boundary::new(scope).covers(path),
             Some(file) => path == file,
             None => true,
         }
@@ -55,12 +53,7 @@ pub(in crate::atlas) fn resolve_module(
         if !directory && path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
             bail!("atlas {command} {flag} `{raw}` does not match a Rust module");
         }
-        let entry = if directory {
-            path.join("mod.rs")
-        } else {
-            path.clone()
-        };
-        (crate_module_for_path(&entry), Some(path), directory)
+        (Boundary::new(&path).module(), Some(path), directory)
     } else {
         (
             raw.strip_prefix("crate::").unwrap_or(raw).to_owned(),
@@ -71,9 +64,7 @@ pub(in crate::atlas) fn resolve_module(
     if syntax_files.iter().any(|file| {
         module_is_within(&file.module_path, &module)
             && match &path {
-                Some(scope) if directory => {
-                    path_in_scope(&file.path, scope) || file.path == scope.with_extension("rs")
-                }
+                Some(scope) if directory => Boundary::new(scope).covers(&file.path),
                 Some(source) => &file.path == source,
                 None => true,
             }

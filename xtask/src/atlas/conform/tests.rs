@@ -213,25 +213,12 @@ fn stranglers_exclude_directory_entry_and_keep_file_scope_exact() {
 
 #[test]
 fn conform_directory_rule_covers_sibling_file() {
-    let root = tempfile::tempdir().unwrap();
-    fs::create_dir_all(root.path().join("src/feature")).unwrap();
+    let boundary = Boundary::new(Path::new("src/feature"));
     let sibling = Path::new("src/feature.rs");
 
-    assert!(rule_covers_path(
-        root.path(),
-        Path::new("src/feature"),
-        sibling
-    ));
-    assert!(rule_covers_path(
-        root.path(),
-        Path::new("src/feature"),
-        Path::new("src/feature/detail.rs")
-    ));
-    assert!(!rule_covers_path(
-        root.path(),
-        Path::new("src/feature"),
-        Path::new("src/featured.rs")
-    ));
+    assert!(boundary.covers(sibling));
+    assert!(boundary.covers(Path::new("src/feature/detail.rs")));
+    assert!(!boundary.covers(Path::new("src/featured.rs")));
 }
 
 #[test]
@@ -355,29 +342,6 @@ fn conform_only_rejects_unknown_paths_before_measuring_or_writing() {
 }
 
 #[test]
-fn layer_direction_classifies_upward_same_downward_and_unknown() {
-    let ranks = LayerRanks::new(&[
-        vec!["store".to_owned()],
-        vec!["agents".to_owned(), "harness".to_owned()],
-        vec!["cli".to_owned()],
-    ]);
-
-    assert_eq!(
-        layer_direction(&ranks, "store::writer", "cli::render"),
-        Some(Direction::Upward)
-    );
-    assert_eq!(
-        layer_direction(&ranks, "agents::state", "harness::target"),
-        Some(Direction::Same)
-    );
-    assert_eq!(
-        layer_direction(&ranks, "cli", "store"),
-        Some(Direction::Downward)
-    );
-    assert_eq!(layer_direction(&ranks, "remote", "store"), None);
-}
-
-#[test]
 fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
     let verdict = Verdict {
         kind: VerdictKind::Item,
@@ -441,17 +405,6 @@ fn tighten_lowers_counts_drops_unused_admissions_and_preserves_verdicts() {
     );
     assert_eq!(target.strangler[0].baseline, 1);
     assert_eq!(target.verdicts, [verdict]);
-}
-
-#[test]
-fn count_in_sources_excludes_inline_test_regions() {
-    let source = Source::new(
-        "src/lib.rs",
-        "fn legacy() {}\n#[cfg(test)]\nmod tests { fn check() { legacy(); } }\n",
-    );
-    let syntax = syntax::analyze_sources(std::slice::from_ref(&source), &BTreeSet::new());
-
-    assert_eq!(count_in_sources(&[source], &syntax.files, "legacy"), 1);
 }
 
 fn fixture_root() -> tempfile::TempDir {
