@@ -120,6 +120,15 @@ pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
+    #[error(
+        "connect to {mux} socket {} was denied: {reason}. A sandbox or permission profile may be blocking it; the room may be live. Run the command outside the sandbox, or ask to escalate.",
+        socket.display()
+    )]
+    SocketConnectDenied {
+        mux: MuxName,
+        socket: PathBuf,
+        reason: String,
+    },
     #[error("could not acquire writer for pane {pane}: {source}")]
     PaneWriteLock {
         pane: PaneId,
@@ -1020,6 +1029,7 @@ pub trait MuxBackend: Send + Sync {
     /// Force-remove a session by name. A missing session is success — the goal
     /// state is "no session by that name", so callers can retire a stale or
     /// renamed session idempotently.
+    /// A denied socket connect is an error, never successful removal.
     fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>> {
         self.list_sessions_within(LIST_SESSIONS_TIMEOUT)
@@ -1028,6 +1038,7 @@ pub trait MuxBackend: Send + Sync {
     /// Classify one named session without folding backend failures into
     /// absence. Backends without a resurrection state use their live-session
     /// list as the liveness truth.
+    /// A denied socket connect is an error, never absence.
     fn session_liveness(&self, name: &str) -> Result<SessionLiveness> {
         let sessions = self.list_sessions_within(LIST_SESSIONS_TIMEOUT)?;
         Ok(if sessions.iter().any(|session| session == name) {

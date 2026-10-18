@@ -1,6 +1,9 @@
 use super::*;
 
 #[cfg(unix)]
+use crate::ids::MuxName;
+
+#[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -232,8 +235,152 @@ fn ensure_session_does_not_ignore_global_environment_repair_failure() {
     backend.program = Some(shim);
     let opts = session_options();
     assert!(
-        backend.ensure_session(&opts).is_err(),
+        matches!(
+            backend.ensure_session(&opts),
+            Err(MuxErr::SocketConnectDenied { .. })
+        ),
         "only the pre-birth no-server error may be ignored"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn session_listing_preserves_socket_connect_errors() {
+    let cases = [
+        ("no server running on /socket with spaces", "absent"),
+        (
+            "error connecting to /socket with spaces (No such file or directory)",
+            "absent",
+        ),
+        (
+            "error connecting to /socket with spaces (Permission denied)",
+            "Permission denied",
+        ),
+        (
+            "error connecting to /socket with spaces (Operation not permitted)",
+            "Operation not permitted",
+        ),
+        (
+            "error connecting to /socket with spaces (Too many open files)",
+            "command",
+        ),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(stderr, expected)| {
+            let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+                "#!/bin/sh\nprintf '%s\\n' '{stderr}' >&2\nexit 1\n"
+            ));
+            let mut backend = TmuxBackend::with_socket("/socket with spaces");
+            backend.program = Some(shim);
+            let result = backend.list_sessions_within(Duration::from_secs(1));
+            let correct = match &result {
+                Ok(sessions) => expected == "absent" && sessions.is_empty(),
+                Err(MuxErr::Command { .. }) => expected == "command",
+                Err(MuxErr::SocketConnectDenied {
+                    mux,
+                    socket,
+                    reason,
+                }) => {
+                    *mux == MuxName::Tmux
+                        && socket == Path::new("/socket with spaces")
+                        && reason == expected
+                }
+                Err(_) => false,
+            };
+            (stderr, correct, result)
+        })
+        .collect();
+    assert!(
+        results.iter().all(|(_, correct, _)| *correct),
+        "{results:?}"
+    );
+
+    let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\nprintf 'other-room\\nrimz-test\\n'\n",
+    );
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    assert_eq!(
+        backend.list_sessions().unwrap(),
+        ["other-room", "rimz-test"]
+    );
+    assert_eq!(
+        backend.session_liveness("rimz-test").unwrap(),
+        crate::mux::SessionLiveness::Live
+    );
+    assert_eq!(
+        backend.session_liveness("missing").unwrap(),
+        crate::mux::SessionLiveness::Absent
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn session_liveness_does_not_fold_socket_denial_into_absence() {
+    let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(
+        "#!/bin/sh\nprintf 'error connecting to /test/socket (Operation not permitted)\\n' >&2\nexit 1\n",
+    );
+    let mut backend = TmuxBackend::with_socket("/test/socket");
+    backend.program = Some(shim);
+    assert!(matches!(
+        backend.session_liveness("rimz-test"),
+        Err(MuxErr::SocketConnectDenied { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn kill_session_only_tolerates_missing_sessions_and_servers() {
+    let cases = [
+        ("can't find session: rimz-test", "absent"),
+        ("no server running on /test/socket", "absent"),
+        (
+            "error connecting to /test/socket (No such file or directory)",
+            "absent",
+        ),
+        (
+            "error connecting to /test/socket (Permission denied)",
+            "Permission denied",
+        ),
+        (
+            "error connecting to /test/socket (Operation not permitted)",
+            "Operation not permitted",
+        ),
+        (
+            "error connecting to /test/socket (Too many open files)",
+            "command",
+        ),
+    ];
+    let results: Vec<_> = cases
+        .into_iter()
+        .map(|(stderr, expected)| {
+            let (_temp, shim) = crate::mux::zellij::tests::support::zellij_shim(&format!(
+                "#!/bin/sh\nprintf '%s\\n' \"{stderr}\" >&2\nexit 1\n"
+            ));
+            let mut backend = TmuxBackend::with_socket("/test/socket");
+            backend.program = Some(shim);
+            let result = backend.kill_session("rimz-test");
+            let correct = match &result {
+                Ok(()) => expected == "absent",
+                Err(MuxErr::Command { .. }) => expected == "command",
+                Err(MuxErr::SocketConnectDenied {
+                    mux,
+                    socket,
+                    reason,
+                }) => {
+                    *mux == MuxName::Tmux
+                        && socket == Path::new("/test/socket")
+                        && reason == expected
+                }
+                Err(_) => false,
+            };
+            (stderr, correct, result)
+        })
+        .collect();
+    assert!(
+        results.iter().all(|(_, correct, _)| *correct),
+        "{results:?}"
     );
 }
 
