@@ -109,7 +109,14 @@ fn lens_change_snaps_context_but_fold_and_focus_keep_it_reachable() {
     );
     assert_eq!(
         handle_key(KeyAction::InboxNext, &mut ui, &snapshot).effects,
-        vec![InputEffect::Focus(context.clone())]
+        vec![InputEffect::Focus(
+            snapshot.worktree_groups[1].rows[0]
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .clone()
+        )]
     );
     ui.browse = None;
     reconcile_selection(&mut ui, &snapshot, Some(context.clone()));
@@ -674,7 +681,13 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
             &keymap,
             false
         ),
-        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_10"))
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_10"
+            ))]
+        }
     );
     assert_eq!(ui.make_up_filter.query.as_deref(), Some("zsh"));
 }
@@ -1707,14 +1720,26 @@ fn make_up_filter_survives_repeated_row_clicks_and_keeps_frame_ordinals() {
     let first = handle_mouse_click(0, first_row, &mut ui, &snapshot);
     assert_eq!(
         first,
-        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_1"))
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_1"
+            ))]
+        }
     );
     assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
 
     let second = handle_mouse_click(0, second_row, &mut ui, &snapshot);
     assert_eq!(
         second,
-        InputOutcome::focus(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(PaneId::from_parts(
+                MuxName::Zellij,
+                "terminal_3"
+            ))]
+        }
     );
     assert_eq!(ui.make_up_filter, BodyLens::from(BodyFilter::Unread));
 }

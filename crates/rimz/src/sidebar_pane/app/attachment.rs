@@ -136,7 +136,7 @@ impl Attachment {
         terminal.swap_buffers();
 
         let initial_width = terminal.size().map(|s| s.width).ok();
-        let subscription = plane.subscribe(&config, wake);
+        let subscription = plane.subscribe(&config, wake.clone());
         let host_wake_path =
             runtime.sidebar_host_wake_socket_path(config.mux, &config.session_name);
         let pixel_lease = match PixelLease::acquire(&runtime) {
@@ -167,6 +167,7 @@ impl Attachment {
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
         state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
+        state.wake = Some(wake);
         state.request_reload = request_reload;
         state.baseline_changed = baseline_changed;
         state.set_probed_aspect(terminal.backend().cell_aspect());

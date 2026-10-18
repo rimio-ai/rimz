@@ -122,13 +122,26 @@ fn shared_placement_captures_the_painted_opening_set() {
         .unwrap()
         .pane_id
         .clone();
-    rig.state.ui.held_expansions = ["older-selection".into()].into();
-    rig.state.ui.drawn_selection = Some("source-selection".into());
-    let placement = rig.state.focus_placement(&target).expect("visible target");
-    assert_eq!(
-        serde_json::to_value(placement).unwrap()["held"],
-        serde_json::json!(["older-selection", "source-selection"])
+    rig.state.ui.selected_index = Some(0);
+    rig.state.ui.selected_pane = rig.state.current.worktree_groups[0].rows[0]
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone());
+    rig.state.dirty = true;
+    paint_at(&mut rig, 0);
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    rig.state
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection.as_deref(), Some("agent-1"));
+    assert!(
+        rig.state.ui.held_expansions.contains("agent-0"),
+        "the click paint already retains A under its freeze"
     );
+    let placement = rig.state.focus_placement(&target).expect("visible target");
+    let mut expected = rig.state.ui.held_expansions.clone();
+    expected.insert("agent-1".into());
+    assert_eq!(placement.held, expected);
 }
 
 fn assert_shared_placement_from_history(previous: usize) {
@@ -145,6 +158,15 @@ fn assert_shared_placement_from_history(previous: usize) {
     paint_at(&mut source, 0);
     let target = source.state.current.worktree_groups[0].rows[1].clone();
     let target_pane = target.pane.as_ref().unwrap().pane_id.clone();
+    let row = source.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    source
+        .state
+        .apply_input(
+            [Wakeup::MouseClick { column: 1, row }],
+            &mut source.terminal,
+        )
+        .unwrap();
+    assert_eq!(source.state.ui.drawn_selection.as_deref(), Some("agent-1"));
     let placement = source
         .state
         .focus_placement(&target_pane)
@@ -205,6 +227,25 @@ fn assert_shared_placement_from_history(previous: usize) {
         source_y
     );
     assert_push_report(&ack, &destination, PushVerdict::Painted, true);
+    for (id, y) in source
+        .state
+        .ui
+        .painted_rows
+        .iter()
+        .filter(|(_, y)| *y <= source_y)
+    {
+        assert_eq!(
+            destination
+                .state
+                .ui
+                .painted_rows
+                .iter()
+                .find(|(painted, _)| painted == id)
+                .map(|(_, row)| row),
+            Some(y),
+            "landing preserves the post-click rows above and including B"
+        );
+    }
 }
 
 #[test]

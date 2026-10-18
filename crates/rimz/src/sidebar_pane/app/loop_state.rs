@@ -106,6 +106,12 @@ struct ClickedRowWatch {
     gliding: bool,
 }
 
+struct FocusRollback {
+    target: PaneId,
+    baseline: Option<PaneId>,
+    label: String,
+}
+
 pub(super) struct LoopState {
     #[cfg(test)]
     pub(super) content_applications: u64,
@@ -131,6 +137,8 @@ pub(super) struct LoopState {
     last_folded_focus_intent: Option<FocusNonce>,
     pending_focus_push: Option<FocusPush>,
     focus_landing: Option<(crate::mux::focus_anchor::FocusAnchor, Instant)>,
+    // Intent adoption can replace the hold-last baseline before dispatch fails.
+    focus_rollback: Option<FocusRollback>,
     painted_focus_anchor_ms: u64,
     painted_height: u16,
     retired_anchor: Option<(Instant, u64)>,
@@ -156,6 +164,7 @@ pub(super) struct LoopState {
     paint: FramePainter,
     pub(super) room_caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) focus_peers: Option<FocusPeers>,
+    pub(super) wake: Option<SyncSender<Wakeup>>,
     remind: RemindState,
     dirty: bool,
     paint_hold: PaintHold,
@@ -221,9 +230,11 @@ pub(super) fn handle_wakeup(
                     Some(render::HitTarget::SubAgentPane(pane)) => Some(pane),
                     _ => None,
                 };
-                if let Some(pane) = pane {
+                if pane.is_some() {
+                    let click = handle_mouse_click(column, row, ui, snapshot);
                     let mut outcome = finish_search(ui, snapshot, false);
-                    outcome.effects.push(InputEffect::Focus(pane));
+                    outcome.redraw |= click.redraw;
+                    outcome.effects.extend(click.effects);
                     return outcome;
                 }
             }
@@ -242,6 +253,7 @@ pub(super) fn handle_wakeup(
         | Wakeup::Event(_)
         | Wakeup::Press { .. }
         | Wakeup::Snapshot
+        | Wakeup::FocusFailed { .. }
         | Wakeup::FocusPush(_) => InputOutcome::default(),
     }
 }
@@ -312,6 +324,7 @@ impl LoopState {
             last_folded_focus_intent: None,
             pending_focus_push: None,
             focus_landing: None,
+            focus_rollback: None,
             painted_focus_anchor_ms: 0,
             painted_height: 0,
             retired_anchor: None,
@@ -339,6 +352,7 @@ impl LoopState {
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             room_caps: Arc::default(),
             focus_peers: None,
+            wake: None,
             remind: RemindState::default(),
             dirty: true,
             paint_hold: PaintHold::default(),
@@ -628,6 +642,7 @@ impl LoopState {
             diag: _,
             result_rx: _,
             observe_tx: _,
+            wake: _,
             room_caps: _,
             request_reload: _,
             baseline_changed: _,
@@ -640,6 +655,7 @@ impl LoopState {
             last_folded_focus_intent: _,
             pending_focus_push: _,
             focus_landing: _,
+            focus_rollback: _,
             painted_focus_anchor_ms: _,
             painted_height: _,
             retired_anchor: _,
@@ -708,6 +724,10 @@ impl LoopState {
     ) -> Result<()> {
         match wakeup {
             Wakeup::FocusPush(push) => self.on_focus_push(*push, fetch, terminal),
+            Wakeup::FocusFailed { pane, error } => {
+                self.on_focus_failed(pane, error);
+                Ok(())
+            }
             Wakeup::Snapshot => {
                 self.on_snapshot(fetch);
                 Ok(())
@@ -728,6 +748,34 @@ impl LoopState {
             }
             wakeup => self.on_input(wakeup, terminal, fetch),
         }
+    }
+
+    fn on_focus_failed(&mut self, pane: PaneId, error: String) {
+        let Some(rollback) = self
+            .focus_rollback
+            .take_if(|request| request.target == pane)
+        else {
+            return;
+        };
+        self.ui.baseline_pane = rollback.baseline;
+        let label = rollback.label;
+        self.ui.browse = None;
+        self.ui.focus_placement = None;
+        self.focus_landing = None;
+        // Dispatch removed the failed intent. Fence older retained cuts from reviving it,
+        // but do not fence the pulled baseline that the failed jump must restore.
+        self.observed_anchor = Some((Instant::now(), None));
+        self.retired_anchor = None;
+        self.fold_fused_now();
+        if !self.alert_active() {
+            let now = Timestamp::now();
+            self.health.alert = Some(render::Alert {
+                reason: format!("focus failed: {label}: {error}"),
+                since: now,
+                recovered_at: Some(now),
+            });
+        }
+        self.dirty = true;
     }
 
     pub(super) fn apply_latest_snapshot(&mut self, update: FetchUpdate) -> bool {
@@ -1106,6 +1154,7 @@ impl LoopState {
             (placement, Some(self.ui.last_order.clone())),
             Some(dispatch),
             None,
+            self.wake.clone(),
         );
         true
     }
@@ -1347,6 +1396,7 @@ impl LoopState {
                         (placement, Some(self.ui.last_order.clone())),
                         None,
                         peers,
+                        self.wake.clone(),
                     );
                 }
                 InputEffect::Width(dir) => {
@@ -1402,6 +1452,7 @@ impl LoopState {
         for wakeup in wakeups {
             let wheel = matches!(wakeup, Wakeup::Scroll { .. });
             let alert_active = self.alert_active();
+            let previous_selection = self.ui.selected_pane.clone();
             let applied = handle_wakeup(
                 wakeup,
                 &mut self.ui,
@@ -1410,8 +1461,23 @@ impl LoopState {
                 alert_active,
             );
             self.clicked_row = None;
+            if self.ui.selected_pane != previous_selection {
+                self.focus_rollback = None;
+            }
             for effect in &applied.effects {
                 if let InputEffect::Focus(pane) = effect {
+                    let owner = self
+                        .ui
+                        .selected_pane
+                        .as_ref()
+                        .and_then(|selected| self.current.row_owning_pane(selected))
+                        .filter(|row| row.pane_ids().any(|id| id == pane))
+                        .or_else(|| self.current.row_owning_pane(pane));
+                    self.focus_rollback = owner.map(|row| FocusRollback {
+                        target: pane.clone(),
+                        baseline: self.ui.baseline_pane.clone(),
+                        label: row.display_name().to_owned(),
+                    });
                     self.arm_clicked_row(pane, Instant::now());
                 }
             }
@@ -2322,6 +2388,13 @@ impl LoopState {
             self.ui.last_focus_anchor_ms = anchor.issued_at_ms;
         }
         if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
+            if self
+                .focus_rollback
+                .as_ref()
+                .is_some_and(|request| request.target == anchor.pane_id)
+            {
+                self.focus_rollback = None;
+            }
             if crate::mux::focus_anchor::clear_matching(&self.runtime, anchor.nonce) {
                 let retired = Instant::now();
                 self.observed_anchor = Some((retired, None));
@@ -2699,10 +2772,9 @@ fn request_focus_until(
 /// The shared intent helper takes a fresh attached-client sample at request
 /// time and serializes concurrent focus actions. An automatic
 /// Zellij repair re-samples a mismatching fence until its strand deadline.
-/// Errors are logged at `debug!`, not surfaced: a pane recycled in the
-/// sub-second window since the snapshot is a benign, self-correcting race, so
-/// the line stays local under `RUST_LOG=debug` and off the off-box error
-/// channel. A cross-tab user request pushes the stored anchor to host peers
+/// Errors return to the attachment for selection rollback and a recovered
+/// health notice. A superseded dispatch stays diagnostic only.
+/// A cross-tab user request pushes the stored anchor to host peers
 /// and waits up to 100 ms for the destination's frame (300 ms after fitting a stale tmux view) before mux dispatch;
 /// the dispatch nonce check still fences superseded requests. The durable
 /// request also wakes renderers outside the push path;
@@ -2721,6 +2793,7 @@ fn spawn_pane_focus(
     ),
     repair: Option<FocusRepairDispatch>,
     peers: Option<FocusPeers>,
+    wake: Option<SyncSender<Wakeup>>,
 ) {
     let session_name = session_name.to_owned();
     let requested_at_ms = crate::utils::time::unix_now_ms();
@@ -2753,43 +2826,26 @@ fn spawn_pane_focus(
             crate::utils::time::unix_now_ms,
             std::thread::sleep,
         );
-        let outcome = match requested {
-            Some(Ok(nonce)) => {
-                let dispatch = || {
-                    crate::mux::focus_anchor::dispatch_action(
-                        backend.as_ref(),
-                        &runtime,
-                        &session_name,
-                        &pane_id,
-                        nonce,
-                        Default::default(),
-                    )
-                };
-                let dispatched = if let Some(peers) = &peers
-                    && let Some(anchor) = crate::mux::focus_anchor::load(&runtime)
-                        .filter(|anchor| anchor.nonce == nonce)
-                {
-                    peers.dispatch(anchor, dispatch)
-                } else {
-                    dispatch()
-                };
-                match dispatched {
-                    Ok(true) => (Some(nonce), "accepted_unconfirmed", None),
-                    Ok(false) => (
-                        Some(nonce),
-                        "failed",
-                        Some("superseded before focus dispatch".to_owned()),
-                    ),
-                    Err(err) => (Some(nonce), "failed", Some(err.to_string())),
-                }
+        let outcome = finish_focus_request(&pane_id, wake.as_ref(), requested, |nonce| {
+            let dispatch = || {
+                crate::mux::focus_anchor::dispatch_action(
+                    backend.as_ref(),
+                    &runtime,
+                    &session_name,
+                    &pane_id,
+                    nonce,
+                    Default::default(),
+                )
+            };
+            if let Some(peers) = &peers
+                && let Some(anchor) =
+                    crate::mux::focus_anchor::load(&runtime).filter(|anchor| anchor.nonce == nonce)
+            {
+                peers.dispatch(anchor, dispatch)
+            } else {
+                dispatch()
             }
-            Some(Err(err)) => (None, "failed", Some(err.to_string())),
-            None => (
-                None,
-                "failed",
-                Some("strand TTL expired before focus request".to_owned()),
-            ),
-        };
+        });
         if let Some(generation) = repair_generation {
             use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
             crate::diag::focus_repair::spawn_append(
@@ -2829,3 +2885,40 @@ fn wake_room(runtime: &RuntimePaths) {
 
 #[cfg(test)]
 mod tests;
+
+fn finish_focus_request(
+    pane: &PaneId,
+    wake: Option<&SyncSender<Wakeup>>,
+    requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
+    dispatch: impl FnOnce(FocusNonce) -> std::result::Result<bool, FocusActionError>,
+) -> (Option<FocusNonce>, &'static str, Option<String>) {
+    let (nonce, dispatched) = match requested {
+        Some(Ok(nonce)) => (Some(nonce), dispatch(nonce)),
+        Some(Err(error)) => (None, Err(error)),
+        None => {
+            return (
+                None,
+                "failed",
+                Some("strand TTL expired before focus request".into()),
+            );
+        }
+    };
+    match dispatched {
+        Ok(true) => (nonce, "accepted_unconfirmed", None),
+        Ok(false) => (
+            nonce,
+            "failed",
+            Some("superseded before focus dispatch".into()),
+        ),
+        Err(error) => {
+            let error = error.to_string();
+            if let Some(wake) = wake {
+                let _ = wake.send(Wakeup::FocusFailed {
+                    pane: pane.clone(),
+                    error: error.clone(),
+                });
+            }
+            (nonce, "failed", Some(error))
+        }
+    }
+}

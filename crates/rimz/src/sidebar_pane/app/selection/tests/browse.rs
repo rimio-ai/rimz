@@ -68,10 +68,7 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     assert_eq!(ui.browse, None, "a real baseline change ends the browse");
     assert_eq!(ui.selected_pane, Some(picked));
 
-    // A bare mouse-click jump (no prior browse) walks the same accept-latency
-    // contract: the click carries the target and the highlight holds on the
-    // old pane, an inert fold keeps it, and only the fold deriving the jumped
-    // pane moves both the highlight and the baseline onto it.
+    // A click seats a browse pick at once; the baseline then catches up without flicker.
     let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
@@ -92,16 +89,18 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
     assert_eq!(outcome.effects, vec![InputEffect::Focus(jumped.clone())]);
-    assert_eq!(ui.selected_pane, Some(from.clone()));
+    assert!(outcome.redraw);
+    assert_eq!(ui.selected_pane, Some(jumped.clone()));
 
-    // A fold still deriving the pre-jump pane keeps the old highlight.
+    // A fold still deriving the pre-jump pane keeps the clicked pick.
     reconcile_selection(&mut ui, &snapshot, Some(from.clone()));
-    assert_eq!(ui.selected_pane, Some(from));
+    assert_eq!(ui.selected_pane, Some(jumped.clone()));
 
-    // The fold that derives the jumped pane moves the highlight and baseline.
+    // Confirmation moves only the baseline and ends browsing.
     reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()));
     assert_eq!(ui.selected_pane, Some(jumped.clone()));
     assert_eq!(ui.baseline_pane, Some(jumped));
+    assert!(ui.browse.is_none());
 }
 #[test]
 fn continued_browse_keeps_the_first_anchor() {

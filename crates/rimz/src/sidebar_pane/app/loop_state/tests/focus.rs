@@ -6,6 +6,465 @@ use crate::mux::tmux::ControlLine;
 use crate::sidebar::presence::{projector::project_presence, tmux::TmuxPresenceState};
 use crate::sidebar_pane::app::fixtures::focus_fixture;
 
+fn child_focus_rig() -> (Rig, PaneId, [PaneId; 2]) {
+    let mut rig = Rig::new();
+    let baseline = zellij("terminal_1");
+    let children = [zellij("terminal_21"), zellij("terminal_22")];
+    let mut snapshot = snapshot_with_focused_pane(&rig.ws, baseline.clone());
+    let row = &mut std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    )[1];
+    row.name = "parent-at-click".into();
+    row.card = crate::store::snapshot::RowCard::Agent(std::sync::Arc::default());
+    let card = row.as_agent_mut().unwrap();
+    card.status = crate::agents::AgentStatus::Running;
+    card.user_turn_started_at = Some(snapshot.now);
+    card.sub_agent_count = 2;
+    card.sub_agents = children
+        .iter()
+        .enumerate()
+        .map(|(index, pane)| {
+            serde_json::from_value(serde_json::json!({
+                "id": format!("child-{index}"), "name": format!("child-{index}"),
+                "status": "running", "last_activity": snapshot.now, "pane": pane,
+            }))
+            .unwrap()
+        })
+        .collect();
+    rig.state
+        .ui
+        .delegation_overrides
+        .insert(row.id.clone(), true);
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    (rig, baseline, children)
+}
+
+fn click_child(rig: &mut Rig, child: &PaneId) {
+    let (column, row) = rig
+        .state
+        .ui
+        .interactions
+        .line_for_target(&render::HitTarget::SubAgentPane(child.clone()))
+        .expect("painted child entry");
+    let applied = rig
+        .state
+        .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(applied.effects, vec![InputEffect::Focus(child.clone())]);
+}
+
+#[test]
+fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
+    let (mut rig, baseline, [first, second]) = child_focus_rig();
+    click_child(&mut rig, &first);
+    click_child(&mut rig, &second);
+    let selected = rig.state.ui.selected_pane.clone();
+    let browse = rig.state.ui.browse.clone();
+    rig.state.ui.focus_placement = Some(crate::mux::focus_anchor::FocusPlacement {
+        row_id: selected.as_ref().unwrap().to_string(),
+        viewport_row: 2,
+        held: Default::default(),
+    });
+    let placement = rig.state.ui.focus_placement.clone();
+    rig.state.on_focus_failed(first, "stale sibling".into());
+    assert_eq!(
+        rig.state.ui.browse, browse,
+        "older failure cannot clear the newer browse"
+    );
+    assert_eq!(rig.state.ui.selected_pane, selected);
+    assert_eq!(rig.state.ui.focus_placement, placement);
+    assert!(rig.state.health.alert.is_none());
+    rig.state.on_focus_failed(second, "latest failure".into());
+    assert_eq!(rig.state.ui.baseline_pane, Some(baseline));
+    assert!(rig.state.ui.browse.is_none());
+    assert_eq!(
+        rig.state.health.alert.as_ref().unwrap().reason,
+        "focus failed: parent-at-click: latest failure"
+    );
+}
+
+#[test]
+fn failed_child_focus_after_card_departure_uses_the_clicked_label() {
+    let (mut rig, baseline, [first, _]) = child_focus_rig();
+    click_child(&mut rig, &first);
+    let parent = rig.state.ui.selected_pane.clone().unwrap();
+    rig.event(SidebarEvent::PaneClosed { pane_id: parent });
+    assert!(rig.state.current.row_owning_pane(&first).is_none());
+    rig.state
+        .on_focus_failed(first, "target disappeared".into());
+    assert_eq!(rig.state.ui.baseline_pane, Some(baseline));
+    assert!(rig.state.ui.browse.is_none());
+    assert_eq!(
+        rig.state
+            .health
+            .alert
+            .as_ref()
+            .expect("departure still reports focus failure")
+            .reason,
+        "focus failed: parent-at-click: target disappeared"
+    );
+}
+
+fn picked_focus_rig() -> (Rig, PaneId, PaneId) {
+    let mut rig = Rig::new();
+    let baseline = zellij("terminal_1");
+    let picked = zellij("terminal_2");
+    rig.fold(
+        snapshot_with_focused_pane(&rig.ws, baseline.clone()),
+        SnapshotSource::Produced,
+    );
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    rig.state
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection, Some(picked.to_string()));
+    (rig, baseline, picked)
+}
+
+#[test]
+fn focus_failure_rolls_back_and_paints_a_recovered_notice_even_after_intent_adoption() {
+    for adopted in [false, true] {
+        let (mut rig, baseline, picked) = picked_focus_rig();
+        if adopted {
+            let anchor =
+                requested_focus_anchor(picked.clone(), 2, crate::utils::time::unix_now_ms(), None);
+            crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+            rig.state.fold_focus_intent(anchor.clone(), Instant::now());
+            assert!(
+                rig.state.ui.browse.is_none(),
+                "intent adoption already ended browsing"
+            );
+            assert_eq!(rig.state.ui.baseline_pane, Some(picked.clone()));
+            rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+                sampled_at: Instant::now(),
+                anchor: Some(anchor.clone()),
+                filter: rig.state.ui.make_up_filter.clone(),
+            }));
+            assert!(crate::mux::focus_anchor::clear_matching(
+                &rig.runtime,
+                anchor.nonce
+            ));
+        }
+        rig.state
+            .on_wakeup(
+                &mut rig.fetch,
+                &mut rig.terminal,
+                Wakeup::FocusFailed {
+                    pane: picked,
+                    error: "target disappeared".into(),
+                },
+            )
+            .unwrap();
+        rig.state
+            .paint_now(&mut rig.terminal, Instant::now())
+            .unwrap();
+        assert_eq!(
+            rig.state.ui.drawn_selection,
+            Some(baseline.to_string()),
+            "failed focus restores the pulled baseline"
+        );
+        assert!(rig.state.ui.browse.is_none());
+        let alert = rig
+            .state
+            .health
+            .alert
+            .as_ref()
+            .expect("focus failure notice");
+        assert_eq!(alert.reason, "focus failed: zsh: target disappeared");
+        assert!(!alert.is_active());
+        let theme = rig.state.ui.theme(&rig.state.current.theme);
+        let frame = render::compose_lines(
+            &rig.state.current,
+            Some(alert),
+            &rig.state.ui,
+            &theme,
+            80,
+            24,
+        );
+        assert!(frame.lines.iter().any(|line| {
+            line.to_string()
+                .contains("focus failed: zsh: target disappeared")
+        }));
+    }
+    let (mut rig, baseline, picked) = picked_focus_rig();
+    rig.state
+        .apply_input([Wakeup::Key(KeyAction::Up)], &mut rig.terminal)
+        .unwrap();
+    rig.state
+        .on_wakeup(
+            &mut rig.fetch,
+            &mut rig.terminal,
+            Wakeup::FocusFailed {
+                pane: picked,
+                error: "late failure".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(rig.state.ui.selected_pane, Some(baseline));
+    assert!(rig.state.health.alert.is_none());
+}
+
+#[test]
+fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch() {
+    let rig = Rig::new();
+    let (snapshot, _, _, _) = focus_fixture();
+    let expected = snapshot.client_views;
+    let mut moved = expected.clone();
+    moved[0].pane_id = zellij("terminal_77");
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let target = zellij("terminal_9");
+    let requested = Some(fenced_request(&rig, &expected, moved));
+    finish_focus_request(&target, Some(&tx), requested, |_| {
+        panic!("failed request must not dispatch")
+    });
+    assert!(
+        matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
+    );
+    for dispatched in [Err(FocusActionError::Superseded), Ok(false), Ok(true)] {
+        let failed = dispatched.is_err();
+        let requested = Some(fenced_request(&rig, &expected, expected.clone()));
+        finish_focus_request(&target, Some(&tx), requested, |_| dispatched);
+        if failed {
+            assert!(
+                matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
+            );
+        } else {
+            assert!(
+                rx.try_recv().is_err(),
+                "superseded or successful dispatch is not a failure"
+            );
+        }
+    }
+}
+
+fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
+    use crate::mux::focus_anchor::{
+        FocusActionRequest, dispatch_action, request_action_with_test_sample,
+    };
+
+    let (own, baseline, picked, client_id) = match mux {
+        MuxName::Zellij => (
+            zellij("terminal_10"),
+            zellij("terminal_1"),
+            zellij("terminal_2"),
+            crate::ids::MuxClientId::Zellij(1),
+        ),
+        MuxName::Tmux => (
+            tmux("%10"),
+            tmux("%1"),
+            tmux("%2"),
+            crate::ids::MuxClientId::Tmux("test-client".to_owned()),
+        ),
+    };
+    let mut rig = Rig::with_own_pane(own.clone());
+    let panes = [baseline.clone(), picked.clone()]
+        .into_iter()
+        .map(|id| {
+            let mut working = pane("terminal_1", "view_1", false);
+            working.pane_id = id;
+            working.view_kind = Some(match mux {
+                MuxName::Zellij => crate::ids::ViewKind::Tab,
+                MuxName::Tmux => crate::ids::ViewKind::Window,
+            });
+            working
+        })
+        .collect();
+    let mut native = snapshot_with_panes(&rig.ws, panes);
+    native.presence = Some(crate::store::snapshot::SidebarPresence::Active);
+    native.own_view = Some(SidebarOwnView {
+        sibling_count: 3,
+        working_pane_ids: vec![baseline.clone(), picked.clone()],
+        own_view_is_daemon: false,
+    });
+    native.focused_pane = Some(baseline.clone());
+    native.viewed_panes = vec![baseline.clone()];
+    native.client_views = vec![crate::pane::ClientPaneView {
+        client_id,
+        pane_id: baseline.clone(),
+    }];
+    rig.fold(native.clone(), SnapshotSource::Produced);
+    native.focused_pane = Some(own.clone());
+    native.viewed_panes = vec![own.clone()];
+    native.client_views[0].pane_id = own;
+    rig.fold(native.clone(), SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection, Some(baseline.to_string()));
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    let outcome = rig
+        .state
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
+        .unwrap();
+    assert!(
+        outcome
+            .effects
+            .contains(&InputEffect::Focus(picked.clone()))
+    );
+    assert_eq!(rig.state.ui.drawn_selection, Some(picked.to_string()));
+
+    let nonce = request_action_with_test_sample(
+        &rig.runtime,
+        "rimz-test",
+        FocusActionRequest {
+            pane_id: picked.clone(),
+            origin: FocusOrigin::User,
+            repair_generation: None,
+            expected_pre_action: Some(&native.client_views),
+            placement: None,
+            order: None,
+        },
+        || Ok(native.client_views.clone()),
+    )
+    .unwrap();
+    let anchor = crate::mux::focus_anchor::load(&rig.runtime).unwrap();
+    rig.state.fold_focus_intent(anchor.clone(), Instant::now());
+    assert!(
+        rig.state.ui.browse.is_none(),
+        "request adoption ended browsing before dispatch"
+    );
+    assert_eq!(rig.state.ui.baseline_pane, Some(picked.clone()));
+    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+        sampled_at: Instant::now(),
+        anchor: Some(anchor),
+        filter: rig.state.ui.make_up_filter.clone(),
+    }));
+
+    // A backend mismatch fails before spawning, but runs real dispatch-error cleanup.
+    let rejecting_backend = crate::mux::backend_for(match mux {
+        MuxName::Zellij => MuxName::Tmux,
+        MuxName::Tmux => MuxName::Zellij,
+    });
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    finish_focus_request(&picked, Some(&tx), Some(Ok(nonce)), |nonce| {
+        dispatch_action(
+            rejecting_backend.as_ref(),
+            &rig.runtime,
+            "rimz-test",
+            &picked,
+            nonce,
+            Default::default(),
+        )
+    });
+    assert!(
+        crate::mux::focus_anchor::load(&rig.runtime).is_none(),
+        "failed dispatch removed its request"
+    );
+    rig.state
+        .on_wakeup(&mut rig.fetch, &mut rig.terminal, rx.try_recv().unwrap())
+        .unwrap();
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    assert_eq!(
+        rig.state.ui.drawn_selection,
+        Some(baseline.to_string()),
+        "failed dispatch restores the pre-jump working-pane baseline while native focus stays on the sidebar"
+    );
+    let alert = rig.state.health.alert.as_ref().unwrap();
+    assert!(alert.reason.starts_with("focus failed: zsh:"));
+    assert!(!alert.is_active());
+    rig.shared_fold(
+        native,
+        Arc::new(super::super::super::fetch::FoldInputs {
+            sampled_at: Instant::now(),
+            anchor: None,
+            filter: rig.state.ui.make_up_filter.clone(),
+        }),
+    );
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    assert_eq!(
+        rig.state.ui.drawn_selection,
+        Some(baseline.to_string()),
+        "the next shared cut must not revive the failed target"
+    );
+}
+
+#[test]
+fn failed_tmux_dispatch_restores_baseline_while_sidebar_is_focused() {
+    assert_failed_dispatch_restores_baseline(MuxName::Tmux);
+}
+
+#[test]
+fn failed_zellij_dispatch_restores_baseline_while_sidebar_is_focused() {
+    assert_failed_dispatch_restores_baseline(MuxName::Zellij);
+}
+
+/// Rules out the hypothesized late-confirmation A→B→A revert, not teammate growth at the top clamp.
+#[test]
+fn clicked_selection_stays_painted_through_late_native_confirmation_and_fence() {
+    let mut rig = Rig::new();
+    let baseline = zellij("terminal_1");
+    let target = zellij("terminal_2");
+    let issued = crate::utils::time::unix_now_ms() - 2_600;
+    let mut native = snapshot_with_focused_pane(&rig.ws, baseline.clone());
+    native.presence = Some(crate::store::snapshot::SidebarPresence::Active);
+    native.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: baseline,
+    }];
+    native.panes_observed_at_ms = Some(issued - 1);
+    rig.fold(native.clone(), SnapshotSource::Produced);
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    let row = rig.state.ui.interactions.line_for_row(1).unwrap() as u16;
+    let now = Instant::now();
+    rig.state
+        .apply_input([Wakeup::MouseClick { column: 1, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(
+        rig.state.ui.drawn_selection,
+        Some(target.to_string()),
+        "click paint selects B"
+    );
+    let (tx, rx) = std::sync::mpsc::sync_channel(16);
+    rig.state.observe_tx = tx;
+    native.panes_observed_at_ms = Some(issued + 500);
+    rig.fold(native.clone(), SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, now + Duration::from_millis(500))
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    let mut anchor = applied_focus_anchor(target.clone(), 2, issued, None);
+    anchor.pre_action = native.client_views.clone();
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    rig.fold(native.clone(), SnapshotSource::Produced);
+    assert!(
+        rig.state.current.focused_pane.is_none(),
+        "aged anchor fences stale A"
+    );
+    rig.state
+        .paint_now(&mut rig.terminal, now + Duration::from_millis(2_600))
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    native.focused_pane = Some(target.clone());
+    native.client_views[0].pane_id = target.clone();
+    native.panes_observed_at_ms = Some(issued + 3_000);
+    rig.fold(native, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, now + Duration::from_millis(3_000))
+        .unwrap();
+    assert_eq!(rig.state.ui.drawn_selection, Some(target.to_string()));
+    for message in rx.try_iter() {
+        if let ObserveMsg::OwnAnomaly { draft, .. } = message {
+            assert_ne!(
+                serde_json::to_value(draft.kind).unwrap()["cause"],
+                "selection_changed"
+            );
+        }
+    }
+}
+
 fn tmux(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Tmux, raw)
 }
