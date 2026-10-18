@@ -4,6 +4,71 @@
 use super::*;
 
 #[test]
+fn flat_resume_names_a_profiled_pane_by_profile() {
+    let saved = AgentState {
+        profile: Some("brainstormer".to_owned()),
+        ..agent("claude", "saved", "/code/project", 0)
+    };
+    let plan = plan_profiled(saved, &profiles("brainstormer", profile("claude")));
+    assert_eq!(
+        plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
+        Some("brainstormer")
+    );
+}
+
+#[test]
+fn flat_resume_keeps_the_profile_pane_name_when_posture_degrades() {
+    let saved = AgentState {
+        profile: Some("brainstormer".to_owned()),
+        ..agent("claude", "saved", "/code/project", 0)
+    };
+    let plan = plan(&[saved]);
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|warning| warning.contains("no longer resolves"))
+    );
+    assert_eq!(
+        plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
+        Some("brainstormer")
+    );
+}
+
+#[test]
+fn flat_resume_names_an_unprofiled_pane_by_kind() {
+    let plan = plan(&[agent("claude", "saved", "/code/project", 0)]);
+    assert_eq!(
+        plan.tabs[0].layout.columns[0].panes[0].name.as_deref(),
+        Some("claude")
+    );
+}
+
+#[test]
+fn flat_resume_names_each_pane_in_a_shared_tab_by_its_identity() {
+    for (profile_age, bare_age, expected) in [
+        (1, 10, ["brainstormer", "claude"]),
+        (10, 1, ["claude", "brainstormer"]),
+    ] {
+        let saved = AgentState {
+            profile: Some("brainstormer".to_owned()),
+            ..agent("claude", "profiled", "/code/project", profile_age)
+        };
+        let plan = plan_resume(
+            &[saved, agent("claude", "bare", "/code/project", bare_age)],
+            &BTreeSet::new(),
+            ctx(2, None, &profiles("brainstormer", profile("claude"))),
+            |_| true,
+            |_| true,
+        );
+        assert_eq!(plan.tabs.len(), 1);
+        let panes = &plan.tabs[0].layout.columns[0].panes;
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].name.as_deref(), Some(expected[0]));
+        assert_eq!(panes[1].name.as_deref(), Some(expected[1]));
+    }
+}
+
+#[test]
 fn provider_resume_adopts_one_session_with_profile_login_and_handle() {
     for kind in ["claude", "codex"] {
         let cwd = tempfile::tempdir().unwrap();
