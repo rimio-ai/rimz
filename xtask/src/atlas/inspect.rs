@@ -12,7 +12,7 @@ use super::modules::{
     self, Boundary, crate_module_for_path, module_is_within, path_in_scope, reference_module_label,
 };
 use super::output::{self, OutputArgs};
-use super::references::{Edge, EdgeKind};
+use super::references::Edge;
 use super::shapes::{self, ShapeFamily};
 use super::sources::SourceKind;
 use super::syntax::{FileSyntax, FnBody, PrivateItem};
@@ -22,7 +22,7 @@ use super::{positive_usize, set_once, value};
 mod calls;
 mod flags;
 
-pub(super) use calls::folded_item_count;
+pub(super) use calls::{assembly_edges, folded_item_count, group_by_fn};
 mod selector;
 mod surface;
 #[cfg(test)]
@@ -942,8 +942,7 @@ impl Referrers {
             )
         };
         let matching = edges.iter().filter(|edge| {
-            edge.kind == EdgeKind::Reference
-                && edge.item == definition.name
+            edge.item == definition.name
                 && edge.to == definition.module
                 && edge.to_line == definition.line
                 && edge.to_path == definition.path

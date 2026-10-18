@@ -4,7 +4,7 @@ use std::process::Command;
 
 use scip::types::{Occurrence, SymbolRole};
 
-use super::super::references::{Edge, EdgeKind, FnRef};
+use super::super::references::{Edge, FnRef};
 use super::super::sources::SourceKind;
 use super::selector::ModuleSelector;
 
@@ -55,7 +55,6 @@ pub(super) fn edge(
         to: "store".to_owned(),
         to_line: 1,
         item: item.to_owned(),
-        kind: EdgeKind::Reference,
         site_kind,
         cross_target: false,
     }

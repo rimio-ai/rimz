@@ -40,12 +40,6 @@ pub(super) struct ItemRefs {
     pub(super) test_count: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum EdgeKind {
-    Reference,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(super) struct FnRef {
     pub(super) label: String,
@@ -83,7 +77,6 @@ pub(super) struct Edge {
     /// items in one file (methods on different owners) stay distinct.
     pub(super) to_line: usize,
     pub(super) item: String,
-    pub(super) kind: EdgeKind,
     pub(super) site_kind: SourceKind,
     pub(super) cross_target: bool,
 }
@@ -196,7 +189,6 @@ impl References {
                 to: module.to_owned(),
                 to_line: line,
                 item: name.to_owned(),
-                kind: EdgeKind::Reference,
                 site_kind: site.site_kind,
                 cross_target: crate_path_for_source(&site.path) != file.crate_path
                     || binaries.contains(&site.path) != binaries.contains(&file.path),
@@ -480,7 +472,6 @@ mod tests {
         assert_eq!(references.edges.len(), 3);
         assert!(references.edges.iter().all(|edge| {
             edge.item == "target"
-                && edge.kind == EdgeKind::Reference
                 && edge.to.is_empty()
                 && edge.to_path == Path::new("crates/demo/src/lib.rs")
         }));

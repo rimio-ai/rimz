@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 
 use super::super::references::{FnRef, ItemKey, ItemRefs, References};
-use super::super::sources::Source;
+use super::super::sources::{Source, SourceKind};
 use super::*;
 
 #[test]
@@ -105,7 +105,6 @@ fn assembly_delta_uses_the_per_function_maximum() {
     let current = collect_reference_edges(current_edges.iter(), &paths, &[]);
     let pair = ("caller".to_owned(), "target".to_owned());
 
-    assert_eq!(base[&pair].items, current[&pair].items);
     assert_eq!(base[&pair].assembly(), 2);
     assert_eq!(current[&pair].assembly(), 4);
 }
@@ -134,7 +133,48 @@ fn assembly_folds_one_owner_type_into_one_item_like_the_dossier() {
 
     assert_eq!(unfolded[&pair].assembly(), 4);
     assert_eq!(folded[&pair].assembly(), 2);
-    assert_eq!(folded[&pair].items.len(), 4);
+}
+
+#[test]
+fn assembly_delta_excludes_aliases_but_keeps_module_level_pairs() {
+    let sources = [Source::new(
+        "src/target.rs",
+        "pub type Alias = ();\npub fn open() {}",
+    )];
+    let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
+    let mut edges = vec![reference_edge("src/a.rs", "Alias", Some(10))];
+    let paths = [PathBuf::from("src/a.rs")];
+    assert!(collect_reference_edges(edges.iter(), &paths, &syntax.files).is_empty());
+    edges[0].from_fn = None;
+    assert!(collect_reference_edges(edges.iter(), &paths, &syntax.files).is_empty());
+    edges.push(reference_edge("src/a.rs", "open", None));
+    edges[1].to_line = 2;
+    let rows = collect_reference_edges(edges.iter(), &paths, &syntax.files);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.values().next().unwrap().assembly(), 0);
+}
+
+#[test]
+fn contract_assembly_excludes_type_alias_references() {
+    let facts = facts_for_sources(
+        vec![
+            Source::new("src/caller.rs", "fn run() {}"),
+            Source::new("src/target.rs", "pub type Alias = ();"),
+        ],
+        References {
+            edges: vec![reference_edge("src/caller.rs", "Alias", Some(1))],
+            ..References::default()
+        },
+    );
+    let expectation = AssemblyExpectation {
+        from: "caller".into(),
+        to: "target".into(),
+        max_items: 0,
+    };
+    assert_eq!(
+        contract_assembly(Path::new("."), &facts, &expectation, false).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -1001,7 +1041,6 @@ fn reference_edge(path: &str, item: &str, function_line: Option<usize>) -> Edge 
         to: "target".to_owned(),
         to_line: 1,
         item: item.to_owned(),
-        kind: EdgeKind::Reference,
         site_kind: SourceKind::Production,
         cross_target: false,
         from_line: function_line.unwrap_or(1),
@@ -1053,7 +1092,6 @@ fn contract_assembly_from_an_ancestor_skips_the_targets_own_functions() {
         to: "cli::exec".to_owned(),
         to_line: 1,
         item: item.to_owned(),
-        kind: EdgeKind::Reference,
         site_kind: SourceKind::Production,
         cross_target: false,
     };

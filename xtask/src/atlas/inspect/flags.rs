@@ -6,7 +6,6 @@ use serde::Serialize;
 
 use super::super::facts::Facts;
 use super::super::modules::module_is_within;
-use super::super::references::EdgeKind;
 use super::super::sources::SourceKind;
 use super::super::syntax::{CallSite, FnBody, FnParam};
 use super::selector::ModuleSelector;
@@ -104,8 +103,7 @@ pub(super) fn flag_section(
 
         let mut sites = Vec::new();
         for edge in references.edges.iter().filter(|edge| {
-            edge.kind == EdgeKind::Reference
-                && edge.site_kind != SourceKind::Test
+            edge.site_kind != SourceKind::Test
                 && !module_is_within(&edge.from, &target.module)
                 && edge.to_path == row.path
                 && edge.to_line == row.line

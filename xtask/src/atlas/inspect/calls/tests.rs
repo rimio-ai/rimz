@@ -388,6 +388,29 @@ fn type_aliases_are_not_assembly_items() {
 }
 
 #[test]
+fn callers_exclude_function_and_module_level_alias_references() {
+    let syntax = super::super::super::syntax::analyze_sources(
+        &[Source::new(
+            "crates/demo/src/store.rs",
+            "pub type Alias = ();\npub fn open() {}",
+        )],
+        &BTreeSet::new(),
+    );
+    let mut edges = vec![
+        edge("Alias", "caller", Some(("run", 1)), SourceKind::Production),
+        edge("Alias", "module_only", None, SourceKind::Production),
+    ];
+    assert!(callers_from_edges(&edges, &selector("store"), &syntax.files).is_empty());
+    edges.push(edge("open", "caller", None, SourceKind::Production));
+    edges[2].to_line = 2;
+    let callers = callers_from_edges(&edges, &selector("store"), &syntax.files);
+    assert_eq!(callers.len(), 1);
+    assert_eq!(callers[0].items, ["open"]);
+    assert_eq!(callers[0].max_fn_items, 0);
+    assert!(callers[0].top_fns.is_empty());
+}
+
+#[test]
 fn an_ancestor_callers_functions_inside_the_target_are_not_its_heaviest() {
     let edge_from = |from: &str, path: &str, function: &str, item: &str| {
         let mut edge = edge(item, from, Some((function, 1)), SourceKind::Production);
