@@ -209,19 +209,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             )
         },
     )?;
+    let (title, pane_name) = fork_tab_names(&seed, channel.as_deref());
     let panes = LayoutPanes {
         columns: vec![LayoutColumn {
             panes: vec![PaneCmd {
                 argv,
-                name: Some(seed.kind.to_string()),
+                name: Some(pane_name),
             }],
             stacked: false,
         }],
         focused_pane: 0,
     };
-    let title = channel
-        .as_deref()
-        .map_or_else(|| seed.kind.to_string(), |channel| format!("#{channel}"));
     let sidebar = room.sidebar_options(&seed.cwd);
     let in_place = placement == Placement::SamePane;
     if in_place {
@@ -265,6 +263,18 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         report_fork(&seed, &source_name, &launch.name);
     }
     Ok(())
+}
+
+/// The forked tab title and pane name: the pane is named by profile, else kind;
+/// the tab is `#<channel>`, else the pane name.
+fn fork_tab_names(seed: &ForkSeed, channel: Option<&str>) -> (String, String) {
+    let pane_name = seed
+        .launch
+        .profile
+        .clone()
+        .unwrap_or_else(|| seed.kind.to_string());
+    let title = channel.map_or_else(|| pane_name.clone(), |channel| format!("#{channel}"));
+    (title, pane_name)
 }
 
 /// The posture this fork replays, from the same seam restart and resume use.
@@ -530,6 +540,22 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("a fork stays on the source provider")
+        );
+    }
+
+    #[test]
+    fn fork_tab_names_follow_the_seed_profile_else_kind() {
+        let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
+        let profiled = seed("claude", Some("brainstormer"), None);
+        let bare = seed("claude", None, None);
+        assert_eq!(
+            fork_tab_names(&profiled, None),
+            pair("brainstormer", "brainstormer")
+        );
+        assert_eq!(fork_tab_names(&bare, None), pair("claude", "claude"));
+        assert_eq!(
+            fork_tab_names(&profiled, Some("auth")),
+            pair("#auth", "brainstormer")
         );
     }
 
