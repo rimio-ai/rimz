@@ -5,7 +5,7 @@ use crate::config::HibernateConfig;
 use crate::ids::WorkspaceId;
 use std::path::{Path, PathBuf};
 
-use super::cache_keepalive::KeepWarmPolicy;
+use super::cache_keepalive::SeatPolicy;
 use crate::agents::AgentState;
 use crate::config::{MachineConfig, RemoteControlConfig};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -28,13 +28,13 @@ pub struct Policy {
     schedule: crate::config::Schedule,
     remote_control: RemoteControlConfig,
     harness: crate::config::HarnessConfig,
-    keep_warm: KeepWarmPolicy,
+    keep_warm: SeatPolicy,
 }
 
 impl Policy {
     pub fn new(
         config: &MachineConfig,
-        keep_warm: &KeepWarmPolicy,
+        keep_warm: &SeatPolicy,
     ) -> Result<Self, crate::config::HibernateScheduleErr> {
         Ok(Self {
             schedule: config.agents.hibernate.schedule()?,
@@ -386,7 +386,7 @@ pub fn hibernate_idle_agents(
     paths: &crate::StatePaths,
     runtime: &crate::RuntimePaths,
     config: &MachineConfig,
-    keep_warm: &KeepWarmPolicy,
+    keep_warm: &SeatPolicy,
 ) {
     hibernate_idle_agents_with(
         snapshot,
@@ -413,7 +413,7 @@ fn hibernate_idle_agents_with(
     paths: &crate::StatePaths,
     runtime: &crate::RuntimePaths,
     config: &MachineConfig,
-    keep_warm: &KeepWarmPolicy,
+    keep_warm: &SeatPolicy,
     mut spawn: impl FnMut(&HibernateHelperRequest) -> bool,
     wake: impl FnMut(&PaneId),
 ) {

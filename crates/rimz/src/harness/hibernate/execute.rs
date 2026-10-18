@@ -18,7 +18,7 @@ pub fn run_request(
     {
         return Ok(());
     }
-    let keep_warm = KeepWarmPolicy::load(config, snapshot.project_root.as_deref());
+    let keep_warm = SeatPolicy::load(config, snapshot.project_root.as_deref());
     let policy = Policy::new(config, &keep_warm)?;
     let Some(agent) =
         crate::store::snapshot::find_agent(&snapshot.agents, &request.kind, &request.agent_id)

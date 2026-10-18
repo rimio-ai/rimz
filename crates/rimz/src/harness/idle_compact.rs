@@ -15,7 +15,7 @@ use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{HarnessConfig, IdleCompactMode, MachineConfig, TeamsConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
-use crate::harness::cache_keepalive::KeepWarmPolicy;
+use crate::harness::cache_keepalive::SeatPolicy;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 
@@ -135,7 +135,7 @@ pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
-    policy: &KeepWarmPolicy,
+    policy: &SeatPolicy,
 ) {
     compact_idle_agents_with(snapshot, runtime, config, policy, |request| {
         spawn_idle_compact(runtime, request)
@@ -146,7 +146,7 @@ fn compact_idle_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &MachineConfig,
-    policy: &KeepWarmPolicy,
+    policy: &SeatPolicy,
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
@@ -488,7 +488,7 @@ mod tests {
             &snapshot,
             &runtime,
             &config,
-            &KeepWarmPolicy::default(),
+            &SeatPolicy::default(),
             |request| {
                 requests.push(request.clone());
                 true
@@ -507,13 +507,9 @@ mod tests {
         );
         std::fs::remove_file(&path).unwrap();
         std::sync::Arc::make_mut(&mut snapshot.agents)[0].team = None;
-        compact_idle_agents_with(
-            &snapshot,
-            &runtime,
-            &config,
-            &KeepWarmPolicy::default(),
-            |_| panic!("solo spawn"),
-        );
+        compact_idle_agents_with(&snapshot, &runtime, &config, &SeatPolicy::default(), |_| {
+            panic!("solo spawn")
+        });
         assert!(!path.exists());
     }
 
@@ -626,7 +622,7 @@ mod tests {
             worktree_path: seat.worktree_path.clone(),
             worktree_branch: seat.worktree_branch.clone(),
         });
-        let mut policy = KeepWarmPolicy::default();
+        let mut policy = SeatPolicy::default();
         let mut team: crate::config::Team =
             toml::from_str("[[roles]]\nrole = \"coder\"\nprofile = \"claude\"\nkeep-warm = \"2h\"")
                 .unwrap();
@@ -643,13 +639,13 @@ mod tests {
             &snapshot,
             &runtime,
             &config,
-            &KeepWarmPolicy {
+            &SeatPolicy {
                 teams: {
                     let mut teams = policy.teams.clone();
                     teams.0.get_mut("probe").unwrap().roles[0].keep_warm = None;
                     teams
                 },
-                ..KeepWarmPolicy::default()
+                ..SeatPolicy::default()
             },
             |_| {
                 spawned += 1;

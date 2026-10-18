@@ -23,14 +23,14 @@ pub struct CacheKeepaliveRequest {
     pub label: String,
 }
 
-/// Effective team roles and agent profiles: where a keep-warm horizon is declared.
+/// Effective team roles and agent profiles: where a seat declares its keep-warm horizon.
 #[derive(Clone, Debug, Default)]
-pub struct KeepWarmPolicy {
+pub struct SeatPolicy {
     pub teams: TeamsConfig,
     pub profiles: ProfilesConfig,
 }
 
-impl KeepWarmPolicy {
+impl SeatPolicy {
     /// Trusted project definitions over the machine's, falling back to the machine snapshot.
     pub fn load(machine: &MachineConfig, project_root: Option<&Path>) -> Self {
         match project_root.and_then(|root| crate::config::effective::load(machine, root).ok()) {
@@ -152,7 +152,7 @@ impl CacheKeepaliveRequest {
         &self,
         snapshot: &'a SidebarSnapshot,
         config: &HarnessConfig,
-        policy: &KeepWarmPolicy,
+        policy: &SeatPolicy,
         now: Timestamp,
     ) -> Option<(&'a AgentState, Option<Duration>)> {
         let agent = snapshot.agents.iter().find(|agent| {
@@ -265,7 +265,7 @@ fn keepalive_agents_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &HarnessConfig,
-    policy: &KeepWarmPolicy,
+    policy: &SeatPolicy,
     mut spawn: impl FnMut(&CacheKeepaliveRequest),
 ) {
     let Ok(Some(_guard)) =
@@ -318,7 +318,7 @@ pub(crate) fn keepalive_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &HarnessConfig,
-    policy: &KeepWarmPolicy,
+    policy: &SeatPolicy,
 ) {
     if !config.cache_keepalive {
         return;

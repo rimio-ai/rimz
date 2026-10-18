@@ -292,7 +292,7 @@ fn keepalive_producers_share_pacing_even_during_spawn() {
     let mut snapshot =
         SidebarSnapshot::build_with_agents(workspace_id, vec![agent.clone()], ts(3540));
     let config = HarnessConfig::default();
-    let policy = KeepWarmPolicy::default();
+    let policy = SeatPolicy::default();
     keepalive_agents_with(&snapshot, &runtime, &config, &policy, |_| {
         panic!("no live pane")
     });
@@ -393,8 +393,8 @@ fn team(keep_warm: Option<KeepWarm>) -> Team {
 }
 
 /// A solo profile `warm` and a team `forge` whose `coder` role holds for `role`.
-fn policy(solo: Option<KeepWarm>, role: Option<KeepWarm>) -> KeepWarmPolicy {
-    let mut policy = KeepWarmPolicy::default();
+fn policy(solo: Option<KeepWarm>, role: Option<KeepWarm>) -> SeatPolicy {
+    let mut policy = SeatPolicy::default();
     policy.profiles.0.insert("warm".into(), profile(solo));
     policy.teams.0.insert("forge".into(), team(role));
     policy
@@ -757,13 +757,9 @@ fn helper_rechecks_the_horizon_before_pinging() {
     });
     let config = HarnessConfig::default();
     let held = policy(Some(KeepWarm::For(TWO_HOURS)), None);
-    keepalive_agents_with(
-        &snapshot,
-        &runtime,
-        &config,
-        &KeepWarmPolicy::default(),
-        |_| panic!("no keep-warm, no ping"),
-    );
+    keepalive_agents_with(&snapshot, &runtime, &config, &SeatPolicy::default(), |_| {
+        panic!("no keep-warm, no ping")
+    });
     let mut requests = Vec::new();
     keepalive_agents_with(&snapshot, &runtime, &config, &held, |request| {
         requests.push(request.clone());
@@ -775,7 +771,7 @@ fn helper_rechecks_the_horizon_before_pinging() {
     assert_eq!(holding, Some(TWO_HOURS));
     assert!(
         requests[0]
-            .target(&snapshot, &config, &KeepWarmPolicy::default(), ts(3540))
+            .target(&snapshot, &config, &SeatPolicy::default(), ts(3540))
             .is_none(),
         "keep-warm removed from the definition since the producer fired"
     );

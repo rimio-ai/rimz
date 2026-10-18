@@ -747,7 +747,7 @@ path = "crates/rimz/src/harness"
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
-# KeepWarmPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
+# SeatPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
 # `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
 # `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
 # Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).

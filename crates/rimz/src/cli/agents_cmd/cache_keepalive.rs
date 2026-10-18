@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::harness::assist_log::{Assist, AssistRecord};
-use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, KeepWarmPolicy, final_ping, prompt};
+use rimz::harness::cache_keepalive::{CacheKeepaliveRequest, SeatPolicy, final_ping, prompt};
 use rimz::message::synthetic::{self, SyntheticMessage};
 use rimz::store::message::{DeliveryGate, HarnessNotice, MessageSender};
 use rimz::store::writer::DeliveryFailureDisposition;
@@ -18,7 +18,7 @@ pub(super) fn run(request: CacheKeepaliveRequest) -> Result<()> {
     let snapshot = ctx
         .published_snapshot()
         .context("reading cache-keepalive snapshot")?;
-    let policy = KeepWarmPolicy::load(&config, Some(&ctx.workspace.project_root));
+    let policy = SeatPolicy::load(&config, Some(&ctx.workspace.project_root));
     let now = Timestamp::now();
     let Some((agent, holding)) = request.target(&snapshot, &config.harness, &policy, now) else {
         return Ok(());
