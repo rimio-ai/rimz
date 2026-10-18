@@ -9,8 +9,7 @@ use crate::agents::BudgetWindow;
 use crate::harness::budget::BudgetSpec;
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
-/// Request anchoring excludes final generation; covers the producer tick, helper spawn, and submission.
-pub(crate) const PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
+const DEFAULT_PROMPT_CACHE_MARGIN: Duration = Duration::from_secs(60);
 
 const DEFAULT_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags. Include relevant information in the summary such that this conversation will be continued by a new context window without needing to redo work or be reprovided with relevant constraints or context. Be sure to preserve: (1) any difficulties or problems that came up, and how they were handled or resolved; (2) any possibilities, options, or approaches that were raised, tried, or set aside, and why; (3) anything that was asked for, decided, agreed, ruled out, or established as a preference, constraint, or boundary — stated exactly; (4) exactly where things stand now — what has been covered, settled, or completed so far; (5) anything still open, unresolved, promised, or expected to happen next; (6) specific details that would be hard to reconstruct — names, numbers, dates, exact wording, links or references — kept exactly. Be complete on these even at the cost of length; keep everything else concise. Weight the two voices differently: keep what the user said, asked for, shared, or established carefully and close to their own words; your own explanations and reasoning can be condensed much further, to what they concluded or produced — as long as nothing in the six items above is dropped.";
 const TEAM_COMPACT_INSTRUCTION: &str = "Summarize the transcript inside <summary></summary> tags so a new context window continues without redoing work. This seat is a team member: on resume I reread the board, the stage files, and git, so point at them by path and section and copy nothing they hold. Keep only what this window alone knows: (1) facts, decisions, and drafts not yet filed, and the words of the user and teammates that shaped them, each tagged with the file and section it belongs in, so my first act on resume writes it there; (2) what is in flight: replies I wait on, messages I owe.";
@@ -188,7 +187,7 @@ pub enum TurnCapParseError {
 use super::FlipCompact;
 use crate::store::message::AutoCompact;
 
-const IDLE_COMPACT_DURATION_UNITS: &[DurationUnit] = &[
+const DURATION_UNITS: &[DurationUnit] = &[
     DurationUnit::Second,
     DurationUnit::Minute,
     DurationUnit::Hour,
@@ -230,7 +229,7 @@ impl FromStr for IdleCompactMode {
         match raw {
             "off" => Ok(Self::Off),
             "on" => Ok(Self::On),
-            _ => parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+            _ => parse_duration_units(raw, DURATION_UNITS)
                 .map(Self::After)
                 .map_err(|_| IdleCompactParseError),
         }
@@ -283,7 +282,7 @@ impl FromStr for KeepWarm {
         if raw == "off" {
             return Ok(Self::Off);
         }
-        parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+        parse_duration_units(raw, DURATION_UNITS)
             .ok()
             .filter(|horizon| !horizon.is_zero())
             .map(Self::For)
@@ -346,6 +345,11 @@ pub struct HarnessConfig {
     /// The shortest prompt-cache TTL keep-warm will hold; `None` (`off`) admits any known TTL.
     #[serde(with = "keep_warm_min_ttl_serde")]
     pub keep_warm_min_ttl: Option<Duration>,
+    /// How long before a prompt cache expires keep-warm pings and idle
+    /// compaction fire. Request anchoring excludes final generation, so this
+    /// covers the producer tick, helper spawn, and submission.
+    #[serde(with = "prompt_cache_margin_serde")]
+    pub prompt_cache_margin: Duration,
 }
 
 impl Default for HarnessConfig {
@@ -362,6 +366,7 @@ impl Default for HarnessConfig {
             idle_compact: IdleCompactMode::default(),
             flip_compact: None,
             keep_warm_min_ttl: Some(DEFAULT_KEEP_WARM_MIN_TTL),
+            prompt_cache_margin: DEFAULT_PROMPT_CACHE_MARGIN,
         }
     }
 }
@@ -381,17 +386,58 @@ impl HarnessConfig {
             CompactSeat::Team => TEAM_COMPACT_INSTRUCTION,
         })
     }
+
+    /// The margin must leave room before every cache expiry it is measured
+    /// from, or keep-warm and idle compaction would silently never fire.
+    fn check_prompt_cache_margin(&self) -> Result<(), String> {
+        let margin = self.prompt_cache_margin;
+        let shown = crate::utils::time::format_duration_compact;
+        if let Some(max) = self.cache_keepalive_max.filter(|max| *max <= margin) {
+            return Err(format!(
+                "harness.prompt_cache_margin {} must be shorter than harness.cache_keepalive_max {}; lower the margin or raise cache_keepalive_max",
+                shown(margin),
+                shown(max)
+            ));
+        }
+        for kind in crate::agents::known_kinds() {
+            let kind = crate::ids::AgentKind::new_unchecked(kind);
+            if let Some(ttl) = self.prompt_cache_ttl(&kind).filter(|ttl| *ttl <= margin) {
+                return Err(format!(
+                    "harness.prompt_cache_margin {} must be shorter than the {kind} prompt-cache TTL {}; lower the margin or set harness.prompt_cache_ttl.{kind}",
+                    shown(margin),
+                    shown(ttl)
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
-/// `off`, or a duration longer than [`PROMPT_CACHE_MARGIN`].
+/// Deserializes `[harness]` and refuses a prompt-cache margin its TTLs or
+/// keepalive cap cannot fit, so the refusal reads like any other bad value.
+pub(super) fn deserialize_checked<'de, D>(deserializer: D) -> Result<HarnessConfig, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let harness = HarnessConfig::deserialize(deserializer)?;
+    harness
+        .check_prompt_cache_margin()
+        .map_err(serde::de::Error::custom)?;
+    Ok(harness)
+}
+
+/// `off`, or a non-zero duration.
 fn parse_off_or_duration(raw: &str) -> Option<Option<Duration>> {
     if raw == "off" {
         return Some(None);
     }
-    parse_duration_units(raw, IDLE_COMPACT_DURATION_UNITS)
+    parse_nonzero_duration(raw).map(Some)
+}
+
+fn parse_nonzero_duration(raw: &str) -> Option<Duration> {
+    parse_duration_units(raw, DURATION_UNITS)
         .ok()
-        .filter(|duration| *duration > PROMPT_CACHE_MARGIN)
-        .map(Some)
+        .filter(|duration| !duration.is_zero())
 }
 
 fn format_off_or_duration(duration: Option<Duration>) -> String {
@@ -399,6 +445,28 @@ fn format_off_or_duration(duration: Option<Duration>) -> String {
         || "off".to_owned(),
         crate::utils::time::format_duration_compact,
     )
+}
+
+mod prompt_cache_margin_serde {
+    use super::*;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        parse_nonzero_duration(&String::deserialize(deserializer)?).ok_or_else(|| {
+            serde::de::Error::custom(
+                "harness.prompt_cache_margin must be a non-zero duration such as 1m",
+            )
+        })
+    }
+
+    pub fn serialize<S>(margin: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&crate::utils::time::format_duration_compact(*margin))
+    }
 }
 
 mod cache_keepalive_max_serde {
@@ -410,7 +478,7 @@ mod cache_keepalive_max_serde {
     {
         parse_off_or_duration(&String::deserialize(deserializer)?).ok_or_else(|| {
             serde::de::Error::custom(
-                "harness.cache_keepalive_max must be off or a duration longer than 1m, such as 6h",
+                "harness.cache_keepalive_max must be off or a non-zero duration such as 6h",
             )
         })
     }
@@ -448,9 +516,7 @@ mod prompt_cache_ttl_serde {
             ));
         }
         parse_off_or_duration(raw).ok_or_else(|| {
-            format!(
-                "harness.prompt_cache_ttl.{kind} must be off or a duration longer than 1m, such as 5m"
-            )
+            format!("harness.prompt_cache_ttl.{kind} must be off or a non-zero duration such as 5m")
         })
     }
 
@@ -567,6 +633,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prompt_cache_margin_is_positive_and_validated_against_effective_limits() {
+        let defaults = serde_json::to_value(HarnessConfig::default()).unwrap();
+        assert_eq!(defaults["prompt_cache_margin"], "1m");
+        for raw in ["90s", "30s"] {
+            let config: HarnessConfig =
+                toml::from_str(&format!("prompt_cache_margin = {raw:?}")).unwrap();
+            let encoded = toml::to_string(&config).unwrap();
+            assert_eq!(
+                serde_json::to_value(&config).unwrap()["prompt_cache_margin"],
+                raw
+            );
+            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), config);
+        }
+        for (raw, detail) in [
+            ("prompt_cache_margin = \"off\"", "prompt_cache_margin"),
+            ("prompt_cache_margin = \"0s\"", "prompt_cache_margin"),
+            ("prompt_cache_margin = \"30m\"", "codex"),
+            (
+                "prompt_cache_margin = \"2m\"\nprompt_cache_ttl = { claude = \"2m\" }",
+                "claude",
+            ),
+            (
+                "prompt_cache_margin = \"2m\"\ncache_keepalive_max = \"2m\"",
+                "cache_keepalive_max",
+            ),
+        ] {
+            let err = super::super::parse_core_text(
+                std::path::Path::new("config.toml"),
+                &format!("[harness]\n{raw}"),
+            )
+            .err()
+            .unwrap_or_else(|| panic!("incompatible margin must refuse load: {raw}"))
+            .validation_message();
+            assert!(err.contains(detail), "{raw}: {err}");
+        }
+    }
+
+    #[test]
     fn prompt_cache_defaults_and_overrides() {
         let kind = crate::ids::AgentKind::new_unchecked;
         let defaults = HarnessConfig::default();
@@ -598,10 +702,9 @@ mod tests {
     }
 
     #[test]
-    fn prompt_cache_overrides_refuse_unknown_kinds_and_short_ttls() {
+    fn prompt_cache_overrides_refuse_unknown_kinds_and_bad_ttls() {
         for (kind, value) in [
             ("typo", "5m"),
-            ("claude", "1m"),
             ("claude", "0s"),
             ("claude", "on"),
             ("claude", "nonsense"),
@@ -634,13 +737,13 @@ mod tests {
             );
             assert_eq!(toml::from_str::<HarnessConfig>(&rendered).unwrap(), config);
         }
-        for raw in ["30s", "1m", "on", "nonsense"] {
+        for raw in ["0s", "on", "nonsense"] {
             let err = toml::from_str::<HarnessConfig>(&format!("cache_keepalive_max = {raw:?}"))
                 .unwrap_err()
                 .to_string();
             assert!(
                 err.contains(
-                    "harness.cache_keepalive_max must be off or a duration longer than 1m, such as 6h"
+                    "harness.cache_keepalive_max must be off or a non-zero duration such as 6h"
                 ),
                 "{raw}: {err}"
             );

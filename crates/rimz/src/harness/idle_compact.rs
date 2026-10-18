@@ -62,7 +62,7 @@ pub fn fire_point(
         }),
         IdleCompactMode::On => {
             let ttl = harness.prompt_cache_ttl(&agent.kind)?;
-            let fire_after = ttl.checked_sub(crate::config::PROMPT_CACHE_MARGIN)?;
+            let fire_after = ttl.checked_sub(harness.prompt_cache_margin)?;
             Some(IdleWindow {
                 fire_after,
                 cache_expires: Some(ttl),

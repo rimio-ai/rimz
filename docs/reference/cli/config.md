@@ -13,7 +13,7 @@ rimz list-pets [--json]
 
 A refusal or error exits 1, following the CLI-wide [exit codes](../cli.md#exit-codes); the [global flags](../cli.md#global-flags) are defined there too.
 
-Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`). The provider kind must be built-in or installed as a plugin; durations must exceed one minute. `rimz config set harness.cache_keepalive false` disables waiting-agent cache pings, and `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) stops them that long after the agent's last request of its own. Defaults and idle-compaction timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
+Provider prompt-cache lifetimes are configurable through `rimz config set harness.prompt_cache_ttl.claude 5m` (or `off`). The provider kind must be built-in or installed as a plugin; durations must exceed `harness.prompt_cache_margin` (default `1m`), which sets how long before a cache expires keep-warm pings and idle compaction fire. `rimz config set harness.cache_keepalive false` disables waiting-agent cache pings, and `rimz config set harness.cache_keepalive_max 2h` (default `6h`, or `off`) stops them that long after the agent's last request of its own. Defaults and idle-compaction timing are in [idle compaction](../../guide/configuration.md#idle-compaction).
 
 ## The config files
 
@@ -109,6 +109,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `harness.flip_compact` | `off`, a token count (`180k`), or a percentage (`70%`); see [hand-off compaction](../../guide/configuration.md#hand-off-compaction) |
 | `harness.compact_instruction` | any string, including `""` |
 | `harness.idle_compact` | `off`, `on` (default), or a duration such as `25m`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
+| `harness.prompt_cache_margin` | a non-zero duration (default `1m`), shorter than every provider prompt-cache lifetime and `harness.cache_keepalive_max`; see [idle compaction](../../guide/configuration.md#idle-compaction) |
 | `harness.keep_warm_min_ttl` | `off` or a duration such as `15m` (default); see [keep-warm](../../guide/configuration.md#keep-warm) |
 | `harness.budget`, `accounts.budget.<kind>` | an amount ending in `/day` |
 | `accounts.use.<kind>` | an account name or `default`; declaration is checked when a room resolves that provider's account for start or launch, not by `set`. Prefer [`rimz accounts use --global`](./accounts.md#use), which preflights a named account before selecting it. The container and deeper paths are not settable. |

@@ -1574,6 +1574,32 @@ fn harness_prompt_cache_edits_validate_provider_and_duration() {
 }
 
 #[test]
+fn prompt_cache_margin_edits_validate_the_merged_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path(),
+    ));
+    let changed = editor.set("harness.prompt_cache_margin", "2m");
+    assert!(
+        changed.is_ok(),
+        "the shared margin must be editable: {changed:?}"
+    );
+    assert!(editor.set("harness.prompt_cache_ttl.claude", "2m").is_err());
+    assert!(editor.set("harness.prompt_cache_margin", "30m").is_err());
+    assert_eq!(
+        editor
+            .get(Some("harness.prompt_cache_margin"))
+            .unwrap()
+            .as_str(),
+        Some("2m")
+    );
+    editor.set("harness.prompt_cache_margin", "30s").unwrap();
+    editor.set("harness.prompt_cache_ttl.claude", "1m").unwrap();
+    editor.set("harness.cache_keepalive_max", "1m").unwrap();
+}
+
+#[test]
 fn harness_turn_budget_values_are_validated_as_plain_amount_strings() {
     let key = parse_key("harness.turn_budget").expect("key");
 

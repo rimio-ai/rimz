@@ -116,6 +116,31 @@ fn keepalive_cap_refuses_a_ping_that_would_start_at_the_maximum() {
 }
 
 #[test]
+fn configured_margin_controls_the_ping_window_and_cap() {
+    let config: HarnessConfig =
+        toml::from_str("prompt_cache_margin = \"6m\"\ncache_keepalive_max = \"2h\"").unwrap();
+    let agent = sleeping();
+    assert!(!should_keepalive(&agent, &config, None, ts(3239)));
+    assert!(should_keepalive(&agent, &config, None, ts(3240)));
+    assert!(!should_keepalive(&agent, &config, None, ts(3600)));
+    assert_eq!(
+        final_ping(&agent, &config, ts(3960)),
+        Some(Duration::from_secs(7200))
+    );
+    assert_eq!(final_ping(&agent, &config, ts(3959)), None);
+    assert!(run_reached_cap(
+        &pinged_at(0, 3960),
+        &config,
+        Duration::from_secs(3600)
+    ));
+    assert!(!run_reached_cap(
+        &pinged_at(0, 3959),
+        &config,
+        Duration::from_secs(3600)
+    ));
+}
+
+#[test]
 fn final_ping_is_the_one_whose_successor_would_reach_the_cap() {
     let config = HarnessConfig::default();
     let max = Some(Duration::from_secs(6 * 3600));
