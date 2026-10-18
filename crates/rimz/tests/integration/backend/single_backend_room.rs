@@ -1362,14 +1362,39 @@ impl TmuxRoom {
     }
 
     fn close_sidebars(&self) {
-        let sidebars = self.sidebar_panes();
-        assert!(!sidebars.is_empty(), "initial room must have a sidebar");
+        // The sidebar pane takes its `rimz-sidebar` title after it starts,
+        // which can trail the room hold the fixture waits for.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let sidebars = loop {
+            let sidebars = self.sidebar_panes();
+            if !sidebars.is_empty() {
+                break sidebars;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "initial room must have a sidebar"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        };
         for pane in sidebars {
             assert!(
                 tmux_output(&self.env.runtime_root, &["kill-pane", "-t", &pane])
                     .status
                     .success()
             );
+        }
+        // A killed sidebar's supervisor holds the room until it exits.
+        let room_lock = self.env.runtime_paths().room_lock();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
+            .expect("probe tmux room release")
+            .is_none()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "closed sidebars never released the room"
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
