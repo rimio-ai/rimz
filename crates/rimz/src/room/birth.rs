@@ -9,14 +9,16 @@ use crate::config::Isolation;
 use crate::disk::lock::{RoomLock, WorkspaceLock};
 use crate::harness::rebirth::{RebirthDisposition, RebirthPlan};
 use crate::harness::resume::ResumePlan;
+use crate::ids::MuxName;
 use crate::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, SessionHealth, SidebarPaneOptions,
+    BackgroundViewLaunch, BackgroundViewOptions, DaemonView, MuxBackend, SessionHealth,
+    SidebarPaneOptions,
 };
 use crate::proc::ProcInfo;
 use crate::remote_control::ReadinessSnapshot;
-use crate::{StatePaths, Store};
+use crate::{RuntimePaths, StatePaths, Store};
 
-use super::RoomContext;
+use super::{RoomBirthSource, RoomContext};
 
 fn birth_session_name(
     recorded: &str,
@@ -113,59 +115,74 @@ pub struct BirthOutcome {
     pub reset: Option<RoomResetReport>,
 }
 
-pub(super) struct BirthAdmission {
+/// Room admission retained across startup prompts and consumed by birth.
+pub struct BirthAdmission {
     session_name: String,
     pre_existed: bool,
     claim: Option<RoomLock>,
     recovery_lock: Option<WorkspaceLock>,
 }
 
-impl RoomContext {
-    /// Admit before recovery inspection, carrying any claim through birth.
-    pub fn admit_birth(&mut self) -> Result<()> {
-        if self.birth_admission.is_none() {
-            self.birth_admission = Some(self.claim_birth()?);
-        }
-        Ok(())
-    }
+/// Admit before hook detection and startup prompts, without constructing a room context.
+pub fn admit_birth(source: RoomBirthSource<'_>, mux: MuxName) -> Result<BirthAdmission> {
+    let (project_root, session_name) = match source {
+        RoomBirthSource::Resolved(workspace) => (&workspace.project_root, &workspace.session_name),
+        RoomBirthSource::Recorded(record) => (&record.project_root, &record.session_name),
+    };
+    let state =
+        StatePaths::for_project_root(project_root).context("preparing adapter store paths")?;
+    let runtime = RuntimePaths::for_state(&state).context("preparing adapter runtime paths")?;
+    runtime
+        .ensure_runtime_dirs()
+        .context("preparing adapter runtime directories")?;
+    let backend = crate::mux::backend_for(mux);
+    claim_birth(backend.as_ref(), session_name, &runtime)
+}
 
+fn claim_birth(
+    backend: &dyn MuxBackend,
+    recorded: &str,
+    runtime: &RuntimePaths,
+) -> Result<BirthAdmission> {
+    let sessions = backend.list_sessions();
+    let list_succeeded = sessions.is_ok();
+    let (session_name, pre_existed) =
+        birth_session_name(recorded, runtime.dir_name.as_str(), sessions);
+    let mut recovery_lock = None;
+    let claim = if !list_succeeded
+        || (pre_existed && super::session::has_sidebar(runtime, backend.name(), &session_name))
+    {
+        None
+    } else if pre_existed {
+        recovery_lock = Some(WorkspaceLock::acquire(&runtime.lock_path("recovery.lock"))?);
+        super::session::claim_listed_room(
+            runtime,
+            backend.name(),
+            &session_name,
+            Duration::from_secs(2),
+        )?
+    } else {
+        Some(super::session::claim_room(
+            runtime,
+            recorded,
+            Duration::from_secs(2),
+        )?)
+    };
+    Ok(BirthAdmission {
+        session_name,
+        pre_existed,
+        claim,
+        recovery_lock,
+    })
+}
+
+impl RoomContext {
     fn claim_birth(&self) -> Result<BirthAdmission> {
-        let sessions = self.backend.list_sessions();
-        let list_succeeded = sessions.is_ok();
-        let (session_name, pre_existed) = birth_session_name(
+        claim_birth(
+            self.backend.as_ref(),
             &self.workspace.session_name,
-            self.runtime.dir_name.as_str(),
-            sessions,
-        );
-        let mut recovery_lock = None;
-        let claim = if !list_succeeded
-            || (pre_existed
-                && super::session::has_sidebar(&self.runtime, self.backend.name(), &session_name))
-        {
-            None
-        } else if pre_existed {
-            recovery_lock = Some(WorkspaceLock::acquire(
-                &self.runtime.lock_path("recovery.lock"),
-            )?);
-            super::session::claim_listed_room(
-                &self.runtime,
-                self.backend.name(),
-                &session_name,
-                Duration::from_secs(2),
-            )?
-        } else {
-            Some(super::session::claim_room(
-                &self.runtime,
-                &self.workspace.session_name,
-                Duration::from_secs(2),
-            )?)
-        };
-        Ok(BirthAdmission {
-            session_name,
-            pre_existed,
-            claim,
-            recovery_lock,
-        })
+            &self.runtime,
+        )
     }
 
     /// Execute shared room birth ordering for a normal or supervised caller.
@@ -198,8 +215,14 @@ impl RoomContext {
             mut claim,
             recovery_lock,
         } = match self.birth_admission.take() {
-            Some(admission) => admission,
-            None => self.claim_birth()?,
+            Some(admission) if admission.claim.is_some() => admission,
+            // A claimless admission trusted a live sidebar that may have died
+            // during the startup prompts, so it is decided again here; its
+            // recovery lock is released first, since the new decision takes it.
+            stale => {
+                drop(stale);
+                self.claim_birth()?
+            }
         };
         let renamed = session_name != self.workspace.session_name;
         self.workspace.session_name = session_name;

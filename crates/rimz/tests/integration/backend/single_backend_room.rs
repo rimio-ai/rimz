@@ -328,10 +328,32 @@ fn start_refuses_when_room_runs_under_another_session_name() {
         .success()
     );
 
+    let bin = room.env.home_root.join("qoder-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("qodercli");
+    let log = room.env.home_root.join("qoder-probes");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\necho probe >> '{}'\necho 'qodercli 1.1.72'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &stub,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    let search_path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
     let started = Instant::now();
     let output = room
         .rimz()
         .args(["--tmux", "start"])
+        .env("PATH", search_path)
         .bounded_output()
         .unwrap();
     assert!(
@@ -339,6 +361,14 @@ fn start_refuses_when_room_runs_under_another_session_name() {
         "an unrecorded rename must not admit another room"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !log.exists(),
+        "refusal must precede provider version probes: {stderr}"
+    );
+    assert!(
+        !stderr.contains("RimZ found"),
+        "refusal must precede hook detection notices: {stderr}"
+    );
     assert!(
         !stderr.contains("previous session ended") && !stderr.contains("Recover "),
         "a live room must not offer recovery: {stderr}"
@@ -1288,6 +1318,18 @@ impl TmuxRoom {
             "tmux start failed: {}",
             String::from_utf8_lossy(&output.stderr),
         );
+        let room_lock = self.env.runtime_paths().room_lock();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
+            .expect("probe tmux room hold")
+            .is_some()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "tmux sidebar never held the room"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn rimz(&self) -> Command {
