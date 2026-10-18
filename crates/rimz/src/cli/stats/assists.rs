@@ -49,6 +49,7 @@ pub(super) struct AssistRollup {
     pub(super) restores: usize,
     pub(super) restored_sessions: usize,
     pub(super) sweeps: usize,
+    pub(super) tmp_evictions: usize,
     pub(super) reclaimed_bytes: u64,
     /// Attempts that did not take effect, keyed by the count they would have joined.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -308,6 +309,18 @@ pub(super) enum AssistEvent {
         recovered: usize,
         labels: Vec<String>,
     },
+    TmpEvict {
+        at: Timestamp,
+        workspace_id: rimz::ids::WorkspaceId,
+        handle: String,
+        reclaimed_bytes: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ended_at: Option<Timestamp>,
+        free_bytes_after: u64,
+        floor_bytes: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     #[serde(rename = "auto_gc")]
     Gc {
         at: Timestamp,
@@ -404,6 +417,12 @@ impl AssistStats {
                     rollup.restores += 1;
                     rollup.restored_sessions += recovered;
                 }
+                AssistEvent::TmpEvict {
+                    reclaimed_bytes, ..
+                } => {
+                    rollup.tmp_evictions += 1;
+                    rollup.reclaimed_bytes += reclaimed_bytes;
+                }
                 AssistEvent::Gc {
                     reclaimed_bytes, ..
                 } => {
@@ -459,7 +478,7 @@ impl AssistEvent {
             Self::LaunchRetry { relaunched, .. } => *relaunched,
             // A stamp write fails after the reset, so an error does not undo it.
             Self::Redeem { windows_reset, .. } => *windows_reset,
-            Self::Gc { error, .. } => error.is_none(),
+            Self::Gc { error, .. } | Self::TmpEvict { error, .. } => error.is_none(),
             Self::Molt { .. }
             | Self::WorkflowStart { .. }
             | Self::WorkflowStep { .. }
@@ -504,6 +523,7 @@ impl AssistEvent {
             Self::LaunchRetry { .. } => "launch_retries",
             Self::Resume { .. } => "restores",
             Self::Gc { .. } => "sweeps",
+            Self::TmpEvict { .. } => "tmp_evictions",
         }
     }
 
@@ -885,6 +905,24 @@ impl AssistEvent {
                 recovered,
                 labels,
             },
+            Assist::TmpEvict {
+                workspace_id,
+                handle,
+                reclaimed_bytes,
+                ended_at,
+                free_bytes_after,
+                floor_bytes,
+                error,
+            } => Self::TmpEvict {
+                at: record.at,
+                workspace_id,
+                handle,
+                reclaimed_bytes,
+                ended_at,
+                free_bytes_after,
+                floor_bytes,
+                error,
+            },
             Assist::AutoGc {
                 workspace_id,
                 scope,
@@ -936,6 +974,7 @@ impl AssistEvent {
             | Self::FlipCompact { at, .. }
             | Self::Resume { at, .. }
             | Self::Gc { at, .. }
+            | Self::TmpEvict { at, .. }
             | Self::TierFallback { at, .. } => *at,
         }
     }
@@ -1092,6 +1131,12 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     row("Auto-resume:", "restores", rollup.restores, agents);
     let freed = (rollup.reclaimed_bytes > 0).then(|| render::fmt_bytes(rollup.reclaimed_bytes));
     row("Auto-gc:", "sweeps", rollup.sweeps, freed);
+    row(
+        "Temp evictions:",
+        "tmp_evictions",
+        rollup.tmp_evictions,
+        None,
+    );
     rows
 }
 
@@ -1455,6 +1500,19 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 plural(*recovered)
             )
         }
+        AssistEvent::TmpEvict {
+            workspace_id,
+            handle,
+            reclaimed_bytes,
+            error,
+            ..
+        } => {
+            let result = error.as_ref().map_or_else(
+                || format!("{} reclaimed", render::fmt_bytes(*reclaimed_bytes)),
+                |error| format!("failed: {}", first_line(error)),
+            );
+            format!("{time} ♻ @{handle} temp eviction — {result} · workspace {workspace_id}")
+        }
         AssistEvent::Gc {
             scope,
             reclaimed_bytes,
@@ -1628,6 +1686,21 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
             session_name,
             ..
         } => format!("{at} {benefit} · workspace {workspace_id} · session {session_name}"),
+        AssistEvent::TmpEvict {
+            free_bytes_after,
+            floor_bytes,
+            ended_at,
+            ..
+        } => {
+            let ended = ended_at
+                .map(|at| format!(" · ended {at}"))
+                .unwrap_or_default();
+            format!(
+                "{at} {benefit} · free {} · floor {}{ended}",
+                render::fmt_bytes(*free_bytes_after),
+                render::fmt_bytes(*floor_bytes)
+            )
+        }
         AssistEvent::Gc {
             workspace_id,
             older_than_secs,

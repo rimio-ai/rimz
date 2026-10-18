@@ -2682,6 +2682,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             restores: 1,
             restored_sessions: 2,
             sweeps: 1,
+            tmp_evictions: 0,
             reclaimed_bytes: 2_048,
             held: [("resumes", 1), ("sweeps", 1)].into(),
         }

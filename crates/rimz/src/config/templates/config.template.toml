@@ -191,6 +191,9 @@ aggressive_resize = true
 [gc]
 # auto = true                         # sweep stale state once a day from every open room
 # older_than = "7d"                   # age cutoff for `rimz gc` (s/m/h/d)
+# tmp_grace = "1d"                    # grace for ended agents' temp units (s/m/h/d)
+# tmp_floor_percent = 10              # free-space reserve as a percentage of capacity (0-100)
+# tmp_floor_min = "10GiB"             # minimum free-space reserve; zero both reserves to disable
 
 [lsp]
 # Shared language servers are off until declared, then start on the first query. Memory and idle policy are machine-only; trusted projects may override server entries by name.

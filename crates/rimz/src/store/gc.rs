@@ -26,6 +26,9 @@ mod classes;
 mod collect;
 mod prune;
 mod temp_sweep;
+mod tmp;
+
+pub use tmp::{TmpHold, TmpUnit, tmp_inventory};
 
 pub(crate) fn collect_runtime_claims(runtime: &paths::RuntimePaths) -> Result<()> {
     collect::collect_claims(runtime)
@@ -108,13 +111,23 @@ pub struct TempSweepReport {
     pub bytes_removed: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GcPolicy {
+    pub older_than: Duration,
+    pub tmp_grace: Duration,
+}
+
 /// Sweep one room's state and runtime classes without visiting other rooms or shared runtime files.
 #[must_use = "maintenance report; surface it to the caller"]
 pub fn collect_room(
     paths: &paths::StatePaths,
-    older_than: Duration,
+    policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
+    temp_owner: impl Fn(
+        &crate::agents::AgentState,
+        &crate::store::snapshot::AgentRollup,
+    ) -> Option<String>,
 ) -> Result<GcReport> {
     if !paths.root.is_dir() {
         return Ok(GcReport::default());
@@ -122,18 +135,23 @@ pub fn collect_room(
     collect_room_under(
         paths,
         &paths::RuntimePaths::for_state(paths)?,
-        older_than,
+        policy,
         dry_run,
         watcher_is_live,
+        temp_owner,
     )
 }
 
 fn collect_room_under(
     paths: &paths::StatePaths,
     runtime: &paths::RuntimePaths,
-    older_than: Duration,
+    policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
+    temp_owner: impl Fn(
+        &crate::agents::AgentState,
+        &crate::store::snapshot::AgentRollup,
+    ) -> Option<String>,
 ) -> Result<GcReport> {
     paths::check_workspace_layout(&paths.root)?;
     let mut report = GcReport {
@@ -142,11 +160,19 @@ fn collect_room_under(
     };
     collect::collect_runtime_classes(
         &runtime.root,
-        older_than,
+        policy.older_than,
         &mut collect::Sweep::new(dry_run),
         &mut report,
     )?;
-    collect_room_state(paths, runtime, dry_run, &watcher_is_live, &mut report)?;
+    collect_room_state(
+        paths,
+        runtime,
+        policy,
+        dry_run,
+        &watcher_is_live,
+        &temp_owner,
+        &mut report,
+    )?;
     complete_room_reports(&mut report);
     Ok(report)
 }
@@ -184,16 +210,20 @@ fn collect_room_temps_under(
 
 #[must_use = "maintenance report; surface it to the caller"]
 pub fn collect_classes(
-    older_than: Duration,
+    policy: GcPolicy,
     dry_run: bool,
     pruned: &BTreeSet<String>,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
+    temp_owner: impl Fn(
+        &crate::agents::AgentState,
+        &crate::store::snapshot::AgentRollup,
+    ) -> Option<String>,
 ) -> Result<GcReport> {
     let mut report = collect::collect_runtime_under(
         &paths::workspaces_dir(),
         &paths::runtime_workspaces_dir(),
         &paths::RuntimePaths::shared().shared_root,
-        older_than,
+        policy.older_than,
         dry_run,
         pruned,
     )?;
@@ -216,9 +246,15 @@ pub fn collect_classes(
                 continue;
             }
         };
-        if let Err(err) =
-            collect_room_state(&paths, &runtime, dry_run, &watcher_is_live, &mut report)
-        {
+        if let Err(err) = collect_room_state(
+            &paths,
+            &runtime,
+            policy,
+            dry_run,
+            &watcher_is_live,
+            &temp_owner,
+            &mut report,
+        ) {
             tracing::warn!(workspace = %paths.dir_name, error = %err, "state gc skipped inaccessible workspace");
         }
     }
@@ -229,12 +265,22 @@ pub fn collect_classes(
 fn collect_room_state(
     paths: &paths::StatePaths,
     runtime: &paths::RuntimePaths,
+    policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: &impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
+    temp_owner: &impl Fn(
+        &crate::agents::AgentState,
+        &crate::store::snapshot::AgentRollup,
+    ) -> Option<String>,
     report: &mut GcReport,
 ) -> Result<()> {
-    let (classes, waits_removed) =
-        classes::collect_state(paths, dry_run, &|name| watcher_is_live(runtime, name))?;
+    let (classes, waits_removed) = classes::collect_state(
+        paths,
+        policy.tmp_grace,
+        dry_run,
+        &|name| watcher_is_live(runtime, name),
+        temp_owner,
+    )?;
     report.wait_outputs_removed += waits_removed;
     report.state_bytes_removed += classes.iter().map(|class| class.bytes_removed).sum::<u64>();
     report.state_files_removed += classes
@@ -303,6 +349,20 @@ mod tests {
     use std::fs;
     use std::time::SystemTime;
 
+    fn policy(older_than: Duration) -> GcPolicy {
+        GcPolicy {
+            older_than,
+            tmp_grace: crate::disk::retention::DEFAULT_TMP_GRACE,
+        }
+    }
+
+    fn temp_owner(
+        agent: &crate::agents::AgentState,
+        _: &crate::store::snapshot::AgentRollup,
+    ) -> Option<String> {
+        agent.name.clone()
+    }
+
     #[test]
     fn room_collection_isolated_and_preview_preserves_files() {
         let home = tempfile::tempdir().unwrap();
@@ -337,9 +397,10 @@ mod tests {
             let report = collect_room_under(
                 state,
                 runtime,
-                Duration::from_secs(7 * 86_400),
+                policy(Duration::from_secs(7 * 86_400)),
                 dry_run,
                 |_, _| Ok(false),
+                temp_owner,
             )
             .unwrap();
             assert_eq!(report.rooms.len(), 1);
@@ -369,9 +430,15 @@ mod tests {
         fs::create_dir_all(retired.parent().unwrap()).unwrap();
         fs::write(&retired, b"not json").unwrap();
         for dry_run in [true, false] {
-            let report =
-                collect_room_under(&state, &runtime, Duration::ZERO, dry_run, |_, _| Ok(false))
-                    .unwrap();
+            let report = collect_room_under(
+                &state,
+                &runtime,
+                policy(Duration::ZERO),
+                dry_run,
+                |_, _| Ok(false),
+                temp_owner,
+            )
+            .unwrap();
             let records = report.rooms[0]
                 .classes
                 .iter()
@@ -390,7 +457,14 @@ mod tests {
             home.path(),
         )
         .unwrap();
-        let report = collect_room(&state, Duration::ZERO, false, |_, _| Ok(false)).unwrap();
+        let report = collect_room(
+            &state,
+            policy(Duration::ZERO),
+            false,
+            |_, _| Ok(false),
+            temp_owner,
+        )
+        .unwrap();
         assert!(report.rooms.is_empty());
         assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
     }
@@ -410,7 +484,15 @@ mod tests {
         let live = runtime.live_dir.join("stale.json");
         fs::write(&live, b"keep").unwrap();
         assert!(
-            collect_room_under(&state, &runtime, Duration::ZERO, false, |_, _| Ok(false)).is_err()
+            collect_room_under(
+                &state,
+                &runtime,
+                policy(Duration::ZERO),
+                false,
+                |_, _| Ok(false),
+                temp_owner
+            )
+            .is_err()
         );
         assert!(live.exists());
         assert!(!state.workspace_lock.exists());

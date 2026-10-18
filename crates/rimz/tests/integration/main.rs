@@ -59,6 +59,7 @@ mod sidebar_supervisor;
 mod sidebar_unread;
 mod sidebar_wakeup;
 mod start;
+mod stats;
 mod store;
 mod teams_flip;
 mod teams_wait;

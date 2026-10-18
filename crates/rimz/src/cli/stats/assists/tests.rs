@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn tmp_evictions_count_successes_and_render_failures() {
+    let workspace = rimz::WorkspaceId::from_project_root(Path::new("/project"));
+    let records = [None, Some("permission denied")].map(|error| {
+        let parsed = serde_json::from_value::<AssistRecord>(serde_json::json!({
+            "at": "2026-01-01T00:00:00Z", "assist": "tmp_evict",
+            "workspace_id": workspace, "handle": "fox", "reclaimed_bytes": if error.is_none() { 2048 } else { 0 },
+            "free_bytes_after": 4096, "floor_bytes": 8192, "error": error
+        }));
+        assert!(parsed.is_ok(), "tmp_evict must decode: {parsed:?}");
+        parsed.unwrap()
+    });
+    let stats = AssistStats::from_records("all", records.into());
+    assert_eq!(stats.rollup.sweeps, 0, "per-unit evictions are not sweeps");
+    let rollup = serde_json::to_value(&stats.rollup).unwrap();
+    assert_eq!(rollup["tmp_evictions"], 1);
+    assert_eq!(stats.rollup.reclaimed_bytes, 2048);
+    assert_eq!(rollup["held"]["tmp_evictions"], 1);
+    assert!(rollup["held"].get("sweeps").is_none());
+    assert!(
+        category_entries(&stats.rollup)
+            .iter()
+            .any(|(label, value)| { *label == "Temp evictions:" && value == "1 (1 held)" })
+    );
+    assert_effect_counts(&stats);
+    assert_eq!(stats.timeline(0, false).0.len(), 1);
+    let lines = stats
+        .events
+        .iter()
+        .map(|event| forensic_line(event, &jiff::tz::TimeZone::UTC))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for expected in [
+        "♻",
+        "@fox",
+        "2 KB",
+        "permission denied",
+        &workspace.to_string(),
+    ] {
+        assert!(lines.contains(expected), "{lines}");
+    }
+}
+
+#[test]
 fn workflow_wait_counts_render_and_legacy_routes_still_parse() {
     for count in [None, Some(7)] {
         let mut wire = serde_json::json!({

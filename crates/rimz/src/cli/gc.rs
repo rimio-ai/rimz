@@ -42,7 +42,7 @@ pub struct GcArgs {
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    let older_than = if args.unattended {
+    let gc_config = if args.unattended {
         // A destructive automation never starts from a config that fails to
         // parse: lenient defaults would re-enable a `gc.auto = false` opt-out.
         let Ok(config) = MachineConfig::load() else {
@@ -51,10 +51,13 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         if !config.gc.auto {
             return Ok(());
         }
-        args.older_than.unwrap_or(config.gc.older_than)
+        config.gc
     } else {
-        args.older_than
-            .unwrap_or(MachineConfig::load_lenient().gc.older_than)
+        MachineConfig::load_lenient().gc.clone()
+    };
+    let policy = gc::GcPolicy {
+        older_than: args.older_than.unwrap_or(gc_config.older_than),
+        tmp_grace: gc_config.tmp_grace,
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the room for gc; run inside a room or pass --root")?;
@@ -69,7 +72,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         GcScope::Room
     };
-    let result = sweep(older_than, args.dry_run, scope, &workspace, &paths, globals);
+    let result = sweep(policy, args.dry_run, scope, &workspace, &paths, globals);
     if args.unattended {
         // Stamp failed attempts too, so persistent failures retry daily rather than per room.
         let now = jiff::Timestamp::now();
@@ -79,7 +82,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                 &workspace.workspace_id,
                 paths.dir_name.as_str(),
                 scope,
-                older_than,
+                policy.older_than,
                 &result,
             ),
         });
@@ -160,13 +163,14 @@ fn auto_gc_assist(
 }
 
 fn sweep(
-    older_than: Duration,
+    policy: gc::GcPolicy,
     dry_run: bool,
     scope: GcScope,
     workspace: &rimz::ResolvedWorkspace,
     paths: &rimz::StatePaths,
     globals: &GlobalFlags,
 ) -> Result<GcOutcome> {
+    let older_than = policy.older_than;
     let spinner = Spinner::new("starting gc…");
     let prune = if scope == GcScope::Machine {
         spinner.set("pruning dead workspaces…");
@@ -180,14 +184,28 @@ fn sweep(
             .map(|watcher| watcher.is_some())
     };
     let report = match scope {
-        GcScope::Room => gc::collect_room(paths, older_than, dry_run, watcher_is_live),
+        GcScope::Room => {
+            gc::collect_room(paths, policy, dry_run, watcher_is_live, |agent, agents| {
+                rimz::harness::launch_plan::agent_temp_owner(agent, agents.iter())
+                    .map(str::to_owned)
+            })
+        }
         GcScope::Machine => {
             let pruned = prune
                 .removed
                 .iter()
                 .map(|removed| removed.dir_name.clone())
                 .collect();
-            gc::collect_classes(older_than, dry_run, &pruned, watcher_is_live)
+            gc::collect_classes(
+                policy,
+                dry_run,
+                &pruned,
+                watcher_is_live,
+                |agent, agents| {
+                    rimz::harness::launch_plan::agent_temp_owner(agent, agents.iter())
+                        .map(str::to_owned)
+                },
+            )
         }
     }
     .context("collecting room garbage")?;

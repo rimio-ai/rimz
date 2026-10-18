@@ -865,6 +865,53 @@ fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
 }
 
 #[test]
+fn gc_tmp_grace_is_independent_of_runtime_and_owned_retention() {
+    let env = Env::new();
+    write_machine_config(&env, "[gc]\ntmp_grace = \"1h\"\n");
+    for machine in [false, true] {
+        let files = stale_room_files(&env, &env.project_root);
+        let state = env.state_path_for(&env.project_root);
+        let unit = state.temp_unit_dir(Some("gone"));
+        let old = SystemTime::now() - Duration::from_secs(2 * 3_600);
+        for path in [&files[2], &unit] {
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        let owned = state.agents_dir.join("orphan");
+        std::fs::create_dir_all(&owned).unwrap();
+        std::fs::File::open(&owned)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(2 * 86_400))
+            .unwrap();
+        for dry_run in [true, false] {
+            let mut command = env.rimz();
+            command.args(["gc", "--json", "--older-than", "30d"]);
+            if machine {
+                command.arg("--all");
+            }
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            let output = command.assert().success();
+            let report: serde_json::Value =
+                serde_json::from_slice(&output.get_output().stdout).unwrap();
+            let tmp = report["rooms"][0]["classes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|class| class["class"] == "tmp")
+                .unwrap();
+            assert_eq!(tmp["files_removed"], 1, "tmp uses its configured grace");
+            assert_eq!(unit.exists(), dry_run);
+            assert!(files[0].exists(), "runtime still uses --older-than");
+            assert!(owned.exists(), "owned still uses its seven-day grace");
+        }
+    }
+}
+
+#[test]
 fn gc_removes_the_ledger_a_shared_account_left_behind() {
     let env = Env::new();
     let rt = env.runtime_paths();

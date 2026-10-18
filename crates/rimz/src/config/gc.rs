@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::disk::retention::DEFAULT_OLDER_THAN;
+use crate::disk::retention::{
+    DEFAULT_OLDER_THAN, DEFAULT_TMP_FLOOR_MIN, DEFAULT_TMP_FLOOR_PERCENT, DEFAULT_TMP_GRACE,
+};
 use crate::utils::time::{DurationUnit, parse_duration_units};
 
 const OLDER_THAN_UNITS: &[DurationUnit] = &[
@@ -12,7 +14,7 @@ const OLDER_THAN_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
-/// Garbage collection policy: the retention cutoff and the daily automatic sweep.
+/// Garbage collection policy: runtime retention, temp-unit grace and free-space reserve.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GcConfig {
@@ -21,6 +23,16 @@ pub struct GcConfig {
     /// Age cutoff `rimz gc` uses when `--older-than` is absent.
     #[serde(with = "older_than_serde")]
     pub older_than: Duration,
+    /// Grace after a temp unit's latest owner ends and its latest modification.
+    #[serde(
+        serialize_with = "older_than_serde::serialize",
+        deserialize_with = "deserialize_tmp_grace"
+    )]
+    pub tmp_grace: Duration,
+    #[serde(deserialize_with = "deserialize_tmp_floor_percent")]
+    pub tmp_floor_percent: u8,
+    #[serde(deserialize_with = "deserialize_tmp_floor_min")]
+    pub tmp_floor_min: String,
 }
 
 impl Default for GcConfig {
@@ -28,8 +40,48 @@ impl Default for GcConfig {
         Self {
             auto: true,
             older_than: DEFAULT_OLDER_THAN,
+            tmp_grace: DEFAULT_TMP_GRACE,
+            tmp_floor_percent: DEFAULT_TMP_FLOOR_PERCENT,
+            tmp_floor_min: DEFAULT_TMP_FLOOR_MIN.to_owned(),
         }
     }
+}
+
+impl GcConfig {
+    pub fn tmp_floor_bytes(&self, total: u64) -> Result<u64, String> {
+        let minimum = crate::utils::size::parse_byte_size(&self.tmp_floor_min)?;
+        Ok(
+            ((u128::from(total) * u128::from(self.tmp_floor_percent) / 100)
+                .min(u128::from(u64::MAX)) as u64)
+                .max(minimum),
+        )
+    }
+}
+
+fn deserialize_tmp_grace<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Duration, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    parse_older_than(&raw).map_err(|err| serde::de::Error::custom(format!("gc.tmp_grace {err}")))
+}
+
+fn deserialize_tmp_floor_percent<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u8, D::Error> {
+    let value = i64::deserialize(deserializer)?;
+    u8::try_from(value)
+        .ok()
+        .filter(|value| *value <= 100)
+        .ok_or_else(|| serde::de::Error::custom("gc.tmp_floor_percent must be 0-100"))
+}
+
+fn deserialize_tmp_floor_min<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let raw = String::deserialize(deserializer)?;
+    crate::utils::size::parse_byte_size(&raw)
+        .map_err(|err| serde::de::Error::custom(format!("gc.tmp_floor_min {err}")))?;
+    Ok(raw)
 }
 
 /// Parse a gc retention span (`30s`, `5m`, `8h`, `3d`); zero is refused.
@@ -75,7 +127,7 @@ mod tests {
         assert_eq!(config.older_than, Duration::from_secs(7 * 86_400));
         assert_eq!(
             toml::to_string(&config).expect("serialize"),
-            "auto = true\nolder_than = \"7d\"\n"
+            "auto = true\nolder_than = \"7d\"\ntmp_grace = \"1d\"\ntmp_floor_percent = 10\ntmp_floor_min = \"10GiB\"\n"
         );
     }
 
@@ -88,6 +140,41 @@ mod tests {
                 "{raw}"
             );
         }
+    }
+
+    #[test]
+    fn tmp_policy_rejects_invalid_values() {
+        for (raw, message) in [
+            (
+                "tmp_grace = \"0d\"",
+                "gc.tmp_grace must be greater than zero",
+            ),
+            (
+                "tmp_floor_percent = 101",
+                "gc.tmp_floor_percent must be 0-100",
+            ),
+            (
+                "tmp_floor_min = \"10x\"",
+                "gc.tmp_floor_min unknown size unit",
+            ),
+        ] {
+            let result = toml::from_str::<GcConfig>(raw);
+            assert!(result.is_err(), "accepted {raw}");
+            assert!(result.unwrap_err().to_string().contains(message), "{raw}");
+        }
+    }
+
+    #[test]
+    fn tmp_floor_uses_the_larger_reserve_and_can_be_disabled() {
+        let config = GcConfig::default();
+        assert_eq!(
+            config.tmp_floor_bytes(100).unwrap(),
+            10 * 1024 * 1024 * 1024
+        );
+        assert_eq!(config.tmp_floor_bytes(u64::MAX).unwrap(), u64::MAX / 10);
+        let config: GcConfig =
+            toml::from_str("tmp_floor_percent = 0\ntmp_floor_min = \"0\"").unwrap();
+        assert_eq!(config.tmp_floor_bytes(u64::MAX).unwrap(), 0);
     }
 
     #[test]

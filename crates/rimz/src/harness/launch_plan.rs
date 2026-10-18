@@ -93,7 +93,7 @@ pub enum LaunchPlanWarning {
 fn temp_owner<'a>(
     own: Option<&'a str>,
     parent: Option<(&crate::ids::AgentKind, &crate::ids::AgentSessionId)>,
-    agents: &'a [crate::agents::AgentState],
+    agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
 ) -> Result<(Option<&'a str>, bool), crate::ids::AgentSessionId> {
     let Some((kind, id)) = parent else {
         return Ok((own, false));
@@ -103,18 +103,26 @@ fn temp_owner<'a>(
         .ok_or_else(|| id.clone())
 }
 
+/// The owner handle of the temp unit `agent` uses, as its launch resolved it.
+pub fn agent_temp_owner<'a>(
+    agent: &'a crate::agents::AgentState,
+    agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
+) -> Option<&'a str> {
+    let parent = agent
+        .parent_agent_id
+        .as_ref()
+        .map(|id| (agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind), id));
+    let own = agent.name.as_deref();
+    temp_owner(own, parent, agents).map_or(own, |(owner, _)| owner)
+}
+
 /// The host temp unit `agent` uses, as its launch resolved it.
 pub fn agent_temp_unit(
     agent: &crate::agents::AgentState,
     agents: &[crate::agents::AgentState],
     state: &StatePaths,
 ) -> PathBuf {
-    let parent = agent
-        .parent_agent_id
-        .as_ref()
-        .map(|id| (agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind), id));
-    let own = agent.name.as_deref();
-    state.temp_unit_dir(temp_owner(own, parent, agents).map_or(own, |(owner, _)| owner))
+    state.temp_unit_dir(agent_temp_owner(agent, agents))
 }
 
 #[derive(Debug, thiserror::Error)]
