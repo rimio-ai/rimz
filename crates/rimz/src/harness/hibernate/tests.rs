@@ -111,7 +111,7 @@ fn decision_fixture() -> (tempfile::TempDir, Store, AgentState, Policy, ScopeVie
         dir,
         store,
         agent,
-        Policy::new(&config, &KeepWarmPolicy::load(&config, None)).unwrap(),
+        Policy::new(&config, &SeatPolicy::load(&config, None)).unwrap(),
         scope,
     )
 }
@@ -125,7 +125,7 @@ fn keep_warm_holds_hibernation_only_while_the_cache_can_stay_warm() {
         "warm".into(),
         toml::from_str("agent = 'claude'\nkeep-warm = '2h'").unwrap(),
     );
-    let policy = Policy::new(&config, &KeepWarmPolicy::load(&config, None)).unwrap();
+    let policy = Policy::new(&config, &SeatPolicy::load(&config, None)).unwrap();
     agent.profile = Some("warm".into());
     agent.turn_started_at = Some(agent.last_activity);
     assert_eq!(
@@ -597,7 +597,7 @@ fn producer_requires_unfocused_due_pane_and_paces_without_recording() {
             paths,
             runtime,
             &config,
-            &KeepWarmPolicy::default(),
+            &SeatPolicy::default(),
             |request| {
                 requests.push(request.clone());
                 true
@@ -772,7 +772,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
                 store.paths(),
                 store.runtime_paths(),
                 &config,
-                &KeepWarmPolicy::default(),
+                &SeatPolicy::default(),
                 |_| panic!("focused pane must not freeze"),
                 |pane| wakes.push(pane.clone()),
             );
@@ -807,7 +807,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             store.paths(),
             store.runtime_paths(),
             &config,
-            &KeepWarmPolicy::default(),
+            &SeatPolicy::default(),
             |_| panic!("disabled hibernation must not freeze"),
             |pane| wakes.push(pane.clone()),
         );
@@ -823,7 +823,7 @@ fn producer_repairs_lost_focus_events_and_focus_during_freeze() {
             store.paths(),
             store.runtime_paths(),
             &config,
-            &KeepWarmPolicy::default(),
+            &SeatPolicy::default(),
             |_| panic!("disabled"),
             |_| panic!("unfocused pane needs no wake"),
         );
@@ -850,7 +850,7 @@ fn producer_trails_departures_only_on_focus_changes_even_when_disabled() {
                 store.paths(),
                 store.runtime_paths(),
                 &config,
-                &KeepWarmPolicy::default(),
+                &SeatPolicy::default(),
                 |_| panic!("disabled"),
                 |_| {},
             );

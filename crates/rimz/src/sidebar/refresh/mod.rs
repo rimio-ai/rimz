@@ -15,7 +15,7 @@ use crate::agents::spending::{
 use crate::agents::{AgentAccount, AgentState};
 use crate::config::MachineConfig;
 use crate::forge::pr_state::PrLink;
-use crate::harness::cache_keepalive::KeepWarmPolicy;
+use crate::harness::cache_keepalive::SeatPolicy;
 use crate::store::snapshot::SidebarSnapshot;
 use crate::{RuntimePaths, Store};
 
@@ -281,9 +281,9 @@ pub(super) fn refresh_heavy_lanes(
         .iter()
         .any(|agent| agent.team.is_some() || agent.profile.is_some())
     {
-        KeepWarmPolicy::load(config, base.project_root.as_deref())
+        SeatPolicy::load(config, base.project_root.as_deref())
     } else {
-        KeepWarmPolicy::default()
+        SeatPolicy::default()
     };
     let teams = &policy.teams;
     crate::harness::idle_compact::compact_idle_agents(base, runtime, config, &policy);

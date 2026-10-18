@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::agents::AgentState;
 use crate::config::HarnessConfig;
-use crate::harness::cache_keepalive::{KeepWarmPolicy, holds};
+use crate::harness::cache_keepalive::{SeatPolicy, holds};
 use crate::store::snapshot::{CacheClock, SidebarSnapshot};
 
 const KEEP_WARM_CACHE_VERSION: u32 = 1;
@@ -38,7 +38,7 @@ pub(super) fn publish(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     harness: &HarnessConfig,
-    policy: &KeepWarmPolicy,
+    policy: &SeatPolicy,
 ) {
     let refreshed = KeepWarmCache {
         version: KEEP_WARM_CACHE_VERSION,
@@ -136,10 +136,10 @@ mod tests {
         agent
     }
 
-    fn policy() -> KeepWarmPolicy {
+    fn policy() -> SeatPolicy {
         let mut profile: Profile = toml::from_str("agent = \"claude\"").unwrap();
         profile.keep_warm = Some(KeepWarm::For(Duration::from_secs(7200)));
-        let mut policy = KeepWarmPolicy::default();
+        let mut policy = SeatPolicy::default();
         policy.profiles.0.insert("warm".into(), profile);
         policy
     }
@@ -280,7 +280,7 @@ mod tests {
         };
         crate::disk::atomic::write_temp_then_rename_cache(&path, &stale).unwrap();
         assert_eq!(read_keep_warm_cache(&path), KeepWarmCache::default());
-        publish(&snapshot, &runtime, &harness, &KeepWarmPolicy::default());
+        publish(&snapshot, &runtime, &harness, &SeatPolicy::default());
         assert!(
             read_keep_warm_cache(&path).horizons.is_empty(),
             "a horizon that leaves the definitions stops being published"
