@@ -374,14 +374,17 @@ fn render_temp_units(
         cell(if report.reclaimable_units == 0 {
             "none".into()
         } else {
+            let earliest = match report.earliest_reclaim {
+                Some(at) => format!(", earliest reclaim {at}"),
+                // Every reclaimable unit is past the grace: it waits for the next sweep.
+                None if report.past_grace_units == report.reclaimable_units => String::new(),
+                None => ", earliest reclaim unknown".into(),
+            };
             format!(
-                "{} units, {}; {} past the grace, earliest reclaim {}",
+                "{} units, {}; {} past the grace{earliest}",
                 report.reclaimable_units,
                 fmt_bytes(report.reclaimable_bytes),
                 report.past_grace_units,
-                report
-                    .earliest_reclaim
-                    .map_or_else(|| "unknown".into(), |at| at.to_string())
             )
         }),
     );

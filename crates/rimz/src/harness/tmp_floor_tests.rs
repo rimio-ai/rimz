@@ -338,3 +338,34 @@ fn pressure_records_failed_removals_and_keeps_evicting() {
         .exists()
     );
 }
+
+#[test]
+fn earliest_reclaim_counts_only_units_inside_the_grace() {
+    let grace = Duration::from_secs(100);
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let unit = |seconds: u64, hold| TmpUnit {
+        handle: format!("u{seconds}"),
+        path: std::path::PathBuf::from(format!("/nonexistent/u{seconds}")),
+        modified: SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
+        hold,
+    };
+    let ended = |seconds: i64| TmpHold::Ended(jiff::Timestamp::from_second(seconds).unwrap());
+
+    let mut report = TempUnits::default();
+    report.tally(&unit(100, TmpHold::Unowned), 1, now, grace);
+    report.tally(&unit(200, ended(200)), 1, now, grace);
+    assert_eq!(report.past_grace_units, 2);
+    assert_eq!(report.earliest_reclaim, None, "no past time is reported");
+
+    report.tally(&unit(950, ended(950)), 1, now, grace);
+    report.tally(&unit(920, TmpHold::Unowned), 1, now, grace);
+    report.tally(&unit(10, TmpHold::Live), 5, now, grace);
+    assert_eq!(report.reclaimable_units, 4);
+    assert_eq!(report.past_grace_units, 2);
+    assert_eq!(report.in_use_units, 1);
+    assert_eq!(
+        report.earliest_reclaim,
+        Some(jiff::Timestamp::from_second(1_020).unwrap()),
+        "the earliest is the soonest unit still inside the grace"
+    );
+}

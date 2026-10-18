@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
@@ -66,30 +66,38 @@ pub fn inspect(config: &GcConfig) -> Result<TempUnits, TmpFloorErr> {
     };
     let now = SystemTime::now();
     for candidate in inventory(&root, false)? {
-        let unit = candidate.unit;
-        let bytes = crate::disk::usage::dir_size(&unit.path);
-        let Some(order) = eviction_time(&unit) else {
-            report.in_use_units += 1;
-            report.in_use_bytes = report.in_use_bytes.saturating_add(bytes);
-            continue;
+        let bytes = crate::disk::usage::dir_size(&candidate.unit.path);
+        report.tally(&candidate.unit, bytes, now, config.tmp_grace);
+    }
+    Ok(report)
+}
+
+impl TempUnits {
+    /// Counts one unit. `earliest_reclaim` covers only units still inside the
+    /// grace, so it never names a past time; a unit already past it waits for
+    /// the next sweep and is counted in `past_grace_units` alone.
+    fn tally(&mut self, unit: &TmpUnit, bytes: u64, now: SystemTime, grace: Duration) {
+        let Some(order) = eviction_time(unit) else {
+            self.in_use_units += 1;
+            self.in_use_bytes = self.in_use_bytes.saturating_add(bytes);
+            return;
         };
-        report.reclaimable_units += 1;
-        report.reclaimable_bytes = report.reclaimable_bytes.saturating_add(bytes);
-        report.past_grace_units += usize::from(unit.past_grace(now, config.tmp_grace));
+        self.reclaimable_units += 1;
+        self.reclaimable_bytes = self.reclaimable_bytes.saturating_add(bytes);
+        if unit.past_grace(now, grace) {
+            self.past_grace_units += 1;
+            return;
+        }
         if let Some(reclaim) = unit
             .modified
             .max(order)
-            .checked_add(config.tmp_grace)
+            .checked_add(grace)
             .and_then(|time| jiff::Timestamp::try_from(time).ok())
         {
-            report.earliest_reclaim = Some(
-                report
-                    .earliest_reclaim
-                    .map_or(reclaim, |at| at.min(reclaim)),
-            );
+            self.earliest_reclaim =
+                Some(self.earliest_reclaim.map_or(reclaim, |at| at.min(reclaim)));
         }
     }
-    Ok(report)
 }
 
 pub fn run(config: &GcConfig) -> Result<Option<FloorReport>, TmpFloorErr> {
