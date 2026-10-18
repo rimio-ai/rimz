@@ -115,10 +115,6 @@ fn ttyd_mouse_flow_paces_drag_reports() {
     );
 }
 
-fn materialized_room_panes_json() -> &'static str {
-    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#
-}
-
 #[cfg(unix)]
 fn free_loopback_port() -> u16 {
     std::net::TcpListener::bind(("127.0.0.1", 0))
@@ -2195,7 +2191,7 @@ fn zellij_room_uses_the_same_shared_ttyd_daemon() {
         )
         .env(
             "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            materialized_room_panes_json(),
+            crate::common::room::MATERIALIZED_ROOM_PANES,
         )
         // The shim cannot answer the room health probe; bound it so the
         // open does not wait the full 8 s budget before proceeding.
