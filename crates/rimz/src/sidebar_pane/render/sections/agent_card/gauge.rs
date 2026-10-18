@@ -387,7 +387,10 @@ impl CachePhase {
                 theme.warm_heat_tone((1.0 + amount) / 2.0),
                 Modifier::empty(),
             ),
-            _ => theme.muted(),
+            Self::Expired => {
+                theme.style(theme.component(Component::CacheExpired), Modifier::empty())
+            }
+            Self::Unknown | Self::Calm => theme.muted(),
         }
     }
 }
@@ -415,8 +418,8 @@ fn cache_age(row: &SidebarRow, now: jiff::Timestamp) -> CacheAge {
 /// in the steady `good` tone; otherwise the time since the agent's own activity
 /// or its last cache request (a ping refreshes the cache, not the activity),
 /// face over the card's provider cache TTL, else the hour. Only the last ten
-/// minutes before a known TTL heat from caution to alarm; unknown lifetimes
-/// and expired caches stay muted.
+/// minutes before a known TTL heat from caution to alarm; an unknown lifetime
+/// stays muted, and an expired cache wears the meter's expired-cache tone.
 fn cache_age_pin(theme: &Theme, row: &SidebarRow, now: jiff::Timestamp) -> Option<Span<'static>> {
     let age = cache_age(row, now);
     let style = age.phase(now).style(theme);
@@ -460,7 +463,7 @@ pub(super) fn cache_line(ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'sta
             let subject = if wide { "cache expired" } else { "expired" };
             spans.push(Span::styled(
                 format!("{} {subject}", theme.glyph(GlyphRole::ClockOver)),
-                theme.style(theme.component(Component::CacheExpired), Modifier::empty()),
+                phase.style(theme),
             ));
             if let Some(cost) = row
                 .as_agent()

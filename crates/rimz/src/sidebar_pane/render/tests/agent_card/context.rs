@@ -467,7 +467,10 @@ fn cache_clock_heat_is_confined_to_the_last_ten_minutes() {
         style(1800, Some(1800)),
         theme.style(theme.heat_tone(1.0), Modifier::empty())
     );
-    assert_eq!(style(1801, Some(1800)), theme.muted());
+    assert_eq!(
+        style(1801, Some(1800)),
+        theme.style(theme.component(Component::CacheExpired), Modifier::empty())
+    );
     assert_ne!(style(1201, Some(1800)), theme.muted());
     for age in [300, 900, 1201, 1800, 3599, 3600, 3601] {
         assert_eq!(
@@ -1628,7 +1631,8 @@ fn calm_context_bar_orders_segments_left_to_right() {
 }
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
 /// idle span) with a continuous caution-to-alarm tone in the last ten minutes
-/// before expiry. Outside that band the pin stays muted.
+/// before expiry. Before that band the pin stays muted, and past the ceiling it
+/// wears the expired-cache tone.
 #[test]
 fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
@@ -1664,6 +1668,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
             Modifier::empty(),
         )
     };
+    let expired = theme.style(theme.component(Component::CacheExpired), Modifier::empty());
     assert_eq!(
         age_style(AgentStatus::Idle, 7 * 60, '◔'),
         theme.muted(),
@@ -1686,13 +1691,13 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
     assert_eq!(
         age_style(AgentStatus::Idle, 10 * 60 * 60, '◉'),
-        theme.muted(),
+        expired,
         "past the ceiling no action can save the cache"
     );
     assert_eq!(
         age_style(AgentStatus::Success, 10 * 60 * 60, '◉'),
-        theme.muted(),
-        "a finished-success context also rests once the cache expires"
+        expired,
+        "a finished-success context also wears the expired tone"
     );
 }
 
@@ -1759,8 +1764,11 @@ fn context_line_age_pin_reads_the_card_cache_clock() {
     assert_ne!(half_style, hour_style);
     assert_eq!(
         age_span(ttl(1800), 40 * 60),
-        ("◉ 40m".to_owned(), theme.muted()),
-        "muted once the provider's TTL has passed"
+        (
+            "◉ 40m".to_owned(),
+            theme.style(theme.component(Component::CacheExpired), Modifier::empty())
+        ),
+        "the expired-cache tone once the provider's TTL has passed"
     );
 
     let held = |warm_until_secs: u64| {
