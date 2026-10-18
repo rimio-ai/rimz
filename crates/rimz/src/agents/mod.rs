@@ -1144,7 +1144,7 @@ pub fn preflight_launch_dir(
             dir: cwd.to_path_buf(),
         });
     }
-    if !adapter.headless_requires_folder_trust() {
+    if mode == LaunchDirMode::Headless && !adapter.headless_requires_folder_trust() {
         return Ok(());
     }
     let subject = if cwd.starts_with(crate::disk::paths::empty_dir_root()) {
@@ -1248,10 +1248,10 @@ mod tests {
             for mode in [LaunchDirMode::Supervised, LaunchDirMode::Headless] {
                 let mut login_env =
                     BTreeMap::from([("HOME".into(), home.path().display().to_string())]);
-                assert!(
-                    preflight_launch_dir(adapter, &sub, Some(home.path()), &login_env, mode)
-                        .is_ok()
-                );
+                assert!(!matches!(
+                    preflight_launch_dir(adapter, &sub, Some(home.path()), &login_env, mode),
+                    Err(LaunchDirRefusal::Home { .. })
+                ));
                 login_env.remove("HOME");
                 assert!(!matches!(
                     preflight_launch_dir(adapter, home.path(), None, &login_env, mode),

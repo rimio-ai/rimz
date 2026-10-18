@@ -4599,6 +4599,7 @@ fn team_worktree_launch_env() -> Env {
     assert!(init_launch_repo(&env.project_root));
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",

@@ -4191,37 +4191,68 @@ fn assert_ended_child_resume_refusal(unhooked: bool) {
 #[cfg(unix)]
 #[test]
 fn parent_message_to_resumed_child_waits_for_installed_registration() {
-    assert_parent_message_resumes_child(None);
+    assert_parent_message_resumes_child(None, None);
 }
 
 #[cfg(unix)]
 #[test]
 fn parent_message_recreates_missing_empty_dir_before_resuming_child() {
-    assert_parent_message_resumes_child(Some(true));
+    assert_parent_message_resumes_child(Some(true), None);
 }
 
 #[cfg(unix)]
 #[test]
 fn parent_message_refuses_revoked_empty_dir_grant_before_opening() {
-    assert_parent_message_resumes_child(Some(false));
+    assert_parent_message_resumes_child(Some(false), None);
 }
 
 #[cfg(unix)]
-fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
-    use crate::common::{exec_args, path_with_front, write_long_lived_agent_shim};
+#[test]
+fn parent_message_resumes_child_in_its_own_trusted_repo() {
+    assert_parent_message_resumes_child(None, Some(true));
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_message_resumes_child_in_its_own_trusted_non_git_directory() {
+    assert_parent_message_resumes_child(None, Some(false));
+}
+
+#[cfg(unix)]
+fn assert_parent_message_resumes_child(empty_grant: Option<bool>, foreign_repo: Option<bool>) {
+    use crate::common::{
+        CommandTimeoutExt, exec_args, path_with_front, write_long_lived_agent_shim,
+    };
     use rimz::harness::launch::{ExecAction, ExecIdentity, ExecRequest, ProviderAccountState};
 
     let env = Env::new();
+    if foreign_repo.is_some() {
+        if crate::common::git::git_missing() {
+            return;
+        }
+        crate::common::git::init_repo(&env.project_root);
+    }
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let cwd = if empty_grant.is_some() {
         store.paths().empty_agent_dir("otter")
+    } else if let Some(git) = foreign_repo {
+        let cwd = env.home_root.join("child-directory");
+        std::fs::create_dir_all(&cwd).unwrap();
+        if git {
+            crate::common::git::init_repo(&cwd);
+        }
+        cwd
     } else {
         env.project_root.clone()
     };
     let checkout = empty_grant.map(|_| env.project_root.display().to_string());
+    let channel = foreign_repo.map(|_| "child-directory");
+    if empty_grant.is_none() {
+        crate::common::trust_claude_project(&env, &cwd);
+    }
     if empty_grant == Some(true) {
         std::fs::write(env.home_root.join(".claude.json"), serde_json::to_vec(&serde_json::json!({"projects": {store.paths().empty_dir_root().display().to_string(): {"hasTrustDialogAccepted": true}}})).unwrap()).unwrap();
     }
@@ -4238,6 +4269,97 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
             o.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_1"));
         },
     );
+    let shim = write_long_lived_agent_shim(&env, "claude");
+    std::os::unix::fs::symlink(zellij_trace_shim(), shim.join("zellij")).unwrap();
+    let mut parent_pane = agent_pane(&env, "claude");
+    parent_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let panes = env.write_pane_fixture(&[parent_pane.clone()]);
+    let trace = env.project_root.join("resume-trace.log");
+    let launched_run = foreign_repo.map(|_| {
+        crate::common::room::seed_live_zellij_room(
+            store.runtime_paths(),
+            &workspace.session_name,
+            serde_json::from_value(json!([
+                {"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},
+                {"id":2,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"}
+            ]))
+            .unwrap(),
+        );
+        let launch_trace = env.project_root.join("child-launch.log");
+        let presence = env.project_root.join("presence.wasm");
+        std::fs::write(&presence, b"test-presence").unwrap();
+        let launched = std::sync::atomic::AtomicBool::new(false);
+        let output = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                crate::common::room::bind_child_panes(
+                    &store,
+                    &launch_trace,
+                    &workspace.session_name,
+                    &launched,
+                );
+            });
+            let output = traced_rimz(&env, &launch_trace)
+                .args([
+                    "--mux",
+                    "zellij",
+                    "subagents",
+                    "claude",
+                    "initial task",
+                    "--cwd",
+                ])
+                .arg(&cwd)
+                .args(["--isolation", "host"])
+                .env("PATH", path_with_front(&shim))
+                .env("SHELL", crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]))
+                .env("RIMZ_TEST_PANE_LIST", &panes)
+                .env("RIMZ_PRESENCE_PLUGIN", &presence)
+                .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"},{"id":2,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"}]"#)
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "parent")
+                .env("ZELLIJ_PANE_ID", "1")
+                .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name)
+                .bounded_output();
+            launched.store(true, std::sync::atomic::Ordering::Relaxed);
+            let output = output.unwrap();
+            assert!(output.status.success(), "{output:?}");
+            output
+        });
+        assert!(output.status.success(), "{output:?}");
+        let runs = rimz::harness::run::list(store.paths()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].worktree_path, cwd);
+        runs.into_iter().next().unwrap()
+    });
+    let (child_name, launch_id) = if let Some(run) = &launched_run {
+        let agents = store
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .unwrap()
+            .agents;
+        let child = agents
+            .iter()
+            .find(|agent| agent.name == run.agent_name)
+            .unwrap();
+        (
+            child.name.clone().unwrap(),
+            child.launch_id.clone().unwrap(),
+        )
+    } else {
+        ("otter".into(), AgentSessionId::from("launch_child"))
+    };
+    if foreign_repo.is_some() {
+        append_lifecycle(
+            &env,
+            "claude",
+            "SessionStart",
+            "child",
+            LifecycleSignal::Registered,
+            |o| {
+                o.agent_name = Some(child_name.clone());
+                o.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_3"));
+                o.worktree_path = Some(cwd.display().to_string());
+            },
+        );
+    }
     store
         .append_event(&EventEnvelope::agent_launched(
             env.workspace_id.clone(),
@@ -4246,11 +4368,12 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
             AgentLaunchPayload {
                 system_prompt_digest: None,
                 agent_id: "child".into(),
-                launch_id: Some("launch_child".into()),
-                agent_name: "otter".into(),
+                launch_id: Some(launch_id.clone()),
+                agent_name: child_name.clone(),
                 agent_name_explicit: true,
                 launch: LaunchParams {
                     checkout: checkout.clone(),
+                    channel: channel.map(str::to_owned),
                     parent_agent_id: Some("parent".into()),
                     parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
                     launch_depth: Some(1),
@@ -4275,32 +4398,37 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
         "child",
         LifecycleSignal::Ended,
         |o| {
-            o.agent_name = Some("otter".into());
+            o.agent_name = Some(child_name.clone());
+            o.worktree_path = Some(cwd.display().to_string());
             o.transcript_path = Some(transcript.display().to_string());
         },
     );
-    let mut run = rimz::store::run::RunRecord::new(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        rimz::agents::PermissionMode::Auto,
-        "finished task".into(),
-        cwd.clone(),
-    );
+    let mut run = launched_run.unwrap_or_else(|| {
+        rimz::store::run::RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            rimz::agents::PermissionMode::Auto,
+            "finished task".into(),
+            cwd.clone(),
+        )
+    });
     run.agent_id = Some("child".into());
-    run.agent_name = Some("otter".into());
+    run.agent_name = Some(child_name.clone());
     run.subagent = true;
     run.status = rimz::store::run::RunStatus::Completed;
     run.joined_at = Some(jiff::Timestamp::now());
     rimz::harness::run::create(store.paths(), &run).unwrap();
-    let shim = write_long_lived_agent_shim(&env, "claude");
-    std::os::unix::fs::symlink(zellij_trace_shim(), shim.join("zellij")).unwrap();
-    let mut parent_pane = agent_pane(&env, "claude");
-    parent_pane.pane_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let panes = env.write_pane_fixture(&[parent_pane.clone()]);
-    let trace = env.project_root.join("resume-trace.log");
+    let target = channel.map_or_else(
+        || format!("@{child_name}"),
+        |channel| format!("@{child_name}#{channel}"),
+    );
     let mut sender = traced_rimz(&env, &trace)
-        .args(["--mux", "zellij", "message", "@otter", "follow up"])
+        .args(["--mux", "zellij", "message", &target, "follow up"])
         .env("PATH", path_with_front(&shim))
+        .env(
+            "SHELL",
+            crate::common::write_fake_login_shell(&env, "rimz-test-sh", &[]),
+        )
         .env("RIMZ_TEST_PANE_LIST", &panes)
         .env("RIMZ_AGENT_KIND", "claude")
         .env("RIMZ_AGENT_ID", "parent")
@@ -4367,11 +4495,12 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
         headless: None,
         identity: ExecIdentity::default(),
     };
-    request.identity.name = Some("otter".into());
+    request.identity.name = Some(child_name);
     request.identity.name_explicit = true;
-    request.identity.launch_id = Some("launch_child".into());
+    request.identity.launch_id = Some(launch_id.to_string());
     request.identity.params = LaunchParams {
         checkout,
+        channel: channel.map(str::to_owned),
         parent_agent_id: Some("parent".into()),
         parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
         launch_depth: Some(1),
@@ -4382,8 +4511,12 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
         .current_dir(&cwd)
         .envs(rimz::room::pane_identity_env(
             &workspace,
-            &env.project_root,
-            None,
+            if foreign_repo.is_some() {
+                &cwd
+            } else {
+                &env.project_root
+            },
+            channel,
             false,
         ))
         .args(exec_args(&env, &request))
@@ -4471,7 +4604,11 @@ fn assert_parent_message_resumes_child(empty_grant: Option<bool>) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let submitted = "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nfollow up";
+    let submitted = if foreign_repo.is_some() {
+        "Type: AGENT_MESSAGE\nFrom: @claude#main\nContent:\nfollow up"
+    } else {
+        "Type: AGENT_MESSAGE\nFrom: @claude\nContent:\nfollow up"
+    };
     assert_text_then_enter(&trace, submitted);
     let started = env.run_installed_hook_in_pane(
         "claude",

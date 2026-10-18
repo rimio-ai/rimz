@@ -11,7 +11,7 @@ rimz agents claude -p "Summarize what changed on this branch."   # the claude -p
 rimz agents codex -p "Prepare the release checklist."            # the same grammar, any agent
 ```
 
-Three things have to be true before the first run. RimZ's reporting hooks must be installed and trusted for that agent, because the hook is how a run learns its turn ended; `rimz doctor` reports their state, and [set up your machine](./setup.md#install-agent-hooks) walks the one-time consent. And a Codex run must not stop at a folder-trust screen: trust the project in Codex before starting a supervised run. A saved-untrusted folder shows Folder access on every launch, so RimZ refuses it without changing that decision. A projectless folder without a saved decision passes. And the run must not start in your home directory (`$HOME`), for any agent: nobody is there to answer a folder-trust prompt, so run it from a project directory or pass `--cwd <DIR>`.
+Three things have to be true before the first run. RimZ's reporting hooks must be installed and trusted for that agent, because the hook is how a run learns its turn ended; `rimz doctor` reports their state, and [set up your machine](./setup.md#install-agent-hooks) walks the one-time consent. And a Claude or Codex run must not stop at a folder-trust screen: trust the project in that provider before starting a supervised run. A saved-untrusted Codex folder shows Folder access on every launch, so RimZ refuses it without changing that decision. A Codex projectless folder without a saved decision passes. And the run must not start in your home directory (`$HOME`), for any agent: nobody is there to answer a folder-trust prompt, so run it from a project directory or pass `--cwd <DIR>`.
 
 ## What a run does on your machine
 
