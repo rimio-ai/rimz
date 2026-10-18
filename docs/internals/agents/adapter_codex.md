@@ -93,7 +93,7 @@ Host skill lists render `-c skills.config` entries with `enabled=false` for unli
 
 | Intent | Codex argv |
 | --- | --- |
-| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0 for permission profiles and Guardian review, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; unreadable versions pass |
+| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0 for permission profiles and Guardian review, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; headless loop and workflow judges also check the resolved binary before spawning; unreadable versions pass |
 | Question editor Escape | `-c tui.question_esc_back=false` follows `--no-daemon` on launch, resume, pick and fork; Escape interrupts instead of collapsing the expanded editor; later user overrides win; headless exec does not inherit these TUI args |
 | Resume a session | `codex resume <id> --no-daemon -c tui.question_esc_back=false` |
 | Pick a session | `codex resume --no-daemon -c tui.question_esc_back=false`; binding waits for the first prompt's resume hooks |

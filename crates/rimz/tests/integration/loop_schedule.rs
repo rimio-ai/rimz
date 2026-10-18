@@ -27,6 +27,89 @@ mod list_tests;
 
 #[cfg(unix)]
 #[test]
+fn judge_refuses_below_version_floor_before_provider_spawn() {
+    let (env, _) = codex_judge_version_fixture("codex-cli 0.162.0");
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].result, LoopRunResult::Errored);
+    let error = records[0].error.as_deref().expect("version refusal");
+    assert!(
+        error.contains("0.162.0") && error.contains("0.163.0"),
+        "{error}"
+    );
+    assert!(error.ends_with("upgrade Codex"), "{error}");
+    assert!(loop_ok(&env, &["loop", "show", "guard"]).contains(error));
+    assert_eq!(
+        std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap(),
+        "--version\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn judge_with_unreadable_version_still_reads_verdict() {
+    let (env, output) = codex_judge_version_fixture("{}");
+    assert!(output.status.success(), "{output:?}");
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].result, LoopRunResult::CheckSkipped);
+    let judge = &records[0].judge[0];
+    assert_eq!(judge.verdict, Some(false));
+    assert_eq!(judge.reason.as_deref(), Some("No actionable work."));
+    let calls = std::fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
+    let calls: Vec<_> = calls.lines().collect();
+    assert_eq!(calls.len(), 2, "one probe and one provider launch");
+    assert_eq!(calls[0], "--version");
+    assert!(calls[1].contains(" exec --json "), "{calls:?}");
+}
+
+#[cfg(unix)]
+fn codex_judge_version_fixture(version: &str) -> (Env, std::process::Output) {
+    let env = Env::new();
+    env.write_config(&env.project_root, "[agents]\nisolation = 'host'\n");
+    env.record(&env.project_root);
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    trust_codex_project(&env, &env.project_root);
+    let bin = env.home_root.join("check-bin");
+    write_path_shim(
+        &bin,
+        "codex",
+        &format!(
+            r#"
+printf '%s' "$*" | tr '\n' ' ' >> "$HOME/judge-calls"
+printf '\n' >> "$HOME/judge-calls"
+if [ "$1" = '--version' ]; then printf '%s\n' '{version}'; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{{"pass":false,"reason":"No actionable work."}}' > "$1"; fi
+    shift
+done
+"#
+        ),
+    );
+    std::fs::write(
+        env.home_root.join(".profile"),
+        format!("PATH='{}':\"$PATH\"\n", bin.display()),
+    )
+    .unwrap();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.guard]\nagent='codex'\nprompt='repair'\nroot={:?}\nevery='1h'\non='success'\n[tasks.guard.check]\nagent='codex'\nprompt='Any work?'\n",
+            env.project_root
+        ),
+    );
+    let output = env
+        .rimz()
+        .env("PATH", path_with_front(&bin))
+        .args(["loop", "run", "guard"])
+        .output()
+        .unwrap();
+    (env, output)
+}
+
+#[cfg(unix)]
+#[test]
 fn resident_agent_decline_is_shown_counted_and_held_without_another_check() {
     resident_agent_decline_is_shown(None);
 }

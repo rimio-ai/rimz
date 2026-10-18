@@ -238,6 +238,8 @@ rimz loop add watchdog --every 15m --check "cargo test" --check-timeout 10m --ju
 
 The judge runs without a pane, using the room-default account and the profile's isolation, and is told to ask no questions and change nothing. It sees the shell output, returns `pass` and a short reason, and the action receives both stages' evidence. `loop logs watchdog` shows each verdict, reason, cost, tokens, and duration. The judge has its own five-minute cap, adjustable with `--judge-timeout`, independent of the shell cap. A missing verdict passes the turn to the next judge or action with the error in history, so an outage alone cannot silently prevent recovery. `--on` is required with a judge: `fail` needs negative verdicts, `success` positive verdicts, and `any` accepts either.
 
+An [unsupported agent version](../reference/agent-support.md) is a launch refusal, not an outage: the judge does not run and the task records an error. Upgrade the agent; if repeated refusals disabled the task, use `rimz loop enable watchdog` to re-enable it.
+
 The same task in `loop.toml` gives its judge a two-minute cap:
 
 ```toml

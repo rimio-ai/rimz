@@ -180,6 +180,7 @@ pub(super) fn run(
             anyhow::bail!("{error}; re-add the loop task from a project directory")
         }
         Err(ProcessErr::Directory(error)) => return Err(error.into()),
+        Err(ProcessErr::Version(error)) => return Err(error.into()),
         Err(ProcessErr::Io(error)) => (
             crate::agents::HeadlessResult {
                 error: Some(format!("running judge: {error}").into()),
