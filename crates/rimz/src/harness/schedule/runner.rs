@@ -1082,7 +1082,7 @@ impl<'a> TaskFire<'a> {
         {
             tracing::warn!(task = %self.name, error = %format!("{consume:#}"), "failed to consume errored one-shot delivery");
         }
-        // The launch resolves the pin again, for the kind its routing lands on.
+        // The launch resolves the pin again for the declared provider.
         let unresolved =
             self.entry
                 .account

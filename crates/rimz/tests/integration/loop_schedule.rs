@@ -9266,6 +9266,88 @@ fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
 }
 
 #[test]
+fn loop_fire_keeps_a_pinned_markdown_profiles_provider_when_unavailable() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    add_claude_account(&env, "rimio");
+    loop_ok(
+        &env,
+        &[
+            "accounts",
+            "add",
+            "codex",
+            "rimio",
+            "--home",
+            env.home_root.join("codex-rimio").to_str().unwrap(),
+        ],
+    );
+    crate::common::write_kind_base(&env, "codex");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "sonnet",
+        "description: Sonnet\nagent: claude\nmodel: sonnet\ntools: []",
+        "",
+    );
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "ping",
+            "--agent",
+            "sonnet",
+            "--account",
+            "rimio",
+            "--prompt",
+            "ping",
+            "--every",
+            "15m",
+            "--throttle",
+            "off",
+        ],
+    );
+    env.publish_accounts(&rimz::agents::account::AccountsCache {
+        logins: BTreeMap::from([(
+            "claude@rimio".parse().unwrap(),
+            rimz::agents::account::ProviderRecord {
+                probe_error: None,
+                login: Some(rimz::agents::account::RecordedLogin::LoggedOut),
+                probed_at_ms: 1,
+                ok: true,
+                account: None,
+            },
+        )]),
+    });
+
+    let output = env.rimz().args(["loop", "run", "ping"]).output().unwrap();
+    let records = read_loop_run_records(&env);
+    assert_eq!(
+        records.last().map(|record| record.result),
+        Some(LoopRunResult::AccountSkipped),
+        "must skip the declared Claude account, not try Codex: {records:?}; {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success());
+    let record = records.last().unwrap();
+    assert!(
+        record
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("claude account `rimio` is logged out")
+    );
+    assert!(record.run_id.is_none());
+    assert!(read_loop_strikes(&env).is_empty());
+    assert!(
+        rimz::harness::run::list(&env.state_path_for(&env.project_root))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn loop_fire_skips_when_its_pinned_account_cannot_run() {
     let env = Env::new();
     env.install_agent_hooks("claude");

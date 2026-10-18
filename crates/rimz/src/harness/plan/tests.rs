@@ -3169,6 +3169,95 @@ fn tier_override_changes_the_supervised_launch_runtime() {
 }
 
 #[test]
+fn supervised_loop_account_pin_keeps_the_provider_while_unpinned_falls_back() {
+    use crate::config::tiers::{DefinitionRenders, ModelTier, TierPreference, TierProvenance};
+    use crate::store::writer::LaunchLogin;
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::workspace::WorkspaceResolver::resolve(root.path(), None).unwrap();
+    let runtime = RuntimePaths::for_project_root(root.path()).unwrap();
+    let mut machine = MachineConfig {
+        accounts: toml::from_str(&format!(
+            "[claude.rimio]\nhome = {:?}\n[codex.rimio]\nhome = {:?}\n",
+            root.path().join("claude-rimio"),
+            root.path().join("codex-rimio"),
+        ))
+        .unwrap(),
+        ..Default::default()
+    };
+    let mut profile = configured_profile("claude", None, Some("sonnet"), None, None, None);
+    profile.model_tier = Some(TierProvenance {
+        tier: ModelTier::Junior,
+        fell_back: false,
+    });
+    profile.definition_renders = Some(DefinitionRenders {
+        preference: TierPreference {
+            model: Some("sonnet".into()),
+            family: Some("claude".into()),
+        },
+        renders: [
+            (
+                "claude".into(),
+                configured_profile("claude", None, Some("sonnet"), None, None, None),
+            ),
+            (
+                "codex".into(),
+                configured_profile("codex", None, Some("sol"), None, None, None),
+            ),
+        ]
+        .into(),
+        exclusions: Default::default(),
+        effort: None,
+    });
+    machine.agents.profiles.0.insert("sonnet".into(), profile);
+    crate::disk::atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &crate::agents::account::AccountsCache {
+            logins: [(
+                "claude@rimio".parse().unwrap(),
+                crate::agents::account::ProviderRecord {
+                    probe_error: None,
+                    login: Some(crate::agents::account::RecordedLogin::LoggedOut),
+                    probed_at_ms: 1,
+                    ok: true,
+                    account: None,
+                },
+            )]
+            .into(),
+        },
+    )
+    .unwrap();
+
+    for (login, expected_kind, expected_model) in [
+        (LaunchLogin::RoomDefault, "codex", "sol"),
+        (
+            LaunchLogin::Pinned("rimio".parse().unwrap()),
+            "claude",
+            "sonnet",
+        ),
+    ] {
+        let mut request = supervised_request("sonnet", "ping");
+        request.loop_task = Some("ping".into());
+        request.login = login;
+        let launch = plan_supervised_launch(
+            &request,
+            None,
+            None,
+            None,
+            &workspace,
+            &machine,
+            effective_launch(&machine, root.path()),
+            |_| LaunchLogin::Pinned("rimio".parse().unwrap()),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let cell = planned_cell(&launch);
+        assert_eq!(cell.kind.as_str(), expected_kind, "{:?}", request.login);
+        assert_eq!(cell.launch.model.as_deref(), Some(expected_model));
+    }
+}
+
+#[test]
 fn supervised_launch_normalizes_model_and_effort_overrides() {
     let mut request = supervised_request("codex", "fix-it");
     request.model = Some(" gpt-5 ".to_owned());

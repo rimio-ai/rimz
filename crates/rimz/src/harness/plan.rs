@@ -394,7 +394,7 @@ impl ResolvedSingleAgentLaunch {
         &self.kind
     }
 
-    /// Resolve a booking without transient availability routing.
+    /// Resolve a booking or pinned fire without transient availability routing.
     pub fn for_booking(
         spec: &str,
         workspace: &crate::workspace::ResolvedWorkspace,
@@ -406,12 +406,16 @@ impl ResolvedSingleAgentLaunch {
 }
 
 /// Resolve one loop launch while keeping effective-config and trust policy in
-/// the launch planner; tier routing judges every kind on `login`.
+/// the launch planner. Explicit login pins retain the declared provider.
+/// Unpinned launches route tiers using `login`.
 pub fn resolve_single_agent_launch(
     spec: &str,
     workspace: &crate::workspace::ResolvedWorkspace,
     login: &crate::store::writer::LaunchLogin,
 ) -> Result<ResolvedSingleAgentLaunch> {
+    if matches!(login, crate::store::writer::LaunchLogin::Pinned(_)) {
+        return ResolvedSingleAgentLaunch::for_booking(spec, workspace);
+    }
     let machine_config = crate::config::MachineConfig::load_lenient();
     let mut launch = crate::config::effective::load(&machine_config, &workspace.project_root)?;
     let state = StatePaths::for_project_root(&workspace.project_root)?;
@@ -742,7 +746,16 @@ pub fn plan_supervised_launch(
         request.tier,
         request.model.as_deref(),
         request.agent.as_deref(),
-        |kind, model| availability.unavailable(kind, model),
+        |kind, model| {
+            // A loop's explicit account pin binds its provider too, even after its scope gates.
+            if request.loop_task.is_some()
+                && matches!(request.login, crate::store::writer::LaunchLogin::Pinned(_))
+            {
+                None
+            } else {
+                availability.unavailable(kind, model)
+            }
+        },
     )?;
     let agent_base = request.agent.as_deref().filter(|_| !routed);
     let mut resolved = resolve_launch(&effective, scope, commands, Some(&spec), agent_base)?;
