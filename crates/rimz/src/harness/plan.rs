@@ -393,6 +393,16 @@ impl ResolvedSingleAgentLaunch {
     pub fn kind(&self) -> &str {
         &self.kind
     }
+
+    /// Resolve a booking without transient availability routing.
+    pub fn for_booking(
+        spec: &str,
+        workspace: &crate::workspace::ResolvedWorkspace,
+    ) -> Result<Self> {
+        let machine = crate::config::MachineConfig::load_lenient();
+        let launch = crate::config::effective::load(&machine, &workspace.project_root)?;
+        resolve_single_agent_spec(spec, &launch, &machine.agents.commands)
+    }
 }
 
 /// Resolve one loop launch while keeping effective-config and trust policy in
@@ -422,11 +432,19 @@ pub fn resolve_single_agent_launch(
         None,
         |kind, model| availability.unavailable(kind, model),
     )?;
+    resolve_single_agent_spec(spec, &launch, &machine_config.agents.commands)
+}
+
+fn resolve_single_agent_spec(
+    spec: &str,
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+) -> Result<ResolvedSingleAgentLaunch> {
     launch.block_set_failure()?;
     let layout = match crate::harness::spec::resolve_spec(
         Some(spec),
         &launch.profiles,
-        &machine_config.agents.commands,
+        commands,
         &launch.teams,
     ) {
         Ok(layout) => layout,
@@ -435,7 +453,7 @@ pub fn resolve_single_agent_launch(
             launch.block_untrusted_reference(
                 crate::config::effective::ProfileScope::Agents,
                 Some(spec),
-                &machine_config.agents.commands,
+                commands,
             )?;
             launch.block_failed_reference(Some(spec), None)?;
             launch.block_failed_reference(unknown_cell(&err), None)?;

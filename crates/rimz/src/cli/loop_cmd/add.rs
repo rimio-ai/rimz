@@ -651,8 +651,7 @@ fn resolve_add_action(
         TaskActionKind::Spawn if args.stay => resolve_resident_action(args, workspace, &preset)?,
         TaskActionKind::Spawn => {
             let spec = args.agent.as_deref().unwrap_or_default();
-            let resolved =
-                resolve_single_agent_launch(spec, workspace, &args.account.clone().into())?;
+            let resolved = ResolvedSingleAgentLaunch::for_booking(spec, workspace)?;
             rimz::harness::plan::validate_launch_preset(resolved.kind(), &preset)?;
             AddTaskAction::Spawn {
                 resolved,

@@ -1625,7 +1625,8 @@ allowed-dependencies = [
 # A supervised launch judges tier availability on its own login per kind: `LaunchAvailability::read_as` (+1).
 # The supervised run's one-cell launch plan and its result leave `cli/supervised`, reading `harness::run`'s request (+2).
 # `validate_launch_preset` shares launch capability refusal with loop admission (+1).
-surface-budget = 43
+# `ResolvedSingleAgentLaunch::for_booking` keeps loop account admission independent of live routing (+1).
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -4201,6 +4202,11 @@ reason = "Returned or carried by pub finalize/resolve signatures the CLI matches
 kind = "item"
 key = "harness::plan::ResolveLaunchError"
 reason = "Returned or carried by pub finalize/resolve signatures the CLI matches on; atlas caveat 13 (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ResolvedSingleAgentLaunch::for_booking"
+reason = "Loop booking in the binary resolves the declared provider before account selection, without fire-time availability fallback."
 
 [[verdict]]
 kind = "item"

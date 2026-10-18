@@ -9155,6 +9155,61 @@ fn add_claude_account(env: &Env, name: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn loop_add_resolves_a_markdown_profiles_provider_before_selecting_its_account() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    add_claude_account(&env, "hooloovoo");
+    crate::common::write_kind_base(&env, "codex");
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "sonnet",
+        "description: Sonnet\nagent: claude\nmodel: sonnet\ntools: []",
+        "",
+    );
+    env.publish_accounts(&rimz::agents::account::AccountsCache {
+        logins: BTreeMap::from([(
+            "claude@hooloovoo".parse().unwrap(),
+            rimz::agents::account::ProviderRecord {
+                probe_error: None,
+                login: None,
+                probed_at_ms: 1,
+                ok: true,
+                account: None,
+            },
+        )]),
+    });
+
+    let added = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "sonnet-ping-hooloovoo",
+            "--agent",
+            "sonnet",
+            "--account",
+            "hooloovoo",
+            "--prompt",
+            "ping",
+            "--in",
+            "1m",
+            "--timeout",
+            "2m",
+        ],
+    );
+    assert!(
+        added.contains("action: launches a fresh sonnet pane on account `hooloovoo` in "),
+        "{added}"
+    );
+    let instances = read_loop_instances(&env);
+    let task = &instances.0["sonnet-ping-hooloovoo"];
+    assert_eq!(task.agent.as_deref(), Some("sonnet"));
+    assert_eq!(task.account, Some("hooloovoo".parse().unwrap()));
+}
+
+#[test]
 fn loop_add_pins_a_declared_account_and_refuses_the_rest() {
     let env = Env::new();
     env.install_agent_hooks("claude");
