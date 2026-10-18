@@ -68,8 +68,10 @@ pub fn date_heartbeat_as_live(path: &std::path::Path) {
         .expect("date heartbeat ahead of the clock");
 }
 
-/// A room as the layout wait accepts it after birth: the sidebar pane plus one
-/// live terminal.
+/// A materialized room, the sidebar pane plus one live terminal, as `ShimRoom`
+/// publishes it as topology. The `zellij-trace` fixture's `handle_action_query`
+/// answers `list-panes` for a born session with a copy of this literal, since
+/// it cannot import the constant; keep the two in step.
 pub const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
 /// Publish the renderer's first heartbeat after birth (not before the rebirth
@@ -83,8 +85,8 @@ pub struct ShimRoom {
 }
 
 impl ShimRoom {
-    /// Always answers with [`MATERIALIZED_ROOM_PANES`]: a birth answered with
-    /// fewer panes leaves the sidebar layout wait polling to its ceiling.
+    /// Always answers with [`MATERIALIZED_ROOM_PANES`], for the topology reads
+    /// that follow birth; the layout wait itself reads the shim's `list-panes`.
     pub fn watch(env: &super::Env, trace: &std::path::Path) -> Self {
         let runtime = env.runtime_paths();
         let workspace = env.resolve_workspace(&env.project_root);

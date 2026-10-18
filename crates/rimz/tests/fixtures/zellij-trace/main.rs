@@ -126,7 +126,9 @@ fn main() {
             env::var("RIMZ_TEST_ZELLIJ_VERSION").unwrap_or_else(|_| "0.44.3".to_owned())
         )),
         Invocation::ListSessions => handle_list_sessions(&log_path),
-        Invocation::ActionQuery(query) => handle_action_query(query, &log_path),
+        Invocation::ActionQuery(query) => {
+            handle_action_query(query, &log_path, arg_after(cli, "--session"))
+        }
         Invocation::PresenceBoot {
             session,
             configuration,
@@ -225,7 +227,7 @@ fn handle_list_sessions(log_path: &Path) {
     std::process::exit(1);
 }
 
-fn handle_action_query(query: ActionQuery, log_path: &Path) {
+fn handle_action_query(query: ActionQuery, log_path: &Path, session: Option<&str>) {
     match query {
         ActionQuery::Clients => write_stdout_raw(
             &env::var("RIMZ_TEST_ZELLIJ_LIST_CLIENTS")
@@ -234,8 +236,17 @@ fn handle_action_query(query: ActionQuery, log_path: &Path) {
         ActionQuery::Panes => {
             if let Some(path) = env::var_os("RIMZ_TEST_ZELLIJ_LIST_PANES_FILE") {
                 write_stdout_raw(&std::fs::read_to_string(path).expect("read panes"));
-            } else {
-                write_env_raw("RIMZ_TEST_ZELLIJ_LIST_PANES");
+            } else if let Ok(panes) = env::var("RIMZ_TEST_ZELLIJ_LIST_PANES") {
+                write_stdout_raw(&panes);
+            } else if session.is_some_and(|session| {
+                created_sessions(log_path)
+                    .iter()
+                    .any(|born| born == session)
+            }) {
+                // The suite's `common::room::MATERIALIZED_ROOM_PANES`, copied.
+                write_stdout_raw(
+                    r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+                );
             }
         }
         ActionQuery::Tabs => {
@@ -511,12 +522,6 @@ fn arg_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2)
         .find(|window| window[0] == flag)
         .map(|window| window[1].as_str())
-}
-
-fn write_env_raw(name: &str) {
-    if let Ok(output) = env::var(name) {
-        write_stdout_raw(&output);
-    }
 }
 
 fn write_stdout(line: &str) {

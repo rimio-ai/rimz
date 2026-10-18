@@ -189,7 +189,7 @@ impl ZellijBackend {
             record_birth_owners()?;
         }
         self.ensure_birth_presence_plugin(opts)?;
-        if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
+        if self.wait_for_sidebar_layout(&opts.session_name) {
             self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
             drop(layout);
             return Ok(());
@@ -205,7 +205,7 @@ impl ZellijBackend {
             spawn()?;
             record_birth_owners()?;
             self.ensure_birth_presence_plugin(opts)?;
-            if self.wait_for_sidebar_layout(&opts.session_name, &opts.workspace_id) {
+            if self.wait_for_sidebar_layout(&opts.session_name) {
                 self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
                 drop(layout);
                 return Ok(());
@@ -470,11 +470,13 @@ impl ZellijBackend {
         else {
             return;
         };
-        let Ok(panes) =
-            self.topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
-        else {
+        let Ok(panes) = self.raw_listed_panes(session, RECONCILE_LIST_TIMEOUT) else {
             return;
         };
+        let panes = panes
+            .into_iter()
+            .map(PaneTopologyPane::from)
+            .collect::<Vec<_>>();
         let Some(tab_position) = panes
             .iter()
             .find(|pane| pane.id == viewed && pane.is_live_terminal())
@@ -1034,27 +1036,27 @@ impl ZellijBackend {
     /// second live terminal, so the caller's temp layout file stays on disk
     /// until Zellij has demonstrably parsed it. Returns `true` once that signal
     /// appears, `false` if the [`SIDEBAR_LAYOUT_TIMEOUT`] ceiling elapses first.
+    /// Reads the server's pane list, independent of the presence-plugin cache.
     ///
     /// The predicate gates on *our* sidebar chrome pane (a default/fallback
     /// birth carries none) counted with the same `is_live_terminal` filter the
-    /// roster applies, so "materialized" here provably implies the caller's next
-    /// pane roster returns the two panes — no held/exited pane slips the gate.
-    pub(super) fn wait_for_sidebar_layout(
-        &self,
-        session_name: &str,
-        workspace_id: &WorkspaceId,
-    ) -> bool {
+    /// roster applies, so "materialized" means the server listed the two live
+    /// panes — no held/exited pane slips the gate.
+    pub(super) fn wait_for_sidebar_layout(&self, session_name: &str) -> bool {
         let deadline = Instant::now() + SIDEBAR_LAYOUT_TIMEOUT;
         while Instant::now() < deadline {
             if self.session_state(session_name) != SessionLiveness::Live {
                 return false;
             }
-            if let Ok(panes) = self.topology_panes_for_workspace(
-                session_name,
-                workspace_id,
-                None,
-                RECONCILE_LIST_TIMEOUT,
-            ) && panes.iter().any(is_sidebar_pane)
+            if let Ok(panes) = self
+                .raw_listed_panes(session_name, RECONCILE_LIST_TIMEOUT)
+                .map(|panes| {
+                    panes
+                        .into_iter()
+                        .map(PaneTopologyPane::from)
+                        .collect::<Vec<_>>()
+                })
+                && panes.iter().any(is_sidebar_pane)
                 && panes.iter().filter(|pane| pane.is_live_terminal()).count() >= 2
             {
                 return true;
