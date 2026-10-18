@@ -1108,10 +1108,20 @@ fn fold_lifecycle(
         );
     state.compaction_count += u32::from(completed_compaction);
     match &signal {
+        // A close that lands at rest compacted a context no prompt has used
+        // since; an automatic one that resumed a turn is mid-request. A
+        // triggerless close outside a bracket is an echo (Claude's second
+        // close, Codex's `SessionStart` queued to the next turn) of a
+        // compaction already folded, so it leaves the marker as it was.
         lifecycle::LifecycleSignal::CompactionEnded {
-            auto: Some(false),
+            auto,
             failed: false,
-        } => state.compacted_awaiting_prompt = Some(timestamp),
+        } if *auto == Some(false)
+            || (!matches!(next.status, AgentStatus::Running | AgentStatus::Waiting)
+                && (auto.is_some() || compaction_closed)) =>
+        {
+            state.compacted_awaiting_prompt = Some(timestamp);
+        }
         lifecycle::LifecycleSignal::TurnStarted { .. } => state.compacted_awaiting_prompt = None,
         _ => {}
     }

@@ -90,6 +90,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
         && !agent.is_provider_subagent()
         && !agent.agent_id.is_empty()
         && agent.compacting_since.is_none()
+        && !agent.compacted_since_prompt()
         && agent.budget_park.is_none()
         && agent.hibernation.is_none()
         && !agent.is_awaiting_input()
@@ -322,6 +323,9 @@ mod tests {
         assert!(due(&candidate));
         assert!(!due(&agent(AgentStatus::Idle, 6_461, 50_000)));
         assert!(!due(&agent(AgentStatus::Idle, 6_000, 49_999)));
+        let mut compacted = candidate.clone();
+        compacted.compacted_awaiting_prompt = Some(ts(6_000));
+        assert!(!due(&compacted), "a compacted seat waits for a real prompt");
         assert!(!should_compact(
             &candidate,
             None,

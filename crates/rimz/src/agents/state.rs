@@ -1338,12 +1338,17 @@ impl AgentState {
             .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
     }
 
-    /// A marker is actionable only when durable turn starts can clear it.
+    /// Whether this agent is compacting or has compacted since its last prompt.
     pub fn compaction_unprompted(&self, now: Timestamp) -> bool {
-        self.is_compacting(now)
-            || (self.compacted_awaiting_prompt.is_some()
-                && super::spec_by_kind(self.kind.as_str())
-                    .is_some_and(|spec| spec.lifecycle_hooks.turn_started.is_native()))
+        self.is_compacting(now) || self.compacted_since_prompt()
+    }
+
+    /// Whether a compaction has landed since the last real prompt. The marker
+    /// is actionable only when durable turn starts can clear it.
+    pub fn compacted_since_prompt(&self) -> bool {
+        self.compacted_awaiting_prompt.is_some()
+            && super::spec_by_kind(self.kind.as_str())
+                .is_some_and(|spec| spec.lifecycle_hooks.turn_started.is_native())
     }
 
     /// Minimal test fixture with stable identity fields and empty enrichment.

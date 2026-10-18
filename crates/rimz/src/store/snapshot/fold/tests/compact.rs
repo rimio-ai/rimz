@@ -333,7 +333,7 @@ fn compact_marker_needs_no_tokens_and_delayed_delivery_cannot_rearm_it() {
 }
 
 #[test]
-fn only_successful_manual_compaction_sets_the_prompt_marker() {
+fn successful_compaction_at_rest_sets_the_prompt_marker() {
     use lifecycle::LifecycleSignal;
 
     for auto in [Some(false), Some(true), None] {
@@ -378,7 +378,7 @@ fn only_successful_manual_compaction_sets_the_prompt_marker() {
                 );
                 event_log::append(&paths.events_log, &completed).unwrap();
                 let (_, agents, _) = catch_up_rollup(&paths).unwrap();
-                let expected = if auto == Some(false) && !failed {
+                let expected = if !failed {
                     Some(completed.timestamp)
                 } else {
                     marked.then_some(sent.timestamp)
@@ -390,6 +390,149 @@ fn only_successful_manual_compaction_sets_the_prompt_marker() {
             }
         }
     }
+}
+
+fn fold_signals(
+    signals: &[lifecycle::LifecycleSignal],
+    cached_status: Option<AgentStatus>,
+) -> AgentState {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    for signal in signals {
+        let event = lifecycle_at(
+            &workspace,
+            "claude",
+            "PostCompact",
+            "sess-a",
+            signal.clone(),
+        );
+        event_log::append(&paths.events_log, &event).unwrap();
+    }
+    if let Some(status) = cached_status {
+        write_rollup_cache(
+            &paths.rollup_cache,
+            &RollupCache {
+                version: 34,
+                extent: event_log::LogExtent {
+                    generation: 0,
+                    offset: std::fs::metadata(&paths.events_log).unwrap().len(),
+                },
+                raw_agents: vec![agent("claude", "sess-a", status, 0)],
+                resume_outcomes: Vec::new(),
+                agent_identity: AgentIdentityState::default(),
+                saw_session_rebirth: false,
+            },
+        )
+        .unwrap();
+    }
+    let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+    agents
+        .into_iter()
+        .find(|agent| agent.agent_id == "sess-a")
+        .unwrap()
+}
+
+#[test]
+fn automatic_close_rests_at_rest_and_resumes_only_an_open_turn() {
+    use lifecycle::LifecycleSignal::*;
+    let ended = TurnEnded {
+        errored: false,
+        parked_on_background: false,
+        turn_id: None,
+    };
+    let close = CompactionEnded {
+        auto: Some(true),
+        failed: false,
+    };
+    let resting = [
+        Registered,
+        TurnStarted { turn_id: None },
+        ended,
+        Compacting,
+        close.clone(),
+    ];
+    // A v34 cache folded the resting close as a phantom running turn; v35 refolds it.
+    for cached in [None, Some(AgentStatus::Running)] {
+        let row = fold_signals(&resting, cached);
+        assert_eq!(row.status, AgentStatus::Success, "cached={cached:?}");
+        assert!(row.compacted_awaiting_prompt.is_some(), "cached={cached:?}");
+        // The close is a request: it restarts the cache clock keep-warm reads.
+        assert_eq!(row.last_request_at(), row.compacted_awaiting_prompt);
+    }
+    let row = fold_signals(
+        &[Registered, TurnStarted { turn_id: None }, Compacting, close],
+        None,
+    );
+    assert_eq!(row.status, AgentStatus::Running);
+    assert_eq!(row.compacted_awaiting_prompt, None);
+}
+
+#[test]
+fn deferred_triggerless_close_after_a_mid_turn_compaction_sets_no_marker() {
+    use lifecycle::LifecycleSignal::*;
+    // Codex queues `SessionStart(compact)` to the next turn, so it lands at
+    // rest after the turn that auto-compacted has already ended.
+    let row = fold_signals(
+        &[
+            Registered,
+            TurnStarted { turn_id: None },
+            Compacting,
+            CompactionEnded {
+                auto: Some(true),
+                failed: false,
+            },
+            TurnEnded {
+                errored: false,
+                parked_on_background: false,
+                turn_id: None,
+            },
+            CompactionEnded {
+                auto: None,
+                failed: false,
+            },
+        ],
+        None,
+    );
+    assert_eq!(row.status, AgentStatus::Success);
+    assert_eq!(row.compacted_awaiting_prompt, None);
+}
+
+#[test]
+fn unbracketed_triggerless_close_leaves_marker_and_turn_boundaries() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut prior = agent("claude", "sess-a", AgentStatus::Success, 0);
+    prior.turn_started_at = Some(epoch());
+    prior.user_turn_started_at = Some(epoch());
+    prior.turn_ended_at = Some(epoch());
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![prior.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let completed = lifecycle_at(
+        &workspace,
+        "claude",
+        "SessionStart",
+        "sess-a",
+        lifecycle::LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
+    );
+    event_log::append(&paths.events_log, &completed).unwrap();
+    let (_, agents, _) = catch_up_rollup(&paths).unwrap();
+    assert_eq!(agents[0].compacted_awaiting_prompt, None);
+    assert_eq!(agents[0].status, AgentStatus::Success);
+    assert_eq!(agents[0].turn_ended_at, prior.turn_ended_at);
+    assert_eq!(agents[0].last_request_at(), prior.last_request_at());
 }
 
 #[test]

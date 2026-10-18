@@ -537,22 +537,8 @@ fn activity_evidence_reconciles_only_running_and_resting_states() {
                 "tool used outside a running turn",
                 "tool used before session registered",
             ),
-            (
-                LifecycleSignal::CompactionEnded {
-                    auto: Some(true),
-                    failed: false,
-                },
-                "auto-compaction resumed a turn",
-                "auto-compaction resumed a turn",
-            ),
         ] {
-            let previous = prior.map(|status| {
-                state(
-                    status,
-                    TurnPhase::Idle,
-                    matches!(signal, LifecycleSignal::CompactionEnded { .. }),
-                )
-            });
+            let previous = prior.map(|status| state(status, TurnPhase::Idle, false));
             let transition = step(previous.as_ref(), None, PriorTurnIds::default(), &signal);
             assert_eq!(transition.next.status, expected, "{prior:?} + {signal:?}");
             assert_eq!(
@@ -689,6 +675,12 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
             state(AgentStatus::Success, TurnPhase::Idle, false),
         ),
         (
+            "automatic after success",
+            state(AgentStatus::Success, TurnPhase::Idle, true),
+            Some(true),
+            state(AgentStatus::Success, TurnPhase::Idle, false),
+        ),
+        (
             "manual after failure",
             state(AgentStatus::Failed, TurnPhase::Idle, true),
             Some(false),
@@ -732,18 +724,11 @@ fn compaction_bracket_follows_trigger_and_counts_one_close() {
             auto: Some(true),
             failed: false,
         },
-        reasoning,
+        state(AgentStatus::Idle, TurnPhase::Idle, false),
     );
     assert_eq!(
         (resumed.kind, resumed.compaction_closed, resumed.opened_turn,),
-        (
-            TransitionKind::Reconciled {
-                from: AgentStatus::Idle,
-                reason: "auto-compaction resumed a turn"
-            },
-            true,
-            true,
-        )
+        (TransitionKind::Normal, true, false)
     );
 
     let ignored = assert_next(

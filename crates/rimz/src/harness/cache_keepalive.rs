@@ -140,6 +140,7 @@ fn pingable(agent: &AgentState) -> bool {
     !(agent.is_provider_subagent()
         || agent.agent_id.is_empty()
         || agent.compacting_since.is_some()
+        || agent.compacted_since_prompt()
         || agent.budget_park.is_some()
         || agent.hibernation.is_some()
         || agent.is_awaiting_input())
