@@ -1188,6 +1188,29 @@ fn check_launch_room(globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn anchor_caller_workspace(
+    workspace: rimz::ResolvedWorkspace,
+    caller: Option<&rimz::agents::AgentState>,
+    globals: &GlobalFlags,
+) -> Result<rimz::ResolvedWorkspace> {
+    let Some(path) = caller.and_then(AgentState::lane_path) else {
+        tracing::debug!("caller has no recorded checkout; keeping invoking cwd");
+        return Ok(workspace);
+    };
+    if !Path::new(path).is_dir() {
+        anyhow::bail!(
+            "the calling agent's checkout `{path}` no longer exists; restart that agent from an existing checkout before it launches another"
+        );
+    }
+    let mut anchored =
+        rimz::workspace::WorkspaceResolver::resolve_participant(path, globals.root.clone())
+            .with_context(|| format!("resolving the calling agent's checkout `{path}`"))?;
+    anchored.worktree_root = Path::new(path)
+        .canonicalize()
+        .with_context(|| format!("resolving the calling agent's launch directory `{path}`"))?;
+    Ok(anchored)
+}
+
 fn resolve_launch_cwd(
     path: Option<&std::path::Path>,
     paths: &rimz::StatePaths,

@@ -432,7 +432,7 @@ fn prepare_supervised(
     let agent_launched = caller.is_some();
     let reader = caller.and_then(|caller| caller.name.clone());
     // The room pin keeps the store and effective config on the same project root.
-    let workspace = supervised::anchor_subagent_workspace(workspace, request, caller, globals)?;
+    let workspace = crate::cli::anchor_caller_workspace(workspace, caller, globals)?;
     check_supervised_subagent_allowed(request, caller, &effective.profiles)?;
     crate::cli::admit_launch_worktree_name(
         &workspace,

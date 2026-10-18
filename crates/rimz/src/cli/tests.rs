@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn caller_launch_anchors_at_the_recorded_checkout() {
+    let checkout = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(checkout.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let globals = Cli::parse_from(["rimz", "agents"]).global;
+    let shell = rimz::workspace::WorkspaceResolver::resolve(scratch.path(), None).unwrap();
+    let mut caller =
+        rimz::agents::AgentState::stub("claude", "parent", rimz::agents::AgentStatus::Idle);
+    caller.worktree_path = Some(checkout.path().display().to_string());
+    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), &globals).unwrap();
+    assert_eq!(
+        anchored.worktree_root,
+        checkout.path().canonicalize().unwrap()
+    );
+    assert_eq!(
+        anchored.cwd_project_root,
+        Some(checkout.path().canonicalize().unwrap())
+    );
+    let subdir = checkout.path().join("packages/web");
+    std::fs::create_dir_all(&subdir).unwrap();
+    caller.checkout = Some(subdir.display().to_string());
+    let anchored = anchor_caller_workspace(shell.clone(), Some(&caller), &globals).unwrap();
+    assert_eq!(anchored.worktree_root, subdir.canonicalize().unwrap());
+    let launch = rimz::worktree::resolve_launch_checkout(
+        &anchored,
+        &Default::default(),
+        None,
+        None,
+        None,
+        None,
+        rimz::worktree::LaunchBase::Configured,
+    )
+    .unwrap();
+    assert_eq!(launch.cwd, subdir.canonicalize().unwrap());
+    assert_eq!(
+        anchored.cwd_project_root,
+        Some(checkout.path().canonicalize().unwrap())
+    );
+    caller.checkout = None;
+    caller.worktree_path = None;
+    for caller in [Some(&caller), None] {
+        let anchored = anchor_caller_workspace(shell.clone(), caller, &globals).unwrap();
+        assert_eq!(anchored.worktree_root, shell.worktree_root);
+    }
+    let missing = checkout.path().join("gone");
+    caller.worktree_path = Some(missing.display().to_string());
+    let error = anchor_caller_workspace(shell, Some(&caller), &globals).unwrap_err();
+    assert!(error.to_string().contains(&missing.display().to_string()));
+}
+
+#[test]
 fn pr_branch_terminal_defaults_and_eof() {
     use rimz::worktree::{PrBranchChoice, PrBranchDivergence, WorktreeErr};
     for (divergence, default, choice) in [
