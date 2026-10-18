@@ -49,6 +49,26 @@ fn active_events<'a>(
         .collect()
 }
 
+pub(crate) fn pane_is_focused(
+    pulled: &SidebarSnapshot,
+    events: &EventStore,
+    pane: &crate::ids::PaneId,
+    now_ms: u64,
+) -> bool {
+    active_events(pulled, events, now_ms)
+        .into_iter()
+        .rev()
+        .find_map(|event| match &event.event {
+            SidebarEvent::FocusChanged { focused, .. } if focused.len() == 1 => {
+                Some(focused.contains(pane))
+            }
+            SidebarEvent::FocusChanged { focused, .. } if focused.contains(pane) => Some(true),
+            SidebarEvent::FocusChanged { unfocused, .. } if unfocused.contains(pane) => Some(false),
+            _ => None,
+        })
+        .unwrap_or_else(|| pulled.client_views.iter().any(|view| &view.pane_id == pane))
+}
+
 fn apply_fusion(
     mut fused: SidebarSnapshot,
     active: &[&crate::sidebar::event_store::StoredEvent],

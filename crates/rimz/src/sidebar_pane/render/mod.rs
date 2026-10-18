@@ -45,7 +45,7 @@ pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
 pub(in crate::sidebar_pane) use self::ui_state::cockpit_spend_target;
 pub(in crate::sidebar_pane) use self::ui_state::{Alert, UiState};
 pub(in crate::sidebar_pane) use self::ui_state::{
-    Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, OrderHold,
+    Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, LayoutFreeze,
 };
 pub(in crate::sidebar_pane) use crate::sidebar_pane::view::BodyFilter;
 use odometer::CLICK_PHASES;

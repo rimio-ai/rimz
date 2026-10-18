@@ -202,7 +202,7 @@ fn finished_group_collapses_unread_success_until_revealed() {
     assert_eq!(
         visible_ids_with_held(&group, &BodyLens::default(), false, Some(&held)),
         ["success-unread", "success"],
-        "the order hold reveals the whole roster while the terminal collapse settles"
+        "the layout freeze reveals the whole roster while the terminal collapse settles"
     );
     assert_eq!(visible_ids(&group, &BodyLens::default(), true).len(), 2);
     assert_eq!(
@@ -720,7 +720,7 @@ fn held_member_reveals_the_whole_finished_roster() {
     assert_eq!(
         texts.iter().filter(|line| line.contains('▸')).count(),
         0,
-        "an order hold reveals full cards without a partial receipt: {texts:?}"
+        "an layout freeze reveals full cards without a partial receipt: {texts:?}"
     );
     assert!(
         map.iter().skip(1).all(Option::is_some),

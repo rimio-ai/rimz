@@ -29,13 +29,13 @@ pub(crate) const FOCUS_STRANDED_EVENT_TTL: Duration = Duration::from_secs(2);
 /// strand. The dispatch thread retries only within the strand's original TTL.
 pub(crate) const FOCUS_REPAIR_RETRY_STEP: Duration = Duration::from_millis(100);
 
-/// How long the interactive sidebar keeps its last row/group order after a
-/// jump, tab-switch, browse, or the focused agent's ask being answered before
-/// re-sorting to live rank. Long enough to read the card you landed on, not just
-/// glance at it, so a watched row holds still while you take it in; each
-/// interaction re-arms it, so a rapid triage burst holds one stable list and it
-/// tidies once you settle.
-pub(crate) const REORDER_HOLD: Duration = Duration::from_secs(5);
+/// The whole-layout freeze after a sidebar interaction or landing paint, re-armed
+/// by each. Order, open cards, and visible cap exemptions hold while content
+/// keeps updating; the layout tidies together once the user settles.
+pub(crate) const LAYOUT_FREEZE: Duration = Duration::from_secs(5);
+
+/// The freeze cap while any client's focus is on the sidebar pane.
+pub(crate) const LAYOUT_FREEZE_PARKED: Duration = Duration::from_secs(30);
 
 /// How long a never-seen-sibling sidebar must report zero working siblings
 /// before the renderer exits and lets its pane close. A tab that already had a

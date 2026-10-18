@@ -1,4 +1,4 @@
-//! Renderer-local row/group order hold.
+//! Renderer-local layout freeze.
 //!
 //! Ranking remains producer truth. This module reapplies the last painted order
 //! over a fresh, already-ranked snapshot for a short interaction window and
@@ -10,8 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::sidebar::timing::REORDER_HOLD;
-use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState};
+use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, UiState};
 use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
 
 /// The focused row leaving the attention class or entering `Running` is the
@@ -35,34 +34,35 @@ pub(super) fn focused_interaction(
     answered || prompted
 }
 
-pub(super) fn arm_order_hold(ui: &mut UiState, now_ms: i64) {
-    ui.order_hold = Some(OrderHold {
+pub(super) fn arm_freeze(ui: &mut UiState, now_ms: i64) {
+    ui.freeze = Some(LayoutFreeze {
         frozen: ui.last_order.clone(),
-        expires_ms: now_ms + REORDER_HOLD.as_millis() as i64,
+        armed_ms: now_ms,
     });
 }
 
-pub(super) fn apply_order_hold(
+pub(super) fn apply_freeze(
     ui: &mut UiState,
     current: &mut SidebarSnapshot,
     interacted: bool,
     now_ms: i64,
+    parked: bool,
 ) {
     if interacted {
-        arm_order_hold(ui, now_ms);
+        arm_freeze(ui, now_ms);
     } else if ui
-        .order_hold
+        .freeze
         .as_ref()
-        .is_some_and(|hold| now_ms >= hold.expires_ms)
+        .is_some_and(|hold| now_ms >= hold.deadline_ms(parked))
     {
-        ui.order_hold = None;
+        ui.freeze = None;
     }
-    if let Some(hold) = ui.order_hold.as_mut() {
+    if let Some(hold) = ui.freeze.as_mut() {
         migrate_frozen_order(current, &mut hold.frozen);
         admit_new_items(current, &mut hold.frozen);
         reorder_to_frozen(current, &hold.frozen);
     }
-    if ui.order_hold.is_some() {
+    if ui.freeze.is_some() {
         super::selection::anchor_selection(ui, current);
     }
 }
@@ -99,14 +99,14 @@ pub(super) fn adopt_shared_hold(
     ui: &mut UiState,
     current: &mut SidebarSnapshot,
     mut order: FrozenOrder,
-    stamp_ms: i64,
+    now_ms: i64,
 ) {
     migrate_frozen_order(current, &mut order);
     admit_new_items(current, &mut order);
     reorder_to_frozen(current, &order);
-    ui.order_hold = Some(OrderHold {
+    ui.freeze = Some(LayoutFreeze {
         frozen: order,
-        expires_ms: stamp_ms + REORDER_HOLD.as_millis() as i64,
+        armed_ms: now_ms,
     });
     super::selection::anchor_selection(ui, current);
     ui.last_order = capture_order(current, ui);

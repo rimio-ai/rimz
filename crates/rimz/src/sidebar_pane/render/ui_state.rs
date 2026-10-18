@@ -66,12 +66,12 @@ pub(in crate::sidebar_pane) struct UiState {
     /// when not browsing (see [`Browse`]).
     pub(in crate::sidebar_pane) browse: Option<Browse>,
     /// The row/group order and visible row set actually painted last fold; this
-    /// is the source for an order hold. Empty before the first paint, which
+    /// is the source for a layout freeze. Empty before the first paint, which
     /// makes the first hold a no-op for ordering.
     pub(in crate::sidebar_pane) last_order: FrozenOrder,
-    /// The active renderer-local order/visibility hold, or `None` while rows
+    /// The armed layout freeze, or `None` while rows
     /// rank and cap live.
-    pub(in crate::sidebar_pane) order_hold: Option<OrderHold>,
+    pub(in crate::sidebar_pane) freeze: Option<LayoutFreeze>,
     /// Target first scroll-zone content line of the agent-cards viewport.
     /// Resolved around the previous target window's selected or topmost card,
     /// clamped to the zone, and written back like frame interactions. A changed
@@ -207,7 +207,7 @@ impl UiState {
             snapshot,
             draft_lens.as_ref().unwrap_or(&self.make_up_filter),
             &self.expanded_groups,
-            self.order_hold.as_ref().map(|hold| &hold.frozen.visible),
+            self.freeze.as_ref().map(|hold| &hold.frozen.visible),
         )
     }
 }
@@ -284,13 +284,26 @@ pub(in crate::sidebar_pane) struct Browse {
     pub(in crate::sidebar_pane) baseline_at_start: Option<PaneId>,
 }
 
-/// Renderer-local order hold that keeps rows and groups stable while the user
+/// Renderer-local layout freeze that keeps rows and groups stable while the user
 /// is looking. Read state still clears immediately; position and held cap
 /// exemptions are presentation-only.
 #[derive(Clone, Debug)]
-pub(in crate::sidebar_pane) struct OrderHold {
+pub(in crate::sidebar_pane) struct LayoutFreeze {
     pub(in crate::sidebar_pane) frozen: FrozenOrder,
-    pub(in crate::sidebar_pane) expires_ms: i64,
+    pub(in crate::sidebar_pane) armed_ms: i64,
+}
+
+impl LayoutFreeze {
+    pub(in crate::sidebar_pane) fn deadline_ms(&self, parked: bool) -> i64 {
+        use crate::sidebar::timing::{LAYOUT_FREEZE, LAYOUT_FREEZE_PARKED};
+        self.armed_ms
+            + if parked {
+                LAYOUT_FREEZE_PARKED
+            } else {
+                LAYOUT_FREEZE
+            }
+            .as_millis() as i64
+    }
 }
 
 /// A sticky health alert pinned to the bottom of the sidebar.

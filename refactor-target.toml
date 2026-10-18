@@ -1101,7 +1101,18 @@ path = "crates/rimz/src/sidebar"
 # project_local is public for the fleet publish benchmark, within existing headroom.
 # SidebarOwnView::from_frame also serves the renderer's projection-free preview (+1).
 # The host watch asks the presence state whether a layout belongs to the current window (+1).
-surface-budget = 240
+# pane_is_focused and LAYOUT_FREEZE_PARKED share native-focus freeze deadlines (+2).
+surface-budget = 242
+
+[[verdict]]
+kind = "item"
+key = "sidebar::fuse::pane_is_focused"
+reason = "The renderer's parked deadline uses fusion's event TTL and supersession rules without exposing stored events."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::LAYOUT_FREEZE_PARKED"
+reason = "Renderer-local freeze deadlines share sidebar-owned cadence constants."
 
 [[verdict]]
 kind = "item"
@@ -6299,8 +6310,8 @@ reason = "Field type of UiState::browse, so it follows the field to pane reach r
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::render::ui_state::OrderHold"
-reason = "Field type of UiState::order_hold, so it follows the field to pane reach rather than going private (pass 24c)."
+key = "sidebar_pane::render::ui_state::LayoutFreeze"
+reason = "Field type of UiState::freeze, so it follows the field to pane reach rather than going private (pass 24c)."
 
 [[verdict]]
 kind = "item"

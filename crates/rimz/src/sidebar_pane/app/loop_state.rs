@@ -24,7 +24,7 @@ use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
 use crate::sidebar::timing::{
-    FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, REORDER_HOLD, TAB_READ_DWELL,
+    FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE, TAB_READ_DWELL,
 };
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
@@ -48,11 +48,11 @@ use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
 use super::inbox::WakeupInbox;
 use super::input::{InputMode, KeyAction, Wakeup, resolve_key};
+use super::layout_freeze;
 use super::lifecycle::{
     PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, grow_beyond_legit, resize_grew,
 };
 use super::notify::{BellNotice, emit_terminal_notification};
-use super::order_hold;
 use super::paint::FramePainter;
 use super::remind::RemindState;
 use super::selection::{
@@ -247,6 +247,17 @@ pub(super) fn handle_wakeup(
 }
 
 impl LoopState {
+    fn parked(&self, now_ms: u64) -> bool {
+        self.config.own_pane.as_ref().is_some_and(|pane| {
+            crate::sidebar::fuse::pane_is_focused(
+                self.overlay_baseline.as_ref().unwrap_or(&self.current),
+                &self.events(),
+                pane,
+                now_ms,
+            )
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         config: ServeConfig,
@@ -445,7 +456,7 @@ impl LoopState {
                 .max(FRAME_MIN_TIMEOUT)
         } else {
             // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer. Also wake at order-hold expiry:
+            // when the data tick is much longer. Also wake at layout-freeze expiry:
             // a fold must run to release the frozen row/group order after idle.
             let watchdog_due =
                 SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
@@ -456,9 +467,11 @@ impl LoopState {
                         .saturating_sub(self.last_content_fold.elapsed()),
                 );
             }
-            if let Some(hold) = self.ui.order_hold.as_ref() {
+            if let Some(hold) = self.ui.freeze.as_ref() {
                 let now_ms = jiff::Timestamp::now().as_millisecond();
-                let remaining = Duration::from_millis((hold.expires_ms - now_ms).max(0) as u64);
+                let remaining = Duration::from_millis(
+                    (hold.deadline_ms(self.parked(now_ms as u64)) - now_ms).max(0) as u64,
+                );
                 timeout = timeout.min(remaining);
             }
             timeout.max(FRAME_MIN_TIMEOUT)
@@ -668,7 +681,7 @@ impl LoopState {
             && overlay_baseline.is_none()
             && *gate == GateState::default()
             && health.failure_streak == 0
-            && ui.order_hold.is_none()
+            && ui.freeze.is_none()
             && tab_read_dwell_until.is_none()
             && !self_close.confirming_empty()
             && pending_focus_repair.is_none()
@@ -1320,10 +1333,6 @@ impl LoopState {
             // paint settles any frame the loop owed.
             self.dirty = false;
         }
-        let interacted = applied.redraw || !applied.effects.is_empty();
-        if interacted && !applied.effects.contains(&InputEffect::Reload) {
-            order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
-        }
         for effect in applied.effects {
             match effect {
                 InputEffect::Focus(pane) => {
@@ -1415,6 +1424,11 @@ impl LoopState {
             outcome.redraw |= applied.redraw;
             outcome.effects.extend(applied.effects);
         }
+        if (outcome.redraw || !outcome.effects.is_empty())
+            && !outcome.effects.contains(&InputEffect::Reload)
+        {
+            layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+        }
         if outcome.redraw {
             if !self.watched() {
                 self.dirty = true;
@@ -1437,6 +1451,13 @@ impl LoopState {
                 &mut self.ui,
             )?;
             self.painted_height = terminal.get_frame().area().height;
+            if outcome
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, InputEffect::Focus(_)))
+            {
+                layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+            }
             self.observe_paint(Instant::now());
             let now = Instant::now();
             let interval = render::animation_interval(
@@ -1618,11 +1639,12 @@ impl LoopState {
             };
             fetch.request(request, false);
         }
+        let now_ms = Timestamp::now().as_millisecond();
         if self
             .ui
-            .order_hold
+            .freeze
             .as_ref()
-            .is_some_and(|hold| jiff::Timestamp::now().as_millisecond() >= hold.expires_ms)
+            .is_some_and(|hold| now_ms >= hold.deadline_ms(self.parked(now_ms as u64)))
         {
             fetch.request(FetchRequest::default(), false);
         }
@@ -2010,7 +2032,7 @@ impl LoopState {
         authoritative_filter_fold: bool,
         now_ms: i64,
     ) {
-        // Presentation sort reorders the snapshot's full row set. The order hold
+        // Presentation sort reorders the snapshot's full row set. The layout freeze
         // below can keep this sorted order stable across a read-clear long enough
         // for the user to confirm where they landed.
         self.current.sort_groups_for_presentation();
@@ -2053,16 +2075,17 @@ impl LoopState {
         {
             self.ui.focus_group_reveal = true;
         }
-        let acted = order_hold::focused_interaction(
+        let acted = layout_freeze::focused_interaction(
             prev_good,
             &self.current,
             self.ui.selected_pane.as_ref(),
         );
         let interacted = cleared || self.ui.selected_pane != prev_selected || acted;
-        let held = self.ui.order_hold.is_some();
-        order_hold::apply_order_hold(&mut self.ui, &mut self.current, interacted, now_ms);
-        self.hold_expired_since_paint |= held && self.ui.order_hold.is_none();
-        self.ui.last_order = order_hold::capture_order(&self.current, &self.ui);
+        let held = self.ui.freeze.is_some();
+        let parked = self.parked(now_ms as u64);
+        layout_freeze::apply_freeze(&mut self.ui, &mut self.current, interacted, now_ms, parked);
+        self.hold_expired_since_paint |= held && self.ui.freeze.is_none();
+        self.ui.last_order = layout_freeze::capture_order(&self.current, &self.ui);
     }
 
     fn fold_spend_rolls(&mut self) {
@@ -2289,11 +2312,11 @@ impl LoopState {
                 self.ui.focus_group_reveal = false;
             }
             if let Some(order) = anchor.order {
-                order_hold::adopt_shared_hold(
+                layout_freeze::adopt_shared_hold(
                     &mut self.ui,
                     &mut self.current,
                     order,
-                    presentation_at_ms as i64,
+                    now_ms as i64,
                 );
             }
             self.ui.last_focus_anchor_ms = anchor.issued_at_ms;
@@ -2447,6 +2470,9 @@ impl LoopState {
             let verdict = self.painted_focus_verdict(&anchor, push)?;
             Some((verdict, anchor.placement?, applied_at))
         });
+        if landing.is_some() {
+            layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+        }
         let mut seeded_landing = false;
         if let Some((PushVerdict::Displaced, placement, applied_at)) = landing
             && !self
@@ -2490,7 +2516,7 @@ impl LoopState {
             return;
         };
         let elapsed = now.saturating_duration_since(watch.clicked_at);
-        if elapsed >= REORDER_HOLD && !seeded_landing {
+        if elapsed >= LAYOUT_FREEZE && !seeded_landing {
             return;
         }
         let to_y = self
@@ -2541,7 +2567,7 @@ impl LoopState {
             crate::utils::time::unix_now_ms(),
         );
         self.observer.send_draft(
-            observe::AnomalyDraft::from_own_sig(&sig, kind, Some(duration_millis(REORDER_HOLD))),
+            observe::AnomalyDraft::from_own_sig(&sig, kind, Some(duration_millis(LAYOUT_FREEZE))),
             &self.observe_tx,
             &self.config.instance_id,
         );
