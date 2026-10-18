@@ -439,7 +439,11 @@ fn teardown_rooms(
             &room.session_name,
             &runtime,
         );
-        if report.session_killed {
+        if let Some(err) = report.kill_error {
+            let failure = format!("remove {} session {}: {err}", room.mux, room.session_name);
+            writeln!(stderr, "Rooms: failed to {failure}")?;
+            failures.push(failure);
+        } else {
             writeln!(
                 stderr,
                 "Rooms: removed {} {} ({} cache entries, {} processes)",
@@ -448,10 +452,6 @@ fn teardown_rooms(
                 report.cache_removed.len(),
                 report.processes_swept.len()
             )?;
-        } else {
-            let failure = format!("remove {} session {}", room.mux, room.session_name);
-            writeln!(stderr, "Rooms: failed to {failure}")?;
-            failures.push(failure);
         }
     }
     Ok(())
