@@ -531,6 +531,114 @@ fn agent_restart_keeps_focus_on_another_pane() {
     assert_launch_focus(&["agents", "restart", "@planner"], true, "new-pane");
 }
 
+#[cfg(unix)]
+#[test]
+fn agent_restart_warns_for_its_own_untrusted_repo() {
+    assert_restart_folder_trust(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_restart_accepts_its_own_trusted_repo() {
+    assert_restart_folder_trust(true);
+}
+
+#[cfg(unix)]
+fn assert_restart_folder_trust(agent_trusted: bool) {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    let cwd = env.home_root.join("agent-repo");
+    std::fs::create_dir_all(&cwd).unwrap();
+    crate::common::git::init_repo(&cwd);
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(
+        &env,
+        if agent_trusted {
+            &cwd
+        } else {
+            &env.project_root
+        },
+    );
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let shim = write_env_dump_shim(&env, "claude");
+    let shell = write_fake_login_shell(&env, "restart-shell", &[]);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "saved-session".into(),
+                launch_id: Some("saved-launch".into()),
+                agent_name: "planner".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams::default(),
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(rimz::ids::PaneId::from_parts(
+                    rimz::ids::MuxName::Zellij,
+                    "terminal_3",
+                )),
+                runtime_owner: Some(rimz::store::runtime::current_process_owner(
+                    rimz::pane::RuntimeOwnerKind::Agent,
+                    "saved-session",
+                )),
+                worktree_path: Some(cwd.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    let panes = serde_json::json!([
+        {"id": 3, "is_plugin": false, "tab_id": 1, "title": "claude"}
+    ]);
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_value(panes.clone()).unwrap(),
+    );
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "restart", "@planner"])
+        .env("SHELL", &shell)
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.home_root.join("mux.log"))
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes.to_string())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    if agent_trusted {
+        assert!(!stderr.contains("no trust decision"), "{stderr}");
+    } else {
+        assert!(
+            stderr.contains(&format!(
+                "claude has no trust decision for `{}`",
+                cwd.display()
+            )),
+            "{stderr}"
+        );
+    }
+}
+
 #[test]
 fn agent_launch_refuses_a_login_without_hooks() {
     assert_launch_focus(&["agents", "claude", "--new-pane"], true, "unhooked");

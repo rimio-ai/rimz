@@ -95,15 +95,17 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let provider_login = rimz::agents::session_login(&kind, login.as_ref(), &machine.accounts)?;
     provider_login.health(&catalog.native_ambient(&kind, &rimz::agents::ambient_env()))?;
+    let repo_root = if source.checkout.is_none() {
+        workspace.at_launch_dir(&cwd)?.cwd_project_root
+    } else {
+        None
+    };
     crate::cli::folder_trust::preflight(
         kind.as_str(),
         &cwd,
         adapter.folder_trust(
             &cwd,
-            source
-                .checkout
-                .is_none()
-                .then(|| workspace.launch_repo_root()),
+            repo_root.as_deref(),
             &provider_login.env(&rimz::agents::ambient_env()),
         ),
         None,

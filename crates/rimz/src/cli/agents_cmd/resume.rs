@@ -326,15 +326,16 @@ fn resume_selected(
     login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
     let adapter = rimz::agents::find_definition(kind.as_str())
         .with_context(|| format!("unknown agent kind `{kind}`"))?;
+    let repo_root = match source {
+        ResumeSource::Recorded(agent) if agent.checkout.is_some() => None,
+        _ => workspace.at_launch_dir(&tab.cwd)?.cwd_project_root,
+    };
     crate::cli::folder_trust::preflight(
         kind.as_str(),
         &tab.cwd,
         adapter.folder_trust(
             &tab.cwd,
-            match source {
-                ResumeSource::Recorded(agent) if agent.checkout.is_some() => None,
-                _ => Some(workspace.launch_repo_root()),
-            },
+            repo_root.as_deref(),
             &login.env(&rimz::agents::ambient_env()),
         ),
         None,
@@ -460,6 +461,11 @@ pub(super) fn resume_lane(
             workspace.worktree_root.as_path()
         }
     };
+    let repo_root = if action.agent_kinds_needing_preflight().is_empty() {
+        None
+    } else {
+        workspace.at_launch_dir(cwd)?.cwd_project_root
+    };
     let mut admitted = std::collections::HashSet::new();
     let restored_agents = action.agents_needing_preflight(&projection.agents);
     for kind in action.agent_kinds_needing_preflight() {
@@ -495,7 +501,7 @@ pub(super) fn resume_lane(
         {
             targets.push((
                 cwd,
-                Some(workspace.launch_repo_root()),
+                repo_root.as_deref(),
                 logins.login(kind, &machine_config.accounts)?,
             ));
         }
