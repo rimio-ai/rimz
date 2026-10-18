@@ -171,7 +171,13 @@ pub(crate) enum ProcessErr {
     #[error(transparent)]
     Directory(#[from] crate::agents::LaunchDirRefusal),
     #[error(transparent)]
+    Version(#[from] crate::agents::version::LaunchVersionErr),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+pub(crate) struct AdmittedLaunch<'a> {
+    plan: &'a LaunchPlan,
 }
 
 pub(crate) fn execute(
@@ -181,16 +187,13 @@ pub(crate) fn execute(
     timeout: Duration,
     interrupted: &dyn Fn() -> bool,
 ) -> Result<crate::proc::BoundedOutput, ProcessErr> {
-    execute_hosted(adapter, plan, timeout, interrupted, |_| Ok(()))
+    admit(adapter, plan)?.execute_hosted(timeout, interrupted, |_| Ok(()))
 }
 
-pub(crate) fn execute_hosted(
+pub(crate) fn admit<'a>(
     adapter: &AgentDefinition,
-    plan: &LaunchPlan,
-    timeout: Duration,
-    interrupted: &dyn Fn() -> bool,
-    spawned: impl FnOnce(u32) -> std::io::Result<()>,
-) -> Result<crate::proc::BoundedOutput, ProcessErr> {
+    plan: &'a LaunchPlan,
+) -> Result<AdmittedLaunch<'a>, ProcessErr> {
     let process = plan.process();
     crate::agents::preflight_launch_dir(
         adapter,
@@ -202,27 +205,45 @@ pub(crate) fn execute_hosted(
         &plan.login.env(&ambient_env()),
         crate::agents::LaunchDirMode::Headless,
     )?;
-    // Preflight may launch a helper; the decision must be fresh after it returns.
-    if interrupted() {
-        return Err(ProcessErr::Io(std::io::ErrorKind::Interrupted.into()));
+    if adapter.min_version().is_some()
+        && let Ok(Some(path)) = process.resolve_program_after_shell_rc()
+    {
+        crate::agents::version::check_launch_version_floor(adapter, &path)?;
     }
-    let (program, args) = process
-        .argv
-        .split_first()
-        .ok_or_else(|| std::io::Error::other("empty headless command"))?;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(&plan.cwd)
-        .envs(&process.env)
-        .stdin(Stdio::null());
-    for key in &process.unset {
-        command.env_remove(key);
+    Ok(AdmittedLaunch { plan })
+}
+
+impl AdmittedLaunch<'_> {
+    pub(crate) fn execute_hosted(
+        self,
+        timeout: Duration,
+        interrupted: &dyn Fn() -> bool,
+        spawned: impl FnOnce(u32) -> std::io::Result<()>,
+    ) -> Result<crate::proc::BoundedOutput, ProcessErr> {
+        // Admission may launch helpers; the decision must be fresh after they return.
+        if interrupted() {
+            return Err(ProcessErr::Io(std::io::ErrorKind::Interrupted.into()));
+        }
+        let plan = self.plan;
+        let process = plan.process();
+        let (program, args) = process
+            .argv
+            .split_first()
+            .ok_or_else(|| std::io::Error::other("empty headless command"))?;
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .current_dir(&plan.cwd)
+            .envs(&process.env)
+            .stdin(Stdio::null());
+        for key in &process.unset {
+            command.env_remove(key);
+        }
+        Ok(crate::proc::run_bounded_output_hosted(
+            &mut command,
+            timeout,
+            interrupted,
+            spawned,
+        )?)
     }
-    Ok(crate::proc::run_bounded_output_hosted(
-        &mut command,
-        timeout,
-        interrupted,
-        spawned,
-    )?)
 }

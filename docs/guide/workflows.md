@@ -192,7 +192,7 @@ change that is not already on the branch. Otherwise answer "approve".
 
 A judge runs headless in the checkout. Its permission mode is automatic unless its profile sets one, so it does not stop on prompts. RimZ adds instructions to its prompt: where `context.json` is, and that the answer must be one JSON object of the same shape a script prints, written to `output_path`. A judge must leave the checkout alone. Under [sandbox isolation](./security.md#sandbox-isolation), RimZ mounts the checkout and its Git directories read-only for the judge. Under host isolation, which is the default, only the prompt tells it so. `rimz workflow validate` refuses a judge whose agent has no headless mode.
 
-A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run.
+A judge that fails (its process fails, or it writes no answer or a bad one) runs once more, with `retry` in `context.json` saying what went wrong. A second failure parks the run. An [unsupported agent version](../reference/agent-support.md) refuses before the judge runs and follows the same retry and park policy; `workflow show` includes the upgrade instruction.
 
 `window` holds a judge or a step until the provider's usage window has room. `5h.left` and `7d.left` are the percent left in the 5-hour and 7-day windows, compared with a whole percent, as in [loop conditions](./loops.md#wait-for-room-in-a-usage-window). While it holds, `rimz workflow list` shows a line such as `waiting: review, window 5h.left=12<40, since 15:02, ×40`.
 

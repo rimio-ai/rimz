@@ -98,15 +98,12 @@ fn run(
         for warning in warnings {
             tracing::warn!(%warning, "workflow judge launch warning");
         }
+        let admitted =
+            crate::harness::headless::admit(adapter, &plan).map_err(|e| e.to_string())?;
         let output = with_child(state, paths, spec, record, |interrupted, spawned| {
-            crate::harness::headless::execute_hosted(
-                adapter,
-                &plan,
-                Duration::from_secs(u32::MAX.into()),
-                interrupted,
-                spawned,
-            )
-            .map_err(|e| e.to_string())
+            admitted
+                .execute_hosted(Duration::from_secs(u32::MAX.into()), interrupted, spawned)
+                .map_err(|e| e.to_string())
         })?;
         let prices = crate::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
         let response = form.read_result(

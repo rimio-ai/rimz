@@ -27,6 +27,55 @@ pub(super) fn capacity(env: &Env, used: u8) -> jiff::Timestamp {
 use std::collections::BTreeMap;
 
 #[test]
+fn judge_refuses_below_version_floor_before_provider_spawn() {
+    let (env, _) = fixture(
+        &format!("{HEADER}[checks.pr]\nagent='codex'\nprompt-file='prompt.md'\non.done='@done'\n"),
+        "",
+    );
+    env.write_config(&env.project_root, "[agents]\nisolation = 'host'\n");
+    env.install_agent_hooks("codex");
+    crate::common::trust_codex_preflight_hooks(&env);
+    crate::common::trust_codex_project(&env, &env.project_root);
+    let shell = write_fake_login_shell(&env, "judge-shell", &[]);
+    let bin = env.home_root.join("judge-bin");
+    write_path_shim(
+        &bin,
+        "codex",
+        r#"
+printf '%s\n' "$*" >> "$HOME/judge-calls"
+if [ "$1" = '--version' ]; then printf '%s\n' 'codex-cli 0.162.0'; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '-o' ]; then shift; printf '%s' '{"outcome":"done"}' > "$1"; fi
+    shift
+done
+"#,
+    );
+    let receipt = success(
+        env.rimz()
+            .args(["workflow", "run", "review"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&bin))
+            .output()
+            .unwrap(),
+    );
+    let id = receipt.lines().next().unwrap();
+    let value = until(&env, id, |value| !events(value, "evaluation").is_empty());
+    let evaluation = &events(&value, "evaluation")[0];
+    assert_eq!(evaluation["object"]["outcome"], "died");
+    let reason = evaluation["object"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("0.162.0") && reason.contains("0.163.0"),
+        "{reason}"
+    );
+    assert!(reason.ends_with("upgrade Codex"), "{reason}");
+    let value = settled(&env, id, "parked");
+    assert_eq!(value["record"]["park"]["reason"], "check");
+    let calls = fs::read_to_string(env.home_root.join("judge-calls")).unwrap();
+    assert!(!calls.is_empty());
+    assert!(calls.lines().all(|call| call == "--version"), "{calls}");
+}
+
+#[test]
 fn judge_process_objects_retry_limit_and_dead_host_policy() {
     for mode in ["object", "file", "missing", "limited", "dead-host"] {
         let (env, _) = fixture(

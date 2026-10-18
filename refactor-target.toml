@@ -794,7 +794,7 @@ path = "crates/rimz/src/harness"
 # workflow::{WorkflowErr, create, advance, cancel, resume, wake} expose run control to the CLI (+6).
 # run::rekey_team_run, the trunk's molt re-export, takes the slack the workflow budget assumed (+1).
 # Shared spend ladder, fresh-offer facts, and redemption selection (+13).
-# headless shares HeadlessProfile, its resolve/prepare stages, typed errors and execution edges (+8).
+# headless shares HeadlessProfile, its resolve/prepare stages, typed errors, admit and AdmittedLaunch::execute_hosted (+10).
 # Workflow AttemptHost, StepLaunch, Occupancy, Observed, LaunchFailure and wake_run cross the CLI seam (+6).
 # Agent identity/head/compose/prepare_end/launch/finish and judge evaluate share private orchestration;
 # Transition finish_judge/stage_agent_end/settle_agent/step_wait replace the old step/stub helpers (+5 net).
@@ -804,7 +804,7 @@ path = "crates/rimz/src/harness"
 # hibernate::Check::{summary,fix} carry producer-owned remedies to doctor without changing JSON (+2).
 # launch_plan::agent_temp_owner shares temp-unit ownership with GC (+1).
 # tmp_floor::{TmpFloorErr, FloorReport, TempUnits, run, inspect} serve GC and doctor (+5).
-surface-budget = 906
+surface-budget = 908
 
 [[verdict]]
 kind = "item"
@@ -7173,7 +7173,7 @@ reason = "Loop and workflow judges share launch-plan compilation and materializa
 [[verdict]]
 kind = "item"
 key = "harness::headless::ProcessErr"
-reason = "Bounded headless execution preserves folder refusal versus I/O failure."
+reason = "Bounded headless execution preserves directory and version refusals versus I/O failure."
 
 [[verdict]]
 kind = "item"
@@ -7182,7 +7182,17 @@ reason = "The loop runner retains its injectable process-runner signature."
 
 [[verdict]]
 kind = "item"
-key = "harness::headless::execute_hosted"
+key = "harness::headless::admit"
+reason = "Loop and workflow judges share directory and version checks outside the workflow workspace lock."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::AdmittedLaunch"
+reason = "Only an admitted headless launch can spawn a provider."
+
+[[verdict]]
+kind = "item"
+key = "harness::headless::AdmittedLaunch::execute_hosted"
 reason = "Workflow judges can publish their process-group leader before bounded pumping starts."
 
 [[verdict]]
