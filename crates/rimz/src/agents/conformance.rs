@@ -23,6 +23,18 @@ use crate::agents::AskKind;
 use crate::transcript::{AskOption, AskQuestion};
 
 #[test]
+fn routine_rimz_prefixes_match_documented_list() {
+    let text = include_str!("../../../../docs/reference/agent-support.md");
+    let published: Vec<_> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("- `rimz message`"))
+        .take_while(|line| line.starts_with("- "))
+        .flat_map(|line| line.split('`').skip(1).step_by(2))
+        .collect();
+    assert_eq!(published, super::ROUTINE_RIMZ_PREFIXES);
+}
+
+#[test]
 fn unsupported_account_spend_exposes_no_spending_sources() {
     let env = std::collections::BTreeMap::from([("HOME".into(), "/fixture/home".into())]);
     for adapter in BUILTINS {

@@ -562,30 +562,7 @@ fn merge_settings(
     Ok(None)
 }
 
-const ROUTINE_RIMZ_PREFIXES: &[&str] = &[
-    "rimz message",
-    "rimz agents",
-    "rimz subagents",
-    "rimz teams",
-    "rimz asks",
-    "rimz answer",
-    "rimz wait --in",
-    "rimz pane list",
-    "rimz pane capture",
-    "rimz loop show",
-    "rimz loop logs",
-    "rimz lsp def",
-    "rimz lsp refs",
-    "rimz lsp hover",
-    "rimz lsp impl",
-    "rimz lsp callers",
-    "rimz lsp callees",
-    "rimz lsp symbols",
-    "rimz lsp find",
-    "rimz lsp check",
-    "rimz lsp list",
-    "rimz lsp status",
-];
+use crate::agents::ROUTINE_RIMZ_PREFIXES;
 
 fn union_settings_array(
     object: &mut serde_json::Map<String, serde_json::Value>,
