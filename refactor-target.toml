@@ -618,7 +618,8 @@ path = "crates/rimz/src/forge"
 # Open PR facts and settled-at mergeability cross the parser/projection seam.
 # The merge-queue fact crosses the same seam to the poll cadence and its readers (+1).
 # `PrLink::queue` is the one open-only reading of that fact for cadence, conditions, and the snapshot (+1).
-surface-budget = 48
+# BranchRow shares demanded branch readings between sidebar publication and conditions (+1).
+surface-budget = 49
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -6149,6 +6150,16 @@ reason = "The CLI binary and sidebar producer share forge signal admission and s
 kind = "item"
 key = "forge::pr_state::PrLink"
 reason = "Restored after private_interfaces: type PrLink is more private than RefreshedLanes::pr_states in the held sidebar/refresh/mod.rs:90 (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "forge::pr_state::BranchRow"
+reason = "Sidebar publication and condition evaluation share repository/branch cache rows independently of checkout signals."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::probe_demand"
+reason = "Read-only condition demand supplies checkout paths and selected branches to both sidebar forge producers."
 
 [[verdict]]
 kind = "item"

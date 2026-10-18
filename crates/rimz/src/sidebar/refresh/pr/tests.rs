@@ -610,6 +610,7 @@ fn github_projection_carries_only_owned_same_pr_settled_mergeability() {
     let project = |prior_link: PrLink, state, mergeability| {
         let plan = plan_github_queries(&group).remove(0);
         let response = forge::GhBulkResponse {
+            refs: BTreeMap::new(),
             open: None,
             prs: vec![Some(forge::GhBulkPr {
                 open: Some(OpenPrFacts {
@@ -707,6 +708,7 @@ fn github_projection_refreshes_pr_and_branch_verdicts_from_one_response() {
     assert_eq!(plans.len(), 1);
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
+        refs: BTreeMap::new(),
         open: None,
         prs: vec![
             Some(forge::GhBulkPr {
@@ -816,6 +818,7 @@ fn github_projection_rejects_terminal_prs_from_an_old_incarnation() {
     let mut plans = plan_github_queries(&group);
     let plan = plans.remove(0);
     let response = forge::GhBulkResponse {
+        refs: BTreeMap::new(),
         open: None,
         prs: vec![
             Some(forge::GhBulkPr {
@@ -965,7 +968,12 @@ fn target_assembly_reuses_origins_but_reads_head_fresh() {
     let mut counts = Vec::new();
     let mut assemble = || {
         let before = crate::proc::testkit::spawn_count();
-        let targets = build_targets(&paths, &DiffStatsCache::default(), &mut state);
+        let targets = build_targets(
+            &BTreeMap::new(),
+            &paths,
+            &DiffStatsCache::default(),
+            &mut state,
+        );
         counts.push(crate::proc::testkit::spawn_count() - before);
         targets
     };
@@ -991,6 +999,24 @@ fn target_assembly_reuses_origins_but_reads_head_fresh() {
         [1, 0, 1, 0, 0],
         "cold, warm, config change, branch change, detached HEAD"
     );
+    let demand = BTreeMap::from_iter(
+        paths[1..3]
+            .iter()
+            .map(|path| (path.clone(), BTreeSet::from(["feature/shared".to_owned()]))),
+    );
+    let targets = build_targets(&demand, &paths, &DiffStatsCache::default(), &mut state);
+    let branches = targets
+        .iter()
+        .filter(|target| target.branch_only)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        branches.len(),
+        1,
+        "one branch target per repository, without a local checkout"
+    );
+    assert_eq!(branches[0].branch, "feature/shared");
+    assert!(!branches[0].trunk);
+    assert!(branches[0].head_sha.is_none() && branches[0].marker_created_at.is_none());
 }
 
 #[test]
@@ -1024,18 +1050,48 @@ fn target_assembly_retries_failed_origin_reads() {
     std::fs::write(&included, "[invalid\n").unwrap();
     let paths = vec![repo.path().display().to_string()];
     let mut state = super::super::ProducerRefreshState::default();
-    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
+    assert!(
+        build_targets(
+            &BTreeMap::new(),
+            &paths,
+            &DiffStatsCache::default(),
+            &mut state
+        )
+        .is_empty()
+    );
     // Repair the transient failure without changing the memo's config identity.
     std::fs::write(&included, "").unwrap();
     assert_eq!(
-        build_targets(&paths, &DiffStatsCache::default(), &mut state).len(),
+        build_targets(
+            &BTreeMap::new(),
+            &paths,
+            &DiffStatsCache::default(),
+            &mut state
+        )
+        .len(),
         1,
         "failed origin reads must be retried without a config stamp change"
     );
     git(&["remote", "remove", "origin"]);
     let before = crate::proc::testkit::spawn_count();
-    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
-    assert!(build_targets(&paths, &DiffStatsCache::default(), &mut state).is_empty());
+    assert!(
+        build_targets(
+            &BTreeMap::new(),
+            &paths,
+            &DiffStatsCache::default(),
+            &mut state
+        )
+        .is_empty()
+    );
+    assert!(
+        build_targets(
+            &BTreeMap::new(),
+            &paths,
+            &DiffStatsCache::default(),
+            &mut state
+        )
+        .is_empty()
+    );
     assert_eq!(
         crate::proc::testkit::spawn_count() - before,
         1,
@@ -1073,6 +1129,7 @@ fn target_assembly_falls_back_for_symbolic_branch_refs() {
     git(&["symbolic-ref", "HEAD", "refs/heads/alias"]);
     let paths = vec![repo.path().display().to_string()];
     let targets = build_targets(
+        &BTreeMap::new(),
         &paths,
         &DiffStatsCache::default(),
         &mut super::super::ProducerRefreshState::default(),
@@ -1088,8 +1145,9 @@ fn target_assembly_falls_back_for_symbolic_branch_refs() {
 #[test]
 fn build_targets_marks_main_and_the_resolved_trunk() {
     let mut state = super::super::ProducerRefreshState::default();
-    let mut build_targets =
-        |needed: &[String], diff: &DiffStatsCache| super::build_targets(needed, diff, &mut state);
+    let mut build_targets = |needed: &[String], diff: &DiffStatsCache| {
+        super::build_targets(&BTreeMap::new(), needed, diff, &mut state)
+    };
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
         Command::new("git")
@@ -1230,12 +1288,29 @@ fn legacy_cache_defaults_and_leaves_repos_due() {
 #[test]
 fn branch_ci_cache_round_trips_and_defaults_for_old_files() {
     let cache = PrStateCache {
+        branches: BTreeMap::from([(
+            "repo".to_owned(),
+            BTreeMap::from([(
+                "feature".to_owned(),
+                BranchRow {
+                    pr: None,
+                    ci: Some(WorktreeCi::Passing),
+                },
+            )]),
+        )]),
         branch_ci: BTreeMap::from([("/repo/main".to_owned(), WorktreeCi::Passing)]),
         ..PrStateCache::default()
     };
     let encoded = serde_json::to_vec(&cache).unwrap();
     let decoded: PrStateCache = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded.branch_ci, cache.branch_ci);
+    assert_eq!(decoded.branches, cache.branches);
+
+    let prior: PrStateCache = serde_json::from_str(r#"{"branch_ci":{},"head_seen":{"/scope":"sha"},"path_repos":{"/scope":"repo"},"repos":{"repo":{"refreshed_at_ms":1000}}}"#).unwrap();
+    assert!(prior.branches.is_empty());
+    assert_eq!(prior.path_repos["/scope"], "repo");
+    assert_eq!(prior.head_seen["/scope"], "sha");
+    assert!(prior.repos.contains_key("repo"));
 
     let old: PrStateCache = serde_json::from_str(r#"{"states":{},"repos":{}}"#).unwrap();
     assert!(old.branch_ci.is_empty());
@@ -1268,6 +1343,7 @@ fn old_unsupported_cache_reclassifies_trunk_without_waiting_for_ttl() {
     assert!(!cache.repos.contains_key(UNSUPPORTED_REPO_KEY));
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1400,6 +1476,7 @@ fn queued_pr_keeps_repo_on_hot_ttl_and_a_dequeued_one_does_not() {
         cache.states.insert(needed[0].clone(), link);
         assert_eq!(
             cached_due_repo_keys(
+                &BTreeMap::new(),
                 &cache,
                 &needed,
                 &DiffStatsCache::default(),
@@ -1455,6 +1532,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
         );
         assert!(
             cached_due_repo_keys(
+                &BTreeMap::new(),
                 &cache,
                 &needed,
                 &DiffStatsCache::default(),
@@ -1477,6 +1555,7 @@ fn pending_ci_keeps_repo_on_hot_ttl() {
         .insert(needed[0].clone(), WorktreeCi::Pending);
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &DiffStatsCache::default(),
@@ -1522,6 +1601,7 @@ fn cached_due_uses_head_nudge_without_git_metadata() {
 
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1537,6 +1617,7 @@ fn cached_due_uses_head_nudge_without_git_metadata() {
 
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1564,6 +1645,7 @@ fn uncached_path_requires_target_assembly() {
 
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1729,6 +1811,7 @@ fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
 
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1741,6 +1824,7 @@ fn unsupported_cached_path_does_not_reassemble_on_head_nudge() {
     );
     assert!(
         cached_due_repo_keys(
+            &BTreeMap::new(),
             &cache,
             &needed,
             &diff,
@@ -1793,6 +1877,7 @@ fn repo_bookkeeping_prunes_stale_repo_stamps() {
 
 fn target(path: &str, branch: &str) -> Target {
     Target {
+        branch_only: false,
         path: path.to_owned(),
         branch: branch.to_owned(),
         trunk: false,
@@ -1833,4 +1918,386 @@ fn tea_targets_stamp_gitea_pull_urls() {
         Some("https://gitea.example.test/org/repo/pulls/91")
     );
     assert_eq!(link.branch.as_deref(), Some("feature"));
+}
+
+#[test]
+fn branch_results_are_separate_and_failed_rows_carry_forward() {
+    let checkout = target("/repo/local", "local");
+    let mut branch = target("\0feat/x", "feat/x");
+    branch.branch_only = true;
+    branch.head_sha = None;
+    let group = repo_group(vec![checkout.clone(), branch.clone()]);
+    let raw = serde_json::json!({"data": {"repository": {
+        "pr0": {"nodes": []}, "facts0": {"nodes": []},
+        "pr1": {"nodes": [{"number": 42, "state": "MERGED"}]}, "facts1": {"nodes": []},
+        "ref1": {"target": {"oid": "head", "statusCheckRollup": {"state": "PENDING"}}},
+        "sha0": {"oid": "sha", "statusCheckRollup": {"state": "SUCCESS"}}
+    }}});
+    let plan = GhQueryPlan {
+        include_open: false,
+        query: String::new(),
+        pr_targets: vec![0, 1],
+        oids: vec!["sha".into()],
+    };
+    let response = forge::parse_github_bulk_response(false, &raw.to_string(), 2, 1).unwrap();
+    let (states, branch_ci) = project_github_group(&group, &[(plan, response)], &BTreeMap::new());
+    let mut cache = PrStateCache::default();
+    apply_repo_probe(
+        &mut cache,
+        &PrStateCache::default(),
+        RepoGroupProbe {
+            open: None,
+            repo_key: branch.repo_key.clone(),
+            targets: group.targets.clone(),
+            states,
+            branch_ci,
+            ok: true,
+        },
+        1000,
+    );
+    assert!(
+        cache.branches.contains_key(&branch.repo_key),
+        "branch results must enter their repository map"
+    );
+    assert_eq!(
+        cache.branches[&branch.repo_key]["feat/x"]
+            .pr
+            .as_ref()
+            .unwrap()
+            .state,
+        WorktreePrState::Merged
+    );
+    assert_eq!(
+        cache.branches[&branch.repo_key]["feat/x"].ci,
+        Some(WorktreeCi::Pending)
+    );
+    assert_eq!(cache.branch_ci[&checkout.path], WorktreeCi::Passing);
+    for paths in [&cache.head_seen, &cache.path_repos] {
+        assert_eq!(paths.keys().collect::<Vec<_>>(), vec![&checkout.path]);
+    }
+    assert!(!cache.states.contains_key(&branch.path));
+    assert!(!cache.target_seen.contains_key(&branch.path));
+    let prior = cache.clone();
+    apply_repo_probe(
+        &mut cache,
+        &prior,
+        RepoGroupProbe {
+            open: None,
+            repo_key: branch.repo_key.clone(),
+            targets: vec![branch.clone()],
+            states: BTreeMap::new(),
+            branch_ci: BTreeMap::new(),
+            ok: false,
+        },
+        2000,
+    );
+    assert_eq!(cache.branches, prior.branches);
+    reconcile_branch_rows(&mut cache, &group_targets(vec![checkout]));
+    assert!(cache.branches.is_empty());
+}
+
+#[test]
+fn demanded_branches_are_uncached_then_hot_and_pruned_on_the_fast_path() {
+    let checkout = target("/repo/local", "local");
+    let repo = checkout.repo_key.clone();
+    let demand = BTreeMap::from([(
+        checkout.path.clone(),
+        BTreeSet::from(["feature".to_owned()]),
+    )]);
+    let mut cache = PrStateCache {
+        path_repos: BTreeMap::from([(checkout.path.clone(), repo.clone())]),
+        head_seen: BTreeMap::from([(checkout.path.clone(), "sha".to_owned())]),
+        repos: BTreeMap::from([(
+            repo.clone(),
+            RepoProbe {
+                refreshed_at_ms: 1000,
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let due = |cache: &PrStateCache, demand: &BTreeMap<String, BTreeSet<String>>, now| {
+        cached_due_repo_keys(
+            demand,
+            cache,
+            std::slice::from_ref(&checkout.path),
+            &DiffStatsCache::default(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            now,
+        )
+    };
+    assert_eq!(
+        due(&cache, &demand, 1001),
+        Some(BTreeSet::from([repo.clone()]))
+    );
+    cache.branches.entry(repo.clone()).or_default().insert(
+        "feature".to_owned(),
+        BranchRow {
+            pr: None,
+            ci: Some(WorktreeCi::Pending),
+        },
+    );
+    assert_eq!(due(&cache, &demand, 1001), Some(BTreeSet::new()));
+    assert_eq!(
+        due(&cache, &demand, 1001 + PR_STATE_HOT_TTL.as_millis() as u64),
+        Some(BTreeSet::from([repo.clone()]))
+    );
+    cache
+        .branches
+        .get_mut(&repo)
+        .unwrap()
+        .get_mut("feature")
+        .unwrap()
+        .ci = Some(WorktreeCi::Passing);
+    assert_eq!(
+        due(&cache, &demand, 1001 + PR_STATE_HOT_TTL.as_millis() as u64),
+        Some(BTreeSet::new())
+    );
+    assert!(
+        due(&cache, &BTreeMap::new(), 1001).is_none(),
+        "pruning must bypass the fresh fast path"
+    );
+}
+
+#[test]
+fn failed_first_branch_probe_obeys_retry_backoff_on_both_due_paths() {
+    let checkout = target("/repo/local", "local");
+    let mut branch = target("\0feature", "feature");
+    branch.branch_only = true;
+    branch.head_sha = None;
+    let repo = checkout.repo_key.clone();
+    let group = repo_group(vec![checkout.clone(), branch]);
+    let mut cache = PrStateCache::default();
+    apply_repo_probe(
+        &mut cache,
+        &PrStateCache::default(),
+        failed_repo_group_probe(&repo, &group, &BTreeMap::new(), &BTreeMap::new()),
+        1000,
+    );
+    let groups = BTreeMap::from([(repo.clone(), group)]);
+    let demand = BTreeMap::from([(
+        checkout.path.clone(),
+        BTreeSet::from(["feature".to_owned()]),
+    )]);
+    for (elapsed, expected) in [
+        (PR_STATE_RETRY_TTL.as_millis() as u64, BTreeSet::new()),
+        (
+            PR_STATE_RETRY_TTL.as_millis() as u64 + 1,
+            BTreeSet::from([repo.clone()]),
+        ),
+    ] {
+        let due = due_repo_keys(
+            &groups,
+            &cache,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1000 + elapsed,
+        );
+        let cached_due = cached_due_repo_keys(
+            &demand,
+            &cache,
+            std::slice::from_ref(&checkout.path),
+            &DiffStatsCache::default(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            1000 + elapsed,
+        );
+        assert_eq!((due, cached_due), (expected.clone(), Some(expected)));
+    }
+    assert_eq!(cache.branches[&repo]["feature"], BranchRow::default());
+}
+
+#[test]
+fn branch_query_plans_stay_within_the_alias_budget() {
+    let targets = (0..70)
+        .map(|index| {
+            let mut branch = target(&format!("\0{index}"), &format!("feature/{index}"));
+            branch.branch_only = true;
+            branch.head_sha = None;
+            branch
+        })
+        .collect();
+    let plans = plan_github_queries(&repo_group(targets));
+    assert_eq!(plans.len(), 3);
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.query.matches(": ref(").count())
+            .sum::<usize>(),
+        70
+    );
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan.query.matches("pullRequests(").count()
+                + plan.query.matches(": ref(").count()
+                <= GH_BULK_MAX_ALIASES)
+    );
+}
+
+#[test]
+fn tea_branch_targets_resolve_all_states_from_first_sight() {
+    let mut branch = tea_target("\0feature", "feature");
+    branch.branch_only = true;
+    branch.head_sha = None;
+    let assigned = assign_states(&[branch.clone()], &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(
+        assigned.transitions.len(),
+        1,
+        "an unseen branch must reach the all-state lookup"
+    );
+    let result = probe_tea_list_with(
+        &branch,
+        r#"[{"index":"42","state":"closed","head":"feature"}]"#,
+        |target, repo, number| {
+            assert_eq!(
+                (target.branch.as_str(), repo, number),
+                ("feature", "org/repo", 42)
+            );
+            Some(ProbeState {
+                state: Some(target.pr_link(
+                    WorktreePrState::Merged,
+                    number,
+                    Some(WorktreeCi::Passing),
+                    Some("merge".into()),
+                )),
+                ok: true,
+            })
+        },
+    );
+    assert!(result.ok);
+    assert_eq!(result.state.unwrap().state, WorktreePrState::Merged);
+}
+
+#[test]
+fn tea_branch_group_lists_all_states_once_and_reads_terminal_details() {
+    let targets = ["a", "b"]
+        .into_iter()
+        .map(|name| {
+            let mut target = tea_target(&format!("\0{name}"), name);
+            target.branch_only = true;
+            target.head_sha = None;
+            target
+        })
+        .collect::<Vec<_>>();
+    let groups = group_targets(targets);
+    let (repo, group) = groups.first_key_value().unwrap();
+    let mut calls = Vec::new();
+    let result = probe_tea_repo_group_with(
+        repo,
+        group,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        |_, program, args| {
+            assert_eq!(program, "tea");
+            calls.push(args.join(" "));
+            if args.starts_with(&["pr", "list", "--state", "open"]) {
+                return Some("[]".to_owned());
+            }
+            if args.starts_with(&["pr", "list", "--state", "all"]) {
+                return Some(r#"[{"index":"42","state":"closed","head":"a"}]"#.to_owned());
+            }
+            if args == ["api", "repos/org/repo/pulls/42"] {
+                return Some(r#"{"state":"closed","merged":true,"merge_commit_sha":"merge","head":{"sha":"head"}}"#.to_owned());
+            }
+            assert!(args[1].ends_with("/status"), "{args:?}");
+            Some(r#"{"state":"success"}"#.to_owned())
+        },
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.starts_with("pr list --state all"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| *call == "api repos/org/repo/pulls/42")
+            .count(),
+        1
+    );
+    assert!(result.ok);
+    assert_eq!(result.states["\0a"].state, WorktreePrState::Merged);
+    assert_eq!(result.states["\0a"].ci, Some(WorktreeCi::Passing));
+    assert_eq!(result.branch_ci["\0a"], WorktreeCi::Passing);
+    assert_eq!(result.branch_ci["\0b"], WorktreeCi::Passing);
+}
+
+#[test]
+fn tea_branch_status_errors_leave_unknown_ci_without_failing_checkouts() {
+    let mut outcomes = Vec::new();
+    for state in ["open", "merged", "closed", "absent"] {
+        let checkout = tea_target("/repo/local", "local");
+        let mut branch = tea_target("\0feature", "feature");
+        branch.branch_only = true;
+        branch.head_sha = None;
+        let groups = group_targets(vec![checkout.clone(), branch.clone()]);
+        let (repo, group) = groups.first_key_value().unwrap();
+        let mut status_calls = Vec::new();
+        let result = probe_tea_repo_group_with(
+            repo,
+            group,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            |_, program, args| {
+                assert_eq!(program, "tea");
+                if args.starts_with(&["pr", "list", "--state", "open"]) {
+                    let mut rows =
+                        vec![serde_json::json!({"index": "1", "state": "open", "head": "local"})];
+                    if state == "open" {
+                        rows.push(
+                            serde_json::json!({"index": "2", "state": "open", "head": "feature"}),
+                        );
+                    }
+                    return Some(serde_json::to_string(&rows).unwrap());
+                }
+                if args.starts_with(&["pr", "list", "--state", "all"]) {
+                    return Some(if state == "absent" {
+                        "[]".to_owned()
+                    } else {
+                        serde_json::json!([{"index": "2", "state": state, "head": "feature"}])
+                            .to_string()
+                    });
+                }
+                if args == ["api", "repos/org/repo/pulls/2"] {
+                    return Some(
+                        serde_json::json!({
+                            "state": "closed", "merged": state == "merged",
+                            "merge_commit_sha": "merge", "head": {"sha": "head"}
+                        })
+                        .to_string(),
+                    );
+                }
+                assert!(args[1].ends_with("/status"), "{args:?}");
+                status_calls.push(args[1].to_owned());
+                (args[1] == "repos/org/repo/commits/local/status")
+                    .then(|| r#"{"state":"success"}"#.to_owned())
+            },
+        );
+        assert_eq!(result.states[&checkout.path].ci, Some(WorktreeCi::Passing));
+        let expected_statuses = if state == "merged" { 4 } else { 2 };
+        assert_eq!(
+            status_calls.len(),
+            expected_statuses,
+            "{state}: {status_calls:?}"
+        );
+        outcomes.push((
+            state,
+            result.ok,
+            result.states.get(&branch.path).and_then(|link| link.ci),
+            result.branch_ci.get(&branch.path).copied(),
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        vec![
+            ("open", true, None, None),
+            ("merged", true, None, None),
+            ("closed", true, None, None),
+            ("absent", true, None, None),
+        ]
+    );
 }

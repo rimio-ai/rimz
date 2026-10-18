@@ -10593,3 +10593,52 @@ fn loop_add_spawn_still_requires_prompt() {
         "{error}"
     );
 }
+
+#[test]
+fn branch_conditions_show_distinct_live_readings() {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "branches",
+    );
+    std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+    std::fs::write(
+        runtime.lane_path("pr-state.json"),
+        json!({
+            "branch_ci": {},
+            "path_repos": {env.project_root.to_string_lossy().to_string(): "repo"},
+            "branches": {"repo": {"a": {"pr": {"state": "merged"}}, "b": {"pr": {"state": "open"}}}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let receipt = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "branches",
+            "--check",
+            "true",
+            "--when",
+            "pr[a]=merged && pr[b]=merged",
+        ],
+    );
+    assert!(receipt.contains("pr[a]: merged, pr[b]: open"), "{receipt}");
+    let show = loop_ok(&env, &["loop", "show", "branches"]);
+    for (term, glyph, reading) in [
+        ("pr[a]=merged", '✓', "merged"),
+        ("pr[b]=merged", '✗', "open"),
+    ] {
+        let line = show
+            .lines()
+            .find(|line| line.trim_start().starts_with(term))
+            .unwrap_or_else(|| panic!("{show}"));
+        assert!(line.contains(glyph) && line.ends_with(reading), "{line}");
+    }
+}

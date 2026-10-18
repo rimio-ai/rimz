@@ -49,7 +49,9 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
             "pr".to_owned(),
             TaskEntry {
                 dir: Some(root.path().to_owned()),
-                when: Some(vec!["pr=merged".to_owned()]),
+                when: Some(vec![
+                    "pr[feat/x]=merged && pr.queue[feat/x]=queued && ci[other]!=unknown".to_owned(),
+                ]),
                 ..entry.clone()
             },
         ),
@@ -116,7 +118,13 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
     )
     .unwrap();
     let snapshot = SidebarSnapshot::build(runtime.workspace_id.clone(), vec![], Timestamp::now());
-    let needed = needed_worktree_paths(&snapshot, when::probe_scopes(&runtime, Some(root.path())));
+    let demand = when::probe_demand(&runtime, Some(root.path()));
+    assert_eq!(
+        demand.get(&root.path().display().to_string()),
+        Some(&BTreeSet::from(["feat/x".to_owned(), "other".to_owned()]))
+    );
+    assert!(demand[&scope.display().to_string()].is_empty());
+    let needed = needed_worktree_paths(&snapshot, demand.into_keys().collect());
     assert_eq!(
         needed,
         vec![
@@ -125,7 +133,7 @@ fn condition_catalog_supplies_pane_free_probe_scopes() {
         ]
     );
     std::fs::remove_file(catalog_path).unwrap();
-    assert!(when::probe_scopes(&runtime, Some(root.path())).is_empty());
+    assert!(when::probe_demand(&runtime, Some(root.path())).is_empty());
 }
 
 #[test]

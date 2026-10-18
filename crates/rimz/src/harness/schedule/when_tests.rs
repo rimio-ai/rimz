@@ -531,3 +531,105 @@ fn window_readings_read_nothing_until_a_window_term_asks() {
     assert_eq!(verdict.readings["window.5h.left"], None);
     assert!(windows.capacities.get().is_some());
 }
+
+#[test]
+fn branch_selectors_read_only_the_scopes_repository() {
+    let source = CiSource(serde_json::from_value(serde_json::json!({
+        "branch_ci": {},
+        "path_repos": {"/scope": "repo", "/unsupported": "<unsupported>"},
+        "branches": {"repo": {
+            "feat/a": {"pr": {"state": "merged", "ci": "passing"}, "ci": "failing"},
+            "b": {"pr": {"state": "open", "open": {"head": "sha", "queue": {"state": "queued", "at": "now"}}}, "ci": "pending"},
+            "closed": {"pr": {"state": "closed", "ci": "passing"}, "ci": "failing"}
+        }}
+    })).unwrap());
+    let input = "pr[feat/a]=merged && ci[feat/a]=passed && pr.queue[b]=queued && ci[b]=pending && ci[closed]=failed";
+    let parsed = WhenExpr::parse(&[input.to_owned()]);
+    assert!(parsed.is_ok(), "branch selectors must parse: {parsed:?}");
+    let expr = parsed.unwrap();
+    assert_eq!(expr.to_string(), input);
+    assert_eq!(WhenExpr::parse(&[expr.to_string()]).unwrap(), expr);
+    assert!(expr.reads_forge());
+    assert!(
+        evaluate(
+            &expr,
+            Path::new("/scope"),
+            Some(&source),
+            None,
+            None,
+            &no_windows()
+        )
+        .ok
+    );
+    for scope in ["/unclassified", "/unsupported"] {
+        let verdict = evaluate(
+            &expr,
+            Path::new(scope),
+            Some(&source),
+            None,
+            None,
+            &no_windows(),
+        );
+        assert!(verdict.readings.values().all(Option::is_none), "{scope}");
+    }
+    let expr = WhenExpr::parse(&[
+        "pr[absent]=unknown && ci[absent]=unknown && pr.queue[absent]=unknown".to_owned(),
+    ])
+    .unwrap();
+    assert!(
+        evaluate(
+            &expr,
+            Path::new("/scope"),
+            Some(&source),
+            None,
+            None,
+            &no_windows()
+        )
+        .ok
+    );
+    let expr =
+        WhenExpr::parse(&["pr[feat/a]=merged && pr[b]=open && pr[feat/a]!=unknown".to_owned()])
+            .unwrap();
+    let verdict = evaluate(
+        &expr,
+        Path::new("/scope"),
+        Some(&source),
+        None,
+        None,
+        &no_windows(),
+    );
+    assert!(verdict.ok);
+    assert_eq!(verdict.readings.len(), 2);
+    assert_eq!(
+        expr.readings(&verdict).collect::<Vec<_>>(),
+        [("pr[feat/a]", Some("merged")), ("pr[b]", Some("open"))]
+    );
+}
+
+#[test]
+fn branch_selector_refusals_suggest_parseable_fixes() {
+    for input in [
+        "pr[]=merged",
+        "ci[feat/x=passed",
+        "pr[feat x]=merged",
+        "pr[a[b]]=merged",
+        "team.stage[b]=Done",
+        "window.5h.left[b]>=40",
+    ] {
+        let error = WhenExpr::parse(&["ci=passed".to_owned(), input.to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("clause 2, position"), "{input}: {error}");
+        let fix = error
+            .split_once("; use ")
+            .unwrap_or_else(|| panic!("{error}"))
+            .1;
+        assert!(
+            WhenExpr::parse(&[fix.to_owned()]).is_ok(),
+            "{input}: {error}"
+        );
+        if input.starts_with("team") || input.starts_with("window") {
+            assert!(error.contains("only ci, pr, pr.queue"), "{error}");
+        }
+    }
+}

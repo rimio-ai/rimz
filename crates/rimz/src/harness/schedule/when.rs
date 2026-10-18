@@ -33,11 +33,11 @@ fn probe_paths(
         .collect()
 }
 
-/// Checkout scopes whose live loop conditions need sidebar CI or PR probes.
-pub(crate) fn probe_scopes(
+/// Checkout scopes and branch selectors whose live conditions need forge probes.
+pub(crate) fn probe_demand(
     runtime: &crate::RuntimePaths,
     project_root: Option<&Path>,
-) -> BTreeSet<String> {
+) -> BTreeMap<String, BTreeSet<String>> {
     let arming = super::arming::load();
     let now = Timestamp::now();
     let mut tasks: Vec<_> = super::fire::runnable_tasks_for(runtime, project_root)
@@ -84,12 +84,30 @@ pub(crate) fn probe_scopes(
         .into_iter()
         .map(|worktree| worktree.marker.worktree_path)
         .collect::<Vec<_>>();
-    tasks
-        .into_iter()
-        .flat_map(|(name, task)| probe_paths(task.entry(), &name, &owned, &ledger))
-        .filter(|scope| scope.is_dir())
-        .map(|scope| scope.to_string_lossy().into_owned())
-        .collect()
+    let mut demand = BTreeMap::<String, BTreeSet<String>>::new();
+    for (name, task) in tasks {
+        let Ok(super::ParsedTrigger {
+            trigger: super::Trigger::Condition { expr, .. },
+            ..
+        }) = task.trigger()
+        else {
+            continue;
+        };
+        let branches = expr
+            .terms()
+            .filter_map(|term| ForgeKey::parse(&term.key)?.branch())
+            .collect::<BTreeSet<_>>();
+        for scope in probe_paths(task.entry(), &name, &owned, &ledger)
+            .into_iter()
+            .filter(|scope| scope.is_dir())
+        {
+            demand
+                .entry(scope.to_string_lossy().into_owned())
+                .or_default()
+                .extend(branches.iter().map(|branch| (*branch).to_owned()));
+        }
+    }
+    demand
 }
 
 /// A room's last-known CI and PR readings. Absence of this source means unknown.
@@ -98,51 +116,70 @@ pub struct CiSource(PrStateCache);
 /// The condition keys read from the room's forge cache. This is the one place
 /// that names them: the parser, the probe scopes, and the no-room hint ask it.
 #[derive(Clone, Copy)]
-enum ForgeKey {
-    Ci,
-    Pr,
-    PrQueue,
+enum ForgeKey<'a> {
+    Ci(Option<&'a str>),
+    Pr(Option<&'a str>),
+    PrQueue(Option<&'a str>),
 }
 
-impl ForgeKey {
-    fn parse(key: &str) -> Option<Self> {
+impl<'a> ForgeKey<'a> {
+    fn parse(key: &'a str) -> Option<Self> {
+        let (key, branch) = match key.split_once('[') {
+            Some((key, branch)) => (key, Some(branch.strip_suffix(']')?)),
+            None => (key, None),
+        };
         match key {
-            "ci" => Some(Self::Ci),
-            "pr" => Some(Self::Pr),
-            "pr.queue" => Some(Self::PrQueue),
+            "ci" => Some(Self::Ci(branch)),
+            "pr" => Some(Self::Pr(branch)),
+            "pr.queue" => Some(Self::PrQueue(branch)),
             _ => None,
+        }
+    }
+
+    fn branch(self) -> Option<&'a str> {
+        match self {
+            Self::Ci(branch) | Self::Pr(branch) | Self::PrQueue(branch) => branch,
         }
     }
 
     fn values(self) -> &'static [&'static str] {
         match self {
-            Self::Ci => &["passed", "failed", "pending", "unknown"],
-            Self::Pr => &["open", "merged", "closed", "unknown"],
-            Self::PrQueue => &["queued", "dequeued", "none", "unknown"],
+            Self::Ci(_) => &["passed", "failed", "pending", "unknown"],
+            Self::Pr(_) => &["open", "merged", "closed", "unknown"],
+            Self::PrQueue(_) => &["queued", "dequeued", "none", "unknown"],
         }
     }
 
     fn read(self, cache: &PrStateCache, scope: &Path) -> Option<&'static str> {
         let scope = scope.to_string_lossy();
-        let link = cache.states.get(scope.as_ref());
+        let (link, head_ci) = if let Some(branch) = self.branch() {
+            let repo = cache.path_repos.get(scope.as_ref())?;
+            let row = cache.branches.get(repo)?.get(branch)?;
+            (row.pr.as_ref(), row.ci)
+        } else {
+            (
+                cache.states.get(scope.as_ref()),
+                cache.branch_ci.get(scope.as_ref()).copied(),
+            )
+        };
         match self {
-            Self::Ci => link
+            Self::Ci(_) => link
                 .filter(|link| {
                     matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
                 })
                 .and_then(|link| link.ci)
-                .or_else(|| cache.branch_ci.get(scope.as_ref()).copied())
+                .or(head_ci)
                 .map(|ci| match ci {
                     WorktreeCi::Passing => "passed",
                     WorktreeCi::Failing => "failed",
                     WorktreeCi::Pending => "pending",
                 }),
-            Self::Pr => link.map(|link| match link.state {
+            Self::Pr(_) => link.map(|link| match link.state {
                 WorktreePrState::Open => "open",
                 WorktreePrState::Merged => "merged",
                 WorktreePrState::Closed => "closed",
             }),
-            Self::PrQueue => link.map(|link| match link.queue() {
+            Self::PrQueue(_) => link.map(|link| match link.queue() {
                 Some(PrQueueFact::Queued { .. }) => "queued",
                 Some(PrQueueFact::Dequeued { .. }) => "dequeued",
                 None => "none",
@@ -641,6 +678,38 @@ impl Parser<'_> {
         self.pos += len;
         Ok(word)
     }
+
+    fn key(&mut self) -> Result<String, WhenError> {
+        let mut key = self.word()?;
+        if !self.take("[") {
+            return Ok(key);
+        }
+        if ForgeKey::parse(&key).is_none() {
+            let fix = if window_span(&key).is_some() {
+                format!("{key}>=40")
+            } else {
+                "team.stage=unknown".to_owned()
+            };
+            return Err(self.error(format!(
+                "{key} cannot take a branch selector; only ci, pr, pr.queue take one; use {fix}"
+            )));
+        }
+        let fix = format!("{key}[branch]=unknown");
+        let Some(end) = self.rest().find(']') else {
+            return Err(self.error(format!("missing ']' in branch selector; use {fix}")));
+        };
+        let branch = &self.rest()[..end];
+        if branch.is_empty() || branch.chars().any(|ch| ch.is_whitespace() || ch == '[') {
+            return Err(self.error(format!(
+                "branch selector must be nonempty, without whitespace, '[' or ']'; use {fix}"
+            )));
+        }
+        key.push('[');
+        key.push_str(branch);
+        key.push(']');
+        self.pos += end + 1;
+        Ok(key)
+    }
     fn or(&mut self) -> Result<Node, WhenError> {
         let mut left = self.and()?;
         while self.take("||") {
@@ -683,14 +752,14 @@ impl Parser<'_> {
             node
         } else {
             self.node()?;
-            let key = self.word()?;
+            let key = self.key()?;
             if window_span(&key).is_some() {
                 return self.window_term(key);
             }
             let forge_key = ForgeKey::parse(&key);
             if key != "team.stage" && forge_key.is_none() {
                 return Err(self.error(
-                    "unknown key; keys: team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left",
+                    "unknown key; keys: team.stage, ci, pr, pr.queue, window.5h.left, window.7d.left; ci, pr, pr.queue also accept [branch]",
                 ));
             }
             if Op::COMPARISONS.iter().any(|op| self.take(op.token())) {

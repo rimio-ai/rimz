@@ -14,7 +14,7 @@ use super::git_line;
 use crate::RuntimePaths;
 use crate::disk::single_flight::{Coalesced, ProducerGuard};
 use crate::forge::pr_state::{
-    PrLink, PrQueueFact, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache,
+    BranchRow, PrLink, PrQueueFact, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache,
 };
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
@@ -54,25 +54,36 @@ pub(super) fn produce_pr_states(
     let cache = read_pr_state_cache(&path);
     let now_ms = unix_now_ms();
     let condition_scopes =
-        crate::harness::schedule::when::probe_scopes(runtime, snapshot.project_root.as_deref());
-    let needed = needed_worktree_paths(snapshot, condition_scopes);
+        crate::harness::schedule::when::probe_demand(runtime, snapshot.project_root.as_deref());
+    let needed = needed_worktree_paths(snapshot, condition_scopes.keys().cloned().collect());
     let diff_cache: DiffStatsCache =
         crate::disk::atomic::read_json_cache(&runtime.diff_stats_path());
     let hot = hot_worktree_paths(snapshot);
     let focused = focused_worktree_paths(snapshot);
-    if let Some(due) = cached_due_repo_keys(&cache, &needed, &diff_cache, &hot, &focused, now_ms)
-        && due.is_empty()
+    if let Some(due) = cached_due_repo_keys(
+        &condition_scopes,
+        &cache,
+        &needed,
+        &diff_cache,
+        &hot,
+        &focused,
+        now_ms,
+    ) && due.is_empty()
     {
         return cache;
     }
 
-    let targets = build_targets(&needed, &diff_cache, state);
+    let targets = build_targets(&condition_scopes, &needed, &diff_cache, state);
     let groups = group_targets(targets);
     let target_paths = current_target_paths(&groups);
     let due_and_reconcile = |cache: &PrStateCache, now_ms| {
         let due = due_repo_keys(&groups, cache, &hot, &focused, now_ms);
         let needs_reconcile = needs_target_reconcile(cache, &needed, &diff_cache, &target_paths)
-            || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms);
+            || unsupported_probe_due(cache, &needed, &hot, &focused, now_ms)
+            || cache.branches.iter().any(|(repo, rows)| {
+                rows.keys()
+                    .any(|branch| !branch_is_demanded(&groups, repo, branch))
+            });
         (due, needs_reconcile)
     };
     let (due, needs_reconcile) = due_and_reconcile(&cache, now_ms);
@@ -136,6 +147,7 @@ struct RepoDueInputs {
 }
 
 fn cached_due_repo_keys(
+    branch_demand: &BTreeMap<String, BTreeSet<String>>,
     cache: &PrStateCache,
     needed: &[String],
     diff_cache: &DiffStatsCache,
@@ -144,6 +156,36 @@ fn cached_due_repo_keys(
     now_ms: u64,
 ) -> Option<BTreeSet<String>> {
     let mut inputs = BTreeMap::<String, RepoDueInputs>::new();
+    let mut demanded = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for (scope, branches) in branch_demand {
+        if let Some(repo) = cache
+            .path_repos
+            .get(scope)
+            .filter(|repo| repo.as_str() != UNSUPPORTED_REPO_KEY)
+        {
+            demanded
+                .entry(repo)
+                .or_default()
+                .extend(branches.iter().map(String::as_str));
+        }
+    }
+    if cache.branches.iter().any(|(repo, rows)| {
+        rows.keys().any(|branch| {
+            !demanded
+                .get(repo.as_str())
+                .is_some_and(|branches| branches.contains(branch.as_str()))
+        })
+    }) {
+        return None;
+    }
+    for (repo, branches) in demanded {
+        let input = inputs.entry(repo.to_owned()).or_default();
+        for branch in branches {
+            let row = cache.branches.get(repo).and_then(|rows| rows.get(branch));
+            input.has_uncached |= row.is_none();
+            input.hot |= row.is_some_and(|row| has_pending_ci(row.pr.as_ref(), row.ci));
+        }
+    }
     for path in needed {
         let head_sha = target_head_sha(diff_cache, path);
         let has_uncached = !cache.head_seen.contains_key(path);
@@ -200,17 +242,34 @@ fn due_repo_keys(
         .iter()
         .filter_map(|(repo_key, group)| {
             let repo_hot = group.targets.iter().any(|target| {
+                if target.branch_only {
+                    return cache
+                        .branches
+                        .get(repo_key)
+                        .and_then(|rows| rows.get(&target.branch))
+                        .is_some_and(|row| has_pending_ci(row.pr.as_ref(), row.ci));
+                }
                 hot.contains(&target.path)
                     || focused.contains(&target.path)
                     || path_has_pending_ci(cache, &target.path)
             });
-            let nudged = group.targets.iter().any(|target| {
-                head_nudged(&cache.head_seen, &target.path, target.head_sha.as_deref())
-            });
-            let has_uncached = group
+            let nudged = group
                 .targets
                 .iter()
-                .any(|target| !cache.head_seen.contains_key(&target.path));
+                .filter(|target| !target.branch_only)
+                .any(|target| {
+                    head_nudged(&cache.head_seen, &target.path, target.head_sha.as_deref())
+                });
+            let has_uncached = group.targets.iter().any(|target| {
+                if target.branch_only {
+                    !cache
+                        .branches
+                        .get(repo_key)
+                        .is_some_and(|rows| rows.contains_key(&target.branch))
+                } else {
+                    !cache.head_seen.contains_key(&target.path)
+                }
+            });
             repo_due(
                 cache.repos.get(repo_key),
                 repo_tier_ttl(repo_hot),
@@ -234,11 +293,15 @@ fn repo_tier_ttl(repo_hot: bool) -> Duration {
 /// A verdict is on its way for `path`: its CI is pending, or the merge queue
 /// is running CI on its PR.
 fn path_has_pending_ci(cache: &PrStateCache, path: &str) -> bool {
-    cache.states.get(path).is_some_and(|link| {
+    has_pending_ci(cache.states.get(path), cache.branch_ci.get(path).copied())
+}
+
+fn has_pending_ci(link: Option<&PrLink>, head_ci: Option<WorktreeCi>) -> bool {
+    link.is_some_and(|link| {
         matches!(link.state, WorktreePrState::Open | WorktreePrState::Merged)
             && link.ci == Some(WorktreeCi::Pending)
             || matches!(link.queue(), Some(PrQueueFact::Queued { .. }))
-    }) || cache.branch_ci.get(path) == Some(&WorktreeCi::Pending)
+    }) || head_ci == Some(WorktreeCi::Pending)
 }
 
 fn repo_due(
@@ -264,6 +327,7 @@ fn repo_due(
 
 #[derive(Clone, Debug)]
 struct Target {
+    branch_only: bool,
     path: String,
     branch: String,
     trunk: bool,
@@ -342,11 +406,13 @@ impl Target {
 }
 
 fn build_targets(
+    branch_demand: &BTreeMap<String, BTreeSet<String>>,
     needed: &[String],
     diff_cache: &DiffStatsCache,
     state: &mut super::ProducerRefreshState,
 ) -> Vec<Target> {
     let mut targets = Vec::new();
+    let mut seen_branches = BTreeSet::new();
     for path in needed {
         let worktree = Path::new(path);
         let Some(checkout) = worktree.ancestors().find(|path| path.join(".git").exists()) else {
@@ -430,7 +496,8 @@ fn build_targets(
                     == Some(head)
         });
         let repo_slug = remote.repo_slug().map(str::to_owned);
-        targets.push(Target {
+        let target = Target {
+            branch_only: false,
             path: path.clone(),
             branch,
             trunk,
@@ -443,7 +510,25 @@ fn build_targets(
             inherited_head,
             marker_created_at: marker.as_ref().map(|marker| marker.created_at),
             from_pr: marker.and_then(|marker| marker.from_pr),
-        });
+        };
+        for branch in branch_demand.get(path).into_iter().flatten() {
+            if !seen_branches.insert((target.repo_key.clone(), branch.clone())) {
+                continue;
+            }
+            targets.push(Target {
+                branch_only: true,
+                // NUL cannot occur in a checkout path; this key is never published.
+                path: format!("\0{branch}"),
+                branch: branch.clone(),
+                trunk: false,
+                head_sha: None,
+                inherited_head: false,
+                marker_created_at: None,
+                from_pr: None,
+                ..target.clone()
+            });
+        }
+        targets.push(target);
     }
     targets
 }
@@ -467,7 +552,13 @@ fn group_targets(targets: Vec<Target>) -> BTreeMap<String, RepoGroup> {
 fn current_target_paths(groups: &BTreeMap<String, RepoGroup>) -> BTreeSet<String> {
     groups
         .values()
-        .flat_map(|group| group.targets.iter().map(|target| target.path.clone()))
+        .flat_map(|group| {
+            group
+                .targets
+                .iter()
+                .filter(|target| !target.branch_only)
+                .map(|target| target.path.clone())
+        })
         .collect()
 }
 
@@ -593,6 +684,10 @@ fn assign_states(
             );
             continue;
         }
+        if target.branch_only {
+            transitions.push((target.clone(), None));
+            continue;
+        }
         if let Some(link) = prior
             .get(&target.path)
             .filter(|link| target.owns_link(link))
@@ -634,6 +729,7 @@ fn probe_due_repos(
     let target_paths = current_target_paths(groups);
     let mut cache =
         reconcile_target_bookkeeping(prior.clone(), needed, diff_cache, &target_paths, now_ms);
+    reconcile_branch_rows(&mut cache, groups);
 
     let due_groups = groups
         .iter()
@@ -645,42 +741,38 @@ fn probe_due_repos(
         crate::lane::WorkLane::Other,
         MAX_PARALLEL_PR_PROBES,
         &due_groups,
-        |(repo_key, group)| probe_repo_group(repo_key, group, &prior.states, &prior.branch_ci),
+        |(repo_key, group)| {
+            let mut states = BTreeMap::new();
+            let mut branch_ci = BTreeMap::new();
+            for target in &group.targets {
+                let (link, ci) = if target.branch_only {
+                    let row = prior
+                        .branches
+                        .get(*repo_key)
+                        .and_then(|rows| rows.get(&target.branch));
+                    (
+                        row.and_then(|row| row.pr.as_ref()),
+                        row.and_then(|row| row.ci),
+                    )
+                } else {
+                    (
+                        prior.states.get(&target.path),
+                        prior.branch_ci.get(&target.path).copied(),
+                    )
+                };
+                if let Some(link) = link {
+                    states.insert(target.path.clone(), link.clone());
+                }
+                if let Some(ci) = ci {
+                    branch_ci.insert(target.path.clone(), ci);
+                }
+            }
+            probe_repo_group(repo_key, group, &states, &branch_ci)
+        },
     );
     for mut result in results {
         attach_stacks(&mut result, diff_cache);
-        for target in &result.targets {
-            cache.states.remove(&target.path);
-            cache.branch_ci.remove(&target.path);
-            cache.head_seen.insert(
-                target.path.clone(),
-                target.head_sha.clone().unwrap_or_default(),
-            );
-            cache
-                .path_repos
-                .insert(target.path.clone(), target.repo_key.clone());
-            cache
-                .target_seen
-                .insert(target.path.clone(), target.stamp());
-        }
-        for (path, state) in result.states {
-            cache.states.insert(path, state);
-        }
-        for (path, ci) in result.branch_ci {
-            cache.branch_ci.insert(path, ci);
-        }
-        let repo_key = result.repo_key.clone();
-        cache.repos.insert(
-            repo_key.clone(),
-            RepoProbe {
-                refreshed_at_ms: now_ms,
-                ok: result.ok,
-                consecutive_failures: next_consecutive_failures(
-                    prior.repos.get(&repo_key),
-                    result.ok,
-                ),
-            },
-        );
+        apply_repo_probe(&mut cache, prior, result, now_ms);
     }
     let active_repo_keys = cache.path_repos.values().cloned().collect::<BTreeSet<_>>();
     cache
@@ -696,6 +788,80 @@ struct RepoGroupProbe {
     states: BTreeMap<String, PrLink>,
     branch_ci: BTreeMap<String, WorktreeCi>,
     ok: bool,
+}
+
+fn apply_repo_probe(
+    cache: &mut PrStateCache,
+    prior: &PrStateCache,
+    mut result: RepoGroupProbe,
+    now_ms: u64,
+) {
+    for target in &result.targets {
+        if target.branch_only {
+            let row = if result.ok {
+                BranchRow {
+                    pr: result.states.remove(&target.path),
+                    ci: result.branch_ci.remove(&target.path),
+                }
+            } else {
+                prior
+                    .branches
+                    .get(&target.repo_key)
+                    .and_then(|rows| rows.get(&target.branch))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            cache
+                .branches
+                .entry(target.repo_key.clone())
+                .or_default()
+                .insert(target.branch.clone(), row);
+            continue;
+        }
+        cache.states.remove(&target.path);
+        cache.branch_ci.remove(&target.path);
+        if let Some(link) = result.states.remove(&target.path) {
+            cache.states.insert(target.path.clone(), link);
+        }
+        if let Some(ci) = result.branch_ci.remove(&target.path) {
+            cache.branch_ci.insert(target.path.clone(), ci);
+        }
+        cache.head_seen.insert(
+            target.path.clone(),
+            target.head_sha.clone().unwrap_or_default(),
+        );
+        cache
+            .path_repos
+            .insert(target.path.clone(), target.repo_key.clone());
+        cache
+            .target_seen
+            .insert(target.path.clone(), target.stamp());
+    }
+    let repo_key = result.repo_key;
+    cache.repos.insert(
+        repo_key.clone(),
+        RepoProbe {
+            refreshed_at_ms: now_ms,
+            ok: result.ok,
+            consecutive_failures: next_consecutive_failures(prior.repos.get(&repo_key), result.ok),
+        },
+    );
+}
+
+fn branch_is_demanded(groups: &BTreeMap<String, RepoGroup>, repo: &str, branch: &str) -> bool {
+    groups.get(repo).is_some_and(|group| {
+        group
+            .targets
+            .iter()
+            .any(|target| target.branch_only && target.branch == branch)
+    })
+}
+
+fn reconcile_branch_rows(cache: &mut PrStateCache, groups: &BTreeMap<String, RepoGroup>) {
+    cache.branches.retain(|repo, rows| {
+        rows.retain(|branch, _| branch_is_demanded(groups, repo, branch));
+        !rows.is_empty()
+    });
 }
 
 fn probe_repo_group(
@@ -740,9 +906,17 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
     while pr_offset < pr_targets.len() || oid_offset < oids.len() {
         let include_open = plans.is_empty() && !pr_targets.is_empty();
         let alias_capacity = GH_BULK_MAX_ALIASES - usize::from(include_open);
-        let pr_end = (pr_offset + alias_capacity / 2).min(pr_targets.len());
+        let mut pr_end = pr_offset;
+        let mut oid_capacity = alias_capacity;
+        while let Some(index) = pr_targets.get(pr_end) {
+            let cost = 2 + usize::from(group.targets[*index].branch_only);
+            if cost > oid_capacity {
+                break;
+            }
+            oid_capacity -= cost;
+            pr_end += 1;
+        }
         let plan_pr_targets = pr_targets[pr_offset..pr_end].to_vec();
-        let oid_capacity = alias_capacity - plan_pr_targets.len() * 2;
         let oid_end = (oid_offset + oid_capacity).min(oids.len());
         let plan_oids = oids[oid_offset..oid_end].to_vec();
         let branches = plan_pr_targets
@@ -750,9 +924,14 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
             .map(|index| group.targets[*index].branch.as_str())
             .collect::<Vec<_>>();
         let oid_refs = plan_oids.iter().map(String::as_str).collect::<Vec<_>>();
+        let refs = plan_pr_targets
+            .iter()
+            .enumerate()
+            .filter_map(|(alias, index)| group.targets[*index].branch_only.then_some(alias))
+            .collect::<Vec<_>>();
         plans.push(GhQueryPlan {
             include_open,
-            query: forge::github_bulk_query(include_open, repo_slug, &branches, &oid_refs),
+            query: forge::github_bulk_query(include_open, repo_slug, &branches, &oid_refs, &refs),
             pr_targets: plan_pr_targets,
             oids: plan_oids,
         });
@@ -762,7 +941,7 @@ fn plan_github_queries(group: &RepoGroup) -> Vec<GhQueryPlan> {
     if plans.is_empty() {
         plans.push(GhQueryPlan {
             include_open: false,
-            query: forge::github_bulk_query(false, repo_slug, &[], &[]),
+            query: forge::github_bulk_query(false, repo_slug, &[], &[], &[]),
             pr_targets: Vec::new(),
             oids: Vec::new(),
         });
@@ -806,6 +985,11 @@ fn probe_github_repo_group(
                 return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
             }
         };
+        if plan.pr_targets.iter().enumerate().any(|(alias, index)| {
+            group.targets[*index].branch_only && !response.refs.contains_key(&alias)
+        }) {
+            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+        }
         batches.push((plan, response));
     }
     let (states, branch_ci) = project_github_group(group, &batches, prior);
@@ -826,8 +1010,12 @@ fn project_github_group(
 ) -> (BTreeMap<String, PrLink>, BTreeMap<String, WorktreeCi>) {
     let mut prs = BTreeMap::new();
     let mut commits = BTreeMap::new();
+    let mut refs = BTreeMap::new();
     for (plan, response) in batches {
         for (alias_index, target_index) in plan.pr_targets.iter().enumerate() {
+            if let Some(ci) = response.refs.get(&alias_index).copied().flatten() {
+                refs.insert(*target_index, ci);
+            }
             if let Some(pr) = response.prs.get(alias_index).and_then(Option::as_ref) {
                 prs.insert(*target_index, pr.clone());
             }
@@ -842,6 +1030,11 @@ fn project_github_group(
     let mut states = BTreeMap::new();
     let mut branch_ci = BTreeMap::new();
     for (target_index, target) in group.targets.iter().enumerate() {
+        if target.branch_only
+            && let Some(ci) = refs.get(&target_index)
+        {
+            branch_ci.insert(target.path.clone(), *ci);
+        }
         if !target.trunk
             && let Some(pr) = prs.get(&target_index)
             && (pr.state == WorktreePrState::Open
@@ -909,27 +1102,43 @@ fn probe_tea_repo_group(
     prior: &BTreeMap<String, PrLink>,
     prior_branch_ci: &BTreeMap<String, WorktreeCi>,
 ) -> RepoGroupProbe {
-    let (open_map, open) = match query_open_tea_prs(group) {
+    probe_tea_repo_group_with(repo_key, group, prior, prior_branch_ci, command_stdout)
+}
+
+fn probe_tea_repo_group_with(
+    repo_key: &str,
+    group: &RepoGroup,
+    prior: &BTreeMap<String, PrLink>,
+    prior_branch_ci: &BTreeMap<String, WorktreeCi>,
+    mut command: impl FnMut(&Path, &str, &[&str]) -> Option<String>,
+) -> RepoGroupProbe {
+    let (open_map, open) = match query_open_tea_prs(group, &mut command) {
         Some(result) => result,
-        None => {
-            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
-        }
+        None => return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci),
     };
     let assigned = assign_states(&group.targets, &open_map, prior);
+    let all_states = if assigned
+        .transitions
+        .iter()
+        .any(|(target, _)| target.branch_only)
+    {
+        let args = forge::tea_pr_list_args("all", group.repo_slug.as_deref());
+        let Some(output) = command(&group.worktree, "tea", &args) else {
+            return failed_repo_group_probe(repo_key, group, prior, prior_branch_ci);
+        };
+        Some(output)
+    } else {
+        None
+    };
     let mut states = assigned.states;
-    if let Some(repo_slug) = group.repo_slug.as_deref() {
-        for target in &group.targets {
-            let Some(link) = states.get_mut(&target.path) else {
-                continue;
-            };
-            if link.state == WorktreePrState::Open {
-                link.ci = probe_tea_ci(&group.worktree, repo_slug, &target.branch);
-            }
-        }
-    }
     let mut ok = true;
     for (target, number) in assigned.transitions {
-        let result = probe_tea(&target, number);
+        let result = probe_tea(
+            &target,
+            number,
+            all_states.as_deref().filter(|_| target.branch_only),
+            &mut command,
+        );
         if !result.ok {
             ok = false;
             if let Some(link) = prior
@@ -948,13 +1157,25 @@ fn probe_tea_repo_group(
     let mut branch_ci = BTreeMap::new();
     if let Some(repo_slug) = group.repo_slug.as_deref() {
         for target in &group.targets {
-            if states.contains_key(&target.path) {
-                continue;
+            if let Some(link) = states.get_mut(&target.path) {
+                if link.state == WorktreePrState::Open
+                    && let Ok(ci) =
+                        probe_tea_ci_with(&group.worktree, repo_slug, &target.branch, &mut command)
+                {
+                    link.ci = ci;
+                }
+                if !target.branch_only || link.state == WorktreePrState::Open {
+                    continue;
+                }
             }
-            let Some(sha) = target.head_sha.as_deref() else {
-                continue;
+            let head = if target.branch_only {
+                Some(target.branch.as_str())
+            } else {
+                target.head_sha.as_deref()
             };
-            if let Some(ci) = probe_tea_ci(&group.worktree, repo_slug, sha) {
+            let Some(head) = head else { continue };
+            if let Ok(Some(ci)) = probe_tea_ci_with(&group.worktree, repo_slug, head, &mut command)
+            {
                 branch_ci.insert(target.path.clone(), ci);
             }
         }
@@ -1035,9 +1256,10 @@ fn carry_prior_branch_ci(
 
 fn query_open_tea_prs(
     group: &RepoGroup,
+    command: &mut impl FnMut(&Path, &str, &[&str]) -> Option<String>,
 ) -> Option<(BTreeMap<String, forge::PrCandidate>, Vec<forge::OpenPr>)> {
     let args = forge::tea_pr_list_args("open", group.repo_slug.as_deref());
-    let output = command_stdout(&group.worktree, "tea", &args)?;
+    let output = command(&group.worktree, "tea", &args)?;
     let links = forge::parse_tea_pr_list_links(&output)
         .inspect_err(|err| tracing::debug!(error = %err, "forge PR open-set parse failed"))
         .ok()?;
@@ -1049,24 +1271,40 @@ struct ProbeState {
     ok: bool,
 }
 
-fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
-    let worktree = &target.worktree;
-    let branch = &target.branch;
+fn probe_tea(
+    target: &Target,
+    prior_number: Option<u64>,
+    shared_list: Option<&str>,
+    command: &mut impl FnMut(&Path, &str, &[&str]) -> Option<String>,
+) -> ProbeState {
     let repo = target.repo_slug.as_deref();
     if let Some(number) = prior_number
         && let Some(repo) = repo
-        && let Some(state) = probe_tea_detail(target, repo, number)
+        && let Some(state) = probe_tea_detail_with(target, repo, number, &mut *command)
     {
         return state;
     }
     let list_args = forge::tea_pr_list_args("all", repo);
-    let Some(output) = command_stdout(worktree, "tea", &list_args) else {
+    let output = shared_list
+        .map(str::to_owned)
+        .or_else(|| command(&target.worktree, "tea", &list_args));
+    let Some(output) = output else {
         return ProbeState {
             state: None,
             ok: false,
         };
     };
-    let candidate = match forge::parse_tea_pr_list_json(&output, branch) {
+    probe_tea_list_with(target, &output, |target, repo, number| {
+        probe_tea_detail_with(target, repo, number, &mut *command)
+    })
+}
+
+fn probe_tea_list_with(
+    target: &Target,
+    output: &str,
+    detail: impl FnOnce(&Target, &str, u64) -> Option<ProbeState>,
+) -> ProbeState {
+    let candidate = match forge::parse_tea_pr_list_json(output, &target.branch) {
         Ok(candidate) => candidate,
         Err(err) => {
             tracing::debug!(error = %err, "gitea PR state parse failed");
@@ -1087,10 +1325,17 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
     if matches!(
         candidate.state,
         WorktreePrState::Closed | WorktreePrState::Merged
-    ) && let Some(repo) = repo
-        && let Some(state) = probe_tea_detail(target, repo, candidate.number)
+    ) && let Some(repo) = target.repo_slug.as_deref()
     {
-        return state;
+        if let Some(state) = detail(target, repo, candidate.number) {
+            return state;
+        }
+        if target.branch_only {
+            return ProbeState {
+                state: None,
+                ok: false,
+            };
+        }
     }
     if candidate.state != WorktreePrState::Open
         && !target.accepts_terminal_pr(candidate.number, candidate.created_at)
@@ -1106,18 +1351,14 @@ fn probe_tea(target: &Target, prior_number: Option<u64>) -> ProbeState {
     }
 }
 
-fn probe_tea_detail(target: &Target, repo: &str, number: u64) -> Option<ProbeState> {
-    probe_tea_detail_with(target, repo, number, command_stdout)
-}
-
 fn probe_tea_detail_with(
     target: &Target,
     repo: &str,
     number: u64,
-    command_stdout: impl FnOnce(&Path, &str, &[&str]) -> Option<String>,
+    mut command: impl FnMut(&Path, &str, &[&str]) -> Option<String>,
 ) -> Option<ProbeState> {
     let worktree = &target.worktree;
-    let output = command_stdout(
+    let output = command(
         worktree,
         "tea",
         &["api", &format!("repos/{repo}/pulls/{number}")],
@@ -1138,18 +1379,23 @@ fn probe_tea_detail_with(
                 .or_else(|| detail.head_sha.clone())
         })
         .flatten();
+    let mut read_ci = |sha: &str| {
+        probe_tea_ci_with(worktree, repo, sha, &mut command)
+            .ok()
+            .flatten()
+    };
     let ci = (state == WorktreePrState::Merged)
         .then(|| {
             detail
                 .merged_sha
                 .as_deref()
-                .and_then(|sha| probe_tea_ci(worktree, repo, sha))
+                .and_then(&mut read_ci)
                 .or_else(|| {
                     detail.head_sha.as_deref().and_then(|head_sha| {
                         if detail.merged_sha.as_deref() == Some(head_sha) {
                             None
                         } else {
-                            probe_tea_ci(worktree, repo, head_sha)
+                            read_ci(head_sha)
                         }
                     })
                 })
@@ -1161,16 +1407,19 @@ fn probe_tea_detail_with(
     })
 }
 
-fn probe_tea_ci(worktree: &Path, repo_slug: &str, branch: &str) -> Option<WorktreeCi> {
+fn probe_tea_ci_with(
+    worktree: &Path,
+    repo_slug: &str,
+    branch: &str,
+    command: &mut impl FnMut(&Path, &str, &[&str]) -> Option<String>,
+) -> Result<Option<WorktreeCi>, String> {
     let endpoint = forge::tea_commit_status_endpoint(repo_slug, branch);
-    let output = command_stdout(worktree, "tea", &["api", &endpoint])?;
-    forge::parse_tea_combined_status(&output)
-        .map_err(|err| {
-            tracing::debug!(error = %err, "gitea combined commit-status parse failed");
-            err
-        })
-        .ok()
-        .flatten()
+    let output = command(worktree, "tea", &["api", &endpoint])
+        .ok_or_else(|| "tea combined commit-status probe failed".to_owned())?;
+    forge::parse_tea_combined_status(&output).map_err(|err| {
+        tracing::debug!(error = %err, "gitea combined commit-status parse failed");
+        err
+    })
 }
 
 fn command_stdout(worktree: &Path, program: &str, args: &[&str]) -> Option<String> {

@@ -81,7 +81,7 @@ fn stack_chooses_highest_duplicate_head_and_orders_bottom_first() {
 
 #[test]
 fn github_stack_open_alias_is_required_and_excludes_forks() {
-    let query = github_bulk_query(true, "org/repo", &[], &[]);
+    let query = github_bulk_query(true, "org/repo", &[], &[], &[]);
     assert!(query.contains("open: pullRequests(first: 100"));
     assert!(query.contains("headRefName baseRefName isCrossRepository"));
     let raw = r#"{"data":{"repository":{"open":{"nodes":[{"number":1,"headRefName":"a","baseRefName":"main","isCrossRepository":false},{"number":2,"headRefName":"b","baseRefName":"a","isCrossRepository":true}]}}}}"#;
@@ -487,13 +487,14 @@ fn builds_github_bulk_query_with_ordered_escaped_aliases() {
         "org/repo",
         &["feature", "quote\"branch"],
         &["head-one", "head\"two"],
+        &[],
     );
 
     assert!(query.starts_with(r#"query { repository(owner: "org", name: "repo") {"#));
     assert!(query.contains(
         r#"pr0: pullRequests(first: 10, headRefName: "feature", states: [OPEN, MERGED, CLOSED]"#
     ));
-    assert!(query.contains("nodes { number state createdAt statusCheckRollup"));
+    assert!(query.contains("nodes { number state createdAt isCrossRepository statusCheckRollup"));
     assert!(query.contains(r#"pr1: pullRequests(first: 10, headRefName: "quote\"branch""#));
     assert!(query.contains(r#"sha0: object(oid: "head-one")"#));
     assert!(query.contains(r#"sha1: object(oid: "head\"two")"#));
@@ -1091,8 +1092,12 @@ fn parses_tea_combined_commit_status() {
 #[test]
 fn tea_commit_status_endpoint_carries_repo_and_branch() {
     assert_eq!(
-        tea_commit_status_endpoint("org/repo", "feature/topic"),
-        "repos/org/repo/commits/feature/topic/status"
+        tea_commit_status_endpoint("org/repo", "feat/x"),
+        "repos/org/repo/commits/feat%2Fx/status"
+    );
+    assert_eq!(
+        tea_commit_status_endpoint("org/repo", "feat%2Fx"),
+        "repos/org/repo/commits/feat%252Fx/status"
     );
 }
 
@@ -1113,4 +1118,44 @@ fn rejects_unusable_input() {
     assert!(parse("not-a-number").is_err());
     assert!(parse("https://github.com/org/repo/pull/nope").is_err());
     assert!(parse("https://example.test/org/repo/issues/1").is_err());
+}
+
+#[test]
+fn github_branch_refs_query_and_read_head_ci() {
+    let query = github_bulk_query(false, "org/repo", &["feat/x"], &[], &[0]);
+    assert!(
+        query.contains("ref0: ref(qualifiedName: \"refs/heads/feat/x\")"),
+        "{query}"
+    );
+    for (reference, expected) in [
+        (
+            serde_json::json!({"target": {"oid": "head", "statusCheckRollup": {"state": "SUCCESS"}}}),
+            Some(WorktreeCi::Passing),
+        ),
+        (serde_json::Value::Null, None),
+        (
+            serde_json::json!({"target": {"oid": "head", "statusCheckRollup": null}}),
+            None,
+        ),
+    ] {
+        let raw = serde_json::json!({"data": {"repository": {"pr0": {"nodes": []}, "facts0": {"nodes": []}, "ref0": reference}}});
+        let response = parse_github_bulk_response(false, &raw.to_string(), 1, 0).unwrap();
+        assert_eq!(response.refs.get(&0), Some(&expected));
+    }
+}
+
+#[test]
+fn github_branch_aliases_ignore_fork_prs_but_checkout_aliases_keep_them() {
+    let raw = serde_json::json!({"data": {"repository": {
+        "pr0": {"nodes": [{"number": 42, "state": "MERGED", "isCrossRepository": true}]},
+        "facts0": {"nodes": []}, "ref0": null,
+        "pr1": {"nodes": [{"number": 42, "state": "MERGED", "isCrossRepository": true}]},
+        "facts1": {"nodes": []}
+    }}});
+    let response = parse_github_bulk_response(false, &raw.to_string(), 2, 0).unwrap();
+    assert_eq!(response.prs[0], None);
+    assert_eq!(
+        response.prs[1].as_ref().map(|pr| (pr.number, pr.state)),
+        Some((42, WorktreePrState::Merged))
+    );
 }
