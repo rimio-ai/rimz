@@ -497,6 +497,62 @@ fn keep_warm_follows_a_toml_base_chain_and_skips_launched_children() {
 }
 
 #[test]
+fn idle_compact_floor_follows_role_then_profile_chain_then_harness() {
+    let harness: HarnessConfig = toml::from_str("idle_compact = \"100k\"").unwrap();
+    let mut policy = policy(None, None);
+    policy.profiles.0.get_mut("warm").unwrap().idle_compact = Some(IdleCompact::Tokens(30_000));
+    policy.profiles.0.insert("child".into(), {
+        let mut profile: Profile = toml::from_str("agent = \"warm\"").unwrap();
+        profile.idle_compact = None;
+        profile
+    });
+    policy.profiles.0.insert("cold".into(), {
+        let mut profile: Profile = toml::from_str("agent = \"warm\"").unwrap();
+        profile.idle_compact = Some(IdleCompact::Off);
+        profile
+    });
+    policy.teams.0.get_mut("forge").unwrap().roles[0].idle_compact =
+        Some(IdleCompact::Tokens(200_000));
+    let mut agent = idle();
+    for (profile, expected) in [
+        ("warm", Some(30_000)),
+        ("child", Some(30_000)),
+        ("cold", None),
+        ("unlisted", Some(100_000)),
+    ] {
+        agent.profile = Some(profile.into());
+        assert_eq!(
+            policy.idle_compact_floor(&agent, &harness),
+            expected,
+            "{profile}"
+        );
+    }
+
+    agent.profile = Some("warm".into());
+    agent.team = Some("forge".into());
+    agent.role = Some("coder".into());
+    assert_eq!(
+        policy.idle_compact_floor(&agent, &harness),
+        Some(200_000),
+        "a TOML role override outranks the profile"
+    );
+    agent.role = Some("judge".into());
+    assert_eq!(
+        policy.idle_compact_floor(&agent, &harness),
+        Some(30_000),
+        "a role without an override reads its profile"
+    );
+
+    agent.launch_depth = Some(1);
+    agent.parent_agent_id = Some("parent".into());
+    assert_eq!(
+        policy.idle_compact_floor(&agent, &harness),
+        None,
+        "a rimz subagents child never compacts idly"
+    );
+}
+
+#[test]
 fn keep_warm_pings_an_idle_agent_each_window_until_the_horizon() {
     let config = HarnessConfig::default();
     let mut agent = idle();

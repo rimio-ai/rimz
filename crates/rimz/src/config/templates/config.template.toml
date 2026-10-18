@@ -264,7 +264,7 @@ aggressive_resize = true
 # auto_compact = "272k"          # native window for Claude/Codex profiles without auto-compact; "off" passes none
 # smart_compact = "258k"         # compact before messages/waits at this threshold (tokens or "70%"); "off" disables it
 ## compact_instruction = ""       # text for compact commands that accept it; unset = RimZ's brief for the seat (solo or team member), "" = bare command
-# idle_compact = "on"             # compact an idle team member before its provider prompt cache expires; on = provider cache TTL minus 1m, off, or a duration such as "25m"
+# idle_compact = "100k"           # compact an idle agent at or above this many tokens before its prompt cache expires (TTL minus prompt_cache_margin); a profile or role may set its own idle-compact; off disables it
 # cache_keepalive = true          # keep waiting agents' prompt caches warm
 # cache_keepalive_max = "6h"      # stop pings, keep-warm included, that would start this long after the agent's last request of its own; off or a duration longer than prompt_cache_margin
 # prompt_cache_margin = "1m"     # keep-warm pings and idle compaction fire this long before a prompt cache expires; shorter than every provider TTL

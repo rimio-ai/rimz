@@ -663,13 +663,51 @@ const TEAM_ROLES: &str = "  - agent: worker\n    role: lead\n    owns: [Plan, Im
 const TEAM_STAGES: &str = "leader: lead\nstages: [Plan, Implement, Review]";
 
 #[test]
-fn idle_compact_role_values_and_inheritance() {
-    for (value, expected) in [
-        ("25m", "25m"),
+fn idle_compact_rides_definitions_and_role_overlays_with_inheritance() {
+    let floor = |loaded: &LoadedDefinitions, name: &str| {
+        serde_json::to_value(&loaded.agent_profiles.0[name]).unwrap()["idle-compact"].clone()
+    };
+    for (raw, expected) in [
+        ("100k", "100k"),
+        ("1000k", "1000k"),
+        ("250000", "250k"),
         ("off", "off"),
         ("false", "off"),
-        ("true", "on"),
     ] {
+        let root = team_fixture();
+        definition(
+            root.path(),
+            "agents/worker.md",
+            &format!(
+                "model: opus\ntools: [Bash, Skill, AskUserQuestion]\nskills: [work]\nsubagents: [general]\nidle-compact: {raw}"
+            ),
+            "Craft.\n\n${traits}",
+        );
+        definition(
+            root.path(),
+            "agents/derived.md",
+            "agent: worker",
+            "Derived.",
+        );
+        team_definition(
+            root.path(),
+            TEAM_STAGES,
+            &format!("{TEAM_ROLES}\n    idle-compact: 50k"),
+            "Pipeline.",
+        );
+        let loaded = clean(root.path());
+        for name in ["worker", "derived", "probe.lead"] {
+            assert_eq!(floor(&loaded, name), expected, "{name}: {raw}");
+        }
+        assert_eq!(floor(&loaded, "probe.judge"), "50k", "{raw}");
+        let roles = serde_json::to_value(&loaded.teams.0["probe"].roles).unwrap();
+        assert!(roles[1]["idle-compact"].is_null(), "the overlay carries it");
+    }
+}
+
+#[test]
+fn idle_compact_refuses_modes_durations_and_subagents() {
+    for value in ["on", "true", "2h", "25m", "70%", "0"] {
         let root = team_fixture();
         team_definition(
             root.path(),
@@ -677,48 +715,21 @@ fn idle_compact_role_values_and_inheritance() {
             &format!("{TEAM_ROLES}\n    idle-compact: {value}"),
             "Pipeline.",
         );
-        let loaded = clean(root.path());
-        let roles = serde_json::to_value(&loaded.teams.0["probe"].roles).unwrap();
-        assert!(roles[0]["idle-compact"].is_null());
-        assert_eq!(roles[1]["idle-compact"], expected);
-        let team = &loaded.teams.0["probe"];
-        for role in ["lead", "unknown"] {
-            assert_eq!(
-                team.idle_compact(role, crate::config::IdleCompactMode::Off),
-                crate::config::IdleCompactMode::Off
-            );
-            assert_eq!(
-                team.idle_compact(role, crate::config::IdleCompactMode::On),
-                crate::config::IdleCompactMode::On
-            );
-        }
-        assert_eq!(
-            team.idle_compact("judge", crate::config::IdleCompactMode::Off),
-            expected.parse().unwrap()
+        error(
+            root.path(),
+            "idle_compact takes off or a positive token floor in digits or k, such as 100k or 1000k",
         );
     }
-}
-
-#[test]
-fn idle_compact_rejects_unitless_role_and_solo_field() {
-    let root = team_fixture();
-    team_definition(
-        root.path(),
-        TEAM_STAGES,
-        &format!("{TEAM_ROLES}\n    idle-compact: 25"),
-        "Pipeline.",
-    );
-    error(root.path(), "off, on, or a duration such as 25m");
     let root = fixture();
     definition(
         root.path(),
-        "agents/worker.md",
-        "idle-compact: on",
-        "Worker.",
+        "subagents/child.md",
+        "agent: pi\nidle-compact: 100k",
+        "",
     );
     error(
         root.path(),
-        "sets `idle-compact:`, which rimz reads on a team role; a solo seat is never idle-compacted",
+        "sets `idle-compact:`, which a subagent never needs; remove it",
     );
 }
 

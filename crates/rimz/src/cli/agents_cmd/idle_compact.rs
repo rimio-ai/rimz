@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use rimz::config::MachineConfig;
 use rimz::harness::assist_log::{Assist, AssistRecord};
 use rimz::harness::cache_keepalive::SeatPolicy;
-use rimz::harness::idle_compact::{IdleCompactRequest, fire_point, resolve_mode, should_compact};
+use rimz::harness::idle_compact::{IdleCompactRequest, fire_point, should_compact};
 use rimz::ids::MessageId;
 use rimz::message::compact::{
     CompactErr, CompactOutcome, CompactRequest, refuse_repeat, send_compact,
@@ -29,8 +29,8 @@ pub fn run_idle_compact(request: IdleCompactRequest) -> Result<()> {
     let agent = find_agent(&snapshot.agents, &request.kind, &request.agent_id)
         .context("idle-compaction target agent is no longer in the rollup")?;
     let policy = SeatPolicy::load(&config, Some(&workspace.project_root));
-    let mode = resolve_mode(agent, &policy.teams, config.harness.idle_compact);
-    let window = fire_point(agent, mode, &config.harness);
+    let floor = policy.idle_compact_floor(agent, &config.harness);
+    let window = fire_point(agent, floor, &config.harness);
     let command = rimz::agents::compact_command(agent, &config.harness);
     let now = Timestamp::now();
     if !should_compact(agent, command.as_deref(), window, now)

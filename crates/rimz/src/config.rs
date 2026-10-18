@@ -87,7 +87,8 @@ pub(crate) use gc::GcConfig;
 pub use gc::parse_older_than;
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
-pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompactMode, KeepWarm};
+pub(crate) use harness::IdleCompactParseError;
+pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompact, KeepWarm};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;
@@ -1315,13 +1316,13 @@ fn check_removed_core_keys(path: &Path, text: &str) -> Result<()> {
     let value = toml::Value::Table(doc.clone());
     if let Some(harness) = doc.get("harness").and_then(toml::Value::as_table)
         && (harness.contains_key("idle_compact_after")
-            || matches!(
-                harness.get("idle_compact").and_then(toml::Value::as_str),
-                Some("auto" | "always")
-            ))
+            || harness
+                .get("idle_compact")
+                .and_then(toml::Value::as_str)
+                .is_some_and(|mode| mode.parse::<IdleCompact>().is_err()))
     {
         return Err(removed(
-            "`harness.idle_compact = \"auto\"`/`\"always\"` and `harness.idle_compact_after` are no longer read; run `rimz setup`, or `rimz config set harness.idle_compact on|off|<duration>` and delete `idle_compact_after`",
+            "`harness.idle_compact` now takes `off` or a token floor such as `100k`; run `rimz setup`, or `rimz config set harness.idle_compact 100k` and delete `idle_compact_after`",
         ));
     }
     for (table, tree) in [

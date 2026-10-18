@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
-use crate::config::{HarnessConfig, KeepWarm, MachineConfig, ProfilesConfig, TeamsConfig};
+use crate::config::{
+    HarnessConfig, IdleCompact, KeepWarm, MachineConfig, Profile, ProfilesConfig, TeamsConfig,
+};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
 use crate::utils::time::{format_duration_coarse, format_duration_compact};
@@ -63,7 +65,7 @@ impl SeatPolicy {
                     .find(|binding| binding.role == role)?
                     .keep_warm
             }
-            None => self.profile_keep_warm(agent.profile.as_deref()?),
+            None => self.profile_setting(agent.profile.as_deref()?, |profile| profile.keep_warm),
         };
         let Some(KeepWarm::For(horizon)) = setting else {
             return None;
@@ -75,13 +77,42 @@ impl SeatPolicy {
             .then_some(horizon)
     }
 
-    /// The first `keep_warm` a TOML profile or its base chain declares; an explicit `off` stops
-    /// the walk. Markdown definitions arrive with their inheritance already resolved.
-    fn profile_keep_warm(&self, name: &str) -> Option<KeepWarm> {
+    /// The token floor at which this seat is compacted while idle (`None` is off): a TOML team
+    /// role's override, else the first value up the seat's profile chain (a Markdown role's
+    /// value lives on its `<team>.<role>` profile), else `harness.idle_compact`. A
+    /// `rimz subagents` child never resolves one.
+    pub fn idle_compact_floor(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<u64> {
+        if agent.launch_depth.is_some() {
+            return None;
+        }
+        let role = agent.team.as_ref().and_then(|team| {
+            let role = agent.role.as_deref()?;
+            self.teams
+                .0
+                .get(team)?
+                .roles
+                .iter()
+                .find(|binding| binding.role == role)?
+                .idle_compact
+        });
+        let setting = role
+            .or_else(|| {
+                self.profile_setting(agent.profile.as_deref()?, |profile| profile.idle_compact)
+            })
+            .unwrap_or(harness.idle_compact);
+        match setting {
+            IdleCompact::Off => None,
+            IdleCompact::Tokens(floor) => Some(floor),
+        }
+    }
+
+    /// The first value a TOML profile or its base chain declares; an explicit `off` stops the
+    /// walk. Markdown definitions arrive with their inheritance already resolved.
+    fn profile_setting<T>(&self, name: &str, pick: impl Fn(&Profile) -> Option<T>) -> Option<T> {
         let mut profile = self.profiles.0.get(name)?;
         for _ in 0..self.profiles.0.len() {
-            if profile.keep_warm.is_some() {
-                return profile.keep_warm;
+            if let Some(setting) = pick(profile) {
+                return Some(setting);
             }
             profile = self.profiles.0.get(&profile.agent)?;
         }

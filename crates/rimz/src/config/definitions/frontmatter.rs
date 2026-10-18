@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Deserializer, de::IgnoredAny};
 
 use crate::agents::PermissionMode;
+use crate::config::{IdleCompact, IdleCompactParseError};
 
 use super::DefinitionErr;
 
@@ -29,6 +30,8 @@ pub(super) struct AgentFrontmatter {
     pub budget: Option<String>,
     #[serde(default, deserialize_with = "keep_warm")]
     pub keep_warm: Option<String>,
+    #[serde(default, deserialize_with = "idle_compact")]
+    pub idle_compact: Option<IdleCompact>,
     pub model_reminder: Option<bool>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
@@ -68,7 +71,8 @@ impl AgentFrontmatter {
             skills,
             subagents,
             model_reminder,
-            keep_warm
+            keep_warm,
+            idle_compact
         );
     }
 }
@@ -112,7 +116,7 @@ pub(super) struct RoleFrontmatter {
     #[serde(default, deserialize_with = "flip_compact")]
     pub flip_compact: Option<String>,
     #[serde(default, deserialize_with = "idle_compact")]
-    pub idle_compact: Option<String>,
+    pub idle_compact: Option<IdleCompact>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
     #[serde(default, deserialize_with = "keep_warm")]
@@ -143,6 +147,7 @@ impl RoleFrontmatter {
             effort: self.effort.clone(),
             fast: self.fast,
             auto_compact: self.auto_compact.clone(),
+            idle_compact: self.idle_compact,
             budget: self.budget.clone(),
             model_reminder: self.model_reminder,
             tools: self.tools.clone(),
@@ -185,26 +190,26 @@ fn list<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     ))
 }
 
-fn idle_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+/// `off` or a token floor; YAML reads a bare `off` as `false`, so `false`
+/// means `off` and `true` names no floor.
+fn idle_compact<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<IdleCompact>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Setting {
         Boolean(bool),
         Text(String),
-        Integer(i64),
+        Integer(u64),
     }
-    let raw = match Setting::deserialize(deserializer).map_err(|_| {
-        serde::de::Error::custom("idle-compact takes off, on, or a duration such as 25m")
-    })? {
-        Setting::Boolean(value) => if value { "on" } else { "off" }.to_owned(),
-        Setting::Text(value) => value,
-        Setting::Integer(value) => {
-            return Err(serde::de::Error::custom(format!(
-                "sets `idle-compact: {value}`; rimz takes off, on, or a duration such as 25m"
-            )));
-        }
+    let invalid = || serde::de::Error::custom(IdleCompactParseError);
+    let raw = match Setting::deserialize(deserializer).map_err(|_| invalid())? {
+        Setting::Boolean(false) => return Ok(Some(IdleCompact::Off)),
+        Setting::Boolean(true) => return Err(invalid()),
+        Setting::Text(text) => text,
+        Setting::Integer(count) => count.to_string(),
     };
-    Ok(Some(raw))
+    raw.parse().map(Some).map_err(|_| invalid())
 }
 
 fn keep_warm<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
@@ -321,10 +326,6 @@ pub(super) fn parse<T: serde::de::DeserializeOwned>(
         (
             "flip-compact",
             "sets `flip-compact:`, which rimz reads on a team role; a solo seat flips no stage",
-        ),
-        (
-            "idle-compact",
-            "sets `idle-compact:`, which rimz reads on a team role; a solo seat is never idle-compacted",
         ),
     ] {
         if keys.contains_key(key) {

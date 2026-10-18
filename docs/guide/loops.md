@@ -436,12 +436,12 @@ Every flag is in the [loop CLI reference](../reference/cli/loop.md); the run mec
 
 An unattended agent stops for reasons that need no judgment from you. The provider's usage window empties mid-turn. The API sheds load and drops the stream. The context window fills one step short of the finish. A spent Codex account sits on reset credits that expire unused. Each stop has a known fix: wait for the reset, retry in a few minutes, compact, redeem a credit. A stock CLI leaves every one of them to whoever is watching, and overnight that is nobody.
 
-RimZ ships each of those fixes as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix at the moment it can work, and the agent carries on in the same session, as if you had typed the resume yourself. Idle team compaction and smart compaction are on by default; auto-continue and auto-redeem are opt-in, with one exception stated under [auto-redeem](#auto-redeem): a Codex credit about to expire is redeemed whether or not you opted in. Because these reflexes let RimZ type into your panes and spend on your account, each section below states the rules it follows.
+RimZ ships each of those fixes as a configurable reflex. The room recognizes the stop from the provider's own evidence, applies the fix at the moment it can work, and the agent carries on in the same session, as if you had typed the resume yourself. Idle compaction and smart compaction are on by default; auto-continue and auto-redeem are opt-in, with one exception stated under [auto-redeem](#auto-redeem): a Codex credit about to expire is redeemed whether or not you opted in. Because these reflexes let RimZ type into your panes and spend on your account, each section below states the rules it follows.
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
 rimz config set resume.auto_redeem true       # spend Codex reset credits when they buy real time
-rimz config set harness.idle_compact off      # opt out of idle team compaction
+rimz config set harness.idle_compact off      # opt out of idle compaction
 rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
@@ -477,9 +477,9 @@ The Codex block in the sidebar shows what auto-redeem would do if the longest us
 
 ### Idle compaction
 
-An idle team member can outlive its provider's warm prompt cache, so its next stage pays to cache the whole accumulated conversation again. Idle compaction submits the member's native compact command with the team brief, with no new prompt behind it. The member summarizes its conversation and carries on from that smaller context; details not preserved in the summary are lost.
+An idle agent can outlive its provider's warm prompt cache, so its next prompt pays to cache the whole accumulated conversation again. Idle compaction submits the agent's native compact command with its seat's brief (solo or team), with no new prompt behind it, once its context has reached its token floor. The agent summarizes its conversation and carries on from that smaller context; details not preserved in the summary are lost.
 
-The [configuration rules](./configuration.md#idle-compaction) define the provider timing, eligible team members, and role overrides. Each attempt leaves a durable command for boundary delivery and an assist record visible in `rimz stats --assists`, including the resolved idle threshold. Set `harness.idle_compact` to `off` to disable the machine default; explicit role overrides still apply.
+The [configuration rules](./configuration.md#idle-compaction) define the provider timing, eligible agents, and the per-profile and per-role floors. Each attempt leaves a durable command for boundary delivery and an assist record visible in `rimz stats --assists`, including the idle threshold it fired at. Set `harness.idle_compact` to `off` to disable the machine default; a profile or role that sets its own floor still applies.
 
 ### Stop when idle
 

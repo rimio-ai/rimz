@@ -420,7 +420,7 @@ impl std::str::FromStr for Isolation {
 
 /// A named agent profile. `agent` is a base reference: either a built-in agent
 /// kind or another profile that resolves to one.
-/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (`budget` and `keep_warm` gate RimZ's own notices; `empty_dir` selects only the working directory).
+/// Also deserialized from trusted repository TOML: a new deserializable field must enter `crate::trust::ExecutableProfile` with a hash test, be `#[serde(skip)]`, or shape no command at all (`budget` and `keep_warm` gate RimZ's own notices, `idle_compact` RimZ's own compaction; `empty_dir` selects only the working directory).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Profile {
     pub agent: String,
@@ -472,6 +472,14 @@ pub struct Profile {
     /// How long a solo agent's prompt cache is held warm after its last real turn; unset means off.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
     pub keep_warm: Option<super::KeepWarm>,
+    /// The context size at which this seat is compacted while idle; unset
+    /// inherits up the `agent` chain, then `harness.idle_compact`.
+    #[serde(
+        default,
+        rename = "idle-compact",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub idle_compact: Option<super::IdleCompact>,
     /// The agent's native auto-compaction window as a token count; rendered per adapter, with unsupported adapters refusing the launch.
     #[serde(
         default,
@@ -564,18 +572,6 @@ pub const DONE_STAGE: &str = "Done";
 const DEFAULT_NOTES_PATTERN: &str = "/*-notes.md";
 
 impl Team {
-    pub fn idle_compact(
-        &self,
-        role: &str,
-        default: super::IdleCompactMode,
-    ) -> super::IdleCompactMode {
-        self.roles
-            .iter()
-            .find(|binding| binding.role == role)
-            .and_then(|binding| binding.idle_compact)
-            .unwrap_or(default)
-    }
-
     pub fn flip_compact(&self, role: &str, default: Option<FlipCompact>) -> Option<AutoCompact> {
         let binding = self.roles.iter().find(|binding| binding.role == role)?;
         match binding.flip_compact.or(default) {
@@ -713,13 +709,14 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub flip_compact: Option<FlipCompact>,
-    /// Override the machine's idle-compaction policy for this team member.
+    /// Override the idle-compaction floor this team member's profile chain
+    /// or the machine sets.
     #[serde(
         default,
         rename = "idle-compact",
         skip_serializing_if = "Option::is_none"
     )]
-    pub idle_compact: Option<super::IdleCompactMode>,
+    pub idle_compact: Option<super::IdleCompact>,
     /// How long this team member's prompt cache is held warm after its last real turn; unset means off.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
     pub keep_warm: Option<super::KeepWarm>,

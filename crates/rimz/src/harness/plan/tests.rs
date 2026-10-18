@@ -763,6 +763,7 @@ fn configured_profile(
         subagents: None,
         model_reminder: None,
         keep_warm: None,
+        idle_compact: None,
         mode,
         model: model.map(str::to_owned),
         effort: effort.map(str::to_owned),

@@ -566,6 +566,7 @@ fn profile(agent: &str, args: Option<&str>) -> Profile {
         subagents: None,
         model_reminder: None,
         keep_warm: None,
+        idle_compact: None,
         mode: None,
         model: None,
         effort: None,

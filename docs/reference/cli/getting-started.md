@@ -99,7 +99,7 @@ A `rimz start` that creates the session, run from a terminal, can ask up to five
 
 | Prompt | When | Default |
 | --- | --- | --- |
-| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle team compaction) | This start wrote the machine config for the first time | The current settings; idle compaction defaults on, the other automation rows off ([setup](../../guide/setup.md)) |
+| First-run questions: truecolor, Nerd Font icons, pet, hands-off automation (`[y/n/choose]` over auto-continue, Codex auto-redeem when `codex` is installed, and idle compaction) | This start wrote the machine config for the first time | The current settings; idle compaction defaults to `100k`, the other automation rows off ([setup](../../guide/setup.md)) |
 | Install or refresh hooks for the listed agents | A detected agent has no RimZ hooks, or a stale RimZ-owned integration | Enter installs all; `n` or end of input installs none |
 | Trust this project's config | The project ships `.rimz/config.toml` with an ungranted executable surface, and you have not declined this version | No |
 | Trust this folder for the listed agents | Detected Codex, Claude, or Qoder has no folder-trust decision under the room's account; shows the proposed file changes first. A decline is remembered per workspace and agent kind; `rimz trust grant` clears it. When no listed kind can be written (Claude in `$HOME`, say), it prints each fix, asks nothing, and remembers those kinds as declined | No |

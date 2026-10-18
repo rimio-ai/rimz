@@ -428,7 +428,7 @@ upward-dependencies = [
 # per-name failures feed launch refusal through the effective-config failed-reference gate.
 # The existing frontmatter splitter supplies Codex's host skill key parser.
 # Worktree lifecycle hooks and their validation error cross the config/worktree seam.
-# IdleCompactMode parsing, Team::idle_compact and ConfigEditor::retire_idle_compact_keys share role policy and setup retirement with consumers, replacing the old idle-span accessor/parser.
+# IdleCompact parsing (with its parse error for the Markdown decoder) and ConfigEditor::retire_idle_compact_keys share the seat floor grammar and setup retirement with consumers, replacing the old idle-span accessor/parser.
 # effective::teams shares the machine fallback between producer lanes and the idle-compaction helper.
 # LspServerKind shares the configured server arm with admission, broker, registry, and status.
 # Watch kinds and bare subjects serve type-led wait listings.
@@ -680,8 +680,8 @@ path = "crates/rimz/src/harness"
 # Rebirth checkout roots feed pre-pane language-server admission.
 # Response paths, publication errors and publication serve CLI receipts/reports; fleet exposes settled rows.
 # `ancestry::check_launch_room` lets both CLI launch entries refuse before opening a store.
-# fire_point, resolve_mode and should_compact share one idle-compaction decision between producer and detached CLI helper.
-# IdleWindow carries the cache-expiry bound through that shared decision.
+# fire_point and should_compact share one idle-compaction decision between producer and detached CLI helper.
+# IdleWindow carries the seat floor and the cache-expiry bound through that shared decision.
 # Deadline rungs, channel policy and locked claims serve the CLI and producer.
 # Locked board records expose their section, request, receipt, and typed errors to the CLI.
 # BOARD_FILE names the board file once for the harness, config defaults, and CLI readers.
@@ -747,7 +747,7 @@ path = "crates/rimz/src/harness"
 # The keepalive helper reads the final-ping rule beside the shared eligibility recheck (+1).
 # `run::VERIFY_MAX_ATTEMPTS_DEFAULT`, the verify cap shared with the CLI (+1).
 # The exec wrapper re-wakes a resumed team member's open stage through `team_stage::rewake_resumed` (+1).
-# SeatPolicy and its load/horizon/holding share one keep-warm admission between the keepalive helper, idle compaction, and the sidebar producer cache (+4).
+# SeatPolicy and its load/horizon/holding/idle_compact_floor share per-seat keep-warm and idle-compaction resolution between the keepalive helper, idle compaction, and the sidebar producer cache (+5).
 # `holds` is the one held-or-not predicate the ping, compaction, and the per-fold card projection share (+1).
 # `run::provider_startup_exit` shares the startup diagnostic predicate with the exec wrapper (+1).
 # Manual redemption shares its prepared preview and locked consume entry with the CLI (+3).

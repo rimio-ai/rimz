@@ -1539,8 +1539,8 @@ fn harness_flip_compact_validation_accepts_off_and_thresholds() {
 #[test]
 fn harness_idle_compact_values_are_parsed_as_strings() {
     let mode = parse_key("harness.idle_compact").expect("mode key");
-    assert_eq!(parse_set_value(&mode, "on").as_str(), Some("on"));
-    assert_eq!(parse_set_value(&mode, "25m").as_str(), Some("25m"));
+    assert_eq!(parse_set_value(&mode, "off").as_str(), Some("off"));
+    assert_eq!(parse_set_value(&mode, "100k").as_str(), Some("100k"));
 }
 
 #[test]
@@ -1635,9 +1635,9 @@ fn harness_smart_compact_validation_rejects_bad_values() {
 }
 
 #[test]
-fn harness_idle_compact_validation_accepts_modes_and_duration() {
+fn harness_idle_compact_validation_accepts_off_and_token_floors() {
     let mode = parse_key("harness.idle_compact").expect("mode key");
-    for value in ["off", "on", "25m"] {
+    for value in ["off", "100k", "250000", "1000k"] {
         validate_set_value(&mode, &Value::from(value)).expect("idle compact mode");
     }
     let err = validate_set_value(&mode, &Value::from("auto"))
@@ -1645,8 +1645,14 @@ fn harness_idle_compact_validation_accepts_modes_and_duration() {
         .to_string();
     assert_eq!(
         err,
-        "harness.idle_compact must be off, on, or a duration such as 25m"
+        "harness.idle_compact must be off or a positive token floor in digits or k, such as 100k or 1000k"
     );
+    for retired in ["on", "2h", "25m", "1m", "0"] {
+        assert!(
+            validate_set_value(&mode, &Value::from(retired)).is_err(),
+            "{retired}"
+        );
+    }
 
     let editor = ConfigEditor::new(test_files());
     assert!(matches!(
@@ -1674,7 +1680,14 @@ fn harness_keep_warm_floor_validation_accepts_off_and_durations() {
 
 #[test]
 fn retired_idle_compaction_is_rejected_then_removed_preserving_other_settings() {
-    for (mode, has_after) in [("auto", true), ("always", false), ("off", true)] {
+    for (mode, has_after) in [
+        ("auto", true),
+        ("always", false),
+        ("on", false),
+        ("2h", false),
+        ("59m", true),
+        ("off", true),
+    ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let after = if has_after {
@@ -1709,7 +1722,7 @@ fn retired_idle_compaction_is_rejected_then_removed_preserving_other_settings() 
         let config = crate::config::parse_core_text_strict(&path, &text).unwrap();
         assert_eq!(
             serde_json::to_value(config.harness).unwrap()["idle_compact"],
-            if mode == "off" { "off" } else { "on" }
+            if mode == "off" { "off" } else { "100k" }
         );
         assert!(editor.retire_idle_compact_keys().unwrap().is_empty());
         assert!(matches!(

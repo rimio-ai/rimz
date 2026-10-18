@@ -5,8 +5,7 @@ use std::path::Path;
 
 use crate::agents;
 use crate::config::{
-    FlipCompact, IdleCompactMode, KeepWarm, Profile, PromptSource, RoleBinding, Team,
-    TeamSignalBinding,
+    FlipCompact, KeepWarm, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding,
 };
 use crate::harness::team_prompt::BUILT_IN_CONSENSUS;
 use crate::store::message::AutoCompact;
@@ -186,11 +185,9 @@ fn roster(
                 .as_deref()
                 .map(|value| flip_compact(path, value))
                 .transpose()?,
-            idle_compact: role
-                .idle_compact
-                .as_deref()
-                .map(|value| idle_compact(path, value))
-                .transpose()?,
+            // A Markdown role's value rides its overlay into the seat's
+            // `<team>.<role>` profile, inheriting like `auto-compact`.
+            idle_compact: None,
             keep_warm: role
                 .keep_warm
                 .as_deref()
@@ -389,15 +386,6 @@ impl SeatLoader<'_> {
         profile.append_system_prompt_files = crafts;
         Ok(profile)
     }
-}
-
-fn idle_compact(path: &Path, value: &str) -> Result<IdleCompactMode, DefinitionErr> {
-    value.parse().map_err(|_| {
-        DefinitionErr::new(
-            path,
-            format!("sets `idle-compact: {value}`; rimz takes off, on, or a duration such as 25m"),
-        )
-    })
 }
 
 pub(super) fn keep_warm(path: &Path, value: &str) -> Result<KeepWarm, DefinitionErr> {
