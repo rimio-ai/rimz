@@ -24,6 +24,8 @@ pub(super) struct GuardSite {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct GuardFamily {
+    #[serde(skip)]
+    pub(super) finding: bool,
     pub(super) key: String,
     pub(super) files: usize,
     pub(super) sites: usize,
@@ -63,29 +65,7 @@ pub(super) fn passthroughs(facts: &Facts, scope: &Path) -> Vec<PassThrough> {
     rows
 }
 
-pub(super) fn guard_families(facts: &Facts, scope: &Path) -> Vec<GuardFamily> {
-    guard_families_with_dropped(facts, scope).0
-}
-
-pub(super) fn guard_families_with_dropped(
-    facts: &Facts,
-    scope: &Path,
-) -> (Vec<GuardFamily>, GuardDrops) {
-    guard_family_report(facts, scope, false)
-}
-
-pub(super) fn guard_families_all_with_dropped(
-    facts: &Facts,
-    scope: &Path,
-) -> (Vec<GuardFamily>, GuardDrops) {
-    guard_family_report(facts, scope, true)
-}
-
-fn guard_family_report(
-    facts: &Facts,
-    scope: &Path,
-    include_all: bool,
-) -> (Vec<GuardFamily>, GuardDrops) {
+pub(super) fn guard_families(facts: &Facts, scope: &Path) -> (Vec<GuardFamily>, GuardDrops) {
     let mut groups = BTreeMap::<String, Vec<GuardSite>>::new();
     for guard in facts
         .syntax
@@ -126,10 +106,8 @@ fn guard_family_report(
                 GuardClassification::PredicateUse => dropped.predicate_use += 1,
                 GuardClassification::Composed => {}
             }
-            if !include_all && classification != GuardClassification::Composed {
-                return None;
-            }
             Some(GuardFamily {
+                finding: classification == GuardClassification::Composed,
                 key,
                 files,
                 sites: locations.len(),

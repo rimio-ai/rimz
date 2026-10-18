@@ -241,6 +241,7 @@ fn survey_output_is_bounded_by_top() {
         .collect::<Vec<_>>();
     let shapes = (0..30)
         .map(|index| ShapeFamily {
+            finding: true,
             name: format!("shape-{index}"),
             members: vec![Member {
                 path: PathBuf::from(format!("src/shape-{index}.rs")),
@@ -259,6 +260,7 @@ fn survey_output_is_bounded_by_top() {
         .collect();
     let guards = (0..30)
         .map(|index| GuardFamily {
+            finding: true,
             key: format!("guard-{index}"),
             files: 3,
             sites: 3,
@@ -430,6 +432,7 @@ fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
     ];
     let shapes = vec![
         ShapeFamily {
+            finding: true,
             name: "fold".to_owned(),
             members: vec![Member {
                 path: PathBuf::from("crates/rimz/src/store/snapshot.rs"),
@@ -446,6 +449,7 @@ fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
             provider: None,
         },
         ShapeFamily {
+            finding: true,
             name: "apply".to_owned(),
             members: vec![Member {
                 path: PathBuf::from("crates/rimz/src/store/snapshot/apply.rs"),
@@ -463,6 +467,7 @@ fn probes_join_rank_hot_shapes_guards_and_admitted_debt() {
         },
     ];
     let guards = vec![GuardFamily {
+        finding: true,
         key: "ready".to_owned(),
         files: 1,
         sites: 3,
@@ -971,10 +976,19 @@ fn stale_verdict_keys_are_judged_crate_wide_whatever_the_scope() {
         module_scores: BTreeMap::new(),
         functions: Vec::new(),
     });
-    let outside = detect::guard_families(&facts, Path::new("."));
+    let outside = detect::guard_families(&facts, Path::new("."))
+        .0
+        .into_iter()
+        .filter(|family| family.finding)
+        .collect::<Vec<_>>();
     assert_eq!(outside.len(), 1, "{outside:?}");
     assert!(
-        detect::guard_families(&facts, scope).is_empty(),
+        detect::guard_families(&facts, scope)
+            .0
+            .into_iter()
+            .filter(|family| family.finding)
+            .collect::<Vec<_>>()
+            .is_empty(),
         "the family lives only outside the scope"
     );
     let verdict = |kind: &str, key: &str| {
@@ -1446,6 +1460,7 @@ fn ambiguous_verdict_keys_are_reported_beside_stale_ones() {
 #[test]
 fn shape_keys_one_view_forms_several_families_under_are_collisions() {
     let family = |name: &str, path: &str| ShapeFamily {
+        finding: true,
         name: name.to_owned(),
         members: vec![Member {
             path: PathBuf::from(path),

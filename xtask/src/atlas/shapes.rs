@@ -30,6 +30,8 @@ struct Cluster {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct ShapeFamily {
+    #[serde(skip)]
+    pub(super) finding: bool,
     pub(super) name: String,
     pub(super) members: Vec<Member>,
     pub(super) files: usize,
@@ -90,40 +92,15 @@ fn clusters(
     (functions.len(), clusters)
 }
 
-pub(super) fn families(facts: &Facts, scope: &Path) -> Vec<ShapeFamily> {
-    families_with_dropped(facts, scope).0
-}
-
-/// Shape families keyed by crate vocabulary, ranked sibling roles first,
-/// beside the count of families dropped because their key named only std
-/// or external vocabulary.
-pub(super) fn families_with_dropped(
-    facts: &Facts,
-    scope: &Path,
-) -> (Vec<ShapeFamily>, FamilyDrops) {
-    family_report(facts, scope, false)
-}
-
 /// Every candidate family, including std vocabulary and families below the
 /// finding gate, alongside the counts the default report omits.
-pub(super) fn families_all_with_dropped(
-    facts: &Facts,
-    scope: &Path,
-) -> (Vec<ShapeFamily>, FamilyDrops) {
-    family_report(facts, scope, true)
-}
-
-fn family_report(
-    facts: &Facts,
-    scope: &Path,
-    include_all: bool,
-) -> (Vec<ShapeFamily>, FamilyDrops) {
+pub(super) fn families(facts: &Facts, scope: &Path) -> (Vec<ShapeFamily>, FamilyDrops) {
     let (_, clusters) = clusters(facts, scope, 40, 0.35);
     let all = merge_families(clusters);
     let mut drops = FamilyDrops::default();
     let mut families = all
         .into_iter()
-        .filter_map(|mut family| {
+        .map(|mut family| {
             let crate_vocabulary = family
                 .name
                 .split('+')
@@ -138,8 +115,8 @@ fn family_report(
             } else if !passes_gate {
                 drops.below_gate += 1;
             }
-            (include_all || (crate_vocabulary && passes_gate && family.provider.is_none()))
-                .then_some(family)
+            family.finding = crate_vocabulary && passes_gate && family.provider.is_none();
+            family
         })
         .collect::<Vec<_>>();
     sort_families(&mut families);
@@ -442,6 +419,7 @@ fn merge_families(clusters: Vec<Cluster>) -> Vec<ShapeFamily> {
                 / members.len().max(1) as f64;
             let (siblings, role) = sibling_role(&members);
             ShapeFamily {
+                finding: false,
                 name,
                 score: files as f64 * mean_sloc,
                 sloc_in_play: members.len() as f64 * mean_sloc,
@@ -983,6 +961,7 @@ mod tests {
     #[test]
     fn finding_gate_requires_siblings_or_three_substantial_files() {
         let family = |files, mean_sloc, siblings| ShapeFamily {
+            finding: false,
             name: "shape".to_owned(),
             members: Vec::new(),
             files,
@@ -1009,6 +988,7 @@ mod tests {
             sloc: 40,
         };
         let family = |members: Vec<Member>, siblings| ShapeFamily {
+            finding: false,
             name: "render+cell+Table::new".to_owned(),
             files: members.len(),
             mean_sloc: 40.0,
@@ -1049,6 +1029,7 @@ mod tests {
     #[test]
     fn finding_families_rank_by_siblings_then_sloc_in_play() {
         let family = |name: &str, siblings, sloc_in_play| ShapeFamily {
+            finding: false,
             name: name.to_owned(),
             members: Vec::new(),
             files: 3,
