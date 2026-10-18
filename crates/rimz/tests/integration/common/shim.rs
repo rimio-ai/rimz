@@ -200,7 +200,7 @@ pub fn write_hook_firing_agent(env: &Env, agent: &str) -> PathBuf {
     let shim = dir.join(agent);
     let version = match agent {
         "claude" => "2.1.158 (Claude Code)",
-        _ => "0.159.2",
+        _ => "0.163.0",
     };
     let body = format!(
         "#!/bin/sh\n\
