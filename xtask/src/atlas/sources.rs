@@ -219,10 +219,11 @@ pub(super) fn working_tree_rust_sources(root: &Path) -> Result<Vec<Source>> {
 }
 
 fn walk(root: &Path, directory: &Path, sources: &mut Vec<Source>) -> Result<()> {
-    for entry in
-        fs::read_dir(directory).with_context(|| format!("reading {}", directory.display()))?
-    {
-        let entry = entry?;
+    let mut entries = fs::read_dir(directory)
+        .with_context(|| format!("reading {}", directory.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             if path == root.join(".git") || path == root.join("target") {
@@ -383,6 +384,28 @@ mod tests {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn working_tree_sources_come_back_sorted_by_path() {
+        let root = tempfile::tempdir().unwrap();
+        let names = ["m", "c", "q", "a", "k", "e", "o", "g", "b", "i", "d", "n"];
+        for directory in ["src/z", "src"] {
+            fs::create_dir_all(root.path().join(directory)).unwrap();
+            for name in names {
+                fs::write(root.path().join(format!("{directory}/{name}.rs")), "").unwrap();
+            }
+        }
+        let paths = working_tree_rust_sources(root.path())
+            .unwrap()
+            .into_iter()
+            .map(|source| source.path)
+            .collect::<Vec<_>>();
+        let mut sorted = paths.clone();
+        sorted.sort();
+
+        assert_eq!(paths.len(), 2 * names.len());
+        assert_eq!(paths, sorted);
     }
 
     #[test]
