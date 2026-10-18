@@ -42,10 +42,21 @@ pub fn disk_space(path: &Path) -> std::io::Result<DiskSpace> {
 
 /// Best-effort recursive size for a path without following symlinks.
 pub(crate) fn dir_size(path: &Path) -> u64 {
-    dir_size_inner(path, &mut HashSet::new())
+    dir_size_inner(path, &mut HashSet::new(), &fs::Metadata::len)
 }
 
-fn dir_size_inner(path: &Path, seen_files: &mut HashSet<FileIdentity>) -> u64 {
+/// Best-effort allocated size, counting hardlinked files once and not following symlinks.
+pub(crate) fn dir_allocated_size(path: &Path) -> u64 {
+    dir_size_inner(path, &mut HashSet::new(), &|meta| {
+        meta.blocks().saturating_mul(512)
+    })
+}
+
+fn dir_size_inner(
+    path: &Path,
+    seen_files: &mut HashSet<FileIdentity>,
+    size: &impl Fn(&fs::Metadata) -> u64,
+) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(_) => return 0,
@@ -53,7 +64,7 @@ fn dir_size_inner(path: &Path, seen_files: &mut HashSet<FileIdentity>) -> u64 {
     if file_identity(&meta).is_some_and(|identity| !seen_files.insert(identity)) {
         return 0;
     }
-    let mut bytes = meta.len();
+    let mut bytes = size(&meta);
     if !meta.is_dir() || meta.file_type().is_symlink() {
         return bytes;
     }
@@ -61,7 +72,7 @@ fn dir_size_inner(path: &Path, seen_files: &mut HashSet<FileIdentity>) -> u64 {
         return bytes;
     };
     for entry in entries.flatten() {
-        bytes = bytes.saturating_add(dir_size_inner(&entry.path(), seen_files));
+        bytes = bytes.saturating_add(dir_size_inner(&entry.path(), seen_files, size));
     }
     bytes
 }
@@ -238,6 +249,38 @@ mod tests {
         let expected = fs::symlink_metadata(&root).unwrap().len()
             + fs::symlink_metadata(&source).unwrap().len();
         assert_eq!(dir_size(&root), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn allocated_size_counts_blocks_once_without_following_links() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("root");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let source = root.join("source");
+        fs::write(&source, vec![1_u8; 16 * 1024]).unwrap();
+        fs::hard_link(&source, nested.join("alias")).unwrap();
+        let sparse = root.join("sparse");
+        fs::File::create(&sparse)
+            .unwrap()
+            .set_len(1024 * 1024)
+            .unwrap();
+        let outside = temp.path().join("outside");
+        fs::write(&outside, vec![2_u8; 32 * 1024]).unwrap();
+        let link = root.join("link");
+        symlink(outside, &link).unwrap();
+        let expected: u64 = [&root, &nested, &source, &sparse, &link]
+            .into_iter()
+            .map(|path| fs::symlink_metadata(path).unwrap().blocks() * 512)
+            .sum();
+
+        assert!(expected > 0);
+        assert_eq!(dir_allocated_size(&root), expected);
+        assert!(dir_allocated_size(&root) < dir_size(&root));
+        assert_eq!(dir_allocated_size(&temp.path().join("missing")), 0);
     }
 
     #[test]

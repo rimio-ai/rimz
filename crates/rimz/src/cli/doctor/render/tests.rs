@@ -596,6 +596,12 @@ fn report_fixture() -> DoctorReport {
         },
         remote_control: RemoteControl::Off,
         disk_usage: storage_fixture(),
+        temp_units: Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+            free_bytes: 20,
+            total_bytes: 100,
+            floor_bytes: 10,
+            ..Default::default()
+        }),
         protocols: None,
         trust: None,
         agents: None,

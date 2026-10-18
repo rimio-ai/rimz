@@ -912,6 +912,114 @@ fn gc_tmp_grace_is_independent_of_runtime_and_owned_retention() {
 }
 
 #[test]
+fn gc_tmp_floor_evicts_machine_wide_oldest_first_and_keeps_live_units() {
+    let env = Env::new();
+    let other = env.home_root.join("other");
+    env.record(&env.project_root);
+    env.record(&other);
+    let paths = env.state_path_for(&env.project_root);
+    let other_paths = env.state_path_for(&other);
+    let now = jiff::Timestamp::now();
+    for (name, hours, live) in [
+        ("recent", 2, false),
+        ("oldest", 5, false),
+        ("live", 8, true),
+    ] {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(name.into()), LifecycleSignal::Ended);
+        observation.agent_name = Some(name.into());
+        if live {
+            observation.runtime_owner = Some(rimz::store::runtime::current_process_owner(
+                rimz::pane::RuntimeOwnerKind::Agent,
+                name,
+            ));
+        }
+        let mut event = rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "SessionEnd",
+            &observation,
+        );
+        event.timestamp = now - jiff::SignedDuration::from_hours(hours);
+        env.store().append_event(&event).unwrap();
+        std::fs::create_dir_all(paths.temp_unit_dir(Some(name))).unwrap();
+    }
+    let orphan = other_paths.temp_unit_dir(Some("orphan"));
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::File::open(&orphan)
+        .unwrap()
+        .set_modified((now - jiff::SignedDuration::from_hours(3)).into())
+        .unwrap();
+    let unnamed = paths.temp_unit_dir(None);
+    std::fs::create_dir_all(&unnamed).unwrap();
+
+    for config in ["[gc]\nauto = false\n", "[gc]\ntmp_floor_min = \"broken\"\n"] {
+        write_machine_config(&env, config);
+        env.rimz()
+            .args(["gc", "--tmp-floor"])
+            .env("RIMZ_TEST_DISK_SPACE", "1,100")
+            .assert()
+            .success();
+        assert!(paths.temp_unit_dir(Some("oldest")).exists());
+        assert!(!env.rimz_home().join("logs/assists.log.jsonl").exists());
+    }
+    write_machine_config(
+        &env,
+        "[gc]\ntmp_floor_percent = 10\ntmp_floor_min = \"1GiB\"\n",
+    );
+    let output = env
+        .rimz()
+        .args(["gc", "--tmp-floor", "--json"])
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["floor_bytes"], 1_073_741_824_u64);
+    assert!(!paths.temp_unit_dir(Some("oldest")).exists());
+    assert!(!paths.temp_unit_dir(Some("recent")).exists());
+    assert!(!orphan.exists());
+    assert!(paths.temp_unit_dir(Some("live")).exists());
+    assert!(unnamed.exists());
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let handles: Vec<_> = records
+        .iter()
+        .map(|record| match &record.assist {
+            rimz::harness::assist_log::Assist::TmpEvict { handle, error, .. } => {
+                assert!(error.is_none());
+                handle.as_str()
+            }
+            other => panic!("unexpected assist {other:?}"),
+        })
+        .collect();
+    assert_eq!(handles, ["oldest", "orphan", "recent"]);
+}
+
+#[test]
+fn gc_tmp_floor_continues_when_the_assist_log_is_unwritable() {
+    let env = Env::new();
+    write_machine_config(&env, "[gc]\ntmp_floor_min = \"1GiB\"\n");
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    for handle in ["first", "second"] {
+        std::fs::create_dir_all(paths.temp_unit_dir(Some(handle))).unwrap();
+    }
+    std::fs::create_dir_all(env.rimz_home().join("logs/assists.log.jsonl")).unwrap();
+    env.rimz()
+        .args(["gc", "--tmp-floor"])
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .assert()
+        .success()
+        .stderr(contains("tmp eviction assist append failed"));
+    for handle in ["first", "second"] {
+        assert!(
+            !paths.temp_unit_dir(Some(handle)).exists(),
+            "failed logging must not halt eviction"
+        );
+    }
+}
+
+#[test]
 fn gc_removes_the_ledger_a_shared_account_left_behind() {
     let env = Env::new();
     let rt = env.runtime_paths();

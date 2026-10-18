@@ -334,6 +334,14 @@ pub(super) fn refresh_heavy_lanes(
         base.now,
         &mut state.auto_gc,
     );
+    crate::harness::auto_gc::tmp_floor_if_due(
+        state_paths,
+        runtime,
+        base.project_root.as_deref(),
+        &config.gc,
+        base.now,
+        &mut state.auto_gc,
+    );
     refresh_diff_stats_for(
         base,
         runtime,

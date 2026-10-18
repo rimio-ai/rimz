@@ -39,10 +39,13 @@ pub struct GcArgs {
     /// the assist and the workspace sweep stamp.
     #[arg(long, hide = true, conflicts_with = "dry_run")]
     unattended: bool,
+    /// Reclaim ended temp units until the machine free-space floor is met.
+    #[arg(long, hide = true, conflicts_with_all = ["all", "dry_run", "unattended", "older_than"])]
+    tmp_floor: bool,
 }
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
-    let gc_config = if args.unattended {
+    let gc_config = if args.unattended || args.tmp_floor {
         // A destructive automation never starts from a config that fails to
         // parse: lenient defaults would re-enable a `gc.auto = false` opt-out.
         let Ok(config) = MachineConfig::load() else {
@@ -55,6 +58,43 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         MachineConfig::load_lenient().gc.clone()
     };
+    if args.tmp_floor {
+        if let Some(report) = rimz::harness::tmp_floor::run(&gc_config)? {
+            if args.json {
+                serde_json::to_writer_pretty(render::out(), &report)?;
+            } else {
+                let mut out = render::out();
+                for record in &report.evictions {
+                    if let Assist::TmpEvict {
+                        workspace_id,
+                        handle,
+                        reclaimed_bytes,
+                        error,
+                        ..
+                    } = &record.assist
+                    {
+                        writeln!(
+                            out,
+                            "{handle}: {} ({workspace_id}){}",
+                            fmt_bytes(*reclaimed_bytes),
+                            error
+                                .as_ref()
+                                .map(|error| format!(" failed: {error}"))
+                                .unwrap_or_default()
+                        )?;
+                    }
+                }
+                writeln!(
+                    out,
+                    "free {} of {}, floor {}",
+                    fmt_bytes(report.free_bytes),
+                    fmt_bytes(report.total_bytes),
+                    fmt_bytes(report.floor_bytes)
+                )?;
+            }
+        }
+        return Ok(());
+    }
     let policy = gc::GcPolicy {
         older_than: args.older_than.unwrap_or(gc_config.older_than),
         tmp_grace: gc_config.tmp_grace,

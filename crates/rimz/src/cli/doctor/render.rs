@@ -272,6 +272,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_lsp(w, &report.lsp, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
     render_storage(w, &report.disk_usage, &mut tally)?;
+    render_temp_units(w, &report.temp_units, &mut tally)?;
 
     if let Some(protocols) = &report.protocols {
         render_protocols(w, protocols, &mut tally)?;
@@ -324,6 +325,74 @@ fn render_hibernate(
         };
         kv.push(check.name, value);
     }
+    kv.render(w)
+}
+
+fn render_temp_units(
+    w: &mut impl Write,
+    report: &Probe<rimz::harness::tmp_floor::TempUnits>,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    section(w, tally, "TEMP UNITS")?;
+    let mut kv = KeyVals::new().indent(2);
+    let report = match report {
+        Probe::Ready(report) => report,
+        Probe::Unavailable { error, .. } => {
+            kv.push(
+                "free",
+                counted_verdict(
+                    tally,
+                    Severity::Warning,
+                    error,
+                    "repair the reported configuration or filesystem access error",
+                ),
+            );
+            return kv.render(w);
+        }
+    };
+    let free = format!(
+        "{} of {}, floor {}",
+        fmt_bytes(report.free_bytes),
+        fmt_bytes(report.total_bytes),
+        fmt_bytes(report.floor_bytes)
+    );
+    let free = if report.free_bytes >= report.floor_bytes {
+        verdict(Health::Ok, &free)
+    } else if report.reclaimable_bytes > 0 {
+        counted_verdict(tally, Severity::Warning, &free, "run `rimz gc --tmp-floor`")
+    } else {
+        counted_verdict(
+            tally,
+            Severity::Problem,
+            &free,
+            "stop or restart the agents holding the largest units; `rimz agents show @handle` prints the unit path",
+        )
+    };
+    kv.push("free", free);
+    kv.push(
+        "reclaimable",
+        cell(if report.reclaimable_units == 0 {
+            "none".into()
+        } else {
+            format!(
+                "{} units, {}; {} past the grace, earliest reclaim {}",
+                report.reclaimable_units,
+                fmt_bytes(report.reclaimable_bytes),
+                report.past_grace_units,
+                report
+                    .earliest_reclaim
+                    .map_or_else(|| "unknown".into(), |at| at.to_string())
+            )
+        }),
+    );
+    kv.push(
+        "in use",
+        cell(format!(
+            "{} units, {}",
+            report.in_use_units,
+            fmt_bytes(report.in_use_bytes)
+        )),
+    );
     kv.render(w)
 }
 

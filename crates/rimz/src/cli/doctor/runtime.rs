@@ -72,6 +72,20 @@ pub(super) fn collect_storage() -> model::Storage {
     }
 }
 
+pub(super) fn collect_temp_units() -> model::Probe<rimz::harness::tmp_floor::TempUnits> {
+    match MachineConfig::load()
+        .map_err(|error| error.to_string())
+        .and_then(|config| {
+            rimz::harness::tmp_floor::inspect(&config.gc).map_err(|error| error.to_string())
+        }) {
+        Ok(report) => model::Probe::Ready(report),
+        Err(error) => model::Probe::Unavailable {
+            error,
+            diagnosis: None,
+        },
+    }
+}
+
 pub(super) fn collect_last_incident(
     ws: &rimz::ResolvedWorkspace,
     cleared_at: Option<jiff::Timestamp>,

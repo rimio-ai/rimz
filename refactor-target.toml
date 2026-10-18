@@ -573,7 +573,9 @@ allowed-dependencies = [
 # WorkflowPaths::check_output owns per-attempt judge output paths (+1).
 # WorkflowPaths::notes owns cross-node scratch paths (+1).
 # DiskSpace, disk_space and the three DEFAULT_TMP_* constants share capacity and retention policy (+5).
-surface-budget = 263
+# RuntimePaths::shared_tmp_floor_lock elects one machine pressure helper (+1).
+# usage::dir_allocated_size shares allocated-byte accounting with pressure eviction (+1).
+surface-budget = 265
 
 [[verdict]]
 kind = "item"
@@ -801,7 +803,8 @@ path = "crates/rimz/src/harness"
 # ScopeRoots and ScopeRoots::path resolve workflow scope across CLI and loop admission (+2).
 # hibernate::Check::{summary,fix} carry producer-owned remedies to doctor without changing JSON (+2).
 # launch_plan::agent_temp_owner shares temp-unit ownership with GC (+1).
-surface-budget = 901
+# tmp_floor::{TmpFloorErr, FloorReport, TempUnits, run, inspect} serve GC and doctor (+5).
+surface-budget = 906
 
 [[verdict]]
 kind = "item"
@@ -7391,3 +7394,43 @@ reason = "Machine GC configuration has one default capacity reserve."
 kind = "item"
 key = "disk::retention::DEFAULT_TMP_FLOOR_MIN"
 reason = "Machine GC configuration shares the binary ten-GiB minimum reserve."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::TmpFloorErr"
+reason = "The detached GC helper and read-only doctor surface typed pressure-policy failures."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::FloorReport"
+reason = "The hidden GC CLI renders or serializes the pressure pass and its per-unit assists."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::TempUnits"
+reason = "Doctor renders or serializes the machine-wide read-only temp-unit assessment."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::inspect"
+reason = "Doctor shares the evictor's inventory and hold rules without locking or writing."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::run"
+reason = "The detached GC CLI delegates machine election and pressure eviction to the harness."
+
+[[verdict]]
+kind = "item"
+key = "harness::auto_gc::tmp_floor_if_due"
+reason = "The sidebar heavy pass delegates read-only probing and paced helper spawning to auto GC."
+
+[[verdict]]
+kind = "item"
+key = "disk::paths::RuntimePaths::shared_tmp_floor_lock"
+reason = "One runtime-class machine lock elects the temp-floor evictor."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::dir_allocated_size"
+reason = "Pressure eviction estimates delayed reclamation using allocated blocks through the shared usage walk."

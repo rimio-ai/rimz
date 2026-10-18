@@ -4,6 +4,7 @@
 //! The room host reads the workspace's durable sweep stamp and spawns
 //! the detached `rimz gc --unattended` helper when a sweep is due. The helper
 //! owns the sweep, the assist record, and the stamp write.
+//! Heavy passes also probe free space and pace `rimz gc --tmp-floor`; that detached helper alone inventories and evicts units.
 
 use std::path::Path;
 use std::time::Duration;
@@ -44,6 +45,7 @@ const AUTO_GC_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
 pub(crate) struct AutoGcMemo {
     producer_since: Option<Timestamp>,
     last_spawn: Option<Timestamp>,
+    last_floor_attempt: Option<Timestamp>,
     /// Stamps only move forward, so one read inside the interval settles the
     /// rest of the day without touching disk.
     last_swept: Option<Timestamp>,
@@ -126,6 +128,63 @@ fn elapsed(since: Timestamp, span: Duration, now: Timestamp) -> bool {
     now.as_second() - since.as_second() >= span.as_secs() as i64
 }
 
+pub(crate) fn tmp_floor_if_due(
+    state_paths: &StatePaths,
+    runtime: &RuntimePaths,
+    project_root: Option<&Path>,
+    config: &GcConfig,
+    now: Timestamp,
+    memo: &mut AutoGcMemo,
+) {
+    let Some(root) = project_root else {
+        return;
+    };
+    floor_if_due(
+        config,
+        now,
+        &mut memo.last_floor_attempt,
+        || crate::disk::usage::disk_space(&state_paths.root),
+        || {
+            crate::child_process::spawn_detached_rimz(
+                runtime,
+                [
+                    "gc".as_ref(),
+                    "--tmp-floor".as_ref(),
+                    "--root".as_ref(),
+                    root.as_os_str(),
+                ],
+                "tmp-floor",
+            )
+        },
+    );
+}
+
+fn floor_if_due(
+    config: &GcConfig,
+    now: Timestamp,
+    last_attempt: &mut Option<Timestamp>,
+    probe: impl FnOnce() -> std::io::Result<crate::disk::usage::DiskSpace>,
+    spawn: impl FnOnce() -> std::io::Result<()>,
+) {
+    if !config.auto || last_attempt.is_some_and(|at| !elapsed(at, AUTO_GC_RESPAWN_THROTTLE, now)) {
+        return;
+    }
+    let result = probe().and_then(|space| {
+        let floor = config
+            .tmp_floor_bytes(space.total)
+            .map_err(std::io::Error::other)?;
+        if space.free >= floor {
+            return Ok(());
+        }
+        *last_attempt = Some(now);
+        spawn()
+    });
+    if let Err(error) = result {
+        *last_attempt = Some(now);
+        tracing::debug!(%error, "tmp-floor trigger failed; retrying after throttle");
+    }
+}
+
 /// When an unattended sweep last ran; unreadable reads as never.
 fn read_stamp(path: &Path) -> Option<Timestamp> {
     let bytes = std::fs::read(path).ok()?;
@@ -182,6 +241,77 @@ mod tests {
 
     fn at(minutes: i64) -> Timestamp {
         Timestamp::from_second(1_000_000 + minutes * 60).expect("timestamp")
+    }
+
+    #[test]
+    fn floor_trigger_throttles_spawns_and_first_attempt_failures() {
+        use crate::disk::usage::DiskSpace;
+        use std::cell::Cell;
+        for failure in [None, Some("probe"), Some("spawn")] {
+            let config = GcConfig {
+                tmp_floor_min: "0".into(),
+                ..GcConfig::default()
+            };
+            let probes = Cell::new(0);
+            let spawns = Cell::new(0);
+            let mut last_attempt = None;
+            for minute in [0, 1, 9, 10] {
+                floor_if_due(
+                    &config,
+                    at(minute),
+                    &mut last_attempt,
+                    || {
+                        probes.set(probes.get() + 1);
+                        if failure == Some("probe") {
+                            return Err(std::io::Error::other("statvfs"));
+                        }
+                        Ok(DiskSpace {
+                            free: 1,
+                            total: 100,
+                        })
+                    },
+                    || {
+                        spawns.set(spawns.get() + 1);
+                        if failure == Some("spawn") {
+                            return Err(std::io::Error::other("spawn"));
+                        }
+                        Ok(())
+                    },
+                );
+            }
+            assert_eq!(
+                probes.get(),
+                2,
+                "{failure:?}: no per-pass retry after a first failure"
+            );
+            assert_eq!(spawns.get(), if failure == Some("probe") { 0 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn floor_trigger_honours_auto_zero_floor_and_free_space_ties() {
+        for (auto, percent, free) in [(false, 10, 1), (true, 0, 0), (true, 10, 10)] {
+            let config = GcConfig {
+                auto,
+                tmp_floor_percent: percent,
+                tmp_floor_min: "0".into(),
+                ..GcConfig::default()
+            };
+            let mut last_attempt = None;
+            let probed = std::cell::Cell::new(false);
+            floor_if_due(
+                &config,
+                at(0),
+                &mut last_attempt,
+                || {
+                    probed.set(true);
+                    Ok(crate::disk::usage::DiskSpace { free, total: 100 })
+                },
+                || panic!("disabled or unbreached floor must not spawn"),
+            );
+            assert_eq!(probed.get(), auto);
+            assert!(last_attempt.is_none());
+        }
     }
 
     #[test]

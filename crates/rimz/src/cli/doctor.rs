@@ -108,6 +108,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         lsp: collect_lsp(ws, globals),
         remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),
         disk_usage: runtime::collect_storage(),
+        temp_units: runtime::collect_temp_units(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         folder_trust: ws.map(|ws| match crate::cli::folder_trust::collect(ws) {
