@@ -75,17 +75,11 @@ pub(super) fn launch_layout(
     crate::cli::check_launch_room(globals)?;
     let mut ctx = Ctx::open(globals)?;
     let snapshot = ctx.cached_snapshot()?;
-    if let Ok(caller) = ancestry::resolve_calling_agent(&snapshot.agents)
-        && let Some(checkout) = caller.checkout.as_deref()
-    {
-        ctx.workspace = rimz::workspace::WorkspaceResolver::resolve_participant(
-            checkout,
-            globals.root.clone(),
-        )?;
-        ctx.workspace.worktree_root = Path::new(checkout)
-            .canonicalize()
-            .with_context(|| format!("resolving the caller's checkout `{checkout}`"))?;
-    }
+    ctx.workspace = crate::cli::anchor_caller_workspace(
+        ctx.workspace,
+        ancestry::resolve_calling_agent(&snapshot.agents).ok(),
+        globals,
+    )?;
     let cwd = crate::cli::resolve_launch_cwd(args.launch.cwd.as_deref(), ctx.store.paths())?;
     if let Some(launched) = launch_resolved(
         args.launch,

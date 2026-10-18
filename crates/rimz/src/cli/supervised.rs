@@ -64,32 +64,6 @@ fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspac
         .context("resolving current workspace")
 }
 
-fn anchor_subagent_workspace(
-    workspace: rimz::ResolvedWorkspace,
-    request: &rimz::harness::run::SupervisedRunRequest,
-    caller: Option<&rimz::agents::AgentState>,
-    globals: &GlobalFlags,
-) -> Result<rimz::ResolvedWorkspace> {
-    let Some(parent) = caller.filter(|parent| request.subagent || parent.checkout.is_some()) else {
-        return Ok(workspace);
-    };
-    let Some(path) = parent.lane_path() else {
-        tracing::debug!("subagent parent has no recorded checkout; keeping invoking cwd");
-        return Ok(workspace);
-    };
-    if !Path::new(path).is_dir() {
-        bail!(
-            "the parent's checkout `{path}` no longer exists; restart the parent from an existing checkout, or launch with `rimz agents` from the directory the child should work in"
-        );
-    }
-    let mut anchored = WorkspaceResolver::resolve_participant(path, globals.root.clone())
-        .with_context(|| format!("resolving the parent's checkout `{path}`"))?;
-    anchored.worktree_root = Path::new(path)
-        .canonicalize()
-        .with_context(|| format!("resolving the parent's launch directory `{path}`"))?;
-    Ok(anchored)
-}
-
 fn preflight_agent(
     adapter: &AgentDefinition,
     launch: &rimz::worktree::LaunchCheckout,

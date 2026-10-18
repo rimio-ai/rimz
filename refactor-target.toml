@@ -379,7 +379,8 @@ path = "crates/rimz/src/cli"
 # The position's standing and its in-room check serve providers and accounts list (+1).
 # Ctx shares cached channel provenance with create-on-miss; current_channel stays CLI-private.
 # Explicit child statuses reach main through the shared exit-code error.
-surface-budget = 33
+# anchor_caller_workspace shares agent-started placement across launch paths (+1).
+surface-budget = 34
 
 [[module]]
 path = "crates/rimz/src/config"
@@ -7214,3 +7215,8 @@ reason = "Admission compares existing runs using their recorded scope kind befor
 kind = "item"
 key = "workspace::ResolvedWorkspace::at_launch_dir"
 reason = "Interactive and supervised CLI launches resolve the launch directory's own repository without changing the room pin."
+
+[[verdict]]
+kind = "item"
+key = "cli::anchor_caller_workspace"
+reason = "Interactive and supervised launch entrypoints share caller-checkout placement and CLI refusal wording."

@@ -1113,7 +1113,7 @@ impl AgentState {
         }
     }
 
-    /// Checkout used for lane routing and grouping, not for process placement.
+    /// Checkout used for lane routing, grouping, and agent-started launch placement.
     pub fn lane_path(&self) -> Option<&str> {
         self.checkout.as_deref().or(self.worktree_path.as_deref())
     }
