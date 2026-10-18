@@ -1,3 +1,11 @@
+//! tmux presence state: folds control-mode lines into pane observations and
+//! focus transitions for the host presence projector.
+//!
+//! A `FocusChanged` never names sidebar chrome in `unfocused`: the prior active
+//! pane is chosen among working panes only, so focus leaving a sidebar arrives
+//! as `unfocused: []`. The sidebar's parked rule therefore reads a singleton
+//! `focused` set that names another pane as the sidebar losing focus.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diag::record::{DiagEvent, WorkPaneBoundaryMove};
