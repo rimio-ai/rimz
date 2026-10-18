@@ -10,10 +10,8 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use crate::common::room::{ShimRoom, seed_sidebar_heartbeat};
+use crate::common::room::{MATERIALIZED_ROOM_PANES, ShimRoom, seed_sidebar_heartbeat};
 use crate::common::{COMMAND_TIMEOUT, CommandTimeoutExt, Env, path_with_front, zellij_trace_shim};
-
-const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
 
 fn seed_actionable_agent(env: &Env) -> PathBuf {
     let bin_dir = env.home_root.join("agent-bin");
@@ -187,7 +185,7 @@ fn start_auto_fallback_reports_the_open_room() {
     let env = Env::new();
     let bin_dir = seed_actionable_agent(&env);
     let trace = env.project_root.join("zellij-fallback.log");
-    let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    let _room = ShimRoom::watch(&env, &trace);
     let mut command = env.rimz();
     configure_actionable_hooks(&mut command, &env, &bin_dir, &trace, "");
     // Remove the fixture's explicit print flag without changing its environment.
@@ -856,7 +854,7 @@ fn start_warns_about_saved_untrusted_on_birth_and_reattach() {
             String::new()
         };
         let trace = env.project_root.join("restricted-start.log");
-        let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+        let _room = ShimRoom::watch(&env, &trace);
         let mut command = env.rimz();
         configure_actionable_hooks(&mut command, &env, &bin, &trace, &sessions);
         let output = command
@@ -894,7 +892,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
         "birth",
     );
     let birth_trace = birth.project_root.join("zellij-birth.log");
-    let _birth_room = ShimRoom::watch(&birth, &birth_trace, MATERIALIZED_ROOM_PANES);
+    let _birth_room = ShimRoom::watch(&birth, &birth_trace);
     let mut birth_command = birth.rimz();
     configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
     birth_command.env("RIMZ_CODEX_CONFIG", &config);
@@ -960,7 +958,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     );
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let live_trace = live.project_root.join("zellij-live.log");
-    let _live_room = ShimRoom::watch(&live, &live_trace, MATERIALIZED_ROOM_PANES);
+    let _live_room = ShimRoom::watch(&live, &live_trace);
     let mut live_command = live.rimz();
     configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
     let live_output = live_command.bounded_output().expect("run live-room start");
@@ -1013,7 +1011,7 @@ fn failed_recovery_park_refuses_birth_before_creating_a_session() {
     std::fs::create_dir_all(&store.paths().pending_recovery)
         .expect("block pending record publication");
     let trace = env.project_root.join("zellij.log");
-    let mut room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    let mut room = ShimRoom::watch(&env, &trace);
     room.allow_no_trigger("a failed park refuses before creating the session");
     let mut command = env.rimz();
     configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
@@ -1059,7 +1057,7 @@ fn unattended_start_without_resume_parks_lost_agents() {
     rimz::store::live_roster::publish(&store.paths().live_roster, [lost.clone()].into())
         .expect("publish the dead session's roster");
     let trace = env.project_root.join("zellij.log");
-    let _room = ShimRoom::watch(&env, &trace, MATERIALIZED_ROOM_PANES);
+    let _room = ShimRoom::watch(&env, &trace);
     let mut command = env.rimz();
     configure_actionable_hooks(&mut command, &env, &bin, &trace, "");
 
@@ -1151,7 +1149,7 @@ fn live_room_start_keeps_parked_agents_without_prompting() {
     };
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
     let zellij_log = env.project_root.join("zellij-live.log");
-    let _room = ShimRoom::watch(&env, &zellij_log, MATERIALIZED_ROOM_PANES);
+    let _room = ShimRoom::watch(&env, &zellij_log);
 
     let mut unattended = env.rimz();
     configure_actionable_hooks(&mut unattended, &env, &bin_dir, &zellij_log, &sessions);
@@ -1267,7 +1265,7 @@ fn reconnect_marker_keeps_pty_start_unattended() {
     let env = Env::new();
     let bin_dir = seed_actionable_agent(&env);
     let zellij_log = env.project_root.join("zellij-reconnect.log");
-    let _room = ShimRoom::watch(&env, &zellij_log, MATERIALIZED_ROOM_PANES);
+    let _room = ShimRoom::watch(&env, &zellij_log);
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -1469,7 +1467,7 @@ fn start_with_accounts(
 ) -> std::process::Output {
     let bin_dir = seed_actionable_agent(env);
     let trace = env.project_root.join("zellij-accounts.log");
-    let mut room = ShimRoom::watch(env, &trace, MATERIALIZED_ROOM_PANES);
+    let mut room = ShimRoom::watch(env, &trace);
     if let Some(reason) = no_trigger_reason {
         room.allow_no_trigger(reason);
     }

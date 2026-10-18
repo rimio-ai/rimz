@@ -852,14 +852,18 @@ fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
     .unwrap();
     let presence = room.env.home_root.join("presence.wasm");
     fs::write(&presence, b"test-presence").unwrap();
-    success(room.command(&["start", "--no-attach", "--no-resume"])
-        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
-        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#)
-        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
-        .env("RIMZ_PRESENCE_PLUGIN", presence)
-        .env("RIMZ_PETS_OFFLINE", "1")
-        .env("TERM", "dumb")
-        .bounded_output().unwrap());
+    let _shim_room =
+        crate::common::room::ShimRoom::watch(&room.env, &room.env.project_root.join("spawn.log"));
+    success(
+        room.command(&["start", "--no-attach", "--no-resume"])
+            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+            .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
+            .env("RIMZ_PRESENCE_PLUGIN", presence)
+            .env("RIMZ_PETS_OFFLINE", "1")
+            .env("TERM", "dumb")
+            .bounded_output()
+            .unwrap(),
+    );
     let value = settled(&room.env, &id, "done");
     assert_eq!(value["record"]["prev_attempt"]["outcome"], "canceled");
     assert_eq!(
