@@ -134,6 +134,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     let launch = batch.single_identity()?;
     let mut invocation = restart::relaunch_request(&agent, &posture, action, login, Some(launch));
     invocation.identity.params.clone_from(&launch.launch);
+    let (title, pane_name) = molt_tab_names(&agent, &posture);
     let argv = rimz::harness::launch::exec_argv(
         &rimz::proc::rimz_exe(),
         store.runtime_paths(),
@@ -157,15 +158,12 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
                 &workspace.project_root,
             ),
             cwd: cwd.clone(),
-            title: source
-                .channel
-                .as_deref()
-                .map_or_else(|| kind.to_string(), |channel| format!("#{channel}")),
+            title,
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {
                     panes: vec![PaneCmd {
                         argv,
-                        name: Some(kind.to_string()),
+                        name: Some(pane_name),
                     }],
                     stacked: false,
                 }],
@@ -293,6 +291,26 @@ fn replacement_posture(
     ))
 }
 
+/// The successor's tab title and pane name, named as a fresh launch of the
+/// same seat would be.
+fn molt_tab_names(agent: &AgentState, posture: &ResumePosture) -> (String, String) {
+    let title = agent.channel.as_deref().map_or_else(
+        || {
+            rimz::harness::spec::default_tab_title(
+                &LayoutSpec::single(restart::restart_cell(agent, posture)),
+                None,
+                agent.team.as_deref(),
+            )
+        },
+        |channel| format!("#{channel}"),
+    );
+    let pane_name = agent
+        .profile
+        .clone()
+        .unwrap_or_else(|| agent.kind.to_string());
+    (title, pane_name)
+}
+
 fn molt_request(
     agent: &AgentState,
     posture: &ResumePosture,
@@ -407,5 +425,35 @@ mod tests {
         );
         assert_eq!(request.name, AgentLaunchName::Soft("fox".into()));
         assert!(request.run_id.is_none());
+    }
+
+    #[test]
+    fn molt_tab_names_follow_a_fresh_launch_of_the_seat() {
+        let posture = ResumePosture {
+            launch: Default::default(),
+            degraded: None,
+        };
+        let names = |profile: Option<&str>, channel: Option<&str>, team: Option<&str>| {
+            let mut agent =
+                rimz::testkit::agent_state("claude", "session", jiff::Timestamp::UNIX_EPOCH);
+            agent.profile = profile.map(Into::into);
+            agent.channel = channel.map(Into::into);
+            agent.team = team.map(Into::into);
+            molt_tab_names(&agent, &posture)
+        };
+        let pair = |title: &str, pane: &str| (title.to_string(), pane.to_string());
+        assert_eq!(
+            names(Some("brainstormer"), None, None),
+            pair("brainstormer", "brainstormer")
+        );
+        assert_eq!(
+            names(Some("brainstormer"), Some("lane"), None),
+            pair("#lane", "brainstormer")
+        );
+        assert_eq!(
+            names(Some("worker"), None, Some("forge")),
+            pair("team:forge", "worker")
+        );
+        assert_eq!(names(None, None, None), pair("claude", "claude"));
     }
 }

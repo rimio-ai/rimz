@@ -146,7 +146,7 @@ Stacks are presentation only. Zellij renders a native stack with one expanded pa
 
 ### From spec to panes
 
-`rimz agents molt` is self-succession rather than another peer launch. It replays recorded posture (or re-bases the same role onto `--agent`), reserves one successor, and opens an unfocused tab on the supplied note without a peer run for that turn. It copies the predecessor's ancestry, generation, team seat, ordinal, and channel without calling the ancestry resolver or consuming the chain cap. After placement it rekeys an open leader run, arms the predecessor's five-minute idle stop, and records the assist. Placement failure marks the reservation Failed and does none of those follow-ups. In-session `/model` changes are not recorded and are not carried.
+`rimz agents molt` is self-succession rather than another peer launch. It replays recorded posture (or re-bases the same role onto `--agent`), reserves one successor, and opens an unfocused tab on the supplied note without a peer run for that turn. The tab title comes from the shared `default_tab_title` rule over the successor's restart cell, and the pane name from its profile, else its provider, so both match a fresh launch of the same seat. It copies the predecessor's ancestry, generation, team seat, ordinal, and channel without calling the ancestry resolver or consuming the chain cap. After placement it rekeys an open leader run, arms the predecessor's five-minute idle stop, and records the assist. Placement failure marks the reservation Failed and does none of those follow-ups. In-session `/model` changes are not recorded and are not carried.
 
 The ordinary launch compile path is the seam the whole harness hangs off, and it runs in a fixed order.
 
