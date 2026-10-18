@@ -94,6 +94,16 @@ fn module_item_guards_keep_only_guards_naming_the_modules_items() {
     let all = module_item_guards(&facts, &selector("store"), true);
     assert_eq!(all.len(), 2, "{all:?}");
     assert!(all.iter().any(|family| family.key.contains("is_ready")));
+    assert_eq!(
+        families
+            .iter()
+            .map(|family| &family.key)
+            .collect::<Vec<_>>(),
+        all.iter()
+            .filter(|family| family.key.contains("Phase::Ready"))
+            .map(|family| &family.key)
+            .collect::<Vec<_>>()
+    );
     let cli = module_item_guards(&facts, &selector("cli"), false);
     assert_eq!(cli.len(), 1, "{cli:?}");
     assert!(cli[0].key.contains("is_stale"));
@@ -209,8 +219,9 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
         ),
         Source::new(
             "crates/demo/src/store/atomic.rs",
-            "fn save() { crate::diag::record(); }",
+            "fn save() { crate::diag::record(); crate::store::helper::run(); }",
         ),
+        Source::new("crates/demo/src/store/helper.rs", "pub fn run() {}"),
         Source::new("crates/demo/src/harness/target.rs", "pub fn wait() {}"),
         Source::new("crates/demo/src/agents.rs", "pub fn run() {}"),
         Source::new("crates/demo/src/diag.rs", "pub fn record() {}"),
@@ -270,6 +281,23 @@ fn target_rule_rows_use_each_rules_files_and_resolved_admissions() {
         .find(|row| row.provider == "harness::target")
         .unwrap();
     assert_eq!(admitted.admitted.as_deref(), Some("harness::target"));
+    assert_eq!(admitted.direction, "upward");
+    let rows_from_atomic = target_rules(root.path(), &target, &facts, &selector("store::atomic"));
+    assert_eq!(
+        rows_from_atomic
+            .iter()
+            .find(|row| row.provider == "store::helper")
+            .unwrap()
+            .direction,
+        "same"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.provider == "diag")
+            .unwrap()
+            .direction,
+        "unranked"
+    );
     assert!(rows.iter().any(|row| row.provider == "agents"));
     assert!(rows.iter().any(|row| row.provider == "diag"));
     assert!(!rows.iter().any(|row| {
