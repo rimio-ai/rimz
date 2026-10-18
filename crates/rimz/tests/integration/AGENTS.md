@@ -65,6 +65,8 @@ Local contract for `crates/rimz/tests/integration/` — the crate's single integ
 
 No in-process `MuxBackend` fake exists; a failing multiplexer call is a fake executable.
 
+A room born through `zellij-trace` runs no sidebar and never writes a heartbeat itself, so a claimed birth waits out its full six-second sidebar-heartbeat bound unless the fixture publishes one; `common::room::ShimRoom::watch` does.
+
 | Double | Reach | Can make fail |
 | --- | --- | --- |
 | `zellij-trace` fixture binary, behind `RIMZ_ZELLIJ_BIN` (`common::shim::zellij_trace_shim`) | every suite; logs each argv, plus each `--layout` file's contents under `RIMZ_TEST_ZELLIJ_LOG_LAYOUTS` (RimZ deletes the file afterwards) | writes and Enter (`RIMZ_TEST_ZELLIJ_MODE=fail-write`, `fail-enter`), session birth (`birth-fails`, `socket-overflow-on-birth`), `new-tab` (`RIMZ_TEST_ZELLIJ_FAIL_NEW_TAB`), `close-pane` (`RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE`). A cached pane listing comes from the topology cache `common::room::seed_live_zellij_room` writes; an authoritative one runs `list-panes`, scripted by `RIMZ_TEST_ZELLIJ_LIST_PANES` |

@@ -1270,6 +1270,131 @@ fn wait_for_marker(marker: &Path) -> String {
     }
 }
 
+#[test]
+fn start_waits_for_delayed_tmux_sidebar_before_rival_admission() {
+    if which::which("zellij").is_err() {
+        crate::common::skip("zellij not on PATH");
+        return;
+    }
+    let Some(room) = TmuxRoom::new() else {
+        return;
+    };
+    let started = room
+        .rimz()
+        .args(["--mux", "tmux", "start"])
+        .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_HOLD_DELAY_MS", "4500")
+        .bounded_output()
+        .unwrap();
+    assert!(started.status.success(), "{started:?}");
+    assert!(
+        rimz::disk::lock::RoomLock::claim(&room.env.runtime_paths().room_lock(), Duration::ZERO)
+            .unwrap()
+            .is_none(),
+        "start must hand the room hold to its delayed sidebar before returning"
+    );
+    let mut rival = room.rimz();
+    pin_zellij_shared_env(&room.env, &mut rival);
+    let refused = rival
+        .args(["--mux", "zellij", "start"])
+        .bounded_output()
+        .unwrap();
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("already held by another running room")
+    );
+    let mut zellij = Command::new("zellij");
+    zellij
+        .scrub_session_env()
+        .env("XDG_RUNTIME_DIR", &room.env.runtime_root)
+        .env("RIMZ_HOME", room.env.rimz_home())
+        .env("HOME", &room.env.home_root);
+    pin_zellij_shared_env(&room.env, &mut zellij);
+    let listed = zellij
+        .args(["list-sessions", "--no-formatting"])
+        .bounded_output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    let stderr = String::from_utf8_lossy(&listed.stderr);
+    assert!(
+        listed.status.success()
+            || stdout.contains("No active zellij sessions found")
+            || stderr.contains("No active zellij sessions found"),
+        "{listed:?}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .filter_map(live_zellij_session_name)
+            .any(|name| name == room.session_name),
+        "refusal must not birth a zellij session"
+    );
+}
+
+#[test]
+fn start_reattaches_after_delayed_tmux_sidebar_without_another_birth() {
+    let Some(room) = TmuxRoom::new() else {
+        return;
+    };
+    let started = room
+        .rimz()
+        .args(["--mux", "tmux", "start"])
+        .env("RIMZ_TEST_SIDEBAR_SUPERVISOR_HOLD_DELAY_MS", "4500")
+        .bounded_output()
+        .unwrap();
+    assert!(started.status.success(), "{started:?}");
+    // Pane ids exist before the sidebar's title or heartbeat does.
+    let panes = || {
+        tmux_output(
+            &room.env.runtime_root,
+            &[
+                "list-panes",
+                "-s",
+                "-t",
+                &room.session_name,
+                "-F",
+                "#{pane_id}",
+            ],
+        )
+    };
+    let before = panes();
+    assert!(before.status.success(), "{before:?}");
+    let reattached = room
+        .rimz()
+        .args(["--mux", "tmux", "start"])
+        .bounded_output()
+        .unwrap();
+    assert!(reattached.status.success(), "{reattached:?}");
+    let after = panes();
+    assert!(after.status.success(), "{after:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&after.stdout),
+        String::from_utf8_lossy(&before.stdout),
+        "reattach must not birth another sidebar pane"
+    );
+}
+
+#[test]
+fn start_waits_for_delayed_zellij_sidebar_before_rival_admission() {
+    let Some(room) =
+        ZellijRoom::start_with(&[("RIMZ_TEST_SIDEBAR_SUPERVISOR_HOLD_DELAY_MS", "4500")])
+    else {
+        return;
+    };
+    let refused = room
+        .rimz()
+        .args(["--mux", "tmux", "start"])
+        .bounded_output()
+        .unwrap();
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("already held by another running room")
+    );
+    assert!(
+        room.tmux_sessions().is_empty(),
+        "refusal must not birth a tmux session"
+    );
+}
+
 struct TmuxRoom {
     env: Env,
     session_name: String,
@@ -1319,17 +1444,12 @@ impl TmuxRoom {
             String::from_utf8_lossy(&output.stderr),
         );
         let room_lock = self.env.runtime_paths().room_lock();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
-            .expect("probe tmux room hold")
-            .is_some()
-        {
-            assert!(
-                Instant::now() < deadline,
-                "tmux sidebar never held the room"
-            );
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        assert!(
+            rimz::disk::lock::RoomLock::claim(&room_lock, Duration::ZERO)
+                .expect("probe tmux room hold")
+                .is_none(),
+            "tmux room must be held when start returns"
+        );
     }
 
     fn rimz(&self) -> Command {
@@ -1363,7 +1483,7 @@ impl TmuxRoom {
 
     fn close_sidebars(&self) {
         // The sidebar pane takes its `rimz-sidebar` title after it starts,
-        // which can trail the room hold the fixture waits for.
+        // which can trail the heartbeat that lets start return.
         let deadline = Instant::now() + Duration::from_secs(10);
         let sidebars = loop {
             let sidebars = self.sidebar_panes();
@@ -1463,6 +1583,12 @@ impl ZellijRoom {
             output.status.success(),
             "zellij start failed: {}",
             String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            rimz::disk::lock::RoomLock::claim(&env.runtime_paths().room_lock(), Duration::ZERO)
+                .expect("probe zellij room hold")
+                .is_none(),
+            "zellij room must be held when start returns"
         );
 
         Some(Self {

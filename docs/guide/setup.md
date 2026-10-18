@@ -135,7 +135,7 @@ rimz reset --no-start        # close it, then run rimz start again
 
 If this project's session is still open in another multiplexer, or you renamed it, close it from that multiplexer (or rename it back to the recorded name), then run the command again. Both commands above can refuse while a leftover session is listed beside the held room.
 
-The room is held while a sidebar pane or a live supervisor lives. Once neither lives, the room is unheld and another room can start. Attaching to the old room relaunches its sidebar only if no other room holds the workspace; otherwise, close the other room first. If the sidebar is temporarily restarting, retry the attach once it returns.
+The room is held while a sidebar pane or a live supervisor lives. When starting a new sidebar, `rimz start` retains its startup hold until that room's sidebar is ready, allowing up to six seconds after the final launch before warning and continuing; a failed sidebar launch continues without that wait. Once neither a sidebar nor a supervisor lives and startup has released its hold, the room is unheld and another room can start. Attaching to the old room relaunches its sidebar only if no other room holds the workspace; otherwise, close the other room first. If the sidebar is temporarily restarting, retry the attach once it returns.
 
 `rimz doctor` re-reads the machine at any time. A normal run writes nothing to disk and starts, stops, or moves nothing in the room, so it is the check to run when something looks wrong. Skipping `rimz setup` entirely is also fine: the first `rimz` in a project asks the same hook, color, glyph, pet, and automation questions when it finds no config, and writes the same files.
 
