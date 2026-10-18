@@ -106,6 +106,12 @@ struct ClickedRowWatch {
     gliding: bool,
 }
 
+struct ClickGuard {
+    until: Instant,
+    interactions: render::FrameInteractions,
+    roster: Vec<String>,
+}
+
 struct FocusRollback {
     target: PaneId,
     baseline: Option<PaneId>,
@@ -155,6 +161,7 @@ pub(super) struct LoopState {
     confirmed_focus_intent_ms: u64,
     observer: observe::OwnObserver,
     clicked_row: Option<ClickedRowWatch>,
+    click_guard: Option<ClickGuard>,
     hold_expired_since_paint: bool,
     observe_tx: SyncSender<ObserveMsg>,
     pub(super) health: Health,
@@ -221,11 +228,23 @@ pub(super) fn handle_wakeup(
         Wakeup::Key(KeyAction::Search) if alert_active => InputOutcome::default(),
         Wakeup::Key(action) => handle_key(action, ui, snapshot),
         Wakeup::MouseClick { column, row } => {
+            if let Some(render::HitTarget::Row(index)) = ui.interactions.target_at(column, row)
+                && !ui
+                    .painted_roster
+                    .get(index)
+                    .is_some_and(|id| ui.visible_roster(snapshot).ordinal_of_id(id).is_some())
+            {
+                return InputOutcome::default();
+            }
             if ui.search_draft.is_some() {
                 // Resolve the pane against the painted draft before clearing widens the roster.
                 let pane = match ui.interactions.target_at(column, row) {
                     Some(render::HitTarget::Row(index)) => {
-                        ui.visible_roster(snapshot).pane_at_ordinal(index)
+                        let roster = ui.visible_roster(snapshot);
+                        ui.painted_roster
+                            .get(index)
+                            .and_then(|id| roster.ordinal_of_id(id))
+                            .and_then(|index| roster.pane_at_ordinal(index))
                     }
                     Some(render::HitTarget::SubAgentPane(pane)) => Some(pane),
                     _ => None,
@@ -339,6 +358,7 @@ impl LoopState {
             confirmed_focus_intent_ms: 0,
             observer: observe::OwnObserver::default(),
             clicked_row: None,
+            click_guard: None,
             hold_expired_since_paint: false,
             observe_tx,
             health: Health::default(),
@@ -677,6 +697,7 @@ impl LoopState {
             width_control: _,
             observer: _,
             clicked_row: _,
+            click_guard: _,
             hold_expired_since_paint: _,
             optimistic_watch_until: _,
             // Maintenance stamps and reminders, read against `current`.
@@ -1444,14 +1465,35 @@ impl LoopState {
         wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
+        self.apply_input_at(wakeups, terminal, Instant::now())
+    }
+
+    fn apply_input_at(
+        &mut self,
+        wakeups: impl IntoIterator<Item = Wakeup>,
+        terminal: &mut Terminal<PaneBackend>,
+        now: Instant,
+    ) -> Result<InputOutcome> {
         let keys = &self.current.sidebar.keys;
         if self.nav_keys.0 != *keys {
             self.nav_keys = (keys.clone(), super::NavKeymap::from_config(keys));
         }
         let mut outcome = InputOutcome::default();
+        let mut user_input = false;
         for wakeup in wakeups {
+            user_input |= !matches!(wakeup, Wakeup::Resize);
             let wheel = matches!(wakeup, Wakeup::Scroll { .. });
             let alert_active = self.alert_active();
+            let live_frame = self
+                .click_guard
+                .as_ref()
+                .filter(|guard| now < guard.until && matches!(wakeup, Wakeup::MouseClick { .. }))
+                .map(|guard| {
+                    (
+                        std::mem::replace(&mut self.ui.interactions, guard.interactions.clone()),
+                        std::mem::replace(&mut self.ui.painted_roster, guard.roster.clone()),
+                    )
+                });
             let previous_selection = self.ui.selected_pane.clone();
             let applied = handle_wakeup(
                 wakeup,
@@ -1460,6 +1502,10 @@ impl LoopState {
                 &self.nav_keys.1,
                 alert_active,
             );
+            if let Some((interactions, roster)) = live_frame {
+                self.ui.interactions = interactions;
+                self.ui.painted_roster = roster;
+            }
             self.clicked_row = None;
             if self.ui.selected_pane != previous_selection {
                 self.focus_rollback = None;
@@ -1490,7 +1536,8 @@ impl LoopState {
             outcome.redraw |= applied.redraw;
             outcome.effects.extend(applied.effects);
         }
-        if (outcome.redraw || !outcome.effects.is_empty())
+        if user_input
+            && (outcome.redraw || !outcome.effects.is_empty())
             && !outcome.effects.contains(&InputEffect::Reload)
         {
             layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
@@ -1510,13 +1557,7 @@ impl LoopState {
             let alert_active = self.alert_active();
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
-            self.paint.draw_and_paint(
-                terminal,
-                &self.current,
-                self.health.alert.as_ref(),
-                &mut self.ui,
-            )?;
-            self.painted_height = terminal.get_frame().area().height;
+            self.draw_frame(terminal, now, user_input)?;
             if outcome
                 .effects
                 .iter()
@@ -1823,13 +1864,7 @@ impl LoopState {
         if self.dirty || animating {
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
-            self.paint.draw_and_paint(
-                terminal,
-                &self.current,
-                self.health.alert.as_ref(),
-                &mut self.ui,
-            )?;
-            self.painted_height = terminal.get_frame().area().height;
+            self.draw_frame(terminal, now, false)?;
             self.observe_paint(Instant::now());
             self.dirty = false;
         }
@@ -1844,6 +1879,42 @@ impl LoopState {
             )
             .unwrap_or(animation_frame(&self.current)),
         );
+        Ok(())
+    }
+
+    fn draw_frame(
+        &mut self,
+        terminal: &mut Terminal<PaneBackend>,
+        now: Instant,
+        user_input: bool,
+    ) -> Result<()> {
+        let user_input = user_input || self.ui.scroll_ease.in_flight();
+        let interactions = std::mem::take(&mut self.ui.interactions);
+        let roster = std::mem::take(&mut self.ui.painted_roster);
+        let rows = std::mem::take(&mut self.ui.painted_rows);
+        self.paint.draw_and_paint(
+            terminal,
+            &self.current,
+            self.health.alert.as_ref(),
+            &mut self.ui,
+        )?;
+        self.painted_height = terminal.get_frame().area().height;
+        if user_input {
+            self.click_guard = None;
+            return Ok(());
+        }
+        if self
+            .click_guard
+            .as_ref()
+            .is_none_or(|guard| now >= guard.until)
+            && rows.iter().any(|row| !self.ui.painted_rows.contains(row))
+        {
+            self.click_guard = Some(ClickGuard {
+                until: now + crate::sidebar::timing::CLICK_GUARD,
+                interactions,
+                roster,
+            });
+        }
         Ok(())
     }
 

@@ -37,6 +37,9 @@ pub(crate) const LAYOUT_FREEZE: Duration = Duration::from_secs(5);
 /// The freeze cap while any client's focus is on the sidebar pane.
 pub(crate) const LAYOUT_FREEZE_PARKED: Duration = Duration::from_secs(30);
 
+/// Clicks after an automatic card move still target the frame the user saw.
+pub(crate) const CLICK_GUARD: Duration = Duration::from_millis(400);
+
 /// How long a never-seen-sibling sidebar must report zero working siblings
 /// before the renderer exits and lets its pane close. A tab that already had a
 /// working pane exits on the first producer-verified zero; this receiver-side

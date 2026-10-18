@@ -452,12 +452,16 @@ pub(super) fn handle_mouse_click(
             toggle_delegation_history(ui, snapshot, row_id);
             InputOutcome::redraw()
         }
-        Some(HitTarget::Row(index)) => ui
-            .visible_roster(snapshot)
-            .pane_at_ordinal(index)
-            .map_or_else(InputOutcome::default, |pane| {
-                select_clicked_pane(ui, snapshot, pane)
-            }),
+        Some(HitTarget::Row(index)) => {
+            let roster = ui.visible_roster(snapshot);
+            ui.painted_roster
+                .get(index)
+                .and_then(|id| roster.ordinal_of_id(id))
+                .and_then(|index| roster.pane_at_ordinal(index))
+                .map_or_else(InputOutcome::default, |pane| {
+                    select_clicked_pane(ui, snapshot, pane)
+                })
+        }
         Some(HitTarget::SubAgentPane(pane)) => select_clicked_pane(ui, snapshot, pane),
         Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
         None => InputOutcome::default(),

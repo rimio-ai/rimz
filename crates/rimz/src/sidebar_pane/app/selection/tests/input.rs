@@ -174,6 +174,7 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         .position(|line| line.to_string().contains("old-child"))
         .unwrap();
     ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &snapshot);
     for line in [first, first + 1] {
         for column in [0, 53] {
             assert_eq!(
@@ -210,6 +211,7 @@ fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
         .unwrap();
     assert!(composed.lines[closed + 1].to_string().contains("Haiku"));
     ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &snapshot);
     for line in [closed, closed + 1] {
         assert_eq!(
             handle_mouse_click(10, line as u16, &mut ui, &snapshot),
@@ -256,6 +258,7 @@ fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
         .position(|line| line.to_string().contains("live-child"))
         .unwrap();
     ui.interactions = composed.interactions;
+    remember_roster(&mut ui, &snapshot);
     assert_eq!(
         handle_mouse_click(1, line as u16, &mut ui, &snapshot),
         InputOutcome {
@@ -848,6 +851,7 @@ fn row_click_selects_and_browses_before_focus_confirmation() {
         interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
+    remember_roster(&mut ui, &snapshot);
     let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
     assert!(outcome.redraw, "the click itself paints the new selection");

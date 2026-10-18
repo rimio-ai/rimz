@@ -114,6 +114,12 @@ fn draw_into(
     ui.meter_pixels = meter_pixels;
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
+    ui.painted_roster = ui
+        .visible_roster(snapshot)
+        .rows()
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
     ui.interactions = composed.interactions;
     ui.scrollbar.shift(composed.correction);
     ui.scrollbar
