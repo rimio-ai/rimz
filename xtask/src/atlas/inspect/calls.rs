@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::super::references::{Edge, EdgeKind, FunctionId};
+use super::super::references::{Edge, FunctionId};
 use super::super::sources::{Source, SourceKind};
 use super::super::syntax::FileSyntax;
 use super::ModuleSelector;
@@ -153,6 +153,30 @@ fn is_type_alias_edge(edge: &Edge, syntax_files: &[FileSyntax]) -> bool {
         .is_some_and(|item| item.kind == "type")
 }
 
+pub(in crate::atlas) fn assembly_edges<'e>(
+    edges: impl Iterator<Item = &'e Edge>,
+    syntax_files: &[FileSyntax],
+) -> impl Iterator<Item = &'e Edge> {
+    edges.filter(|edge| {
+        edge.site_kind == SourceKind::Production && !is_type_alias_edge(edge, syntax_files)
+    })
+}
+
+pub(in crate::atlas) fn group_by_fn<'e>(
+    edges: impl Iterator<Item = &'e Edge>,
+) -> BTreeMap<FunctionId, Vec<&'e Edge>> {
+    let mut functions = BTreeMap::<FunctionId, Vec<&Edge>>::new();
+    for edge in edges {
+        if let Some(function) = &edge.from_fn {
+            functions
+                .entry(FunctionId::new(&edge.from_path, function))
+                .or_default()
+                .push(edge);
+        }
+    }
+    functions
+}
+
 fn folded_label(owner: &str, names: &[String]) -> String {
     let mut names = names.iter().filter(|name| name.as_str() != owner).fold(
         Vec::<String>::new(),
@@ -265,69 +289,34 @@ pub(super) fn callers_from_edges(
     target: &ModuleSelector,
     syntax_files: &[FileSyntax],
 ) -> Vec<Caller> {
-    #[derive(Default)]
-    struct Assembly {
-        edges: Vec<Edge>,
-    }
-    let mut rows = BTreeMap::<String, Assembly>::new();
-    for edge in edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.site_kind == SourceKind::Production
-            && target.matches(&edge.to, &edge.to_path)
-            && !target.matches(&edge.from, &edge.from_path)
+    let mut rows = BTreeMap::<String, Vec<&Edge>>::new();
+    for edge in assembly_edges(edges.iter(), syntax_files).filter(|edge| {
+        target.matches(&edge.to, &edge.to_path) && !target.matches(&edge.from, &edge.from_path)
     }) {
-        rows.entry(edge.from.clone())
-            .or_default()
-            .edges
-            .push(edge.clone());
+        rows.entry(edge.from.clone()).or_default().push(edge);
     }
     let mut rows = rows
         .into_iter()
-        .map(|(module, assembly)| {
-            let mut by_function = BTreeMap::<FunctionId, Vec<&Edge>>::new();
-            for edge in &assembly.edges {
-                if let Some(function) = &edge.from_fn {
-                    by_function
-                        .entry(FunctionId::new(&edge.from_path, function))
-                        .or_default()
-                        .push(edge);
-                }
-            }
+        .map(|(module, edges)| {
+            let by_function = group_by_fn(edges.iter().copied());
             let mut items = BTreeSet::new();
             for function_edges in by_function.values() {
                 items.extend(distinct_folded_items(function_edges, syntax_files));
             }
             items.extend(
-                assembly
-                    .edges
+                edges
                     .iter()
                     .filter(|edge| edge.from_fn.is_none())
                     .map(|edge| edge.item.clone()),
             );
-            let mut top_fns = assembly
-                .edges
+            let mut top_fns = by_function
                 .into_iter()
-                .filter_map(|edge| {
-                    let function = edge.from_fn.clone()?;
-                    Some((FunctionId::new(&edge.from_path, &function), edge))
-                })
-                .fold(
-                    BTreeMap::<FunctionId, Vec<Edge>>::new(),
-                    |mut functions, (function, edge)| {
-                        functions.entry(function).or_default().push(edge);
-                        functions
-                    },
-                )
-                .into_iter()
-                .map(|(function, edges)| {
-                    let edge_refs = edges.iter().collect::<Vec<_>>();
-                    CallerFn {
-                        function: function.label,
-                        path: function.path,
-                        line: function.line,
-                        items: distinct_folded_items(&edge_refs, syntax_files).len(),
-                        items_unfolded: unfolded_items(&edge_refs),
-                    }
+                .map(|(function, edges)| CallerFn {
+                    function: function.label,
+                    path: function.path,
+                    line: function.line,
+                    items: folded_item_count(&edges, syntax_files),
+                    items_unfolded: unfolded_items(&edges),
                 })
                 .collect::<Vec<_>>();
             top_fns.sort_by(|left, right| {
@@ -369,7 +358,7 @@ pub(super) fn assembly_functions(
         BTreeMap::<FunctionId, BTreeMap<String, BTreeSet<(String, usize)>>>::new();
     for edge in edges
         .iter()
-        .filter(|edge| edge.kind == EdgeKind::Reference && edge.site_kind == SourceKind::Production)
+        .filter(|edge| edge.site_kind == SourceKind::Production)
     {
         let Some(function) = &edge.from_fn else {
             continue;
@@ -387,30 +376,16 @@ pub(super) fn assembly_functions(
             .insert((edge.item.clone(), edge.to_line));
     }
     let from_contains_to = from.contains(to);
-    let mut by_function = BTreeMap::<FunctionId, (Vec<&Edge>, usize, BTreeSet<usize>)>::new();
-    for edge in edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.site_kind == SourceKind::Production
-            && from.matches(&edge.from, &edge.from_path)
+    let by_function = group_by_fn(assembly_edges(edges.iter(), syntax_files).filter(|edge| {
+        from.matches(&edge.from, &edge.from_path)
             && to.matches(&edge.to, &edge.to_path)
             // An ancestor caller contains the target: the target's own
             // functions are not its callers.
             && !(from_contains_to && to.matches(&edge.from, &edge.from_path))
-            && !is_type_alias_edge(edge, syntax_files)
-    }) {
-        let Some(function) = &edge.from_fn else {
-            continue;
-        };
-        let aggregate = by_function
-            .entry(FunctionId::new(&edge.from_path, function))
-            .or_default();
-        aggregate.0.push(edge);
-        aggregate.1 += 1;
-        aggregate.2.insert(edge.from_line);
-    }
+    }));
     let mut rows = by_function
         .into_iter()
-        .map(|(function, (edges, sites, site_lines))| {
+        .map(|(function, edges)| {
             let items_unfolded = unfolded_items(&edges);
             let mut also = also_by_function
                 .remove(&function)
@@ -426,8 +401,13 @@ pub(super) fn assembly_functions(
                 line: function.line,
                 items: distinct_folded_items(&edges, syntax_files),
                 items_unfolded,
-                sites,
-                site_lines: site_lines.into_iter().collect(),
+                sites: edges.len(),
+                site_lines: edges
+                    .iter()
+                    .map(|edge| edge.from_line)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
                 also,
             }
         })
@@ -574,25 +554,11 @@ pub(super) fn call_shapes(
     target: &ModuleSelector,
     syntax_files: &[FileSyntax],
 ) -> Vec<CallShape> {
-    let mut functions = BTreeMap::<FunctionId, (String, Vec<&Edge>)>::new();
-    for edge in edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.site_kind == SourceKind::Production
-            && target.matches(&edge.to, &edge.to_path)
-            && !target.matches(&edge.from, &edge.from_path)
-            && !is_type_alias_edge(edge, syntax_files)
-    }) {
-        let Some(function) = &edge.from_fn else {
-            continue;
-        };
-        functions
-            .entry(FunctionId::new(&edge.from_path, function))
-            .or_insert_with(|| (edge.from.clone(), Vec::new()))
-            .1
-            .push(edge);
-    }
+    let functions = group_by_fn(assembly_edges(edges.iter(), syntax_files).filter(|edge| {
+        target.matches(&edge.to, &edge.to_path) && !target.matches(&edge.from, &edge.from_path)
+    }));
     let mut shapes = BTreeMap::<Vec<String>, (usize, Vec<AssemblyFunction>)>::new();
-    for (function, (module, edges)) in functions {
+    for (function, edges) in functions {
         let shape = folded_sequence(&edges, syntax_files);
         let items = shape.iter().collect::<BTreeSet<_>>().len();
         let items_unfolded = unfolded_items(&edges);
@@ -601,7 +567,7 @@ pub(super) fn call_shapes(
             .or_insert_with(|| (items_unfolded, Vec::new()))
             .1
             .push(AssemblyFunction {
-                module,
+                module: edges[0].from.clone(),
                 function,
                 items,
                 items_unfolded,
@@ -639,30 +605,17 @@ pub(super) fn repeated_assembly(
     target: &ModuleSelector,
     syntax_files: &[FileSyntax],
 ) -> Vec<AssemblyGroup> {
-    let mut raw_functions = BTreeMap::<FunctionId, (String, Vec<&Edge>)>::new();
-    for edge in edges.iter().filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.site_kind == SourceKind::Production
-            && target.matches(&edge.to, &edge.to_path)
-            && !target.matches(&edge.from, &edge.from_path)
-            && !is_type_alias_edge(edge, syntax_files)
-    }) {
-        let Some(function) = &edge.from_fn else {
-            continue;
-        };
-        let aggregate = raw_functions
-            .entry(FunctionId::new(&edge.from_path, function))
-            .or_insert_with(|| (edge.from.clone(), Vec::new()));
-        aggregate.1.push(edge);
-    }
+    let raw_functions = group_by_fn(assembly_edges(edges.iter(), syntax_files).filter(|edge| {
+        target.matches(&edge.to, &edge.to_path) && !target.matches(&edge.from, &edge.from_path)
+    }));
     let functions = raw_functions
         .into_iter()
-        .map(|(function, (module, edges))| {
+        .map(|(function, edges)| {
             let items_unfolded = unfolded_items(&edges);
             let items = distinct_folded_items(&edges, syntax_files)
                 .into_iter()
                 .collect::<BTreeSet<_>>();
-            (function, (module, items, items_unfolded))
+            (function, (edges[0].from.clone(), items, items_unfolded))
         })
         .collect::<Vec<_>>();
     let mut intersections = BTreeSet::<Vec<String>>::new();

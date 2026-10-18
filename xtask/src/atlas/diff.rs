@@ -19,8 +19,8 @@ use super::modules::{
     is_declaration_only, module_is_within,
 };
 use super::output::{self, OutputArgs};
-use super::references::{Edge, EdgeKind, FunctionId};
-use super::sources::{self, SourceKind};
+use super::references::{Edge, FunctionId};
+use super::sources;
 use super::syntax::{FileSyntax, Spelling};
 use super::target::{self, Direction, LayerRanks, TARGET_FILE};
 use super::{positive_usize, set_once, validate_scope, value};
@@ -103,7 +103,6 @@ struct DependencySite {
 
 #[derive(Clone, Debug, Default)]
 struct EdgeData {
-    items: BTreeSet<String>,
     /// Folded distinct items per calling function (`max/fn`).
     by_fn: BTreeMap<FunctionId, usize>,
 }
@@ -846,40 +845,21 @@ fn collect_reference_edges<'a>(
     syntax_files: &[FileSyntax],
 ) -> EdgeMap {
     let mut rows = EdgeMap::new();
-    let mut by_fn = BTreeMap::<(String, String), BTreeMap<FunctionId, Vec<&Edge>>>::new();
-    for edge in edges.filter(|edge| {
-        edge.kind == EdgeKind::Reference
-            && edge.site_kind == SourceKind::Production
-            && (in_paths(&edge.from_path, paths) ^ in_paths(&edge.to_path, paths))
-    }) {
+    let mut pairs = BTreeMap::<(String, String), Vec<&Edge>>::new();
+    for edge in inspect::assembly_edges(edges, syntax_files)
+        .filter(|edge| in_paths(&edge.from_path, paths) ^ in_paths(&edge.to_path, paths))
+    {
         let pair = (edge.from.clone(), edge.to.clone());
-        rows.entry(pair.clone())
-            .or_default()
-            .items
-            .insert(edge.item.clone());
-        if let Some(function) = &edge.from_fn {
-            by_fn
-                .entry(pair)
-                .or_default()
-                .entry(FunctionId::new(&edge.from_path, function))
-                .or_default()
-                .push(edge);
-        }
+        rows.entry(pair.clone()).or_default();
+        pairs.entry(pair).or_default().push(edge);
     }
-    for (pair, functions) in by_fn {
-        rows.entry(pair).or_default().by_fn = fold_by_fn(functions, syntax_files);
+    for (pair, edges) in pairs {
+        rows.entry(pair).or_default().by_fn = inspect::group_by_fn(edges.into_iter())
+            .into_iter()
+            .map(|(function, edges)| (function, inspect::folded_item_count(&edges, syntax_files)))
+            .collect();
     }
     rows
-}
-
-fn fold_by_fn(
-    functions: BTreeMap<FunctionId, Vec<&Edge>>,
-    syntax_files: &[FileSyntax],
-) -> BTreeMap<FunctionId, usize> {
-    functions
-        .into_iter()
-        .map(|(function, edges)| (function, inspect::folded_item_count(&edges, syntax_files)))
-        .collect()
 }
 
 fn interface_rows(base: &EdgeMap, current: &EdgeMap) -> Vec<InterfaceRow> {
@@ -959,32 +939,24 @@ fn contract_assembly(
         (Err(error), _) | (_, Err(error)) => return Err(error),
     };
     let from_contains_to = from.contains(&to);
-    let mut functions = BTreeMap::<FunctionId, Vec<&Edge>>::new();
-    for edge in facts
+    let edges = facts
         .references
         .as_ref()
         .expect("diff loads required reference evidence")
         .edges
-        .iter()
-        .filter(|edge| {
-            edge.kind == EdgeKind::Reference
-                && edge.site_kind == SourceKind::Production
-                && from.matches(&edge.from, &edge.from_path)
+        .iter();
+    let functions = inspect::group_by_fn(
+        inspect::assembly_edges(edges, &facts.syntax.files).filter(|edge| {
+            from.matches(&edge.from, &edge.from_path)
                 && to.matches(&edge.to, &edge.to_path)
                 // An ancestor `from` contains `to`: its functions inside
                 // `to` assemble nothing across the boundary.
                 && !(from_contains_to && to.matches(&edge.from, &edge.from_path))
-        })
-    {
-        if let Some(function) = &edge.from_fn {
-            functions
-                .entry(FunctionId::new(&edge.from_path, function))
-                .or_default()
-                .push(edge);
-        }
-    }
-    Ok(fold_by_fn(functions, &facts.syntax.files)
+        }),
+    );
+    Ok(functions
         .into_values()
+        .map(|edges| inspect::folded_item_count(&edges, &facts.syntax.files))
         .max()
         .unwrap_or(0))
 }

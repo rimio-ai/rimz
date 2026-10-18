@@ -11,7 +11,7 @@ use super::super::modules::{
     EXTERNAL_REACH, EscapingItem, ReExport, bounded_names, escaping_items_for_boundary,
     is_declaration_only, module_is_within, reference_module_label, resolve_reexport,
 };
-use super::super::references::{Edge, EdgeKind};
+use super::super::references::Edge;
 use super::super::sources::SourceKind;
 use super::super::syntax::{FileSyntax, PubItem};
 use super::ModuleSelector;
@@ -251,7 +251,7 @@ pub(super) fn surface_section(facts: &Facts, target: &ModuleSelector) -> (Surfac
     for edge in references
         .edges
         .iter()
-        .filter(|edge| edge.kind == EdgeKind::Reference && target.matches(&edge.to, &edge.to_path))
+        .filter(|edge| target.matches(&edge.to, &edge.to_path))
     {
         if edge.cross_target {
             cross_target.insert(edge_target(edge));
