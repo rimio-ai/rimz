@@ -379,7 +379,7 @@ fn build_report(
     });
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
     let ranks = configured.as_ref().map(Target::layer_ranks);
-    let cycles = module_cycles(facts, scope, ranks.as_ref());
+    let cycles = cycles_from_syntax(&facts.syntax.files, scope, ranks.as_ref());
     let assemblers = assemblers(
         &facts.syntax.files,
         &facts.known_modules,
@@ -977,21 +977,9 @@ fn assembler(function: &FnBody, providers: BTreeMap<String, BTreeSet<&str>>) -> 
     }
 }
 
-fn module_cycles(facts: &Facts, scope: &Path, ranks: Option<&LayerRanks>) -> Vec<Cycle> {
-    cycles_from_syntax(
-        &facts.syntax.files,
-        &facts.known_modules,
-        &facts.crate_names,
-        scope,
-        ranks,
-    )
-}
-
 /// Top-level module pairs that import each other, same-layer pairs first.
 fn cycles_from_syntax(
     files: &[super::syntax::FileSyntax],
-    _known_modules: &BTreeSet<String>,
-    _crate_names: &BTreeSet<String>,
     scope: &Path,
     ranks: Option<&LayerRanks>,
 ) -> Vec<Cycle> {

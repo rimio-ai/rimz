@@ -61,7 +61,7 @@ pub(super) struct PaceReport {
 
 #[derive(Debug)]
 pub(super) struct Log {
-    commits: Vec<Commit>,
+    pub(super) commits: Vec<Commit>,
 }
 
 struct IntroducingCandidate {
@@ -306,24 +306,6 @@ fn declares_added_name(line: &str, name: &str) -> bool {
     })
 }
 
-pub(super) fn pace(
-    log: &Log,
-    root: &Path,
-    scope: &Path,
-    window_pct: usize,
-    noise_lifetime: usize,
-    noise_window: usize,
-) -> Result<PaceReport> {
-    Ok(fold_pace(
-        root,
-        scope,
-        &log.commits,
-        window_pct,
-        noise_lifetime,
-        noise_window,
-    ))
-}
-
 fn git_history(root: &Path, scope: &Path) -> Result<String> {
     let mut command = Command::new("git");
     command.args([
@@ -400,7 +382,7 @@ fn parse_history(input: &str) -> Result<Vec<Commit>> {
     Ok(commits)
 }
 
-fn fold_pace(
+pub(super) fn fold_pace(
     root: &Path,
     scope: &Path,
     commits: &[Commit],
