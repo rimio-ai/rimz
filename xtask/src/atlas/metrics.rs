@@ -194,8 +194,11 @@ fn ensure_prerequisite() -> Result<()> {
 }
 
 fn walk_json_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let entry = entry?;
+    let mut entries = fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
         let path = entry.path();
         if path.is_dir() {
             walk_json_files(&path, files)?;
@@ -298,6 +301,42 @@ mod tests {
             spaces,
             metrics: metrics(cyclomatic, cognitive, sloc),
         }
+    }
+
+    #[test]
+    fn directory_creation_order_does_not_change_cx_accumulation() {
+        let cx = |order: &[(&str, u64)]| {
+            let root = tempfile::tempdir().unwrap();
+            for (name, cognitive) in order {
+                fs::write(
+                    root.path().join(format!("{name}.json")),
+                    format!(r#"{{"name":"run","kind":"function","start_line":1,"metrics":{{"cyclomatic":{{"sum":30}},"cognitive":{{"sum":{cognitive}}},"loc":{{"sloc":80}}}}}}"#),
+                ).unwrap();
+            }
+            let mut files = Vec::new();
+            walk_json_files(root.path(), &mut files).unwrap();
+            assert_eq!(
+                files
+                    .iter()
+                    .map(|file| file.file_stem().unwrap().to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["a", "b", "c"]
+            );
+            let mut functions = Vec::new();
+            for file in files {
+                let space = serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap();
+                collect_functions(
+                    &space,
+                    Path::new("src/demo.rs"),
+                    Path::new("src"),
+                    None,
+                    &mut functions,
+                );
+            }
+            functions.iter().map(|function| function.score).sum::<f64>()
+        };
+        let files = [("a", 1_000_000_000_000_000_000), ("b", 70), ("c", 70)];
+        assert_eq!(cx(&files), cx(&[files[2], files[1], files[0]]));
     }
 
     #[test]
