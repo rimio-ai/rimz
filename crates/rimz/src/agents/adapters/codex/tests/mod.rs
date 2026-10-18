@@ -531,17 +531,26 @@ fn codex_commands_and_permission_args_match_run_posture() {
             .permission_args(PermissionMode::Auto),
         vec![
             "--ask-for-approval",
-            "never",
-            "--sandbox",
-            "workspace-write"
+            "on-request",
+            "-c",
+            r#"approvals_reviewer="auto_review""#,
+            "-c",
+            r#"default_permissions="rimz""#,
         ]
     );
-    assert!(
+    assert_eq!(
         CodexAdapter
             .spec()
             .launch
-            .permission_args(PermissionMode::Ask)
-            .is_empty()
+            .permission_args(PermissionMode::Ask),
+        vec![
+            "--ask-for-approval",
+            "on-request",
+            "-c",
+            r#"approvals_reviewer="user""#,
+            "-c",
+            r#"default_permissions="rimz""#
+        ]
     );
     assert_eq!(
         CodexAdapter
@@ -557,6 +566,63 @@ fn codex_commands_and_permission_args_match_run_posture() {
             .compact_command("preserve the implementation plan"),
         Some("/compact".to_owned())
     );
+}
+
+#[test]
+fn host_permission_profile_inherits_and_quotes_room_roots() {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join("config.toml");
+    let env = BTreeMap::from([("RIMZ_CODEX_CONFIG".into(), config.display().to_string())]);
+    let roots = [
+        PathBuf::from("/room/state space"),
+        PathBuf::from("/run/room/quote\""),
+        PathBuf::from("/run/shared\\root"),
+    ];
+    for (content, parent) in [
+        ("", ":workspace"),
+        ("default_permissions = 'mine'", "mine"),
+        ("default_permissions = 'rimz'", ":workspace"),
+    ] {
+        std::fs::write(&config, content).unwrap();
+        let mut args = vec!["-c".into(), r#"default_permissions="rimz""#.into()];
+        CodexAdapter.configure_room_permissions(&mut args, &env, &roots);
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[2], "-c");
+        let profile = args[3].parse::<toml::Table>().unwrap();
+        assert_eq!(
+            profile["permissions"]["rimz"],
+            toml::Value::Table(toml::Table::from_iter([
+                ("extends".into(), toml::Value::String(parent.into())),
+                (
+                    "filesystem".into(),
+                    toml::Value::Table(
+                        roots
+                            .iter()
+                            .map(|root| (
+                                root.to_str().unwrap().into(),
+                                toml::Value::String("write".into())
+                            ))
+                            .collect()
+                    )
+                ),
+                (
+                    "network".into(),
+                    toml::Value::Table(toml::Table::from_iter([(
+                        "enabled".into(),
+                        toml::Value::Boolean(false)
+                    )]))
+                ),
+            ]))
+        );
+    }
+    for overrides in [
+        vec![],
+        vec!["-c".into(), "default_permissions='mine'".into()],
+    ] {
+        let mut args = overrides.clone();
+        CodexAdapter.configure_room_permissions(&mut args, &env, &roots);
+        assert_eq!(args, overrides);
+    }
 }
 
 #[test]
@@ -601,8 +667,15 @@ fn sandbox_isolation_replaces_codex_sandbox_overrides() {
         "-c",
         "sandbox_mode=read-only",
         "--config=sandbox_mode=workspace-write",
+        "-c",
+        r#"default_permissions="rimz""#,
+        "--config=default_permissions=other",
+        "--config",
+        "default_permissions=third",
+        "-c",
+        r#"approvals_reviewer="auto_review""#,
         "--ask-for-approval",
-        "never",
+        "on-request",
     ]
     .map(ToOwned::to_owned)
     .to_vec();
@@ -614,14 +687,33 @@ fn sandbox_isolation_replaces_codex_sandbox_overrides() {
     assert_eq!(
         args,
         [
+            "-c",
+            r#"approvals_reviewer="auto_review""#,
             "--ask-for-approval",
-            "never",
+            "on-request",
             "--sandbox",
             "danger-full-access"
         ]
         .map(ToOwned::to_owned)
     );
     assert_eq!(args, once);
+
+    let mut ask = CodexAdapter
+        .spec()
+        .launch
+        .permission_args(PermissionMode::Ask);
+    CodexAdapter.disable_native_sandbox_args(&mut ask);
+    assert_eq!(
+        ask,
+        [
+            "--ask-for-approval",
+            "on-request",
+            "-c",
+            r#"approvals_reviewer="user""#,
+            "--sandbox",
+            "danger-full-access",
+        ]
+    );
 
     let mut approve_for_me = vec!["--not-so-yolo".to_owned(), "--approve-for-me".to_owned()];
     CodexAdapter.disable_native_sandbox_args(&mut approve_for_me);

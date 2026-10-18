@@ -218,7 +218,7 @@ Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config hom
 
 ## Launch flags
 
-RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for that flag on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper; an unreadable version passes without a verdict.
+RimZ launches each agent with the provider's own flags. A typed profile field or `rimz agents` flag that an agent cannot express fails the launch before any pane opens, with an error that the agent "does not support profile field" and names the field. Raw profile `args` pass any other provider flag through unchanged, as do CLI arguments after `--`. Codex rejects `--remote X` or `--remote=X`, from either source, because managed panes run embedded with `--no-daemon`; remove `--remote` to launch. Codex requires 0.163.0 or newer for permission profiles and Guardian review on every launch, resume and fork. RimZ checks the resolved launch binary before opening a pane where possible, otherwise in the exec wrapper; an unreadable version passes without a verdict.
 
 OpenCode requires 2.0.0 or newer and runs with `--standalone` on every launch and resume. Launch, setup/install, and doctor refuse an older readable version with `opencode upgrade --major`; an unreadable version passes without a verdict. Fork and model presets are unsupported. Plan adds no arguments; select the plan agent interactively with Shift+Tab. The plan-approval gate in the wiring matrix still works for those interactive turns.
 
@@ -256,7 +256,7 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Agent | Ask | Auto | Plan | Yolo |
 | --- | --- | --- | --- | --- |
 | Claude Code | `--permission-mode default` | `--permission-mode auto` | `--permission-mode plan` | `--dangerously-skip-permissions` |
-| Codex | none | `--ask-for-approval never --sandbox workspace-write` | none | `--dangerously-bypass-approvals-and-sandbox` |
+| Codex | `--ask-for-approval on-request -c approvals_reviewer="user" -c default_permissions="rimz"` | `--ask-for-approval on-request -c approvals_reviewer="auto_review" -c default_permissions="rimz"` | none | `--dangerously-bypass-approvals-and-sandbox` |
 | Pi | none | none | none | none |
 | OpenCode | none | none | none | `--auto` |
 | Antigravity | none | `--mode accept-edits` | `--mode plan` | `--dangerously-skip-permissions --mode accept-edits` |
@@ -274,6 +274,8 @@ A permission mode comes from the `mode` profile field, the `--ask` and `--yolo` 
 | Muse | `--permission-profile :ask-me` | `--permission-profile :auto-review` | `--permission-profile :read-only` | `--yolo` |
 | Process plugin | declared by bundle | declared by bundle | declared by bundle | declared by bundle |
 
+On host isolation, Codex Ask and Auto use a launch-scoped `rimz` permission profile. It extends your `default_permissions` profile, or `:workspace` when unset or already `rimz`, adds write access to the room's state, runtime, and shared runtime roots, and disables network access inside the command sandbox. Other paths and network access can escalate: interactive Ask uses the human reviewer, Auto uses Guardian, including headless runs. Headless Ask cannot escalate, because Codex forces approval policy `never` for the human reviewer. Yolo still bypasses both sandbox and approval checks. Invalid parent profiles fail in Codex at startup.
+
 Claude additionally receives routine-command permissions by default through one merged `--settings`, independent of permission mode. Each prefix below gets one `Bash(<prefix> *)` rule, matching the bare command and its arguments:
 
 - `rimz message`, `rimz agents`, `rimz subagents`, `rimz teams`
@@ -289,7 +291,7 @@ Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-p
 
 Codex receives no RimZ permission rules. Users may add their own `~/.codex/rules/rimz.rules` (or `$CODEX_HOME/rules/rimz.rules`) using, for example, `prefix_rule(pattern = ["rimz", "agents"], decision = "allow")`. The [upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules) covers matching and precedence; RimZ does not create or modify that file.
 
-Under `agents.isolation = "sandbox"` a Codex launch replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox; approval flags stay as listed, though an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
+Under `agents.isolation = "sandbox"` a Codex launch removes all `default_permissions` overrides and replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox. Approval flags and `approvals_reviewer` stay as listed, so Auto retains Guardian review; an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
 
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 

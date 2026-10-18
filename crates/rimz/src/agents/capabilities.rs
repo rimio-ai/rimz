@@ -567,6 +567,15 @@ pub trait LaunchCapability: CoreCapability {
     /// unchanged for providers without a verified native switch.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
 
+    /// Grant a host launch access to the room's state, runtime, and shared runtime roots.
+    fn configure_room_permissions(
+        &self,
+        _extra_args: &mut Vec<String>,
+        _login_env: &BTreeMap<String, String>,
+        _roots: &[PathBuf; 3],
+    ) {
+    }
+
     /// Disable private language servers when RimZ owns the checkout's servers.
     fn disable_native_lsp_args(&self, _extra_args: &mut Vec<String>) {}
 

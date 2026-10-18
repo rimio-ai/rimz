@@ -956,6 +956,8 @@ fn compile_agent_process_with_extra_env(
     }
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
+    } else if let Some(roots) = &reminders.permission_roots {
+        adapter.configure_room_permissions(action.extra_args_mut(), &login_env, roots);
     }
     // A settings-member fast switch rides outside the settings document until
     // every other settings mutation has run, then merges into the one result.

@@ -845,9 +845,11 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             "codex",
             vec![
                 "--ask-for-approval",
-                "never",
-                "--sandbox",
-                "workspace-write",
+                "on-request",
+                "-c",
+                r#"approvals_reviewer="auto_review""#,
+                "-c",
+                r#"default_permissions="rimz""#,
             ],
         ),
         ("claude", vec!["--permission-mode", "auto"]),
@@ -883,7 +885,36 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             .collect();
         if kind == "codex" {
             assert_eq!(sandbox_values, ["danger-full-access"]);
-            assert!(host.provider_argv.contains(&"workspace-write".to_owned()));
+            assert!(!host.provider_argv.contains(&"--sandbox".to_owned()));
+            assert!(
+                host.provider_argv
+                    .contains(&r#"default_permissions="rimz""#.to_owned())
+            );
+            assert!(
+                !sandboxed
+                    .provider_argv
+                    .iter()
+                    .any(|arg| arg.starts_with("default_permissions="))
+            );
+            for process in [&host, &sandboxed] {
+                assert!(
+                    process
+                        .provider_argv
+                        .windows(2)
+                        .any(|pair| pair == ["--ask-for-approval", "on-request"])
+                );
+                assert!(
+                    process
+                        .provider_argv
+                        .contains(&r#"approvals_reviewer="auto_review""#.to_owned())
+                );
+                assert!(
+                    !process
+                        .provider_argv
+                        .iter()
+                        .any(|arg| arg.starts_with("permissions.rimz="))
+                );
+            }
         } else {
             assert!(sandbox_values.is_empty());
             assert_eq!(sandboxed.provider_argv.len(), host.provider_argv.len());

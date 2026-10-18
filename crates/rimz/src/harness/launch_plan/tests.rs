@@ -33,6 +33,42 @@ fn compile_prompt_request(
 }
 
 #[test]
+fn codex_host_profile_grants_room_roots_and_covers_temp_files() {
+    let project = tempfile::tempdir().unwrap();
+    let state = StatePaths::under(
+        crate::WorkspaceId::from_project_root(project.path()),
+        project.path(),
+    )
+    .unwrap();
+    let runtime = RuntimePaths::under(state.workspace_id.clone(), project.path()).unwrap();
+    let invocation = request(
+        "codex",
+        action_with_args(
+            "launch",
+            vec!["-c".into(), r#"default_permissions="rimz""#.into()],
+        ),
+    );
+    let plan = compile_prompt_request(project.path(), &invocation, None, None);
+    let profiles: Vec<_> = plan
+        .process()
+        .provider_argv
+        .iter()
+        .filter_map(|arg| arg.strip_prefix("permissions.rimz="))
+        .collect();
+    assert_eq!(profiles.len(), 1);
+    let table = format!("profile={}", profiles[0])
+        .parse::<toml::Table>()
+        .unwrap();
+    let filesystem = table["profile"]["filesystem"].as_table().unwrap();
+    assert_eq!(filesystem.len(), 3);
+    for path in [&state.root, &runtime.root, &runtime.shared_root] {
+        assert_eq!(filesystem[path.to_str().unwrap()].as_str(), Some("write"));
+    }
+    assert!(Path::new(&plan.process().env["TMPDIR"]).starts_with(&state.root));
+    assert!(Path::new(&plan.process().env["RIMZ_SHARED"]).starts_with(&state.root));
+}
+
+#[test]
 fn workflow_env_pins_survive_both_isolations() {
     let project = tempfile::tempdir().unwrap();
     let metadata = tempfile::tempdir().unwrap();
