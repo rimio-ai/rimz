@@ -29,7 +29,8 @@ pub(crate) fn zellij_shim(script: &str) -> (TempDir, PathBuf) {
 }
 
 /// A shim that logs every argv, reports a supported version, and runs
-/// `list_panes` for `action list-panes --all --json`. Every other verb exits 0.
+/// `list_panes` for `action list-panes --all --json`. Screen dumps are blank;
+/// every other verb exits 0.
 #[cfg(unix)]
 fn shim_answering_list_panes(list_panes: &str) -> (TempDir, PathBuf) {
     zellij_shim(&format!(
@@ -38,6 +39,7 @@ dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
 if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 case " $* " in
+  *" action dump-screen "*) printf '\n' ;;
   *" action list-clients "*) printf 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n' ;;
   *" action list-panes --all --json "*)
 {list_panes} ;;
@@ -59,7 +61,7 @@ pub(crate) fn failing_roster_shim() -> (TempDir, PathBuf) {
     shim_answering_list_panes("    exit 1")
 }
 
-/// A shim that only records argv — for flows that never list panes.
+/// A shim that records argv and returns blank dumps, for flows that never list panes.
 #[cfg(unix)]
 pub(crate) fn logging_shim() -> (TempDir, PathBuf) {
     shim_answering_list_panes("    exit 0")

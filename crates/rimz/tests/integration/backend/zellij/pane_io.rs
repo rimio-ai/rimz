@@ -1014,6 +1014,82 @@ fn pane_capture_reads_a_held_pane_that_pane_list_omits() {
 }
 
 #[test]
+fn pane_capture_blank_pane_succeeds_with_and_without_lines_and_ansi() {
+    require_zellij!();
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let here = workspace.session_name;
+    record_known_workspace_session(
+        &env.rimz_home(),
+        &workspace.workspace_id,
+        &env.project_root,
+        &here,
+    );
+    let room = LiveZellijSession::from_namespace(crate::common::ZellijNamespace::new(), &here);
+    let xdg = room.path();
+    room.create_background();
+    let opened = room
+        .command()
+        .args([
+            "--session",
+            &here,
+            "action",
+            "new-pane",
+            "--",
+            "sh",
+            "-c",
+            "sleep 120",
+        ])
+        .bounded_output()
+        .expect("open blank pane");
+    assert!(opened.status.success(), "{opened:?}");
+    let target = poll_until(
+        Duration::from_secs(10),
+        || {
+            list_panes(xdg, &here).map(|snapshot| {
+                snapshot.panes.into_iter().find(|pane| {
+                    pane.terminal_command
+                        .as_deref()
+                        .is_some_and(|command| command.contains("sleep 120"))
+                })
+            })
+        },
+        Option::is_some,
+        "blank pane listed",
+    )
+    .expect("blank pane");
+    let target = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", target.id)).to_string();
+    for ansi in [false, true] {
+        for lines in [false, true] {
+            let mut args = vec!["pane", "capture", &target];
+            if lines {
+                args.extend(["--lines", "5"]);
+            }
+            if ansi {
+                args.push("--ansi");
+            }
+            let output = env
+                .rimz()
+                .env("XDG_RUNTIME_DIR", xdg)
+                .env("XDG_CACHE_HOME", xdg)
+                .env("TMPDIR", xdg)
+                .args(args)
+                .bounded_output()
+                .expect("capture blank pane");
+            assert!(
+                output.status.success(),
+                "ansi={ansi} lines={lines}: {output:?}"
+            );
+            let text = String::from_utf8(output.stdout).expect("capture utf-8");
+            assert!(
+                anstream::adapter::strip_str(&text).all(|text| text.trim().is_empty()),
+                "ansi={ansi} lines={lines}: {text:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn pane_capture_lines_bounds_scrollback_without_blank_padding() {
     require_zellij!();
     let env = Env::new();
