@@ -1,5 +1,5 @@
 use super::*;
-use crate::sidebar::timing::REORDER_HOLD;
+use crate::sidebar::timing::LAYOUT_FREEZE;
 use std::sync::mpsc::{Receiver, sync_channel};
 
 fn watched_row() -> (Rig, Receiver<ObserveMsg>, PaneId, Instant) {
@@ -125,6 +125,25 @@ fn exact_landing_emits_no_displacement() {
 }
 
 #[test]
+fn landing_paints_rearm_the_freeze_after_adoption() {
+    for requested_row in [None, Some(1_000)] {
+        let (mut rig, _, _) = landing(requested_row, false);
+        layout_freeze::arm_freeze(&mut rig.state.ui, 0);
+        let before = Timestamp::now().as_millisecond();
+        rig.state.dirty = true;
+        rig.state
+            .paint_now(&mut rig.terminal, Instant::now())
+            .unwrap();
+        let after = Timestamp::now().as_millisecond();
+        let armed = rig.state.ui.freeze.as_ref().unwrap().armed_ms;
+        assert!(
+            (before..=after).contains(&armed),
+            "landing paint, not adoption, starts the timer: {armed}"
+        );
+    }
+}
+
+#[test]
 fn same_tab_landing_keeps_the_local_click_watch_without_a_second_record() {
     let (mut rig, rx, id) = landing(Some(1_000), true);
     let clicked_at = rig.state.clicked_row.as_ref().unwrap().clicked_at;
@@ -162,7 +181,7 @@ fn landing_is_judged_only_at_the_paint_that_consumed_it() {
     rig.state.ui.selected_pane = pane;
     rig.state.dirty = true;
     rig.state
-        .paint_now(&mut rig.terminal, Instant::now() + REORDER_HOLD)
+        .paint_now(&mut rig.terminal, Instant::now() + LAYOUT_FREEZE)
         .unwrap();
     assert!(rx.try_recv().is_err(), "a stale landing must not be judged");
 }
@@ -199,7 +218,7 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         // Lower-priority changes deliberately coincide with each higher one.
         rig.state.ui.anchor_clamped = cause == "no_room_clamp";
         if matches!(cause, "no_room_clamp" | "hold_expired") {
-            super::super::super::order_hold::arm_order_hold(&mut rig.state.ui, 0);
+            super::super::super::layout_freeze::arm_freeze(&mut rig.state.ui, 0);
             let prev = rig.state.current.clone();
             rig.state
                 .reconcile_selection_and_order(&prev, None, None, false, false, 5_000);
@@ -271,13 +290,13 @@ fn clicked_row_watch_ends_on_input_or_at_the_hold_deadline() {
     let (mut rig, rx, pane, now) = watched_row();
     rig.state.ui.painted_rows[0].1 = 8;
     rig.state
-        .observe_paint(now + REORDER_HOLD - Duration::from_millis(1));
+        .observe_paint(now + LAYOUT_FREEZE - Duration::from_millis(1));
     let _ = displacement(&rx, &rig.state.config.instance_id);
     rig.state.arm_clicked_row(&pane, now);
     rig.state.ui.painted_rows[0].1 = 9;
-    rig.state.observe_paint(now + REORDER_HOLD);
+    rig.state.observe_paint(now + LAYOUT_FREEZE);
     rig.state
-        .observe_paint(now + REORDER_HOLD + Duration::from_millis(1));
+        .observe_paint(now + LAYOUT_FREEZE + Duration::from_millis(1));
     assert!(rx.try_recv().is_err(), "the click window is half-open");
 }
 

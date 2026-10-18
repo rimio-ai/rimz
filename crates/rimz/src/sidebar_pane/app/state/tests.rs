@@ -812,8 +812,8 @@ fn focused_read_clear_keeps_live_rank_when_unread_clears() {
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut settled.worktree_groups)[0].rows)
         [0]
     .unread = false;
-    a.ui.order_hold.as_mut().expect("hold armed").expires_ms =
-        jiff::Timestamp::now().as_millisecond() - 1;
+    a.ui.freeze.as_mut().expect("hold armed").armed_ms =
+        jiff::Timestamp::now().as_millisecond() - 5_001;
     a.apply(settled);
 
     assert_eq!(
@@ -1038,7 +1038,7 @@ fn staying_on_tab_does_not_sweep_new_unread() {
 }
 
 #[test]
-fn new_ranked_first_unread_splices_at_front_during_order_hold() {
+fn new_ranked_first_unread_splices_at_front_during_freeze() {
     let ws = workspace();
     let (_dir, mut a) = ApplyHarness::new(&ws);
     let (mut background, first, _) =

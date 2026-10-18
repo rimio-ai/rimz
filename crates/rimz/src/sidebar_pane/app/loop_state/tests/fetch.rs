@@ -78,10 +78,10 @@ fn renderer_local_reconciliation_state_forces_full_content() {
         }),
         ("gate", |state| state.gate.reject_streak = 1),
         ("failure_streak", |state| state.health.failure_streak = 1),
-        ("order_hold", |state| {
-            state.ui.order_hold = Some(crate::sidebar_pane::render::OrderHold {
+        ("freeze", |state| {
+            state.ui.freeze = Some(crate::sidebar_pane::render::LayoutFreeze {
                 frozen: crate::sidebar_pane::render::FrozenOrder::default(),
-                expires_ms: i64::MAX,
+                armed_ms: jiff::Timestamp::now().as_millisecond(),
             });
         }),
         ("tab_read_dwell", |state| {

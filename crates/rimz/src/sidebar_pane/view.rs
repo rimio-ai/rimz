@@ -54,7 +54,7 @@ impl<'a> VisibleGroup<'a> {
     }
 }
 
-/// One body projection shared by render, browse, selection, and order holds.
+/// One body projection shared by render, browse, selection, and layout freezes.
 pub(super) struct VisibleRoster<'a> {
     rows: Vec<&'a SidebarRow>,
     matches: Vec<bool>,
@@ -271,7 +271,7 @@ fn project_rows<'a>(
                 .map(|row| row.id.as_str())
         })
         .flatten();
-    // Keep a collapsing roster whole while focus or the order hold anchors any
+    // Keep a collapsing roster whole while focus or the layout freeze anchors any
     // member. Once both clear, every row collapses into the receipt together.
     let revealed = collapses
         && source.iter().any(|row| {

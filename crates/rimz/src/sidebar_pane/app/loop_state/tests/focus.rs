@@ -1,4 +1,4 @@
-//! Focus anchors resolving into selection and scroll, the order holds that
+//! Focus anchors resolving into selection and scroll, the layout freezes that
 //! keep the frame still while the user acts, and the read-mark receipts.
 
 use super::*;
@@ -41,6 +41,71 @@ fn tmux_focus_snapshot(rig: &Rig, third_window: &str, stamp: u64) -> SidebarSnap
         pane_id: tmux("%1"),
     }];
     result
+}
+
+#[test]
+fn tmux_sidebar_departure_releases_parked_freeze_before_the_next_pull() {
+    let own = tmux("%7");
+    let mut producer = TmuxPresenceState::default();
+    let mut sidebar = tmux_subscription("%7", "@1", false);
+    if let ControlLine::Subscription { title, command, .. } = &mut sidebar {
+        *title = Some(crate::pane::SIDEBAR_CHROME_TITLE.to_owned());
+        *command = Some("rimz".to_owned());
+    }
+    for line in [tmux_subscription("%1", "@1", true), sidebar] {
+        producer.apply(line, true);
+    }
+    let mut rig = Rig::with_own_pane(own.clone());
+    let now = crate::utils::time::unix_now_ms();
+    let mut pulled = tmux_focus_snapshot(&rig, "@1", now - 100);
+    pulled.focused_pane = Some(own.clone());
+    pulled.client_views[0].pane_id = own.clone();
+    rig.fold(pulled, SnapshotSource::Produced);
+    for event in project_presence(
+        producer
+            .apply(
+                ControlLine::WindowPaneChanged {
+                    window: "@1".to_owned(),
+                    pane: "%7".to_owned(),
+                },
+                false,
+            )
+            .0,
+    ) {
+        rig.event(event);
+    }
+    rig.state.ui.theme(&rig.state.current.theme);
+    layout_freeze::arm_freeze(&mut rig.state.ui, now as i64 - 6_000);
+    assert!(rig.state.parked(now));
+    let departure = project_presence(
+        producer
+            .apply(
+                ControlLine::WindowPaneChanged {
+                    window: "@1".to_owned(),
+                    pane: "%1".to_owned(),
+                },
+                false,
+            )
+            .0,
+    );
+    assert_eq!(
+        departure,
+        vec![SidebarEvent::FocusChanged {
+            focused: vec![tmux("%1")],
+            unfocused: vec![],
+        }]
+    );
+    for event in departure {
+        rig.event(event);
+    }
+    assert!(
+        rig.state.ui.freeze.is_none(),
+        "departure releases in the event fold, not a later pull"
+    );
+    assert_eq!(
+        rig.state.current.client_views[0].pane_id, own,
+        "pull still reports the sidebar"
+    );
 }
 
 fn assert_tmux_activation_selection(third_window: &str, line: ControlLine, expected: &str) {
@@ -1204,7 +1269,7 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
     let target = zellij("terminal_2");
     let stamp_ms = crate::utils::time::unix_now_ms();
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    let order = order_hold::capture_order(&snapshot, &rig.state.ui);
+    let order = layout_freeze::capture_order(&snapshot, &rig.state.ui);
     let mut anchor = applied_focus_anchor(target.clone(), 7, stamp_ms, Some(order.clone()));
     anchor.placement = None;
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
@@ -1219,7 +1284,7 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
         "a rowless anchor preserves external-focus group reveal"
     );
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
-    assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
+    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().frozen, order);
 }
 
 #[test]
@@ -1227,7 +1292,7 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     let mut rig = Rig::new();
     let first = zellij("terminal_1");
     let target = zellij("terminal_2");
-    let stamp_ms = crate::utils::time::unix_now_ms();
+    let stamp_ms = crate::utils::time::unix_now_ms() - 1_000;
     let mut anchor = requested_focus_anchor(
         target.clone(),
         7,
@@ -1250,7 +1315,9 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).expect("store anchor");
 
     let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
+    let before = Timestamp::now().as_millisecond();
     rig.fold(snapshot, SnapshotSource::Produced);
+    let after = Timestamp::now().as_millisecond();
 
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert_eq!(rig.state.ui.scroll_offset, 0);
@@ -1265,11 +1332,11 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
         vec![target.clone(), first],
         "fold snapshot adopts anchor row order before paint"
     );
-    let hold = rig.state.ui.order_hold.as_ref().expect("shared hold");
+    let hold = rig.state.ui.freeze.as_ref().expect("shared hold");
     assert_eq!(hold.frozen.visible, HashSet::from([target.to_string()]));
-    assert_eq!(
-        hold.expires_ms,
-        stamp_ms as i64 + crate::sidebar::timing::REORDER_HOLD.as_millis() as i64
+    assert!(
+        (before..=after).contains(&hold.armed_ms),
+        "adoption starts at the fold, not the anchor stamp"
     );
 
     rig.state.ui.scroll_offset = 4;
@@ -1329,7 +1396,7 @@ fn fresh_child_focus_anchor_selects_parent_and_queues_placement_and_hold() {
     assert_eq!(rig.state.ui.selected_pane, Some(parent));
     assert_eq!(rig.state.ui.scroll_offset, 0);
     assert_eq!(rig.state.ui.focus_placement, anchor.placement);
-    assert_eq!(rig.state.ui.order_hold.as_ref().unwrap().frozen, order);
+    assert_eq!(rig.state.ui.freeze.as_ref().unwrap().frozen, order);
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
 }
 
@@ -1456,13 +1523,13 @@ fn reload_key_preserves_control_reload_flow_without_freezing_order() {
         "the host decides without clearing attachment-local deferred work"
     );
     assert!(
-        rig.state.ui.order_hold.is_none(),
+        rig.state.ui.freeze.is_none(),
         "reload must not freeze the refreshed order"
     );
 }
 
 #[test]
-fn input_browse_arms_order_hold_before_next_fold() {
+fn input_browse_arms_freeze_before_next_fold() {
     let mut rig = Rig::new();
     let panes = vec![
         pane("terminal_1", "tab_0", false),
@@ -1474,19 +1541,21 @@ fn input_browse_arms_order_hold_before_next_fold() {
     rig.state.ui.selected_pane = Some(first);
     rig.state.ui.selected_index = Some(0);
     rig.state.ui.last_order =
-        super::super::order_hold::capture_order(&rig.state.current, &rig.state.ui);
+        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
 
-    rig.input(KeyAction::Down);
+    rig.state
+        .apply_input([Wakeup::Key(KeyAction::Down)], &mut rig.terminal)
+        .unwrap();
 
     assert_eq!(rig.state.ui.selected_pane, Some(second));
     assert!(
-        rig.state.ui.order_hold.is_some(),
-        "arrow-key browse arms the order hold immediately, without waiting for a fold"
+        rig.state.ui.freeze.is_some(),
+        "arrow-key browse arms the layout freeze immediately, without waiting for a fold"
     );
 }
 
 #[test]
-fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
+fn browse_survives_a_frameless_escape_hatch_with_a_live_freeze() {
     let mut rig = Rig::new();
     let framed = agent_snapshot(&rig.ws);
     let selected = framed.worktree_groups[0].rows[0]
@@ -1499,7 +1568,7 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
     rig.input(KeyAction::Down);
     let browse = rig.state.ui.browse.clone();
     assert!(browse.is_some());
-    assert!(rig.state.ui.order_hold.is_some());
+    assert!(rig.state.ui.freeze.is_some());
     assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
 
     let mut frameless = framed.clone();
@@ -1519,7 +1588,7 @@ fn browse_survives_a_frameless_escape_hatch_with_a_live_order_hold() {
     assert_eq!(rig.state.gate.reject_streak, 0);
     assert_eq!(rig.state.current.panes_produced_at_ms, None);
     assert!(rig.state.current.worktree_groups.is_empty());
-    assert!(rig.state.ui.order_hold.is_some());
+    assert!(rig.state.ui.freeze.is_some());
     assert_eq!(rig.state.ui.selected_pane, Some(selected.clone()));
     assert_eq!(rig.state.ui.browse, browse);
     assert_eq!(rig.state.ui.selected_index, None);
@@ -1560,7 +1629,7 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
     rig.state.ui.selected_pane = Some(selected.clone());
     rig.state.ui.baseline_pane = Some(selected);
     rig.state.ui.last_order =
-        super::super::order_hold::capture_order(&rig.state.current, &rig.state.ui);
+        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
 
     let mut after = before;
     after.panes_produced_at_ms = Some(2);
@@ -1577,7 +1646,7 @@ fn answering_focused_agent_holds_the_pre_answer_order() {
 
     rig.fold(after, SnapshotSource::Produced);
 
-    assert!(rig.state.ui.order_hold.is_some());
+    assert!(rig.state.ui.freeze.is_some());
     assert_eq!(
         rig.state.current.worktree_groups[0]
             .rows
@@ -1608,7 +1677,7 @@ fn mark_all_read_clears_every_unread_row_and_writes_receipts() {
     rig.state.current = snapshot;
     rig.state.ui.unread_guard = Some("agent-1".to_owned());
     rig.state.ui.last_order =
-        super::super::order_hold::capture_order(&rig.state.current, &rig.state.ui);
+        super::super::layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
 
     rig.input(KeyAction::MarkAllRead);
 

@@ -873,7 +873,7 @@ fn queued_wheel_ticks_paint_once_at_the_final_offset() {
             !rig.state.ui.offset_authoritative,
             "paint consumed the wheel intent"
         );
-        assert!(rig.state.ui.order_hold.is_some());
+        assert!(rig.state.ui.freeze.is_some());
         assert!(!rig.state.dirty);
     }
 }

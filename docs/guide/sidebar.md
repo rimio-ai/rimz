@@ -247,7 +247,7 @@ Three partitions hold regardless of any score, so the column keeps one stable ou
 - Finished project groups follow every unfinished project group, behind the landed chip. Like `+K more`, the chip toggles by mouse only, and its open or closed choice belongs to this sidebar view. Opening scrolls only as far as the first receipt it reveals needs; neither opening nor closing changes the selection.
 - Project worktrees lead and out-of-project panes tail, so the `external` divider always sorts last whatever it holds.
 
-Inside an unfinished group, the six-row cap folds idle cards and process rows behind `+K more`; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. After you jump or browse, the column holds the order it last painted for a few seconds, so a glance back finds the cards where they were.
+Inside an unfinished group, the six-row cap folds idle cards and process rows behind `+K more`; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. After you jump or browse, the column freezes its order for five seconds from your last interaction or landing paint, so a glance back finds the cards where they were. While any client's focus is on this sidebar pane, the freeze lasts thirty seconds instead; leaving the pane restores the five-second deadline without restarting it. Each tab has its own timer, and a hidden tab settles on its next content fold.
 
 ## Tuning
 

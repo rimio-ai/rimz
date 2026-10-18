@@ -1,4 +1,34 @@
 use super::*;
+use crate::sidebar::timing::LAYOUT_FREEZE;
+
+#[test]
+fn freeze_deadline_counts_from_arming_for_both_focus_states() {
+    let freeze = LayoutFreeze {
+        frozen: FrozenOrder::default(),
+        armed_ms: 1_000,
+    };
+    assert_eq!(freeze.deadline_ms(false), 6_000);
+    assert_eq!(freeze.deadline_ms(true), 31_000);
+}
+
+#[test]
+fn freeze_releases_at_the_deadline_including_parked_ties() {
+    for (parked, deadline) in [(false, 6_000), (true, 31_000)] {
+        let mut ui = UiState::default();
+        let mut current = snapshot_with_groups(vec![group("a", vec![row("a1", "terminal_1")])]);
+        arm_freeze(&mut ui, 1_000);
+        apply_freeze(&mut ui, &mut current, false, deadline - 1, parked);
+        assert!(
+            ui.freeze.is_some(),
+            "holds through deadline - 1 (parked={parked})"
+        );
+        apply_freeze(&mut ui, &mut current, false, deadline, parked);
+        assert!(
+            ui.freeze.is_none(),
+            "releases at the exact deadline (parked={parked})"
+        );
+    }
+}
 use crate::agents::AgentStatus;
 use crate::sidebar_pane::app::fixtures::{pane, snapshot, workspace};
 use crate::store::snapshot::{
@@ -383,7 +413,7 @@ fn capture_order_collects_group_keys_flat_row_ids_and_visible_ids() {
 }
 
 #[test]
-fn apply_order_hold_arms_holds_and_expires() {
+fn apply_freeze_arms_holds_and_expires() {
     let mut ui = UiState {
         last_order: FrozenOrder {
             groups: vec!["a".to_owned()],
@@ -398,29 +428,29 @@ fn apply_order_hold_arms_holds_and_expires() {
     )]);
     let now_ms = 1_000;
 
-    apply_order_hold(&mut ui, &mut current, true, now_ms);
+    apply_freeze(&mut ui, &mut current, true, now_ms, false);
 
-    let expires_ms = now_ms + REORDER_HOLD.as_millis() as i64;
+    let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     assert_eq!(
-        ui.order_hold.as_ref().map(|hold| hold.expires_ms),
+        ui.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
         Some(expires_ms)
     );
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_order_hold(&mut ui, &mut current, false, expires_ms - 1);
+    apply_freeze(&mut ui, &mut current, false, expires_ms - 1, false);
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1"]);
 
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut current.worktree_groups)[0].rows)
         .reverse();
-    apply_order_hold(&mut ui, &mut current, false, expires_ms);
-    assert!(ui.order_hold.is_none());
+    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
+    assert!(ui.freeze.is_none());
     assert_eq!(row_ids(&current, "a"), vec!["a1", "a2"]);
 }
 
 #[test]
-fn order_hold_preserves_partitions_when_a_middle_group_lands_or_revives() {
+fn freeze_preserves_partitions_when_a_middle_group_lands_or_revives() {
     for was_finished in [false, true] {
         let mut groups = vec![
             group("a", vec![row("a1", "terminal_1")]),
@@ -434,14 +464,14 @@ fn order_hold_preserves_partitions_when_a_middle_group_lands_or_revives() {
         let mut current = snapshot_with_groups(groups);
         let mut ui = UiState::default();
         ui.last_order = capture_order(&current, &ui);
-        apply_order_hold(&mut ui, &mut current, true, 1_000);
+        apply_freeze(&mut ui, &mut current, true, 1_000, false);
 
         let changed = if was_finished { 2 } else { 1 };
         std::sync::Arc::make_mut(&mut current.worktree_groups)[changed].finished = !was_finished;
-        apply_order_hold(&mut ui, &mut current, false, 1_001);
+        apply_freeze(&mut ui, &mut current, false, 1_001, false);
 
         assert_eq!(group_keys(&current), vec!["a", "c", "b", "external"]);
-        assert!(ui.order_hold.is_some(), "the hold remains armed");
+        assert!(ui.freeze.is_some(), "the hold remains armed");
     }
 }
 
@@ -467,21 +497,19 @@ fn new_group_during_hold_stays_at_its_ranked_position_after_expiry() {
     let now_ms = 1_000;
     let mut current = snapshot_with_groups(groups());
 
-    apply_order_hold(&mut ui, &mut current, true, now_ms);
+    apply_freeze(&mut ui, &mut current, true, now_ms, false);
 
     assert_eq!(group_keys(&current), vec!["team", "main"]);
     assert_eq!(
-        ui.order_hold
-            .as_ref()
-            .map(|hold| hold.frozen.groups.clone()),
+        ui.freeze.as_ref().map(|hold| hold.frozen.groups.clone()),
         Some(vec!["team".to_owned(), "main".to_owned()])
     );
 
-    let expires_ms = now_ms + REORDER_HOLD.as_millis() as i64;
+    let expires_ms = now_ms + LAYOUT_FREEZE.as_millis() as i64;
     let mut current = snapshot_with_groups(groups());
-    apply_order_hold(&mut ui, &mut current, false, expires_ms);
+    apply_freeze(&mut ui, &mut current, false, expires_ms, false);
 
-    assert!(ui.order_hold.is_none());
+    assert!(ui.freeze.is_none());
     assert_eq!(group_keys(&current), vec!["team", "main"]);
 }
 
@@ -515,11 +543,11 @@ fn adopt_shared_hold_installs_reorders_and_recaptures() {
 
     assert_eq!(row_ids(&current, "a"), vec!["a-new", "a2", "a1"]);
     assert_eq!(
-        ui.order_hold.as_ref().map(|hold| hold.expires_ms),
-        Some(stamp_ms + REORDER_HOLD.as_millis() as i64)
+        ui.freeze.as_ref().map(|hold| hold.deadline_ms(false)),
+        Some(stamp_ms + LAYOUT_FREEZE.as_millis() as i64)
     );
     assert_eq!(
-        ui.order_hold.as_ref().map(|hold| &hold.frozen),
+        ui.freeze.as_ref().map(|hold| &hold.frozen),
         Some(&expected_order)
     );
     assert_eq!(frozen_row_ids(&ui.last_order), vec!["a-new", "a2", "a1"]);
@@ -530,7 +558,7 @@ fn adopt_shared_hold_installs_reorders_and_recaptures() {
 }
 
 #[test]
-fn order_hold_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
+fn freeze_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
     let mut ui = UiState {
         last_order: FrozenOrder {
             groups: vec!["team".to_owned()],
@@ -557,7 +585,7 @@ fn order_hold_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
         ],
     )]);
 
-    apply_order_hold(&mut ui, &mut current, true, 1_000);
+    apply_freeze(&mut ui, &mut current, true, 1_000, false);
 
     assert_eq!(
         row_ids(&current, "team"),
@@ -568,7 +596,7 @@ fn order_hold_migrates_rekeyed_rows_by_pane_and_keeps_visible_slots() {
             "new-agent"
         ],
     );
-    let frozen = &ui.order_hold.as_ref().expect("hold").frozen;
+    let frozen = &ui.freeze.as_ref().expect("hold").frozen;
     assert_eq!(
         frozen_row_ids(frozen),
         vec![
