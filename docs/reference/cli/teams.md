@@ -212,6 +212,8 @@ rimz teams peer --channel triage
 rimz teams launch forge -w feat-rate-limits
 ```
 
+A team launched from an agent's pane starts in that agent's own checkout unless a worktree is selected. If the selected account has not trusted the launch directory, the launch refuses with the grant command to ask the user to run. Human team launches warn on an undecided folder; saved-untrusted folders refuse for either caller.
+
 A checkout holding another team (a live member, or team history with a board stage other than `Done`) [refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-checkout); `rimz teams flip <team>#<lane> Done "<note>"` releases a stopped run without removing its checkout. A channel held at a different checkout [also refuses a fresh launch](../../internals/harness/fleet.md#one-team-per-channel), even for the same team, whether the channel is explicit or derived from the checkout.
 
 `rimz teams <team> [PROMPT]` and `rimz teams launch <team> [PROMPT]` launch a configured team and send the optional prompt to its leader: the `leader` role, else the first declared role. The team's tab selects the leader's pane internally; whether the client enters it follows the [agent launch focus rule](./agents.md#channel-worktree-and-placement). Both run the same launch as `rimz agents <team>`: worktree creation, channel placement, pull-request checkout, and [reconciliation with an existing cohort](./agents.md#relaunch-into-a-named-worktree). A live cohort receives the prompt through its leader, or is just focused when no prompt is supplied; an agent caller or `--bg` preserves focus. A missing leader refuses with exit 1 and commands to message live members. A closed cohort prompts to resume, start fresh, or remove; cancellation and non-terminal refusals exit 1 with prompt-preserving next commands. A name that is not a defined team is refused with the list of configured teams, and `forge.reviewer` is refused with a pointer to `rimz agents forge.reviewer`. A team launched by an agent is a top-level cohort, not a child of that agent.
@@ -219,7 +221,7 @@ A checkout holding another team (a live member, or team history with a board sta
 | Flag | Effect |
 | --- | --- |
 | `-w`, `--worktree [NAME]` | Reuse or create the RimZ-owned worktree `NAME`, on lane `#NAME`; bare `-w` generates a name. New trees branch from the remote default branch, fetched at launch, unless `agents.worktree.base` selects `head` or a literal ref. A configured `fresh` also fetches. The fetch never prompts and gives up after 60 seconds, so an ssh origin whose key needs a passphrase with no agent running waits out that budget. A failed fetch warns and uses the last-fetched tip, or local `HEAD` if none exists; with no `origin`, an unset base uses local `HEAD`. Reuse and `--from-pr` do not fetch. `team#NAME` is the same selection; give one or the other. Name rules and prompts are on [`rimz agents`](./agents.md#channel-worktree-and-placement). |
-| `--channel NAME` | Launch into the durable named lane `NAME` in the room root. Conflicts with `-w` and `team#worktree`. |
+| `--channel NAME` | Launch into the durable named lane `NAME` in the selected checkout. Conflicts with `-w` and `team#worktree`. |
 | `--from-pr PR` | Create or reuse a worktree from a pull-request number or URL. |
 | `--description TEXT` | Seed the member cards' description until the agents name their sessions. |
 | `--continue` | Resume the matching closed cohort instead of launching; the same as [`rimz teams resume`](#resume-a-team). |
