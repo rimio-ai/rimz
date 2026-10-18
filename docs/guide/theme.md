@@ -110,7 +110,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `good` | calm and positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker |
 | `warn` | the caution floor: resting `?` waits, the low-mid gauge rung |
 | `caution` | the warm "hot or costly" amber: the gauge mid-band and the age-heat midpoint |
-| `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter |
+| `alarm` | danger: failed `!`, the full-gauge crest, `-` removals (the fresh-input `↘` marker is a deeper red one step past it), and greyed toward `muted` for an expired context meter and its age clock |
 | `accent` | data: the `◎` sessions glyph, the `↗` output marker |
 | `cool` | cool informational: large window tags, the `◇` token total, the paused `⏸` glyph |
 | `meta` | delegation and compaction: the `⧉` subagent marker, the `◍` cache-write marker |
@@ -121,7 +121,7 @@ caution = "yellow" # a palette role tracks the active [colors] table
 | `selection` | the selected card's bright `▌` spine and the dim `▎` lane bracket |
 | `selection_bg` | the selected card's recessed background band |
 
-Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) wears a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.
+Two rules keep the palette honest: `alarm` red marks danger, and one warm `caution` amber means "hot or costly" everywhere. The [expired context meter](./sidebar.md) and its age clock wear a fixed greyed red, `alarm` blended halfway to `muted`, not another tunable slot.
 
 The four health slots also form a ramp, `good → warn → caution → alarm`, green through gold and orange to red, and the live meters slide along it. The context meter, the remote link badge, and the draining provider budget bar ride the whole ramp. The card age clock stays neutral until the last ten minutes before its known cache lifetime, then warms from amber to red (over the whole lifetime when shorter); with no known lifetime it never heats. The reset-countdown pace uses the warm tail, with a cool green tail of its own once spending runs well under pace.
 
