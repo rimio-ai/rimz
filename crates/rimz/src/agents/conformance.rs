@@ -229,7 +229,9 @@ fn named_login_env_resolves_hook_install_under_the_named_home() {
             assert!(path.starts_with(&named), "{kind}: {path:?}");
             assert!(!path.starts_with(&home), "{kind}: {path:?}");
         }
-        adapter.install_hooks(&login_env).unwrap();
+        adapter
+            .install_hooks(&login_env, Default::default())
+            .unwrap();
         assert!(named.join(filename).is_file(), "{kind}");
         assert!(adapter.hooks_installed(&login_env), "{kind}");
         assert!(!adapter.hooks_installed(&ambient), "{kind}");

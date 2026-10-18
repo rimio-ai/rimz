@@ -42,10 +42,12 @@ rimz · first-run setup
 
 RimZ found 2 coding agents: claude, codex.
 To show them live in the sidebar, RimZ installs or refreshes reporting hooks in each agent's config.
+Codex also gets a permission rules file: routine `rimz` commands run without a prompt or sandbox in every Codex session, including outside RimZ. Turn it off with `[agents] allow-routine-rimz = false`.
 
   claude  13 hooks → ~/.claude/settings.json  updates existing config
           + sets your statusline to show live context
   codex   11 hooks → ~/.codex/config.toml     updates existing config
+          config → ~/.codex/rules/rimz.rules  new file
 
 Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you.
   undo     rimz hooks uninstall
@@ -54,9 +56,11 @@ Each hook is one `rimz hooks feed` line — it reports events, never acts or ans
 Install or refresh reporting hooks? [Y/n]
 ```
 
-Enter or `y` installs for every agent listed; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks are already current is not listed at all.
+Enter or `y` installs for every agent listed; `n` skips all of them and setup carries on. Only agents whose binary RimZ found appear, and an agent whose hooks and managed files are already current is not listed at all.
 
 What the write does depends on the agent. Most are a merge: RimZ adds its entries to the existing JSON, TOML, or YAML and leaves every other value, your own hooks included. Amp, Copilot, Kiro, OpenCode, Pi, and OMP instead get one whole file that belongs to RimZ, marked `_rimz_managed` on its first line; an unmarked file already sitting at that path is yours, and install refuses rather than overwrite it. Muse gets a separate RimZ-owned hook file plus two settings pointing to it, with your own hooks preserved. Where the row shows a statusline note, RimZ claims the agent's statusline slot, which is how the card gets live context. A statusline you had set keeps running, wrapped inside RimZ's, and uninstall puts yours back on its own.
+
+Codex also gets a marked `rules/rimz.rules` file for [routine coordination commands](./configuration.md#routine-rimz-commands). Those rules let matching commands run without a permission prompt or command sandbox; the dry run shows them separately from the reporting hooks. An unmarked file at that path is left alone; your own rules still apply.
 
 `rimz hooks install` and `rimz hooks uninstall` cover the rest of the lifecycle:
 

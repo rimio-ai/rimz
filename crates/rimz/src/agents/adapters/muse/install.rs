@@ -23,11 +23,19 @@ const HOOK_TIMEOUT: i64 = 4;
 pub(super) struct MuseManagedIntegration;
 
 impl ManagedIntegration for MuseManagedIntegration {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install_at(&home(env)?, Some(installed_cli_version()?))
     }
 
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview_at(&home(env)?, Some(installed_cli_version()?))
     }
 
@@ -66,12 +74,18 @@ impl ManagedIntegration for MuseManagedIntegration {
         })
     }
 
-    fn upgrade_available(&self, env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         self.managed_artifacts_present(env) && !self.installed(env)
     }
 
     fn install_blocker(&self, env: &BTreeMap<String, String>) -> Option<String> {
-        self.preview(env).err().map(|error| error.to_string())
+        self.preview(env, crate::agents::HookInstallOptions::default())
+            .err()
+            .map(|error| error.to_string())
     }
 
     fn wiring_input_paths(

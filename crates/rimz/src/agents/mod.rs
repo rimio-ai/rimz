@@ -215,6 +215,20 @@ pub enum AgentErr {
 
 pub type Result<T> = std::result::Result<T, AgentErr>;
 
+/// Machine policy for provider-managed hook installation.
+#[derive(Clone, Copy, Debug)]
+pub struct HookInstallOptions {
+    pub allow_routine_rimz: bool,
+}
+
+impl Default for HookInstallOptions {
+    fn default() -> Self {
+        Self {
+            allow_routine_rimz: true,
+        }
+    }
+}
+
 /// A provider setting that prevents an explicitly requested capability.
 #[derive(Clone, Debug)]
 pub struct SettingsConflict {

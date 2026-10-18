@@ -96,6 +96,7 @@ fn a_fresh_shared_account_links_every_entry_that_is_not_private() {
         [
             "config.toml",
             "AGENTS.md",
+            "rules",
             "archived_sessions",
             "history.jsonl",
             "sessions"
@@ -292,10 +293,17 @@ fn switching_to_standalone_unlinks_history_and_keeps_settings() {
         report.unlinked,
         ["archived_sessions", "history.jsonl", "sessions"]
     );
-    assert_eq!(report.current, ["config.toml", "AGENTS.md"]);
+    assert_eq!(report.current, ["config.toml", "AGENTS.md", "rules"]);
     assert_eq!(
         names(&home.named),
-        [ASIDE_DIR, "AGENTS.md", "auth.json", "config.toml", "notes"]
+        [
+            ASIDE_DIR,
+            "AGENTS.md",
+            "auth.json",
+            "config.toml",
+            "notes",
+            "rules"
+        ]
     );
     assert!(home.native.join("sessions").is_dir());
     assert_eq!(
@@ -468,7 +476,7 @@ fn migration_removes_owned_skill_links_and_preserves_user_entries() {
 #[test]
 fn a_standalone_account_shares_settings_alone_and_rerun_changes_nothing() {
     for (kind, files, dirs) in [
-        ("codex", &["config.toml", "AGENTS.md"][..], &[][..]),
+        ("codex", &["config.toml", "AGENTS.md"][..], &["rules"][..]),
         (
             "claude",
             &["settings.json", "settings.local.json", "CLAUDE.md"][..],
@@ -512,11 +520,11 @@ fn a_standalone_account_shares_settings_alone_and_rerun_changes_nothing() {
 #[test]
 fn relative_links_to_the_native_entries_are_current() {
     let home = Fixture::new("codex");
-    for name in ["config.toml", "AGENTS.md"] {
+    for name in ["config.toml", "AGENTS.md", "rules"] {
         symlink(Path::new("../native").join(name), home.named.join(name)).unwrap();
     }
     let report = home.run(false);
-    assert_eq!(report.current, ["config.toml", "AGENTS.md"]);
+    assert_eq!(report.current, ["config.toml", "AGENTS.md", "rules"]);
     assert!(report.linked.is_empty());
     assert_eq!(
         fs::read_link(home.named.join("config.toml")).unwrap(),

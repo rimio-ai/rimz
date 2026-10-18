@@ -540,7 +540,7 @@ fn a_named_account_preflights_its_home_and_hooks() {
 
     crate::agents::find_definition("claude")
         .unwrap()
-        .install_hooks(&login.env(&ambient))
+        .install_hooks(&login.env(&ambient), Default::default())
         .unwrap();
     assert_eq!(login.preflight(&ambient), Ok(()));
     assert_eq!(
@@ -754,7 +754,7 @@ fn default_health_checks_the_provider_home_and_names_the_hooks_fix() {
 
     crate::agents::find_definition("claude")
         .unwrap()
-        .install_hooks(&ambient)
+        .install_hooks(&ambient, Default::default())
         .unwrap();
     assert_eq!(default.health(&ambient), Ok(()));
     assert_eq!(AccountStatus::of(None).as_str(), "ready");

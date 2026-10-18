@@ -35,7 +35,11 @@ pub(super) fn settings_path(env: &BTreeMap<String, String>) -> Result<PathBuf> {
 }
 
 impl ManagedIntegration for QoderAdapter {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "qoder",
@@ -44,7 +48,11 @@ impl ManagedIntegration for QoderAdapter {
         }
         SOURCE.install(env)
     }
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         if let Some(reason) = self.install_blocker(env) {
             return Err(AgentErr::Install {
                 agent: "qoder",

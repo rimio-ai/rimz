@@ -597,7 +597,7 @@ rimz config set agents.isolation sandbox
 
 That probes bubblewrap and then writes `isolation = "sandbox"` under `[agents]` in `config.toml`. The default is `host`, and `rimz config set agents.isolation host` restores it without disturbing any profile `skills` list. For a profile that needs host access, such as a system administrator using `sudo`, set `isolation: host` in its Markdown definition. A recorded `--isolation` flag wins over the profile default, which wins over machine policy. Restart re-reads the profile; panes already open keep what they started with. Off Linux there is no sandbox, so a `config.toml` or profile shared from a Linux machine that asks for `sandbox` runs on the host instead, with a warning naming the setting.
 
-To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`. That agent keeps the choice through restart and resume, and its subagents inherit the override, but never run looser than their parent's effective isolation: a sandboxed parent refuses a child's host override and clamps host defaults to sandbox with a note. Inside the mount view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`); host mode leaves it on.
+To try one launch the other way, pass `--isolation host` or `--isolation sandbox` to `rimz agents`, `rimz teams`, or `rimz subagents`. That agent keeps the choice through restart and resume, and its subagents inherit the override, but never run looser than their parent's effective isolation: a sandboxed parent refuses a child's host override and clamps host defaults to sandbox with a note. Inside the mount view a Codex agent runs with its own command sandbox off (`--sandbox danger-full-access`). In host mode, Ask and Auto use a command sandbox with write access to the room's state and runtime directories; Auto escalates other access to Guardian, Ask to you ([permission modes](../reference/agent-support.md#permission-modes)).
 
 Every launched agent carries three variables, so a script or skill inside the pane can read them instead of guessing: `RIMZ_ISOLATION` is `sandbox` or `host`, `TMPDIR` names the agent's temp directory, which its subagents share (`/tmp` in the sandbox, a host path otherwise), and `RIMZ_SHARED` names the directory the whole room shares for files agents hand each other (the same host path in both). A process that outlives the agent's command, such as a language server, a notification handler, or a room started from the pane, gets your own `TMPDIR` back; a `rimz wait --run` command is the agent's own work and keeps the agent's. What the sandbox does and does not hide is [security → sandbox isolation](./security.md#sandbox-isolation).
 
@@ -751,18 +751,18 @@ This key is machine-only: project config cannot override it, so a repository can
 
 #### Routine RimZ commands
 
-Claude can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`, adding a curated set of command permissions and the launch's scratch/shared directories through Claude's `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
+Claude and Codex can otherwise pause for permission just to coordinate with another agent. RimZ defaults `allow-routine-rimz` to `true`. For Claude, it adds curated command permissions and the launch's scratch/shared directories through `--settings`, plus auto-mode context describing those commands and directories. Your Claude settings are preserved; RimZ does not edit `~/.claude/settings.json`. For Codex, `rimz hooks install` writes the same command prefixes into `$CODEX_HOME/rules/rimz.rules` (`~/.codex/rules/rimz.rules` by default); matching commands run unsandboxed without Guardian review. The file is shared by named accounts, including standalone accounts. See [permission modes](./fleet.md#set-a-permission-mode) for what this covers.
 
 The switch also covers your installed `rimz-*` skills in Claude's skill directory or the RimZ library. Only exact directory names with a `SKILL.md` receive rules, never a wildcard grant. Turning it off does not remove the permissions from a profile's own `skills:` list.
 
-To keep Claude launches free of these additions, set this in `~/.rimz/config.toml`:
+To opt out, set this in `~/.rimz/config.toml`:
 
 ```toml
 [agents]
 allow-routine-rimz = false
 ```
 
-This key is machine-only: project config cannot override it. It applies to every RimZ-launched Claude agent, including subagents, restarts, resumes, and forks, under host or sandbox isolation and in every permission mode. Other providers are unchanged. `rimz agents explain claude` shows the launch settings without starting an agent.
+This key is machine-only: project config cannot override it. It applies to every RimZ-launched Claude agent, including subagents, restarts, resumes, and forks, under host or sandbox isolation and in every permission mode. For Codex, switching it off removes the managed rules file at the next `rimz start` consent or `rimz hooks install`; `rimz hooks uninstall` removes it too. Your own unmarked file is left alone during preview and install, never replaced or removed; your own rules still apply. Other providers are unchanged. `rimz agents explain claude` shows the launch settings without starting an agent; `rimz hooks install --dry-run codex` previews Codex's file changes.
 
 #### Subagent launches
 

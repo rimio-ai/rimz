@@ -412,10 +412,13 @@ fn with_action_hooks(test: &str) -> bool {
     let home = tempfile::tempdir().unwrap();
     find_definition("claude")
         .unwrap()
-        .install_hooks(&BTreeMap::from([(
-            "CLAUDE_CONFIG_DIR".into(),
-            home.path().display().to_string(),
-        )]))
+        .install_hooks(
+            &BTreeMap::from([(
+                "CLAUDE_CONFIG_DIR".into(),
+                home.path().display().to_string(),
+            )]),
+            Default::default(),
+        )
         .unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args([

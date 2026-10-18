@@ -182,10 +182,18 @@ impl InstallationCapability for OmpAdapter {
 }
 
 impl ManagedIntegration for OmpAdapter {
-    fn install(&self, env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         OMP_SOURCE.install(env)
     }
-    fn preview(&self, env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         OMP_SOURCE.preview(env)
     }
     fn uninstall(&self, env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
@@ -197,7 +205,11 @@ impl ManagedIntegration for OmpAdapter {
     fn managed_artifacts_present(&self, env: &BTreeMap<String, String>) -> bool {
         OMP_SOURCE.managed_artifacts_present(env)
     }
-    fn upgrade_available(&self, env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         OMP_SOURCE.upgrade_available(env)
     }
     fn wiring_input_paths(

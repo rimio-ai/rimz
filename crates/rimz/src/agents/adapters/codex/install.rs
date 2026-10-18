@@ -1,11 +1,13 @@
-//! Codex hook installer for `config.toml`.
+//! Codex hook and routine-command rules installer.
 //!
 //! This module owns the non-destructive TOML merge/uninstall path, RimZ hook command detection, and Codex trust-state reporting for managed hooks.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::agents::capabilities::LaunchCapability;
+use crate::agents::managed_source::{ManagedSource, RIMZ_MANAGED_MARKER};
 use crate::agents::provider_file;
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
@@ -22,17 +24,94 @@ pub(super) static MANAGED_INTEGRATION: CodexManagedIntegration = CodexManagedInt
 
 pub(super) struct CodexManagedIntegration;
 
+static RULES_TEXT: LazyLock<String> = LazyLock::new(|| {
+    let mut rules = format!(
+        "# {RIMZ_MANAGED_MARKER}\n# RimZ rewrites this file; controlled by [agents] allow-routine-rimz.\n"
+    );
+    for prefix in crate::agents::ROUTINE_RIMZ_PREFIXES {
+        let words = prefix
+            .split_whitespace()
+            .map(|word| serde_json::Value::String(word.to_owned()).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        rules.push_str(&format!(
+            "prefix_rule(pattern=[{words}], decision=\"allow\")\n"
+        ));
+    }
+    rules
+});
+
+static RULES_SOURCE: LazyLock<ManagedSource> = LazyLock::new(|| {
+    ManagedSource::new(
+        "codex",
+        &RULES_TEXT,
+        &[],
+        "rules file",
+        codex_rules_path,
+        true,
+    )
+});
+
+fn codex_rules_path(login_env: &BTreeMap<String, String>) -> Result<PathBuf> {
+    super::CodexAdapter
+        .config_home(login_env)
+        .map(|home| home.join("rules/rimz.rules"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "codex",
+            reason: "$CODEX_HOME and $HOME are not set; cannot resolve Codex rules".to_owned(),
+        })
+}
+
 impl ManagedIntegration for CodexManagedIntegration {
-    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
-        install_into(&codex_config_path(login_env)?)
+    fn install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
+        let path = codex_rules_path(login_env)?;
+        let managed = RULES_SOURCE.installed_at(&path);
+        let files = if options.allow_routine_rimz && (!path.exists() || managed) {
+            RULES_SOURCE.install_into(&path)?.files
+        } else if !options.allow_routine_rimz && managed {
+            RULES_SOURCE.uninstall_from(&path)?.files
+        } else {
+            Vec::new()
+        };
+        let mut report = install_into(&codex_config_path(login_env)?)?;
+        report.files.extend(files);
+        Ok(report)
     }
 
-    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
-        preview_install_at(&codex_config_path(login_env)?)
+    fn preview(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
+        let mut preview = preview_install_at(&codex_config_path(login_env)?)?;
+        let path = codex_rules_path(login_env)?;
+        let managed = RULES_SOURCE.installed_at(&path);
+        if options.allow_routine_rimz && (!path.exists() || managed) {
+            preview.files.extend(RULES_SOURCE.preview_at(&path)?.files);
+        } else if !options.allow_routine_rimz && managed {
+            preview.files.push(HookInstallFilePreview {
+                original: read_optional_file("codex", &path)?,
+                path,
+                candidate: String::new(),
+                existed: true,
+            });
+        }
+        Ok(preview)
     }
 
     fn uninstall(&self, login_env: &BTreeMap<String, String>) -> Result<HookUninstallReport> {
-        uninstall_from(&codex_config_path(login_env)?)
+        let mut report = uninstall_from(&codex_config_path(login_env)?)?;
+        let path = codex_rules_path(login_env)?;
+        if RULES_SOURCE.installed_at(&path) {
+            report
+                .files
+                .extend(RULES_SOURCE.uninstall_from(&path)?.files);
+        }
+        Ok(report)
     }
 
     fn installed(&self, login_env: &BTreeMap<String, String>) -> bool {
@@ -41,6 +120,22 @@ impl ManagedIntegration for CodexManagedIntegration {
 
     fn managed_artifacts_present(&self, login_env: &BTreeMap<String, String>) -> bool {
         codex_config_path(login_env).is_ok_and(|path| managed_artifacts_at(&path))
+            || RULES_SOURCE.installed(login_env)
+    }
+
+    fn upgrade_available(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        options: crate::agents::HookInstallOptions,
+    ) -> bool {
+        let Ok(path) = codex_rules_path(login_env) else {
+            return false;
+        };
+        if options.allow_routine_rimz {
+            !path.exists() || RULES_SOURCE.upgrade_available_at(&path)
+        } else {
+            RULES_SOURCE.installed_at(&path)
+        }
     }
 
     fn wiring_input_paths(

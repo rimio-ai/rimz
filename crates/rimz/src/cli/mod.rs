@@ -1325,6 +1325,13 @@ pub(crate) fn machine_config() -> std::sync::Arc<rimz::config::MachineConfig> {
     rimz::config::MachineConfig::load_lenient()
 }
 
+/// The machine's routine-command policy as managed hook installs take it.
+pub(crate) fn hook_install_options() -> rimz::agents::HookInstallOptions {
+    rimz::agents::HookInstallOptions {
+        allow_routine_rimz: machine_config().agents.allow_routine_rimz,
+    }
+}
+
 fn require_worktree_config(config: &rimz::config::MachineConfig) -> Result<()> {
     config.require_readable_core("create a worktree")?;
     Ok(())

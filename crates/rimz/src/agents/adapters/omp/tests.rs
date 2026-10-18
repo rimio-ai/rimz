@@ -230,9 +230,9 @@ fn install_uses_login_home_and_xdg_does_not_move_it() {
     let managed = managed.unwrap();
     let path = dir.path().join(".omp/agent/extensions/rimz.ts");
     assert!(!managed.installed(&env));
-    let preview = managed.preview(&env).unwrap();
+    let preview = managed.preview(&env, Default::default()).unwrap();
     assert_eq!(preview.files[0].candidate, EXTENSION_SOURCE);
-    managed.install(&env).unwrap();
+    managed.install(&env, Default::default()).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
     assert!(managed.installed(&env));
     env.insert(

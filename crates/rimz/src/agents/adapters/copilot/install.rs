@@ -22,18 +22,30 @@ pub(super) static MANAGED_INTEGRATION: CopilotManagedIntegration = CopilotManage
 pub(super) struct CopilotManagedIntegration;
 
 impl ManagedIntegration for CopilotManagedIntegration {
-    fn upgrade_available(&self, login_env: &BTreeMap<String, String>) -> bool {
+    fn upgrade_available(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> bool {
         COPILOT_MANAGED_SOURCE.upgrade_available(login_env)
     }
 
-    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install(
             &super::paths::hooks_path(_login_env)?,
             &super::paths::settings_path()?,
         )
     }
 
-    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview(
             &super::paths::hooks_path(_login_env)?,
             &super::paths::settings_path()?,

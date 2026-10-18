@@ -390,7 +390,7 @@ fn install_preview_reclaim_drift_and_uninstall_keep_user_hooks() {
     let fixture = Fixture::new();
     fixture.write(&fixture.settings, &json!({"model":"custom","hooks":{"Notification":[{"hooks":[{"type":"command","command":"echo user"}]},{"hooks":[{"type":"command","command":"old/rimz hooks feed --source qoder"}]}]}}));
     let original = std::fs::read_to_string(&fixture.settings).unwrap();
-    let preview = QoderAdapter.preview_hook_install(&fixture.env);
+    let preview = QoderAdapter.preview_hook_install(&fixture.env, Default::default());
     assert!(preview.is_ok(), "{preview:?}");
     let preview = preview.unwrap();
     assert_eq!(
@@ -398,13 +398,17 @@ fn install_preview_reclaim_drift_and_uninstall_keep_user_hooks() {
         original
     );
     assert_eq!(preview.files[0].path, fixture.settings);
-    QoderAdapter.install_hooks(&fixture.env).unwrap();
+    QoderAdapter
+        .install_hooks(&fixture.env, Default::default())
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&fixture.settings).unwrap(),
         preview.files[0].candidate
     );
     assert!(QoderAdapter.hooks_installed(&fixture.env));
-    QoderAdapter.install_hooks(&fixture.env).unwrap();
+    QoderAdapter
+        .install_hooks(&fixture.env, Default::default())
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&fixture.settings).unwrap(),
         preview.files[0].candidate
@@ -428,7 +432,9 @@ fn install_preview_reclaim_drift_and_uninstall_keep_user_hooks() {
     root["hooks"].as_object_mut().unwrap().remove("QueryEnd");
     fixture.write(&fixture.settings, &root);
     assert!(!QoderAdapter.hooks_installed(&fixture.env));
-    QoderAdapter.install_hooks(&fixture.env).unwrap();
+    QoderAdapter
+        .install_hooks(&fixture.env, Default::default())
+        .unwrap();
     assert!(QoderAdapter.hooks_installed(&fixture.env));
     QoderAdapter.uninstall_hooks(&fixture.env).unwrap();
     let root: Value = serde_json::from_slice(&std::fs::read(&fixture.settings).unwrap()).unwrap();
@@ -457,7 +463,9 @@ fn config_home_and_skills_follow_explicit_env() {
             QoderAdapter.skills_home(&env),
             fixture.settings.parent().map(|p| p.join("skills"))
         );
-        QoderAdapter.install_hooks(&env).unwrap();
+        QoderAdapter
+            .install_hooks(&env, Default::default())
+            .unwrap();
         assert!(fixture.settings.exists());
         assert!(QoderAdapter.hooks_installed(&env));
     }
@@ -467,7 +475,7 @@ fn config_home_and_skills_follow_explicit_env() {
 fn synchronous_permission_install_refuses_an_async_managed_handler() {
     let fixture = Fixture::new();
     fixture.write(&fixture.settings, &json!({"hooks":{"PermissionRequest":[{"_rimz_managed":true,"hooks":[{"type":"command","command":"user-hook","async":true}]}]}}));
-    let result = QoderAdapter.install_hooks(&fixture.env);
+    let result = QoderAdapter.install_hooks(&fixture.env, Default::default());
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("async"));
 }

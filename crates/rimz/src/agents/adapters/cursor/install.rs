@@ -28,7 +28,11 @@ pub(super) static MANAGED_INTEGRATION: CursorManagedIntegration = CursorManagedI
 pub(super) struct CursorManagedIntegration;
 
 impl ManagedIntegration for CursorManagedIntegration {
-    fn install(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install_all(
             &cursor_hooks_path()?,
             &cursor_cli_config_paths(login_env)?,
@@ -36,7 +40,11 @@ impl ManagedIntegration for CursorManagedIntegration {
         )
     }
 
-    fn preview(&self, login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview_all(
             &cursor_hooks_path()?,
             &cursor_cli_config_paths(login_env)?,

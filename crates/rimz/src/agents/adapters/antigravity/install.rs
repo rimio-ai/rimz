@@ -29,11 +29,19 @@ pub(super) static MANAGED_INTEGRATION: AntigravityManagedIntegration =
 pub(super) struct AntigravityManagedIntegration;
 
 impl ManagedIntegration for AntigravityManagedIntegration {
-    fn install(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallReport> {
+    fn install(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallReport> {
         install(&hooks_path()?, &settings_path()?)
     }
 
-    fn preview(&self, _login_env: &BTreeMap<String, String>) -> Result<HookInstallPreview> {
+    fn preview(
+        &self,
+        _login_env: &BTreeMap<String, String>,
+        _options: crate::agents::HookInstallOptions,
+    ) -> Result<HookInstallPreview> {
         preview(&hooks_path()?, &settings_path()?)
     }
 

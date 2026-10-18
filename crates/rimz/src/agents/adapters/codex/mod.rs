@@ -902,7 +902,10 @@ const MIN_MANAGED_LAUNCH: super::version::CliVersion = super::version::CliVersio
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
-        use crate::agents::capabilities::{SharedHomeEntry, SharedHomeKind::File};
+        use crate::agents::capabilities::{
+            SharedHomeEntry,
+            SharedHomeKind::{Dir, File},
+        };
         &[
             SharedHomeEntry {
                 name: "config.toml",
@@ -911,6 +914,10 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
             SharedHomeEntry {
                 name: "AGENTS.md",
                 kind: File,
+            },
+            SharedHomeEntry {
+                name: "rules",
+                kind: Dir,
             },
         ]
     }
