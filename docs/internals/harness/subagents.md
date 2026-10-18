@@ -82,7 +82,7 @@ The parent's `worktree_path` is stamped from its launch cwd (or filled from a ho
 
 The same re-anchor applies to interactive peers, supervised peers, and teams launched by an agent. Loop fires have no agent caller and keep their resolved directory. No caller row or no recorded path keeps the invoking cwd and logs at debug. A recorded checkout that no longer exists refuses, naming the path, before any store append or mux action.
 
-Provider preflight then runs against that checkout. Besides hook installation and trust, a Codex child must pass the [folder-trust preflight](../agents/adapter_codex.md#directory-trust-preflight): undecided projects and saved-untrusted folders refuse with the fix instead of parking the child on Codex's trust screen until its deadline. Projectless folders without a saved decision pass.
+Provider preflight then runs against that checkout. Besides hook installation and trust, children must pass the folder-trust preflight for every provider that models it, including Claude and [Codex](../agents/adapter_codex.md#directory-trust-preflight): undecided projects and saved-untrusted folders refuse with the fix instead of parking the child on a trust screen until its deadline. Codex projectless folders without a saved decision pass.
 
 ## Pane zones
 

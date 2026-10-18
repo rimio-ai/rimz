@@ -44,6 +44,7 @@ fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
             return;
         }
         env.install_agent_hooks("claude");
+        crate::common::trust_claude_project(&env, &env.project_root);
         let skill_dir = env.home_root.join(".claude/skills/librarian");
         std::fs::create_dir_all(&skill_dir).expect("skill directory");
         let skill = skill_dir.join("SKILL.md");
@@ -213,6 +214,7 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         return;
     }
     env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
     for name in ["visible", "hidden"] {
         let dir = env.home_root.join(".claude/skills").join(name);
         std::fs::create_dir_all(&dir).expect("skill directory");

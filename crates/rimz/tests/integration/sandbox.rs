@@ -137,6 +137,7 @@ fn child_cap_launch(explicit_host: bool) {
     // The caller's `/tmp` is its own temp unit.
     let cwd = store.paths().temp_unit_dir(Some("parent")).join("clean");
     std::fs::create_dir_all(&cwd).unwrap();
+    crate::common::trust_claude_project(&env, &cwd);
     let workspace = env.resolve_workspace(&env.project_root);
     store
         .append_event(&EventEnvelope::agent_launched(

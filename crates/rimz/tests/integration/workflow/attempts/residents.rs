@@ -265,6 +265,7 @@ fn stop_records_recursive_children_and_leaves_peers_and_cohorts_live() {
 fn turn_error_wakes_and_preserves_typed_limit_reset() {
     for child in [false, true] {
         let room = Room::with_kind("", "claude");
+        crate::common::trust_claude_project(&room.env, &room.env.project_root);
         let definition = room.env.rimz_home().join("workflows/review");
         let spec = fs::read_to_string(definition.join("workflow.toml")).unwrap();
         fs::write(

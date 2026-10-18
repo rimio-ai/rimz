@@ -119,13 +119,15 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
             Some(crate::cli::folder_trust::Unattended::Subagent),
         )?;
     }
+    let repo_root = if child.checkout.is_none() {
+        workspace.at_launch_dir(&cwd)?.cwd_project_root
+    } else {
+        None
+    };
     match rimz::agents::preflight_launch_dir(
         adapter,
         &cwd,
-        child
-            .checkout
-            .is_none()
-            .then(|| workspace.launch_repo_root()),
+        repo_root.as_deref(),
         &provider_login.env(&rimz::agents::ambient_env()),
         rimz::agents::LaunchDirMode::Supervised,
     ) {

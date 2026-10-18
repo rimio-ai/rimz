@@ -6916,6 +6916,7 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
     let dispatch = Env::new();
     dispatch.record(&dispatch.project_root);
     dispatch.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&dispatch, &dispatch.project_root);
     loop_ok(
         &dispatch,
         &[

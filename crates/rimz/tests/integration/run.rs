@@ -628,6 +628,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
     std::fs::write(env.rimz_home().join("teams/duo.md"), "---\ndescription: Duo\nleader: writer\nstages: [Work]\nroles:\n  - role: writer\n    agent: preview\n    owns: [Work]\n  - role: coder\n    agent: preview\n---\nWork together.").unwrap();
     trust_codex_project(&env, &env.project_root);
     trust_codex_hooks(&env);
+    crate::common::trust_claude_project(&env, &env.project_root);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
     write_failing_agent_shim(&env, "claude", 1);
     let shell = write_fake_login_shell(&env, "tier-test-sh", &[]);
@@ -1425,6 +1426,9 @@ fn assert_subagent_checkout_case(
     }
     trust_codex_preflight_hooks(&env);
     trust_codex_project(&env, if cwd.is_some() { &foreign } else { &checkout });
+    if empty == Some("fallback") {
+        crate::common::trust_claude_project(&env, &checkout);
+    }
     if switch.is_some() {
         for name in ["work", "spare"] {
             let home = env.home_root.join(name);
@@ -2091,7 +2095,7 @@ fn supervised_launch_refuses_its_own_unusable_named_account() {
 }
 
 #[test]
-fn supervised_claude_without_folder_trust_passes_preflight() {
+fn supervised_claude_without_folder_trust_refuses_but_headless_passes() {
     let env = Env::new();
     let config = env.home_root.join(".claude.json");
     let login_env = std::collections::BTreeMap::from([(
@@ -2103,18 +2107,98 @@ fn supervised_claude_without_folder_trust_passes_preflight() {
         adapter.folder_trust(&env.project_root, Some(&env.project_root), &login_env),
         Some(rimz::agents::FolderTrust::Undecided(_))
     ));
+    let error = rimz::agents::preflight_launch_dir(
+        adapter,
+        &env.project_root,
+        Some(&env.project_root),
+        &login_env,
+        rimz::agents::LaunchDirMode::Supervised,
+    )
+    .expect_err("supervised Claude must not stop at an unwatched trust prompt");
+    assert!(matches!(
+        error,
+        rimz::agents::LaunchDirRefusal::Untrusted(_)
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("rimz trust grant --agents claude")
+    );
     assert!(
         rimz::agents::preflight_launch_dir(
             adapter,
             &env.project_root,
             Some(&env.project_root),
             &login_env,
-            rimz::agents::LaunchDirMode::Supervised,
+            rimz::agents::LaunchDirMode::Headless
         )
-        .is_ok(),
-        "supervised Claude launches do not check folder trust"
+        .is_ok()
     );
     assert!(!config.exists(), "preflight must not grant folder trust");
+}
+
+#[cfg(unix)]
+#[test]
+fn supervised_claude_refuses_before_records_or_panes_until_the_user_trusts() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let shim = write_failing_agent_shim(&env, "claude", 1);
+    let trace = env.home_root.join("mux.log");
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.record(&env.project_root);
+    let panes = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+    seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_str(panes).unwrap(),
+    );
+    let mut command = env.rimz();
+    command
+        .args([
+            "--mux", "zellij", "agents", "claude", "fix it", "-p", "--bg",
+        ])
+        .env("PATH", path_with_front(&shim))
+        .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", panes)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        );
+    let output = command.bounded_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("rimz trust grant --agents claude"),
+        "{stderr}"
+    );
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+    assert!(env.store().snapshot_cached().unwrap().agents.is_empty());
+    assert!(!trace.exists(), "preflight must not invoke the mux");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let output = command.bounded_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        rimz::harness::run::list(env.store().paths()).unwrap().len(),
+        1
+    );
+    assert!(trace.exists());
 }
 
 #[test]

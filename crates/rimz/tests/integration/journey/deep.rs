@@ -3151,6 +3151,10 @@ fn tmux_supervised_run_holds_its_account_history_link_until_it_dies() {
     let stub_dir = write_hook_firing_agent(&env, "claude");
     let agent_path = path_with_front(&stub_dir);
     trust_agent_path(&env, "claude", &agent_path);
+    env.rimz()
+        .env("PATH", &agent_path)
+        .args(["trust", "grant", "--agents", "claude"])
+        .assert_success_within_timeout("trust project for the work account");
     let socket = managed_socket(&env.runtime_root);
     let _server = TmuxServerGuard::new(socket.clone());
 
@@ -3205,6 +3209,10 @@ fn zellij_supervised_run_holds_its_account_history_link_until_it_dies() {
     let stub_dir = write_hook_firing_agent(&env, "claude");
     let agent_path = path_with_front(&stub_dir);
     trust_agent_path(&env, "claude", &agent_path);
+    env.rimz()
+        .env("PATH", &agent_path)
+        .args(["trust", "grant", "--agents", "claude"])
+        .assert_success_within_timeout("trust project for the work account");
     // The run's pane inherits the server's environment, born here.
     let started = env
         .rimz()

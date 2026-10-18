@@ -301,11 +301,11 @@ A supervised run refuses at entry, before it writes a run record or opens a pane
 
 - RimZ's hooks for the agent are not installed and trusted, because hooks are the completion signal;
 - the working directory is your home directory (`$HOME`), for every agent kind: nobody answers an unattended run's folder-trust prompt, and Claude never saves trust there. Run it from a project directory or pass `--cwd <DIR>`; a subdirectory of home passes;
-- a Codex project has no recorded trust decision, because Codex would open its directory-trust screen and never read the prompt (run `rimz trust grant --agents codex` there, or answer that screen once in an interactive `codex` session); a folder saved as untrusted also refuses, since its Folder access prompt recurs on every launch. RimZ leaves that decision alone; trust the folder in Codex before a supervised run. Projectless folders without a saved decision pass;
+- a Claude or Codex project has no recorded trust decision, because its folder-trust screen would block the prompt (run `rimz trust grant --agents claude` or `rimz trust grant --agents codex` there, or answer that screen once in the provider's own interactive session); a Codex folder saved as untrusted also refuses, since its Folder access prompt recurs on every launch. RimZ leaves that decision alone; trust the folder in Codex before a supervised run. Codex projectless folders without a saved decision pass;
 - the room or provider-account daily cap has no headroom (exit `125`; see the [Budget CLI](./budget.md#what-a-cap-blocks));
 - a fresh Qwen run's exact Alibaba account has an exhausted quota window (exit `125`); missing or mismatched readings allow the launch.
 
-None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook, home-directory, and Codex-trust refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
+None of these writes a run record, so `agents wait` and the JSON have nothing to read afterwards. The two cap refusals exit `125` as listed; the hook, home-directory, and folder-trust refusals exit `2`, and a flag combination the command rejects exits `1`, the same code a run that started and failed uses.
 
 Run records, the completion wakeup, streaming, and pane cleanup are described in [scripting.md](../../internals/harness/scripting.md).
 
@@ -313,7 +313,7 @@ Run records, the completion wakeup, streaming, and pane cleanup are described in
 
 Every launch RimZ performs checks the account it launches under, `default` included. An interactive agent or team launch, a cohort or lane resume, a [`restart`](#restart), a [`fork`](#fork), and a parent's message that [resumes an ended child](./subagents.md#follow-up-messages) refuse when that account's home is not a directory or RimZ's hooks there are not installed and trusted. The refusal comes before any pane opens or closes and before any record is written, and names the fix: `rimz hooks install <agent>` for `default`, `rimz accounts add <agent> <name>` for a named account, and the provider's own `/hooks` screen for hooks it has not trusted. Only the launched provider's account is judged. A plugin kind declares no home for RimZ to check, so it passes. [`rimz start`](./getting-started.md#start-the-room) is the one lenient entry: it refuses a broken named account and lets a room open on a broken `default`.
 
-Attended agent launches and relaunches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Saved-untrusted Codex folders also warn on attended agent commands, but refuse on team commands and supervised launches or resumes; see [agent folder trust](./hooks-trust.md#agent-folder-trust). Supervised Claude runs are not checked for folder trust: a pane child in a folder Claude has not trusted stops at its prompt.
+Attended agent launches and relaunches warn, but continue, when the selected account has no folder-trust decision. Answer the provider's prompt in its pane or grant with `rimz trust grant --agents`. Saved-untrusted Codex folders also warn on attended agent commands, but refuse on team commands and supervised launches or resumes; see [agent folder trust](./hooks-trust.md#agent-folder-trust). Supervised Claude runs also refuse undecided folder trust before opening a pane.
 
 ## Resume agents
 

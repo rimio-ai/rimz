@@ -1713,6 +1713,7 @@ fn lsp_required_launch_waits_then_refuses_before_recording_a_run() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");
     env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
     let agent_bin = crate::common::write_failing_agent_shim(&env, "claude", 1);
     let shell = crate::common::write_fake_login_shell(&env, "lsp-test-sh", &[]);
     std::fs::write(env.rimz_home().join("theme.toml"), "[broken").unwrap();
