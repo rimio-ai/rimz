@@ -24,6 +24,8 @@ If the sidebar cannot paint, the column shows the reason and a retry delay inste
 
 ## The layout
 
+Clicking a card selects it immediately while its pane gains focus; clicking a child selects its parent card. If the focus request fails, the highlight returns to session focus and a dismissable bottom notice reads `focus failed: <card>: <error>`.
+
 Top to bottom, the column stacks three zones plus pinned chrome:
 
 ```

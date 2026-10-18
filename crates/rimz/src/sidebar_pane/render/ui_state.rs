@@ -62,7 +62,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// a real off-screen→on-screen switch arms the tab-wide read dwell; leaving
     /// disarms it.
     pub(in crate::sidebar_pane) viewing_own_tab: Option<bool>,
-    /// The transient arrow-key browse pick riding above the baseline, or `None`
+    /// The transient motion or click browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(in crate::sidebar_pane) browse: Option<Browse>,
     /// The row/group order and visible row set actually painted last fold; this
@@ -273,9 +273,9 @@ pub(in crate::sidebar_pane) struct DashboardTab {
     pub(in crate::sidebar_pane) derived_at_start: Option<crate::ids::AgentKind>,
 }
 
-/// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
-/// row — other tabs' rows included, so any card is one keystroke from
-/// expanding. Holds until the derived baseline genuinely changes from
+/// Browse pins `pane` above session focus. Motion roams every visible row
+/// without moving focus; a click pins the owning card before dispatching focus.
+/// Holds until the derived baseline genuinely changes from
 /// `baseline_at_start` — the value captured when browsing began. A `None`
 /// derivation holds the baseline, so an inert frame never ends a browse.
 #[derive(Clone, Debug, PartialEq, Eq)]

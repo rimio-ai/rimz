@@ -844,12 +844,12 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 
 | mouse | action |
 |-------|--------|
-| click a card or process row | focus its pane |
+| click a card or process row | select the card immediately and focus its pane |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a make-up bucket or `⑃ N` | filter the cards |
 | click `↑ N need you` | scroll to the top of the cards |
 | click a subagents and waits line | open or close its entries |
-| click either line of a subagent entry | focus the child's live pane, else the parent's pane |
+| click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |
 | click a finished group's header or receipt | show or collapse its cards |
 | click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts in this sidebar; opening scrolls to the first receipt it reveals |

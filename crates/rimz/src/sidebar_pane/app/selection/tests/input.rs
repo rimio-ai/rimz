@@ -138,7 +138,7 @@ fn delegation_snapshot() -> SidebarSnapshot {
 }
 
 #[test]
-fn both_child_entry_lines_focus_the_child_without_moving_selection() {
+fn both_child_entry_lines_select_the_parent_and_focus_the_child() {
     let mut snapshot = delegation_snapshot();
     let child = PaneId::from_parts(crate::MuxName::Zellij, "terminal_child");
     let now = snapshot.now;
@@ -178,15 +178,22 @@ fn both_child_entry_lines_focus_the_child_without_moving_selection() {
         for column in [0, 53] {
             assert_eq!(
                 handle_mouse_click(column, line as u16, &mut ui, &snapshot),
-                InputOutcome::focus(child.clone())
+                InputOutcome {
+                    redraw: true,
+                    effects: vec![InputEffect::Focus(child.clone())]
+                }
             );
-            assert_eq!(ui.selected_pane, Some(other.clone()));
-            assert_eq!(ui.selected_index, Some(1));
+            assert_eq!(ui.selected_pane, Some(parent.clone()));
+            assert_eq!(ui.selected_index, Some(0));
+            assert_eq!(ui.browse.as_ref().map(|browse| &browse.pane), Some(&parent));
         }
     }
     assert_eq!(
         handle_mouse_click(10, native as u16, &mut ui, &snapshot),
-        InputOutcome::focus(parent.clone())
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(parent.clone())]
+        }
     );
     let card = std::sync::Arc::make_mut(
         &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
@@ -206,11 +213,57 @@ fn both_child_entry_lines_focus_the_child_without_moving_selection() {
     for line in [closed, closed + 1] {
         assert_eq!(
             handle_mouse_click(10, line as u16, &mut ui, &snapshot),
-            InputOutcome::focus(parent.clone())
+            InputOutcome {
+                redraw: true,
+                effects: vec![InputEffect::Focus(parent.clone())]
+            }
         );
-        assert_eq!(ui.selected_pane, Some(other.clone()));
-        assert_eq!(ui.selected_index, Some(1));
+        assert_eq!(ui.selected_pane, Some(parent.clone()));
+        assert_eq!(ui.selected_index, Some(0));
     }
+}
+
+#[test]
+fn child_entry_uses_the_visible_parent_when_its_own_card_is_filtered() {
+    let mut snapshot = delegation_snapshot();
+    let child = PaneId::from_parts(MuxName::Zellij, "terminal_child");
+    let rows = std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    );
+    rows[0].as_agent_mut().unwrap().sub_agents[0].pane = Some(child.clone());
+    let parent = rows[0].pane.as_ref().unwrap().pane_id.clone();
+    let parent_id = rows[0].id.clone();
+    let mut own_card = rows[0].clone();
+    own_card.id = "child-own-card".into();
+    own_card.pane = Some(pane("terminal_child", "tab_0", false));
+    own_card.as_agent_mut().unwrap().status = crate::agents::AgentStatus::Idle;
+    rows.push(own_card);
+    let mut ui = UiState {
+        make_up_filter: BodyLens::from(BodyFilter::Status(crate::agents::AgentStatus::Running)),
+        delegation_overrides: std::collections::BTreeMap::from([(parent_id, true)]),
+        ..Default::default()
+    };
+    assert!(
+        ui.visible_roster(&snapshot)
+            .ordinal_of_id("child-own-card")
+            .is_none()
+    );
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let line = composed
+        .lines
+        .iter()
+        .position(|line| line.to_string().contains("live-child"))
+        .unwrap();
+    ui.interactions = composed.interactions;
+    assert_eq!(
+        handle_mouse_click(1, line as u16, &mut ui, &snapshot),
+        InputOutcome {
+            redraw: true,
+            effects: vec![InputEffect::Focus(child)]
+        }
+    );
+    assert_eq!(ui.selected_pane, Some(parent));
 }
 
 fn pane_of(snapshot: &SidebarSnapshot, row: usize) -> PaneId {
@@ -777,9 +830,7 @@ fn collapsing_the_selected_group_preserves_the_viewport_with_no_selection() {
 }
 
 #[test]
-fn focus_keys_fire_without_mutating_selection() {
-    // Every jump — a mouse click, a digit ordinal, Enter, or the Space triage
-    // key — fires the focus command and mutates no selection state.
+fn row_click_selects_and_browses_before_focus_confirmation() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
@@ -790,7 +841,6 @@ fn focus_keys_fire_without_mutating_selection() {
         ],
     );
 
-    // A mouse click on terminal_2's row jumps without moving the selection.
     let mut ui = UiState {
         selected_index: Some(0),
         help_visible: false,
@@ -800,11 +850,24 @@ fn focus_keys_fire_without_mutating_selection() {
     };
     let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::focus(target.clone()));
-    assert!(!outcome.redraw, "a jump changes nothing to repaint");
-    assert_eq!(ui.selected_index, Some(0), "the click moves no selection");
-    assert_eq!(ui.selected_pane, None);
-    assert_eq!(ui.browse, None);
+    assert!(outcome.redraw, "the click itself paints the new selection");
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
+    assert_eq!(ui.selected_index, Some(1));
+    assert_eq!(ui.selected_pane, Some(target.clone()));
+    assert_eq!(ui.browse.as_ref().map(|browse| &browse.pane), Some(&target));
+}
+
+#[test]
+fn focus_keys_fire_without_mutating_selection() {
+    let ws = workspace();
+    let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
 
     // A digit ordinal jumps to the second pane without moving the selection.
     let mut ui = UiState::default();

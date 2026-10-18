@@ -1,5 +1,5 @@
 //! The selection model: an identity-keyed highlight over a derived baseline,
-//! the transient arrow-key browse layer above it, the key/mouse handlers that
+//! the transient motion/click browse layer above it, the key/mouse handlers that
 //! act on it, and the typed effects they return to the serve loop.
 
 use crate::ids::PaneId;
@@ -26,8 +26,8 @@ pub(super) struct InputOutcome {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum InputEffect {
-    /// Fire the one-way focus command without moving the highlight. Selection
-    /// remains derived state until the baseline catches up.
+    /// Fire the one-way focus command. Mouse input pairs it with a browse pick;
+    /// key jumps leave the highlight derived until the baseline catches up.
     Focus(PaneId),
     /// Dispatch one resize step. Resize wakeups own repaint and persistence.
     Width(WidthAdjust),
@@ -293,8 +293,7 @@ pub(super) fn handle_key(
                 return outcome;
             }
             // Focus the current visible row without moving the highlight — it
-            // follows once the derived baseline catches up, identical to a
-            // click.
+            // follows once the derived baseline catches up.
             match ui.selected_pane.clone() {
                 Some(pane) if ui.selected_index.is_some() => InputOutcome::focus(pane),
                 _ => InputOutcome::default(),
@@ -450,10 +449,34 @@ pub(super) fn handle_mouse_click(
         Some(HitTarget::Row(index)) => ui
             .visible_roster(snapshot)
             .pane_at_ordinal(index)
-            .map_or_else(InputOutcome::default, InputOutcome::focus),
-        Some(HitTarget::SubAgentPane(pane)) => InputOutcome::focus(pane),
+            .map_or_else(InputOutcome::default, |pane| {
+                select_clicked_pane(ui, snapshot, pane)
+            }),
+        Some(HitTarget::SubAgentPane(pane)) => select_clicked_pane(ui, snapshot, pane),
         Some(HitTarget::Hyperlink(_)) => InputOutcome::default(),
         None => InputOutcome::default(),
+    }
+}
+
+fn select_clicked_pane(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputOutcome {
+    let roster = ui.visible_roster(snapshot);
+    let Some(index) = snapshot
+        .row_owning_pane(&pane)
+        .and_then(|row| roster.ordinal_of_id(&row.id))
+        .or_else(|| {
+            roster
+                .rows()
+                .iter()
+                .position(|row| row.pane_ids().any(|id| id == &pane))
+        })
+    else {
+        return InputOutcome::default();
+    };
+    select_row_in(ui, &roster, index);
+    begin_or_continue_browse(ui);
+    InputOutcome {
+        redraw: true,
+        effects: vec![InputEffect::Focus(pane)],
     }
 }
 
@@ -574,8 +597,8 @@ fn select_adjacent_worktree(
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
-/// arrow-key browse; focus actions resolve their target through the active
-/// roster instead and never move the highlight. A changed pick reveals on the
+/// motion and click browse; focus keys resolve their target through the active
+/// roster instead. A changed pick reveals on the
 /// next draw only if no line of its card is visible.
 fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_pane = roster.pane_at_ordinal(index);
@@ -641,9 +664,8 @@ fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
 /// state: the baseline is the session focus register, re-queried from the mux
 /// every fold and updated by focus events between pulls; it cannot
 /// desynchronize, only lag a frame. One transient local layer rides above it:
-/// the arrow-key [`Browse`] pick. A jump moves no local state — its highlight
-/// arrives here, when the baseline catches up. Keyed on pane identity, never
-/// position.
+/// [`Browse`] pick from a motion key or click. Clicks paint their pick at once;
+/// key jumps wait for the baseline. Keyed on pane identity, never position.
 ///
 /// `derived` is the snapshot's session-register derivation, pre-filtered at the
 /// call site to a non-sidebar row: `Some(pane)` iff the focused pane is a row in
