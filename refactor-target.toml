@@ -6163,6 +6163,21 @@ reason = "Read-only condition demand supplies checkout paths and selected branch
 
 [[verdict]]
 kind = "item"
+key = "cli::loop_cmd::explain::run"
+reason = "The parent loop dispatcher calls its private read-only condition inspection handler."
+
+[[verdict]]
+kind = "item"
+key = "cli::loop_cmd::condition::reading"
+reason = "Explain and task presentation share the room-gated forge and account-window reading path."
+
+[[verdict]]
+kind = "item"
+key = "cli::loop_cmd::condition::write_terms"
+reason = "Explain and show render the same per-term truth and reading lines."
+
+[[verdict]]
+kind = "item"
 key = "forge::GhBulkPr"
 reason = "Constructed by the held sidebar/refresh/pr/tests.rs, so crate reach is the narrowest that keeps them compiling (pass 24c)."
 

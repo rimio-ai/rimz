@@ -633,3 +633,28 @@ fn branch_selector_refusals_suggest_parseable_fixes() {
         }
     }
 }
+
+#[test]
+fn refusals_suggest_nearby_keys_values_and_stages() {
+    let stages = BTreeSet::from(["Review".to_owned()]);
+    for (input, expected) in [
+        ("pr.que=queued", Some("pr.queue")),
+        ("pr.que[b]=queued", Some("pr.queue")),
+        ("ci=pased", Some("passed")),
+        ("ci[b]=pased", Some("passed")),
+        ("ci=unknwon", Some("unknown")),
+        ("team.stage=Reveiw", Some("Review")),
+        ("unrecognizable=passed", None),
+        ("ci=unrecognizable", None),
+        ("team.stage=unrecognizable", None),
+    ] {
+        let error = WhenExpr::parse_with_stages(&[input.to_owned()], Some(&stages))
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("clause 1, position"), "{error}");
+        match expected {
+            Some(name) => assert!(error.contains(&format!("did you mean {name}?")), "{error}"),
+            None => assert!(!error.contains("did you mean"), "{error}"),
+        }
+    }
+}
