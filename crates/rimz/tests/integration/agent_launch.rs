@@ -5505,7 +5505,7 @@ fn write_counting_dead_agent(env: &Env, log: &std::path::Path) -> std::path::Pat
         &dir,
         "codex",
         &format!(
-            "if [ \"${{1:-}}\" = --version ]; then echo 0.159.2; exit 0; fi\nprintf 'launch\\n' >> '{log}'\nenv > '{log}.env'\nif [ -n \"${{RIMZ_TEST_PARENT_ENDED_MARKER:-}}\" ]; then i=0; while [ ! -e \"$RIMZ_TEST_PARENT_ENDED_MARKER\" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done; fi\nif [ \"$(($(wc -l < '{log}')))\" -gt \"${{RIMZ_TEST_STARTUP_DEATHS:-99}}\" ]; then exit 0; fi\nif [ -n \"${{RIMZ_TEST_STARTUP_STTY:-}}\" ]; then stty raw -echo; fi\nexit 7",
+            "if [ \"${{1:-}}\" = --version ]; then echo 0.163.0; exit 0; fi\nprintf 'launch\\n' >> '{log}'\nenv > '{log}.env'\nif [ -n \"${{RIMZ_TEST_PARENT_ENDED_MARKER:-}}\" ]; then i=0; while [ ! -e \"$RIMZ_TEST_PARENT_ENDED_MARKER\" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done; fi\nif [ \"$(($(wc -l < '{log}')))\" -gt \"${{RIMZ_TEST_STARTUP_DEATHS:-99}}\" ]; then exit 0; fi\nif [ -n \"${{RIMZ_TEST_STARTUP_STTY:-}}\" ]; then stty raw -echo; fi\nexit 7",
             log = log.display()
         ),
     );
@@ -5585,7 +5585,7 @@ fn picker_exit_case(bound: bool, code: i32) {
         &shim_dir,
         "codex",
         &format!(
-            r#"if [ "${{1:-}}" = --version ]; then echo 0.159.2; exit 0; fi
+            r#"if [ "${{1:-}}" = --version ]; then echo 0.163.0; exit 0; fi
 printf 'launch\n' >> "$RIMZ_TEST_PICK_LOG"
 if [ "$RIMZ_TEST_PICK_BOUND" = 1 ]; then
     printf '%s\n' '{{"hook_event_name":"SessionStart","session_id":"sess-picked"}}' | "$RIMZ_TEST_PICK_BIN" hooks feed --source codex || exit 99
@@ -5750,7 +5750,7 @@ fn a_provider_startup_exit_is_recorded_without_relaunches() {
     crate::common::write_path_shim(
         &shim_dir,
         "codex",
-        "if [ \"${1:-}\" = --version ]; then echo 0.159.2; exit 0; fi\nexit 2",
+        "if [ \"${1:-}\" = --version ]; then echo 0.163.0; exit 0; fi\nexit 2",
     );
     write_startup_relaunch_config(&env, "startup-relaunches = 0");
     let request = startup_death_request(&env, "launch_startup_diag");

@@ -215,14 +215,14 @@ mod tests {
     fn launch_version_floor_refuses_only_known_old_versions() {
         let codex = crate::agents::find_definition("codex").unwrap();
         let path = std::path::Path::new("/opt/bin/codex");
-        for raw in [None, Some("0.156.0"), Some("0.159.2"), Some("0.156.0-beta")] {
+        for raw in [None, Some("0.163.0"), Some("0.164.0"), Some("0.163.0-beta")] {
             assert!(check_launch_version(codex, path, raw.and_then(|v| v.parse().ok())).is_ok());
         }
-        let error = check_launch_version(codex, path, Some(CliVersion::new(0, 155, 9)))
+        let error = check_launch_version(codex, path, Some(CliVersion::new(0, 162, 9)))
             .expect_err("old Codex must refuse");
         let message = error.to_string();
-        assert!(message.contains("0.155.9"));
-        assert!(message.contains("0.156.0"));
+        assert!(message.contains("0.162.9"));
+        assert!(message.contains("0.163.0"));
         assert!(message.contains("/opt/bin/codex"));
         assert!(message.contains("upgrade Codex"));
         assert!(message.contains("the oldest release RimZ supports"));

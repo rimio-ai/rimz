@@ -889,7 +889,7 @@ fn forward_login_env(command: &mut std::process::Command, login_env: &BTreeMap<S
     );
 }
 
-const MIN_NO_DAEMON: super::version::CliVersion = super::version::CliVersion::new(0, 156, 0);
+const MIN_MANAGED_LAUNCH: super::version::CliVersion = super::version::CliVersion::new(0, 163, 0);
 
 impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     fn shared_home_entries(&self) -> &'static [crate::agents::capabilities::SharedHomeEntry] {
@@ -925,7 +925,7 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
     }
 
     fn min_version(&self) -> Option<super::version::CliVersion> {
-        Some(MIN_NO_DAEMON)
+        Some(MIN_MANAGED_LAUNCH)
     }
 
     fn rejected_extra_arg(
