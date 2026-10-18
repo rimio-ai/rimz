@@ -198,23 +198,23 @@ fn level_rows(
         .history
         .as_ref()
         .context("rank history facts missing")?;
-    let mut pace = history::pace(
-        history,
+    let mut pace = history::fold_pace(
         &facts.root,
         scope,
+        &history.commits,
         PACE_WINDOW,
         NOISE_LIFETIME,
         NOISE_WINDOW,
-    )?;
+    );
     if include_module_file {
-        let module_file_pace = history::pace(
-            history,
+        let module_file_pace = history::fold_pace(
             &facts.root,
             &scope.with_extension("rs"),
+            &history.commits,
             PACE_WINDOW,
             NOISE_LIFETIME,
             NOISE_WINDOW,
-        )?;
+        );
         if let Some(metrics) = module_file_pace.modules.into_values().next() {
             pace.modules.insert("(root)".to_owned(), metrics);
         }

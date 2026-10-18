@@ -747,19 +747,7 @@ fn cycles_count_dependency_sites_in_both_directions() {
         ),
     ];
     let syntax = super::super::syntax::analyze_sources(&sources, &BTreeSet::new());
-    let known_modules = syntax
-        .files
-        .iter()
-        .map(|file| file.module_path.clone())
-        .collect::<BTreeSet<_>>();
-
-    let cycles = cycles_from_syntax(
-        &syntax.files,
-        &known_modules,
-        &BTreeSet::new(),
-        Path::new("crates/demo/src"),
-        None,
-    );
+    let cycles = cycles_from_syntax(&syntax.files, Path::new("crates/demo/src"), None);
 
     assert_eq!(
         cycles,
@@ -773,13 +761,7 @@ fn cycles_count_dependency_sites_in_both_directions() {
     );
 
     let ranks = LayerRanks::new(&[vec!["a".to_owned()], vec!["b".to_owned()]]);
-    let cycles = cycles_from_syntax(
-        &syntax.files,
-        &known_modules,
-        &BTreeSet::new(),
-        Path::new("crates/demo/src"),
-        Some(&ranks),
-    );
+    let cycles = cycles_from_syntax(&syntax.files, Path::new("crates/demo/src"), Some(&ranks));
     assert_eq!(cycles[0].same_layer, Some(false));
 }
 
