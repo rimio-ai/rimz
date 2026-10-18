@@ -6,10 +6,22 @@
 //! conventional leading version token where a caller needs ordering. Where
 //! several sources disagree, `newest_version` picks the one to show.
 //! Agent CLI releases have disagreed on the stream, so the probe reads both.
+//! Successful output is reused per invoked `PATH` entry and the stamp of the
+//! file it reaches for this process; failures remain retryable and changed
+//! binaries are reprobed. A version-manager shim whose file never changes
+//! (`mise use`, `volta pin`) keeps its first answer until the process exits.
+//! The cache lock never spans a subprocess, so concurrent cold probes can race.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
+use std::sync::{LazyLock, Mutex};
+
+use crate::disk::parse_cache::{FileStamp, StampedPath};
+
+static VERSION_OUTPUTS: LazyLock<Mutex<HashMap<StampedPath, (String, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A simple three-part CLI version. Agent CLIs do not need semver metadata for
 /// RimZ's gates; ordered numeric major/minor/patch is the contract.
@@ -100,6 +112,23 @@ pub(super) fn probe_cli_version_with(
     binary: impl AsRef<OsStr>,
     parse: impl FnOnce(&str, &str) -> Option<String>,
 ) -> Option<String> {
+    let binary = binary.as_ref();
+    // Keyed on the invoked path, not its symlink target: a multicall shim
+    // (Volta, mise) dispatches on `argv[0]`, so its links are distinct tools.
+    let identity = which::which(binary).ok().and_then(|path| {
+        let stamp = FileStamp::from_metadata(&std::fs::metadata(&path).ok()?);
+        Some(StampedPath { path, stamp })
+    });
+    if let Some((stdout, stderr)) = identity.as_ref().and_then(|identity| {
+        VERSION_OUTPUTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(identity)
+            .cloned()
+    }) {
+        return parse(&stdout, &stderr);
+    }
+
     let mut command = Command::new(binary);
     command.arg("--version").stdin(Stdio::null());
     let output = crate::proc::run_bounded_output(
@@ -110,10 +139,17 @@ pub(super) fn probe_cli_version_with(
     if output.timed_out || !output.status.success() {
         return None;
     }
-    parse(
-        &String::from_utf8_lossy(&output.stdout),
-        &String::from_utf8_lossy(&output.stderr),
-    )
+    let streams = (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    );
+    if let Some(identity) = identity {
+        VERSION_OUTPUTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(identity, streams.clone());
+    }
+    parse(&streams.0, &streams.1)
 }
 
 /// Pick the version from a `--version` probe's two streams. Scan both for the
@@ -176,6 +212,85 @@ fn check_launch_version(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_probe_reuses_streams_across_parsers_and_reprobes_changed_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("stub");
+        let log = dir.path().join("calls");
+        let script = format!(
+            "#!/bin/sh\necho probe >> '{}'\necho 'stub 1.2.3'\necho banner >&2\n",
+            log.display()
+        );
+        std::fs::write(&binary, &script).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(probe_cli_version(&binary).as_deref(), Some("1.2.3"));
+        }
+        assert_eq!(
+            probe_cli_version_with(&binary, |stdout, stderr| {
+                assert_eq!(stderr, "banner\n");
+                Some(format!("selected:{}", stdout.trim()))
+            })
+            .as_deref(),
+            Some("selected:stub 1.2.3")
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+
+        std::fs::write(&binary, script.replace("1.2.3", "1.2.4") + "\n").unwrap();
+        assert_eq!(probe_cli_version(&binary).as_deref(), Some("1.2.4"));
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_multicall_shims_keep_separate_versions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("shim");
+        std::fs::write(&shim, "#!/bin/sh\necho \"$(basename \"$0\") 1.0.0\"\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::os::unix::fs::symlink(&shim, &first).unwrap();
+        std::os::unix::fs::symlink(&shim, &second).unwrap();
+
+        let name = |path: &std::path::Path| {
+            probe_cli_version_with(path, |stdout, _| {
+                stdout.split(' ').next().map(str::to_owned)
+            })
+        };
+        assert_eq!(name(&first).as_deref(), Some("first"));
+        assert_eq!(name(&second).as_deref(), Some("second"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_probe_is_retried() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("stub");
+        let log = dir.path().join("calls");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\necho probe >> '{}'\necho 'stub 1.2.3'\nexit 1\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(probe_cli_version(&binary), None);
+        assert_eq!(probe_cli_version(&binary), None);
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 2);
+    }
 
     #[test]
     fn qwen_version_floor_requires_seconds_hook_timeouts() {
