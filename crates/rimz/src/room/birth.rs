@@ -1,7 +1,7 @@
 //! Room birth, health recovery, and reset transitions.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -359,7 +359,7 @@ impl RoomContext {
         let daemon = background_view.map(|options| &options.view);
         let mut birth_sidebar = sidebar.clone();
         birth_sidebar.pristine_birth = !pre_existed;
-        let _ = crate::sidebar::launch_sidebar_if_needed(
+        let sidebar_launch = crate::sidebar::launch_sidebar_if_needed(
             self.backend.as_ref(),
             &self.runtime,
             &birth_sidebar,
@@ -389,6 +389,26 @@ impl RoomContext {
         let reset = health?;
         self.publish_hibernation_admission(&hibernation)?;
         self.load_presence();
+        // Health recovery can rebirth the session; only its own heartbeat
+        // proves the final sidebar's supervisor has taken the room hold. The
+        // bound starts here, after that rebirth's sidebar launch.
+        if claim.is_some() && sidebar_launch != crate::sidebar::SidebarLaunchOutcome::Failed {
+            let sidebar_deadline = Instant::now() + Duration::from_secs(6);
+            while !super::session::has_sidebar(
+                &self.runtime,
+                self.backend.name(),
+                &self.workspace.session_name,
+            ) {
+                if Instant::now() >= sidebar_deadline {
+                    tracing::warn!(
+                        session = %self.workspace.session_name,
+                        "sidebar heartbeat did not arrive before birth handoff deadline; continuing",
+                    );
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
         Ok(BirthOutcome { resume, reset })
     }
 

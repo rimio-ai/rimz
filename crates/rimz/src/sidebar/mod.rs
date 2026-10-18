@@ -326,9 +326,9 @@ fn launch_sidebar<B: SidebarMux + ?Sized>(
         Ok(()) => {
             // Hold the election lock (`_guard`) until the new daemon publishes
             // its heartbeat, so an attach polling behind us reads it and skips.
-            // The daemon writes the heartbeat just after start, well inside the
-            // budget; a slow one falls to reconciliation rather than stalling the
-            // attach further.
+            // This short election wait only coalesces launches; a slow daemon
+            // falls to reconciliation. Room birth separately retains its room
+            // claim while waiting for its own session's heartbeat.
             wait_for_fresh_sidebar(runtime);
             SidebarLaunchOutcome::Opened
         }

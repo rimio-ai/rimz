@@ -40,6 +40,8 @@ const TEST_STRAY_PID_FILE_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_STRAY_PID_FI
 #[cfg(feature = "testkit")]
 const TEST_RESPAWN_BACKOFF_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS";
 #[cfg(feature = "testkit")]
+const TEST_HOLD_DELAY_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_SUPERVISOR_HOLD_DELAY_MS";
+#[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_INTERVAL_MS_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE_INTERVAL_MS";
 #[cfg(feature = "testkit")]
 const TEST_PANE_PROBE_ENV: &str = "RIMZ_TEST_SIDEBAR_PANE_PROBE";
@@ -119,6 +121,8 @@ pub fn run(config: ServeConfig) -> Result<()> {
     let runtime = crate::RuntimePaths::for_workspace(config.workspace_id.clone())?;
     let state = crate::StatePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
+    #[cfg(feature = "testkit")]
+    thread::sleep(duration_override(TEST_HOLD_DELAY_MS_ENV, Duration::ZERO));
     let _room = crate::disk::lock::RoomLock::hold(&runtime.room_lock())?;
     if let Some(pane) = &config.own_pane
         && let Err(error) = crate::mux::backend_for(config.mux).close_pane_on_exit(pane)
