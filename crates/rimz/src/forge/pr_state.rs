@@ -15,6 +15,9 @@ pub(crate) struct PrStateCache {
     /// Commit-level CI verdict for paths without a PR link.
     #[serde(default)]
     pub branch_ci: BTreeMap<String, WorktreeCi>,
+    /// Branch PR and head CI readings by repository key, then head branch.
+    #[serde(default)]
+    pub(crate) branches: BTreeMap<String, BTreeMap<String, BranchRow>>,
     /// Probe freshness by origin repo key.
     #[serde(default)]
     pub(crate) repos: BTreeMap<String, RepoProbe>,
@@ -30,6 +33,14 @@ pub(crate) struct PrStateCache {
     /// Branch/incarnation identity observed for each supported worktree.
     #[serde(default)]
     pub(crate) target_seen: BTreeMap<String, TargetStamp>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct BranchRow {
+    #[serde(default)]
+    pub(crate) pr: Option<PrLink>,
+    #[serde(default)]
+    pub(crate) ci: Option<WorktreeCi>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +170,8 @@ impl<'de> Deserialize<'de> for PrStateCache {
             #[serde(default)]
             branch_ci: Option<BTreeMap<String, WorktreeCi>>,
             #[serde(default)]
+            branches: BTreeMap<String, BTreeMap<String, BranchRow>>,
+            #[serde(default)]
             repos: BTreeMap<String, RepoProbe>,
             #[serde(default)]
             head_seen: BTreeMap<String, String>,
@@ -173,6 +186,7 @@ impl<'de> Deserialize<'de> for PrStateCache {
         let mut cache = Self {
             states: disk.states,
             branch_ci: disk.branch_ci.unwrap_or_default(),
+            branches: disk.branches,
             repos: disk.repos,
             head_seen: disk.head_seen,
             path_repos: disk.path_repos,

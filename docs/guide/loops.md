@@ -190,6 +190,14 @@ rimz loop show open-pr
 
 The receipt names the checkout being observed. The sidebar checks its board and CI each tick: `waiting` becomes `holding`, and either reading turning false restarts the 30 minutes. Once ready, RimZ opens a fresh supervised agent pane with the prompt and removes the one-shot task; `rimz loop list` and `rimz loop watch` keep showing it as `▸ running` until that run ends. The room's sidebar probes that checkout while the task is live, even after its agent panes close; removing the task releases that probe. Without a room sidebar, CI is unknown. Cancel before it fires with `rimz loop remove open-pr`; [conditions](../reference/cli/loop.md#conditions) lists the expression rules and unknown readings.
 
+When your next turn depends on several branches landing, name them directly instead of keeping their checkouts open:
+
+```sh
+rimz loop add follow-up --when 'pr[sidebar-ordering]=merged && pr[sidebar-cards]=merged' --once --agent claude --prompt 'Continue now that both prerequisites have merged.'
+```
+
+Both branches belong to the origin repository of the checkout where you add the task. The room sidebar keeps those branch readings live without local checkouts; removing `follow-up` releases them.
+
 ## Guard a turn with a check
 
 Most recurring automation should stay a plain script. A cron job that runs the test suite, syncs a mirror, or checks a certificate's expiry is deterministic, instant, and free; spending an agent turn to re-check a world that has not changed is burning tokens on `true`. What a script cannot do is recover. When the command that was supposed to pass fails at 2 a.m., the script's whole error path is "page a human."

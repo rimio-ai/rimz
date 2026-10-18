@@ -118,6 +118,7 @@ pub(crate) struct GhBulkPr {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GhBulkResponse {
+    pub(crate) refs: BTreeMap<usize, Option<WorktreeCi>>,
     pub(crate) open: Option<Vec<OpenPr>>,
     pub(crate) prs: Vec<Option<GhBulkPr>>,
     pub(crate) commits: Vec<Option<WorktreeCi>>,
@@ -579,6 +580,7 @@ pub(crate) fn github_bulk_query(
     repo_slug: &str,
     branches: &[&str],
     oids: &[&str],
+    refs: &[usize],
 ) -> String {
     let (owner, repo) = repo_slug.split_once('/').unwrap_or(("", repo_slug));
     let mut fields = Vec::with_capacity(branches.len() + oids.len() + 1);
@@ -588,8 +590,14 @@ pub(crate) fn github_bulk_query(
         fields.push("open: pullRequests(first: 100, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number headRefName baseRefName isCrossRepository } }".to_owned());
     }
     for (index, branch) in branches.iter().enumerate() {
+        if refs.contains(&index) {
+            fields.push(format!(
+                "ref{index}: ref(qualifiedName: {}) {{ target {{ ... on Commit {{ oid statusCheckRollup {{ state }} }} }} }}",
+                graphql_string(&format!("refs/heads/{branch}"))
+            ));
+        }
         fields.push(format!(
-            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
+            "pr{index}: pullRequests(first: 10, headRefName: {}, states: [OPEN, MERGED, CLOSED], orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ number state createdAt isCrossRepository statusCheckRollup {{ state }} mergeCommit {{ oid statusCheckRollup {{ state }} }} }} }}",
             graphql_string(branch)
         ));
         fields.push(format!(
@@ -713,6 +721,8 @@ pub(crate) fn parse_github_bulk_response(
     struct Pull {
         number: u64,
         state: String,
+        #[serde(default, rename = "isCrossRepository")]
+        is_cross_repository: bool,
         #[serde(rename = "createdAt")]
         created_at: Option<String>,
         #[serde(rename = "statusCheckRollup")]
@@ -731,6 +741,11 @@ pub(crate) fn parse_github_bulk_response(
     #[derive(Deserialize)]
     struct Rollup {
         state: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct BranchRef {
+        target: Option<Commit>,
     }
 
     let response: Response = serde_json::from_str(raw).map_err(|err| err.to_string())?;
@@ -768,6 +783,9 @@ pub(crate) fn parse_github_bulk_response(
         let mut best = connection
             .nodes
             .into_iter()
+            .filter(|pull| {
+                !pull.is_cross_repository || !repository.contains_key(&format!("ref{index}"))
+            })
             .filter_map(|pull| {
                 let state = parse_pr_state(&pull.state)?;
                 let merge_commit = pull
@@ -894,7 +912,26 @@ pub(crate) fn parse_github_bulk_response(
     } else {
         None
     };
-    Ok(GhBulkResponse { prs, commits, open })
+    let mut refs = BTreeMap::new();
+    for index in 0..branch_count {
+        if let Some(value) = repository.get(&format!("ref{index}")) {
+            let reference: Option<BranchRef> =
+                serde_json::from_value(value.clone()).map_err(|err| err.to_string())?;
+            let ci = reference
+                .and_then(|reference| reference.target)
+                .and_then(|commit| commit.status_check_rollup)
+                .and_then(|rollup| rollup.state)
+                .as_deref()
+                .and_then(ci_from_gh_rollup_state);
+            refs.insert(index, ci);
+        }
+    }
+    Ok(GhBulkResponse {
+        prs,
+        commits,
+        open,
+        refs,
+    })
 }
 
 fn prefer_github_bulk_pr(current: Option<GhBulkPr>, next: GhBulkPr) -> GhBulkPr {
@@ -1001,6 +1038,9 @@ pub(crate) fn tea_pr_list_args<'a>(state: &'a str, repo: Option<&'a str>) -> Vec
 
 /// Build the Gitea combined commit-status endpoint used for CI enrichment.
 pub(crate) fn tea_commit_status_endpoint(repo_slug: &str, branch: &str) -> String {
+    let branch = url::form_urlencoded::byte_serialize(branch.as_bytes())
+        .collect::<String>()
+        .replace('+', "%20");
     format!("repos/{repo_slug}/commits/{branch}/status")
 }
 
