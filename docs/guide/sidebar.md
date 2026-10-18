@@ -24,8 +24,6 @@ If the sidebar cannot paint, the column shows the reason and a retry delay inste
 
 ## The layout
 
-Clicking a card selects it immediately while its pane gains focus; clicking a child selects its parent card. If the focus request fails, the highlight returns to session focus and a dismissable bottom notice reads `focus failed: <card>: <error>`. If cards move on their own, a click within 400 ms still targets the card you were looking at, or does nothing if it has left. Your next scroll, browse, or other action paints a new frame to click.
-
 Top to bottom, the column stacks three zones plus pinned chrome:
 
 ```
@@ -193,6 +191,8 @@ Focusing a hibernating pane wakes it after about a second, or sooner when you ty
 The cockpit compresses the fleet into one line, and the column below arrives already triaged: the card that needs you next sits at the top of its group, a soft wash marks every result, ask, and recovery you have not seen, and the one card that most needs you animates across its glyph, name, and description until you read it.
 
 You do not read where to go; you go. Press `n` (or `␣`) to jump to the next thing that needs you, oldest first, and RimZ focuses that agent's pane; `N` walks back. You read and answer there, in the agent's own UI, where the full context is. From any pane in the room, `Alt+p` focuses the sidebar, and pressing it again returns you to a work pane in that tab, so the whole loop runs without touching the mouse. The full key table is in the [interface reference](../interface/sidebar.md#keys-and-mouse).
+
+Clicking a card selects it immediately while its pane gains focus; clicking a child selects its parent card. If the focus request fails, the highlight returns to session focus and a dismissable bottom notice reads `focus failed: <card>: <error>`. If cards move on their own, a click within 400 ms still targets the card you were looking at, or does nothing if it has left. Your next scroll, browse, or other action paints a new frame to click.
 
 A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `done`, and stays unread until you focus its pane, dwell a couple of seconds in its tab, or press `m`; `M` marks every card read. The mark survives the agent recovering and moving on, so a result you never looked at is still flagged an hour later. It changes emphasis, never position: the card keeps its place in the ranking while the wash, the blink, and the jump key get you to it. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread across the sleep; the mark and any configured success notification arrive when the wait cycle finishes at done.
 
