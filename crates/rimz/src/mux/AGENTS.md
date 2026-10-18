@@ -24,3 +24,5 @@ Local contract for `crates/rimz/src/mux/` — the Zellij/tmux seam. Extends [cra
 ## Tests
 
 Planner, width, and selection logic stay unit-level — no mux required. Live-backend behaviour belongs in [`tests/integration/backend/`](../../tests/integration/backend/), which self-skips when the mux binary is absent.
+
+A change to what a Zellij birth waits on also runs `cargo xtask test -P live -E 'binary(integration) & test(/^journey::deep::zellij/)'`, which covers clientless births through the real plugin.

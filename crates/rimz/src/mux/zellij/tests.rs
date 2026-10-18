@@ -2082,6 +2082,39 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn wait_for_sidebar_layout_reads_server_not_topology() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms(),
+        Some(9),
+        None,
+        vec![
+            terminal_pane(8, 1, 30, 0, "rimz-sidebar"),
+            terminal_pane(9, 1, 70, 30, "zsh"),
+        ],
+    );
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]\n' ;;
+esac
+exit 0
+"#,
+    );
+    let backend = room.backend(&shim);
+
+    assert!(backend.wait_for_sidebar_layout("rimz-test"));
+    let log = shim_log(&temp);
+    assert!(command_count(&log, "list-panes") >= 1, "{log}");
+    assert_eq!(command_count(&log, "rimz:dump_topology"), 0, "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn list_panes_uses_fresh_topology_and_honors_explicit_floor() {
     let room = TestRoom::new();
     let floor = unix_now_ms();
