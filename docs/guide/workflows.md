@@ -78,11 +78,11 @@ Every `(default)` edge to `@user` parks the run for you. The `tests` row says a 
 
 The warning appears while [auto-continue](./loops.md#auto-continue) is off, which is the default. It is about rate limits. A step whose agent hits a provider rate limit or spend limit ends its attempt as `limited`, and the run follows `then`. In `fix-tests` that means the check fails again and `fix` relaunches into the same limit, so a long limit can use up the three visits. A check can wait for the reset instead, as [the PR example](#wait-on-the-outside-world) does.
 
-A step is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The agent's reporting hooks must be installed, and a Codex step needs folder trust for the checkout. `rimz doctor` reports both.
+A step is a [supervised run](./scripting.md#what-a-run-does-on-your-machine), so it has the same prerequisites. The agent's reporting hooks must be installed, and a Codex step needs folder trust for the checkout. `rimz doctor` reports both, and when it says an agent's folder trust is undecided, it names the `rimz trust grant` command that settles it.
 
 Then start the run:
 
-1. Open the project's room. The room is the multiplexer session RimZ manages for the project, and `rimz start` opens it and attaches to it. Run the next commands in the project, inside the room or in another terminal.
+1. Open the project's room. The room is the multiplexer session RimZ manages for the project, and `rimz start` opens it and attaches to it. Run the next commands from the project's directory, in a shell inside that room or in another terminal. A shell in another project's room carries that project's root in its environment, and `workflow run` would look for the worktree there.
 2. Create a RimZ worktree, so the agent's edits stay off your branch. The [worktrees guide](./worktrees.md) covers what this creates.
 
    ```sh
@@ -225,7 +225,7 @@ rimz workflow resume "$RUN" --extend visits=+2       # two more visits for every
 rimz workflow resume "$RUN" --extend deadline=2026-11-08
 ```
 
-An extension is a grant on this run only, and the definition does not change. `show` then counts visits against both, as in `step fix: 3 visits of 3 + 2 grant`.
+A run that is still active takes `--extend` too, without `--at`. An extension is a grant on this run only, and the definition does not change. `show` then counts visits against both, as in `step fix: 3 visits of 3 + 2 grant`.
 
 ## Stop a run and clean up
 
@@ -237,7 +237,7 @@ rimz workflow cancel "$RUN"
 
 A run started by a loop task can come back. The task starts a new run in any worktree that has none while its condition holds. To stop for good, end the condition or disable the task with `rimz loop disable <name>`.
 
-When you are done with the worktree, `rimz worktree remove feat-x` removes it. It refuses while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. `--force` removes it anyway and deletes those commits with the branch. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
+When you are done with the worktree, `rimz worktree remove feat-x` removes it. It refuses while the tree has uncommitted changes, while the branch holds commits that have not landed, or while an agent or pane is still in the tree, and names the fix. A check runs in the checkout, so files your suite writes there (a `__pycache__/`, a coverage report) count as changes unless `.gitignore` covers them. `--force` removes it anyway and deletes those commits with the branch. The [cleanup section](./worktrees.md#cleanup-once-work-lands) covers landing the work first.
 
 A run also ends on its own: as `done` at `@done`, or as `failed` at `@failed`. A finished run leaves `rimz workflow list`, and `rimz workflow show` still reads it for seven days. After that, RimZ's garbage collection removes its run directory. `rimz reset` keeps run directories, and `rimz reset --hard` removes them.
 
