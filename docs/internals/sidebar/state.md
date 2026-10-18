@@ -379,7 +379,7 @@ A pane retains its baseline only while a fold applies an overlay or focus intent
 | --- | --- | --- | --- |
 | `PaneClosed` | `pane_id` | Delete every row bound to the pane. Highest precedence in fusion. | Host presence projector |
 | `CommandChanged` | `pane_id`, `command` | Overlay the command until a pull verifies the pane's row shape. | Host presence projector |
-| `FocusChanged` | `focused` and `unfocused` pane id lists | Set `SidebarSnapshot::focused_pane` to the current pane and mark it viewed; a transition naming only the prior pane clears the register. | Host presence projector, from client-derived Zellij focus or tmux pane and view focus |
+| `FocusChanged` | `focused` and `unfocused` pane id lists | Set `SidebarSnapshot::focused_pane` to the current pane and mark it viewed; a transition naming only the prior pane clears the register. | Host presence projector, from client-derived Zellij focus or tmux pane and view focus. tmux never lists sidebar chrome in `unfocused`, so focus leaving a sidebar arrives as `unfocused: []` |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull. Admits no card on its own. | Host presence projector |
 | `PanesChanged` | none | Nudge a producer pull: topology moved, identity unknown. | Projector fallback, or an incomplete tmux layout |
 | `StoreDelta` | optional event method and lifecycle signal | Refetch the rollup. A session start or end also requests fresh panes. | Store and context-sidecar writers ([store.md → wakeups](../store.md#wakeups)) |
