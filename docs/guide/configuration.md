@@ -14,7 +14,7 @@ rimz config set theme.style modern             # truecolor plus Nerd Font glyphs
 rimz config set theme.pets.enabled true        # an animated companion on the provider dashboard
 rimz config set resume.auto_continue true      # resume rate-limit and API-error parks on their own
 rimz config set harness.smart_compact 200k     # compact before a message once context passes 200k tokens
-rimz config set harness.idle_compact off       # disable idle team compaction on this machine
+rimz config set harness.idle_compact off       # disable idle compaction on this machine
 rimz config set notifications.triggers '["waiting", "failed"]'   # which cards raise a banner
 rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sidebar from any pane
 rimz config set sidebar.zoom_key "Alt+g"       # smart fullscreen zoom that skips sidebar chrome
@@ -205,7 +205,7 @@ A running room never asks about parked agents, whether you use Zellij or tmux. U
 
 `auto_redeem_min_gain` is the threshold the main rule uses: RimZ redeems into a spent window when its natural reset is at least this far away, since that is how much blocked time the credit recovers. It takes `s`, `m`, `h`, or `d` and defaults to `12h`. Raise it to redeem only when a window would otherwise block most of a day.
 
-`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question; idle compaction starts on, and answering no sets it to `off` ([set up your machine](./setup.md)).
+`rimz setup` offers `auto_continue`, `auto_redeem` (when Codex is installed), and `idle_compact` together as one consent question; idle compaction starts at `100k`, and answering no sets it to `off` ([set up your machine](./setup.md)).
 
 ### Dollar budgets
 
@@ -252,17 +252,17 @@ compact_instruction = "preserve the open questions and exact decisions"
 
 ```toml
 [harness]
-idle_compact = "on"
+idle_compact = "100k"
 ```
 
-An idle team member may return for another stage after its provider's warm prompt cache has expired. Compaction first reduces the conversation that must be cached again. `idle_compact` defaults to `on`: compact one minute before the provider's prompt-cache lifetime runs out. `off` disables it; a duration such as `"25m"` sets the idle threshold directly, without a cache-lifetime lookup. Durations take `s`, `m`, `h`, or `d`. A role's [`idle-compact`](../reference/definitions.md#idle-compaction) overrides this machine default.
+An idle agent may get its next prompt after its provider's warm prompt cache has expired, and that prompt then pays to cache the whole conversation again. Idle compaction shrinks the conversation first, while the cache is still warm. `idle_compact` is a token floor: once an agent has sat idle for its provider's prompt-cache lifetime less `prompt_cache_margin`, RimZ compacts it if its occupied context has reached the floor. It defaults to `"100k"`; it takes a token count in digits or `k` (`"50k"`, `"250000"`, `"1000k"`) or `"off"`; an `m` suffix is refused, since an old minute value such as `"25m"` would otherwise read as millions. A profile's or team role's [`idle-compact`](../reference/definitions.md#idle-compaction) sets its own floor, so a cheap reviewer can compact at `50k` while a long-running planner stays at `250k` or `off`.
 
-| Provider | Default prompt-cache lifetime | Idle threshold with `on` |
+| Provider | Default prompt-cache lifetime | Compacts after idle (default margin) |
 | --- | --- | --- |
 | Claude, any model or account | 60 minutes | 59 minutes |
 | Codex, any model or account | 30 minutes | 29 minutes |
 
-Other providers have no default lifetime and are skipped with `on`. Configure a different lifetime for your setup, such as an API-key account with a five-minute cache, or use `off` when no warm-cache lifetime is known:
+Other providers have no default lifetime and are never idle-compacted. Configure a different lifetime for your setup, such as an API-key account with a five-minute cache, or use `off` when no warm-cache lifetime is known:
 
 ```toml
 [harness.prompt_cache_ttl]
@@ -270,9 +270,9 @@ claude = "5m"
 codex = "off"
 ```
 
-Keys name built-in or installed plugin provider kinds, not models or named logins. Values accept `off` or a duration longer than `prompt_cache_margin`; unknown kinds and shorter durations are refused. An explicit `idle_compact` duration bypasses that lookup but still requires a native compact command. `harness.cache_keepalive` defaults to `true` and controls waiting-agent and [keep-warm](#keep-warm) cache pings independently of idle compaction. `harness.cache_keepalive_max` (default `"6h"`) stops pings that would start that long after the agent's last request of its own; the last ping says so, and the agent's next turn of any other kind restarts the clock. It accepts `off`, which keeps pinging for as long as the agent sleeps, or a duration longer than `prompt_cache_margin`. `harness.prompt_cache_margin` (default `"1m"`) is how long before a prompt cache expires both cache pings and idle compaction fire; raise it if pings land too late on a slow machine. It must stay shorter than every provider's cache lifetime and than `cache_keepalive_max`, or the config is refused.
+Keys name built-in or installed plugin provider kinds, not models or named logins. Values accept `off` or a duration longer than `prompt_cache_margin`; unknown kinds and shorter durations are refused. `harness.cache_keepalive` defaults to `true` and controls waiting-agent and [keep-warm](#keep-warm) cache pings independently of idle compaction. `harness.cache_keepalive_max` (default `"6h"`) stops pings that would start that long after the agent's last request of its own; the last ping says so, and the agent's next turn of any other kind restarts the clock. It accepts `off`, which keeps pinging for as long as the agent sleeps, or a duration longer than `prompt_cache_margin`. `harness.prompt_cache_margin` (default `"1m"`) is how long before a prompt cache expires both cache pings and idle compaction fire; raise it if pings land too late on a slow machine. It must stay shorter than every provider's cache lifetime and than `cache_keepalive_max`, or the config is refused.
 
-Only team members qualify, never solo agents, `rimz subagents` children, or provider subagents. A board at `Done` disables compaction; another stage or a missing board counts as live. The member needs at least 50,000 occupied context tokens and a bound pane, and must be idle rather than working, sleeping with a pending wait, awaiting input, budget-parked, or already compacting. The reflex sends the native command with the [team brief](#smart-compaction) at a turn boundary and fires at most once per idle stretch. Idle time starts at the last tool event or, without one, the turn start, capped at the completed turn's end. Restarting an idle member does not restart this clock. With the default cache-timed setting a member found past its cache lifetime is left alone rather than compacted cold. Timing is best-effort: missing hooks, a slow sidebar pass, or early provider eviction can cost a cache write, never correctness. Neither another member working nor an open pull request is required. A member that [keep-warm](#keep-warm) is holding is not compacted until its horizon passes. See [loops → idle compaction](./loops.md#idle-compaction) for the action and its record.
+Solo agents and team members both qualify; `rimz subagents` children and provider subagents never do. For a team member, a board at `Done` disables compaction; another stage or a missing board counts as live. The agent needs a bound pane and must be idle rather than working, sleeping with a pending wait, awaiting input, budget-parked, or already compacting. The reflex sends the native command with the seat's [brief](#smart-compaction) at a turn boundary and fires at most once per idle stretch. Once an agent has compacted (by this reflex, by hand, or on its own while resting), neither idle compaction nor keep-warm touches it again until a real prompt arrives. Idle time starts at the last tool event or, without one, the turn start, capped at the completed turn's end. Restarting an idle agent does not restart this clock. An agent found past its cache lifetime is left alone rather than compacted cold. Timing is best-effort: missing hooks, a slow sidebar pass, or early provider eviction can cost a cache write, never correctness. A seat that [keep-warm](#keep-warm) is holding is not compacted until its horizon passes. See [loops → idle compaction](./loops.md#idle-compaction) for the action and its record.
 
 ### Keep-warm
 

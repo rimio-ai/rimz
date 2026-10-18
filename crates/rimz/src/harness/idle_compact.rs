@@ -1,5 +1,5 @@
-//! Producer-side idle compaction: condense an inactive team member's context
-//! before its provider prompt cache expires.
+//! Producer-side idle compaction: condense an idle seat's context, once it
+//! reaches the seat's token floor, before its provider prompt cache expires.
 //!
 //! The room host and the detached `rimz agents idle-compact` helper
 //! share one eligibility decision. The helper owns the durable message write;
@@ -13,14 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus};
-use crate::config::{HarnessConfig, IdleCompactMode, MachineConfig, TeamsConfig};
+use crate::config::{HarnessConfig, MachineConfig};
 use crate::disk::atomic::write_temp_then_rename_cache;
 use crate::harness::cache_keepalive::SeatPolicy;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::store::snapshot::SidebarSnapshot;
-
-/// Below this fill, re-caching costs less than an extra compaction turn.
-pub const IDLE_COMPACT_MIN_TOKENS: u64 = 50_000;
 
 /// Bounds duplicate helper spawns while a frame or context reading catches up.
 const IDLE_COMPACT_RESPAWN_THROTTLE: Duration = Duration::from_secs(10 * 60);
@@ -42,52 +39,32 @@ struct FireRecord {
     fired_for_request: Timestamp,
 }
 
-/// Idle interval in which compaction may run; cache expiry is an exclusive bound.
+/// When an idle seat compacts: at or above `floor` tokens, once idle for
+/// `fire_after` and before its prompt cache expires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IdleWindow {
+    pub floor: u64,
     pub fire_after: Duration,
-    pub cache_expires: Option<Duration>,
+    pub cache_expires: Duration,
 }
 
+/// The seat's window: its floor (`None` is off) and the provider's prompt-cache
+/// TTL less `harness.prompt_cache_margin`. An unknown TTL never compacts.
 pub fn fire_point(
     agent: &AgentState,
-    mode: IdleCompactMode,
+    floor: Option<u64>,
     harness: &HarnessConfig,
 ) -> Option<IdleWindow> {
-    match mode {
-        IdleCompactMode::Off => None,
-        IdleCompactMode::After(duration) => Some(IdleWindow {
-            fire_after: duration,
-            cache_expires: None,
-        }),
-        IdleCompactMode::On => {
-            let ttl = harness.prompt_cache_ttl(&agent.kind)?;
-            let fire_after = ttl.checked_sub(harness.prompt_cache_margin)?;
-            Some(IdleWindow {
-                fire_after,
-                cache_expires: Some(ttl),
-            })
-        }
-    }
+    let ttl = harness.prompt_cache_ttl(&agent.kind)?;
+    Some(IdleWindow {
+        floor: floor?,
+        fire_after: ttl.checked_sub(harness.prompt_cache_margin)?,
+        cache_expires: ttl,
+    })
 }
 
-pub fn resolve_mode(
-    agent: &AgentState,
-    teams: &TeamsConfig,
-    default: IdleCompactMode,
-) -> IdleCompactMode {
-    agent
-        .team
-        .as_ref()
-        .and_then(|name| teams.0.get(name))
-        .map_or(default, |team| {
-            team.idle_compact(agent.role.as_deref().unwrap_or(""), default)
-        })
-}
-
-fn eligible_seat(agent: &AgentState) -> bool {
-    agent.team.is_some()
-        && !agent.is_provider_subagent()
+fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
+    !agent.is_provider_subagent()
         && !agent.agent_id.is_empty()
         && agent.compacting_since.is_none()
         && !agent.compacted_since_prompt()
@@ -99,7 +76,7 @@ fn eligible_seat(agent: &AgentState) -> bool {
             AgentStatus::Idle | AgentStatus::Success
         )
         && agent.occupied_context_tokens().is_some_and(|tokens| {
-            tokens >= IDLE_COMPACT_MIN_TOKENS && agent.last_compact_command_tokens != Some(tokens)
+            tokens >= floor && agent.last_compact_command_tokens != Some(tokens)
         })
 }
 
@@ -121,16 +98,14 @@ pub fn should_compact(
         return false;
     };
     let idle = now.as_second() - last_request_at.as_second();
-    eligible_seat(agent)
+    eligible_seat(agent, window.floor)
         && command.is_some()
-        && cohort_live(agent)
+        && (agent.team.is_none() || cohort_live(agent))
         && idle >= window.fire_after.as_secs().min(i64::MAX as u64) as i64
-        && window
-            .cache_expires
-            .is_none_or(|ttl| idle < ttl.as_secs().min(i64::MAX as u64) as i64)
+        && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64
 }
 
-/// Compact each eligible team member whose idle threshold is due; a seat keep-warm is holding waits for its horizon.
+/// Compact each eligible seat whose floor and idle window are due; a seat keep-warm is holding waits for its horizon.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
@@ -150,19 +125,15 @@ fn compact_idle_agents_with(
     mut spawn: impl FnMut(&IdleCompactRequest) -> bool,
 ) {
     for agent in snapshot.agents.iter() {
-        if !eligible_seat(agent) {
+        let floor = policy.idle_compact_floor(agent, &config.harness);
+        let Some(window) = fire_point(agent, floor, &config.harness) else {
             continue;
-        }
-        let mode = resolve_mode(agent, &policy.teams, config.harness.idle_compact);
+        };
         let command = crate::agents::compact_command(agent, &config.harness);
-        if !should_compact(
-            agent,
-            command.as_deref(),
-            fire_point(agent, mode, &config.harness),
-            snapshot.now,
-        ) || policy
-            .holding(agent, &config.harness, snapshot.now)
-            .is_some()
+        if !should_compact(agent, command.as_deref(), Some(window), snapshot.now)
+            || policy
+                .holding(agent, &config.harness, snapshot.now)
+                .is_some()
         {
             continue;
         }
@@ -304,56 +275,73 @@ mod tests {
         );
     }
 
+    /// Default harness: Claude's 60m TTL less the 1m margin opens the window at 59m.
+    const NOW: i64 = 6_000 + 3_550;
+
     fn due(agent: &AgentState) -> bool {
         should_compact(
             agent,
             Some("/compact"),
-            fire_point(
-                agent,
-                IdleCompactMode::After(Duration::from_secs(59 * 60)),
-                &HarnessConfig::default(),
-            ),
-            ts(10_000),
+            fire_point(agent, Some(50_000), &HarnessConfig::default()),
+            ts(NOW),
         )
     }
 
     #[test]
-    fn predicate_requires_idle_threshold_and_context_floor() {
+    fn predicate_requires_idle_threshold_and_the_seat_floor() {
         let candidate = agent(AgentStatus::Idle, 6_000, 50_000);
         assert!(due(&candidate));
-        assert!(!due(&agent(AgentStatus::Idle, 6_461, 50_000)));
-        assert!(!due(&agent(AgentStatus::Idle, 6_000, 49_999)));
+        assert!(!due(&agent(AgentStatus::Idle, 6_011, 50_000)));
+        assert!(
+            !due(&agent(AgentStatus::Idle, 6_000, 49_999)),
+            "one below the floor"
+        );
         let mut compacted = candidate.clone();
         compacted.compacted_awaiting_prompt = Some(ts(6_000));
         assert!(!due(&compacted), "a compacted seat waits for a real prompt");
         assert!(!should_compact(
             &candidate,
             None,
-            fire_point(
-                &candidate,
-                IdleCompactMode::After(Duration::from_secs(59 * 60)),
-                &HarnessConfig::default()
-            ),
-            ts(10_000),
+            fire_point(&candidate, Some(50_000), &HarnessConfig::default()),
+            ts(NOW),
         ));
-        assert!(!should_compact(
-            &candidate,
-            Some("/compact"),
-            fire_point(&candidate, IdleCompactMode::Off, &HarnessConfig::default()),
-            ts(10_000),
-        ));
+        assert_eq!(
+            fire_point(&candidate, None, &HarnessConfig::default()),
+            None,
+            "an off floor opens no window"
+        );
+    }
+
+    #[test]
+    fn window_opens_at_ttl_less_the_configured_margin_and_closes_at_ttl() {
+        let candidate = agent(AgentStatus::Idle, 0, 80_000);
+        let harness: HarnessConfig = toml::from_str("prompt_cache_margin = \"6m\"").unwrap();
+        let window = fire_point(&candidate, Some(50_000), &harness);
+        assert_eq!(
+            window.map(|window| window.fire_after.as_secs()),
+            Some(54 * 60)
+        );
+        for (now, expected) in [
+            (54 * 60 - 1, false),
+            (54 * 60, true),
+            (60 * 60 - 1, true),
+            (60 * 60, false),
+            (86_400, false),
+        ] {
+            assert_eq!(
+                should_compact(&candidate, Some("/compact"), window, ts(now)),
+                expected,
+                "{now}"
+            );
+        }
     }
 
     #[test]
     fn predicate_clamps_request_anchor_after_resume() {
         let mut candidate = agent(AgentStatus::Idle, 30 * 60, 80_000);
         candidate.turn_ended_at = Some(ts(0));
-        let window = fire_point(
-            &candidate,
-            IdleCompactMode::After(Duration::from_secs(57 * 60)),
-            &HarnessConfig::default(),
-        );
-        for (now, expected) in [(57 * 60 - 1, false), (57 * 60, true), (86_400, true)] {
+        let window = fire_point(&candidate, Some(50_000), &HarnessConfig::default());
+        for (now, expected) in [(59 * 60 - 1, false), (59 * 60, true), (60 * 60, false)] {
             assert_eq!(
                 should_compact(&candidate, Some("/compact"), window, ts(now)),
                 expected
@@ -379,10 +367,13 @@ mod tests {
     }
 
     #[test]
-    fn solo_and_done_cohorts_never_compact() {
+    fn solo_seats_compact_and_done_cohorts_never_do() {
         let mut candidate = agent(AgentStatus::Idle, 6_000, 80_000);
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
+        candidate.worktree_path = Some(root.path().to_string_lossy().into_owned());
         candidate.team = None;
-        assert!(!due(&candidate), "solo seats must never compact");
+        assert!(due(&candidate), "a solo seat reads no board");
         candidate.team = Some("probe".to_owned());
         let root = tempfile::tempdir().unwrap();
         candidate.worktree_path = Some(root.path().to_string_lossy().into_owned());
@@ -426,7 +417,7 @@ mod tests {
             candidate.kind = AgentKind::new_unchecked(kind);
             candidate.model = Some(model.to_owned());
             let harness: HarnessConfig = toml::from_str(config).unwrap();
-            let point = fire_point(&candidate, IdleCompactMode::default(), &harness);
+            let point = fire_point(&candidate, Some(50_000), &harness);
             assert_eq!(
                 point.map(|point| point.fire_after.as_secs()),
                 ttl.map(|ttl| ttl - 60),
@@ -456,15 +447,14 @@ mod tests {
     }
 
     #[test]
-    fn producer_sends_team_brief_and_never_spawns_for_solo() {
+    fn producer_fires_at_each_seats_own_floor_with_its_brief() {
         let dir = tempfile::tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
         let mut candidate = agent(AgentStatus::Idle, 6_100, 80_000);
         candidate.turn_ended_at = Some(ts(6_000));
-        candidate.team = Some("probe".to_owned());
         let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(10_000));
+            SidebarSnapshot::build_with_agents(workspace_id, vec![candidate.clone()], ts(NOW));
         std::sync::Arc::make_mut(&mut snapshot.agent_panes).push(PaneAgent {
             checkout: None,
             root_lane: false,
@@ -481,35 +471,76 @@ mod tests {
             worktree_path: candidate.worktree_path.clone(),
             worktree_branch: candidate.worktree_branch.clone(),
         });
-        let mut config = crate::config::MachineConfig::default();
-        config.harness.idle_compact = IdleCompactMode::After(Duration::from_secs(59 * 60));
-        let mut requests = Vec::new();
-        compact_idle_agents_with(
-            &snapshot,
-            &runtime,
-            &config,
-            &SeatPolicy::default(),
-            |request| {
+        let config = crate::config::MachineConfig::default();
+        let mut policy = SeatPolicy::default();
+        for name in ["solo", "probe.lead"] {
+            let mut profile: crate::config::Profile = toml::from_str("agent = \"claude\"").unwrap();
+            profile.idle_compact = Some(crate::config::IdleCompact::Tokens(80_000));
+            policy.profiles.0.insert(name.to_owned(), profile);
+        }
+        let mut team: crate::config::Team =
+            toml::from_str("[[roles]]\nrole = \"coder\"\nprofile = \"claude\"").unwrap();
+        team.roles[0].idle_compact = Some(crate::config::IdleCompact::Tokens(80_000));
+        policy.teams.0.insert("probe".to_owned(), team);
+        let path = fire_record_path(&runtime, &candidate.kind, &candidate.agent_id);
+        let mut fire = |seat: &AgentState| {
+            std::sync::Arc::make_mut(&mut snapshot.agents)[0] = seat.clone();
+            let mut requests = Vec::new();
+            compact_idle_agents_with(&snapshot, &runtime, &config, &policy, |request| {
                 requests.push(request.clone());
                 true
-            },
+            });
+            if !requests.is_empty() {
+                assert_eq!(
+                    Some(read_fire_record(&path).unwrap().fired_for_request),
+                    seat.last_request_at()
+                );
+                std::fs::remove_file(&path).unwrap();
+            }
+            requests
+        };
+
+        assert!(
+            fire(&candidate).is_empty(),
+            "80k sits below the 100k default"
         );
-        assert_eq!(requests.len(), 1);
+
+        let mut toml_role = candidate.clone();
+        toml_role.role = Some("coder".to_owned());
+        let requests = fire(&toml_role);
+        assert_eq!(requests.len(), 1, "a TOML role override");
         assert_eq!(
             requests[0].command,
-            crate::agents::compact_command(&candidate, &config.harness).unwrap()
+            crate::agents::compact_command(&toml_role, &config.harness).unwrap()
         );
         assert!(requests[0].command.contains("This seat is a team member"));
-        let path = fire_record_path(&runtime, &candidate.kind, &candidate.agent_id);
+
+        let mut markdown_role = candidate.clone();
+        markdown_role.role = Some("lead".to_owned());
+        markdown_role.profile = Some("probe.lead".to_owned());
         assert_eq!(
-            Some(read_fire_record(&path).unwrap().fired_for_request),
-            candidate.last_request_at()
+            fire(&markdown_role).len(),
+            1,
+            "a Markdown role's synthetic profile"
         );
-        std::fs::remove_file(&path).unwrap();
-        std::sync::Arc::make_mut(&mut snapshot.agents)[0].team = None;
-        compact_idle_agents_with(&snapshot, &runtime, &config, &SeatPolicy::default(), |_| {
-            panic!("solo spawn")
-        });
+
+        let mut solo = candidate.clone();
+        solo.team = None;
+        solo.profile = Some("solo".to_owned());
+        let requests = fire(&solo);
+        assert_eq!(requests.len(), 1, "a solo seat's profile floor");
+        assert_eq!(
+            requests[0].command,
+            crate::agents::compact_command(&solo, &config.harness).unwrap()
+        );
+        assert!(!requests[0].command.contains("This seat is a team member"));
+
+        solo.parent_agent_id = Some(AgentSessionId::from("parent"));
+        solo.launch_depth = Some(1);
+        assert!(
+            fire(&solo).is_empty(),
+            "a rimz subagents child never compacts"
+        );
         assert!(!path.exists());
     }
 
@@ -626,7 +657,7 @@ mod tests {
         let mut team: crate::config::Team =
             toml::from_str("[[roles]]\nrole = \"coder\"\nprofile = \"claude\"\nkeep-warm = \"2h\"")
                 .unwrap();
-        team.roles[0].idle_compact = Some(IdleCompactMode::On);
+        team.roles[0].idle_compact = Some(crate::config::IdleCompact::Tokens(50_000));
         policy.teams.0.insert("probe".to_owned(), team);
         let config = crate::config::MachineConfig::default();
         let mut spawned = 0;

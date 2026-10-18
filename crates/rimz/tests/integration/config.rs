@@ -1090,7 +1090,7 @@ fn setup_retires_idle_compaction_keys_and_reruns_on() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "on");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "100k");
 }
 
 #[test]
@@ -1139,7 +1139,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
         .args(["config", "get", "harness.idle_compact"])
         .output()
         .expect("config get idle_compact");
-    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "on");
+    assert_eq!(String::from_utf8_lossy(&idle_compact.stdout).trim(), "100k");
 
     let output = run_setup_pty(&env, "\nn\nn\nn\nn\n", None, &[]);
 
@@ -1197,7 +1197,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(
         text.contains("auto_continue = true")
             && text.contains("auto_redeem = true")
-            && text.contains("idle_compact = \"on\""),
+            && text.contains("idle_compact = \"100k\""),
         "every offered row enabled:\n{text}"
     );
 }

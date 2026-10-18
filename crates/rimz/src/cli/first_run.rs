@@ -3,9 +3,7 @@
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
-use rimz::config::{
-    CellAspect, ColorDepth, ConfigEditor, IdleCompactMode, MachineConfig, PetsConfig,
-};
+use rimz::config::{CellAspect, ColorDepth, ConfigEditor, IdleCompact, MachineConfig, PetsConfig};
 use rimz::sidebar_pane::pets::{self, PetRenderTier};
 use rimz::theme::{nerd_font_probe_glyphs, nerd_font_probe_gradient};
 
@@ -85,10 +83,10 @@ static AUTOMATION_ROWS: [AutomationRow; 3] = [
     AutomationRow {
         key: "harness.idle_compact",
         label: "idle compaction",
-        cost: "compacts an idle teammate before cache expiry; lossy",
-        on_value: "on",
+        cost: "compacts idle 100k+ agents before cache expiry; lossy",
+        on_value: "100k",
         off_value: "off",
-        is_on: |config| config.harness.idle_compact != IdleCompactMode::Off,
+        is_on: |config| config.harness.idle_compact != IdleCompact::Off,
         needs_codex: false,
     },
 ];
@@ -615,7 +613,7 @@ mod tests {
         config.theme.pets.enabled = true;
         config.resume.auto_continue = true;
         config.resume.auto_redeem = true;
-        config.harness.idle_compact = IdleCompactMode::On;
+        config.harness.idle_compact = IdleCompact::Tokens(100_000);
         Defaults::from_config(&config, false, codex_detected)
     }
 
@@ -712,7 +710,7 @@ mod tests {
 
         let mut mixed = MachineConfig::default();
         mixed.resume.auto_continue = true;
-        mixed.harness.idle_compact = IdleCompactMode::Off;
+        mixed.harness.idle_compact = IdleCompact::Off;
         let mixed = Defaults::from_config(&mixed, false, true);
         let (answers, rendered) = drive(mixed.clone(), b"\n\n\n\n\n\n\n");
         assert!(rendered.contains("[y/n/Choose]"));
@@ -728,7 +726,7 @@ mod tests {
     fn codex_gate_hides_and_never_touches_auto_redeem() {
         let mut config = MachineConfig::default();
         config.resume.auto_redeem = true;
-        config.harness.idle_compact = IdleCompactMode::Off;
+        config.harness.idle_compact = IdleCompact::Off;
 
         let without = Defaults::from_config(&config, false, false);
         assert_eq!(
@@ -758,10 +756,9 @@ mod tests {
     }
 
     #[test]
-    fn hand_set_duration_reads_on_and_survives_keeping_it_on() {
+    fn hand_set_floor_reads_on_and_survives_keeping_it_on() {
         let mut config = MachineConfig::default();
-        config.harness.idle_compact =
-            IdleCompactMode::After(std::time::Duration::from_secs(25 * 60));
+        config.harness.idle_compact = IdleCompact::Tokens(250_000);
         let defaults = Defaults::from_config(&config, false, false);
         assert_eq!(defaults.automation_states(), vec![false, true]);
 

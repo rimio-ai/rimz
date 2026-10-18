@@ -255,7 +255,10 @@ impl ConfigEditor {
         if harness.remove("idle_compact_after").is_some() {
             removed.push("harness.idle_compact_after".to_owned());
         }
-        if let Some(mode @ ("auto" | "always")) = harness.get("idle_compact").and_then(Item::as_str)
+        if let Some(mode) = harness
+            .get("idle_compact")
+            .and_then(Item::as_str)
+            .filter(|mode| mode.parse::<super::IdleCompact>().is_err())
         {
             removed.push(format!("harness.idle_compact = \"{mode}\""));
             harness.remove("idle_compact");
@@ -1227,8 +1230,10 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(mode) = value.as_str() else {
             invalid_value!("harness.idle_compact must be a string");
         };
-        if mode.parse::<super::IdleCompactMode>().is_err() {
-            invalid_value!("harness.idle_compact must be off, on, or a duration such as 25m");
+        if mode.parse::<super::IdleCompact>().is_err() {
+            invalid_value!(
+                "harness.idle_compact must be off or a positive token floor in digits or k, such as 100k or 1000k"
+            );
         }
     }
     if is_harness_keep_warm_min_ttl_edit(path)

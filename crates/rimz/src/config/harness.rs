@@ -194,55 +194,64 @@ const DURATION_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
-/// Automatic idle-compaction policy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum IdleCompactMode {
-    /// Leave idle team members untouched.
+/// The context size at which an idle seat is compacted before its prompt
+/// cache expires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleCompact {
+    /// Leave the seat's context alone however large it grows.
     Off,
-    /// Compact before the provider prompt cache expires.
-    #[default]
-    On,
-    /// Compact after an explicit idle span, regardless of provider cache facts.
-    After(Duration),
+    /// Compact once at least this many tokens occupy the context.
+    Tokens(u64),
 }
 
-impl fmt::Display for IdleCompactMode {
+impl Default for IdleCompact {
+    fn default() -> Self {
+        Self::Tokens(100_000)
+    }
+}
+
+impl fmt::Display for IdleCompact {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Off => f.write_str("off"),
-            Self::On => f.write_str("on"),
-            Self::After(duration) => {
-                f.write_str(&crate::utils::time::format_duration_compact(*duration))
+            Self::Tokens(tokens) if tokens.is_multiple_of(1_000) => {
+                write!(f, "{}k", tokens / 1_000)
             }
+            Self::Tokens(tokens) => write!(f, "{tokens}"),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("idle_compact takes off, on, or a duration such as 25m")]
+#[error("idle_compact takes off or a positive token floor in digits or k, such as 100k or 1000k")]
 pub struct IdleCompactParseError;
 
-impl FromStr for IdleCompactMode {
+impl FromStr for IdleCompact {
     type Err = IdleCompactParseError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        match raw {
-            "off" => Ok(Self::Off),
-            "on" => Ok(Self::On),
-            _ => parse_duration_units(raw, DURATION_UNITS)
-                .map(Self::After)
-                .map_err(|_| IdleCompactParseError),
+        if raw == "off" {
+            return Ok(Self::Off);
+        }
+        // `m` reads as a million there; refusing it keeps a legacy minute
+        // duration such as `59m` from loading as a floor no context reaches.
+        if raw.ends_with(['m', 'M']) {
+            return Err(IdleCompactParseError);
+        }
+        match AutoCompact::parse(raw) {
+            Ok(AutoCompact::Tokens(tokens)) if tokens > 0 => Ok(Self::Tokens(tokens)),
+            _ => Err(IdleCompactParseError),
         }
     }
 }
 
-impl Serialize for IdleCompactMode {
+impl Serialize for IdleCompact {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
 }
 
-impl<'de> Deserialize<'de> for IdleCompactMode {
+impl<'de> Deserialize<'de> for IdleCompact {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer)?
             .parse()
@@ -336,9 +345,11 @@ pub struct HarnessConfig {
     /// string sends the bare command) replaces the brief for every seat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_instruction: Option<String>,
-    /// Compact an idle team member before its provider prompt cache expires.
+    /// Compact an idle seat whose context holds at least this many tokens
+    /// before its provider prompt cache expires; a profile or team role
+    /// overrides it, and `off` disables it.
     #[serde(default)]
-    pub idle_compact: IdleCompactMode,
+    pub idle_compact: IdleCompact,
     /// Compact a team member on hand-off: the role's `flip-compact` overrides this setting, then unset falls back to 120k for a Plan owner or 180k otherwise; `off` disables compaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_compact: Option<FlipCompact>,
@@ -363,7 +374,7 @@ impl Default for HarnessConfig {
             auto_compact: Some(272_000),
             smart_compact: Some(AutoCompact::Tokens(258_000)),
             compact_instruction: None,
-            idle_compact: IdleCompactMode::default(),
+            idle_compact: IdleCompact::default(),
             flip_compact: None,
             keep_warm_min_ttl: Some(DEFAULT_KEEP_WARM_MIN_TTL),
             prompt_cache_margin: DEFAULT_PROMPT_CACHE_MARGIN,
@@ -961,32 +972,56 @@ mod tests {
     }
 
     #[test]
-    fn idle_compact_defaults_on() {
+    fn idle_compact_defaults_to_100k() {
         let config: HarnessConfig = toml::from_str("").expect("parse harness config");
 
-        assert_eq!(serde_json::to_value(config).unwrap()["idle_compact"], "on");
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["idle_compact"],
+            "100k"
+        );
     }
 
     #[test]
-    fn idle_compact_modes_and_duration_round_trip() {
-        for raw in ["off", "on", "25m", "2h"] {
-            let config: HarnessConfig =
+    fn idle_compact_token_floors_round_trip_at_every_toml_site() {
+        for (raw, expected) in [
+            ("off", "off"),
+            ("25", "25"),
+            ("2k", "2k"),
+            ("100k", "100k"),
+            ("250000", "250k"),
+            ("1000k", "1000k"),
+        ] {
+            let harness: HarnessConfig =
                 toml::from_str(&format!("idle_compact = \"{raw}\"")).unwrap();
-            let toml = toml::to_string(&config).expect("serialize harness config");
-            assert!(toml.contains(&format!("idle_compact = \"{raw}\"")));
-            let back: HarnessConfig = toml::from_str(&toml).expect("parse harness config");
-            assert_eq!(back, config);
+            let encoded = toml::to_string(&harness).expect("serialize harness config");
+            assert_eq!(toml::from_str::<HarnessConfig>(&encoded).unwrap(), harness);
+            let profile: crate::config::Profile =
+                toml::from_str(&format!("agent = \"claude\"\nidle-compact = \"{raw}\"")).unwrap();
+            let role: crate::config::RoleBinding = toml::from_str(&format!(
+                "role = \"worker\"\nprofile = \"worker\"\nidle-compact = \"{raw}\""
+            ))
+            .unwrap();
+            for (value, key) in [
+                (serde_json::to_value(harness).unwrap(), "idle_compact"),
+                (serde_json::to_value(profile).unwrap(), "idle-compact"),
+                (serde_json::to_value(role).unwrap(), "idle-compact"),
+            ] {
+                assert_eq!(value[key], expected, "{raw}: {value}");
+            }
         }
     }
 
     #[test]
     fn idle_compact_rejects_bad_values() {
-        for raw in ["auto", "always", "soon", "25", "25w"] {
+        for raw in [
+            "auto", "always", "on", "2h", "25m", "1m", "59M", "70%", "0", "0k", "25w",
+        ] {
             let err =
                 toml::from_str::<HarnessConfig>(&format!("idle_compact = \"{raw}\"")).unwrap_err();
             assert!(
                 err.to_string()
-                    .contains("idle_compact takes off, on, or a duration such as 25m")
+                    .contains("idle_compact takes off or a positive token floor in digits or k, such as 100k or 1000k"),
+                "{raw}: {err}"
             );
         }
     }

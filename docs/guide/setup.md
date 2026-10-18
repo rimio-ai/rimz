@@ -107,11 +107,11 @@ So setup lists three behaviors as rows with their current state and what each on
 | --- | --- |
 | auto-continue | types `continue` into a parked agent's pane after a rate limit or an API error, once the clock says the retry can succeed |
 | auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks hours of work. Offered only when `codex` is on the machine |
-| idle compaction | has an idle team member summarize its conversation shortly before its provider prompt cache expires, while its team's board is not `Done`. The detail behind the summary is gone |
+| idle compaction | has an idle agent whose context has reached 100k tokens summarize its conversation shortly before its provider prompt cache expires (a team member only while its board is not `Done`). The detail behind the summary is gone |
 
-`y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is: on a fresh machine idle compaction is on and the other rows are off. An existing idle-compaction duration counts as on and survives keeping that answer; changing the answer writes `on` or `off`. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
+`y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is: on a fresh machine idle compaction is on and the other rows are off. An existing idle-compaction token floor counts as on and survives keeping that answer; changing the answer writes `100k` or `off`. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
 
-Setup removes the retired idle-compaction timer key and the old `auto` and `always` modes, reporting each removal before refreshing defaults or reading the configuration for the questions. An existing `off` is kept. This repair also runs with `--config-only`.
+Setup removes the retired idle-compaction timer key and every `idle_compact` value that is not `off` or a token floor (the old `auto`, `always`, and `on` modes and every duration, minutes such as `25m` included), reporting each removal before refreshing defaults or reading the configuration for the questions. An existing `off` is kept. This repair also runs with `--config-only`.
 
 The rules each one follows, down to which park resumes on which clock, are [loops → keep the fleet moving](./loops.md#keep-the-fleet-moving). The keys and their tuning are [configuration → resume](./configuration.md#resume).
 
