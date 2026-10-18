@@ -740,6 +740,30 @@ mod tests {
     }
 
     #[test]
+    fn live_room_socket_denial_preserves_cause_and_remedy() {
+        let error = LiveRoomErr::from(MuxErr::SocketConnectDenied {
+            mux: MuxName::Tmux,
+            socket: PathBuf::from("/test/socket"),
+            reason: "Operation not permitted".to_owned(),
+        })
+        .to_string();
+        for part in [
+            "tmux",
+            "/test/socket",
+            "denied",
+            "Operation not permitted",
+            "sandbox",
+            "permission profile",
+            "room may be live",
+            "outside the sandbox",
+            "ask to escalate",
+        ] {
+            assert!(error.contains(part), "missing {part:?}: {error}");
+        }
+        assert!(!error.contains("no live RimZ room"), "{error}");
+    }
+
+    #[test]
     fn preflight_reuses_only_a_healthy_live_verdict() {
         assert_eq!(
             classify_preflight_health(

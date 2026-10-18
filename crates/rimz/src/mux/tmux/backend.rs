@@ -32,6 +32,40 @@ use crate::pane::keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, paste
 /// column amount — its step is Zellij's own ~5%-of-view increment.
 const SIDEBAR_RESIZE_STEP_COLS: u16 = 2;
 
+fn server_is_absent(stderr: &str) -> Result<bool> {
+    let stderr = stderr.trim();
+    if stderr == "no server running" || stderr.starts_with("no server running on ") {
+        return Ok(true);
+    }
+    let Some((socket, reason)) = stderr
+        .strip_prefix("error connecting to ")
+        .and_then(|text| text.strip_suffix(')'))
+        .and_then(|text| text.rsplit_once(" ("))
+    else {
+        return Ok(false);
+    };
+    match reason {
+        "No such file or directory" => Ok(true),
+        "Permission denied" | "Operation not permitted" => Err(MuxErr::SocketConnectDenied {
+            mux: MuxName::Tmux,
+            socket: socket.into(),
+            reason: reason.to_owned(),
+        }),
+        _ => Ok(false),
+    }
+}
+
+fn run_session_command(spec: CommandSpec) -> Result<std::process::Output> {
+    let output = spec.output_raw_with_timeout(super::super::COMMAND_TIMEOUT)?;
+    if output.status.success() {
+        return Ok(output);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    // Classify before generic command errors redact the private socket path.
+    server_is_absent(&stderr)?;
+    Err(spec.command_error(stderr))
+}
+
 impl TmuxBackend {
     pub(super) fn global_mux_context_removal_command(&self) -> CommandSpec {
         let commands = crate::mux::AMBIENT_MUX_ENV
@@ -234,12 +268,9 @@ impl MuxBackend for TmuxBackend {
         // Repair a pre-fix server before new-session forks its first pane.
         // This command cannot start a server; absent or stale sockets are
         // expected on a true birth, but other repair failures must surface.
-        match self.global_mux_context_removal_command().run() {
+        match run_session_command(self.global_mux_context_removal_command()) {
             Ok(_) => {}
-            Err(MuxErr::Command { stderr, .. })
-                if stderr.starts_with("no server running on ")
-                    || (stderr.starts_with("error connecting to ")
-                        && stderr.trim_end().ends_with("(No such file or directory)")) => {}
+            Err(MuxErr::Command { stderr, .. }) if server_is_absent(&stderr)? => {}
             Err(err) => return Err(err),
         }
         // The runtime domain goes in first so the pin and any caller override
@@ -266,7 +297,7 @@ impl MuxBackend for TmuxBackend {
                 if stderr.to_ascii_lowercase().contains("duplicate session") => {}
             Err(err) => return Err(err),
         }
-        self.global_mux_context_removal_command().run()?;
+        run_session_command(self.global_mux_context_removal_command())?;
         // The duplicate path never saw `-e`, so the birth env is re-asserted
         // idempotently: future panes of a pre-stamp room inherit it; existing
         // panes keep the env they were born with and their participants fall
@@ -307,15 +338,11 @@ impl MuxBackend for TmuxBackend {
     fn kill_session(&self, name: &str) -> Result<()> {
         // A session that is already gone (or no server at all) is the goal
         // state, so the "can't find session" / "no server" errors are success.
-        match self.cmd().args(["kill-session", "-t", name]).run() {
+        match run_session_command(self.cmd().args(["kill-session", "-t", name])) {
             Ok(_) => Ok(()),
             Err(MuxErr::Command { stderr, .. })
-                if {
-                    let lower = stderr.to_ascii_lowercase();
-                    lower.contains("can't find session")
-                        || lower.contains("no server running")
-                        || lower.contains("error connecting")
-                } =>
+                if stderr.to_ascii_lowercase().contains("can't find session")
+                    || server_is_absent(&stderr)? =>
             {
                 Ok(())
             }
@@ -324,15 +351,13 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn list_sessions_within(&self, timeout: Duration) -> Result<Vec<String>> {
-        // tmux exits 1 with `error connecting to ...` (or `no server
-        // running`) on stderr when no server has been started yet. That is
-        // an empty list of sessions, not an error condition; the Zellij
-        // backend normalizes its equivalent banner the same way.
+        // Only a missing server is an empty list. A denied connect says
+        // nothing about whether the room is live.
         let spec = self.cmd().args(["list-sessions", "-F", "#{session_name}"]);
         let output = spec.output_raw_with_timeout(timeout)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("no server running") || stderr.contains("error connecting") {
+            if server_is_absent(&stderr)? {
                 return Ok(Vec::new());
             }
             return Err(spec.command_error(stderr.into_owned()));
