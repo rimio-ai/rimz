@@ -57,7 +57,8 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// window, then clamped to the zone. A changed selection reveals only when no
 /// card line is visible; an external-focus reveal includes its group header.
 /// Wheel, banner, and toggle inputs make the offset authoritative once; opening
-/// the landed chip also reveals its first newly shown receipt. The unread
+/// the landed chip also reveals its first newly shown receipt, and the banner
+/// reveals the full-roster lead where it sits. The unread
 /// banner decides from the target; the cards, scrollbar, and hit geometry use
 /// the visible row from `UiState::scroll_ease`, clamped to that viewport. Both
 /// offsets are returned for the caller to write back, a draw byproduct like the
@@ -594,6 +595,15 @@ fn resolve_scroll_offset(
         snap: false,
     };
     if ui.offset_authoritative {
+        if let Some(index) = ui
+            .reveal_row
+            .as_deref()
+            .and_then(|id| input.roster.ordinal_of_id(id))
+        {
+            resolved.offset =
+                auto_scroll_to_selection(input.scroll_map, index, resolved.offset, viewport)
+                    .min(max_offset);
+        }
         if ui.landed_reveal
             && let Some((chip, last)) = input.landed_span
         {

@@ -4,7 +4,7 @@
 
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
-use crate::store::snapshot::{SidebarSnapshot, triage_key};
+use crate::store::snapshot::{SidebarSnapshot, lead_unread_row, triage_key};
 
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, HitTarget, UiState, active_dashboard_tab,
@@ -423,7 +423,13 @@ pub(super) fn handle_mouse_click(
         Some(HitTarget::UnreadBanner) => {
             ui.offset_authoritative = true;
             ui.scroll_ease.cancel();
-            ui.scroll_offset = 0;
+            let roster = ui.visible_roster(snapshot);
+            ui.reveal_row = lead_unread_row(&snapshot.worktree_groups)
+                .filter(|row| roster.ordinal_of_id(&row.id).is_some())
+                .map(|row| row.id.clone());
+            if ui.reveal_row.is_none() {
+                ui.scroll_offset = 0;
+            }
             InputOutcome::redraw()
         }
         Some(HitTarget::ToggleGroup(group_key)) => {
