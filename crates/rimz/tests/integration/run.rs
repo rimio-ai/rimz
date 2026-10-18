@@ -1042,11 +1042,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     )
     .expect("write heartbeat");
     let trace_path = env.project_root.join("fresh-supervised.log");
-    let _room = crate::common::room::ShimRoom::watch(
-        &env,
-        &trace_path,
-        r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
-    );
+    let _room = crate::common::room::ShimRoom::watch(&env, &trace_path);
     let presence = env.project_root.join("presence.wasm");
     std::fs::write(&presence, b"test-presence").expect("write presence fixture");
     let project_config = env.project_root.join(".rimz/config.toml");

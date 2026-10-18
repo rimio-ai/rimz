@@ -68,6 +68,10 @@ pub fn date_heartbeat_as_live(path: &std::path::Path) {
         .expect("date heartbeat ahead of the clock");
 }
 
+/// A room as the layout wait accepts it after birth: the sidebar pane plus one
+/// live terminal.
+pub const MATERIALIZED_ROOM_PANES: &str = r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#;
+
 /// Publish the renderer's first heartbeat after birth (not before the rebirth
 /// purge), and answer topology requests as the presence plugin would.
 pub struct ShimRoom {
@@ -79,7 +83,9 @@ pub struct ShimRoom {
 }
 
 impl ShimRoom {
-    pub fn watch(env: &super::Env, trace: &std::path::Path, panes: &str) -> Self {
+    /// Always answers with [`MATERIALIZED_ROOM_PANES`]: a birth answered with
+    /// fewer panes leaves the sidebar layout wait polling to its ceiling.
+    pub fn watch(env: &super::Env, trace: &std::path::Path) -> Self {
         let runtime = env.runtime_paths();
         let workspace = env.resolve_workspace(&env.project_root);
         let mut topology = rimz::mux::zellij::pane_topology::PaneTopologyCache {
@@ -89,7 +95,7 @@ impl ShimRoom {
             focused_pane: None,
             clients_withheld: false,
             clients: None,
-            panes: serde_json::from_str(panes).expect("shim room panes"),
+            panes: serde_json::from_str(MATERIALIZED_ROOM_PANES).expect("shim room panes"),
         };
         let expected = "\\tattach\\t--create-background\\t or \\trimz:dump_topology\\t".to_owned();
         Self::watch_trace(trace, expected, move |line| {

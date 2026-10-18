@@ -1574,7 +1574,7 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
     let workspace = env.resolve_workspace(&env.project_root);
     let trace = env.home_root.join("resident-mux.log");
     let _room = if each_worktree {
-        Some(crate::common::room::ShimRoom::watch(&env, &trace, "[]"))
+        Some(crate::common::room::ShimRoom::watch(&env, &trace))
     } else {
         crate::common::room::seed_live_zellij_room(
             &env.runtime_paths(),
