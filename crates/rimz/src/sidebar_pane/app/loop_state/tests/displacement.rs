@@ -148,6 +148,26 @@ fn same_tab_landing_keeps_the_local_click_watch_without_a_second_record() {
 }
 
 #[test]
+fn landing_is_judged_only_at_the_paint_that_consumed_it() {
+    let (mut rig, rx, _) = landing(Some(1_000), false);
+    let pane = rig.state.ui.selected_pane.take();
+    rig.state.ui.selected_index = None;
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    assert!(rig.state.ui.focus_placement.is_none());
+
+    rig.state.ui.selected_index = Some(0);
+    rig.state.ui.selected_pane = pane;
+    rig.state.dirty = true;
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now() + REORDER_HOLD)
+        .unwrap();
+    assert!(rx.try_recv().is_err(), "a stale landing must not be judged");
+}
+
+#[test]
 fn missing_landing_row_records_null_from_the_post_paint_zone() {
     let (mut rig, rx, id) = landing(Some(3), false);
     rig.state.ui.focus_placement = None;
