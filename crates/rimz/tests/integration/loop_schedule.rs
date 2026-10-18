@@ -736,7 +736,6 @@ fn condition_add_refuses_invalid_predicates_and_options() {
             vec!["--project", "--when", "ci=passed"],
             "--project tasks cannot use --when yet",
         ),
-        (vec!["--when", "ci!=failed"], "!ci=failed"),
     ] {
         let output = env
             .rimz()
@@ -748,6 +747,19 @@ fn condition_add_refuses_invalid_predicates_and_options() {
         assert!(!output.status.success());
         assert!(error.contains(expected), "expected {expected}: {error}");
     }
+    let receipt = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "known",
+            "--check",
+            "true",
+            "--when",
+            "ci!=failed",
+        ],
+    );
+    assert!(receipt.contains("trigger: when ci!=failed"), "{receipt}");
 }
 
 #[test]
