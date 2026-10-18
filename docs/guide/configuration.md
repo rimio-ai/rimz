@@ -306,11 +306,14 @@ flip_compact = "180k"
 [gc]
 auto = true
 older_than = "7d"
+tmp_grace = "1d"
+tmp_floor_percent = 10
+tmp_floor_min = "10GiB"
 ```
 
 Stale runtime files, orphaned temp files, dead workspace stores, and landed worktrees pile up as rooms come and go. With `auto` on, the default, every open room runs [`rimz gc`](../reference/cli/maintenance.md#sweep-stale-state) once a day, starting five minutes after the room comes up. A manual `rimz gc` sweeps only the current room; `--all` adds every room and shared machine state. One daily helper is elected to run that machine scope, so closed rooms also get cleaned without every open room repeating the machine sweep. Both scopes keep anything dirty, unmerged, occupied by an agent, or unproven. Each sweep shows up in `rimz stats --assists`.
 
-`older_than` is the age past which runtime and temp files go, and it is also what `rimz gc --older-than` defaults to. It takes `s`, `m`, `h`, or `d`. `rimz config set gc.auto false` turns the daily sweep off and leaves `rimz gc` for you to run by hand.
+`older_than` is the age past which runtime and atomic-write temp files go, and it is also what `rimz gc --older-than` defaults to. Agent scratch has its own `tmp_grace`: a unit stays while any agent sharing it is live or has not ended, then goes after both its latest end and its latest directory or direct-child modification are past the grace. Both durations take `s`, `m`, `h`, or `d` and must be greater than zero. `tmp_floor_percent` (0 through 100) and `tmp_floor_min` reserve the larger of a capacity percentage and a byte size; `GiB` is binary, `G` is decimal. Setting both to zero disables the floor. `rimz config set gc.auto false` turns the daily sweep off and leaves `rimz gc` for you to run by hand.
 
 ### Sidebar rendering
 

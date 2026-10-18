@@ -218,12 +218,10 @@ impl Host for SystemHost {
             .map_err(|err| format!("/proc/meminfo: {err}"))
     }
 
-    // The statvfs field widths differ by platform; the conversion is a no-op on Linux.
-    #[allow(clippy::useless_conversion)]
     fn disk_free(&self, checkout: &Path) -> Result<u64, String> {
-        let stat = nix::sys::statvfs::statvfs(checkout)
-            .map_err(|err| format!("{}: {err}", checkout.display()))?;
-        Ok(u64::from(stat.blocks_available()).saturating_mul(u64::from(stat.fragment_size())))
+        crate::disk::usage::disk_space(checkout)
+            .map(|space| space.free)
+            .map_err(|err| format!("{}: {err}", checkout.display()))
     }
 
     fn workspaces(&self) -> Result<Vec<WorkspaceId>, String> {

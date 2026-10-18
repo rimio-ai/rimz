@@ -447,7 +447,8 @@ upward-dependencies = [
 # Hibernation enabled/explicit accessors preserve default-on provenance (+2).
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
 # TaskEntry::repeats_while_true shares sustained workflow/resident retry policy (+1).
-surface-budget = 202 # SpendOrder shares typed capacity ordering with harness and CLI.
+# GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
+surface-budget = 203 # SpendOrder shares typed capacity ordering with harness and CLI.
 
 [[verdict]]
 kind = "item"
@@ -571,7 +572,8 @@ allowed-dependencies = [
 # WorkflowPaths, its accessors, definition paths, and run discovery share the classed path boundary (+9).
 # WorkflowPaths::check_output owns per-attempt judge output paths (+1).
 # WorkflowPaths::notes owns cross-node scratch paths (+1).
-surface-budget = 258
+# DiskSpace, disk_space and the three DEFAULT_TMP_* constants share capacity and retention policy (+5).
+surface-budget = 263
 
 [[verdict]]
 kind = "item"
@@ -798,7 +800,8 @@ path = "crates/rimz/src/harness"
 # Workflow transition and supervised-step accounting share a private emission seam (+2).
 # ScopeRoots and ScopeRoots::path resolve workflow scope across CLI and loop admission (+2).
 # hibernate::Check::{summary,fix} carry producer-owned remedies to doctor without changing JSON (+2).
-surface-budget = 900
+# launch_plan::agent_temp_owner shares temp-unit ownership with GC (+1).
+surface-budget = 901
 
 [[verdict]]
 kind = "item"
@@ -1285,7 +1288,8 @@ path = "crates/rimz/src/store"
 # EvaluationOrigin distinguishes check answers from engine decisions in the journal (+1).
 # card_status shares displayed status and phase resolution with CLI consumers (+1).
 # workflow::RunRecord::started_by shares live task-run selection with the CLI (+1).
-surface-budget = 471
+# GcPolicy and tmp inventory, hold, unit and grace predicate serve both GC passes (+5).
+surface-budget = 476
 
 [[verdict]]
 kind = "item"
@@ -1606,7 +1610,8 @@ allowed-dependencies = [
 # Room-scoped class and orphan-temp entry points complement the machine sweeps.
 # OrphanEmptyTree reports orphan empty-dir retention alongside pruned workspaces (+1).
 # FailedWorkspace reports dead-workspace removal failures without aborting GC (+1).
-surface-budget = 19
+# GcPolicy and tmp_inventory expose the independent temp-unit policy and owner-set inventory (+2).
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/store/mod.rs"
@@ -1793,7 +1798,8 @@ allowed-dependencies = [
 # The wrapper's handoff path retains the plan's resolved temp owner (+1).
 # ModelRefreshFailure preserves refresh evidence through a failed launch compile (+1).
 # Headless loop checks pin workspace identity without inheriting an agent or channel.
-surface-budget = 13
+# agent_temp_owner shares the launch ownership rule with the caller-supplied GC resolver (+1).
+surface-budget = 14
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -7325,3 +7331,63 @@ reason = "Interactive and supervised CLI launches resolve the launch directory's
 kind = "item"
 key = "cli::anchor_caller_workspace"
 reason = "Interactive and supervised launch entrypoints share caller-checkout placement and CLI refusal wording."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::DiskSpace"
+reason = "Filesystem free and total bytes shared by launch throttling and tmp retention policy."
+
+[[verdict]]
+kind = "item"
+key = "disk::usage::disk_space"
+reason = "One platform-aware filesystem probe shared by throttle, tmp GC and doctor."
+
+[[verdict]]
+kind = "item"
+key = "config::gc::GcConfig::tmp_floor_bytes"
+reason = "GC and doctor share the max of percentage and byte reserve."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::GcPolicy"
+reason = "The CLI supplies independent runtime TTL and temp-unit grace to the store sweep."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::tmp::TmpHold"
+reason = "Grace GC, pressure eviction and doctor share the temp-unit hold ladder."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::tmp::TmpUnit"
+reason = "One read-only inventory carries temp-unit identity, mtime and hold to maintenance consumers."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::tmp::TmpUnit::past_grace"
+reason = "Temp GC and doctor use the same strict two-clock expiry predicate."
+
+[[verdict]]
+kind = "item"
+key = "store::gc::tmp::tmp_inventory"
+reason = "Grace GC, the floor helper and doctor share one owner-aware per-room inventory."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::agent_temp_owner"
+reason = "Launch planning and maintenance resolve a shared temp unit from the same parent row."
+
+[[verdict]]
+kind = "item"
+key = "disk::retention::DEFAULT_TMP_GRACE"
+reason = "Configuration and the tmp class share the one-day default without changing owned-state retention."
+
+[[verdict]]
+kind = "item"
+key = "disk::retention::DEFAULT_TMP_FLOOR_PERCENT"
+reason = "Machine GC configuration has one default capacity reserve."
+
+[[verdict]]
+kind = "item"
+key = "disk::retention::DEFAULT_TMP_FLOOR_MIN"
+reason = "Machine GC configuration shares the binary ten-GiB minimum reserve."

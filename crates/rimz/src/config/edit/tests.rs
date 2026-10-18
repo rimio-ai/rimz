@@ -396,6 +396,9 @@ fn validates_config_key_read_and_write_surfaces() {
         "harness.turn_budget",
         "gc.auto",
         "gc.older_than",
+        "gc.tmp_grace",
+        "gc.tmp_floor_percent",
+        "gc.tmp_floor_min",
     ] {
         validate_set_key(&test_files(), &parse_key(key).unwrap())
             .unwrap_or_else(|err| panic!("{key}: {err}"));
@@ -1692,16 +1695,28 @@ fn retired_idle_compaction_is_rejected_then_removed_preserving_other_settings() 
 
 #[test]
 fn gc_older_than_is_a_validated_duration_string() {
-    let key = parse_key("gc.older_than").expect("key");
-
-    let value = parse_set_value(&key, "3d");
-    assert_eq!(value.as_str(), Some("3d"));
-    validate_set_value(&key, &value).expect("day span");
-    for bad in ["0d", "soon"] {
-        let err = validate_set_value(&key, &Value::from(bad))
-            .expect_err("invalid gc span")
-            .to_string();
-        assert!(err.contains("use a duration such as 8h or 3d"), "{err}");
+    for name in ["gc.older_than", "gc.tmp_grace"] {
+        let key = parse_key(name).expect("key");
+        let value = parse_set_value(&key, "3d");
+        assert_eq!(value.as_str(), Some("3d"));
+        validate_set_value(&key, &value).expect("day span");
+        for bad in ["0d", "soon"] {
+            let result = validate_set_value(&key, &Value::from(bad));
+            assert!(result.is_err(), "accepted {name} {bad}");
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("use a duration such as 8h or 3d")
+            );
+        }
+    }
+    let key = parse_key("gc.tmp_floor_min").unwrap();
+    assert!(validate_set_value(&key, &Value::from("10x")).is_err());
+    assert_eq!(parse_set_value(&key, "0").as_str(), Some("0"));
+    let key = parse_key("gc.tmp_floor_percent").unwrap();
+    for bad in [-1, 101] {
+        assert!(validate_set_value(&key, &Value::from(bad)).is_err());
     }
 }
 

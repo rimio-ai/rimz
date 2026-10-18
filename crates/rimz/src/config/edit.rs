@@ -1130,7 +1130,8 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_daily_budget_edit(path)
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
-        || is_gc_older_than_edit(path)
+        || is_gc_duration_edit(path)
+        || matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min")
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -1155,13 +1156,28 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             invalid_value!("resume.auto_redeem_min_gain {err}");
         }
     }
-    if is_gc_older_than_edit(path) {
+    if is_gc_duration_edit(path) {
         let Some(raw) = value.as_str() else {
-            invalid_value!("gc.older_than must be a duration string");
+            invalid_value!("{} must be a duration string", path.join("."));
         };
         if let Err(err) = super::parse_older_than(raw) {
-            invalid_value!("gc.older_than {err}; use a duration such as 8h or 3d");
+            invalid_value!("{} {err}; use a duration such as 8h or 3d", path.join("."));
         }
+    }
+    if matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min") {
+        let Some(raw) = value.as_str() else {
+            invalid_value!("gc.tmp_floor_min must be a byte-size string");
+        };
+        if let Err(err) = crate::utils::size::parse_byte_size(raw) {
+            invalid_value!("gc.tmp_floor_min {err}");
+        }
+    }
+    if matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_percent")
+        && value
+            .as_integer()
+            .is_none_or(|value| !(0..=100).contains(&value))
+    {
+        invalid_value!("gc.tmp_floor_percent must be 0-100");
     }
     if is_daily_budget_edit(path) {
         let Some(raw) = value.as_str() else {
@@ -1310,8 +1326,8 @@ fn is_auto_redeem_min_gain_edit(path: &[String]) -> bool {
     matches!(path, [root, child] if root == "resume" && child == "auto_redeem_min_gain")
 }
 
-fn is_gc_older_than_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "gc" && child == "older_than")
+fn is_gc_duration_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "gc" && matches!(child.as_str(), "older_than" | "tmp_grace"))
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {

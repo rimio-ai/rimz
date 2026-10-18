@@ -268,6 +268,17 @@ pub enum Assist {
         recovered: usize,
         labels: Vec<String>,
     },
+    TmpEvict {
+        workspace_id: crate::ids::WorkspaceId,
+        handle: String,
+        reclaimed_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ended_at: Option<Timestamp>,
+        free_bytes_after: u64,
+        floor_bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
     AutoGc {
         workspace_id: crate::ids::WorkspaceId,
         #[serde(default)]

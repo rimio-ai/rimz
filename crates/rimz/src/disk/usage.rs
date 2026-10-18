@@ -9,6 +9,37 @@ use std::os::unix::fs::MetadataExt;
 
 use crate::disk::paths;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskSpace {
+    pub free: u64,
+    pub total: u64,
+}
+
+/// Available (unprivileged) space and capacity on the filesystem holding `path`.
+// The statvfs field widths differ by platform; conversion is a no-op on Linux.
+#[allow(clippy::useless_conversion)]
+pub fn disk_space(path: &Path) -> std::io::Result<DiskSpace> {
+    #[cfg(any(test, feature = "testkit"))]
+    if let Ok(raw) = std::env::var("RIMZ_TEST_DISK_SPACE") {
+        let (free, total) = raw
+            .split_once(',')
+            .and_then(|(free, total)| Some((free.parse().ok()?, total.parse().ok()?)))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "RIMZ_TEST_DISK_SPACE must be <free>,<total>",
+                )
+            })?;
+        return Ok(DiskSpace { free, total });
+    }
+    let stat = nix::sys::statvfs::statvfs(path)?;
+    let fragment = u64::from(stat.fragment_size());
+    Ok(DiskSpace {
+        free: u64::from(stat.blocks_available()).saturating_mul(fragment),
+        total: u64::from(stat.blocks()).saturating_mul(fragment),
+    })
+}
+
 /// Best-effort recursive size for a path without following symlinks.
 pub(crate) fn dir_size(path: &Path) -> u64 {
     dir_size_inner(path, &mut HashSet::new())
@@ -115,6 +146,49 @@ fn measure_under(roots: &[(StorageKind, PathBuf)]) -> RuntimeStorage {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn disk_space_reports_available_capacity() {
+        let temp = tempdir().unwrap();
+        let space = disk_space(temp.path()).unwrap();
+        assert!(space.total > 0);
+        assert!(space.free <= space.total);
+        assert!(disk_space(&temp.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn disk_space_override_is_process_local() {
+        if let Ok(raw) = std::env::var("RIMZ_TEST_DISK_SPACE") {
+            let result = disk_space(Path::new("/does-not-exist"));
+            if raw == "1,100" {
+                assert_eq!(
+                    result.unwrap(),
+                    DiskSpace {
+                        free: 1,
+                        total: 100
+                    }
+                );
+            } else {
+                assert!(result.is_err(), "malformed override must be refused");
+            }
+            return;
+        }
+        for raw in ["1,100", "invalid"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "disk::usage::tests::disk_space_override_is_process_local",
+                ])
+                .env("RIMZ_TEST_DISK_SPACE", raw)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
 
     #[test]
     fn dir_size_sums_nested_tree() {
