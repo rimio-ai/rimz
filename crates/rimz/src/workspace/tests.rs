@@ -367,6 +367,43 @@ fn init_git_repo(path: &Path) {
 }
 
 #[test]
+fn at_launch_dir_preserves_the_room_and_resolves_the_directories_own_repo() {
+    let dir = tempfile::tempdir().unwrap();
+    let room = WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let repo = dir.path().join("repo");
+    init_git_repo(&repo);
+    let repo = repo.canonicalize().unwrap();
+    let linked = dir.path().join("linked");
+    assert!(
+        Command::new("git")
+            .current_dir(&repo)
+            .args(["worktree", "add", "-b", "linked"])
+            .arg(&linked)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let plain = dir.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    for (path, root, branch) in [
+        (&repo, Some(&repo), Some("main")),
+        (&linked, Some(&repo), Some("linked")),
+        (&plain, None, None),
+    ] {
+        let path = path.canonicalize().unwrap();
+        let launch = room.at_launch_dir(&path).unwrap();
+        assert_eq!(launch.worktree_root, path);
+        assert_eq!(launch.cwd_project_root.as_ref(), root);
+        assert_eq!(launch.worktree_branch.as_deref(), branch);
+        assert_eq!(launch.project_root, room.project_root);
+        assert_eq!(launch.workspace_id, room.workspace_id);
+        assert_eq!(launch.session_name, room.session_name);
+        assert_eq!(launch.root_class, room.root_class);
+        assert_eq!(launch.mux_hint, room.mux_hint);
+    }
+}
+
+#[test]
 fn git_resolution_batches_probes_without_changing_roots_or_branches() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");

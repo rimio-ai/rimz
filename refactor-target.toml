@@ -1315,7 +1315,8 @@ surface-budget = 55
 path = "crates/rimz/src/workspace.rs"
 # Record scanners expose only rooms using the current layout.
 # Persisted hooks resolve through their captured environment (+1).
-surface-budget = 25
+# ResolvedWorkspace::at_launch_dir keeps the room pin while resolving launch trust (+1).
+surface-budget = 26
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -7208,3 +7209,8 @@ reason = "CLI and loop admission supply both checkout and project roots for spec
 kind = "item"
 key = "harness::workflow::ScopeRoots::path"
 reason = "Admission compares existing runs using their recorded scope kind before reading the definition."
+
+[[verdict]]
+kind = "item"
+key = "workspace::ResolvedWorkspace::at_launch_dir"
+reason = "Interactive and supervised CLI launches resolve the launch directory's own repository without changing the room pin."

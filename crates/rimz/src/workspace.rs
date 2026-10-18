@@ -138,6 +138,22 @@ pub struct ResolvedWorkspace {
 }
 
 impl ResolvedWorkspace {
+    /// Keep this room's identity while launching at an already canonical `dir`.
+    /// Resolve the directory's own main-repository root and branch, or neither
+    /// outside Git, without changing the room pin or session.
+    pub fn at_launch_dir(&self, dir: &Path) -> Result<ResolvedWorkspace> {
+        let (cwd_project_root, worktree_branch) = match resolve_git(dir)? {
+            Some((root, _, branch)) => (Some(root), branch),
+            None => (None, None),
+        };
+        Ok(Self {
+            cwd_project_root,
+            worktree_root: dir.to_path_buf(),
+            worktree_branch,
+            ..self.clone()
+        })
+    }
+
     /// The repository launch-created worktrees belong to. A participant may
     /// keep coordinating through a pinned room while its cwd names another
     /// repository; outside Git, creation falls back to the room root.
