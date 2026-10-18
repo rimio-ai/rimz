@@ -2377,3 +2377,28 @@ fn remote_agent_fields_render_as_key_and_verdict() {
         "{out}"
     );
 }
+
+#[test]
+fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
+    let render = |earliest_reclaim| {
+        let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+            free_bytes: 20,
+            total_bytes: 100,
+            floor_bytes: 10,
+            reclaimable_units: 2,
+            reclaimable_bytes: 4,
+            past_grace_units: 2,
+            earliest_reclaim,
+            ..Default::default()
+        });
+        strip(|w| render_temp_units(w, &report, &mut Tally::default()))
+    };
+    let all_past = render(None);
+    assert!(all_past.contains("2 past the grace\n"), "{all_past}");
+    assert!(!all_past.contains("earliest reclaim"), "{all_past}");
+    let pending = render(Some(jiff::Timestamp::from_second(1_000).unwrap()));
+    assert!(
+        pending.contains("earliest reclaim 1970-01-01T00:16:40Z"),
+        "{pending}"
+    );
+}
