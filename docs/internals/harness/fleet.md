@@ -103,7 +103,7 @@ Every file below is under `harness/` except the top-level `address.rs`, the petn
 | [`assist_log.rs`](../../../crates/rimz/src/harness/assist_log.rs) | The audit trail every unattended intervention appends to. See [loops.md § The assist log](./loops.md#the-assist-log). |
 | [`idle_compact.rs`](../../../crates/rimz/src/harness/idle_compact.rs) | The host's idle compaction check. See [messaging.md § Idle compaction](./messaging.md#idle-compaction). |
 | [`idle_stop.rs`](../../../crates/rimz/src/harness/idle_stop.rs) | The host's check of pending `stop --when-idle` requests and the decision its helper re-runs. See [loops.md § Recovery the host runs](./loops.md#recovery-the-host-runs). |
-| [`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs) | The host's daily gc check and its sweep stamp. See [loops.md § Recovery the host runs](./loops.md#recovery-the-host-runs). |
+| [`auto_gc.rs`](../../../crates/rimz/src/harness/auto_gc.rs) | The host's daily gc check, sweep stamp, and read-only temp-floor trigger. [`tmp_floor.rs`](../../../crates/rimz/src/harness/tmp_floor.rs) owns machine-wide pressure eviction and doctor's read-only inventory. See [loops.md § Recovery the host runs](./loops.md#recovery-the-host-runs). |
 
 The CLI side lives in [`cli/agents_cmd/`](../../../crates/rimz/src/cli/agents_cmd) (launch placement, reconciliation, restart, resume, fork, stop, and the hidden `exec` wrapper), [`cli/supervised/`](../../../crates/rimz/src/cli/supervised) (the run driver both `agents -p` and loop fires call), and [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd). Those handlers parse flags, execute effects, and render; the harness keeps provider and durable-state rules.
 

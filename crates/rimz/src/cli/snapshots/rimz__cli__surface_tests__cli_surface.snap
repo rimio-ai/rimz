@@ -972,6 +972,7 @@ rimz gc
     --mux <MUX>  [action=set takes=1..=1 global]
     --older-than <OLDER_THAN>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --tmp-floor  [action=set-true takes=0..=0 hidden]
     --tmux  [action=set-true takes=0..=0 global]
     --unattended  [action=set-true takes=0..=0 hidden]
     --zellij  [action=set-true takes=0..=0 global]

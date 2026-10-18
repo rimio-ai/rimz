@@ -1135,6 +1135,7 @@ fn doctor_human_report_renders_titled_sections() {
         "MACHINE CONFIG",
         "HOOKS",
         "STORAGE",
+        "TEMP UNITS",
         "PROTOCOLS",
         "AGENTS",
         "MESSAGES",
@@ -1187,6 +1188,52 @@ fn doctor_human_report_renders_titled_sections() {
             || stdout.contains("no problems found"),
         "the report ends with a verdict line:\n{stdout}"
     );
+}
+
+#[test]
+fn doctor_temp_units_reports_pressure_without_writing_state() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_machine_config(
+        &env,
+        "[gc]\ntmp_floor_percent = 10\ntmp_floor_min = \"0\"\n",
+    );
+    let paths = env.state_path_for(&env.project_root);
+    let unit = paths.temp_unit_dir(Some("orphan"));
+    std::fs::create_dir_all(&unit).unwrap();
+    std::fs::write(unit.join("scratch"), "data").unwrap();
+    let before = tree_listing(&env.rimz_home());
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .output()
+        .unwrap();
+    let report = doctor_json(&output);
+    assert_eq!(report["temp_units"]["ready"]["free_bytes"], 1);
+    assert_eq!(report["temp_units"]["ready"]["floor_bytes"], 10);
+    assert_eq!(report["temp_units"]["ready"]["reclaimable_units"], 1);
+    assert_eq!(report["temp_units"]["ready"]["past_grace_units"], 0);
+    assert_eq!(report["temp_units"]["ready"]["in_use_units"], 0);
+    assert_eq!(tree_listing(&env.rimz_home()), before);
+    let text = env
+        .rimz()
+        .arg("doctor")
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.contains("TEMP UNITS"), "{text}");
+    assert!(text.contains("rimz gc --tmp-floor"), "{text}");
+    std::fs::remove_dir_all(&unit).unwrap();
+    let text = env
+        .rimz()
+        .arg("doctor")
+        .env("RIMZ_TEST_DISK_SPACE", "1,100")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(text.stdout).unwrap();
+    assert!(text.contains("stop or restart"), "{text}");
 }
 
 #[test]

@@ -1158,6 +1158,10 @@ impl RuntimePaths {
         self.shared_root.join("auto-gc.lock")
     }
 
+    pub(crate) fn shared_tmp_floor_lock(&self) -> PathBuf {
+        self.shared_root.join("tmp-floor.lock")
+    }
+
     pub fn shared_rate_limits_path(&self) -> PathBuf {
         self.persistent_shared_root.join("rate_limits.json")
     }
