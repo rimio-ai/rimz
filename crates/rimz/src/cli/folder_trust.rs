@@ -8,11 +8,14 @@ use serde::Serialize;
 
 use super::render;
 
+const AGENT_RELAUNCH: &str = "launch from a directory the account already trusts: on `rimz agents`, `--cwd <DIR>` chooses one and dropping `--cwd` uses your own checkout";
+
 #[derive(Clone, Copy)]
 pub(super) enum Unattended {
     Team,
     Loop,
     Subagent,
+    Agent,
 }
 
 impl std::fmt::Display for Unattended {
@@ -21,6 +24,7 @@ impl std::fmt::Display for Unattended {
             Self::Team => "team",
             Self::Loop => "loop",
             Self::Subagent => "subagent resume",
+            Self::Agent => "agent-started",
         })
     }
 }
@@ -33,6 +37,12 @@ pub(super) fn preflight(
 ) -> Result<()> {
     let message = match trust {
         Some(FolderTrust::Restricted { key }) => {
+            if matches!(unattended, Some(Unattended::Agent)) {
+                anyhow::bail!(
+                    "agent-started launch refused: {kind} folder `{}` is saved untrusted; ask the user to trust the folder in Codex; {AGENT_RELAUNCH}; RimZ leaves the saved decision alone",
+                    key.display()
+                );
+            }
             let message = format!(
                 "{kind} folder `{}` is saved untrusted; it will stop at its Folder access prompt on every launch; {}",
                 key.display(),
@@ -51,6 +61,13 @@ pub(super) fn preflight(
             } else {
                 "rimz trust grant"
             };
+            if matches!(unattended, Some(Unattended::Agent)) {
+                anyhow::bail!(
+                    "agent-started launch refused: {kind} has no trust decision for `{}`; the pane would stop at its folder-trust prompt with nobody watching; ask the user to {}; {AGENT_RELAUNCH}",
+                    gap.key.display(),
+                    gap.fix(kind, subject)
+                );
+            }
             let message = format!(
                 "{kind} has no trust decision for `{}`; it will stop at its folder-trust prompt in the pane; {}",
                 gap.key.display(),
@@ -239,6 +256,8 @@ mod tests {
             None,
             Some(super::Unattended::Team),
             Some(super::Unattended::Loop),
+            Some(super::Unattended::Subagent),
+            Some(super::Unattended::Agent),
         ] {
             let result = super::preflight(
                 "codex",
@@ -253,10 +272,69 @@ mod tests {
                 let text = error.to_string();
                 assert!(text.contains(&unattended.unwrap().to_string()));
                 assert!(text.contains("saved untrusted"));
-                assert!(text.contains("Open restricted"));
+                if matches!(unattended, Some(super::Unattended::Agent)) {
+                    assert!(text.contains("ask the user to trust the folder in Codex"));
+                    assert!(!text.contains("in the pane"));
+                } else {
+                    assert!(text.contains("Open restricted"));
+                }
                 assert!(!text.contains("rimz trust grant"));
             }
         }
+    }
+
+    #[test]
+    fn agent_undecided_refusal_names_the_key_and_both_relaunch_exits() {
+        let gap = rimz::agents::FolderTrustGap {
+            key: "/target".into(),
+            path: "/config".into(),
+            grant: Ok(rimz::agents::FolderTrustPreview {
+                original: None,
+                candidate: String::new(),
+            }),
+        };
+        let error = super::preflight(
+            "claude",
+            std::path::Path::new("/target"),
+            Some(rimz::agents::FolderTrust::Undecided(gap)),
+            Some(super::Unattended::Agent),
+        )
+        .expect_err("agent caller must not leave an unwatched prompt");
+        let text = error.to_string();
+        for expected in [
+            "claude",
+            "/target",
+            "nobody watching",
+            "ask the user to run `rimz trust grant --agents claude`",
+            "--cwd <DIR>",
+            "dropping `--cwd` uses your own checkout",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+    }
+
+    #[test]
+    fn agent_restricted_refusal_leaves_the_saved_decision_alone() {
+        let error = super::preflight(
+            "codex",
+            std::path::Path::new("/target"),
+            Some(rimz::agents::FolderTrust::Restricted {
+                key: "/target".into(),
+            }),
+            Some(super::Unattended::Agent),
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        for expected in [
+            "/target",
+            "ask the user to trust the folder in Codex",
+            "--cwd <DIR>",
+            "RimZ leaves the saved decision alone",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        assert!(!text.contains("rimz trust grant"));
+        assert!(!text.contains("in the pane"));
     }
 
     #[test]

@@ -255,7 +255,7 @@ fn assert_empty_dir_launch(multi: bool, explicit_cwd: bool, empty_caller: bool) 
 
 #[test]
 fn saved_untrusted_warns_for_agents_and_refuses_teams() {
-    for team in [false, true] {
+    for (team, agent) in [(false, false), (true, false), (false, true)] {
         let env = Env::new();
         env.install_agent_hooks("codex");
         crate::common::trust_codex_preflight_hooks(&env);
@@ -287,8 +287,17 @@ fn saved_untrusted_warns_for_agents_and_refuses_teams() {
         let shim = crate::common::write_failing_agent_shim(&env, "codex", 1);
         let workspace = env.resolve_workspace(&env.project_root);
         env.store().record_workspace(&workspace).unwrap();
+        if agent {
+            crate::common::wait::register_calling_agent(&env);
+        }
+        let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
         let trace = env.home_root.join("mux.log");
         let mut command = env.rimz();
+        if agent {
+            command
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "launch-session");
+        }
         command.args(["--mux", "zellij"]);
         if team {
             command.args(["teams", "solo", "--bg"]);
@@ -309,15 +318,172 @@ fn saved_untrusted_warns_for_agents_and_refuses_teams() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("saved untrusted"), "{stderr}");
-        assert!(stderr.contains("Open restricted"), "{stderr}");
+        if agent {
+            assert!(
+                stderr.contains("ask the user to trust the folder in Codex"),
+                "{stderr}"
+            );
+            assert!(!stderr.contains("in the pane"), "{stderr}");
+        } else {
+            assert!(stderr.contains("Open restricted"), "{stderr}");
+        }
         assert!(!stderr.contains("rimz trust grant"), "{stderr}");
-        assert_eq!(output.status.success(), !team, "{stderr}");
+        assert_eq!(output.status.success(), !team && !agent, "{stderr}");
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-        if team {
-            assert!(env.store().snapshot().unwrap().agents.is_empty());
+        if team || agent {
+            assert_eq!(
+                serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+                before
+            );
             assert!(!trace.exists(), "preflight must not invoke the mux");
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_cwd_in_trusted_room_refuses_an_undecided_non_git_directory() {
+    assert_agent_folder_launch("non-git");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_cwd_repo_does_not_inherit_a_trusted_non_git_ancestor() {
+    assert_agent_folder_launch("repo");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_started_team_refuses_undecided_folder_trust() {
+    assert_agent_folder_launch("team");
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_launch_without_cwd_uses_the_callers_linked_worktree() {
+    assert_agent_folder_launch("linked");
+}
+
+#[cfg(unix)]
+fn assert_agent_folder_launch(shape: &str) {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let parent = env.home_root.join("trusted-parent");
+    let target = parent.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    if shape == "linked" {
+        assert!(init_launch_repo(&env.project_root));
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&env.project_root)
+                .args(["worktree", "add", "-b", "linked"])
+                .arg(&target)
+                .status()
+                .unwrap()
+                .success()
+        );
+    } else if shape == "repo" {
+        assert!(init_launch_repo(&target));
+        crate::common::trust_claude_project(&env, &parent);
+    }
+    if shape != "team" {
+        crate::common::trust_claude_project(&env, &env.project_root);
+    }
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store().record_workspace(&workspace).unwrap();
+    crate::common::wait::register_calling_agent(&env);
+    if shape == "linked" {
+        let mut observation = AgentLifecycleObservation::new(
+            Some("provider-session".into()),
+            LifecycleSignal::Registered,
+        );
+        observation.worktree_path = Some(target.display().to_string());
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "claude",
+                "test",
+                &observation,
+            ))
+            .unwrap();
+    }
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "worker",
+        "description: Worker\nagent: claude\ntools: []",
+        "",
+    );
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "duo",
+        "layout: lead,worker\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: worker, owns: [Build]}\n  - {role: worker, agent: worker}",
+        "Work together.",
+    );
+    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+    let shim = write_env_dump_shim(&env, "claude");
+    let trace = env.home_root.join("mux.log");
+    let mut command = env.rimz();
+    command.args(["--mux", "zellij"]);
+    if shape == "team" {
+        command.args(["teams", "duo", "--bg"]);
+    } else {
+        command.args(["agents", "claude", "--bg", "--new-tab"]);
+        if shape != "linked" {
+            command.arg("--cwd").arg(&target);
+        }
+    }
+    let output = command
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .env("PATH", path_with_front(&shim))
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if shape == "linked" {
+        assert!(output.status.success(), "{stderr}");
+        let agents = env.store().snapshot_cached().unwrap().agents;
+        let launched = agents
+            .iter()
+            .find(|agent| agent.agent_id.as_str() != "provider-session")
+            .expect("launched agent");
+        assert_eq!(launched.worktree_path.as_deref(), target.to_str());
+        return;
+    }
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let key = if shape == "team" {
+        &env.project_root
+    } else {
+        &target
+    };
+    for expected in [
+        key.to_str().unwrap(),
+        "rimz trust grant --agents claude",
+        "--cwd",
+        "nobody watching",
+    ] {
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+    assert_eq!(
+        serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+        before
+    );
+    assert!(!trace.exists(), "preflight must not invoke the mux");
 }
 
 #[test]
@@ -353,6 +519,11 @@ fn agent_team_launch_keeps_focus() {
 #[test]
 fn user_launch_tab_takes_focus() {
     assert_launch_focus(&["agents", "claude", "--new-tab"], false, "new-tab");
+}
+
+#[test]
+fn user_background_launch_warns_once_for_undecided_folder_trust() {
+    assert_launch_focus(&["agents", "claude", "--new-tab", "--bg"], false, "new-tab");
 }
 
 #[test]
@@ -525,6 +696,7 @@ fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinke
 
     let env = Env::new();
     env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
     let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
     env.record(&env.project_root);
     configure_github_origin_rewrite(&env);
@@ -700,6 +872,9 @@ fn assert_launch_focus(args: &[&str], agent: bool, action: &str) {
 
 fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version: &str) {
     let env = Env::new();
+    if agent {
+        crate::common::trust_claude_project(&env, &env.project_root);
+    }
     if action != "unhooked" {
         env.install_agent_hooks("claude");
     }
@@ -820,15 +995,20 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         } else {
             env.project_root.clone()
         };
+        let session_id = if hold || action == "cohort" {
+            "held-session"
+        } else {
+            "provider-session"
+        };
         let mut observation = AgentLifecycleObservation {
-            agent_id: Some("provider-session".into()),
+            agent_id: Some(session_id.into()),
             pane_id: Some(rimz::ids::PaneId::from_parts(
                 rimz::ids::MuxName::Zellij,
                 "terminal_3",
             )),
             runtime_owner: Some(rimz::pane::RuntimeOwner::new(
                 rimz::pane::RuntimeOwnerKind::Agent,
-                "provider-session",
+                session_id,
                 std::process::id(),
                 None,
             )),
@@ -839,10 +1019,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                 role: hold.then(|| "lead".to_owned()),
                 ..Default::default()
             },
-            ..AgentLifecycleObservation::new(
-                Some("provider-session".into()),
-                LifecycleSignal::Registered,
-            )
+            ..AgentLifecycleObservation::new(Some(session_id.into()), LifecycleSignal::Registered)
         };
         if hold && !live_hold {
             observation.runtime_owner = None;
@@ -864,7 +1041,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
                     "claude",
                     "test",
                     &AgentLifecycleObservation::new(
-                        Some("provider-session".into()),
+                        Some(session_id.into()),
                         LifecycleSignal::Ended,
                     ),
                 ))
@@ -1024,7 +1201,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
         String::from_utf8_lossy(&output.stderr)
     );
     let trace = std::fs::read_to_string(log).unwrap();
-    if matches!(args[1], "claude" | "duo") && action != "cohort" {
+    if !agent && matches!(args[1], "claude" | "duo") && action != "cohort" {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             stderr.matches("claude has no trust decision").count(),
@@ -1067,7 +1244,7 @@ fn assert_launch_focus_version(args: &[&str], agent: bool, action: &str, version
     }
     assert_eq!(
         spawn.unwrap().split('\t').any(|arg| arg == "--no-focus"),
-        agent,
+        agent || args.contains(&"--bg"),
         "{trace}"
     );
     if args[1] == "restart" {
@@ -1147,6 +1324,7 @@ fn unsupported_plugin_peer_launch_explains_that_no_report_will_come() {
 #[cfg(unix)]
 fn launch_prompted_peer(env: &Env, extra: &[&str]) -> std::process::Output {
     env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(env, &env.project_root);
     crate::common::wait::register_calling_agent(env);
     std::fs::write(
         env.rimz_home().join("config.toml"),

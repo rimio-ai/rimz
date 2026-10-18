@@ -67,6 +67,17 @@ pub(crate) fn append_frame(
     (frame, end)
 }
 
+pub fn trust_claude_project(env: &Env, root: &std::path::Path) {
+    let path = env.home_root.join(".claude.json");
+    let mut config: serde_json::Value = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).expect("Claude config"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => panic!("read Claude config: {error}"),
+    };
+    config["projects"][root.to_str().unwrap()]["hasTrustDialogAccepted"] = true.into();
+    std::fs::write(path, serde_json::to_vec(&config).unwrap()).expect("write Claude trust");
+}
+
 pub fn write_definition(
     env: &Env,
     namespace: &str,
