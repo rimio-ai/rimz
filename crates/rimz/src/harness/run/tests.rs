@@ -935,6 +935,26 @@ fn fold_lifecycle_maps_each_disposition_to_its_run_status() {
 
 #[test]
 fn parked_run_resumes_and_completes_once() {
+    assert_parked_run_resumes(LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+        name: None,
+        native_key: None,
+        turn_id: None,
+    });
+}
+
+#[test]
+fn parked_run_resumes_at_a_blocking_prompt() {
+    assert_parked_run_resumes(LifecycleSignal::AwaitingInput {
+        kind: crate::agents::AskKind::Permission,
+        ask_id: None,
+        detail: None,
+        native_key: None,
+    });
+}
+
+fn assert_parked_run_resumes(signal: LifecycleSignal) {
     let (_dir, paths, record) = setup();
     let mut ended = AgentLifecycleObservation::new(
         Some(AgentSessionId::from("sess-1")),
@@ -965,21 +985,15 @@ fn parked_run_resumes_and_completes_once() {
     assert_eq!(parked.last_message.as_deref(), Some("waiting"));
 
     let mut observation = ended.clone();
-    observation.signal = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
-        name: None,
-        native_key: None,
-        turn_id: None,
-    };
+    observation.signal = signal;
     record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
         panic!("non-completion must not read owed")
     })
     .unwrap();
-    assert_eq!(
-        load(&paths, &record.run_id).unwrap().parked_at,
-        parked.parked_at
-    );
+    let running = load(&paths, &record.run_id).unwrap();
+    assert_eq!(running.parked_at, None);
+    assert_eq!(running.parked_answer.as_deref(), Some("waiting"));
+    assert_eq!(running.status, RunStatus::Running);
     observation.signal = LifecycleSignal::TurnStarted { turn_id: None };
     record_lifecycle(&paths, &record.run_id, "claude", &observation, None, || {
         panic!("turn start must not read owed")
@@ -987,6 +1001,7 @@ fn parked_run_resumes_and_completes_once() {
     .unwrap();
     let running = load(&paths, &record.run_id).unwrap();
     assert_eq!(running.parked_at, None);
+    assert_eq!(running.parked_answer.as_deref(), Some("waiting"));
     assert_eq!(running.follow_ups, record.follow_ups);
     assert_eq!(running.status, RunStatus::Running);
 
@@ -1012,6 +1027,59 @@ fn parked_run_resumes_and_completes_once() {
             .is_none()
     );
     assert_eq!(load(&paths, &record.run_id).unwrap(), completed);
+}
+
+#[test]
+fn out_of_turn_signals_leave_the_run_parked() {
+    let (_dir, paths, record) = setup();
+    let parked = fold_turn(&paths, &record.run_id, turn_ended(), Some("waiting"), true);
+    for signal in [
+        LifecycleSignal::Registered,
+        LifecycleSignal::Compacting,
+        LifecycleSignal::CompactionEnded {
+            auto: None,
+            failed: false,
+        },
+    ] {
+        let unchanged = fold_turn(&paths, &record.run_id, signal, None, false);
+        assert_eq!(unchanged.parked_at, parked.parked_at);
+        assert_eq!(unchanged.parked_answer, None);
+    }
+}
+
+#[test]
+fn tool_use_prevents_settlement_by_a_stale_strand_check() {
+    let (dir, paths, record) = setup();
+    let runtime =
+        crate::RuntimePaths::under(record.workspace_id.clone(), &dir.path().join("rt")).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let parked = fold_turn(
+        store.paths(),
+        &record.run_id,
+        turn_ended(),
+        Some("waiting"),
+        true,
+    );
+    fold_turn(
+        store.paths(),
+        &record.run_id,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            name: None,
+            native_key: None,
+            turn_id: None,
+        },
+        None,
+        false,
+    );
+    assert_eq!(
+        settle_stranded_park(&store, &parked, parked.parked_at).unwrap(),
+        ParkCheck::Live
+    );
+    let running = load(store.paths(), &record.run_id).unwrap();
+    assert_eq!(running.status, RunStatus::Running);
+    assert_eq!(running.parked_at, None);
 }
 
 /// Folds one root observation of `child`; a turn end parks when `owed`.

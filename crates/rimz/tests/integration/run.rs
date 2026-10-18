@@ -2478,6 +2478,16 @@ mod parked {
         }
 
         fn hook_replying(&self, event: &str, prompt: &str, reply: &str) {
+            self.hook_payload(json!({
+                "hook_event_name": event,
+                "session_id": "provider-session",
+                "prompt": prompt,
+                "last_assistant_message": reply,
+                "cwd": self.env.project_root,
+            }));
+        }
+
+        fn hook_payload(&self, payload: serde_json::Value) {
             let mut command = self.env.hook_command("claude");
             command
                 .env(rimz::harness::launch::ENV_RUN_ID, self.run_id.as_str())
@@ -2485,17 +2495,7 @@ mod parked {
                 .env("RIMZ_AGENT_NAME", "planner");
             let output = self
                 .env
-                .spawn_payload(
-                    command,
-                    &json!({
-                        "hook_event_name": event,
-                        "session_id": "provider-session",
-                        "prompt": prompt,
-                        "last_assistant_message": reply,
-                        "cwd": self.env.project_root,
-                    })
-                    .to_string(),
-                )
+                .spawn_payload(command, &payload.to_string())
                 .wait_with_output()
                 .expect("run lifecycle hook");
             self.env.drain_hooks();
@@ -2642,6 +2642,80 @@ mod parked {
             terminal.last_message.as_deref(),
             Some("FINDINGS\n\n---\n\nWOKE")
         );
+    }
+
+    #[test]
+    fn tool_use_inside_a_keepalive_turn_unparks_and_keeps_the_report() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        let name = fixture.arm();
+        fixture.hook_replying("Stop", "", "FINDINGS");
+        let stale = fixture.assert_parked();
+        let at = stale.parked_at.expect("park timestamp");
+        fixture.hook(
+            "UserPromptSubmit",
+            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+        );
+        let pinged = fixture.assert_parked();
+        assert_eq!(pinged.parked_at, Some(at));
+        assert_eq!(pinged.last_message.as_deref(), Some("FINDINGS"));
+        fixture.hook_payload(json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "provider-session",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!("rimz wait cancel {name}")},
+            "tool_use_id": "cancel-wait",
+            "cwd": fixture.env.project_root,
+        }));
+        let running = fixture.record();
+        assert_eq!(running.parked_at, None);
+        assert_eq!(running.parked_answer.as_deref(), Some("FINDINGS"));
+        assert_eq!(running.status, RunStatus::Running);
+        wait_ok(&fixture.env, &["wait", "cancel", &name]);
+        assert_eq!(
+            settle_stranded_park(&fixture.store, &stale, None).expect("first stale check"),
+            ParkCheck::Stranded(at)
+        );
+        assert_eq!(
+            settle_stranded_park(&fixture.store, &stale, Some(at)).expect("second stale check"),
+            ParkCheck::Live
+        );
+        let fresh = fixture.record();
+        assert_eq!(fresh.status, RunStatus::Running);
+        assert_eq!(
+            settle_stranded_park(&fixture.store, &fresh, None).expect("fresh check"),
+            ParkCheck::Live
+        );
+        fixture.hook_replying("Stop", "", "REPORT");
+        let terminal = fixture.assert_terminal(RunStatus::Completed);
+        assert_eq!(
+            terminal.last_message.as_deref(),
+            Some("FINDINGS\n\n---\n\nREPORT")
+        );
+    }
+
+    #[test]
+    fn a_ping_only_turn_leaves_a_solo_run_parked_and_its_answer_untouched() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            return;
+        }
+        let fixture = Fixture::new(env);
+        fixture.arm();
+        fixture.hook_replying("Stop", "", "FINDINGS");
+        let parked = fixture.assert_parked();
+        fixture.hook(
+            "UserPromptSubmit",
+            "Type: CACHE_KEEPALIVE\nFrom: @rimz\nContent:\nCache keepalive, no action needed.",
+        );
+        fixture.hook_replying("Stop", "", "pong");
+        let pinged = fixture.assert_parked();
+        assert_eq!(pinged.last_message.as_deref(), Some("FINDINGS"));
+        assert_eq!(pinged.parked_answer, None);
+        assert_eq!(pinged.parked_at, parked.parked_at);
     }
 
     #[test]

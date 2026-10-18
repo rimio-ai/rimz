@@ -299,13 +299,13 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<Timestamp>,
     /// When a clean turn end left this run open because its session was still
-    /// owed a harness wake. Cleared by the next turn start and by every
+    /// owed a harness wake. Cleared by the first in-turn signal and by every
     /// terminal write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at: Option<Timestamp>,
-    /// The answer text through the most recent park, sealed when the wake
-    /// turn starts; each later turn's final message joins after it in
-    /// `last_message`. Kept by the terminal write, cleared by a reopen.
+    /// The answer text through the most recent park, sealed when an in-turn
+    /// signal proves work resumed; each later turn's final message joins after
+    /// it in `last_message`. Kept by the terminal write, cleared by a reopen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_answer: Option<String>,
     /// The child's `last_activity` at the provider-limit park its parent was
