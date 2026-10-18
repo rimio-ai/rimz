@@ -358,10 +358,10 @@ pub enum ParkCheck {
 
 /// Settle only after two nothing-owed checks under the same park timestamp.
 ///
-/// The CAS protects a wake turn starting between the read and lock: the
-/// lifecycle hook folds `TurnStarted` (clearing `parked_at`) before settling
-/// the wake message to `Delivered`, so a queue read showing the wake gone
-/// implies the clear already happened.
+/// The CAS protects work resuming between the read and lock: the first
+/// in-turn signal (`TurnStarted`, `ToolUsed`, or `AwaitingInput`) clears
+/// `parked_at`. A wake's turn start precedes its message becoming `Delivered`;
+/// a keepalive-opened turn clears the park at its first tool hook instead.
 ///
 /// The second look covers producer sequences shorter than the check cadence:
 /// the digest reporter stamps child `report_message_id` fields and queues the
@@ -1070,10 +1070,15 @@ fn fold_lifecycle(
         record.parked_at = None;
         return LifecycleFold::NewlyTerminal;
     }
-    // The wake turn both clears the park and may carry the run's first
-    // transcript path, so the clear cannot return ahead of that fold.
-    let unparked = matches!(observation.signal, LifecycleSignal::TurnStarted { .. })
-        && record.parked_at.is_some();
+    // The first in-turn signal resumes work: a keepalive's turn start is a
+    // ping edge the hook never folds. Still fold any first transcript path.
+    let unparked = record.parked_at.is_some()
+        && matches!(
+            observation.signal,
+            LifecycleSignal::TurnStarted { .. }
+                | LifecycleSignal::ToolUsed { .. }
+                | LifecycleSignal::AwaitingInput { .. }
+        );
     if unparked {
         record.parked_at = None;
         // Sealed here, not at park, so a replayed Stop of the parked turn
@@ -1136,9 +1141,9 @@ fn fold_team_lifecycle(
     }
 }
 
-/// Write one turn's final message into the answer: the text sealed at the
-/// last park, then this turn's message. A later message of the same turn
-/// replaces only this turn's part, and an empty one adds nothing.
+/// Write one turn's final message after the answer sealed when work resumed.
+/// A later message of the same turn replaces only this turn's part, and an
+/// empty one adds nothing.
 fn set_turn_message(record: &mut RunRecord, message: String) {
     record.last_message = Some(match record.parked_answer.as_deref() {
         Some(parked) if message.is_empty() => parked.to_owned(),

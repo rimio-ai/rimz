@@ -142,7 +142,7 @@ Claude wakes a parked parent by injecting the finished background task's notific
 
 A parked row is still `running`, so an `ended` fails it like any other running row.
 
-Separately, a clean turn end does not complete a supervised run while its session is owed a harness wake: an armed one-shot wait, a wake message in flight, or live or unreported launched work. The harness keeps the run `Running` with `parked_at` until the next turn starts; this does not change the provider's turn verdict or `terminal_disposition` ([parked runs](../harness/scripting.md#parked-runs)).
+Separately, a clean turn end does not complete a supervised run while its session is owed a harness wake: an armed one-shot wait, a wake message in flight, or live or unreported launched work. The harness keeps the run `Running` with `parked_at` until the first in-turn signal proves work resumed; this does not change the provider's turn verdict or `terminal_disposition` ([parked runs](../harness/scripting.md#parked-runs)).
 
 The park bit says only that something is pending. Which background shells run is a separate durable list, `background_shells`, folded from the adapter's `BackgroundShellReport` under its [lifetime row](#the-rollup) (a launch adds one, a task list replaces them, a finish notice drops some). The list never moves status or phase, and the sidebar lists it in the card's waits section ([adapter_claude.md](./adapter_claude.md#background-shells)).
 
