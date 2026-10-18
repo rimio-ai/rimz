@@ -10,8 +10,8 @@ use super::pane_topology::{
     PaneTopologyCache, PaneTopologyPane, ZellijPaneId, read_pane_topology_cache,
 };
 use super::parse::{
-    classify_session_not_found, is_no_active_sessions, is_session_not_found,
-    is_transient_list_reply, live_session_name_from_line, parse_client_view,
+    classify_session_not_found, is_session_not_found, is_transient_list_reply,
+    live_session_name_from_line, parse_client_view,
 };
 use super::raw_pane::{
     floating_panes_in_anchor_view, is_daemon_host_pane, is_sidebar_pane, sidebar_geometry_off_spec,
@@ -1146,21 +1146,18 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn list_sessions_within(&self, timeout: std::time::Duration) -> Result<Vec<String>> {
-        let output = match self.cmd().arg("list-sessions").run_with_timeout(timeout) {
-            Ok(output) => output,
-            Err(MuxErr::Command { ref stderr, .. }) if is_no_active_sessions(stderr.as_bytes()) => {
-                return Ok(Vec::new());
-            }
-            Err(err) => return Err(err),
-        };
+        let spec = self.cmd().arg("list-sessions");
+        let listing = super::session::session_listing(&spec, timeout)?;
         // Output lines look like `name [Created Ns ago]` for live sessions, or
         // `name [Created Ns ago] (EXITED - attach to resurrect)` for stopped
         // sessions. `list_sessions` is the live-session set used by `rimz list`
         // and `rimz reload`, so filter resurrectable corpses out here.
-        Ok(String::from_utf8_lossy(&output.stdout)
+        let sessions = listing
             .lines()
             .filter_map(live_session_name_from_line)
-            .collect())
+            .collect::<Vec<_>>();
+        self.check_unlisted_sockets(&spec, &sessions)?;
+        Ok(sessions)
     }
 
     fn session_liveness(&self, name: &str) -> Result<SessionLiveness> {

@@ -25,6 +25,10 @@ The type definitions live in `zellij-utils/src/data.rs` and the plugin shims in 
 | Layout KDL | <https://zellij.dev/documentation/creating-a-layout.html>, `zellij-utils/src/kdl/kdl_layout_parser.rs` |
 | Session resurrection | <https://zellij.dev/documentation/session-resurrection.html>, `zellij-server/src/background_jobs.rs` |
 
+## CLI session discovery
+
+On Unix, `get_sessions` scans the socket directory and keeps only socket files whose `assert_socket` probe connects and receives a `Connected` reply. `ConnectionRefused` removes the stale socket file; every other connect error, including `PermissionDenied`, silently omits it. `list_sessions` merges that result with the `session_info` resurrection cache, so a denied live session with a cached layout appears as `(EXITED - attach to resurrect)`. Without live or resurrectable sessions it prints `No active zellij sessions found.` to stderr and exits 1. An unreadable socket directory instead prints `Error occurred: PermissionDenied` and exits 1. Source: [`get_sessions`, `assert_socket`, and `list_sessions`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/sessions.rs).
+
 ## CLI action reply association
 
 On supported releases through 0.45.1, `SessionState::new_client` reuses the lowest free client id. A delayed `RemoveClient` from a connection probe can remove a different action client's sender after that id is reused, and a `Log` reply addressed by the bare id can reach another client. Action stdout can therefore be empty or belong to another action. Upstream [55d077a5](https://github.com/zellij-org/zellij/commit/55d077a5) retires client ids instead of reusing them and removes the connection probe's immediate cleanup. Sources: [`SessionState::new_client` and `ConnStatus`](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-server/src/lib.rs), [issue #5270](https://github.com/zellij-org/zellij/issues/5270), [PR #5272](https://github.com/zellij-org/zellij/pull/5272) (closed in favor of [#5630](https://github.com/zellij-org/zellij/pull/5630)).

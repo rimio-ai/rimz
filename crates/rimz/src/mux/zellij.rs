@@ -393,6 +393,10 @@ fn zellij_client_options_args(config: &ZellijConfig) -> Vec<String> {
 
 #[derive(Debug, Default)]
 pub struct ZellijBackend {
+    #[cfg(test)]
+    socket_connect: Option<fn(&Path) -> std::io::Result<()>>,
+    #[cfg(test)]
+    socket_dir: Option<PathBuf>,
     /// Test-only root for Zellij's socket, state, config, cache, home, and log
     /// env pins. Production inherits the process environment.
     runtime_dir: Option<PathBuf>,
@@ -544,6 +548,10 @@ impl ZellijBackend {
                 .env("XDG_CACHE_HOME", dir.clone())
                 .env("HOME", dir.clone())
                 .env("TMPDIR", dir);
+        }
+        #[cfg(test)]
+        if let Some(dir) = &self.socket_dir {
+            spec = spec.env("ZELLIJ_SOCKET_DIR", dir.to_string_lossy());
         }
         spec
     }
