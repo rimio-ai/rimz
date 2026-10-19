@@ -420,15 +420,13 @@ impl TaskCatalog {
             return Ok(TaskMutation::default());
         };
         let changed = remove_definition(name, task)?;
-        if changed && task.entry().stay {
-            super::launch_ledger_store::remove(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
-                name,
-            )?;
+        let root = task.entry().resolved_root();
+        if changed && root.is_absolute() && task.entry().stay {
+            super::launch_ledger_store::remove(&StatePaths::for_project_root(&root)?, name)?;
         }
-        if changed {
+        if changed && root.is_absolute() {
             super::launch_ledger_store::remove_declines(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                &StatePaths::for_project_root(&root)?,
                 name,
             )?;
         }
@@ -447,12 +445,12 @@ impl TaskCatalog {
         let Some(task) = self.visible.get(name) else {
             return Ok(TaskMutation::default());
         };
-        if task.entry().stay
-            && super::launch_ledger::load(&StatePaths::for_project_root(
-                &task.entry().resolved_root(),
-            )?)?
-            .get(name)
-            .is_some_and(|launches| !launches.is_empty())
+        let root = task.entry().resolved_root();
+        if root.is_absolute()
+            && task.entry().stay
+            && super::launch_ledger::load(&StatePaths::for_project_root(&root)?)?
+                .get(name)
+                .is_some_and(|launches| !launches.is_empty())
         {
             bail!(
                 "cannot rename loop task `{name}`: its resident leaders record the task name; edit it with `rimz loop add {name}`, or remove and re-add under the new name (which relaunches its checkouts)"
@@ -474,14 +472,14 @@ impl TaskCatalog {
             )?,
         };
         let old_key = task.key(name);
-        if changed {
+        if changed && root.is_absolute() {
             super::launch_ledger_store::rename_declines(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                &StatePaths::for_project_root(&root)?,
                 name,
                 new_name,
             )?;
             crate::harness::workflow::rename_task(
-                &StatePaths::for_project_root(&task.entry().resolved_root())?,
+                &StatePaths::for_project_root(&root)?,
                 name,
                 new_name,
             )?;
