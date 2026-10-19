@@ -3608,8 +3608,16 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
         );
         assert_eq!(entry.matches.as_ref(), Some(&matches));
     }
-    let listing = loop_ok(&env, &["loop", "list"]);
-    assert_eq!(listing.matches("↳ team forge").count(), 2, "{listing}");
+    let listing = loop_ok(&env, &["loop", "list", "--all"]);
+    assert_eq!(
+        listing.matches("team forge#feature-team ·").count(),
+        1,
+        "{listing}"
+    );
+    assert!(
+        listing.contains("pr.conflicted") && listing.contains("team.stage"),
+        "{listing}"
+    );
     team_signal_hook(&env, &env.project_root, "sess-any", "UserPromptSubmit");
     for payload in [
         json!({"path":cwd,"repo":"o/r","number":7}),
@@ -5737,7 +5745,7 @@ fn loop_wait_workflow_pins_and_delivers_to_live_session() {
         last_loop_record(&env).root.as_deref(),
         Some(env.project_root.as_path())
     );
-    let list = loop_ok(&env, &["loop", "list"]);
+    let list = loop_ok(&env, &["loop", "list", "--all"]);
     let show = loop_ok(&env, &["loop", "show", "wait"]);
     assert!(
         list.lines()
@@ -8129,7 +8137,10 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
     };
 
     let list = loop_ok(&env, &["loop", "list"]);
-    assert_eq!(row(&list, "NAME"), ["NAME", "TRIGGER", "ACTION", "LAST"]);
+    assert_eq!(
+        row(&list, "NAME"),
+        ["NAME", "RUNS", "NEXT", "ACTION", "LAST"]
+    );
     let idle = row(&list, "busy");
     assert!(idle.contains(&"✓".to_owned()), "{list}");
     assert!(!list.contains("▸ running"), "{list}");
@@ -8166,11 +8177,10 @@ fn loop_list_shows_a_consumed_one_shot_until_its_run_ends() {
     assert!(
         lines.len() == 5
             && lines[0].contains("room")
-            && lines[2] == "ROOM"
+            && lines[2].starts_with("DONE")
             && lines[3].trim_start().starts_with("NAME")
             && lines[4].trim_start().starts_with("later")
-            && lines[4].contains("▸ running")
-            && lines[4].contains("one-shot fired"),
+            && lines[4].contains("▸ running"),
         "{list}"
     );
 
@@ -8199,18 +8209,20 @@ fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
         .map(|name| hold_loop_run_lock(&loop_run_lock_path(&env, name), &holder));
 
     let list = loop_ok(&env, &["loop", "list"]);
-    let lines = list.lines().collect::<Vec<_>>();
+    assert!(list.contains("ROUTINE") && list.contains("DONE"), "{list}");
+    let fan = list
+        .lines()
+        .find(|line| line.trim_start().starts_with("fan "))
+        .unwrap();
+    let later = list
+        .lines()
+        .find(|line| line.trim_start().starts_with("later "))
+        .unwrap();
     assert!(
-        lines.len() == 6
-            && lines[0].contains("room")
-            && lines[4].trim_start().starts_with("fan ")
-            && lines[4].contains("▸ running 3m")
-            && lines[4].contains("every 1h")
-            && lines[5].trim_start().starts_with("later ")
-            && lines[5].contains("▸ running 3m")
-            && lines[5].contains("one-shot fired"),
+        fan.contains("every 1h") && fan.contains("▸ running 3m"),
         "{list}"
     );
+    assert!(later.contains("▸ running 3m"), "{list}");
 }
 
 #[test]
