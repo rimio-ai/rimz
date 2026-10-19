@@ -62,7 +62,7 @@ pub fn unnoticed_stall<'a>(
         child,
         parent,
         silent_secs,
-        cause: if run.agent_id.is_none() {
+        cause: if run.agent_id.is_none() && child.agent_id.is_provisional() {
             ChildStall::NeverStarted
         } else {
             cause
@@ -289,13 +289,23 @@ mod tests {
 
     #[test]
     fn an_unbound_run_finds_its_silent_provisional_child_by_kind_and_name() {
-        let (agents, mut run) = silent();
+        let (mut agents, mut run) = silent();
+        agents[1].agent_id = "launch_child".into();
         run.agent_id = None;
         assert!(unnoticed_stall(&run, &agents, now(), 1_921).is_none());
         let stall = unnoticed_stall(&run, &agents, now(), 1_800).expect("provisional child");
         assert_eq!(stall.cause, ChildStall::NeverStarted);
-        assert_eq!(stall.child.agent_id.as_str(), "child");
+        assert_eq!(stall.child.agent_id.as_str(), "launch_child");
         assert_eq!(stall.silent_secs, 1_920);
+    }
+
+    #[test]
+    fn an_unbound_run_keeps_a_registered_childs_mid_turn_verdict() {
+        let (agents, mut run) = silent();
+        run.agent_id = None;
+        let stall = unnoticed_stall(&run, &agents, now(), 1_800).expect("registered child");
+        assert_eq!(stall.child.agent_id.as_str(), "child");
+        assert_eq!(stall.cause, ChildStall::MidTurn);
     }
 
     #[test]
