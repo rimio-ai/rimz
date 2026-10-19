@@ -152,6 +152,7 @@ mod tests {
 
     fn record(result: LoopRunResult, check: Option<CheckRecord>) -> LoopRunRecord {
         LoopRunRecord {
+            kind: None,
             judge: Vec::new(),
             checkout: None,
             task: "nightly".to_owned(),

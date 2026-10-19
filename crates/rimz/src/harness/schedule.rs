@@ -299,6 +299,16 @@ pub struct TaskShape {
     action: Result<TaskAction, TaskActionErr>,
     trigger: Result<ParsedTrigger, ScheduleErr>,
     ephemeral: bool,
+    kind: TaskKind,
+}
+
+/// The lifecycle of a stored task, independent of its current attention state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    Routine,
+    OneOff,
+    WakeUp,
 }
 
 impl TaskShape {
@@ -307,6 +317,7 @@ impl TaskShape {
             action: TaskAction::from_entry(name, entry),
             trigger: parse_trigger(name, entry),
             ephemeral: ephemeral_lifetime(entry),
+            kind: lifecycle_kind(entry),
         }
     }
 
@@ -321,6 +332,25 @@ impl TaskShape {
     const fn is_ephemeral(&self) -> bool {
         self.ephemeral
     }
+}
+
+fn lifecycle_kind(entry: &TaskEntry) -> TaskKind {
+    if entry.wait.is_some() || entry.team.is_some() || entry.loop_task.is_some() {
+        return TaskKind::WakeUp;
+    }
+    if (entry.signal.is_none()
+        && entry.when.is_none()
+        && entry.every.is_none()
+        && entry.cron.is_none()
+        && entry.watch.is_none())
+        || entry.fire_at.is_some()
+        || entry.once == Some(true)
+        || entry.watch.is_some()
+        || (entry.stay && !entry.each_worktree)
+    {
+        return TaskKind::OneOff;
+    }
+    TaskKind::Routine
 }
 
 fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
@@ -634,6 +664,27 @@ impl TaskTimingState {
 }
 
 impl TaskTiming {
+    /// Project conjunction progress from the readings already held by this timing.
+    pub fn condition_count(&self) -> Option<when::ConditionCount> {
+        let Trigger::Condition { expr, .. } = &self.parsed.as_ref().ok()?.trigger else {
+            return None;
+        };
+        let readings = match &self.state {
+            TaskTimingState::Waiting { readings } => readings.as_slice(),
+            TaskTimingState::Holding { .. } | TaskTimingState::Fired | TaskTimingState::Due(_) => {
+                &[]
+            }
+            _ => return None,
+        };
+        expr.condition_count(
+            readings,
+            matches!(
+                self.state,
+                TaskTimingState::Holding { .. } | TaskTimingState::Fired | TaskTimingState::Due(_)
+            ),
+        )
+    }
+
     /// Refine an armed condition from the same current reading used by the CLI.
     pub fn with_condition(
         mut self,

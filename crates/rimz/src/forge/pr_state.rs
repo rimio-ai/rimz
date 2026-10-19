@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::snapshot::{PrStack, WorktreeCi, WorktreePrState};
 
+pub(crate) const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
+
 #[derive(Debug, Default, Clone, Serialize)]
 pub(crate) struct PrStateCache {
     /// PR link by absolute worktree path.

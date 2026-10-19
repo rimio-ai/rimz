@@ -195,6 +195,10 @@ impl LoadedTask {
         &self.entry
     }
 
+    pub const fn kind(&self) -> super::TaskKind {
+        self.shape.kind
+    }
+
     pub fn key(&self, name: &str) -> String {
         TaskKey::for_task(name, self.source(), &self.entry().resolved_root())
     }

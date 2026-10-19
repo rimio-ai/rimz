@@ -5,6 +5,179 @@ use jiff::civil::date;
 use jiff::civil::Weekday::{Friday, Monday, Wednesday};
 
 #[test]
+fn lifecycle_kind_follows_the_stored_row() {
+    let recurring = TaskEntry {
+        every: Some("5m".into()),
+        ..spawn_entry()
+    };
+    let signal = TaskEntry {
+        every: None,
+        signal: Some("ci.passed".into()),
+        ..recurring.clone()
+    };
+    let cases = [
+        (recurring.clone(), TaskKind::Routine),
+        (
+            TaskEntry {
+                deadline: Some(Timestamp::UNIX_EPOCH),
+                ..recurring.clone()
+            },
+            TaskKind::Routine,
+        ),
+        (
+            TaskEntry {
+                at: Some("08:00".into()),
+                ..spawn_entry()
+            },
+            TaskKind::OneOff,
+        ),
+        (
+            TaskEntry {
+                once: Some(true),
+                ..recurring.clone()
+            },
+            TaskKind::OneOff,
+        ),
+        (
+            TaskEntry {
+                fire_at: Some(Timestamp::UNIX_EPOCH),
+                ..spawn_entry()
+            },
+            TaskKind::OneOff,
+        ),
+        (
+            TaskEntry {
+                stay: true,
+                ..signal.clone()
+            },
+            TaskKind::OneOff,
+        ),
+        (
+            TaskEntry {
+                stay: true,
+                each_worktree: true,
+                ..signal.clone()
+            },
+            TaskKind::Routine,
+        ),
+        (
+            TaskEntry {
+                watch: Some(WatchSpec::Command("true".into())),
+                ..spawn_entry()
+            },
+            TaskKind::OneOff,
+        ),
+        (
+            TaskEntry {
+                loop_task: Some("owner".into()),
+                ..signal.clone()
+            },
+            TaskKind::WakeUp,
+        ),
+        (
+            TaskEntry {
+                team: Some("forge#work".parse().unwrap()),
+                ..signal.clone()
+            },
+            TaskKind::WakeUp,
+        ),
+    ];
+    for (entry, expected) in cases {
+        let task = catalog::LoadedTask::new("task", entry.clone(), catalog::TaskSource::Config);
+        assert_eq!(task.kind(), expected, "{entry:?}");
+    }
+    let entry = TaskEntry {
+        wait: Some(wait_target()),
+        watch: Some(WatchSpec::Command("true".into())),
+        ..spawn_entry()
+    };
+    assert_eq!(
+        catalog::LoadedTask::new("wait", entry, catalog::TaskSource::Config).kind(),
+        TaskKind::WakeUp
+    );
+}
+
+#[test]
+fn condition_count_projects_the_stored_timing_without_reading_again() {
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    for (expression, readings, expected) in [
+        (
+            "pr=merged && !ci=failed && ci!=unknown",
+            vec![("pr", None), ("ci", None)],
+            Some((1, 3, 2)),
+        ),
+        (
+            "pr=merged && !!ci=passed",
+            vec![("pr", Some("merged")), ("ci", Some("passed"))],
+            Some((2, 2, 0)),
+        ),
+        ("pr=merged || ci=passed", vec![], None),
+        ("!(pr=merged && ci=passed)", vec![], None),
+    ] {
+        let entry = TaskEntry {
+            when: Some(vec![expression.into()]),
+            ..spawn_entry()
+        };
+        let parsed = parse_trigger("test", &entry);
+        let Trigger::Condition { expr, .. } = &parsed.as_ref().unwrap().trigger else {
+            panic!("condition")
+        };
+        let readings: std::collections::BTreeMap<String, Option<String>> = readings
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.map(str::to_owned)))
+            .collect();
+        let verdict = when::Verdict {
+            ok: expr.leaves().all(|(term, negated)| {
+                term.matches(
+                    readings
+                        .get(&term.key)
+                        .and_then(|v: &Option<String>| v.as_deref()),
+                ) != negated
+            }),
+            readings,
+        };
+        let timing = TaskTiming::evaluate(
+            &parsed,
+            catalog::TaskSource::Config,
+            Some(now.timestamp()),
+            None,
+            &now,
+        )
+        .with_condition(&verdict, None, now.timestamp());
+        let count = timing.condition_count();
+        assert_eq!(
+            count.map(|count| (count.met, count.total, count.not_read)),
+            expected,
+            "{expression}"
+        );
+        if let Some(count) = count {
+            assert_eq!(count.met == count.total, verdict.ok);
+        }
+    }
+}
+
+#[test]
+fn condition_count_is_absent_without_an_observed_verdict() {
+    let now = zdt(2026, 6, 24, 8, 5, 0);
+    let entry = TaskEntry {
+        when: Some(vec!["ci=passed".into()]),
+        ..spawn_entry()
+    };
+    let parsed = parse_trigger("test", &entry);
+    for state in [
+        TaskTimingState::Disabled(arming::DisabledReason::Manual),
+        TaskTimingState::Unarmed,
+        TaskTimingState::Paused(now.timestamp()),
+        TaskTimingState::NoOccurrence,
+    ] {
+        let mut timing =
+            TaskTiming::evaluate(&parsed, catalog::TaskSource::Config, None, None, &now);
+        timing.state = state;
+        assert_eq!(timing.condition_count(), None, "{:?}", timing.state());
+    }
+}
+
+#[test]
 fn true_condition_without_hold_is_due() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let entry = TaskEntry {

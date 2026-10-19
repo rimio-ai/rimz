@@ -14,7 +14,8 @@ use super::git_line;
 use crate::RuntimePaths;
 use crate::disk::single_flight::{Coalesced, ProducerGuard};
 use crate::forge::pr_state::{
-    BranchRow, PrLink, PrQueueFact, PrStateCache, RepoProbe, TargetStamp, read_pr_state_cache,
+    BranchRow, PrLink, PrQueueFact, PrStateCache, RepoProbe, TargetStamp, UNSUPPORTED_REPO_KEY,
+    read_pr_state_cache,
 };
 use crate::forge::{self, ForgeCli};
 use crate::sidebar::refresh::git_stats::{
@@ -33,7 +34,6 @@ const PR_STATE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PARALLEL_PR_PROBES: usize = 8;
 const GH_BULK_MAX_ALIASES: usize = 100;
 const PR_STACK_DEPTH: usize = 8;
-const UNSUPPORTED_REPO_KEY: &str = "<unsupported>";
 // Local worktree creation and forge PR creation use different clocks.
 const TERMINAL_PR_CLOCK_SKEW: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
 

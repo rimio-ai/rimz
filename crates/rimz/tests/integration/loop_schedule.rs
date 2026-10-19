@@ -8927,8 +8927,8 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
             "stuck",
             "--check",
             "touch check-ready; parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
-            "--every",
-            "15m",
+            "--at",
+            "23:59",
         ],
     );
     let mut runner = env
@@ -8941,6 +8941,7 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
     let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
     assert_eq!(info.pid, runner.id());
     wait_for_path(&env.project_root.join("check-ready"));
+    loop_ok(&env, &["loop", "remove", "stuck"]);
     let stopped = loop_ok(&env, &["loop", "stop", "stuck"]);
     assert!(
         stopped.contains("stopped") && stopped.contains("SIGTERM"),
@@ -8952,10 +8953,17 @@ fn loop_stop_terminates_holder_and_records_cancellation() {
         .open(loop_run_lock_path(&env, "stuck"))
         .expect("open released loop lock");
     released.try_lock().expect("loop lock released");
+    drop(released);
     assert!(!runner.wait().expect("wait for stopped runner").success());
     let record = last_loop_record(&env);
     assert_eq!(record.result, LoopRunResult::Canceled);
     assert_eq!(record.error.as_deref(), Some("stopped by rimz loop stop"));
+    assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains("DONE") && list.contains("stuck") && list.contains("canceled"),
+        "{list}"
+    );
 }
 
 /// A fire that would start an agent waits behind another start's turn: it
@@ -9460,7 +9468,13 @@ fn loop_stop_reaches_a_consumed_one_shot_run() {
     let record = last_loop_record(&env);
     assert_eq!(record.task, "later");
     assert_eq!(record.result, LoopRunResult::Canceled);
+    assert_eq!(record.kind, Some(rimz::harness::schedule::TaskKind::OneOff));
     assert!(!read_loop_instances(&env).0.contains_key("later"));
+    let list = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        list.contains("DONE") && list.contains("later") && list.contains("canceled"),
+        "{list}"
+    );
     let show = loop_ok(&env, &["loop", "show", "later"]);
     assert!(
         show.contains("canceled") && !show.contains("▸ running"),

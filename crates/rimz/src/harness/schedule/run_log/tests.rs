@@ -214,6 +214,7 @@ fn skipped_check_cost_counts_and_old_check_rows_still_parse() {
 
 fn record(task: &str, second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        kind: None,
         judge: Vec::new(),
         checkout: None,
         task: task.to_owned(),
