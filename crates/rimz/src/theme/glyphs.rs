@@ -138,6 +138,8 @@ const GLYPH_CATALOG: &[GlyphCatalogRow] = &[
     glyph!(ChromeSpineLaneRight, "🮇", None),
     glyph!(ChromeInfinity, "∞", Some("\u{edfe}")),
     glyph!(ChromeSearch, "/", Some("\u{f002}")),
+    glyph!(ChromeFocusAbove, "↑", None),
+    glyph!(ChromeFocusBelow, "↓", None),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

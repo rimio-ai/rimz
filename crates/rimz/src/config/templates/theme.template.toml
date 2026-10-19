@@ -274,6 +274,8 @@
 ## spine_lane_right = "🮇"
 ## infinity = "∞"
 ## search = "/"
+## focus_above = "↑"
+## focus_below = "↓"
 
 [theme.glyphs.nerd_font.status]
 ## waiting = ""
@@ -403,6 +405,8 @@
 ## spine_lane_right = "🮇"
 ## infinity = ""
 ## search = ""
+## focus_above = "↑"
+## focus_below = "↓"
 
 [theme.providers]
 # Provider styles are keyed by agent kind and every field is optional.

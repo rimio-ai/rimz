@@ -522,6 +522,8 @@ Input paints synchronously off the grid. A destination focus push also tries its
 
 A sidebar in an unviewed tab suspends animation and emits no frame bytes for plain data changes, including when the session is detached. A newer host viewport publication can instead trigger one hidden paint per frame interval; intermediate publications coalesce to the latest. A settled hidden attachment coalesces content folds to at most once per data tick, plus on reveal, own-view changes, and outward actions, under the mailbox rules above. Gate, health, focus, receipt, and lifecycle work remain live within that bound; unsettled reconciliation bypasses it. A viewed-pane fold resumes the grid and paints within one base frame; a resize wakeup optimistically resumes watching and paints immediately unless the grow-resize self-close hold is engaged. Unknown ownership still counts as watched. The serve loop wakes at the deferred-content deadline and when the layout freeze expires, to fire the fold that lets rows and groups settle back to live rank once the user goes idle. Hidden capture semantics are owned by [sidebar.md](./sidebar.md#from-store-to-screen).
 
+The focus-marker dwell also caps `LoopState::frame_timing` while watched, even when otherwise idle. At its deadline, the dwell itself makes a paint due, independently of a later ordinary frame boundary. Once ready, the marker holds no expired timer; the next focus move re-arms it.
+
 ## Failure modes
 
 Each degradation has one owner, and none leaves a wrong verdict that outlives the next pull.

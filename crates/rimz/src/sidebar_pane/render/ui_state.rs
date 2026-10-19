@@ -117,7 +117,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Armed only by opening the landed chip. The next draw reveals its first
     /// newly shown receipt while keeping the chip visible, then consumes it.
     pub(in crate::sidebar_pane) landed_reveal: bool,
-    /// The banner's full-roster lead to reveal minimally on the next draw, then consume.
+    /// The row the banner (its full-roster lead) or the focus marker (the
+    /// selected card) reveals minimally on the next draw, then consumed.
     pub(in crate::sidebar_pane) reveal_row: Option<String>,
     /// A fresh shared click placement and its source opening set for the next
     /// draw to land, then consumed.
@@ -129,6 +130,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// This sidebar's input changed selection, or its requested focus landed.
     /// The next draw may reveal that card, then consumes the mark.
     pub(in crate::sidebar_pane) own_input_reveal: bool,
+    /// The loop owns the dwell clock; render only consumes readiness.
+    pub(in crate::sidebar_pane) focus_marker_ready: bool,
     /// The row id a manual mark-unread just reopened while it is the focused
     /// pane. While armed, focus-read auto-clear skips that row; moving focus
     /// off it releases the guard so a later revisit clears normally.

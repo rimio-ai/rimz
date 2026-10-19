@@ -23,6 +23,7 @@ pub(in crate::sidebar_pane) enum HitTarget {
     /// The `+K older` tail of an open delegation section.
     ToggleDelegationHistory(String),
     UnreadBanner,
+    FocusMarker,
     Hyperlink(String),
 }
 
@@ -190,7 +191,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
     match target {
         HitTarget::ProviderTab(_) => 0,
         HitTarget::BodyFilter(_) => 1,
-        HitTarget::UnreadBanner => 2,
+        HitTarget::UnreadBanner | HitTarget::FocusMarker => 2,
         HitTarget::SubAgentPane(_)
         | HitTarget::ToggleGroup(_)
         | HitTarget::ToggleLanded
@@ -243,6 +244,36 @@ impl RenderedBlock {
 
     fn push_row(&mut self, line: Line<'static>, ordinal: usize) {
         self.push(line, Some(ordinal));
+    }
+
+    pub(super) fn replace_line_with_target(
+        &mut self,
+        row: usize,
+        line: Line<'static>,
+        target: HitTarget,
+    ) {
+        self.lines[row] = line;
+        self.interactions.row_by_line[row] = None;
+        let mut tails = Vec::new();
+        for region in &mut self.interactions.regions {
+            if !region.rows.contains(&row) {
+                continue;
+            }
+            if region.rows.end > row + 1 {
+                tails.push(HitRegion {
+                    rows: row + 1..region.rows.end,
+                    ..region.clone()
+                });
+            }
+            region.rows.end = row;
+        }
+        self.interactions
+            .regions
+            .retain(|region| !region.rows.is_empty());
+        self.interactions.regions.extend(tails);
+        self.interactions
+            .regions
+            .push(HitRegion::line(row, 0..u16::MAX, target));
     }
 
     pub(super) fn push_inert(&mut self, line: Line<'static>) {
