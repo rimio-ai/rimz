@@ -90,10 +90,30 @@ pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> 
 }
 
 pub(super) fn remove(store: TaskStore<'_>, name: &str) -> Result<bool> {
+    remove_at_root(store, name, None)
+}
+
+pub(super) fn remove_machine_at_root(name: &str, root: &Path) -> Result<bool> {
+    remove_at_root(TaskStore::Machine, name, Some(root))
+}
+
+fn remove_at_root(store: TaskStore<'_>, name: &str, root: Option<&Path>) -> Result<bool> {
     let path = store.path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
+    if let Some(root) = root {
+        let config: crate::config::LoopConfig =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if !config
+            .tasks
+            .0
+            .get(name)
+            .is_some_and(|entry| entry.resolved_root() == root)
+        {
+            return Ok(false);
+        }
+    }
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
