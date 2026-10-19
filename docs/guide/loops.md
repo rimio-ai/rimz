@@ -419,6 +419,8 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Inspect, test, and manage tasks with the rest of the surface:
 
+You can inspect the worktree name printed by the list with `rimz loop show <worktree>`. For a resident task with `--worktree`, this is its launch destination, not the checkout its guards read. If several tasks belong to it, RimZ lists their real names and inspection commands instead of choosing. `rimz loop show <team>` (or `<team>#<channel>`) lists the real subscription names hidden by the folded WAKE-UPS line. Exact task names work from outside the room too; the result names the `--root` other commands need. Use the real task name for changes such as `remove`, `pause`, and `fire`.
+
 ```sh
 rimz loop list                 # this room's tasks, grouped by lifecycle
 rimz loop list --all           # every known room, with older one-offs and wake-ups unfolded

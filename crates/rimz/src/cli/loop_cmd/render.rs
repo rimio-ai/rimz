@@ -1105,10 +1105,223 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
     Ok(())
 }
 
-pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
-    let Some(task) = load_task(&args.name, globals)? else {
+enum ShowTarget {
+    Task(Box<LoadedTask>),
+    History(Option<PathBuf>),
+    Owner(Vec<(PathBuf, Vec<SubscriptionView>)>),
+}
+
+fn show_room(
+    name: &str,
+    roots: Vec<&Path>,
+    caller: Option<&Path>,
+    json: bool,
+) -> Result<Option<PathBuf>> {
+    if let Some(root) = roots.iter().find(|root| Some(**root) == caller) {
+        return Ok(Some(root.to_path_buf()));
+    }
+    match roots.as_slice() {
+        [] => Ok(None),
+        [root] => Ok(Some(root.to_path_buf())),
+        _ => {
+            let mut commands = Vec::new();
+            for root in roots {
+                commands.push(shlex::try_join([
+                    "rimz",
+                    "--root",
+                    root.to_string_lossy().as_ref(),
+                    "loop",
+                    "show",
+                    name,
+                ])?);
+            }
+            if json {
+                bail!("ambiguous loop task {name}:\n{}", commands.join("\n"));
+            }
+            writeln!(ui::out(), "{}", commands.join("\n"))?;
+            Err(ui::AlreadyReported.into())
+        }
+    }
+}
+
+fn owns_subscription(entry: &TaskEntry, name: &str) -> bool {
+    entry.loop_task.as_deref() == Some(name)
+        || entry.team.as_ref().is_some_and(|team| {
+            let team = team.to_string();
+            team == name || team.split_once('#').is_some_and(|(team, _)| team == name)
+        })
+}
+
+fn resolve_show(args: &mut ShowArgs, caller: Option<&Path>) -> Result<ShowTarget> {
+    let machine = TaskCatalog::load(None)?;
+    let mut catalogs = Vec::new();
+    let mut machine_fallback = None;
+    for root in list::room_roots(caller)? {
+        match TaskCatalog::load_room(&root) {
+            Ok(catalog) => catalogs.push((root, catalog)),
+            Err(error) if Some(root.as_path()) == caller => return Err(error),
+            Err(error) => {
+                tracing::warn!("cannot load loop tasks in {}: {error:#}", root.display());
+                if let Some(task) = machine.visible().get(&args.name)
+                    && task.entry().resolved_root() == root
+                {
+                    machine_fallback = Some((root, task.clone()));
+                }
+            }
+        }
+    }
+    let mut exact: Vec<_> = catalogs
+        .iter()
+        .filter(|(_, catalog)| catalog.visible().contains_key(&args.name))
+        .map(|(root, _)| root.as_path())
+        .collect();
+    if let Some((root, _)) = &machine_fallback {
+        exact.push(root.as_path());
+    }
+    if let Some(root) = show_room(&args.name, exact, caller, args.json)? {
+        let task = catalogs
+            .iter()
+            .find(|(candidate, _)| *candidate == root)
+            .and_then(|(_, catalog)| catalog.visible().get(&args.name))
+            .or_else(|| {
+                machine_fallback
+                    .as_ref()
+                    .filter(|(candidate, _)| *candidate == root)
+                    .map(|(_, task)| task)
+            })
+            .cloned();
+        if let Some(task) = task {
+            return Ok(ShowTarget::Task(Box::new(task)));
+        }
+    }
+    let history = catalogs
+        .iter()
+        .filter(|(root, _)| {
+            !run_log::task_history(&rimz::disk::paths::logs_dir(), &args.name, Some(root), None)
+                .records
+                .is_empty()
+                || in_flight_run(&args.name, root).ok().flatten().is_some()
+        })
+        .map(|(root, _)| root.as_path())
+        .collect();
+    if let Some(root) = show_room(&args.name, history, caller, args.json)? {
+        return Ok(ShowTarget::History(Some(root)));
+    }
+    let mut matches = Vec::new();
+    let mut wakes = 0;
+    for (_, catalog) in &catalogs {
+        for (name, task) in catalog.visible() {
+            let entry = task.entry();
+            if list::worktree_name(entry).as_deref() != Some(args.name.as_str()) {
+                continue;
+            }
+            if task.kind() == schedule::TaskKind::WakeUp {
+                wakes += 1;
+            } else {
+                matches.push((name, task));
+            }
+        }
+    }
+    if let [(name, task)] = matches.as_slice() {
+        if !args.json {
+            writeln!(ui::out(), "worktree {} → {name}", args.name)?;
+        }
+        args.name = (*name).clone();
+        return Ok(ShowTarget::Task(Box::new((*task).clone())));
+    }
+    if !matches.is_empty() {
+        let mut lines = Vec::new();
+        for (name, task) in matches {
+            let trigger = task
+                .trigger()
+                .as_ref()
+                .map(|trigger| trigger.describe())
+                .unwrap_or_else(|error| format!("invalid: {error}"));
+            let root = task.entry().resolved_root();
+            let command = if Some(root.as_path()) == caller {
+                shlex::try_join(["rimz", "loop", "show", name])?
+            } else {
+                shlex::try_join([
+                    "rimz",
+                    "--root",
+                    root.to_string_lossy().as_ref(),
+                    "loop",
+                    "show",
+                    name,
+                ])?
+            };
+            lines.push(format!("{name} · {trigger} · {command}"));
+        }
+        if wakes > 0 {
+            lines.push(format!("+ {wakes} wake-ups"));
+        }
+        if args.json {
+            bail!("ambiguous worktree {}:\n{}", args.name, lines.join("\n"));
+        }
+        writeln!(ui::out(), "{}", lines.join("\n"))?;
+        return Err(ui::AlreadyReported.into());
+    }
+    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
+    let mut owners = Vec::new();
+    for (root, catalog) in &catalogs {
+        if catalog
+            .visible()
+            .values()
+            .any(|task| owns_subscription(task.entry(), &args.name))
+        {
+            owners.push((
+                root.clone(),
+                load_subscriptions(root, &now, |entry| owns_subscription(entry, &args.name))?,
+            ));
+        }
+    }
+    if !owners.is_empty() {
+        return Ok(ShowTarget::Owner(owners));
+    }
+    Ok(ShowTarget::History(caller.map(Path::to_path_buf)))
+}
+
+fn write_show_room(root: &Path, caller: Option<&Path>) -> Result<()> {
+    if Some(root) != caller {
+        writeln!(
+            ui::out(),
+            "room {} · other commands need {}",
+            display_path(root),
+            shlex::try_join(["--root", root.to_string_lossy().as_ref()])?
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
+    let caller = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .ok()
+        .map(|workspace| workspace.project_root);
+    let mut scoped = globals.clone();
+    let task = match resolve_show(&mut args, caller.as_deref())? {
+        ShowTarget::Task(task) => Some(task),
+        ShowTarget::History(root) => {
+            scoped.root = root;
+            None
+        }
+        ShowTarget::Owner(owners) => {
+            if args.json {
+                bail!("subscription owners are text-only; use rimz loop list --json");
+            }
+            for (root, subscriptions) in owners {
+                write_show_room(&root, caller.as_deref())?;
+                write_subscriptions(&mut ui::out(), &subscriptions)?;
+            }
+            return Ok(());
+        }
+    };
+    let globals = &scoped;
+    let Some(task) = task else {
         if args.json {
             bail!("no loop task named {}; see rimz loop list", args.name);
+        }
+        if let Some(root) = &globals.root {
+            write_show_room(root, caller.as_deref())?;
         }
         // A failed lookup falls through to `logs`, whose own lookup warns once.
         if let Ok(Some((root, in_flight))) = in_flight_without_row(&args.name, globals) {
@@ -1126,6 +1339,9 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
     let entry = task.entry();
     let root = entry.resolved_root();
+    if !args.json {
+        write_show_room(&root, caller.as_deref())?;
+    }
     let runtime = runtime_for_root(&root);
     let stamps = runtime
         .as_ref()
@@ -1181,7 +1397,9 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         condition::write_show(&mut condition, entry, &timing)?;
     }
     let subscriptions = if !args.json || entry.each_worktree {
-        load_subscriptions(&args.name, &root, &now_zoned)
+        load_subscriptions(&root, &now_zoned, |entry| {
+            entry.loop_task.as_deref() == Some(&args.name)
+        })
     } else {
         Ok(Vec::new())
     };
@@ -1324,12 +1542,16 @@ fn write_workflow_runs(
     Ok(())
 }
 
-fn load_subscriptions(name: &str, root: &Path, now: &jiff::Zoned) -> Result<Vec<SubscriptionView>> {
+fn load_subscriptions(
+    root: &Path,
+    now: &jiff::Zoned,
+    owns: impl Fn(&TaskEntry) -> bool,
+) -> Result<Vec<SubscriptionView>> {
     let catalog = TaskCatalog::load_room(root)?;
     let subscriptions = catalog
         .visible()
         .iter()
-        .filter(|(_, task)| task.entry().loop_task.as_deref() == Some(name))
+        .filter(|(_, task)| owns(task.entry()))
         .collect::<Vec<_>>();
     if subscriptions.is_empty() {
         return Ok(Vec::new());
