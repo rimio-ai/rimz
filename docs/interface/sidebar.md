@@ -171,7 +171,7 @@ Each declared stage gets one dot; `Done` has no separate slot. These roles live 
 | `◎ N` | sessions that ran in the spend window |
 | `¤ N` | agents alive right now |
 | `⑃ N` | open pull requests on the agents' branches, stacked pull requests included |
-| `↑ 2 need you` | the card that most needs you is scrolled out of view |
+| `↑ 2 need you` / `↓ 2 need you` | the card that most needs you is above / below the view |
 | `▌` ... `▐` | the selected card's left and right spines |
 | `▎` ... `🮇` | the selection lane: every row of the group that holds the selection |
 | `┄` | the dotted seal on the selected group's header |
@@ -209,7 +209,7 @@ Lines 2 and 3 cover the spend window, `[sidebar] spend_window`: `"session"` (the
 | 3 | `¤` live agents, `⑃ N` open pull requests on the room's worktree branches when there are any, stacked pull requests included and each counted once, and the room's spend for the window on the right. |
 | then | one line per [parked workflow run](#parked-workflow-runs), only while a run is parked, above the rule. |
 | 4 | the make-up line: units by status. |
-| 5 | the `↑ N need you` banner, only while it applies. |
+| 5 | the `↑ N need you` or `↓ N need you` banner, only while it applies. |
 
 Before any spend arrives the token breakdown shows zeroes and the spend shows `$0.00`. When an agent's cost moves, the spend counts up to the new figure within 1.2 seconds. It never decreases inside one window and resets when the window rolls. Antigravity reports current usage that cannot be summed over time, so its cost shows on its card and stays out of this total. How every figure is computed is [Token Insight](../guide/insight.md).
 
@@ -245,7 +245,7 @@ At narrow widths the right-hand buckets clip from the idle end. A bucket without
 
 ### The unread banner
 
-`↑ N need you` counts units with at least one unread waiting or failed member. It appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. During a wheel glide it reflects where the cards will land, so it does not appear or disappear midway through the motion. It is yellow for a waiting card and red for a failed one. Click it to reveal that card where it sits without changing selection, or scroll to the top if the filter hides it; press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
+`↑ N need you` or `↓ N need you` counts units with at least one unread waiting or failed member. It appears when the card that most needs you, the oldest unread `?` or `!`, has scrolled out of view. The arrow points toward that card: up when above the painted view or hidden by the filter, down when below. During a wheel glide its visibility reflects where the cards will land, so it does not appear or disappear midway through the motion; its arrow follows the painted position. It is yellow for a waiting card and red for a failed one. Click it to reveal that card where it sits without changing selection, or scroll to the top if the filter hides it; press `n` to jump to the next card that needs you. It disappears when that card is on screen or nothing is waiting for you.
 
 ### An empty room
 
@@ -606,7 +606,7 @@ Click anywhere on the chip's line to open it. If the receipts it reveals are bel
  ▸ ○ landed-a
 ```
 
-The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
+The count is groups, not agents. A focused, held, or individually expanded group stays visible below the closed chip without changing the count; process-only groups also stay visible. A filter or search suppresses the chip and reveals matching cards uncollapsed, but `s` never matches finished groups. Unread results there remain reachable through `u`; `n` and `␣` skip hidden cards, while the actionable `↑/↓ N need you` banner is unchanged. `rimz sidebar frame` starts closed; `--expand` opens the chip and every card. On narrow panes the dotted rule shrinks before the label is trimmed from the right.
 
 A folded finished group hides its pipeline line and puts the stage after the team name on the roster line:
 
@@ -869,7 +869,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a card or process row | select the card immediately and focus its pane |
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a make-up bucket or `⑃ N` | filter the cards |
-| click `↑ N need you` | reveal the lead card where it sits, or scroll to the top if the filter hides it |
+| click `↑ N need you` / `↓ N need you` | reveal the lead card where it sits, or scroll to the top if the filter hides it |
 | click `↑ <name>` / `↓ <name>` | reveal the focused card without changing selection |
 | click a subagents and waits line | open or close its entries |
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |

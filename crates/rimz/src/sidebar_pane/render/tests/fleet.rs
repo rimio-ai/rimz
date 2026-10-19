@@ -1047,7 +1047,7 @@ fn render_cockpit_hides_zero_open_prs() {
     assert!(!spend.contains('⑃'), "zero open PRs stay hidden:\n{screen}");
 }
 
-/// The `↑ N need you` jump banner appears when the lead leaves the viewport and
+/// The directional `N need you` jump banner appears when the lead leaves the viewport and
 /// stays hidden while scroll-to-top already shows it.
 #[test]
 fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
@@ -1070,6 +1070,27 @@ fn unread_jump_banner_shows_only_when_the_lead_is_scrolled_off() {
         screen.contains("↑ 1 need you"),
         "banner appears when wheel-pinned past the lead:\n{screen}"
     );
+    assert_snapshot("unread_banner_above", screen);
+}
+
+#[test]
+fn unread_banner_points_below_or_to_the_filter_hidden_lead() {
+    let mut snapshot = overflowing_fleet_with_unread_lead();
+    let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
+    let rows = std::sync::Arc::make_mut(&mut group.rows);
+    let lead = rows.remove(0);
+    rows.push(lead);
+    let mut ui = UiState {
+        offset_authoritative: true,
+        ..Default::default()
+    };
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(screen.contains("↓ 1 need you"), "{screen}");
+    assert_snapshot("unread_banner_below", screen);
+
+    ui.make_up_filter = BodyLens::from(BodyFilter::Status(AgentStatus::Running));
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(screen.contains("↑ 1 need you"), "{screen}");
 }
 
 /// A make-up bucket click narrows the body to that status: only the `!` card

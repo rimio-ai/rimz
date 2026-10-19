@@ -109,7 +109,7 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) scroll_zone_top: usize,
     /// The last draw's anchor correction hit the offset clamp, so the card moved.
     pub(in crate::sidebar_pane) anchor_clamped: bool,
-    /// The last draw showed the `↑ N need you` banner.
+    /// The last draw showed the directional `↑/↓ N need you` banner.
     pub(in crate::sidebar_pane) banner_shown: bool,
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
     /// paint; banner and landed-chip reveals can still nudge their target into view.

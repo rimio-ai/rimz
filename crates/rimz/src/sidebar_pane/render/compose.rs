@@ -239,7 +239,16 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
             );
             Some((above, Line::from(spans)))
         });
-    insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
+    let lead_above = lead_unread_row(&snapshot.worktree_groups)
+        .and_then(|lead| roster.ordinal_of_id(&lead.id))
+        .and_then(|ordinal| {
+            scroll
+                .card_starts
+                .iter()
+                .find(|(index, _)| *index == ordinal)
+        })
+        .is_none_or(|(_, first)| *first < layout.offset);
+    insert_unread_banner(layout.show_banner, lead_above, snapshot, theme, &mut top);
     top.tag("cockpit");
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
         walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
@@ -388,6 +397,7 @@ fn plan_zones(input: ZoneInputs<'_, '_>) -> ZoneLayout {
 
 fn insert_unread_banner(
     show: bool,
+    above: bool,
     snapshot: &SidebarSnapshot,
     theme: &Theme,
     top: &mut RenderedBlock,
@@ -404,7 +414,7 @@ fn insert_unread_banner(
     let separator = top.lines.last().cloned().unwrap_or_default();
     let mut with_banner = std::mem::take(top).window(0, at);
     with_banner.push_target(
-        pad_chrome(unread_banner_line(theme, status, count)),
+        pad_chrome(unread_banner_line(theme, status, count, above)),
         HitTarget::UnreadBanner,
     );
     with_banner.push_inert(separator);
@@ -858,17 +868,27 @@ fn nudge_into_view(top: usize, bottom: usize, offset: usize, viewport: usize) ->
     }
 }
 
-/// The `↑ N need you` jump banner, toned by the lead's status (`failed` the
+/// The directional `↑/↓ N need you` jump banner, toned by the lead's status (`failed` the
 /// alarm red, else the caution warn). Rendered only while the lead is scrolled
 /// out of view; its click minimally reveals the lead where it sits, or scrolls
 /// to the top if the filter hides it.
-fn unread_banner_line(theme: &Theme, lead_status: AgentStatus, count: usize) -> Line<'static> {
+fn unread_banner_line(
+    theme: &Theme,
+    lead_status: AgentStatus,
+    count: usize,
+    above: bool,
+) -> Line<'static> {
     let style = if lead_status == AgentStatus::Failed {
         theme.alarm(Modifier::empty())
     } else {
         theme.warn(Modifier::empty())
     };
-    Line::styled(format!("↑ {count} need you"), style)
+    let glyph = theme.glyph(if above {
+        GlyphRole::ChromeFocusAbove
+    } else {
+        GlyphRole::ChromeFocusBelow
+    });
+    Line::styled(format!("{glyph} {count} need you"), style)
 }
 
 /// Ride the scrollbar on a visible scroll-zone line: the right rail is the last
