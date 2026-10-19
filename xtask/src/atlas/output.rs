@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::{set_once, value};
+use super::ArgCursor;
 
 pub(super) const USAGE: &str = "  --json             emit the report as JSON instead of Markdown
   --out <file>       write the report to <file> instead of stdout
@@ -24,32 +24,20 @@ pub(super) struct OutputArgs {
 }
 
 impl OutputArgs {
-    /// Consumes one output flag at `args[index]`; returns the number of
-    /// arguments eaten, or `None` when the flag is not an output flag.
-    pub(super) fn parse_flag(
-        &mut self,
-        args: &[String],
-        index: usize,
-        verb: &str,
-    ) -> Result<Option<usize>> {
-        match args[index].as_str() {
-            "--json" => {
-                if self.json {
-                    bail!("atlas {verb} --json may only be passed once");
-                }
-                self.json = true;
-                Ok(Some(1))
-            }
+    /// Consumes the cursor's current output flag; returns `false` for other flags.
+    pub(super) fn parse_flag(&mut self, cursor: &mut ArgCursor<'_>) -> Result<bool> {
+        let verb = cursor.verb;
+        match cursor.flag {
+            "--json" => cursor.switch(&mut self.json, "--json")?,
             "--out" => {
-                let raw = value(args, index, verb, "--out")?;
+                let raw = cursor.value_of("--out")?;
                 if raw.is_empty() {
                     bail!("atlas {verb} --out requires a non-empty path");
                 }
-                set_once(&mut self.out, PathBuf::from(raw), verb, "--out")?;
-                Ok(Some(2))
+                cursor.once(&mut self.out, PathBuf::from(raw), "--out")?;
             }
             "--section" => {
-                let raw = value(args, index, verb, "--section")?;
+                let raw = cursor.value_of("--section")?;
                 let names = raw
                     .split(',')
                     .map(str::trim)
@@ -59,11 +47,11 @@ impl OutputArgs {
                 if names.is_empty() {
                     bail!("atlas {verb} --section requires at least one section name");
                 }
-                set_once(&mut self.sections, names, verb, "--section")?;
-                Ok(Some(2))
+                cursor.once(&mut self.sections, names, "--section")?;
             }
-            _ => Ok(None),
+            _ => return Ok(false),
         }
+        Ok(true)
     }
 
     /// Rejects section names the verb does not render.
@@ -153,10 +141,9 @@ mod tests {
             "rank, guards",
         ]);
         let mut output = OutputArgs::default();
-        let mut index = 0;
-        while index < raw.len() {
-            let eaten = output.parse_flag(&raw, index, "survey").unwrap().unwrap();
-            index += eaten;
+        let mut cursor = ArgCursor::new(&raw, "survey").unwrap();
+        while cursor.next().is_some() {
+            assert!(output.parse_flag(&mut cursor).unwrap());
         }
         assert!(output.json);
         assert_eq!(output.out.as_deref(), Some(Path::new("/tmp/x.json")));
@@ -173,7 +160,9 @@ mod tests {
     fn non_output_flags_are_left_alone() {
         let raw = args(&["--top", "3"]);
         let mut output = OutputArgs::default();
-        assert_eq!(output.parse_flag(&raw, 0, "survey").unwrap(), None);
+        let mut cursor = ArgCursor::new(&raw, "survey").unwrap();
+        cursor.next();
+        assert!(!output.parse_flag(&mut cursor).unwrap());
         assert!(output.wants("anything"));
     }
 
@@ -181,9 +170,14 @@ mod tests {
     fn repeated_and_empty_flags_fail() {
         let mut output = OutputArgs::default();
         let raw = args(&["--json", "--json"]);
-        output.parse_flag(&raw, 0, "diff").unwrap();
-        assert!(output.parse_flag(&raw, 1, "diff").is_err());
+        let mut cursor = ArgCursor::new(&raw, "diff").unwrap();
+        cursor.next();
+        output.parse_flag(&mut cursor).unwrap();
+        cursor.next();
+        assert!(output.parse_flag(&mut cursor).is_err());
         let raw = args(&["--section", ","]);
-        assert!(OutputArgs::default().parse_flag(&raw, 0, "diff").is_err());
+        let mut cursor = ArgCursor::new(&raw, "diff").unwrap();
+        cursor.next();
+        assert!(OutputArgs::default().parse_flag(&mut cursor).is_err());
     }
 }

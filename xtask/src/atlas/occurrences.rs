@@ -14,7 +14,7 @@ use super::references::{
     FnRef, descriptor_tail_matches, has_role, normalized_document_path, occurrence_line, read_index,
 };
 use super::syntax::{self, SyntaxReport};
-use super::{index, modules, set_once, sources, validate_scope, value};
+use super::{ArgCursor, index, modules, sources, validate_scope};
 
 const USAGE: &str = "cargo xtask atlas index [--doc <path>] [--symbol <name>]";
 const SECTIONS: &[&str] = &["symbols", "occurrences"];
@@ -112,30 +112,23 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
+    let Some(mut cursor) = ArgCursor::new(args, "index") else {
         return Ok(None);
-    }
+    };
     let mut query = Query::default();
     let mut output = OutputArgs::default();
-    let mut index = 0;
-    while index < args.len() {
-        if let Some(consumed) = output.parse_flag(args, index, "index")? {
-            index += consumed;
+    while let Some(flag) = cursor.next() {
+        if output.parse_flag(&mut cursor)? {
             continue;
         }
-        match args[index].as_str() {
+        match flag {
             "--doc" => {
-                let raw = value(args, index, "index", "--doc")?;
+                let raw = cursor.value_of(flag)?;
                 validate_scope(raw, "--doc")?;
-                set_once(
-                    &mut query.doc,
-                    normalized_document_path(raw),
-                    "index",
-                    "--doc",
-                )?;
+                cursor.once(&mut query.doc, normalized_document_path(raw), flag)?;
             }
             "--symbol" => {
-                let raw = value(args, index, "index", "--symbol")?;
+                let raw = cursor.value_of(flag)?;
                 if raw.contains('#')
                     || !syn::parse_str::<syn::Ident>(raw).is_ok_and(|ident| ident == raw)
                 {
@@ -143,11 +136,10 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                         "atlas index: invalid --symbol `{raw}`; --symbol takes one item name such as `open`; narrow with --doc <file that defines it>"
                     );
                 }
-                set_once(&mut query.symbol, raw.to_owned(), "index", "--symbol")?;
+                cursor.once(&mut query.symbol, raw.to_owned(), flag)?;
             }
             other => bail!("unknown atlas index argument `{other}`\n\n{}", usage()),
         }
-        index += 2;
     }
     if query.doc.is_none() && query.symbol.is_none() {
         bail!(
