@@ -746,7 +746,12 @@ pub fn admit(config: &HibernateConfig) -> Result<Admission, HibernateErr> {
 }
 
 fn admit_with(config: &HibernateConfig, host: &impl Host) -> Result<Admission, HibernateErr> {
-    config.schedule()?;
+    if let Err(error) = config.schedule() {
+        return Ok(Admission {
+            available: false,
+            reason: Some(error.to_string()),
+        });
+    }
     let report = inspect_with(config, host);
     Ok(Admission {
         available: report.enabled && report.skipped.is_none(),

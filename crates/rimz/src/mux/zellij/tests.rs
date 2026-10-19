@@ -486,6 +486,7 @@ impl TestRoom {
                 rimz_build: None,
                 pins: crate::ids::RoomLogins::new(),
                 remote_control_off: Default::default(),
+                skipped: Vec::new(),
                 updated_at: jiff::Timestamp::now(),
             },
         )

@@ -146,6 +146,77 @@ fn config_editor_non_force_defaults_fill_the_gaps_beside_an_existing_file() {
 }
 
 #[test]
+fn non_force_defaults_preserve_a_dangling_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let target = dir.path().join("missing.toml");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        &path,
+        dir.path().join("agents-home"),
+    ));
+    editor.write_defaults(false).unwrap();
+    assert_eq!(std::fs::read_link(&path).unwrap(), target);
+    assert!(!target.exists());
+}
+
+#[test]
+fn dangling_core_refuses_account_inheritance_but_allows_a_default_pin() {
+    if std::env::var_os("RIMZ_TEST_DANGLING_CORE").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "config::edit::tests::dangling_core_refuses_account_inheritance_but_allows_a_default_pin", "--nocapture"])
+            .env("RIMZ_HOME", home.path())
+            .env("RIMZ_TEST_DANGLING_CORE", "1")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = MachineConfig::config_path();
+    std::os::unix::fs::symlink(path.with_file_name("missing.toml"), &path).unwrap();
+    ConfigEditor::machine().write_defaults(false).unwrap();
+    let machine = MachineConfig::load_lenient();
+    assert!(
+        machine.notices.unreadable_files.contains_key(&path),
+        "a dangling core must be recorded as unreadable"
+    );
+    assert!(machine.require_readable_core("select an account").is_err());
+    let root = tempfile::tempdir().unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let following =
+        crate::agents::resolve_room_accounts(&Default::default(), root.path(), &machine);
+    assert!(following.login(&kind, &machine.accounts).is_err());
+    let pins = [(kind.clone(), crate::ids::LoginName::default_login())].into();
+    let pinned = crate::agents::resolve_room_accounts(&pins, root.path(), &machine);
+    assert!(
+        pinned
+            .login(&kind, &machine.accounts)
+            .unwrap()
+            .name()
+            .is_default()
+    );
+}
+
+#[test]
+fn non_force_defaults_report_metadata_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("not-a-directory");
+    std::fs::write(&parent, "occupied").unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        parent.join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    assert!(
+        editor.write_defaults(false).is_err(),
+        "an unreadable path must not silently count as an existing config"
+    );
+}
+
+#[test]
 fn set_classifies_a_duplicate_key_in_the_existing_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("config.toml");

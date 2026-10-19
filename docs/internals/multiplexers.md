@@ -82,7 +82,7 @@ Three modules outside `mux/` complete the picture. [`room/`](../../crates/rimz/s
 
 1. the `--mux <name>` flag,
 2. the active environment (`ZELLIJ` or `ZELLIJ_PANE_ID`, then `TMUX` or `TMUX_PANE`),
-3. `[mux] default` from per-machine config, which fails fast when it names an uninstalled backend,
+3. `[mux] default` from per-machine config, skipped when it names an uninstalled backend (room admission warns),
 4. the installed binary, tmux preferred when both are present.
 
 The flag and the environment decide before config loads, so a command run inside a live room always addresses that room.

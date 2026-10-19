@@ -89,6 +89,7 @@ fn root_lane_is_stamped_through_every_fold_reader() {
             rimz_build: None,
             pins: Default::default(),
             remote_control_off: Default::default(),
+            skipped: Vec::new(),
             updated_at: jiff::Timestamp::UNIX_EPOCH,
         },
     )

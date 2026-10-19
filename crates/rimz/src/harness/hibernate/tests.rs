@@ -1086,7 +1086,7 @@ fn disabled_preflight_does_not_probe() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
+fn admission_publishes_unavailable_for_a_bad_schedule() {
     let (_dir, store, _, _, _) = decision_fixture();
     let runtime = store.runtime_paths();
     let mut host = FakeHost::new();
@@ -1121,7 +1121,17 @@ fn admission_publishes_capability_verdict_and_rejects_bad_schedule() {
         Some("disabled")
     );
     config.after = "bad".into();
-    assert!(admit_with(&config, &host).is_err());
+    let invalid = admit_with(&config, &host).unwrap();
+    assert!(!invalid.available);
+    assert!(
+        invalid
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("agents.hibernate")
+    );
+    invalid.publish(runtime).unwrap();
+    assert_eq!(Admission::read(runtime).reason, invalid.reason);
     let report = inspect_with(&config, &host);
     assert!(matches!(report.checks[0].status, CheckStatus::Error));
 }

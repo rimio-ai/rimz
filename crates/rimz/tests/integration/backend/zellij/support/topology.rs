@@ -189,6 +189,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
         rimz_build: None,
         pins: Default::default(),
         remote_control_off: Default::default(),
+        skipped: Vec::new(),
         updated_at: jiff::Timestamp::now(),
     };
     rimz::workspace::record::write(&state, &record).expect("workspace record");

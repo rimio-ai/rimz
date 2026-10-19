@@ -1411,7 +1411,8 @@ path = "crates/rimz/src/store"
 # GcPolicy and tmp inventory, hold, unit and grace predicate serve both GC passes (+5).
 # pending_recovery::{seed, confirm} share locked tab-confirmation transitions with rebirth (+2).
 # idle_stop::withdraw_before and message::human_opened_turn share conditional withdrawal and authorship with hooks (+2).
-surface-budget = 480
+# Store::set_skipped_settings replaces the room's durable configuration warnings (+1).
+surface-budget = 481
 
 [[verdict]]
 kind = "item"
@@ -1509,7 +1510,8 @@ path = "crates/rimz/src/workspace.rs"
 # Record scanners expose only rooms using the current layout.
 # Persisted hooks resolve through their captured environment (+1).
 # ResolvedWorkspace::at_launch_dir keeps the room pin while resolving launch trust (+1).
-surface-budget = 26
+# SkippedSetting carries the room's configuration warnings into CLI and sidebar readers (+1).
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/wakeup"
@@ -4088,6 +4090,16 @@ reason = "Error type of pub record::read, read_optional and write and of the pub
 kind = "item"
 key = "workspace::record::Result"
 reason = "Return alias of pub record::read, read_optional and write; atlas caveat 13 (pass 22b)."
+
+[[verdict]]
+kind = "item"
+key = "workspace::record::SkippedSetting"
+reason = "The durable room-warning schema is shared with command and sidebar readers."
+
+[[verdict]]
+kind = "item"
+key = "store::writer::Store::set_skipped_settings"
+reason = "Room birth replaces its warnings through the locked store writer."
 
 [[verdict]]
 kind = "item"

@@ -168,10 +168,13 @@ impl Store {
             if unfreeze_logins
                 && let Some(mut record) =
                     crate::workspace::record::read_optional(&paths.workspace_record)?
-                && !(record.pins.is_empty() && record.remote_control_off.is_empty())
+                && !(record.pins.is_empty()
+                    && record.remote_control_off.is_empty()
+                    && record.skipped.is_empty())
             {
                 record.pins.clear();
                 record.remote_control_off.clear();
+                record.skipped.clear();
                 crate::workspace::record::write(paths, &record)?;
             }
 

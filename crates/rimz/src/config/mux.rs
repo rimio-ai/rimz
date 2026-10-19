@@ -6,7 +6,7 @@ use super::MachineConfig;
 
 /// Backend-selection preference. `default` is consulted after `--mux` and an
 /// active mux env; unset resolves from installed binaries with tmux as the
-/// tiebreak. A set-but-uninstalled backend fails fast at selection.
+/// tiebreak. An uninstalled configured backend is treated as unset.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MuxConfig {

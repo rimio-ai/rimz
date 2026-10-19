@@ -2,7 +2,7 @@
 //!
 //! 1. explicit `--mux <name>` flag
 //! 2. active mux environment (`ZELLIJ` / `TMUX`)
-//! 3. `[mux] default` config — errors if it names an uninstalled backend
+//! 3. `[mux] default` config, when that backend is installed
 //! 4. installed binary (tmux preferred when both are present)
 //!
 //! The live-session snapshot answers which backend holds a session at batch scale.
@@ -65,9 +65,10 @@ fn select_backend(
             MuxName::Zellij => zellij_installed,
             MuxName::Tmux => tmux_installed,
         };
-        return installed
-            .then_some(mux)
-            .ok_or(MuxErr::ConfiguredMuxNotInstalled { mux });
+        if installed {
+            return Ok(mux);
+        }
+        tracing::warn!(%mux, "configured default backend is not installed; auto-detecting");
     }
     match (zellij_installed, tmux_installed) {
         (_, true) => Ok(MuxName::Tmux),
@@ -198,17 +199,15 @@ mod tests {
     }
 
     #[test]
-    fn configured_default_errors_when_not_installed() {
-        assert!(matches!(
-            select(None, None, Some(MuxName::Zellij), false, true),
-            Err(MuxErr::ConfiguredMuxNotInstalled {
-                mux: MuxName::Zellij
-            })
-        ));
-        assert!(matches!(
-            select(None, None, Some(MuxName::Tmux), true, false),
-            Err(MuxErr::ConfiguredMuxNotInstalled { mux: MuxName::Tmux })
-        ));
+    fn configured_default_falls_back_when_not_installed() {
+        assert_eq!(
+            select(None, None, Some(MuxName::Zellij), false, true).unwrap(),
+            MuxName::Tmux
+        );
+        assert_eq!(
+            select(None, None, Some(MuxName::Tmux), true, false).unwrap(),
+            MuxName::Zellij
+        );
     }
 
     #[test]
