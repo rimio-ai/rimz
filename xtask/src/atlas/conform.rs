@@ -157,34 +157,28 @@ pub(super) fn ratchet(root: &Path) -> Result<()> {
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
+    let Some(mut cursor) = super::ArgCursor::new(args, "conform") else {
         return Ok(None);
-    }
+    };
     let mut mode = Mode::Report;
     let mut only = BTreeSet::new();
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(flag) = cursor.next() {
+        match flag {
             "--ratchet" | "--tighten" => {
                 if mode != Mode::Report {
                     bail!("atlas conform --ratchet and --tighten are mutually exclusive");
                 }
-                mode = if args[index] == "--ratchet" {
+                mode = if flag == "--ratchet" {
                     Mode::Ratchet
                 } else {
                     Mode::Tighten
                 };
             }
             "--only" => {
-                only.insert(super::validate_scope(
-                    super::value(args, index, "conform", "--only")?,
-                    "--only",
-                )?);
-                index += 1;
+                only.insert(super::validate_scope(cursor.value_of(flag)?, flag)?);
             }
             arg => bail!("unknown atlas conform argument `{arg}`"),
         }
-        index += 1;
     }
     if !only.is_empty() && mode != Mode::Tighten {
         bail!("atlas conform --only requires --tighten");

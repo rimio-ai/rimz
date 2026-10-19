@@ -18,7 +18,7 @@ use super::rank::{self, Hotspot, RankBy, Row, Totals};
 use super::shapes::{self, ShapeFamily};
 use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path};
 use super::target::{self, Direction, LayerRanks, TARGET_FILE, Target, Verdict, VerdictKind};
-use super::{positive_usize, set_once, validate_scope, value};
+use super::{ArgCursor, validate_scope};
 
 const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
@@ -227,57 +227,37 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
+    let Some(mut cursor) = ArgCursor::new(args, "survey") else {
         return Ok(None);
-    }
+    };
     let mut path = None;
     let mut top = None;
     let mut by = None;
     let mut all = false;
     let mut restamp = false;
     let mut output = OutputArgs::default();
-    let mut index = 0;
-    while index < args.len() {
-        if let Some(eaten) = output.parse_flag(args, index, "survey")? {
-            index += eaten;
+    while let Some(flag) = cursor.next() {
+        if output.parse_flag(&mut cursor)? {
             continue;
         }
-        let arg = &args[index];
-        match arg.as_str() {
+        match flag {
             "--path" => {
-                let parsed = validate_scope(value(args, index, "survey", "--path")?, "--path")?;
-                set_once(&mut path, parsed, "survey", "--path")?;
-                index += 2;
+                let parsed = validate_scope(cursor.value_of(flag)?, flag)?;
+                cursor.once(&mut path, parsed, flag)?;
             }
-            "--top" => {
-                let parsed =
-                    positive_usize(value(args, index, "survey", "--top")?, "survey", "--top")?;
-                set_once(&mut top, parsed, "survey", "--top")?;
-                index += 2;
-            }
+            "--top" => cursor.positive(&mut top, flag)?,
             "--by" => {
-                let raw = value(args, index, "survey", "--by")?;
+                let raw = cursor.value_of(flag)?;
                 let parsed = RankBy::parse(raw).ok_or_else(|| {
                     anyhow::anyhow!(
                         "atlas survey --by must be one of code, esc, churn, pace, cx, tc, depth"
                     )
                 })?;
-                set_once(&mut by, parsed, "survey", "--by")?;
-                index += 2;
+                cursor.once(&mut by, parsed, flag)?;
             }
-            "--all" | "--restamp" => {
-                let flag = if arg == "--all" {
-                    &mut all
-                } else {
-                    &mut restamp
-                };
-                if *flag {
-                    bail!("atlas survey {arg} may only be passed once");
-                }
-                *flag = true;
-                index += 1;
-            }
-            _ => bail!("unknown atlas survey argument `{arg}`"),
+            "--all" => cursor.switch(&mut all, flag)?,
+            "--restamp" => cursor.switch(&mut restamp, flag)?,
+            _ => bail!("unknown atlas survey argument `{flag}`"),
         }
     }
     output.validate_sections("survey", SECTIONS)?;

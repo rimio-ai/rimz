@@ -84,26 +84,59 @@ fn validate_scope(value: &str, flag: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn value<'a>(args: &'a [String], index: usize, verb: &str, flag: &str) -> Result<&'a str> {
-    args.get(index + 1)
-        .map(String::as_str)
-        .ok_or_else(|| anyhow::anyhow!("atlas {verb} {flag} requires a value"))
+struct ArgCursor<'a> {
+    args: std::slice::Iter<'a, String>,
+    flag: &'a str,
+    verb: &'a str,
 }
 
-fn set_once<T>(slot: &mut Option<T>, value: T, verb: &str, flag: &str) -> Result<()> {
-    if slot.is_some() {
-        bail!("atlas {verb} {flag} may only be passed once");
+impl<'a> ArgCursor<'a> {
+    fn new(args: &'a [String], verb: &'a str) -> Option<Self> {
+        if args.iter().any(|arg| crate::is_help_flag(arg)) {
+            return None;
+        }
+        Some(Self {
+            args: args.iter(),
+            flag: "",
+            verb,
+        })
     }
-    *slot = Some(value);
-    Ok(())
-}
 
-fn positive_usize(value: &str, verb: &str, flag: &str) -> Result<usize> {
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|_| anyhow::anyhow!("atlas {verb} {flag} requires a positive integer"))?;
-    if parsed == 0 {
-        bail!("atlas {verb} {flag} must be greater than zero");
+    fn next(&mut self) -> Option<&'a str> {
+        self.flag = self.args.next()?.as_str();
+        Some(self.flag)
     }
-    Ok(parsed)
+
+    fn value_of(&mut self, flag: &str) -> Result<&'a str> {
+        self.args
+            .next()
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("atlas {} {flag} requires a value", self.verb))
+    }
+
+    fn once<T>(&self, slot: &mut Option<T>, value: T, flag: &str) -> Result<()> {
+        if slot.is_some() {
+            bail!("atlas {} {flag} may only be passed once", self.verb);
+        }
+        *slot = Some(value);
+        Ok(())
+    }
+
+    fn switch(&self, slot: &mut bool, flag: &str) -> Result<()> {
+        if *slot {
+            bail!("atlas {} {flag} may only be passed once", self.verb);
+        }
+        *slot = true;
+        Ok(())
+    }
+
+    fn positive(&mut self, slot: &mut Option<usize>, flag: &str) -> Result<()> {
+        let parsed = self.value_of(flag)?.parse::<usize>().map_err(|_| {
+            anyhow::anyhow!("atlas {} {flag} requires a positive integer", self.verb)
+        })?;
+        if parsed == 0 {
+            bail!("atlas {} {flag} must be greater than zero", self.verb);
+        }
+        self.once(slot, parsed, flag)
+    }
 }

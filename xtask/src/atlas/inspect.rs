@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde::Serialize;
 
+use super::ArgCursor;
 use super::detect::{self, GuardFamily, IdentifierRole};
 use super::facts::{Facets, Facts};
 use super::history::{self, Commit};
@@ -17,7 +18,6 @@ use super::shapes::{self, ShapeFamily};
 use super::sources::SourceKind;
 use super::syntax::{FileSyntax, FnBody, PrivateItem};
 use super::target::{self, Direction, ModuleRule, TARGET_FILE, Target, Verdict, VerdictKind};
-use super::{positive_usize, set_once, value};
 
 mod calls;
 mod flags;
@@ -380,9 +380,9 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
+    let Some(mut cursor) = ArgCursor::new(args, "inspect") else {
         return Ok(None);
-    }
+    };
     let mut module = None;
     let mut from = None;
     let mut item = None;
@@ -390,51 +390,26 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut all = false;
     let mut brief = false;
     let mut output = OutputArgs::default();
-    let mut index = 0;
-    while index < args.len() {
-        if let Some(eaten) = output.parse_flag(args, index, "inspect")? {
-            index += eaten;
+    while let Some(flag) = cursor.next() {
+        if output.parse_flag(&mut cursor)? {
             continue;
         }
-        let flag = args[index].as_str();
         match flag {
-            "--brief" => {
-                if brief {
-                    bail!("atlas inspect --brief may only be passed once");
-                }
-                brief = true;
-                index += 1;
-            }
+            "--brief" => cursor.switch(&mut brief, flag)?,
             "--module" | "--from" | "--item" => {
-                let raw = value(args, index, "inspect", flag)?;
+                let raw = cursor.value_of(flag)?;
                 if raw.is_empty() {
                     bail!("atlas inspect {flag} requires a non-empty value");
                 }
                 match flag {
-                    "--module" => set_once(&mut module, raw.to_owned(), "inspect", flag)?,
-                    "--from" => set_once(&mut from, raw.to_owned(), "inspect", flag)?,
-                    "--item" => set_once(&mut item, raw.to_owned(), "inspect", flag)?,
+                    "--module" => cursor.once(&mut module, raw.to_owned(), flag)?,
+                    "--from" => cursor.once(&mut from, raw.to_owned(), flag)?,
+                    "--item" => cursor.once(&mut item, raw.to_owned(), flag)?,
                     _ => unreachable!(),
                 }
-                index += 2;
             }
-            "--top" => {
-                let raw = value(args, index, "inspect", "--top")?;
-                set_once(
-                    &mut top,
-                    positive_usize(raw, "inspect", "--top")?,
-                    "inspect",
-                    "--top",
-                )?;
-                index += 2;
-            }
-            "--all" => {
-                if all {
-                    bail!("atlas inspect --all may only be passed once");
-                }
-                all = true;
-                index += 1;
-            }
+            "--top" => cursor.positive(&mut top, flag)?,
+            "--all" => cursor.switch(&mut all, flag)?,
             "--no-index" => bail!("atlas inspect requires the exact SCIP reference index"),
             flag => bail!("unknown atlas inspect flag `{flag}`\n\n{}", usage()),
         }

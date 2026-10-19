@@ -23,7 +23,7 @@ use super::references::{Edge, FunctionId};
 use super::sources;
 use super::syntax::{FileSyntax, Spelling};
 use super::target::{self, Direction, LayerRanks, TARGET_FILE};
-use super::{positive_usize, set_once, validate_scope, value};
+use super::{ArgCursor, validate_scope};
 
 const DEFAULT_TOP: usize = 20;
 
@@ -387,49 +387,40 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
 }
 
 fn parse_args(args: &[String]) -> Result<Option<Args>> {
-    if args.iter().any(|arg| crate::is_help_flag(arg)) {
+    let Some(mut cursor) = ArgCursor::new(args, "diff") else {
         return Ok(None);
-    }
+    };
     let mut base = None;
     let mut path = None;
     let mut expect = None;
     let mut top = None;
     let mut output = OutputArgs::default();
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
-        if let Some(eaten) = output.parse_flag(args, index, "diff")? {
-            index += eaten;
+    while let Some(flag) = cursor.next() {
+        if output.parse_flag(&mut cursor)? {
             continue;
         }
-        match arg.as_str() {
+        match flag {
             "--base" => {
-                let parsed = value(args, index, "diff", "--base")?;
+                let parsed = cursor.value_of(flag)?;
                 if parsed.is_empty() {
                     bail!("atlas diff --base requires a non-empty revision");
                 }
-                set_once(&mut base, parsed.to_owned(), "diff", "--base")?;
-                index += 2;
+                cursor.once(&mut base, parsed.to_owned(), flag)?;
             }
             "--path" => {
-                let parsed = validate_scope(value(args, index, "diff", "--path")?, "--path")?;
-                set_once(&mut path, parsed, "diff", "--path")?;
-                index += 2;
+                let parsed = validate_scope(cursor.value_of(flag)?, flag)?;
+                cursor.once(&mut path, parsed, flag)?;
             }
             "--expect" => {
-                let parsed = value(args, index, "diff", "--expect")?;
+                let parsed = cursor.value_of(flag)?;
                 if parsed.is_empty() {
                     bail!("atlas diff --expect requires a non-empty path");
                 }
-                set_once(&mut expect, PathBuf::from(parsed), "diff", "--expect")?;
-                index += 2;
+                cursor.once(&mut expect, PathBuf::from(parsed), flag)?;
             }
-            "--top" => {
-                let parsed = positive_usize(value(args, index, "diff", "--top")?, "diff", "--top")?;
-                set_once(&mut top, parsed, "diff", "--top")?;
-                index += 2;
-            }
+            "--top" => cursor.positive(&mut top, flag)?,
             _ => bail!(
-                "unknown atlas diff flag `{arg}`\n\n{USAGE}\n\n{}",
+                "unknown atlas diff flag `{flag}`\n\n{USAGE}\n\n{}",
                 output::USAGE
             ),
         }
