@@ -17,10 +17,10 @@ use super::chrome::{
 };
 use super::layout::{pad_line_to, text_width, trim_spans_to_width};
 use super::sections::{
-    CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
-    cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
-    fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci, parked_overflow_line,
-    parked_workflow_line, worktree_group_lines_projected,
+    CardWalk, CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext,
+    cockpit_spend_line, cockpit_summary_line, content_width, dashboard_block, fleet_header_lines,
+    fleet_size, fleet_store_lines, fleet_total_lines, open_pr_total, open_pr_worst_ci,
+    parked_overflow_line, parked_workflow_line, worktree_group_lines_windowed,
 };
 use super::theme::{Component, Theme};
 use super::{
@@ -38,7 +38,7 @@ pub(in crate::sidebar_pane) fn compose_lines(
     width: u16,
     height: u16,
 ) -> ComposedFrame {
-    compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None)
+    compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None, None)
 }
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
@@ -66,10 +66,14 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// carries a track/thumb glyph in the right rail column — part of the composed
 /// line, so every consumer of the frame sees it.
 ///
-/// Compose the scroll zone once with the previous selections' expansions, or
-/// the carried opening set on a shared landing. An armed layout freeze retains
-/// them regardless of geometry or authoritative scrolling; its expiry releases
-/// them together with the frozen order.
+/// A cold height epoch paints the scroll zone once while filling card heights.
+/// A warm frame measures it with cached heights and row-owning placeholders,
+/// then paints the eased viewport in a second walk; a measurement miss carries
+/// its lines into that walk, so no card is painted twice. Both walks use the
+/// previous selections' expansions, or the carried opening set on a shared
+/// landing. An armed layout freeze retains them regardless of geometry or
+/// authoritative scrolling; its expiry releases them together with the frozen
+/// order.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
@@ -81,6 +85,10 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// are the single authority on hit geometry — built from the same final line
 /// vector that is rendered, so they stay 1:1 with what the user sees through
 /// every clip and every scroll position.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "lend pane-local caches independently of immutable UI state"
+)]
 pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -89,6 +97,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     width: u16,
     height: u16,
     mut meter_pixels: Option<&mut MeterPixels>,
+    heights: Option<&mut super::heights::CardHeights>,
 ) -> ComposedFrame {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette the producer resolved from
@@ -99,6 +108,11 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     // width and opened with a blank gutter, reserving the trailing right rail —
     // the same frame the cards carry (see `with_gutter`).
     let roster = ui.visible_roster(snapshot);
+    let mut walk = CardWalk::new(heights);
+    #[cfg(test)]
+    if let Some(cache) = walk.heights.as_deref_mut() {
+        cache.painted.clear();
+    }
     let mut top = top_lines(snapshot, ui, cells, theme);
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
@@ -137,7 +151,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     if ui.freeze.is_none() {
         held_expansions.clear();
     }
-    let (scroll, landed_span) = scroll_lines(
+    let (scroll, landed_span) = scroll_lines_windowed(
         snapshot,
         ui,
         &roster,
@@ -145,6 +159,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
         cells,
         theme,
         meter_pixels.as_deref_mut(),
+        &mut walk,
     );
     let layout = plan_zones(ZoneInputs {
         snapshot,
@@ -185,6 +200,30 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     let painted_rows = placements(layout.offset);
     let anchored_rows = placements(layout.resolution.offset);
     insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
+    let scroll = if walk.heights.is_some() && walk.window.is_empty() {
+        walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
+        walk.measuring = false;
+        let (painted, painted_landed_span) = scroll_lines_windowed(
+            snapshot,
+            ui,
+            &roster,
+            &held_expansions,
+            cells,
+            theme,
+            meter_pixels.as_deref_mut(),
+            &mut walk,
+        );
+        debug_assert_eq!(
+            scroll.interactions.row_map(),
+            painted.interactions.row_map()
+        );
+        debug_assert_eq!(scroll.card_starts, painted.card_starts);
+        debug_assert_eq!(landed_span, painted_landed_span);
+        debug_assert_eq!(scroll.lines.len(), painted.lines.len());
+        painted
+    } else {
+        scroll
+    };
     let scroll_block = visible_scroll_block(scroll, snapshot, ui, theme, cells, layout);
 
     let mut frame = top.window(0, layout.top_shown);
@@ -550,6 +589,7 @@ fn bottom_corner_chrome(
 }
 
 /// One draw's lines, typed interactions, and resolved zone positions.
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(super) painted_rows: Vec<(String, isize)>,
     pub(super) anchored_rows: Vec<(String, isize)>,
@@ -1009,6 +1049,7 @@ pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, Agen
     })
 }
 
+#[cfg(test)]
 pub(super) fn scroll_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
@@ -1016,11 +1057,73 @@ pub(super) fn scroll_lines(
     held_expansions: &BTreeSet<String>,
     width: usize,
     theme: &Theme,
+    meter_pixels: Option<&mut MeterPixels>,
+) -> (RenderedBlock, Option<(usize, usize)>) {
+    scroll_lines_windowed(
+        snapshot,
+        ui,
+        roster,
+        held_expansions,
+        width,
+        theme,
+        meter_pixels,
+        &mut CardWalk::new(None),
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one scroll walker serves full paints, measurement, and viewport paints"
+)]
+fn scroll_lines_windowed(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    roster: &VisibleRoster<'_>,
+    held_expansions: &BTreeSet<String>,
+    width: usize,
+    theme: &Theme,
     mut meter_pixels: Option<&mut MeterPixels>,
+    walk: &mut CardWalk<'_>,
 ) -> (RenderedBlock, Option<(usize, usize)>) {
     let mut block = RenderedBlock::default();
     let mut landed_span = None;
 
+    let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
+    let ctx = RowCtx {
+        theme,
+        now: snapshot.now,
+        width,
+        tier: Tier::for_width(content_width(width)),
+        bands: &snapshot.theme.display.context_meter,
+        tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
+        stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
+        card_density: snapshot.theme.display.card_density,
+        stale_after_secs: snapshot.theme.display.stale_after_secs,
+        selected_index: ui.selected_index,
+        matched: true,
+        held_expansions,
+        focused_pane: snapshot.focused_pane.as_ref(),
+        animation_phase: ui.animation_phase,
+        cost_rolls: &ui.cost_rolls,
+        lead_unread: lead_unread_id,
+        recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
+        max_recent_subagents: snapshot.theme.display.max_recent_subagents,
+        delegation_overrides: &ui.delegation_overrides,
+        delegation_history: &ui.delegation_history,
+    };
+    if walk.measuring
+        && let Some(cache) = walk.heights.as_deref_mut()
+    {
+        let theme = ui
+            .cached_theme(&snapshot.theme)
+            .filter(|cached| std::ptr::eq(cached.as_ref(), theme))
+            .unwrap_or_else(|| std::rc::Rc::new(theme.clone()));
+        let cold_epoch = cache.prepare(&snapshot.worktree_groups, theme, &ctx);
+        if cold_epoch {
+            // Every card needs measurement; retain that full paint instead of walking twice.
+            walk.window = 0..usize::MAX;
+        }
+    }
     if roster.len() == 0
         && ui
             .search_draft
@@ -1031,31 +1134,7 @@ pub(super) fn scroll_lines(
         block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
         return (block, None);
     }
-
     if !snapshot.worktree_groups.is_empty() {
-        let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
-        let ctx = RowCtx {
-            theme,
-            now: snapshot.now,
-            width,
-            tier: Tier::for_width(content_width(width)),
-            bands: &snapshot.theme.display.context_meter,
-            tool_repeat_warn_after: snapshot.attention.tool_repeat_warn_after.get(),
-            stalled_after_secs: snapshot.attention.stalled_after_secs.get(),
-            card_density: snapshot.theme.display.card_density,
-            stale_after_secs: snapshot.theme.display.stale_after_secs,
-            selected_index: ui.selected_index,
-            matched: true,
-            held_expansions,
-            focused_pane: snapshot.focused_pane.as_ref(),
-            animation_phase: ui.animation_phase,
-            cost_rolls: &ui.cost_rolls,
-            lead_unread: lead_unread_id,
-            recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
-            max_recent_subagents: snapshot.theme.display.max_recent_subagents,
-            delegation_overrides: &ui.delegation_overrides,
-            delegation_history: &ui.delegation_history,
-        };
         let filtered = ui.make_up_filter.filter.is_some()
             || ui
                 .search_draft
@@ -1092,12 +1171,16 @@ pub(super) fn scroll_lines(
                 block.push_inert(Line::from(""));
             }
             emitted = true;
-            block.append(worktree_group_lines_projected(WorktreeRenderContext {
-                row: &ctx,
-                roster,
-                group,
-                meter_pixels: meter_pixels.as_deref_mut(),
-            }));
+            walk.origin = block.lines.len();
+            block.append(worktree_group_lines_windowed(
+                WorktreeRenderContext {
+                    row: &ctx,
+                    roster,
+                    group,
+                    meter_pixels: meter_pixels.as_deref_mut(),
+                },
+                walk,
+            ));
             if landed_span.is_none()
                 && group.source().finished
                 && group.is_empty()

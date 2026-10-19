@@ -17,6 +17,7 @@ mod ansi;
 mod chrome;
 mod compose;
 mod fmt;
+mod heights;
 mod interaction;
 mod labels;
 mod layout;
@@ -102,6 +103,7 @@ fn draw_into(
     prune_delegation_state(snapshot, ui);
     let theme = ui.theme(&snapshot.theme);
     let mut meter_pixels = ui.meter_pixels.take();
+    let mut card_heights = std::mem::take(&mut ui.card_heights);
     let composed = compose_lines_with_meter(
         snapshot,
         alert,
@@ -110,8 +112,10 @@ fn draw_into(
         area.width,
         area.height,
         meter_pixels.as_mut(),
+        Some(&mut card_heights),
     );
     ui.meter_pixels = meter_pixels;
+    ui.card_heights = card_heights;
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
     ui.painted_roster = ui
@@ -743,8 +747,16 @@ pub fn render_expanded_line_ansi<W: Write>(
         ..UiState::default()
     };
     let theme = ui.theme(&snapshot.theme);
-    let composed =
-        compose_lines_with_meter(&snapshot, None, &ui, theme.as_ref(), width, u16::MAX, None);
+    let composed = compose_lines_with_meter(
+        &snapshot,
+        None,
+        &ui,
+        theme.as_ref(),
+        width,
+        u16::MAX,
+        None,
+        None,
+    );
     let height =
         u16::try_from(composed.content_height.clamp(1, usize::from(u16::MAX))).unwrap_or(u16::MAX);
 
