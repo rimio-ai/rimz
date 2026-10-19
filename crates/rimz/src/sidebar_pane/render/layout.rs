@@ -96,6 +96,30 @@ pub(super) fn ellipsize(text: &str, max_cells: usize) -> String {
     format!("{}…", clip(text, max_cells - 1))
 }
 
+/// Greedy word wrap to `width` columns. Words longer than the budget are hard-cut.
+pub(super) fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current = clip(word, width);
+        } else if text_width(&current) + 1 + text_width(word) <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current = clip(word, width);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
 pub(super) fn clip(content: &str, width: usize) -> String {
     let mut taken = String::new();
     let mut used = 0;

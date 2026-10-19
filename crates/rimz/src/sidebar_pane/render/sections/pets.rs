@@ -1,6 +1,6 @@
 use crate::sidebar_pane::pets::{PetBody, PetCellGrid, PetView};
 use crate::sidebar_pane::pixel::{image_id_color, placeholder_cluster};
-use crate::sidebar_pane::render::layout::{clip, text_width};
+use crate::sidebar_pane::render::layout::{clip, text_width, wrap_words};
 use crate::sidebar_pane::render::theme::Theme;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -176,31 +176,6 @@ fn body_lines(
             None => spans.push(Span::raw(" ".repeat(grid_w))),
         }
         lines.push(Line::from(spans));
-    }
-    lines
-}
-
-/// Greedy word wrap to `width` columns. A word longer than `width` is hard-cut
-/// so a caption never overflows the panel.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current = clip(word, width);
-        } else if text_width(&current) + 1 + text_width(word) <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut current));
-            current = clip(word, width);
-        }
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
     }
     lines
 }

@@ -25,6 +25,76 @@ fn waiting_asker() -> AgentState {
 }
 
 #[test]
+fn waiting_question_wraps_naturally_without_its_preamble() {
+    for width in [32, 46, 48] {
+        let mut asker = waiting_asker();
+        asker.open_ask.as_mut().unwrap().detail = Some(
+            "The cache is ready. Should I keep the current pricing cache for this run? More details follow.".into(),
+        );
+        let snapshot = snapshot_with(vec![asker]);
+        let theme = Theme::fixed(false);
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, width));
+        let shown = text
+            .iter()
+            .map(|line| line.trim_matches(['▌', '▐', ' ']))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            shown.contains("Should I keep the current pricing cache for this run?"),
+            "{text:?}"
+        );
+        let question = text
+            .iter()
+            .position(|line| line.contains("Should I"))
+            .unwrap();
+        assert!(text[question + 1].contains('?'), "{text:?}");
+        assert!(text[question + 2].contains('%'), "{text:?}");
+        assert!(
+            !shown.contains("ready") && !shown.contains("details") && !shown.contains('…'),
+            "{text:?}"
+        );
+        assert_snapshot(
+            &format!("waiting_question_{width}"),
+            snapshot_to_screen(&snapshot, width as u16, 22),
+        );
+    }
+}
+
+#[test]
+fn waiting_description_marks_omitted_lines_and_wide_words() {
+    for (name, detail) in [
+        (
+            "prose",
+            "Bash: allow the pricing cache write and refresh every downstream consumer before continuing the build with the latest complete dataset",
+        ),
+        (
+            "word",
+            "漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字 done",
+        ),
+    ] {
+        let mut asker = waiting_asker();
+        asker.open_ask.as_mut().unwrap().detail = Some(detail.into());
+        let snapshot = snapshot_with(vec![asker]);
+        let theme = Theme::fixed(false);
+        let text = line_texts(&group_lines_at_width(&snapshot, &theme, 0, 32));
+        let description = text
+            .iter()
+            .position(|line| line.contains(if name == "prose" { "Bash:" } else { "漢字" }))
+            .unwrap();
+        assert!(
+            text[description + 1]
+                .trim_end_matches(['▐', ' '])
+                .ends_with('…'),
+            "{text:?}"
+        );
+        assert_snapshot(
+            &format!("waiting_truncated_{name}"),
+            snapshot_to_screen(&snapshot, 32, 22),
+        );
+    }
+}
+
+#[test]
 fn waiting_card_description_prefers_open_ask_to_session_name() {
     let snapshot = snapshot_with(vec![waiting_asker()]);
     assert_eq!(
@@ -52,9 +122,21 @@ fn waiting_card_description_prefers_open_ask_to_session_name() {
     let snapshot = snapshot_with(vec![multiline]);
     let text = line_texts(&group_lines(&snapshot, &theme, 0));
     assert!(
-        text.iter()
-            .any(|line| line.contains("Which approach? 1. merge")),
+        text.iter().any(|line| line.contains("Which approach?")),
         "{text:?}"
+    );
+    assert!(
+        !text.iter().any(|line| line.contains("1. merge")),
+        "{text:?}"
+    );
+    let question = text
+        .iter()
+        .position(|line| line.contains("Which approach?"))
+        .unwrap();
+    assert!(text[question + 1].contains('%'), "{text:?}");
+    assert_snapshot(
+        "waiting_short_question",
+        snapshot_to_screen(&snapshot, 32, 22),
     );
 }
 

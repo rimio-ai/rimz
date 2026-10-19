@@ -1,4 +1,4 @@
-//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered line skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line, and closed resting history omits the delegation summary.
+//! State-derived agent-card templates. Lifecycle, quiet age, density, and reach choose an ordered slot skeleton; provider enrichment only fills the chosen slots. Read idle and done history can shrink to one line, and closed resting history omits the delegation summary.
 
 use crate::agents::AgentStatus;
 use crate::config::CardDensityMode;
@@ -9,8 +9,8 @@ use super::super::SelectionReach;
 use super::CardExpansion;
 use super::description::awaiting_first_prompt;
 
-/// The card lifecycle state. Its line set is stable; enrichment only changes
-/// the contents of those lines.
+/// The card lifecycle state. Its slot set is stable; enrichment only changes
+/// the contents of those slots, including a waiting description's line count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CardStage {
     Fresh { labeled: bool },
@@ -127,7 +127,7 @@ const ENGAGED_RESTING_EXPANDED: &[CardSlot] = &[
     CardSlot::DelegationEntries,
 ];
 
-/// The ordered line skeleton for one agent-card state.
+/// The ordered slot skeleton for one agent-card state.
 pub(super) fn template(
     stage: CardStage,
     status: AgentStatus,

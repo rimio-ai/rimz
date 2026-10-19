@@ -170,7 +170,11 @@ pub(super) fn row_lines(
                 CardSlot::Identity => {
                     inner.push(identity_line(ctx, row, attention, cost_usd).into());
                 }
-                CardSlot::Description => inner.push(description_line(ctx, row, attention).into()),
+                CardSlot::Description => inner.extend(
+                    description_lines(ctx, row, attention)
+                        .into_iter()
+                        .map(CardLine::from),
+                ),
                 CardSlot::Question => {
                     if let Some(ask) = agent.queued_asks.first().filter(|_| {
                         matches!(agent.status, AgentStatus::Running | AgentStatus::Waiting)
