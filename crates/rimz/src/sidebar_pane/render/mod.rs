@@ -17,6 +17,7 @@ mod ansi;
 mod chrome;
 mod compose;
 mod fmt;
+mod frame_rows;
 mod heights;
 mod interaction;
 mod labels;
@@ -40,6 +41,7 @@ use self::compose::lead_unread;
 use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
 };
+pub(in crate::sidebar_pane) use self::frame_rows::SectionLabel;
 use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
 pub(in crate::sidebar_pane) use self::sections::agent_card_cost_usd;
@@ -118,6 +120,18 @@ fn draw_into(
     ui.card_heights = card_heights;
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
+    ui.sections = composed
+        .lines
+        .iter()
+        .zip(&composed.sections)
+        .flat_map(|(line, label)| {
+            let rows = frame_rows::wrapped_line_height(line, area.width);
+            std::iter::repeat_n(label.clone(), rows)
+        })
+        .take(usize::from(area.height))
+        .collect();
+    ui.sections
+        .resize(usize::from(area.height), SectionLabel::default());
     ui.painted_roster = ui
         .visible_roster(snapshot)
         .rows()
@@ -149,8 +163,8 @@ fn draw_into(
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     paint_hyperlinks(frame, &ui.interactions, area);
-    if ui.help_visible {
-        draw_help_overlay(
+    if ui.help_visible
+        && let Some(rect) = draw_help_overlay(
             frame,
             theme.as_ref(),
             crate::config::SidebarConfig::key_label(&snapshot.sidebar.focus_key),
@@ -158,7 +172,11 @@ fn draw_into(
             &snapshot.sidebar.keys,
             area,
             (top_height, bottom_height),
-        );
+        )
+    {
+        let start = usize::from(rect.y - area.y);
+        let end = usize::from(rect.bottom() - area.y);
+        ui.sections[start..end].fill(SectionLabel("chrome".to_owned()));
     }
 }
 
@@ -204,9 +222,9 @@ fn draw_help_overlay(
     keys: &crate::config::SidebarKeys,
     area: Rect,
     chrome_heights: (usize, usize),
-) {
+) -> Option<Rect> {
     if area.width == 0 {
-        return;
+        return None;
     }
 
     let area_bottom = area.bottom();
@@ -223,7 +241,7 @@ fn draw_help_overlay(
     }
     let region_h = region_bottom.saturating_sub(region_top);
     if region_h == 0 {
-        return;
+        return None;
     }
 
     let lines = help_lines(theme, focus_key, zoom_key, keys, usize::from(area.width));
@@ -235,14 +253,14 @@ fn draw_help_overlay(
         .min(usize::from(area.width)) as u16;
     let box_h = (lines.len() as u16).min(region_h);
     if box_w == 0 || box_h == 0 {
-        return;
+        return None;
     }
 
     let x = area.right().saturating_sub(box_w).max(area.x);
     let y = region_bottom.saturating_sub(box_h).max(region_top);
     let width = box_w.min(area.right().saturating_sub(x));
     if width == 0 {
-        return;
+        return None;
     }
 
     let rect = Rect {
@@ -253,6 +271,7 @@ fn draw_help_overlay(
     };
     frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(Text::from(lines)), rect);
+    Some(rect)
 }
 
 #[cfg(any(test, feature = "testkit"))]
@@ -695,24 +714,23 @@ pub fn render_fixed<W: Write>(
 }
 
 pub fn render_fixed_line_ansi<W: Write>(
-    mut writer: W,
+    writer: W,
     snapshot: &SidebarSnapshot,
     width: u16,
     height: u16,
 ) -> io::Result<()> {
-    let backend = TestBackend::new(width, height);
-    let mut terminal = infallible(Terminal::new(backend));
-    infallible(terminal.clear());
-    infallible(draw_to_terminal(
-        &mut terminal,
-        snapshot,
-        None,
-        &mut UiState {
-            selected_index: Some(0),
-            ..UiState::default()
-        },
-    ));
-    write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
+    render_line_ansi(writer, snapshot, width, Some(height), None)
+}
+
+/// Print matching physical rows of a full frame; `height = None` expands it to fit.
+pub fn render_section_line_ansi<W: Write>(
+    writer: W,
+    snapshot: &SidebarSnapshot,
+    width: u16,
+    height: Option<u16>,
+    section: &str,
+) -> io::Result<()> {
+    render_line_ansi(writer, snapshot, width, height, Some(section))
 }
 
 /// Render the one-shot `rimz sidebar frame --expand` view as line-oriented ANSI.
@@ -720,21 +738,37 @@ pub fn render_fixed_line_ansi<W: Write>(
 /// Every card uses expanded density, every worktree group bypasses its row cap,
 /// and the offscreen viewport grows to the full composed height.
 pub fn render_expanded_line_ansi<W: Write>(
-    mut writer: W,
+    writer: W,
     snapshot: &SidebarSnapshot,
     width: u16,
 ) -> io::Result<()> {
-    let mut snapshot = snapshot.clone();
-    snapshot.theme.display.card_density = CardDensityMode::Expanded;
+    render_line_ansi(writer, snapshot, width, None, None)
+}
+
+fn render_line_ansi<W: Write>(
+    mut writer: W,
+    snapshot: &SidebarSnapshot,
+    width: u16,
+    height: Option<u16>,
+    section: Option<&str>,
+) -> io::Result<()> {
+    let mut expanded = height.is_none().then(|| snapshot.clone());
+    if let Some(snapshot) = &mut expanded {
+        snapshot.theme.display.card_density = CardDensityMode::Expanded;
+    }
+    let snapshot = expanded.as_ref().unwrap_or(snapshot);
     let mut ui = UiState {
         selected_index: Some(0),
-        landed_open: true,
-        expanded_groups: snapshot
+        ..UiState::default()
+    };
+    if height.is_none() {
+        ui.landed_open = true;
+        ui.expanded_groups = snapshot
             .worktree_groups
             .iter()
             .map(|group| group.key.clone())
-            .collect(),
-        delegation_history: snapshot
+            .collect();
+        ui.delegation_history = snapshot
             .worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter())
@@ -743,28 +777,38 @@ pub fn render_expanded_line_ansi<W: Write>(
                     .filter(|agent| agent.sub_agent_count > 0)
                     .map(|agent| (row.id.clone(), agent.user_turn_started_at))
             })
-            .collect(),
-        ..UiState::default()
-    };
-    let theme = ui.theme(&snapshot.theme);
-    let composed = compose_lines_with_meter(
-        &snapshot,
-        None,
-        &ui,
-        theme.as_ref(),
-        width,
-        u16::MAX,
-        None,
-        None,
-    );
-    let height =
-        u16::try_from(composed.content_height.clamp(1, usize::from(u16::MAX))).unwrap_or(u16::MAX);
+            .collect();
+    }
+    let height = height.unwrap_or_else(|| {
+        let theme = ui.theme(&snapshot.theme);
+        let composed = compose_lines_with_meter(
+            snapshot,
+            None,
+            &ui,
+            theme.as_ref(),
+            width,
+            u16::MAX,
+            None,
+            None,
+        );
+        u16::try_from(composed.content_height.clamp(1, usize::from(u16::MAX))).unwrap_or(u16::MAX)
+    });
 
     let backend = TestBackend::new(width, height);
     let mut terminal = infallible(Terminal::new(backend));
     infallible(terminal.clear());
-    infallible(draw_to_terminal(&mut terminal, &snapshot, None, &mut ui));
-    write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
+    infallible(draw_to_terminal(&mut terminal, snapshot, None, &mut ui));
+    let buffer = terminal.backend().buffer();
+    if let Some(section) = section {
+        for row in ui
+            .frame_rows(buffer)
+            .filter(|row| row.label.matches(section))
+        {
+            row.write_ansi(&mut writer)?;
+        }
+        return Ok(());
+    }
+    write_buffer_line_ansi(&mut writer, buffer)
 }
 
 #[cfg(test)]

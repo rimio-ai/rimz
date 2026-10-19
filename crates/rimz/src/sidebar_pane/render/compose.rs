@@ -124,10 +124,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     let bottom_height = bottom
         .lines
         .iter()
-        // Every line occupies at least one row — a blank separator has width 0
-        // but still takes a row, so `.max(1)` keeps the reservation honest and
-        // the footer from being pushed off the frame.
-        .map(|line| line.width().div_ceil(cells).max(1))
+        .map(|line| super::frame_rows::wrapped_line_height(line, width))
         .sum::<usize>()
         .min(height);
 
@@ -200,6 +197,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     let painted_rows = placements(layout.offset);
     let anchored_rows = placements(layout.resolution.offset);
     insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
+    top.tag("cockpit");
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
         walk.window = layout.offset..layout.offset.saturating_add(layout.viewport);
         walk.measuring = false;
@@ -239,6 +237,7 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     }
     ComposedFrame {
         lines: frame.lines,
+        sections: frame.sections,
         interactions: frame.interactions,
         scroll_offset: layout.resolution.offset,
         visible_scroll_offset: layout.offset,
@@ -526,6 +525,7 @@ pub(super) fn build_bottom_chrome(
         );
     }
     header.append(bottom);
+    header.tag("chrome");
     header
 }
 
@@ -557,6 +557,7 @@ fn dashboard_chrome(
     panel.map_lines(pad_chrome);
     panel.translate_columns(1);
     block.append(panel);
+    block.tag("providers");
     block
 }
 
@@ -585,6 +586,9 @@ fn bottom_corner_chrome(
         }
         block.extend_inert(lines.into_iter().map(pad_chrome));
     }
+    if dashboard_present {
+        block.tag("providers");
+    }
     block
 }
 
@@ -600,6 +604,7 @@ pub(in crate::sidebar_pane) struct ComposedFrame {
     pub(super) correction: isize,
     pub(super) scroll_ease: ScrollEase,
     pub(in crate::sidebar_pane) lines: Vec<Line<'static>>,
+    pub(super) sections: Vec<super::SectionLabel>,
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
     pub(in crate::sidebar_pane) scroll_offset: usize,
     pub(super) visible_scroll_offset: usize,
@@ -1132,6 +1137,7 @@ fn scroll_lines_windowed(
             .is_some_and(|query| !query.is_empty())
     {
         block.push_inert(pad_chrome(Line::styled("no match", theme.muted())));
+        block.tag("chrome");
         return (block, None);
     }
     if !snapshot.worktree_groups.is_empty() {
@@ -1154,10 +1160,13 @@ fn scroll_lines_windowed(
                         block.push_inert(Line::from(""));
                     }
                     landed_chip = Some(block.lines.len());
-                    block.push_target(
+                    let mut chip = RenderedBlock::default();
+                    chip.push_target(
                         pad_chrome(landed_line(theme, width, landed_count, ui.landed_open)),
                         HitTarget::ToggleLanded,
                     );
+                    chip.tag("chrome");
+                    block.append(chip);
                     emitted = true;
                 }
                 if !ui.landed_open && group.is_empty() {

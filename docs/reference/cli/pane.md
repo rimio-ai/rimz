@@ -96,6 +96,19 @@ A capture whose reply never arrives fails (exit `1`) rather than printing nothin
 | `--ansi` | Keep colors and text attributes as escape sequences. |
 | `--json` | Print `pane_id`, `raw_text` (the capture as one string), and `lines` (the same text split into lines). |
 
+## Render a sidebar frame
+
+`rimz sidebar frame` renders the room's sidebar once without capturing a pane. It uses the live sidebar's size when available, otherwise the configured width policy and terminal height (24 rows without a terminal). Output keeps colors on a terminal and strips escape sequences over a pipe.
+
+| Flag | Meaning |
+| --- | --- |
+| `--width <COLS>`, `--height <ROWS>` | Override the frame dimensions. Each must be at least `1`. |
+| `--expand` | Open every card and group, including finished groups, and grow the frame to fit. Conflicts with `--height`. |
+| `--section <LABEL>` | Print only the matching physical rows from the full-size frame, without labels. Filtering does not reflow or expand the frame. No match prints nothing. |
+| `--workspace-id <ID>`, `--mux <BACKEND>`, `--session-name <NAME>` | Select the room and multiplexer to render. |
+
+Section labels are `cockpit` (top lines and unread banner), `providers` (dashboard and pet art), `chrome` (search, notices, footer, alert), `#<group>` (group header, pipeline, and tail), `@<handle>#<group>` (agent card), and `<process name>#<group>` (process row). A handleless card uses its row id instead of `@<handle>`. Wrapped continuation rows retain their section. `--section '#main'` selects the group and all its cards and processes; other labels match exactly. The group name is its displayed label, not necessarily its branch name.
+
 ## Send text and keys
 
 `rimz pane send <TARGET> [TEXT]` types into the target pane as if from the keyboard. It always sends in this order: the text, then each `--key` in the order given, then Enter if `--enter` is set. Where the flags sit on the command line does not change the order, so a key that must come before the text (such as `ctrl-u` to clear the line) needs its own `send` first.

@@ -225,7 +225,8 @@ which = "8"
 
 # Sidebar terminal UI — `crossterm` is supplied transitively by ratatui's
 # `crossterm_0_29` feature; no direct dep needed.
-ratatui = "0.30"
+# Rendered line counts keep section tags aligned with the paragraph's word wrap.
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 
 # Test-time
 insta = { version = "1", features = ["json", "yaml", "filters"] }

@@ -219,6 +219,51 @@ fn frame_emits_plain_text_over_a_pipe() {
 
 const ROOM_LESS_ID: &str = "ws_abcdef0123456789abcdef01";
 
+#[test]
+fn frame_section_filters_the_full_frame_over_a_pipe() {
+    let env = Env::new();
+    let frame = |section: Option<&str>, expand: bool| {
+        let mut command = env.rimz();
+        command.args([
+            "sidebar",
+            "frame",
+            "--workspace-id",
+            ROOM_LESS_ID,
+            "--width",
+            "54",
+        ]);
+        if expand {
+            command.arg("--expand");
+        } else {
+            command.args(["--height", "24"]);
+        }
+        if let Some(section) = section {
+            command.args(["--section", section]);
+        }
+        let output = command.output().expect("spawn frame");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.stdout.contains(&b'\x1b'));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for expand in [false, true] {
+        let full = frame(None, expand);
+        let cockpit = frame(Some("cockpit"), expand);
+        assert!(!cockpit.trim().is_empty(), "cockpit rows missing");
+        assert!(cockpit.lines().count() < full.lines().count());
+        assert!(
+            cockpit
+                .lines()
+                .all(|row| full.lines().any(|full| full == row))
+        );
+        assert!(!cockpit.contains("? for help"));
+        assert!(frame(Some("unknown-section"), expand).is_empty());
+    }
+}
+
 fn assert_no_dir_named_for_room_less_id(env: &Env) {
     fn walk(dir: &Path, hits: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {

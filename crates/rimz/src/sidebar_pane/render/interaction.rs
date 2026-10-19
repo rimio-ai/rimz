@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use ratatui::text::Line;
 
+use super::SectionLabel;
 use crate::sidebar_pane::view::BodyFilter;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,6 +205,7 @@ fn target_precedence(target: &HitTarget) -> u8 {
 #[derive(Default)]
 pub(super) struct RenderedBlock {
     pub(super) lines: Vec<Line<'static>>,
+    pub(super) sections: Vec<SectionLabel>,
     pub(super) interactions: FrameInteractions,
     pub(super) card_starts: Vec<(usize, usize)>,
 }
@@ -217,6 +219,7 @@ impl RenderedBlock {
         debug_assert_eq!(lines.len(), row_by_line.len());
         let mut block = Self {
             lines: Vec::with_capacity(lines.len()),
+            sections: Vec::with_capacity(lines.len()),
             interactions: FrameInteractions::default(),
             card_starts: Vec::new(),
         };
@@ -233,6 +236,7 @@ impl RenderedBlock {
 
     fn push(&mut self, line: Line<'static>, ordinal: Option<usize>) {
         self.lines.push(line);
+        self.sections.push(SectionLabel::default());
         self.interactions.row_by_line.push(ordinal);
         self.assert_shape();
     }
@@ -278,6 +282,14 @@ impl RenderedBlock {
         self.assert_shape();
     }
 
+    pub(super) fn tag(&mut self, section: &str) {
+        for label in &mut self.sections {
+            if label.as_str().is_empty() {
+                label.0 = section.to_owned();
+            }
+        }
+    }
+
     pub(super) fn translate_columns(&mut self, columns: u16) {
         self.interactions.translate(0, columns);
     }
@@ -292,6 +304,7 @@ impl RenderedBlock {
         );
         self.interactions.append(other.interactions);
         self.lines.extend(other.lines);
+        self.sections.extend(other.sections);
         self.assert_shape();
     }
 
@@ -299,8 +312,11 @@ impl RenderedBlock {
         let end = start.saturating_add(len).min(self.lines.len());
         self.lines.truncate(end);
         self.lines.drain(..start.min(end));
+        self.sections.truncate(end);
+        self.sections.drain(..start.min(end));
         let block = Self {
             lines: self.lines,
+            sections: self.sections,
             interactions: self.interactions.windowed(start, len),
             card_starts: self
                 .card_starts
@@ -315,6 +331,7 @@ impl RenderedBlock {
 
     fn assert_shape(&self) {
         debug_assert_eq!(self.lines.len(), self.interactions.row_by_line.len());
+        debug_assert_eq!(self.lines.len(), self.sections.len());
         debug_assert!(
             self.interactions
                 .regions

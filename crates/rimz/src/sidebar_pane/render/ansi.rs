@@ -1,7 +1,8 @@
 use std::io::{self, Write};
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, Cell};
 use ratatui::style::{Color, Modifier};
+use unicode_width::UnicodeWidthStr;
 
 /// Ghostty TokyoNight's default foreground, paired with the screenshot canvas
 /// background in `xtask/assets/ghostty-tokyonight.json`.
@@ -22,24 +23,46 @@ struct LineAnsiStyle {
 }
 
 pub(super) fn write_buffer_line_ansi<W: Write>(writer: &mut W, buffer: &Buffer) -> io::Result<()> {
-    let width = buffer.area.width as usize;
+    let width = usize::from(buffer.area.width.max(1));
     for row in buffer.content.chunks(width) {
-        let mut current: Option<LineAnsiStyle> = None;
-        for cell in row {
-            let next = LineAnsiStyle {
-                fg: cell.fg,
-                bg: cell.bg,
-                modifier: cell.modifier,
-            };
-            if current != Some(next) {
-                write_line_sgr(writer, next)?;
-                current = Some(next);
-            }
-            writer.write_all(cell.symbol().as_bytes())?;
-        }
-        writer.write_all(b"\x1b[0m\n")?;
+        write_row_ansi(writer, row)?;
     }
     Ok(())
+}
+
+pub(super) fn write_row_ansi<W: Write>(writer: &mut W, row: &[Cell]) -> io::Result<()> {
+    let mut current: Option<LineAnsiStyle> = None;
+    for cell in display_cells(row) {
+        let next = LineAnsiStyle {
+            fg: cell.fg,
+            bg: cell.bg,
+            modifier: cell.modifier,
+        };
+        if current != Some(next) {
+            write_line_sgr(writer, next)?;
+            current = Some(next);
+        }
+        writer.write_all(cell.symbol().as_bytes())?;
+    }
+    writer.write_all(b"\x1b[0m\n")
+}
+
+pub(super) fn display_cells(row: &[Cell]) -> impl Iterator<Item = &Cell> {
+    let mut covered = 0;
+    row.iter().filter(move |cell| {
+        if covered > 0 {
+            covered -= 1;
+            return false;
+        }
+        let symbol = cell.symbol();
+        let width = if symbol.contains('\x1b') {
+            anstream::adapter::strip_str(symbol).to_string().width()
+        } else {
+            symbol.width()
+        };
+        covered = width.saturating_sub(1);
+        true
+    })
 }
 
 fn write_line_sgr<W: Write>(writer: &mut W, style: LineAnsiStyle) -> io::Result<()> {

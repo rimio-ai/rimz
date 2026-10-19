@@ -1236,7 +1236,13 @@ reason = "Render emphasis and keyboard selection read the projected row match bi
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane"
-surface-budget = 59
+# render_section_line_ansi exposes the CLI's full-frame section filter.
+surface-budget = 60
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::render_section_line_ansi"
+reason = "The sidebar frame CLI prints matching physical rows from the library's painted buffer."
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
