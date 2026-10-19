@@ -37,6 +37,7 @@ fn attached_terminal_title_ignores_shell_osc_title() {
     client.press_alt_until('h', &sidebar_pane, "sidebar pane");
     client.press_alt_until('l', &work_pane, "work pane after sidebar");
 
+    client.watch_output(b"TITLE_DONE");
     backend
         .send_keys(
             &work_pane, room.name(),
@@ -61,13 +62,14 @@ fn attached_terminal_title_ignores_shell_osc_title() {
     let shell = rimz::proc::shell_pane_name();
     let expected = format!("{} | {shell}", room.name());
     let deadline = Instant::now() + Duration::from_secs(5);
-    let titles = loop {
-        let titles = client.titles();
-        if titles.iter().any(|title| title == &expected) || Instant::now() >= deadline {
-            break titles;
-        }
+    while !client.output_seen() {
+        assert!(
+            Instant::now() < deadline,
+            "attached client never rendered title payload sentinel: capture={capture:?}",
+        );
         std::thread::sleep(Duration::from_millis(25));
-    };
+    }
+    let titles = client.titles();
     let output_len = client.output_bytes().len();
     assert!(
         !titles

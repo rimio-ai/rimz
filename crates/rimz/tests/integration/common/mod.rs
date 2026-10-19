@@ -160,9 +160,26 @@ pub(crate) struct PtyRecorder {
 struct PtyOutput {
     tail: Vec<u8>,
     titles: Vec<String>,
+    marker: Option<OutputMarker>,
 }
 
 impl PtyRecorder {
+    pub(crate) fn watch_output(&self, needle: &[u8]) {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .marker = Some(OutputMarker::new(needle));
+    }
+
+    pub(crate) fn output_seen(&self) -> bool {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .marker
+            .as_ref()
+            .is_some_and(|marker| marker.seen)
+    }
+
     pub(crate) fn read_from(
         &self,
         mut reader: impl std::io::Read + Send + 'static,
@@ -182,6 +199,9 @@ impl PtyRecorder {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 output.titles.extend(titles);
+                if let Some(marker) = &mut output.marker {
+                    marker.feed(&buffer[..read]);
+                }
                 let tail = &mut output.tail;
                 tail.extend_from_slice(&buffer[..read]);
                 let excess = tail.len().saturating_sub(OUTPUT_TAIL_BYTES);
@@ -206,6 +226,41 @@ impl PtyRecorder {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .titles
             .clone()
+    }
+}
+
+struct OutputMarker {
+    needle: Vec<u8>,
+    carry: Vec<u8>,
+    seen: bool,
+}
+
+impl OutputMarker {
+    fn new(needle: &[u8]) -> Self {
+        assert!(!needle.is_empty(), "output marker must not be empty");
+        Self {
+            needle: needle.to_vec(),
+            carry: Vec::new(),
+            seen: false,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        if self.seen {
+            return;
+        }
+        self.carry.extend_from_slice(bytes);
+        if self
+            .carry
+            .windows(self.needle.len())
+            .any(|window| window == self.needle)
+        {
+            self.seen = true;
+            self.carry.clear();
+            return;
+        }
+        let excess = self.carry.len().saturating_sub(self.needle.len() - 1);
+        self.carry.drain(..excess);
     }
 }
 
@@ -272,7 +327,65 @@ impl OscTitleScanner {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_OSC_TITLE_BYTES, OUTPUT_TAIL_BYTES, OscTitleScanner, PtyRecorder};
+    use super::{
+        MAX_OSC_TITLE_BYTES, OUTPUT_TAIL_BYTES, OscTitleScanner, OutputMarker, PtyRecorder,
+    };
+
+    #[test]
+    fn output_marker_is_independent_of_read_boundaries() {
+        let stream = b"noiseTITLE_DONEtail";
+        let marker_end = b"noiseTITLE_DONE".len();
+        let mut marker = OutputMarker::new(b"TITLE_DONE");
+        for (index, byte) in stream.iter().enumerate() {
+            marker.feed(std::slice::from_ref(byte));
+            assert_eq!(
+                marker.seen,
+                index + 1 >= marker_end,
+                "one byte per read at {index}"
+            );
+        }
+        for split in 0..=stream.len() {
+            let mut marker = OutputMarker::new(b"TITLE_DONE");
+            marker.feed(&stream[..split]);
+            assert_eq!(marker.seen, split >= marker_end, "before split at {split}");
+            marker.feed(&stream[split..]);
+            assert!(marker.seen, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn output_marker_ignores_partial_matches_and_bounds_carry() {
+        let mut marker = OutputMarker::new(b"TITLE_DONE");
+        marker.feed(b"TITLE_DON");
+        assert!(!marker.seen);
+        for _ in 0..32 {
+            marker.feed(&[b'x'; 4096]);
+            assert!(!marker.seen);
+            assert!(marker.carry.len() < marker.needle.len());
+        }
+        marker.feed(b"TITLE_DONTITLE_DONE");
+        assert!(marker.seen, "recover from an incomplete earlier match");
+        marker.feed(b"later output");
+        assert!(marker.seen, "a completed marker stays seen");
+    }
+
+    #[test]
+    fn pty_recorder_retains_output_marker_after_byte_tail_eviction() {
+        use std::io::Read;
+
+        let recorder = PtyRecorder::default();
+        recorder.watch_output(b"TITLE_DONE");
+        let first = std::io::Cursor::new(b"\x1b]2;marvin@evil:~/leak\x07TITLE_");
+        let mut rest = b"DONE".to_vec();
+        rest.extend(vec![b'x'; OUTPUT_TAIL_BYTES + 4096]);
+        recorder
+            .read_from(first.chain(std::io::Cursor::new(rest)))
+            .join()
+            .expect("reader thread");
+        assert!(recorder.output_seen(), "marker survives tail eviction");
+        assert_eq!(recorder.titles(), ["marvin@evil:~/leak"]);
+        assert_eq!(recorder.output_bytes(), vec![b'x'; OUTPUT_TAIL_BYTES]);
+    }
 
     #[test]
     fn osc_titles_parses_bel_and_st_terminators() {

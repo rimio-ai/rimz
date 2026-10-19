@@ -270,6 +270,7 @@ fn attached_terminal_title_ignores_shell_osc_title() {
         .pane_id;
     let client = AttachedTmuxClient::attach(&server.socket, session, 120, 40);
 
+    client.watch_output(b"TITLE_DONE");
     server
         .backend
         .send_keys(
@@ -289,13 +290,14 @@ fn attached_terminal_title_ignores_shell_osc_title() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    let titles = loop {
-        let titles = client.titles();
-        if !titles.is_empty() || Instant::now() >= deadline {
-            break titles;
-        }
+    while !client.output_seen() {
+        assert!(
+            Instant::now() < deadline,
+            "attached client never rendered title payload sentinel: capture={capture:?}",
+        );
         thread::sleep(Duration::from_millis(25));
-    };
+    }
+    let titles = client.titles();
     let prefix = format!("{session} | ");
     assert!(
         titles.iter().any(|title| title.starts_with(&prefix)),
