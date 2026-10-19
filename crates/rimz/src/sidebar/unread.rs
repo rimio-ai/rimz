@@ -14,10 +14,32 @@ use tracing::debug;
 use crate::agents::AgentStatus;
 use crate::disk::{atomic, paths::RuntimePaths};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::sidebar::read_marks::ReadMarks;
+use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
 use crate::store::snapshot::{SidebarRow, SidebarSnapshot};
 
 const UNREAD_EPISODES_VERSION: &str = "rimz.unread.v1";
+
+pub(crate) fn reconcile_snapshot(
+    runtime: &RuntimePaths,
+    snapshot: &mut SidebarSnapshot,
+) -> ReconcileOutcome {
+    let mut episodes = UnreadEpisodes::load(runtime);
+    let silent_opens = episodes.was_absent_on_load();
+    let marks = ReadMarks::load(runtime);
+    if snapshot.panes_produced_at_ms.is_some() {
+        prune_read_marks(
+            runtime,
+            &snapshot.rows().map(|row| row.id.clone()).collect(),
+        );
+    }
+    let unread = episodes.reconcile(snapshot, &marks, silent_opens);
+    if (episodes.was_absent_on_load() || unread.changed)
+        && let Err(err) = episodes.persist(runtime)
+    {
+        debug!(error = %err, "unread episodes persist failed");
+    }
+    unread
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnreadEpisodes {

@@ -323,6 +323,18 @@ pub struct SidebarSnapshot {
 }
 
 impl SidebarSnapshot {
+    #[cfg(feature = "testkit")]
+    pub(crate) fn score_scenario_rows(&mut self) {
+        let windows = aggregate::AttentionWindows::from_config(&self.attention);
+        for group in Arc::make_mut(&mut self.worktree_groups) {
+            aggregate::stamp_attention(
+                Arc::make_mut(&mut group.rows).as_mut_slice(),
+                self.now,
+                windows,
+            );
+        }
+    }
+
     /// The row whose own pane is `pane`, else the row listing it as a child's pane:
     /// a child promoted to its own card can still be listed under its parent.
     pub fn row_owning_pane(&self, pane: &PaneId) -> Option<&SidebarRow> {

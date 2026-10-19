@@ -242,7 +242,7 @@ impl SidebarSnapshot {
 /// foreground-process start, not attention, and row ordering already seats them
 /// below every agent card. Both boundaries are strict (`>`), so the configured
 /// second is the last member of the previous band.
-fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
+pub(super) fn stamp_attention(rows: &mut [SidebarRow], now: Timestamp, windows: AttentionWindows) {
     for row in rows {
         let age_secs = score::age_secs(now, row.last_activity);
         (row.inactive, row.archived, row.attention_score) =

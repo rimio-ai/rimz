@@ -19,6 +19,8 @@ pub mod presence;
 pub mod produce;
 pub mod read_marks;
 pub mod refresh;
+#[cfg(feature = "testkit")]
+pub mod scenario;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod timing;

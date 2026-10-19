@@ -11,6 +11,54 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn play_check_parses_every_checked_in_scenario_and_reports_all_errors() {
+    let env = Env::new();
+    let scenarios = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios");
+    let files: Vec<_> = std::fs::read_dir(scenarios)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "scn"))
+        .collect();
+    assert!(!files.is_empty());
+    let output = env
+        .rimz()
+        .args(["sidebar", "play", "--check"])
+        .args(&files)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.starts_with("ok "))
+            .count(),
+        files.len()
+    );
+    let bad = env.project_root.join("bad.scn");
+    let other = env.project_root.join("other.scn");
+    std::fs::write(&bad, "agent @a claude\n0s @a spwans @b codex").unwrap();
+    std::fs::write(&other, "0s @unknown idle").unwrap();
+    let output = env
+        .rimz()
+        .args(["sidebar", "play", "--check"])
+        .args([&bad, &files[0], &other])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("bad.scn: line 2, column 7:"), "{errors}");
+    assert!(errors.contains("other.scn: line 1, column 4:"), "{errors}");
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("ok "));
+    let output = env.rimz().args(["sidebar", "play"]).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("crates/rimz/scenarios/"));
+}
+
+#[test]
 fn agent_birth_argv_returned_to_shell_renders_process_row() {
     let env = Env::new();
     env.install_agent_hooks("claude");

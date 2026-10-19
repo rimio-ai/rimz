@@ -111,6 +111,14 @@ enum SidebarSubcmd {
     /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
     /// publishing a new build.
     Repair,
+    /// Validate scripted sidebar scenarios without rendering.
+    #[cfg(feature = "testkit")]
+    #[command(hide = true)]
+    Play {
+        #[arg(long)]
+        check: bool,
+        files: Vec<std::path::PathBuf>,
+    },
     /// Render a deterministic sidebar fixture frame. Hidden — contributor
     /// screenshot infrastructure, not a user-facing sidebar verb.
     #[cfg(feature = "testkit")]
@@ -394,6 +402,8 @@ impl SidebarArgs {
             SidebarSubcmd::Host { .. } => "sidebar host",
             SidebarSubcmd::Repair => "sidebar repair",
             #[cfg(feature = "testkit")]
+            SidebarSubcmd::Play { .. } => "sidebar play",
+            #[cfg(feature = "testkit")]
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Gallery { .. } => "sidebar gallery",
@@ -475,6 +485,8 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             session_name,
         } => host(workspace_id, mux, session_name),
         SidebarSubcmd::Repair => repair(globals),
+        #[cfg(feature = "testkit")]
+        SidebarSubcmd::Play { check, files } => play(check, files),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Fixture {
             state,
@@ -578,6 +590,44 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             },
         ),
     }
+}
+
+#[cfg(feature = "testkit")]
+fn play(check: bool, files: Vec<std::path::PathBuf>) -> Result<()> {
+    if files.is_empty() {
+        return Err(super::usage::UsageError::new(
+            "`rimz sidebar play` needs scenario files; see crates/rimz/scenarios/".to_owned(),
+        )
+        .into());
+    }
+    if !check {
+        bail!("use --check to validate scenario files without rendering");
+    }
+    let mut failed = false;
+    let mut out = render::out();
+    let mut err = std::io::stderr().lock();
+    for path in files {
+        let result = std::fs::read_to_string(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|source| {
+                let name = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("scenario");
+                rimz::sidebar::scenario::check(name, &source).map_err(Into::into)
+            });
+        match result {
+            Ok(summary) => writeln!(out, "ok {}: {summary}", path.display())?,
+            Err(error) => {
+                writeln!(err, "{}: {error}", path.display())?;
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        bail!("scenario validation failed");
+    }
+    Ok(())
 }
 
 /// Run the structural pass directly; `rimz reload --repair` composes this
