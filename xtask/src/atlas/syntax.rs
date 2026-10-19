@@ -320,7 +320,7 @@ fn analyze_file(
 
     let dependencies = {
         let mut dependency_collector = DependencyCollector {
-            file_module: &module_path,
+            module: module_path.clone(),
             crate_names,
             seen: BTreeSet::new(),
             sites: Vec::new(),
@@ -863,7 +863,7 @@ fn is_boundary_visible(visibility: &Visibility) -> bool {
 }
 
 struct DependencyCollector<'a> {
-    file_module: &'a str,
+    module: String,
     crate_names: &'a BTreeSet<String>,
     seen: BTreeSet<(String, String)>,
     sites: Vec<DependencySite>,
@@ -893,7 +893,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
                 .first()
                 .is_some_and(|segment| matches!(segment.as_str(), "crate" | "self" | "super"));
             let leaf_may_be_module = leaf.path.len() == 1 && !leaf.grouped;
-            let mut module_path = resolve_import_path(self.file_module, &leaf.path);
+            let mut module_path = resolve_import_path(&self.module, &leaf.path);
             if module_path.is_empty() && internal {
                 module_path = "(crate)".to_owned();
             }
@@ -926,7 +926,7 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
             .is_some_and(|segment| self.crate_names.contains(segment));
         if path.leading_colon.is_none() && segments.len() >= 2 && (internal || workspace) {
             let mut module_path =
-                resolve_import_path(self.file_module, &segments[..segments.len() - 1]);
+                resolve_import_path(&self.module, &segments[..segments.len() - 1]);
             if module_path.is_empty() && internal {
                 module_path = "(crate)".to_owned();
             }
@@ -947,9 +947,17 @@ impl<'ast> Visit<'ast> for DependencyCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-        if !is_cfg_excluded(&item.attrs) {
-            visit::visit_item_mod(self, item);
+        if is_cfg_excluded(&item.attrs) {
+            return;
         }
+        let module = if item.content.is_some() {
+            join_module(&self.module, &item.ident.to_string())
+        } else {
+            self.module.clone()
+        };
+        let previous_module = std::mem::replace(&mut self.module, module);
+        visit::visit_item_mod(self, item);
+        self.module = previous_module;
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
