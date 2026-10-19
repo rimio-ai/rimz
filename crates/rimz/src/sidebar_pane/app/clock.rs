@@ -31,13 +31,6 @@ impl LoopClock {
     }
 
     #[cfg(any(test, feature = "testkit"))]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the scenario player will construct the virtual driver"
-        )
-    )]
     pub(super) fn play(epoch: Timestamp) -> Self {
         Self {
             epoch,
@@ -47,13 +40,6 @@ impl LoopClock {
     }
 
     #[cfg(any(test, feature = "testkit"))]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the scenario player will advance the virtual driver"
-        )
-    )]
     pub(super) fn advance(&self, elapsed: Duration) {
         if let Some(offset) = &self.offset_ms {
             offset.fetch_add(super::timing::duration_millis(elapsed), Ordering::Relaxed);

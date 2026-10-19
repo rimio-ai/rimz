@@ -160,6 +160,15 @@ pub fn detect_env() -> (PixelRenderCaps, bool) {
     detect_env_with(&LiveProbe::ambient())
 }
 
+#[cfg(feature = "testkit")]
+pub(in crate::sidebar_pane) fn player_caps() -> PixelRenderCaps {
+    let probe = LiveProbe::ambient();
+    if env_present(&probe, "TMUX") || env_present(&probe, "ZELLIJ") {
+        return PixelRenderCaps::default();
+    }
+    detect_standalone(&probe)
+}
+
 trait Probe {
     fn tmux_version(&self) -> io::Result<String>;
     fn tmux_pane_passthrough(

@@ -111,12 +111,24 @@ enum SidebarSubcmd {
     /// Repair missing, duplicate, wedged, or mis-docked sidebar panes without
     /// publishing a new build.
     Repair,
-    /// Validate scripted sidebar scenarios without rendering.
+    /// Play scripted scenarios through the sidebar loop, or validate with --check.
     #[cfg(feature = "testkit")]
-    #[command(hide = true)]
+    #[command(hide = true, group(clap::ArgGroup::new("headless").args(["at", "frames"])))]
     Play {
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["at", "frames", "motion", "ansi", "section", "height"])]
         check: bool,
+        #[arg(long, conflicts_with = "frames", value_parser = rimz::sidebar::scenario::parse_duration)]
+        at: Option<std::time::Duration>,
+        #[arg(long)]
+        frames: Option<std::path::PathBuf>,
+        #[arg(long, requires = "frames", value_parser = parse_motion)]
+        motion: Option<std::ops::Range<std::time::Duration>>,
+        #[arg(long, requires = "at")]
+        ansi: bool,
+        #[arg(long, requires = "at")]
+        section: Option<String>,
+        #[arg(long, requires = "headless", value_parser = clap::value_parser!(u16).range(1..))]
+        height: Option<u16>,
         files: Vec<std::path::PathBuf>,
     },
     /// Render a deterministic sidebar fixture frame. Hidden — contributor
@@ -486,7 +498,27 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         } => host(workspace_id, mux, session_name),
         SidebarSubcmd::Repair => repair(globals),
         #[cfg(feature = "testkit")]
-        SidebarSubcmd::Play { check, files } => play(check, files),
+        SidebarSubcmd::Play {
+            check,
+            at,
+            frames,
+            motion,
+            ansi,
+            section,
+            height,
+            files,
+        } => play(
+            check,
+            files,
+            rimz::sidebar_pane::app::PlayOptions {
+                at,
+                frames,
+                motion,
+                ansi,
+                section,
+                height,
+            },
+        ),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Fixture {
             state,
@@ -593,7 +625,24 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 #[cfg(feature = "testkit")]
-fn play(check: bool, files: Vec<std::path::PathBuf>) -> Result<()> {
+fn parse_motion(raw: &str) -> std::result::Result<std::ops::Range<std::time::Duration>, String> {
+    let (start, end) = raw
+        .split_once("..")
+        .ok_or("--motion needs a range such as 6s..9s")?;
+    let range = rimz::sidebar::scenario::parse_duration(start).map_err(|error| error.to_string())?
+        ..rimz::sidebar::scenario::parse_duration(end).map_err(|error| error.to_string())?;
+    if range.start > range.end {
+        return Err("--motion range must not decrease".into());
+    }
+    Ok(range)
+}
+
+#[cfg(feature = "testkit")]
+fn play(
+    check: bool,
+    files: Vec<std::path::PathBuf>,
+    options: rimz::sidebar_pane::app::PlayOptions,
+) -> Result<()> {
     if files.is_empty() {
         return Err(super::usage::UsageError::new(
             "`rimz sidebar play` needs scenario files; see crates/rimz/scenarios/".to_owned(),
@@ -601,7 +650,10 @@ fn play(check: bool, files: Vec<std::path::PathBuf>) -> Result<()> {
         .into());
     }
     if !check {
-        bail!("use --check to validate scenario files without rendering");
+        if options.ansi && files.len() != 1 {
+            bail!("--ansi needs exactly one scenario file");
+        }
+        return rimz::sidebar_pane::app::play(&files, options).map_err(Into::into);
     }
     let mut failed = false;
     let mut out = render::out();

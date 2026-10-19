@@ -37,13 +37,6 @@ pub(in crate::sidebar_pane) struct FrameRow<'a> {
 
 impl FrameRow<'_> {
     #[cfg(any(test, feature = "testkit"))]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "The scenario player will consume plain rows under testkit."
-        )
-    )]
     pub(in crate::sidebar_pane) fn plain_text(&self) -> String {
         let mut text = String::with_capacity(self.cells.len());
         for cell in ansi::display_cells(self.cells) {

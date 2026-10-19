@@ -1,18 +1,21 @@
-# The final idle frame restores the opening roster; completed children leave before wrap.
+# Planner opens done: production scoring puts a running coder above an idle planner.
+# The final frame restores the opening roster; completed children leave before wrap.
+# The selected coder and its read receipt remain until the fresh runtime at wrap.
 scenario pilot width 54 height 34 length 25s pets off
 agent @planner claude
 agent @coder codex
-0s @planner idle
+0s @planner done "plan approved"
 0s @coder idle
 1s @coder runs "implement the sidebar story"
 3s @coder spawns @otter codex "check the model"
 4s @coder spawns @fox claude "review the renderer"
+5s ui expand @coder # show the nested reviewers
 6s @fox done "renderer reviewed"
 7s @coder waits 5s "child reviews"
 10s @otter done "model checked"
 12s ui select @planner # hold the current layout
 12.5s @coder asks "Ship the sidebar story?" # ask during the layout freeze
-17s ui expand @coder
+17.5s ui expand @coder
 19s @coder answered
 21s @coder done "sidebar story shipped"
 23s @otter leaves

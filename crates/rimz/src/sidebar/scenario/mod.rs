@@ -9,6 +9,8 @@ mod model;
 mod parser;
 mod presets;
 
+pub use parser::parse_duration;
+
 #[derive(Clone, Copy)]
 enum Preset {
     Empty,
@@ -79,20 +81,12 @@ pub(crate) struct Scenario {
     initial: model::Room,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Playback consumes beat labels in the next task.")
-)]
 pub(crate) struct Beat {
     pub(crate) at: Duration,
     pub(crate) label: String,
     pub(crate) action: Action,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Playback dispatches UI beats in the next task.")
-)]
 pub(crate) enum Action {
     Ui(UiAction),
     Agent { handle: String, verb: Verb },

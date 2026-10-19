@@ -1429,7 +1429,7 @@ pub(super) fn result_channel() -> (ResultSender, ResultReceiver) {
 }
 
 impl ResultSender {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn send(
         &self,
         update: FetchUpdate,
@@ -2034,7 +2034,7 @@ pub(super) struct FetchDispatcher {
 
 impl FetchDispatcher {
     /// A dispatcher whose worker serves it alone.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub(super) fn new(tx: Sender<FetchRequest>) -> Self {
         Self::for_plane(tx, Covered::default())
     }

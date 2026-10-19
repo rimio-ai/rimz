@@ -36,6 +36,18 @@ pub(super) struct FramePainter {
 }
 
 impl FramePainter {
+    #[cfg(feature = "testkit")]
+    pub(super) fn prepare_play_pet(
+        &mut self,
+        ui: &mut UiState,
+        snapshot: &SidebarSnapshot,
+    ) -> bool {
+        self.refresh_view(ui, snapshot, false);
+        let ready = self.assets.settle_load(std::time::Duration::from_secs(5));
+        self.refresh_view(ui, snapshot, false);
+        ready
+    }
+
     #[cfg(test)]
     pub(super) fn with_slot(slot: Option<PixelSlot>, caps: PixelRenderCaps) -> Self {
         Self::new(caps, false, slot)
@@ -151,7 +163,7 @@ impl FramePainter {
             &snapshot.theme.pets,
             PetViewFrame {
                 action,
-                phase: ui.animation_phase,
+                phase: ui.cosmetic_phase.unwrap_or(ui.animation_phase),
                 refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
                 body,
                 pixel_id_base: self.painter.id_base(),

@@ -113,7 +113,7 @@ impl FrameInteractions {
         self.row_by_line.get(line).copied().flatten()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub(in crate::sidebar_pane) fn line_for_row(&self, ordinal: usize) -> Option<usize> {
         self.row_by_line
             .iter()
@@ -125,7 +125,7 @@ impl FrameInteractions {
         self.row_by_line.len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub(in crate::sidebar_pane) fn line_for_target(
         &self,
         target: &HitTarget,

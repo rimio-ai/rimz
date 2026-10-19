@@ -1,0 +1,596 @@
+---
+source: crates/rimz/src/sidebar_pane/app/play/tests.rs
+expression: review
+---
+{"frame":0,"t_ms":0,"beat":1,"label":"0s @coder idle","changed":["","#main","@coder#main","@planner#main","chrome","cockpit"],"key":true,"text":"0000.txt","ansi":"0000.ansi"}
+{"frame":1,"t_ms":1000,"beat":2,"label":"1s @coder runs \"implement the sidebar story\"","changed":["","@coder#main","cockpit"],"key":true,"text":"0001.txt","ansi":"0001.ansi"}
+{"frame":2,"t_ms":3000,"beat":3,"label":"3s @coder spawns @otter codex \"check the model\"","changed":["","@coder#main"],"key":true,"text":"0002.txt","ansi":"0002.ansi"}
+{"frame":3,"t_ms":4000,"beat":4,"label":"4s @coder spawns @fox claude \"review the renderer\"","changed":["@coder#main"],"key":true,"text":"0003.txt","ansi":"0003.ansi"}
+{"frame":4,"t_ms":5000,"beat":5,"label":"show the nested reviewers","changed":["","#main","@coder#main","@planner#main"],"key":true,"text":"0004.txt","ansi":"0004.ansi"}
+{"frame":5,"t_ms":6000,"beat":6,"label":"6s @fox done \"renderer reviewed\"","changed":["@coder#main"],"key":true,"text":"0005.txt","ansi":"0005.ansi"}
+{"frame":6,"t_ms":7000,"beat":7,"label":"7s @coder waits 5s \"child reviews\"","changed":["","@coder#main","cockpit"],"key":true,"text":"0006.txt","ansi":"0006.ansi"}
+{"frame":7,"t_ms":10000,"beat":8,"label":"10s @otter done \"model checked\"","changed":["","@coder#main","@planner#main"],"key":true,"text":"0007.txt","ansi":"0007.ansi"}
+{"frame":8,"t_ms":12000,"beat":9,"label":"hold the current layout","changed":["","@coder#main","@planner#main"],"key":true,"text":"0008.txt","ansi":"0008.ansi"}
+{"frame":9,"t_ms":12500,"beat":10,"label":"ask during the layout freeze","changed":["","@coder#main","cockpit"],"key":true,"text":"0009.txt","ansi":"0009.ansi"}
+{"frame":10,"t_ms":17060,"beat":10,"label":"ask during the layout freeze","changed":["","@coder#main","@planner#main"],"key":true,"text":"0010.txt","ansi":"0010.ansi"}
+{"frame":11,"t_ms":17500,"beat":11,"label":"17.5s ui expand @coder","changed":["","@coder#main","@planner#main"],"key":true,"text":"0011.txt","ansi":"0011.ansi"}
+{"frame":12,"t_ms":19100,"beat":12,"label":"19s @coder answered","changed":["@coder#main","cockpit"],"key":true,"text":"0012.txt","ansi":"0012.ansi"}
+{"frame":13,"t_ms":21000,"beat":13,"label":"21s @coder done \"sidebar story shipped\"","changed":["@coder#main","cockpit"],"key":true,"text":"0013.txt","ansi":"0013.ansi"}
+{"frame":14,"t_ms":23000,"beat":15,"label":"23s @fox leaves","changed":["","@coder#main","@planner#main"],"key":true,"text":"0014.txt","ansi":"0014.ansi"}
+{"frame":15,"t_ms":24000,"beat":16,"label":"24s @coder idle","changed":["","@coder#main","@planner#main","cockpit"],"key":true,"text":"0015.txt","ansi":"0015.ansi"}
+
+== 0ms: 0s @coder idle ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 1
+cockpit       │
+#main         │  ⑂ main
+@planner#main │  ✓ planner
+@planner#main │    plan approved
+@planner#main │    ▢ ────────────────────────────────────    0%
+@coder#main   │  ○ coder
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 1000ms: 1s @coder runs "implement the sidebar story" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │  ⑂ main
+@planner#main │  ✓ planner
+@planner#main │    plan approved
+@planner#main │    ▢ ────────────────────────────────────    0%
+@coder#main   │  ⠁ coder
+@coder#main   │    implement the sidebar story
+@coder#main   │    ▢ ────────────────────────────────────    0%
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 3000ms: 3s @coder spawns @otter codex "check the model" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │  ⑂ main
+@planner#main │  ✓ planner
+@planner#main │    plan approved
+@planner#main │    ▢ ────────────────────────────────────    0%
+@coder#main   │  ⢄ coder
+@coder#main   │    implement the sidebar story
+@coder#main   │    ▢ ────────────────────────────────────    0%
+@coder#main   │    ⧉ subagents (1)
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 4000ms: 4s @coder spawns @fox claude "review the renderer" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │  ⑂ main
+@planner#main │  ✓ planner
+@planner#main │    plan approved
+@planner#main │    ▢ ────────────────────────────────────    0%
+@coder#main   │  ⢄ coder
+@coder#main   │    implement the sidebar story
+@coder#main   │    ▢ ────────────────────────────────────    0%
+@coder#main   │    ⧉ subagents (2)
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 5000ms: show the nested reviewers ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+@coder#main   │ ▌⢄ coder                                             ▐
+@coder#main   │ ▌  implement the sidebar story                       ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ⠁ codex · check the model                       ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ⠁ claude · review the renderer                  ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 6000ms: 6s @fox done "renderer reviewed" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+@coder#main   │ ▌⢄ coder                                             ▐
+@coder#main   │ ▌  implement the sidebar story                       ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ⠁ codex · check the model                       ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 7000ms: 7s @coder waits 5s "child reviews" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+@coder#main   │ ▌☾ coder                                             ▐
+@coder#main   │ ▌  wakes in 1m                                       ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
+@coder#main   │ ▌    ⠁ codex · check the model                       ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 10000ms: 10s @otter done "model checked" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@coder#main   │ ▌☾ coder                                             ▐
+@coder#main   │ ▌  wakes in 1m                                       ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2) · ⧖ waits (1)                     ▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ◷ timer · in 1m                            ◔ <1m▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 12000ms: hold the current layout ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 1                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 1   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▌✓ planner                                           ▐
+@planner#main │ ▌  plan approved                                     ▐
+@planner#main │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@planner#main │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▎☾ coder                                             🮇
+@coder#main   │ ▎  wakes now                                         🮇
+@coder#main   │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@coder#main   │ ▎  ▤ 0                                               🮇
+@coder#main   │ ▎  ⧉ subagents (2) · ⧖ waits (1)                     🮇
+@coder#main   │ ▎    ✓ codex · model checked                         🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
+@coder#main   │ ▎    ✓ claude · renderer reviewed                    🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
+@coder#main   │ ▎    ◷ timer · due                              ◔ <1m🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 12500ms: ask during the layout freeze ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▌✓ planner                                           ▐
+@planner#main │ ▌  plan approved                                     ▐
+@planner#main │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@planner#main │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▎? coder                                             🮇
+@coder#main   │ ▎  Ship the sidebar story?                           🮇
+@coder#main   │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@coder#main   │ ▎  ▤ 0                                               🮇
+@coder#main   │ ▎  ⧉ subagents (2)                                   🮇
+@coder#main   │ ▎    ✓ codex · model checked                         🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
+@coder#main   │ ▎    ✓ claude · renderer reviewed                    🮇
+@coder#main   │ ▎      xhigh                                      <1m🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 17060ms: ask during the layout freeze ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▎? coder                                             🮇
+@coder#main   │ ▎  Ship the sidebar story?                           🮇
+@coder#main   │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@coder#main   │ ▎  ⧉ subagents (2)                                   🮇
+@planner#main │ ▌✓ planner                                           ▐
+@planner#main │ ▌  plan approved                                     ▐
+@planner#main │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@planner#main │ ▌  ▤ 0                                               ▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 17500ms: 17.5s ui expand @coder ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 1   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▌? coder                                             ▐
+@coder#main   │ ▌  Ship the sidebar story?                           ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 19100ms: 19s @coder answered ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 1   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▌⠁ coder                                             ▐
+@coder#main   │ ▌  implement the sidebar story                       ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 21000ms: 21s @coder done "sidebar story shipped" ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▌✓ coder                                             ▐
+@coder#main   │ ▌  sidebar story shipped                             ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@coder#main   │ ▌  ⧉ subagents (2)                                   ▐
+@coder#main   │ ▌    ✓ codex · model checked                         ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@coder#main   │ ▌    ✓ claude · renderer reviewed                    ▐
+@coder#main   │ ▌      xhigh                                      <1m▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 23000ms: 23s @fox leaves ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 2                ⢿ 0   ☾ 0   ○ 0
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@coder#main   │ ▌✓ coder                                             ▐
+@coder#main   │ ▌  sidebar story shipped                             ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+@coder#main   │ ▌  ▤ 0                                               ▐
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@planner#main │ ▎  ▤ 0                                               🮇
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help
+
+== 24000ms: 24s @coder idle ==
+cockpit       │  ⌘ query-engine                /srv/code/query-engine
+cockpit       │
+cockpit       │  ◎ 0                                  ◇ 0 ↘ 0 ↗ 0 ◌ 0
+cockpit       │  ¤ 2                                            $0.00
+cockpit       │  ────────────────────────────────────────────────────
+cockpit       │  ? 0   ! 0   ⏸︎ 0   ✓ 1                ⢿ 0   ☾ 0   ○ 1
+cockpit       │
+#main         │ ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+@planner#main │ ▎✓ planner                                           🮇
+@planner#main │ ▎  plan approved                                     🮇
+@planner#main │ ▎  ▢ ────────────────────────────────────    0%      🮇
+@coder#main   │ ▌○ coder                                             ▐
+@coder#main   │ ▌  .                                                 ▐
+@coder#main   │ ▌  ▢ ────────────────────────────────────    0%      ▐
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+              │
+chrome        │  ────────────────────────────────────────────────────
+chrome        │   W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │   M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0                       $0.00
+chrome        │
+chrome        │                                            ? for help

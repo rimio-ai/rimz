@@ -35,6 +35,8 @@ mod loop_state;
 mod notify;
 mod paint;
 mod plane;
+#[cfg(feature = "testkit")]
+mod play;
 mod remind;
 mod selection;
 mod socket;
@@ -59,6 +61,8 @@ pub use demo::{serve_fixture, serve_gallery};
 #[cfg(feature = "testkit")]
 pub use fetch::IdleCycleFixture;
 pub use keymap::NavKeymap;
+#[cfg(feature = "testkit")]
+pub use play::{PlayError, PlayOptions, play};
 
 /// Send a pane-addressed left-button press through the host's room socket.
 #[cfg(feature = "testkit")]

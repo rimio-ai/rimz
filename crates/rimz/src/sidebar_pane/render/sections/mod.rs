@@ -165,6 +165,7 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) held_expansions: &'a BTreeSet<String>,
     pub(in crate::sidebar_pane::render) focused_pane: Option<&'a PaneId>,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
+    pub(in crate::sidebar_pane::render) money_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
     pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
     pub(in crate::sidebar_pane::render) recent_subagent_secs: u64,
