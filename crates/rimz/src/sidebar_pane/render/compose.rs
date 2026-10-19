@@ -74,6 +74,7 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// authoritative scrolling; its expiry releases them together with the frozen
 /// order.
 /// An adopted host viewport supplies the same anchor rows, openings, and toggles.
+/// A ready off-screen focus marker overwrites an edge line only after layout and placement capture.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
@@ -196,6 +197,48 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     };
     let painted_rows = placements(layout.offset);
     let anchored_rows = placements(layout.resolution.offset);
+    let marker = ui
+        .selected_index
+        .filter(|_| ui.focus_marker_ready && layout.viewport > 0)
+        .and_then(|ordinal| {
+            let &(_, first) = scroll
+                .card_starts
+                .iter()
+                .find(|&&(index, _)| index == ordinal)?;
+            if card_visible(
+                scroll.interactions.row_map(),
+                ordinal,
+                first,
+                layout.offset,
+                layout.viewport,
+            ) {
+                return None;
+            }
+            let above = first < layout.offset;
+            if above && layout.show_banner {
+                return None;
+            }
+            let row = roster.row(ordinal)?;
+            let glyph = theme.glyph(if above {
+                GlyphRole::ChromeFocusAbove
+            } else {
+                GlyphRole::ChromeFocusBelow
+            });
+            let name_style = if row.as_agent().is_some() {
+                theme.body_brand(theme.provider_brand_tone(&row.name))
+            } else {
+                theme.body()
+            };
+            let spans = trim_spans_to_width(
+                vec![
+                    Span::raw(" "),
+                    Span::styled(format!("{glyph} "), theme.muted()),
+                    Span::styled(row.display_name().to_owned(), name_style),
+                ],
+                cells.saturating_sub(1),
+            );
+            Some((above, Line::from(spans)))
+        });
     insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
     top.tag("cockpit");
     let scroll = if walk.heights.is_some() && walk.window.is_empty() {
@@ -222,7 +265,17 @@ pub(in crate::sidebar_pane) fn compose_lines_with_meter(
     } else {
         scroll
     };
-    let scroll_block = visible_scroll_block(scroll, snapshot, ui, theme, cells, layout);
+    let mut scroll_block = visible_scroll_block(scroll, snapshot, ui, theme, cells, layout);
+    if let Some((above, line)) = marker
+        && !scroll_block.lines.is_empty()
+    {
+        let edge = if above {
+            0
+        } else {
+            scroll_block.lines.len() - 1
+        };
+        scroll_block.replace_line_with_target(edge, line, HitTarget::FocusMarker);
+    }
 
     let mut frame = top.window(0, layout.top_shown);
     frame.append(scroll_block);

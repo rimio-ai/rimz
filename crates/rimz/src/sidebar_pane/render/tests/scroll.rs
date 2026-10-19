@@ -1,6 +1,132 @@
 use super::*;
 use std::sync::Arc;
 
+#[test]
+fn focus_marker_overlays_the_edge_without_moving_cards_or_anchors() {
+    let snapshot = overflowing_fleet();
+    let theme = Theme::fixed(false);
+    let mut ui = UiState {
+        selected_index: Some(5),
+        ..Default::default()
+    };
+    let plain = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    ui.focus_marker_ready = true;
+    let marked = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+    assert!(
+        marked
+            .interactions
+            .line_for_target(&HitTarget::FocusMarker)
+            .is_some(),
+        "named edge marker"
+    );
+    let (column, row) = marked
+        .interactions
+        .line_for_target(&HitTarget::FocusMarker)
+        .unwrap();
+    assert_eq!(usize::from(row), 20 - marked.bottom_height - 1);
+    assert_eq!(
+        marked.interactions.target_at(column + 10, row),
+        Some(HitTarget::FocusMarker)
+    );
+    assert_eq!(marked.scroll_offset, plain.scroll_offset);
+    assert_eq!(marked.painted_rows, plain.painted_rows);
+    assert_eq!(marked.anchored_rows, plain.anchored_rows);
+    assert_eq!(marked.top_height, plain.top_height);
+    assert_eq!(marked.lines.len(), plain.lines.len());
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let name = ui.visible_roster(&snapshot).row(5).unwrap().display_name();
+    assert!(screen.contains(&format!("↓ {name}")));
+    assert_snapshot("offscreen_focus_marker", screen);
+}
+
+#[test]
+fn unread_banner_suppresses_only_the_up_marker() {
+    let mut snapshot = overflowing_fleet();
+    let lead = snapshot.rows_mut().next().unwrap();
+    lead.as_agent_mut().unwrap().status = AgentStatus::Waiting;
+    lead.unread = true;
+    let theme = Theme::fixed(false);
+    for (selected_index, scroll_offset, marker) in [(0, 99, false), (5, 8, true)] {
+        let ui = UiState {
+            selected_index: Some(selected_index),
+            scroll_offset,
+            focus_marker_ready: true,
+            ..Default::default()
+        };
+        let frame = compose_lines(&snapshot, None, &ui, &theme, 38, 20);
+        assert!(
+            frame
+                .interactions
+                .line_for_target(&HitTarget::UnreadBanner)
+                .is_some()
+        );
+        assert_eq!(
+            frame
+                .interactions
+                .line_for_target(&HitTarget::FocusMarker)
+                .is_some(),
+            marker
+        );
+    }
+    snapshot.rows_mut().next().unwrap().unread = false;
+    let ui = UiState {
+        selected_index: Some(0),
+        scroll_offset: 99,
+        focus_marker_ready: true,
+        ..Default::default()
+    };
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    let name = ui.visible_roster(&snapshot).row(0).unwrap().display_name();
+    assert!(
+        screen.contains(&format!("↑ {name}")),
+        "the up marker returns once the banner is gone"
+    );
+}
+
+#[test]
+fn focus_marker_trims_wide_names_without_wrapping_the_frame() {
+    let mut snapshot = overflowing_fleet();
+    snapshot
+        .rows_mut()
+        .nth(5)
+        .unwrap()
+        .as_agent_mut()
+        .unwrap()
+        .handle = Some("多".repeat(100));
+    let theme = Theme::fixed(false);
+    let ui = UiState {
+        selected_index: Some(5),
+        focus_marker_ready: true,
+        ..Default::default()
+    };
+    let frame = compose_lines(&snapshot, None, &ui, &theme, 16, 20);
+    assert!(
+        frame
+            .interactions
+            .line_for_target(&HitTarget::FocusMarker)
+            .is_some(),
+        "narrow marker"
+    );
+    let (_, row) = frame
+        .interactions
+        .line_for_target(&HitTarget::FocusMarker)
+        .unwrap();
+    assert!(frame.lines[usize::from(row)].width() <= 16);
+    let unmarked = UiState {
+        focus_marker_ready: false,
+        ..ui.clone()
+    };
+    assert_eq!(
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 16, 20)
+            .lines()
+            .count(),
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &unmarked, 16, 20)
+            .lines()
+            .count(),
+        "the marker never wraps into an extra line"
+    );
+}
+
 fn delegation_fleet(parents: &[usize]) -> SidebarSnapshot {
     let now = fixed_now();
     let mut agents = (0..12)

@@ -432,6 +432,15 @@ pub(super) fn handle_mouse_click(
             }
             InputOutcome::redraw()
         }
+        Some(HitTarget::FocusMarker) => {
+            ui.reveal_row = ui
+                .selected_index
+                .and_then(|index| ui.visible_roster(snapshot).row(index))
+                .map(|row| row.id.clone());
+            ui.offset_authoritative = true;
+            ui.scroll_ease.cancel();
+            InputOutcome::redraw()
+        }
         Some(HitTarget::ToggleGroup(group_key)) => {
             toggle_group_expanded(ui, snapshot, group_key);
             InputOutcome::redraw()

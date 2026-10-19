@@ -267,6 +267,22 @@ Selecting a card already on screen, even partially, scrolls nothing. Selecting a
 
 A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
+When a native switch or outside focus command leaves the focused card off-screen, a named edge marker appears after 500 ms on tmux or 300 ms on Zellij: `↓ <name>` below the view, or `↑ <name>` above it. It replaces an edge line without moving the cards. The unread banner takes priority over the up-marker; the down-marker can show alongside it. Click the marker to reveal the card with the least scrolling, without changing the selection. It disappears when the card comes into view or you select another card with the sidebar's own input.
+
+Here the focused card sits below the view after a tab switch:
+
+```
+ ⑂ alpha
+ ⣾ codex
+   task-0
+   ▢ ──────────────────────────    0%
+ ⣾ codex
+   task-1
+   ▢ ──────────────────────────    0%
+ ↓ codex
+ ────────────────────────────────────
+```
+
 ### The card
 
 The selected card includes its stats line:
@@ -850,6 +866,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a pipeline line | focus the visible stage owner, else the first actionable team member, else the group's first visible row |
 | click a make-up bucket or `⑃ N` | filter the cards |
 | click `↑ N need you` | reveal the lead card where it sits, or scroll to the top if the filter hides it |
+| click `↑ <name>` / `↓ <name>` | reveal the focused card without changing selection |
 | click a subagents and waits line | open or close its entries |
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |

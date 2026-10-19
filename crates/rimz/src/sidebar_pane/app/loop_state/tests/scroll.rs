@@ -94,6 +94,202 @@ fn publish_scrolled(source: &mut Rig, offset: usize) {
     paint_at(source, 0);
 }
 
+fn offscreen_focus_marker(mux: MuxName) -> (Rig, Instant) {
+    let (mut rig, _) = scroll_rig();
+    rig.state.config.mux = mux;
+    rig.state.config.own_pane = None;
+    let mut focused = rig.state.current.clone();
+    focused.focused_pane = focused.worktree_groups[0].rows[19]
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone());
+    let before = Instant::now();
+    rig.fold(focused, SnapshotSource::Produced);
+    let after = Instant::now();
+    assert!(
+        matches!(rig.state.focus_marker, Some(FocusMarker::Dwelling(_))),
+        "the consuming focus fold arms a dwell"
+    );
+    let Some(FocusMarker::Dwelling(deadline)) = rig.state.focus_marker else {
+        unreachable!()
+    };
+    let dwell = Duration::from_millis(if mux == MuxName::Tmux { 500 } else { 300 });
+    assert!(deadline >= before + dwell && deadline <= after + dwell);
+    (rig, deadline)
+}
+
+fn assert_focus_marker_boundary(mux: MuxName) {
+    let (mut rig, deadline) = offscreen_focus_marker(mux);
+    rig.state
+        .draw_frame(
+            &mut rig.terminal,
+            deadline - Duration::from_millis(1),
+            false,
+        )
+        .unwrap();
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_none()
+    );
+    let rows = rig.state.ui.painted_rows.clone();
+    let anchors = rig.state.ui.anchored_rows.clone();
+    let offset = rig.state.ui.scroll_offset;
+    rig.state
+        .draw_frame(&mut rig.terminal, deadline, false)
+        .unwrap();
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_some()
+    );
+    assert_eq!(rig.state.ui.painted_rows, rows);
+    assert_eq!(rig.state.ui.anchored_rows, anchors);
+    assert_eq!(rig.state.ui.scroll_offset, offset);
+}
+
+#[test]
+fn tmux_focus_marker_appears_exactly_at_500ms() {
+    assert_focus_marker_boundary(MuxName::Tmux);
+}
+
+#[test]
+fn zellij_focus_marker_appears_exactly_at_300ms() {
+    assert_focus_marker_boundary(MuxName::Zellij);
+}
+
+#[test]
+fn a_second_focus_move_rearms_the_marker_dwell() {
+    let (mut rig, previous) = offscreen_focus_marker(MuxName::Zellij);
+    let mut focused = rig.state.current.clone();
+    focused.focused_pane = focused.worktree_groups[0].rows[18]
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone());
+    rig.fold(focused, SnapshotSource::Produced);
+    let Some(FocusMarker::Dwelling(deadline)) = rig.state.focus_marker else {
+        panic!("rearmed dwell")
+    };
+    assert!(deadline > previous);
+    rig.state
+        .draw_frame(&mut rig.terminal, previous, false)
+        .unwrap();
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_none()
+    );
+}
+
+#[test]
+fn marker_deadline_wakes_and_paints_an_otherwise_idle_sidebar() {
+    let (mut rig, _) = scroll_rig();
+    rig.state.ui.selected_index = Some(19);
+    rig.state.ui.selected_pane = rig.state.current.worktree_groups[0].rows[19]
+        .pane
+        .as_ref()
+        .map(|pane| pane.pane_id.clone());
+    rig.state.ui.freeze = None;
+    rig.state.dirty = false;
+    rig.state.focus_marker = Some(FocusMarker::Dwelling(
+        Instant::now() + Duration::from_millis(50),
+    ));
+    let (active, timeout) = rig.state.frame_timing();
+    assert!(!active);
+    assert!(
+        timeout <= Duration::from_millis(50),
+        "the dwell caps the idle timeout"
+    );
+    rig.state.focus_marker = Some(FocusMarker::Dwelling(Instant::now()));
+    rig.state.next_frame = Instant::now() + Duration::from_secs(2);
+    let (active, _) = rig.state.frame_timing();
+    assert!(active, "the elapsed dwell itself makes the frame due");
+    rig.paint(active);
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_some()
+    );
+}
+
+#[test]
+fn marker_click_reveals_without_changing_selection_and_then_disappears() {
+    let (mut rig, deadline) = offscreen_focus_marker(MuxName::Zellij);
+    rig.state
+        .draw_frame(&mut rig.terminal, deadline, false)
+        .unwrap();
+    let (column, row) = rig
+        .state
+        .ui
+        .interactions
+        .line_for_target(&render::HitTarget::FocusMarker)
+        .unwrap();
+    let selected = rig.state.ui.selected_pane.clone();
+    let applied = rig
+        .state
+        .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
+        .unwrap();
+    assert!(applied.effects.is_empty());
+    assert_eq!(rig.state.ui.selected_pane, selected);
+    assert!(rig.state.ui.scroll_offset > 0);
+    assert!(
+        rig.state
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-19")
+    );
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_none()
+    );
+    assert!(rig.state.focus_marker.is_none());
+}
+
+#[test]
+fn hidden_paints_hide_the_marker_and_own_selection_ends_it() {
+    let (mut rig, deadline) = offscreen_focus_marker(MuxName::Zellij);
+    rig.state
+        .draw_frame(&mut rig.terminal, deadline, false)
+        .unwrap();
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_some()
+    );
+    rig.state.config.own_pane = Some(PaneId::from_parts(MuxName::Zellij, "terminal_99"));
+    rig.state.current.own_view = Some(own_view());
+    rig.state.current.viewed_panes.clear();
+    assert!(!rig.state.watched());
+    rig.state
+        .draw_frame(&mut rig.terminal, deadline, false)
+        .unwrap();
+    assert!(
+        rig.state
+            .ui
+            .interactions
+            .line_for_target(&render::HitTarget::FocusMarker)
+            .is_none()
+    );
+    rig.state
+        .apply_input([Wakeup::Key(KeyAction::Top)], &mut rig.terminal)
+        .unwrap();
+    assert!(rig.state.focus_marker.is_none());
+}
+
 fn assert_native_arrival_keeps_shared_frame(mux: MuxName) {
     let (mut source, mut destination, output) = viewport_pair(mux);
     publish_scrolled(&mut source, 12);

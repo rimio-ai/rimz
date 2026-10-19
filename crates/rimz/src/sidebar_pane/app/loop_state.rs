@@ -23,7 +23,10 @@ use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
-use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE, TAB_READ_DWELL};
+use crate::sidebar::timing::{
+    FOCUS_MARKER_TMUX_DWELL, FOCUS_MARKER_ZELLIJ_DWELL, FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE,
+    TAB_READ_DWELL,
+};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
@@ -143,6 +146,12 @@ struct ViewportState {
     dashboard_tab: Option<render::DashboardTab>,
 }
 
+#[derive(Clone, Copy)]
+enum FocusMarker {
+    Dwelling(Instant),
+    Ready,
+}
+
 pub(super) struct LoopState {
     #[cfg(test)]
     pub(super) content_applications: u64,
@@ -172,6 +181,7 @@ pub(super) struct LoopState {
     // Intent adoption can replace the hold-last baseline before dispatch fails.
     focus_rollback: Option<FocusRollback>,
     pending_input_focus: Option<PaneId>,
+    focus_marker: Option<FocusMarker>,
     painted_focus_anchor_ms: u64,
     painted_height: u16,
     paints: u64,
@@ -393,6 +403,7 @@ impl LoopState {
             focus_landing: None,
             focus_rollback: None,
             pending_input_focus: None,
+            focus_marker: None,
             painted_focus_anchor_ms: 0,
             painted_height: 0,
             paints: 0,
@@ -570,7 +581,9 @@ impl LoopState {
             && render::animation_interval(&self.current, &self.ui, clock.phase, alert_active)
                 .is_some();
         let active = !self.self_close.confirming_empty()
-            && (self.viewport_pending || (watched && (animating || self.dirty)));
+            && (self.viewport_pending
+                || (watched
+                    && (animating || self.dirty || self.focus_marker_due(self.clock.now()))));
         let mut timeout = if active {
             self.next_frame
                 .saturating_duration_since(self.clock.now())
@@ -600,6 +613,13 @@ impl LoopState {
             }
             timeout.max(FRAME_MIN_TIMEOUT)
         };
+        if watched && let Some(FocusMarker::Dwelling(until)) = self.focus_marker {
+            timeout = timeout.min(
+                until
+                    .saturating_duration_since(self.clock.now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
         if let Some(until) = self
             .tab_read_dwell_until
             .filter(|_| self.current.own_view.is_some())
@@ -740,6 +760,7 @@ impl LoopState {
             self_close,
             pending_focus_repair,
             pending_input_focus,
+            focus_marker: _,
             // The acknowledged baseline the comparison runs against.
             current: _,
             #[cfg(test)]
@@ -1641,6 +1662,8 @@ impl LoopState {
             if selected_row != previous_row {
                 self.pending_input_focus = None;
                 self.ui.own_input_reveal = true;
+                self.focus_marker = None;
+                self.ui.focus_marker_ready = false;
             }
             if self.ui.selected_pane != previous_selection {
                 self.focus_rollback = None;
@@ -2004,7 +2027,8 @@ impl LoopState {
     }
 
     fn foreground_paint_due(&self, now: Instant, active: bool, watched: bool) -> bool {
-        (self.viewport_pending || (watched && (active || self.dirty))) && now >= self.next_frame
+        (self.viewport_pending || (watched && (active || self.dirty)))
+            && (now >= self.next_frame || self.focus_marker_due(now))
     }
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
@@ -2022,7 +2046,7 @@ impl LoopState {
             alert_active,
         )
         .is_some();
-        if self.dirty || animating {
+        if self.dirty || animating || self.focus_marker_due(now) {
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
             self.draw_frame(terminal, now, false)?;
@@ -2049,6 +2073,12 @@ impl LoopState {
         now: Instant,
         user_input: bool,
     ) -> Result<()> {
+        self.ui.focus_marker_ready = self.watched()
+            && match self.focus_marker {
+                Some(FocusMarker::Ready) => true,
+                Some(FocusMarker::Dwelling(until)) => now >= until,
+                None => false,
+            };
         let user_input = user_input || self.ui.scroll_ease.in_flight();
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
@@ -2061,6 +2091,17 @@ impl LoopState {
         )?;
         self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
+        let selected_visible = self
+            .ui
+            .drawn_selection
+            .as_ref()
+            .is_some_and(|selected| self.ui.painted_rows.iter().any(|(id, _)| id == selected));
+        if selected_visible {
+            self.focus_marker = None;
+            self.ui.focus_marker_ready = false;
+        } else if self.ui.focus_marker_ready {
+            self.focus_marker = Some(FocusMarker::Ready);
+        }
         self.ui.last_order = layout_freeze::capture_order(&self.current, &self.ui);
         self.viewport_pending = false;
         self.publish_viewport();
@@ -2365,6 +2406,16 @@ impl LoopState {
         }
         let previous_filter = self.ui.make_up_filter.filter;
         reconcile_selection(&mut self.ui, &self.current, focused_pane);
+        if derived_focus_pane
+            && self.ui.selected_pane.is_some()
+            && self.ui.selected_pane != prev_selected
+        {
+            let dwell = match self.config.mux {
+                MuxName::Tmux => FOCUS_MARKER_TMUX_DWELL,
+                MuxName::Zellij => FOCUS_MARKER_ZELLIJ_DWELL,
+            };
+            self.focus_marker = Some(FocusMarker::Dwelling(self.clock.now() + dwell));
+        }
         if authoritative_filter_fold
             && !self.current.worktree_groups.is_empty()
             && previous_filter.is_some()
@@ -2734,6 +2785,11 @@ impl LoopState {
                 error: None,
             },
         );
+    }
+
+    fn focus_marker_due(&self, now: Instant) -> bool {
+        self.watched()
+            && matches!(self.focus_marker, Some(FocusMarker::Dwelling(until)) if now >= until)
     }
 
     fn publish_viewport(&mut self) {

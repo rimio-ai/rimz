@@ -40,6 +40,12 @@ pub(crate) const LAYOUT_FREEZE_PARKED: Duration = Duration::from_secs(30);
 /// Clicks after an automatic card move still target the frame the user saw.
 pub(crate) const CLICK_GUARD: Duration = Duration::from_millis(400);
 
+/// Consumer-side dwell before naming an off-screen focused card on tmux.
+pub(crate) const FOCUS_MARKER_TMUX_DWELL: Duration = Duration::from_millis(500);
+
+/// Consumer-side dwell before naming an off-screen focused card on Zellij.
+pub(crate) const FOCUS_MARKER_ZELLIJ_DWELL: Duration = Duration::from_millis(300);
+
 /// How long a never-seen-sibling sidebar must report zero working siblings
 /// before the renderer exits and lets its pane close. A tab that already had a
 /// working pane exits on the first producer-verified zero; this receiver-side

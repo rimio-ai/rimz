@@ -1180,7 +1180,23 @@ path = "crates/rimz/src/sidebar"
 # The host watch asks the presence state whether a layout belongs to the current window (+1).
 # pane_is_focused and LAYOUT_FREEZE_PARKED share native-focus freeze deadlines (+2).
 # CLICK_GUARD gives the renderer's stale-frame hit window its shared cadence (+1).
-surface-budget = 243
+# FOCUS_MARKER_TMUX_DWELL and FOCUS_MARKER_ZELLIJ_DWELL own backend-specific consumer dwell (+2).
+surface-budget = 245
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::FOCUS_MARKER_TMUX_DWELL"
+reason = "The renderer measures the tmux marker dwell at the consuming focus fold."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::timing::FOCUS_MARKER_ZELLIJ_DWELL"
+reason = "The renderer measures the Zellij marker dwell at the consuming focus fold."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::interaction::RenderedBlock::replace_line_with_target"
+reason = "The focus marker replaces one painted edge line and its hit regions without changing card geometry."
 
 [[verdict]]
 kind = "item"
