@@ -206,7 +206,7 @@ Each agent is a small stacked card whose anatomy is drawn in [the interface refe
 A card's slot skeleton is fixed before any content fills it; optional slots render only when their content applies. [`template`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/template.rs) maps four inputs to an ordered list of slots:
 
 - **Stage** (`CardStage`). A card is `Fresh` while it is `idle` with no submitted prompt, no session history, and an empty context gauge; `labeled` means it carries a RimZ-authored description instead of the compose affordance. Otherwise it is `Engaged`. The renderer marks a read card `Stale` when its child-folded `last_activity` exceeds `[theme.display] stale_after_secs` (default 86400, `0` disables), unless reach, an open delegation section, or `expanded` density keeps it open; only idle and success rows may use the stale template. `CardStage::resolve` is that one decision, and both `template` callers (`row_lines` and the frame-rate check `delegation_motion`) read it.
-- **Expansion** (`CardExpansion`): `reach` (`SelectionReach`) distinguishes the live or held selected row, its visible named teammates, and unreached rows. Both selected rows and teammates open the card, but only selected rows gain the stats line outside `expanded` density. `delegation` (the sticky header override, else the live or held selected row itself or `expanded` density) picks whether the delegation entries show, so a teammate folds its entries behind the summary line. Expansion holds, also copied through the host's viewport publication, accumulate across clicks while `UiState::freeze` is armed and release together when it clears. Compose builds the retained opening set before measuring the scroll zone, independently of clamp geometry or authoritative scrolling. Off-screen selections reveal only after this sidebar's own input, while retaining previous selections too.
+- **Expansion** (`CardExpansion`): `reach` (`SelectionReach`) distinguishes the live selected row (`Selected`), held source rows (`Held`), their visible named teammates (`Teammate`), and unreached rows. All three reaches open engaged cards, but only live or held source rows gain the stats line outside `expanded` density. Fresh teammates and held rows keep identity and any launch description; only the live selection gains the meter and compose dots. `delegation` (the sticky header override, else the live or held selected row itself or `expanded` density) picks whether the delegation entries show, so a teammate folds its entries behind the summary line. Expansion holds, also copied through the host's viewport publication, accumulate across clicks while `UiState::freeze` is armed and release together when it clears. Compose builds the retained opening set before measuring the scroll zone, independently of clamp geometry or authoritative scrolling. Off-screen selections reveal only after this sidebar's own input, while retaining previous selections too.
 - **Density**: `[theme.display] card_density`, one of `auto`, `expanded`, `compact`.
 - **Status**, read by the stale, resting compact, and delegation-summary arms.
 
@@ -216,10 +216,10 @@ A card's slot skeleton is fixed before any content fills it; optional slots rend
 | compact, not expanded: `idle` | identity |
 | compact, not expanded: `running`, `waiting` | identity, description, gauge |
 | compact, not expanded: `paused`, `success`, `failed`, `sleeping` | identity, description |
-| fresh unlabeled, not expanded | identity |
-| fresh labeled, not expanded | identity, description |
-| fresh unlabeled, expanded | identity, awaiting dots, gauge |
-| fresh labeled, expanded | identity, description, gauge |
+| fresh unlabeled, not live selected | identity |
+| fresh labeled, not live selected | identity, description |
+| fresh unlabeled, live selected | identity, awaiting dots, gauge |
+| fresh labeled, live selected | identity, description, gauge |
 | engaged, unreached idle or success, delegation closed, density not `expanded` | identity, description, question, gauge |
 | engaged, otherwise resting or teammate, `auto` or opened `compact` | identity, description, question, gauge, delegation |
 | engaged, selected (live or held) or `expanded` density | identity, description, question, gauge, tokens, cache, delegation |

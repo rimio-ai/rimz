@@ -278,7 +278,7 @@ fn held_card_with_running_child_keeps_the_fast_grid() {
 }
 
 #[test]
-fn held_fresh_teammate_keeps_the_breath_grid() {
+fn held_fresh_teammate_does_not_keep_the_breath_grid() {
     let mut parent = agent(
         "parent",
         "codex",
@@ -300,7 +300,9 @@ fn held_fresh_teammate_keeps_the_breath_grid() {
     let snapshot = snapshot_with(vec![parent, teammate]);
     let mut ui = UiState::default();
     ui.held_expansions.insert("parent".into());
-    assert!(expanded_row_awaiting_first_prompt(&snapshot, &ui));
+    assert!(!expanded_row_awaiting_first_prompt(&snapshot, &ui));
+    ui.held_expansions.insert("teammate".into());
+    assert!(!expanded_row_awaiting_first_prompt(&snapshot, &ui));
 }
 
 /// Shell jobs and live children animate inside an open delegation section
@@ -527,7 +529,7 @@ fn selected_blank_idle_agent_keeps_breath_grid_awake() {
 }
 
 #[test]
-fn expanded_blank_team_member_keeps_breath_grid_awake() {
+fn expanded_blank_team_member_does_not_keep_breath_grid_awake() {
     let ws = workspace();
     let mut snapshot = agent_snapshot(&ws);
     let group = &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0];
@@ -549,11 +551,7 @@ fn expanded_blank_team_member_keeps_breath_grid_awake() {
     let mut ui = selected_ui();
     ui.theme(&snapshot.theme);
 
-    assert!(animation_interval(&snapshot, &ui, 0, false).is_some());
-    assert_eq!(
-        animation_interval(&snapshot, &ui, ui.animation_phase, false).expect("animated"),
-        crate::sidebar::timing::BREATH_ANIMATION_FRAME
-    );
+    assert!(animation_interval(&snapshot, &ui, 0, false).is_none());
 }
 
 #[test]

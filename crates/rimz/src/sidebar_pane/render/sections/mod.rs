@@ -57,12 +57,13 @@ pub(super) use provider::{
 pub(super) use worktree::worktree_group_lines_projected;
 pub(super) use worktree::{CardWalk, WorktreeRenderContext, worktree_group_lines_windowed};
 
-/// How far live or held selection reaches a row: the source row itself, a named
-/// teammate opened alongside it, or neither. This controls expansion, not
+/// How far selection reaches a row: the live selection, a held source row, a named
+/// teammate opened alongside either, or neither. This controls expansion, not
 /// selection styling.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SelectionReach {
     Selected,
+    Held,
     Teammate,
     #[default]
     Unreached,
@@ -70,7 +71,7 @@ pub(super) enum SelectionReach {
 
 impl SelectionReach {
     /// Selection opens the card for the selected row and its teammates alike;
-    /// only the selected row gains session stats outside expanded density.
+    /// only live or held source rows gain session stats outside expanded density.
     pub(super) fn opens_card(self) -> bool {
         self != Self::Unreached
     }
@@ -104,7 +105,7 @@ pub(super) fn row_selection_reach(
     let mut reach = SelectionReach::Unreached;
     for source in sources {
         if row_index == source {
-            return SelectionReach::Selected;
+            return SelectionReach::Held;
         }
         if range.contains(&source)
             && let (Some(source), Some(row)) = (roster.row(source), roster.row(row_index))
@@ -135,10 +136,10 @@ impl CardExpansion {
         row: &SidebarRow,
         reach: SelectionReach,
     ) -> Self {
-        let delegation = overrides
-            .get(&row.id)
-            .copied()
-            .unwrap_or(reach == SelectionReach::Selected || density == CardDensityMode::Expanded);
+        let delegation = overrides.get(&row.id).copied().unwrap_or(
+            matches!(reach, SelectionReach::Selected | SelectionReach::Held)
+                || density == CardDensityMode::Expanded,
+        );
         let history = row
             .as_agent()
             .is_some_and(|agent| history.get(&row.id) == Some(&agent.user_turn_started_at));
