@@ -4,6 +4,77 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[test]
+fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
+    for value in [
+        "ci=passed",
+        "pr=open",
+        "pr.queue=queued",
+        "window.5h.left>10",
+        "team.stage=Missing",
+        "team.stage!=",
+    ] {
+        for at_role in [true, false] {
+            let setting = format!("keep-warm = {{ while = '{value}' }}");
+            let raw = if at_role {
+                format!(
+                    "leader = 'lead'\nstages = ['Plan']\n[[roles]]\nrole = 'lead'\nprofile = 'claude'\nowns = ['Plan']\n{setting}"
+                )
+            } else {
+                format!(
+                    "leader = 'lead'\nstages = ['Plan']\n{setting}\nroles = [{{role = 'lead', profile = 'claude', owns = ['Plan']}}]"
+                )
+            };
+            let team: Team = toml::from_str(&raw).unwrap();
+            let result = prepare_team("mill", &team, &ProfilesConfig::default(), None);
+            assert!(result.is_err(), "invalid while {value} must be refused");
+            let error = result.err().unwrap().to_string();
+            assert!(error.contains("mill") && error.contains(value), "{error}");
+            if at_role {
+                assert!(error.contains("lead"), "{error}");
+            }
+        }
+    }
+    for raw in [
+        "keep-warm = {while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}]",
+        "keep-warm = {while = 'off'}\nroles = [{role = 'lead', profile = 'claude'}]",
+    ] {
+        let team: Team = toml::from_str(raw).unwrap();
+        let result = prepare_team("mill", &team, &ProfilesConfig::default(), None);
+        assert!(result.is_err(), "an unstaged team has no board");
+        assert!(result.err().unwrap().to_string().contains("no board"));
+    }
+    for clause in ["team.stage=Plan", "team.stage!=Done", "team.stage=unknown"] {
+        let team: Team = toml::from_str(&format!("leader = 'lead'\nstages = ['Plan']\nkeep-warm = {{while = '{clause}'}}\nroles = [{{role = 'lead', profile = 'claude', owns = ['Plan']}}]")).unwrap();
+        assert!(prepare_team("mill", &team, &ProfilesConfig::default(), None).is_ok());
+    }
+    for value in ["team.stage!=Done", "ci=passed", "off"] {
+        let profiles: ProfilesConfig = toml::from_str(&format!(
+            "[solo]\nagent = 'claude'\nkeep-warm = {{while = '{value}'}}"
+        ))
+        .unwrap();
+        let error = validate_config(
+            &profiles,
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("solo") && error.contains(value) && error.contains("no board"),
+            "{error}"
+        );
+        assert!(
+            validate_subagent_profile_namespace(
+                &profiles,
+                &CommandsConfig::default(),
+                &TeamsConfig::default()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn room_channel_resolver_prefers_explicit_worktree_then_in_place_team() {
     assert_eq!(
         resolve_room_channel(
@@ -249,6 +320,7 @@ fn role(role: &str, profile: &str) -> RoleBinding {
 
 fn team(roles: Vec<RoleBinding>) -> Team {
     Team {
+        keep_warm: None,
         roles,
         leader: None,
         layout: None,
@@ -261,6 +333,7 @@ fn team(roles: Vec<RoleBinding>) -> Team {
 
 fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
     Team {
+        keep_warm: None,
         roles,
         leader: None,
         layout: Some(layout.to_owned()),
@@ -2268,6 +2341,7 @@ fn team_leader_validation_accepts_one_target() {
     ));
 
     let layout_only = |leader: &str, layout: &str| Team {
+        keep_warm: None,
         roles: Vec::new(),
         leader: Some(leader.to_owned()),
         layout: Some(layout.to_owned()),

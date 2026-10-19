@@ -1395,6 +1395,7 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
         "review".to_owned(),
         Team {
             roles: vec![role("local", "local-profile")],
+            keep_warm: None,
             leader: None,
             layout: None,
             scratch_files: None,
@@ -1504,6 +1505,7 @@ fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
         "review".to_owned(),
         Team {
             roles: vec![role("coder", "local")],
+            keep_warm: None,
             leader: None,
             layout: Some("coder,planner".to_owned()),
             scratch_files: None,

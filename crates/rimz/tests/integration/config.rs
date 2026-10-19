@@ -202,6 +202,69 @@ fn agents_validate_refuses_what_launch_refuses() {
 }
 
 #[test]
+fn keep_warm_while_refusals_follow_definition_loading_boundaries() {
+    for markdown in [true, false] {
+        for (clause, expected) in [
+            ("ci=passed", "only `team.stage`"),
+            ("pr=open", "only `team.stage`"),
+            ("pr.queue=queued", "only `team.stage`"),
+            ("window.5h.left>10", "only `team.stage`"),
+            ("team.stage=Missing", "Missing"),
+            ("team.stage!=", "keep-warm"),
+        ] {
+            let env = Env::new();
+            crate::common::write_definition(
+                &env,
+                "agents",
+                "worker",
+                "description: Worker\nmodel: opus\ntools: [Bash]",
+                "",
+            );
+            if markdown {
+                crate::common::write_definition(
+                    &env,
+                    "teams",
+                    "mill",
+                    &format!(
+                        "leader: lead\nstages: [Plan]\nkeep-warm: {{ while: '{clause}' }}\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]"
+                    ),
+                    "Pipeline.",
+                );
+            } else {
+                env.write_config(
+                    &env.project_root,
+                    &format!(
+                        "[profiles.worker]\nagent = 'claude'\n[agents.teams.mill]\nleader = 'lead'\nstages = ['Plan']\nkeep-warm = {{ while = '{clause}' }}\nroles = [{{role = 'lead', profile = 'worker', owns = ['Plan']}}]"
+                    ),
+                );
+                env.rimz().args(["trust", "grant"]).assert().success();
+                let error = rimz::config::effective::load_with_roots(
+                    &rimz::config::MachineConfig::default(),
+                    &env.project_root,
+                    &env.rimz_home(),
+                )
+                .err()
+                .expect("invalid while must refuse effective project config")
+                .to_string();
+                assert!(error.contains(expected), "{error}");
+            }
+            if markdown {
+                env.rimz()
+                    .args(["agents", "validate"])
+                    .assert()
+                    .failure()
+                    .stdout(contains(expected));
+            }
+            env.rimz()
+                .args(["agents", "explain", "mill"])
+                .assert()
+                .failure()
+                .stderr(contains(expected));
+        }
+    }
+}
+
+#[test]
 fn agents_home_definitions_feed_both_profile_catalogues_without_kind_rows() {
     let env = Env::new();
     crate::common::write_kind_base(&env, "claude");

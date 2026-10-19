@@ -1092,6 +1092,7 @@ fn subagent_doorway_keeps_team_roles_on_agent_profiles() {
     machine.agents.teams.0.insert(
         "forge".to_owned(),
         Team {
+            keep_warm: None,
             roles: vec![RoleBinding {
                 signals: Vec::new(),
                 owns: Vec::new(),
@@ -3302,6 +3303,7 @@ fn supervised_launch_qualifies_a_bare_role_in_its_team_lane() {
     machine.agents.teams.0.insert(
         "forge".to_owned(),
         Team {
+            keep_warm: None,
             roles: vec![RoleBinding {
                 profile: "claude-agent".to_owned(),
                 ..role_binding("reviewer")

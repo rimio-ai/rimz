@@ -245,6 +245,28 @@ fn task_labels_do_not_change_the_executable_hash() {
 }
 
 #[test]
+fn keep_warm_team_role_and_profile_fields_do_not_enter_trust_hash() {
+    let base: ProjectConfig = toml::from_str("[profiles.worker]\nagent = 'claude'\n[agents.teams.mill]\nroles = [{role = 'lead', profile = 'worker'}]").unwrap();
+    let configured: ProjectConfig = toml::from_str("[profiles.worker]\nagent = 'claude'\nkeep-warm = '2h'\n[agents.teams.mill]\nkeep-warm = { max = '6h', while = 'team.stage!=Done' }\nroles = [{role = 'lead', profile = 'worker', keep-warm = '1h'}]").unwrap();
+    assert_eq!(base.teams().len(), 1, "base team must be parsed");
+    assert_eq!(
+        configured.teams().len(),
+        1,
+        "configured team must be parsed"
+    );
+    let team = serde_json::to_value(&configured.teams()["mill"]).unwrap();
+    assert_eq!(
+        team["keep-warm"],
+        serde_json::json!({"max": "6h", "while": "team.stage!=Done"})
+    );
+    assert_eq!(team["roles"][0]["keep-warm"], "1h");
+    assert_eq!(
+        executable_surface_hash(&base),
+        executable_surface_hash(&configured)
+    );
+}
+
+#[test]
 fn runtime_env_key_does_not_enter_trust_hash() {
     let base = project_with("");
     let extra = project_with("[agents]\nruntime-env = false\n");

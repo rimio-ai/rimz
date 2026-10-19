@@ -1179,6 +1179,7 @@ fn resolves_team_for_launch_context_from_effective_config() {
     machine_config.agents.teams.0.insert(
         "forge".to_owned(),
         crate::config::Team {
+            keep_warm: None,
             roles: vec![
                 crate::config::RoleBinding {
                     signals: Vec::new(),

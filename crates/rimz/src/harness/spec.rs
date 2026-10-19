@@ -280,6 +280,12 @@ impl ResolvedProfile {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LayoutErr {
+    #[error("{definition} keep-warm while `{clause}`: {reason}")]
+    KeepWarm {
+        definition: String,
+        clause: String,
+        reason: String,
+    },
     #[error("layout spec is empty")]
     Empty,
     #[error("cell `{cell}`: {kind} has no fast-mode launch switch; {fix}")]
@@ -1749,7 +1755,16 @@ fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<
 }
 
 fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
-    for name in profiles.0.keys() {
+    for (name, profile) in &profiles.0 {
+        if let Some(crate::config::KeepWarmPolicy::Block(fields)) = &profile.keep_warm
+            && let Some(clause) = &fields.while_clause
+        {
+            return Err(LayoutErr::KeepWarm {
+                definition: format!("profile '{name}'"),
+                clause: clause.clone(),
+                reason: "a solo profile has no board; remove `while` and use `max` only".into(),
+            });
+        }
         if name.is_empty()
             || name
                 .chars()
@@ -1910,6 +1925,48 @@ fn prepare_team<'a>(
     base_override: Option<&ResolvedProfile>,
 ) -> Result<PreparedTeam<'a>> {
     validate_team_stages(name, team)?;
+    let stages = team
+        .pipeline_stages()
+        .into_iter()
+        .chain([crate::config::DONE_STAGE.to_owned()])
+        .collect();
+    let declarations = std::iter::once((format!("team '{name}'"), team.keep_warm.as_ref())).chain(
+        team.roles.iter().map(|binding| {
+            (
+                format!("team '{name}' role '{}'", binding.role),
+                binding.keep_warm.as_ref(),
+            )
+        }),
+    );
+    for (definition, policy) in declarations {
+        let Some(crate::config::KeepWarmPolicy::Block(fields)) = policy else {
+            continue;
+        };
+        let Some(clause) = &fields.while_clause else {
+            continue;
+        };
+        let refuse = |reason| LayoutErr::KeepWarm {
+            definition: definition.clone(),
+            clause: clause.clone(),
+            reason,
+        };
+        if !team.staged() {
+            return Err(refuse(
+                "an unstaged team has no board; declare stages and owners or remove `while`".into(),
+            ));
+        }
+        if clause == "off" {
+            continue;
+        }
+        let expr = crate::harness::schedule::when::WhenExpr::parse_with_stages(
+            std::slice::from_ref(clause),
+            Some(&stages),
+        )
+        .map_err(|error| refuse(error.to_string()))?;
+        if !expr.terms().all(|term| term.key == "team.stage") {
+            return Err(refuse("only `team.stage` is admitted; replace forge/window conditions with a team stage condition".into()));
+        }
+    }
     let team_prompt_declared = crate::harness::team_prompt::declared(team);
     if team_prompt_declared && !team.staged() {
         return Err(LayoutErr::TeamPromptWithoutStages {

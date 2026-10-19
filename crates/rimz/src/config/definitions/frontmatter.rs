@@ -28,8 +28,7 @@ pub(super) struct AgentFrontmatter {
     pub auto_compact: Option<String>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
-    #[serde(default, deserialize_with = "keep_warm")]
-    pub keep_warm: Option<String>,
+    pub keep_warm: Option<crate::config::KeepWarmPolicy>,
     #[serde(default, deserialize_with = "idle_compact")]
     pub idle_compact: Option<IdleCompact>,
     pub model_reminder: Option<bool>,
@@ -86,6 +85,8 @@ pub(super) struct BaseFrontmatter {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TeamFrontmatter {
+    #[serde(rename = "keep-warm")]
+    pub keep_warm: Option<crate::config::KeepWarmPolicy>,
     pub name: Option<String>,
     #[serde(rename = "description")]
     _description: Option<String>,
@@ -119,8 +120,7 @@ pub(super) struct RoleFrontmatter {
     pub idle_compact: Option<IdleCompact>,
     #[serde(default, deserialize_with = "number_text")]
     pub budget: Option<String>,
-    #[serde(default, deserialize_with = "keep_warm")]
-    pub keep_warm: Option<String>,
+    pub keep_warm: Option<crate::config::KeepWarmPolicy>,
     pub model_reminder: Option<bool>,
     #[serde(default, deserialize_with = "list")]
     pub traits: Option<Vec<String>>,
@@ -210,24 +210,6 @@ fn idle_compact<'de, D: Deserializer<'de>>(
         Setting::Integer(count) => count.to_string(),
     };
     raw.parse().map(Some).map_err(|_| invalid())
-}
-
-fn keep_warm<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Setting {
-        Boolean(bool),
-        Text(String),
-        Other(IgnoredAny),
-    }
-    // YAML reads a bare `off` as `false`; `true` names no horizon.
-    match Setting::deserialize(deserializer)? {
-        Setting::Boolean(false) => Ok(Some("off".to_owned())),
-        Setting::Text(value) => Ok(Some(value)),
-        Setting::Boolean(true) | Setting::Other(_) => Err(serde::de::Error::custom(
-            "keep-warm takes off or a duration such as 2h",
-        )),
-    }
 }
 
 fn flip_compact<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {

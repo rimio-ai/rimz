@@ -552,11 +552,18 @@ impl Resolver<'_> {
             .transpose()?;
         profile.fast = fm.fast;
         profile.budget = fm.budget.clone();
-        profile.keep_warm = fm
-            .keep_warm
-            .as_deref()
-            .map(|value| super::team::keep_warm(path, value))
-            .transpose()?;
+        if let Some(crate::config::KeepWarmPolicy::Block(fields)) = &fm.keep_warm
+            && let Some(clause) = &fields.while_clause
+        {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "profile '{}' keep-warm while `{clause}`: a solo definition has no board; remove `while` and use `max` only",
+                    path.file_stem().unwrap_or_default().to_string_lossy()
+                ),
+            ));
+        }
+        profile.keep_warm = fm.keep_warm.clone();
         profile.model_reminder = fm.model_reminder;
         profile.description = Some(frontmatter::description(path, fm.description.as_deref())?);
         let craft = traits::render(

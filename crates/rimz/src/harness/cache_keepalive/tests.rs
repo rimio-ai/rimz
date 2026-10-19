@@ -378,13 +378,16 @@ fn idle() -> AgentState {
 
 fn profile(keep_warm: Option<KeepWarm>) -> Profile {
     let mut profile: Profile = toml::from_str("agent = \"claude\"").unwrap();
-    profile.keep_warm = keep_warm;
+    profile.keep_warm = keep_warm.map(Into::into);
     profile
 }
 
 fn team(keep_warm: Option<KeepWarm>) -> Team {
     let binding = |role: &str| RoleBinding {
-        keep_warm: (role == "coder").then_some(keep_warm).flatten(),
+        keep_warm: (role == "coder")
+            .then_some(keep_warm)
+            .flatten()
+            .map(Into::into),
         ..toml::from_str(&format!("role = \"{role}\"\nprofile = \"warm\"")).unwrap()
     };
     let mut team: Team = toml::from_str("").unwrap();
@@ -398,6 +401,130 @@ fn policy(solo: Option<KeepWarm>, role: Option<KeepWarm>) -> SeatPolicy {
     policy.profiles.0.insert("warm".into(), profile(solo));
     policy.teams.0.insert("forge".into(), team(role));
     policy
+}
+
+#[test]
+fn keep_warm_team_default_holds_seats_without_role_bindings() {
+    let team: Team =
+        toml::from_str("keep-warm = '2h'\nlayout = 'claude,codex'\nroles = []").unwrap();
+    let policy = SeatPolicy {
+        teams: TeamsConfig(std::collections::BTreeMap::from([("peer".into(), team)])),
+        ..SeatPolicy::default()
+    };
+    let mut seat = idle();
+    seat.team = Some("peer".into());
+    for role in [Some("claude"), None] {
+        seat.role = role.map(str::to_owned);
+        assert_eq!(
+            policy.horizon(&seat, &HarnessConfig::default()),
+            Some(TWO_HOURS),
+            "team default must reach role {role:?}"
+        );
+        assert_eq!(
+            policy.holding(&seat, &HarnessConfig::default(), ts(3540)),
+            Some(TWO_HOURS),
+            "consumer must hold role {role:?}"
+        );
+    }
+}
+
+#[test]
+fn keep_warm_team_fields_follow_the_board_without_latching() {
+    let roster = toml::from_str::<Team>(
+        r#"
+keep-warm = { max = "6h", while = "team.stage!=Done" }
+roles = [
+  {role = "scout", profile = "claude", keep-warm = {max = "1h", while = "team.stage=Plan"}},
+  {role = "architect", profile = "claude"},
+  {role = "coder", profile = "claude", keep-warm = {while = "off"}},
+  {role = "reviewer", profile = "claude"},
+  {role = "short", profile = "claude", keep-warm = "1h"},
+  {role = "off", profile = "claude", keep-warm = "off"},
+]
+"#,
+    );
+    assert!(
+        roster.is_ok(),
+        "team keep-warm blocks must load: {roster:?}"
+    );
+    let held = SeatPolicy {
+        teams: TeamsConfig(std::collections::BTreeMap::from([(
+            "forge".into(),
+            roster.unwrap(),
+        )])),
+        ..SeatPolicy::default()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut seat = idle();
+    seat.team = Some("forge".into());
+    seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
+    let harness = HarnessConfig::default();
+    for stage in ["Explore", "Plan", "Implement", "Done", "Review"] {
+        std::fs::write(
+            root.path().join("blackboard.md"),
+            format!("Stage: {stage}\n"),
+        )
+        .unwrap();
+        for role in ["scout", "architect", "coder", "reviewer", "short", "off"] {
+            seat.role = Some(role.into());
+            let hours = match role {
+                "off" => None,
+                "scout" => (stage == "Plan").then_some(1),
+                "coder" => Some(6),
+                "short" => (stage != "Done").then_some(1),
+                _ => (stage != "Done").then_some(6),
+            };
+            let expected = hours.map(|hours| Duration::from_secs(hours * 3600));
+            assert_eq!(held.horizon(&seat, &harness), expected, "{role} at {stage}");
+            assert_eq!(
+                held.holding(&seat, &harness, ts(3540)),
+                expected,
+                "consumer {role} at {stage}"
+            );
+        }
+    }
+}
+
+#[test]
+fn keep_warm_while_unknown_reads_pass_and_while_only_uses_the_ping_cap() {
+    let roster = toml::from_str::<Team>(
+        r#"keep-warm = {while = "team.stage!=Done"}
+roles = [{role = "coder", profile = "claude"}]"#,
+    );
+    assert!(roster.is_ok(), "while-only team must load: {roster:?}");
+    let held = SeatPolicy {
+        teams: TeamsConfig(std::collections::BTreeMap::from([(
+            "forge".into(),
+            roster.unwrap(),
+        )])),
+        ..SeatPolicy::default()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let mut seat = idle();
+    seat.team = Some("forge".into());
+    seat.role = Some("coder".into());
+    let harness = HarnessConfig::default();
+    for board in [None, Some("# Board\n"), Some("Stage: Implement\n")] {
+        if let Some(board) = board {
+            std::fs::write(root.path().join("blackboard.md"), board).unwrap();
+        }
+        seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
+        assert_eq!(
+            held.holding(&seat, &harness, ts(3540)),
+            harness.cache_keepalive_max
+        );
+    }
+    seat.worktree_path = None;
+    assert_eq!(held.horizon(&seat, &harness), harness.cache_keepalive_max);
+    let off = toml::from_str("cache_keepalive_max = 'off'").unwrap();
+    assert_eq!(held.horizon(&seat, &off), None);
+    seat.keepalive_since = Some(ts(0));
+    seat.pinged_at = Some(ts(5 * 3600 + 60));
+    assert_eq!(
+        held.holding(&seat, &harness, ts(5 * 3600 + 3540)),
+        None,
+        "the ping run cap still ends a while-held run"
+    );
 }
 
 #[test]
@@ -476,7 +603,7 @@ fn keep_warm_follows_a_toml_base_chain_and_skips_launched_children() {
     });
     held.profiles
         .0
-        .insert("cold".into(), child(Some(KeepWarm::Off)));
+        .insert("cold".into(), child(Some(KeepWarm::Off.into())));
     let mut agent = idle();
     for (profile, expected) in [
         ("child", Some(TWO_HOURS)),
@@ -609,7 +736,7 @@ fn keep_warm_pings_an_idle_agent_each_window_until_the_horizon() {
 }
 
 #[test]
-fn keep_warm_stops_for_a_finished_cohort_but_the_sleeping_path_does_not() {
+fn keep_warm_and_the_sleeping_path_both_continue_after_done() {
     let config = HarnessConfig::default();
     let root = tempfile::tempdir().unwrap();
     let mut seat = idle();
@@ -632,7 +759,7 @@ fn keep_warm_stops_for_a_finished_cohort_but_the_sleeping_path_does_not() {
     .unwrap();
     assert!(due(&seat));
     std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
-    assert!(!due(&seat), "Done ends the hold");
+    assert!(due(&seat), "a plain duration continues after Done");
     let mut sleeper = sleeping();
     sleeper.team = seat.team.clone();
     sleeper.role = seat.role.clone();
@@ -714,7 +841,11 @@ fn keep_warm_holds_only_an_agent_it_can_still_ping() {
     seat.worktree_path = Some(root.path().to_string_lossy().into_owned());
     assert_eq!(holding(&seat, &on), Some(TWO_HOURS));
     std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
-    assert_eq!(holding(&seat, &on), None, "a Done cohort is not held");
+    assert_eq!(
+        holding(&seat, &on),
+        Some(TWO_HOURS),
+        "Done alone does not end a hold"
+    );
 
     assert_eq!(
         holding(&solo, &on).map(|_| held.holding(&solo, &on, ts(3600))),
