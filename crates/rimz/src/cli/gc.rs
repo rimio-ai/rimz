@@ -242,28 +242,20 @@ fn sweep(
             .map(|watcher| watcher.is_some())
     };
     let report = match scope {
-        GcScope::Room => {
-            gc::collect_room(paths, policy, dry_run, watcher_is_live, |agent, agents| {
-                rimz::harness::launch_plan::agent_temp_owner(agent, agents.iter())
-                    .map(str::to_owned)
-            })
-        }
+        GcScope::Room => gc::collect_room(paths, policy, dry_run, watcher_is_live, |agents| {
+            let owners = rimz::harness::launch_plan::AgentTempOwners::new(agents.iter());
+            move |agent: &rimz::agents::AgentState| owners.owner(agent).map(str::to_owned)
+        }),
         GcScope::Machine => {
             let pruned = prune
                 .removed
                 .iter()
                 .map(|removed| removed.dir_name.clone())
                 .collect();
-            gc::collect_classes(
-                policy,
-                dry_run,
-                &pruned,
-                watcher_is_live,
-                |agent, agents| {
-                    rimz::harness::launch_plan::agent_temp_owner(agent, agents.iter())
-                        .map(str::to_owned)
-                },
-            )
+            gc::collect_classes(policy, dry_run, &pruned, watcher_is_live, |agents| {
+                let owners = rimz::harness::launch_plan::AgentTempOwners::new(agents.iter());
+                move |agent: &rimz::agents::AgentState| owners.owner(agent).map(str::to_owned)
+            })
         }
     }
     .context("collecting room garbage")?;

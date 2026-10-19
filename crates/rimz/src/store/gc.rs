@@ -122,15 +122,12 @@ pub struct GcPolicy {
 
 /// Sweep one room's state and runtime classes without visiting other rooms or shared runtime files.
 #[must_use = "maintenance report; surface it to the caller"]
-pub fn collect_room(
+pub fn collect_room<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     paths: &paths::StatePaths,
     policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
-    temp_owner: impl Fn(
-        &crate::agents::AgentState,
-        &crate::store::snapshot::AgentRollup,
-    ) -> Option<String>,
+    temp_owners: impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
 ) -> Result<GcReport> {
     if !paths.root.is_dir() {
         return Ok(GcReport::default());
@@ -141,20 +138,17 @@ pub fn collect_room(
         policy,
         dry_run,
         watcher_is_live,
-        temp_owner,
+        temp_owners,
     )
 }
 
-fn collect_room_under(
+fn collect_room_under<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     paths: &paths::StatePaths,
     runtime: &paths::RuntimePaths,
     policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
-    temp_owner: impl Fn(
-        &crate::agents::AgentState,
-        &crate::store::snapshot::AgentRollup,
-    ) -> Option<String>,
+    temp_owners: impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
 ) -> Result<GcReport> {
     paths::check_workspace_layout(&paths.root)?;
     let mut report = GcReport {
@@ -173,7 +167,7 @@ fn collect_room_under(
         policy,
         dry_run,
         &watcher_is_live,
-        &temp_owner,
+        &temp_owners,
         &mut report,
     )?;
     complete_room_reports(&mut report);
@@ -212,15 +206,12 @@ fn collect_room_temps_under(
 }
 
 #[must_use = "maintenance report; surface it to the caller"]
-pub fn collect_classes(
+pub fn collect_classes<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     policy: GcPolicy,
     dry_run: bool,
     pruned: &BTreeSet<String>,
     watcher_is_live: impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
-    temp_owner: impl Fn(
-        &crate::agents::AgentState,
-        &crate::store::snapshot::AgentRollup,
-    ) -> Option<String>,
+    temp_owners: impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
 ) -> Result<GcReport> {
     let mut report = collect::collect_runtime_under(
         &paths::workspaces_dir(),
@@ -255,7 +246,7 @@ pub fn collect_classes(
             policy,
             dry_run,
             &watcher_is_live,
-            &temp_owner,
+            &temp_owners,
             &mut report,
         ) {
             tracing::warn!(workspace = %paths.dir_name, error = %err, "state gc skipped inaccessible workspace");
@@ -265,16 +256,13 @@ pub fn collect_classes(
     Ok(report)
 }
 
-fn collect_room_state(
+fn collect_room_state<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     paths: &paths::StatePaths,
     runtime: &paths::RuntimePaths,
     policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: &impl Fn(&paths::RuntimePaths, &str) -> io::Result<bool>,
-    temp_owner: &impl Fn(
-        &crate::agents::AgentState,
-        &crate::store::snapshot::AgentRollup,
-    ) -> Option<String>,
+    temp_owners: &impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
     report: &mut GcReport,
 ) -> Result<()> {
     let (classes, waits_removed) = classes::collect_state(
@@ -282,7 +270,7 @@ fn collect_room_state(
         policy,
         dry_run,
         &|name| watcher_is_live(runtime, name),
-        temp_owner,
+        temp_owners,
     )?;
     report.wait_outputs_removed += waits_removed;
     report.state_bytes_removed += classes.iter().map(|class| class.bytes_removed).sum::<u64>();
@@ -363,10 +351,9 @@ mod tests {
     }
 
     fn temp_owner(
-        agent: &crate::agents::AgentState,
         _: &crate::store::snapshot::AgentRollup,
-    ) -> Option<String> {
-        agent.name.clone()
+    ) -> fn(&crate::agents::AgentState) -> Option<String> {
+        |agent| agent.name.clone()
     }
 
     #[test]

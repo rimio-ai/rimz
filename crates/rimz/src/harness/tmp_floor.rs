@@ -157,10 +157,11 @@ fn probe(root: &Path) -> io::Result<DiskSpace> {
 
 fn room_inventory(paths: &StatePaths) -> Result<Vec<TmpUnit>, TmpFloorErr> {
     let (_, agents, _) = crate::store::snapshot::RollupCursor::new().fold(paths)?;
+    let owners = super::launch_plan::AgentTempOwners::new(agents.iter());
     Ok(crate::store::gc::tmp_inventory(
         paths,
         &agents,
-        &|row, agents| super::launch_plan::agent_temp_owner(row, agents.iter()).map(str::to_owned),
+        &|row, _| owners.owner(row).map(str::to_owned),
     )?)
 }
 

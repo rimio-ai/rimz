@@ -8,15 +8,12 @@ use crate::config::TranscriptRetention;
 use crate::disk::paths::Class;
 use crate::disk::retention;
 
-pub(super) fn collect_state(
+pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<String>>(
     paths: &crate::StatePaths,
     policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: &impl Fn(&str) -> std::io::Result<bool>,
-    temp_owner: &impl Fn(
-        &crate::agents::AgentState,
-        &crate::store::snapshot::AgentRollup,
-    ) -> Option<String>,
+    temp_owners: &impl Fn(&crate::store::snapshot::AgentRollup) -> Owner,
 ) -> Result<(Vec<super::ClassReport>, usize)> {
     let agents = {
         let _guard = crate::disk::lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
@@ -51,14 +48,17 @@ pub(super) fn collect_state(
                 None => Ok(()),
             },
             Class::Tmp => match &agents {
-                Some(agents) => collect_tmp(
-                    paths,
-                    agents,
-                    policy.tmp_grace,
-                    temp_owner,
-                    &mut sweep,
-                    &mut report,
-                ),
+                Some(agents) => {
+                    let owner = temp_owners(agents);
+                    collect_tmp(
+                        paths,
+                        agents,
+                        policy.tmp_grace,
+                        &|agent, _| owner(agent),
+                        &mut sweep,
+                        &mut report,
+                    )
+                }
                 None => Ok(()),
             },
             Class::Out => {

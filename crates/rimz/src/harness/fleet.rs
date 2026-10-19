@@ -38,17 +38,17 @@ struct SelectedRuns<'a> {
 }
 
 #[derive(Default)]
-struct LaunchRows {
+pub(super) struct LaunchRows {
     answers: HashMap<AgentKey, Vec<usize>>,
     launches: HashMap<AgentKey, Vec<usize>>,
     aliases: HashMap<AgentKey, Option<AgentSessionId>>,
 }
 
 impl LaunchRows {
-    fn new(agents: &[AgentState]) -> Self {
+    pub(super) fn new<'a>(agents: impl IntoIterator<Item = &'a AgentState>) -> Self {
         let mut rows = Self::default();
         for (index, agent) in agents
-            .iter()
+            .into_iter()
             .enumerate()
             .filter(|(_, agent)| !agent.is_provider_subagent())
         {
@@ -72,7 +72,7 @@ impl LaunchRows {
         rows
     }
 
-    fn members(&self, kind: &AgentKind, id: &AgentSessionId) -> Vec<usize> {
+    pub(super) fn members(&self, kind: &AgentKind, id: &AgentSessionId) -> Vec<usize> {
         let key = (kind.clone(), id.clone());
         let mut members = self.answers.get(&key).cloned().unwrap_or_default();
         if let Some(Some(alias)) = self.aliases.get(&key)
