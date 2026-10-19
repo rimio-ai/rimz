@@ -837,7 +837,8 @@ path = "crates/rimz/src/harness"
 # tmp_floor::TempUnitBytes keeps measured inventory byte totals all-or-none (+1).
 # launch_plan::AgentTempOwners and its constructor/lookup share indexed ownership with GC (+3).
 # TaskKind, lifecycle inspection, condition progress and unread-forge reasons (+8).
-surface-budget = 927
+# WhenTerm::reads_forge lets condition presentation classify a leaf without reparsing it (+1).
+surface-budget = 928
 
 [[verdict]]
 kind = "item"
@@ -7720,3 +7721,8 @@ reason = "TaskTiming projects pure conjunction progress through the expression's
 kind = "item"
 key = "forge::pr_state::UNSUPPORTED_REPO_KEY"
 reason = "The forge cache owns its unsupported-repository marker, shared by producer and readers."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenTerm::reads_forge"
+reason = "Condition presentation asks a parsed leaf whether it reads forge instead of reparsing its display text."

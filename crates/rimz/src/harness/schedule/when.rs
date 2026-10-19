@@ -452,6 +452,11 @@ impl Op {
 }
 
 impl WhenTerm {
+    /// Whether this term reads the room's forge cache.
+    pub fn reads_forge(&self) -> bool {
+        ForgeKey::parse(&self.key).is_some()
+    }
+
     fn comparison_evidence(&self, reading: Option<&str>) -> String {
         let op = if reading.is_none() || self.matches(reading) {
             self.op.token()
@@ -617,8 +622,7 @@ impl WhenExpr {
 
     /// Whether any term reads the room's forge cache.
     pub fn reads_forge(&self) -> bool {
-        self.terms()
-            .any(|term| ForgeKey::parse(&term.key).is_some())
+        self.terms().any(WhenTerm::reads_forge)
     }
 
     /// The first key that reads the scope checkout rather than a named branch.

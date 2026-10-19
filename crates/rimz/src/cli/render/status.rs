@@ -51,7 +51,7 @@ pub(crate) fn lsp_order(entry: &rimz::lsp::registry::Entry) -> (u8, &std::path::
     let rank = match lsp(&entry.state) {
         StateRole::Success | StateRole::Working => 0,
         StateRole::Failed | StateRole::Waiting | StateRole::Paused | StateRole::Unavailable => 1,
-        StateRole::Neutral => 2,
+        StateRole::Neutral | StateRole::Unknown => 2,
     };
     (rank, &entry.root, &entry.server)
 }
@@ -65,6 +65,7 @@ pub(crate) enum StateRole {
     Failed,
     Unavailable,
     Neutral,
+    Unknown,
 }
 
 pub(crate) fn role(role: StateRole) -> anstyle::Style {
@@ -74,7 +75,7 @@ pub(crate) fn role(role: StateRole) -> anstyle::Style {
         StateRole::Waiting => palette::warn(),
         StateRole::Paused => palette::warn(),
         StateRole::Failed | StateRole::Unavailable => palette::alarm(),
-        StateRole::Neutral => palette::muted(),
+        StateRole::Neutral | StateRole::Unknown => palette::muted(),
     }
 }
 

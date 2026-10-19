@@ -554,7 +554,16 @@ pub(super) fn write_record_forensics(
             .hold
             .as_ref()
             .map_or_else(String::new, |hold| format!(" · held {hold}"));
-        write_detail_link(out, "when", &format!("{}{held}", condition.when))?;
+        let current = entry
+            .and_then(|entry| entry.when.as_deref())
+            .and_then(|clauses| schedule::when::WhenExpr::parse(clauses).ok());
+        if detail == Forensics::Full
+            || !current.is_some_and(|expr| expr.to_string() == condition.when)
+        {
+            write_detail_link(out, "when", &format!("{}{held}", condition.when))?;
+        } else if let Some(hold) = &condition.hold {
+            write_detail_link(out, "held", hold)?;
+        }
         write!(out, "  ")?;
         let mut serializer = serde_json::Serializer::new(&mut *out);
         let mut readings = serializer.serialize_map(None)?;
@@ -973,6 +982,43 @@ mod tests {
         assert!(
             text.contains("  {\"pr\":\"open\",\"ci\":\"passed\"}\n"),
             "{text}"
+        );
+        let entry = TaskEntry {
+            when: Some(vec!["pr=open && ci=passed && pr=open".into()]),
+            ..TaskEntry::default()
+        };
+        let mut out = Vec::new();
+        write_record_forensics(
+            &mut out,
+            Some(&entry),
+            &record,
+            ui::prose::Prose::Raw,
+            Forensics::Summary,
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("when:"), "{text}");
+        assert!(
+            text.contains("  {\"pr\":\"open\",\"ci\":\"passed\"}\n"),
+            "{text}"
+        );
+        let entry = TaskEntry {
+            when: Some(vec!["pr=merged".into()]),
+            ..entry
+        };
+        let mut out = Vec::new();
+        write_record_forensics(
+            &mut out,
+            Some(&entry),
+            &record,
+            ui::prose::Prose::Raw,
+            Forensics::Summary,
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("when: pr=open && ci=passed && pr=open")
         );
     }
 }

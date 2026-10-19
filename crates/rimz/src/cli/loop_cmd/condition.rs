@@ -115,20 +115,32 @@ pub(super) fn write_show(
         return Ok(());
     };
     let verdict = reading(entry, expr);
-    let label = timing
-        .state()
-        .condition_label()
-        .unwrap_or_else(|| match timing.state() {
-            schedule::TaskTimingState::Unarmed => "unarmed".to_owned(),
-            schedule::TaskTimingState::Blocked(_) => "blocked · trust".to_owned(),
-            state => list::TaskState::held_text(&state, Timestamp::now())
-                .unwrap_or_else(|| "-".to_owned()),
-        });
-    writeln!(out, "condition: {label}")?;
-    write_terms(out, expr, &verdict)
+    write_terms(out, entry, expr, &verdict)?;
+    if expr.reads_forge()
+        && let Some(checked) = runtime_for_root(&entry.resolved_root())
+            .map(|runtime| CiSource::read(&runtime))
+            .and_then(|source| source.checked_at(&entry.run_dir()))
+    {
+        writeln!(
+            out,
+            "  forge checked {}",
+            ui::rel_age(checked, Timestamp::now())
+        )?;
+    }
+    Ok(())
 }
 
-pub(super) fn write_terms(out: &mut impl Write, expr: &WhenExpr, verdict: &Verdict) -> Result<()> {
+pub(super) fn write_terms(
+    out: &mut impl Write,
+    entry: &TaskEntry,
+    expr: &WhenExpr,
+    verdict: &Verdict,
+) -> Result<()> {
+    let root = entry.resolved_root();
+    let open = render::room_open(&root);
+    let source = runtime_for_root(&root)
+        .filter(|_| open)
+        .map(|runtime| CiSource::read(&runtime));
     for (term, negated) in expr.leaves() {
         let value = verdict
             .readings
@@ -136,17 +148,58 @@ pub(super) fn write_terms(out: &mut impl Write, expr: &WhenExpr, verdict: &Verdi
             .and_then(|value| value.as_deref());
         let role = if term.matches(value) != negated {
             ui::status::StateRole::Success
+        } else if value.is_none() {
+            ui::status::StateRole::Unknown
         } else {
             ui::status::StateRole::Failed
         };
         let (glyph, style) = ui::verdict(role);
+        let reason = if value.is_none() {
+            if !term.reads_forge() {
+                "not read".to_owned()
+            } else if !open {
+                "readings paused (room closed)".to_owned()
+            } else {
+                unread_reason(
+                    source
+                        .as_ref()
+                        .and_then(|source| source.unread_reason(&term.key, &entry.run_dir())),
+                )
+            }
+        } else {
+            String::new()
+        };
         writeln!(
             out,
             "  {}{term}   {} {}",
             if negated { "!" } else { "" },
             ui::paint(style, glyph),
-            value.unwrap_or("unknown")
+            value.unwrap_or(&reason)
         )?;
     }
     Ok(())
+}
+
+pub(super) fn unread_reason(reason: Option<when::UnreadReason>) -> String {
+    use when::UnreadReason;
+    match reason {
+        None | Some(UnreadReason::NotChecked) => "not checked yet".into(),
+        Some(UnreadReason::NoForge) => "no supported forge for this checkout".into(),
+        Some(UnreadReason::LookupFailing { last_tried }) => {
+            let age = i64::try_from(last_tried)
+                .ok()
+                .and_then(|at| Timestamp::from_millisecond(at).ok())
+                .map(|at| ui::rel_age(at, Timestamp::now()))
+                .unwrap_or_else(|| "unknown".into());
+            format!("forge lookup failing, last tried {age}")
+        }
+        Some(UnreadReason::NoPr { branch }) => branch.map_or_else(
+            || "no PR for this checkout".into(),
+            |branch| format!("no PR for branch {branch}"),
+        ),
+        Some(UnreadReason::NoCi { branch }) => branch.map_or_else(
+            || "no CI for this checkout".into(),
+            |branch| format!("no CI for branch {branch}"),
+        ),
+    }
 }

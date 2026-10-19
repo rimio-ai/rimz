@@ -371,34 +371,33 @@ Loop-owned agent panes close on every terminal outcome, including failure and ti
 
 ### What a fire leaves behind
 
-A fire leaves two things: whatever the task did (one transient pane for `--agent`, one delivered message for `--wait`), and one line of run history in `~/.rimz/logs/loop-runs.log.jsonl`. `rimz loop show <name>` gives that history a health verdict; `rimz loop logs <name>` prints the complete stored forensics. Take a check-only task that runs `cargo test` hourly, fired once by hand in a repository with no `Cargo.toml`:
+A fire leaves two things: whatever the task did (one transient pane for `--agent`, one delivered message for `--wait`), and one line of run history in `~/.rimz/logs/loop-runs.log.jsonl`. `rimz loop show <name>` gives that history a health verdict; `rimz loop logs <name>` prints the complete stored forensics. Take a check-only task that runs `make test` hourly, fired once by hand in a checkout with no test target:
 
 ```console
-$ rimz loop fire suite
-suite — check
-  check: cargo test
-  │ error: could not find `Cargo.toml` in `/home/me/code/app` or any parent directory
-✗ check failed (exit 101) in 173ms
-$ rimz loop show suite
-suite — every 1h
-  ✗ failing · last run 0s ago, failed (exit 101) in 173ms
+$ rimz loop fire tests
+tests — check
+  check: make test
+  │ make: *** No rule to make target 'test'.  Stop.
+✗ check failed (exit 2) in 304ms
+$ rimz loop show tests
+tests · routine · worktree probe · every 1h · next in 59m
+  ✗ failing · last run 0s ago, failed (exit 2) in 304ms
 
-LAST RUN — ✗ failed (exit 101) · 0s ago · 173ms · manual
-  │ error: could not find `Cargo.toml` in `/home/me/code/app` or any parent directory
+LAST RUN — ✗ failed (exit 2) · 0s ago · 304ms · manual
+  │ make: *** No rule to make target 'test'.  Stop.
 
-RECENT RUNS (newest first · 1 of 1)
-  WHEN    STATUS               TOOK   NOTE
-  0s ago  ✗ failed (exit 101)  173ms  error: could not find `Cargo.toml` in `/home/me/code/app`...
-
-  action:  run check · cargo test
-  root:    ~/code/app · no room
+  action:  run check · make test
+  root:    ~/room · room open
+  dir:     ~/room-worktrees/probe
   source:  machine — ~/.rimz/loop.toml
   strikes: 1/3
 ```
 
-The screen answers first and shows its evidence after. The verdict line reads the latest conclusive run: how long ago it ran, how it ended, and, once there is a streak, how many runs in a row ended that way and when the streak began. `LAST RUN` is that run's output (a passing check prints its last five lines and the `rimz loop logs` command for the rest), `RECENT RUNS` reads newest first, and the task's facts close the screen, where `strikes` counts consecutive failures against the threshold. `manual` marks a run you fired by hand; a clock's fire carries no mark.
+The screen answers first and shows its evidence after. The verdict line reads the latest conclusive run: how long ago it ran, how it ended, and, once there is a streak, how many runs in a row ended that way and when the streak began. `LAST RUN` is that run's output (a passing check prints its last five lines and the `rimz loop logs` command for the rest). `RECENT RUNS` appears newest first only when it adds history beyond `LAST RUN`. The task's facts close the screen, where `strikes` counts consecutive failures against the threshold. `manual` marks a run you fired by hand; a clock's fire carries no mark.
 
-A subscription can hear another signal in its family without acting on it. Those signals do not replace `LAST RUN` or inflate the run counts: a muted `heard` line counts them since the last acting run and names the latest. `rimz loop logs <name> --heard` includes that listening history when you need it. Refused fires and guard declines still appear in recent runs. A wake that has not fired describes what it will wake instead of suggesting a manual fire, which would spend a one-shot wait.
+A subscription can hear another signal in its family without acting on it. Those signals do not replace `LAST RUN` or inflate the run counts: a muted `heard` line counts them since the last acting run and names the latest. `rimz loop logs <name> --heard` includes that listening history when you need it. Refused fires and guard declines still appear in recent runs. With no fires, a wake-up names the agent it will wake and says `not fired yet`, without a manual-fire hint. Only other clock-triggered tasks suggest a manual fire; conditions, signals, and watches do not.
+
+To test an action before its condition becomes true, use `rimz loop fire <name>`. It warns that the condition is not met, including the clause count when available, then runs anyway without disarming the task. A condition that is already met adds no warning.
 
 Teardown is one command. `rimz loop remove <name>` deletes the entry from whichever file owns it; the run history stays. `rimz loop timer remove` takes the timer out, and `rimz uninstall` removes it too.
 
