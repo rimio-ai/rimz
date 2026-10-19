@@ -100,7 +100,6 @@ pub fn should_compact(
     let idle = now.as_second() - last_request_at.as_second();
     eligible_seat(agent, window.floor)
         && command.is_some()
-        && (agent.team.is_none() || cohort_live(agent))
         && idle >= window.fire_after.as_secs().min(i64::MAX as u64) as i64
         && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64
 }
@@ -367,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn solo_seats_compact_and_done_cohorts_never_do() {
+    fn solo_seats_and_team_seats_compact_whatever_the_board_says() {
         let mut candidate = agent(AgentStatus::Idle, 6_000, 80_000);
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
@@ -385,7 +384,7 @@ mod tests {
         .unwrap();
         assert!(due(&candidate));
         std::fs::write(root.path().join("blackboard.md"), "Stage: Done\n").unwrap();
-        assert!(!due(&candidate), "Done suppresses idle compaction");
+        assert!(due(&candidate), "Done still compacts");
     }
 
     #[test]

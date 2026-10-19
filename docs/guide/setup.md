@@ -109,7 +109,7 @@ So setup lists three behaviors as rows with their current state and what each on
 | --- | --- |
 | auto-continue | types `continue` into a parked agent's pane after a rate limit or an API error, once the clock says the retry can succeed |
 | auto-redeem | spends one of the reset credits a Codex plan grants, refilling a spent usage window on the spot, when doing so unblocks hours of work. Offered only when `codex` is on the machine |
-| idle compaction | has an idle agent whose context has reached 100k tokens summarize its conversation shortly before its provider prompt cache expires (a team member only while its board is not `Done`). The detail behind the summary is gone |
+| idle compaction | has an idle agent whose context has reached 100k tokens summarize its conversation shortly before its provider prompt cache expires. The detail behind the summary is gone |
 
 `y` turns every listed row on, `n` turns every row off, and `choose` walks them one at a time. Enter keeps each row as it is: on a fresh machine idle compaction is on and the other rows are off. An existing idle-compaction token floor counts as on and survives keeping that answer; changing the answer writes `100k` or `off`. Whatever you pick, every action these take appends a record you can read back with `rimz stats --assists`.
 
