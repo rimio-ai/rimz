@@ -54,7 +54,6 @@ struct Args {
     input: Input,
     top: usize,
     output: OutputArgs,
-    show_internal: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -366,9 +365,9 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     }
     let report = build_report(root, base, paths, contract.as_ref(), &base_facts, &current)?;
     let rendered = if args.output.json {
-        render_json(&report, &args.output, args.show_internal)?
+        render_json(&report, &args.output)?
     } else {
-        render_markdown(&report, args.top, &args.output, args.show_internal)
+        render_markdown(&report, args.top, &args.output)
     };
     args.output.emit(&rendered)?;
 
@@ -396,17 +395,8 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut expect = None;
     let mut top = None;
     let mut output = OutputArgs::default();
-    let mut show_internal = false;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
-        if arg == "--section" {
-            show_internal = args.get(index + 1).is_some_and(|sections| {
-                sections
-                    .split(',')
-                    .map(str::trim)
-                    .any(|section| section == "internal")
-            });
-        }
         if let Some(eaten) = output.parse_flag(args, index, "diff")? {
             index += eaten;
             continue;
@@ -455,7 +445,6 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
         input,
         top: top.unwrap_or(DEFAULT_TOP),
         output,
-        show_internal,
     }))
 }
 
@@ -1375,12 +1364,7 @@ fn expectation_rows(
     rows
 }
 
-fn render_markdown(
-    report: &Report,
-    top: usize,
-    output_args: &OutputArgs,
-    show_internal: bool,
-) -> String {
+fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> String {
     let mut output = String::new();
     markdown_line(
         &mut output,
@@ -1592,7 +1576,7 @@ fn render_markdown(
         );
     }
 
-    if show_internal {
+    if output_args.named("internal") {
         markdown_line(&mut output, format_args!("\n## Internal dependencies\n"));
         write_dependency_changes(&mut output, report, top, false);
     }
@@ -1689,7 +1673,7 @@ fn moved_interface_rows(rows: &[InterfaceRow]) -> Vec<&InterfaceRow> {
     moved
 }
 
-fn render_json(report: &Report, output_args: &OutputArgs, show_internal: bool) -> Result<String> {
+fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
     let mut sections = Map::new();
     if output_args.wants("expectations") {
         sections.insert(
@@ -1783,7 +1767,7 @@ fn render_json(report: &Report, output_args: &OutputArgs, show_internal: bool) -
             }),
         );
     }
-    if show_internal {
+    if output_args.named("internal") {
         sections.insert(
             "internal".to_owned(),
             json!({
