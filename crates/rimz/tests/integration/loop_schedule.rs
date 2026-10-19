@@ -25,6 +25,87 @@ use crate::common::{Env, ScrubSessionEnvExt, canonical};
 #[path = "loop_list.rs"]
 mod list_tests;
 
+#[test]
+fn loop_show_condition_evidence_and_watch_command_are_not_repeated_or_cut() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.condition]\nroot={:?}\ncheck='true'\nwhen=['pr=merged && ci=passed']\n",
+            env.project_root
+        ),
+    );
+    write_loop_fire_state(
+        &env,
+        BTreeMap::from([("condition".into(), Timestamp::now())]),
+    );
+    let text = loop_ok(&env, &["loop", "show", "condition"]);
+    assert!(
+        text.starts_with("condition · routine · waiting · 0 of 2 met\n"),
+        "{text}"
+    );
+    assert!(!text.contains("condition:"), "{text}");
+    assert!(
+        text.contains("pr=merged   ? readings paused (room closed)"),
+        "{text}"
+    );
+    assert!(!text.contains("try `rimz loop fire"), "{text}");
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "condition", "--json"])).unwrap();
+    assert_eq!(value["kind"], "routine");
+}
+
+#[test]
+fn loop_show_watch_command_is_not_cut_inside_a_token() {
+    let env = Env::new();
+    let command = format!("echo {} tail", "long-token-".repeat(20));
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "watch".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                watch: Some(rimz::config::WatchSpec::Command(command.clone())),
+                ..TaskEntry::default()
+            },
+        )])),
+    );
+    let text = loop_ok(&env, &["loop", "show", "watch"]);
+    assert!(
+        text.lines()
+            .next()
+            .unwrap()
+            .contains("watch · one-off · on command exit"),
+        "{text}"
+    );
+    assert!(text.contains(&"long-token-".repeat(20)), "{text}");
+    assert!(text.contains("echo") && text.contains("tail"), "{text}");
+    assert!(!text.contains("try `rimz loop fire"), "{text}");
+}
+
+#[test]
+fn loop_fire_warns_for_unmet_conditions_and_keeps_them_armed() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.condition]\nroot={:?}\ncheck='true'\nwhen=['team.stage=Done']\n",
+            env.project_root
+        ),
+    );
+    let text = loop_ok(&env, &["loop", "fire", "condition"]);
+    assert!(
+        text.contains("condition not met (0 of 1); running anyway, task stays armed"),
+        "{text}"
+    );
+    assert!(text.contains("check passed"), "{text}");
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "condition", "--json"])).unwrap();
+    assert_eq!(value["runs"].as_array().unwrap().len(), 1);
+    assert!(loop_ok(&env, &["loop", "list"]).contains("condition"));
+}
+
 #[cfg(unix)]
 #[test]
 fn judge_refuses_below_version_floor_before_provider_spawn() {
@@ -1017,7 +1098,10 @@ fn condition_tick_observes_board_and_records_evidence() {
     let listing = loop_ok(&env, &["loop", "list"]);
     assert!(listing.contains("when team.stage=Done"), "{listing}");
     let shown = loop_ok(&env, &["loop", "show", "ready"]);
-    assert!(shown.contains("waiting · team.stage: Review"), "{shown}");
+    assert!(
+        shown.contains("waiting · 0 of 1 met") && shown.contains("team.stage=Done   ✗ Review"),
+        "{shown}"
+    );
     std::fs::write(&root_board, "Stage: Review\n").unwrap();
     std::fs::write(&board, "Stage: Done\n").unwrap();
     loop_ok(&env, &["loop", "tick"]);
@@ -1305,7 +1389,7 @@ fn resident_named_worktree_saves_at_root_with_checkout_subscriptions_and_receipt
         "{text}"
     );
     assert!(
-        text.contains("before launch: takes over worktree `landing`"),
+        text.contains("before launch: stops idle agents in worktree `landing` first"),
         "{text}"
     );
     assert!(!env.project_root.join(".worktrees/landing").exists());
@@ -6481,8 +6565,8 @@ fn loop_spawn_controls_persist_render_and_gate_daily_budget() {
     assert_eq!((task.max_attempts, task.max_strikes), (Some(4), Some(5)));
     let show = loop_ok(&env, &["loop", "show", "bounded"]);
     assert!(
-        show.contains("\n  verify:   cargo xtask gate (up to 4 attempts)\n")
-            && show.contains("\n  timeout:  3h (default)\n"),
+        show.contains("\n  verify:  cargo xtask gate (up to 4 attempts)\n")
+            && show.contains("\n  timeout: 3h (default)\n"),
         "{show}"
     );
 
@@ -8156,7 +8240,7 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     assert!(
         list.lines()
             .any(|line| { line.trim_start().starts_with("invalid") && line.contains("invalid:") })
-            && show.contains("invalid — invalid:")
+            && show.contains("invalid · routine · invalid:")
             && fire.contains("check passed"),
         "{list}\n{show}\n{fire}"
     );
@@ -8194,7 +8278,7 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
         list.lines()
             .any(|line| { line.trim_start().starts_with("legacy") && line.contains('✓') })
             && show.contains("✓ completed")
-            && show.contains("RECENT RUNS (newest first · 1 of 1)")
+            && !show.contains("RECENT RUNS")
             && !show.contains("MODE")
             && !show.contains("last failure"),
         "{list}\n{show}"
@@ -8211,12 +8295,17 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
 #[test]
 fn loop_show_nonspawning_tasks_have_no_throttle_readings() {
     let env = Env::new();
-    for limit in ["", "[throttle]\nmax-active = 1\n"] {
+    for (limit, switch) in [
+        ("", ""),
+        ("", "throttle='on'\n"),
+        ("", "throttle='off'\n"),
+        ("[throttle]\nmax-active = 1\n", ""),
+    ] {
         write_loop_config(
             &env,
             &format!(
-                "{limit}[tasks.check]\ncheck = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
-                 [tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+                "{limit}[tasks.check]\n{switch}check = \"true\"\nroot = {:?}\nevery = \"1h\"\n\
+                 [tasks.wake]\n{switch}root = {:?}\nevery = \"1h\"\n\
                  wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
                 env.project_root, env.project_root,
             ),
@@ -8324,7 +8413,7 @@ fn loop_overlap_records_holder_and_preserves_one_shot() {
     );
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        show.starts_with("busy — once at 07:00 · ▸ running 25m · pid 42424\n")
+        show.starts_with("busy · one-off · once at 07:00 · ▸ running 25m · pid 42424\n")
             && show.contains("  1 fire skipped while the active run holds the lock\n")
             && show.contains("  stop with `rimz loop stop busy`\n")
             && !show
@@ -9273,7 +9362,7 @@ fn loop_run_held_by_the_start_throttle_is_shown_skipped_and_stopped() {
         "{show}"
     );
     assert!(
-        show.contains("throttle: no limits set") && !show.contains("THROTTLE"),
+        !show.contains("throttle:") && !show.contains("load:") && !show.contains("THROTTLE"),
         "{show}"
     );
 
@@ -11650,8 +11739,11 @@ fn explain_outside_a_room_reports_unknown_and_the_missing_inputs() {
         text.contains("when: ci=unknown && window.5h.left>=40"),
         "{text}"
     );
-    assert!(text.contains("  ci=unknown   ✓ unknown"), "{text}");
-    assert!(text.contains("  window.5h.left>=40   ✗ unknown"), "{text}");
+    assert!(
+        text.contains("  ci=unknown   ✓ readings paused (room closed)"),
+        "{text}"
+    );
+    assert!(text.contains("  window.5h.left>=40   ? not read"), "{text}");
     assert!(
         text.contains(
             "ci and pr readings come from the room's sidebar; the loop timer alone never sees them"

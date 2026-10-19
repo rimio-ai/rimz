@@ -1,5 +1,53 @@
 use super::*;
 
+#[test]
+fn manual_condition_notice_only_warns_when_unmet_and_counts_conjunctions() {
+    let now = Timestamp::now();
+    for (condition, ok, expected) in [
+        (
+            Some("team.stage=Done"),
+            false,
+            "condition not met (0 of 1); running anyway, task stays armed\n",
+        ),
+        (
+            Some("team.stage=Done || ci=passed"),
+            false,
+            "condition not met; running anyway, task stays armed\n",
+        ),
+        (Some("!team.stage=Done"), true, ""),
+        (None, false, ""),
+    ] {
+        let entry = TaskEntry {
+            when: condition.map(|expr| vec![expr.into()]),
+            every: condition.is_none().then(|| "1h".into()),
+            ..Default::default()
+        };
+        let shape = schedule::TaskShape::compile("task", &entry);
+        let timing = schedule::TaskTiming::evaluate(
+            shape.trigger(),
+            TaskSource::Config,
+            Some(now),
+            None,
+            &now.to_zoned(jiff::tz::TimeZone::UTC),
+        );
+        let timing = if condition.is_some() {
+            timing.with_condition(
+                &schedule::when::Verdict {
+                    ok,
+                    readings: BTreeMap::from([("team.stage".into(), None), ("ci".into(), None)]),
+                },
+                None,
+                now,
+            )
+        } else {
+            timing
+        };
+        let mut out = Vec::new();
+        write_condition_notice(&mut out, &timing).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+    }
+}
+
 struct RunOutcome {
     record: LoopRunRecord,
     presentation: LoopRunPresentation,

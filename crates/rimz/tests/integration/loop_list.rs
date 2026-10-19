@@ -606,10 +606,7 @@ fn acting_history_and_heard_are_not_skips() {
         show.contains("heard 3 other ci.* signals since, latest ci.passed 5m ago"),
         "{show}"
     );
-    assert!(
-        show.contains("RECENT RUNS (newest first · 1 of 1)"),
-        "{show}"
-    );
+    assert!(!show.contains("RECENT RUNS"), "{show}");
     assert!(show.contains("rimz loop logs acted -n 1"), "{show}");
     let value: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "show", "acted", "--json"])).unwrap();
@@ -673,7 +670,9 @@ fn show_reused_wait_names_ignore_history_before_arming() {
     );
     let text = loop_ok(&env, &["loop", "show", "wait-reused"]);
     assert!(
-        text.contains("not fired yet") && !text.contains("loop fire") && !text.contains("LAST RUN"),
+        text.contains("wakes @coder; not fired yet")
+            && !text.contains("loop fire")
+            && !text.contains("LAST RUN"),
         "{text}"
     );
     let value: serde_json::Value =
@@ -681,7 +680,7 @@ fn show_reused_wait_names_ignore_history_before_arming() {
     assert!(value["runs"].as_array().unwrap().is_empty(), "{value}");
     let logs = loop_ok(&env, &["loop", "logs", "wait-reused", "--heard"]);
     assert!(
-        logs.contains("not fired yet") && !logs.contains("loop fire"),
+        logs.contains("wakes @coder; not fired yet") && !logs.contains("loop fire"),
         "{logs}"
     );
     let mut current = record(

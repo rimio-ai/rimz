@@ -30,6 +30,22 @@ fn project_trust_decision(
     }
 }
 
+fn write_condition_notice(
+    out: &mut impl Write,
+    timing: &schedule::TaskTiming,
+) -> std::io::Result<()> {
+    if !matches!(timing.state(), schedule::TaskTimingState::Waiting { .. }) {
+        return Ok(());
+    }
+    let count = timing.condition_count().map_or_else(String::new, |count| {
+        format!(" ({} of {})", count.met, count.total)
+    });
+    writeln!(
+        out,
+        "condition not met{count}; running anyway, task stays armed"
+    )
+}
+
 pub(super) fn run_one(
     name: &str,
     mode: LoopRunMode,
@@ -86,6 +102,22 @@ pub(super) fn run_one(
             prefix: ui::paint(ui::palette::faint(), "  │ "),
         },
     };
+    if mode == LoopRunMode::Manual {
+        let mut observed_entry = entry.clone();
+        if let Some(checkout) = &checkout {
+            observed_entry.dir = Some(checkout.clone());
+        }
+        let now = Timestamp::now();
+        let timing = schedule::TaskTiming::evaluate(
+            loaded.trigger(),
+            TaskSource::Config,
+            Some(now),
+            None,
+            &now.to_zoned(config.time_zone()),
+        );
+        let timing = condition::observe(name, &observed_entry, timing, now);
+        write_condition_notice(&mut ui::out(), &timing)?;
+    }
     let mut fire = rimz::harness::schedule::runner::TaskFire::new(
         name,
         loaded,

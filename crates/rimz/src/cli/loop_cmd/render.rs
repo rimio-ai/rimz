@@ -306,6 +306,7 @@ fn has_agent_runs_section(entry: &TaskEntry, action: Option<&TaskAction>) -> boo
 
 struct ShowView {
     name: String,
+    kind: schedule::TaskKind,
     entry: TaskEntry,
     source: TaskSource,
     timing: schedule::TaskTiming,
@@ -374,7 +375,6 @@ struct SubscriptionView {
 
 enum ShowThrottle {
     Off,
-    Compact(Option<String>),
     Full(Vec<(&'static str, String)>),
 }
 
@@ -652,6 +652,9 @@ fn write_worktrees(
         .iter()
         .filter(|row| view.all || row.rank() < 5)
         .collect::<Vec<_>>();
+    let source = runtime_for_root(&view.entry.resolved_root())
+        .filter(|_| view.room_is_open)
+        .map(|runtime| schedule::when::CiSource::read(&runtime));
     let has_leader = rendered
         .iter()
         .any(|row| matches!(row.condition.state, CheckoutState::Launched { .. }));
@@ -702,21 +705,35 @@ fn write_worktrees(
                 cells.push(ui::cell(""));
                 continue;
             };
-            let value = verdict
+            let Some(value) = verdict
                 .readings
                 .get(&term.key)
-                .and_then(|value| value.as_deref());
+                .and_then(|value| value.as_deref())
+            else {
+                let reason = if term.reads_forge() {
+                    source
+                        .as_ref()
+                        .and_then(|source| source.unread_reason(&term.key, &row.condition.checkout))
+                        .map(|reason| condition::unread_reason(Some(reason)))
+                        .unwrap_or_else(|| "not read".into())
+                } else {
+                    "not read".into()
+                };
+                let (glyph, style) = ui::verdict(ui::status::StateRole::Unknown);
+                cells.push(ui::cell(format!("{glyph} {reason}")).fg(style));
+                continue;
+            };
             if repeated_keys.contains(term.key.as_str()) {
-                cells.push(ui::cell(value.unwrap_or("unknown")));
+                cells.push(ui::cell(value));
                 continue;
             }
-            let role = if term.matches(value) != *negated {
+            let role = if term.matches(Some(value)) != *negated {
                 ui::status::StateRole::Success
             } else {
                 ui::status::StateRole::Failed
             };
             let (glyph, style) = ui::verdict(role);
-            cells.push(ui::cell(format!("{glyph} {}", value.unwrap_or("unknown"))).fg(style));
+            cells.push(ui::cell(format!("{glyph} {value}")).fg(style));
         }
         if has_leader {
             let leader = if let CheckoutState::Launched { leader, .. } = &row.condition.state {
@@ -992,19 +1009,20 @@ fn write_empty_history(
     out: &mut impl Write,
     name: &str,
     entry: Option<&TaskEntry>,
-    you: bool,
 ) -> std::io::Result<()> {
     if let Some(entry) = entry {
         let shape = schedule::TaskShape::compile(name, entry);
-        if let Ok(action @ TaskAction::Deliver(_)) = shape.action() {
-            return writeln!(
-                out,
-                "{}; not fired yet",
-                list::action(action.kind(), action.subject(), Some(entry), you)
-            );
+        if let Ok(TaskAction::Deliver(target)) = shape.action() {
+            return writeln!(out, "wakes {}; not fired yet", target.handle);
+        }
+        if matches!(
+            shape.trigger().as_ref().map(|parsed| &parsed.trigger),
+            Ok(schedule::Trigger::Schedule(_))
+        ) {
+            return writeln!(out, "no runs recorded; try `rimz loop fire {name}`");
         }
     }
-    writeln!(out, "no runs recorded; try `rimz loop fire {name}`")
+    writeln!(out, "no runs recorded")
 }
 
 fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()> {
@@ -1015,8 +1033,12 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         &view.timing,
         view.in_flight.as_ref(),
         now,
-        view.entry.each_worktree,
+        &view.entry,
+        view.kind,
     )?;
+    if let Some(rimz::config::WatchSpec::Command(command)) = &view.entry.watch {
+        write_watch_command(out, command)?;
+    }
     write_verdict(
         out,
         &view.name,
@@ -1051,9 +1073,7 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         Vec::new()
     };
     write_attention(out, view, &rows)?;
-    if view.entry.each_worktree {
-        write_worktrees(out, view, expr, rows)?;
-    } else if !view.launches.is_empty() {
+    if !view.entry.each_worktree && !view.launches.is_empty() {
         writeln!(out, "\nLAUNCHES")?;
         let mut launches = view.launches.iter().collect::<Vec<_>>();
         launches.sort_by(|a, b| b.1.at.cmp(&a.1.at).then(a.0.cmp(b.0)));
@@ -1073,12 +1093,19 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             )?;
         }
     }
-    if !view.entry.each_worktree {
+    if let Ok(parsed) = view.timing.parsed()
+        && matches!(parsed.trigger, schedule::Trigger::Condition { .. })
+    {
+        writeln!(out, "  {}", parsed.describe())?;
+    }
+    if view.entry.each_worktree {
+        write_worktrees(out, view, expr, rows)?;
+    } else {
         write!(out, "{}", view.condition)?;
     }
     if view.records.is_empty() {
         writeln!(out)?;
-        write_empty_history(out, &view.name, Some(&view.entry), view.you)?;
+        write_empty_history(out, &view.name, Some(&view.entry))?;
     } else {
         write_last_run(
             out,
@@ -1091,7 +1118,14 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
         if view.show_agent_runs {
             write_agent_runs(out, &view.records, now)?;
         }
-        write_runs_table(out, &view.records, runs, now)?;
+        let rows = collapsed_run_rows(&view.records);
+        let repeats_detail = rows.len() == 1
+            && rows[0].skipped == 0
+            && detail_index(&view.records)
+                .is_some_and(|index| std::ptr::eq(rows[0].latest, &view.records[index]));
+        if !repeats_detail {
+            write_runs_table(out, &view.records, runs, now)?;
+        }
     }
     if !view.entry.each_worktree {
         write_subscriptions(out, &view.subscriptions)?;
@@ -1449,7 +1483,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     {
         ShowThrottle::Full(schedule::throttle::readings(&config, &args.name, entry))
     } else {
-        ShowThrottle::Compact(schedule::throttle::compact_load())
+        ShowThrottle::Off
     };
     let workflow_runs = if entry.workflow.is_some() {
         list::WorkflowRunRow::of_task(
@@ -1465,6 +1499,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         room_is_open,
         show_agent_runs: has_agent_runs_section(task.entry(), task.action().ok()),
         name: args.name,
+        kind: task.kind(),
         entry: entry.clone(),
         source: task.source(),
         timing,
@@ -1506,7 +1541,7 @@ pub(super) fn show(mut args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             worktrees: Vec<WorktreeJson<'a>>,
         }
         let json = ShowJson {
-            facts: serde_json::json!({ "task": view.name, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs }),
+            facts: serde_json::json!({ "task": view.name, "kind": view.kind, "entry": view.entry, "launches": view.launches, "runs": view.records, "heard": view.heard, "running": running, "held": held, "waiting": waiting, "workflow_runs": view.workflow_runs }),
             worktrees: worktrees_json(&view),
         };
         writeln!(ui::out(), "{}", serde_json::to_string_pretty(&json)?)?;
@@ -1814,7 +1849,7 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
                 args.name
             )?;
         } else {
-            write_empty_history(&mut out, &args.name, entry, false)?;
+            write_empty_history(&mut out, &args.name, entry)?;
         }
         return Ok(());
     }
@@ -1991,18 +2026,36 @@ fn write_show_headline(
     timing: &schedule::TaskTiming,
     in_flight: Option<&InFlightRun>,
     now: Timestamp,
-    each_worktree: bool,
+    entry: &TaskEntry,
+    kind: schedule::TaskKind,
 ) -> std::io::Result<()> {
-    let schedule_text = match timing.parsed() {
-        Ok(parsed) => parsed.describe(),
-        Err(err) => format!("invalid: {err}"),
+    let each_worktree = entry.each_worktree;
+    let kind = match kind {
+        schedule::TaskKind::Routine => "routine",
+        schedule::TaskKind::OneOff => "one-off",
+        schedule::TaskKind::WakeUp => "wake-up",
     };
-    write!(
-        out,
-        "{} — {}",
-        ui::paint(ui::palette::header(), name),
-        ui::paint(schedule_style(timing.parsed()), &schedule_text)
-    )?;
+    write!(out, "{} · {kind}", ui::paint(ui::palette::header(), name),)?;
+    if let Some(worktree) = list::worktree_name(entry) {
+        write!(out, " · worktree {worktree}")?;
+    }
+    let trigger = match timing.parsed() {
+        Ok(parsed) => match &parsed.trigger {
+            schedule::Trigger::Condition { .. } => None,
+            schedule::Trigger::Watch(rimz::config::WatchSpec::Command(_)) => {
+                Some("on command exit".to_owned())
+            }
+            _ => Some(parsed.describe()),
+        },
+        Err(err) => Some(format!("invalid: {err}")),
+    };
+    if let Some(trigger) = trigger {
+        write!(
+            out,
+            " · {}",
+            ui::paint(schedule_style(timing.parsed()), &trigger)
+        )?;
+    }
     if each_worktree {
         write!(out, " · each worktree")?;
     }
@@ -2035,27 +2088,61 @@ fn write_show_headline(
         schedule::TaskTimingState::Paused(until) => {
             write!(out, " · paused, resumes {}", pause_until_text(until, now))?
         }
+        schedule::TaskTimingState::Due(_)
+            if matches!(
+                timing.parsed().map(|parsed| &parsed.trigger),
+                Ok(schedule::Trigger::Condition { .. })
+            ) =>
+        {
+            write!(out, " · due")?;
+        }
         schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
             write!(out, " · next {}", ui::rel_until(next, now))?;
         }
         schedule::TaskTimingState::Listening { .. } => write!(out, " · listening")?,
         schedule::TaskTimingState::Watching { .. } => write!(out, " · watching")?,
-        state @ (schedule::TaskTimingState::Waiting { .. }
-        | schedule::TaskTimingState::Holding { .. }
-        | schedule::TaskTimingState::Fired)
+        schedule::TaskTimingState::Waiting { .. } if !each_worktree => write!(out, " · waiting")?,
+        state @ (schedule::TaskTimingState::Holding { .. } | schedule::TaskTimingState::Fired)
             if !each_worktree =>
         {
             write!(out, " · {}", state.condition_label().unwrap_or_default())?
         }
-        schedule::TaskTimingState::Invalid
-        | schedule::TaskTimingState::Unarmed
-        | schedule::TaskTimingState::NoOccurrence
-        | schedule::TaskTimingState::Waiting { .. }
+        schedule::TaskTimingState::Invalid => write!(out, " · invalid")?,
+        schedule::TaskTimingState::Unarmed if !each_worktree => write!(out, " · unarmed")?,
+        schedule::TaskTimingState::NoOccurrence if !each_worktree => {
+            write!(out, " · no next fire")?
+        }
+        schedule::TaskTimingState::Unarmed | schedule::TaskTimingState::NoOccurrence => {}
+        schedule::TaskTimingState::Waiting { .. }
         | schedule::TaskTimingState::Holding { .. }
         | schedule::TaskTimingState::Fired => {}
     }
+    if !each_worktree && let Some(count) = timing.condition_count() {
+        write!(out, " · {} of {} met", count.met, count.total)?;
+    }
     writeln!(out)?;
     Ok(())
+}
+
+fn write_watch_command(out: &mut impl Write, command: &str) -> std::io::Result<()> {
+    use unicode_width::UnicodeWidthStr;
+    let width = ui::terminal_columns(100);
+    let mut column = 2;
+    write!(out, "  ")?;
+    for word in command.split_inclusive(char::is_whitespace) {
+        let word_width = word.width();
+        if column > 2 && column + word_width > width {
+            write!(out, "\n  ")?;
+            column = 2;
+        }
+        write!(out, "{word}")?;
+        column += word_width;
+        if word.ends_with('\n') {
+            write!(out, "  ")?;
+            column = 2;
+        }
+    }
+    writeln!(out)
 }
 
 fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()> {
@@ -2089,10 +2176,10 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
         action_text.push_str(&format!(" · {check}"));
     }
     if entry.stay {
-        action_text.push_str(" · stays");
+        action_text.push_str(" · pane stays open");
     }
     if entry.takeover {
-        action_text.push_str(" · takes over the checkout");
+        action_text.push_str(" · stops idle agents in the checkout first");
     }
     kv.push("action", ui::cell(action_text));
     if !matches!(action, Some(TaskAction::CheckOnly))
@@ -2162,28 +2249,20 @@ fn write_show_facts(out: &mut impl Write, view: &ShowView) -> std::io::Result<()
             ui::cell(blocked_notice(state)).fg(ui::status::trust(state)),
         );
     }
-    match &view.throttle {
-        ShowThrottle::Off => {
-            if let Some(switch) = entry.throttle {
-                kv.push(
-                    "throttle",
-                    ui::cell(match switch {
-                        rimz::config::ThrottleSwitch::On => "on",
-                        rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
-                    }),
-                );
-            }
-        }
-        ShowThrottle::Compact(load) => {
-            kv.push("throttle", ui::cell("no limits set"));
-            if let Some(load) = load {
-                kv.push("load", ui::cell(load));
-            }
-        }
-        ShowThrottle::Full(_) if entry.throttle == Some(rimz::config::ThrottleSwitch::On) => {
-            kv.push("throttle", ui::cell("on"))
-        }
-        ShowThrottle::Full(_) => {}
+    if (view.config.r#loop.throttle.has_limits()
+        || view
+            .in_flight
+            .as_ref()
+            .is_some_and(|run| !run.held.is_empty()))
+        && let Some(switch) = entry.throttle
+    {
+        kv.push(
+            "throttle",
+            ui::cell(match switch {
+                rimz::config::ThrottleSwitch::On => "on",
+                rimz::config::ThrottleSwitch::Off => "off (starts without taking a turn)",
+            }),
+        );
     }
     if let Some(budget) = budget_label(entry) {
         kv.push("budget", ui::cell(budget));
@@ -2571,9 +2650,10 @@ fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, an
     match (acting.streak, since) {
         (1, None) => {}
         (1, Some(since)) => line.push_str(&format!(" · first{since}")),
-        (count, since) => {
-            line.push_str(&format!(" · {count} in a row{}", since.unwrap_or_default()))
-        }
+        (count, since) => line.push_str(&format!(
+            " · {count} runs in a row{}",
+            since.unwrap_or_default()
+        )),
     }
     Some((
         line,

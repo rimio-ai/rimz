@@ -926,27 +926,6 @@ fn held_in(host: &dyn Host, name: &str, root: &Path) -> Vec<Held> {
         .collect()
 }
 
-/// Current pressure pairs in avg10/avg60 order, omitting unavailable resources.
-pub fn compact_load() -> Option<String> {
-    compact_load_in(&SystemHost)
-}
-
-fn compact_load_in(host: &dyn Host) -> Option<String> {
-    let readings = Resource::ALL
-        .into_iter()
-        .filter_map(|resource| {
-            let pressure = host.pressure(resource).ok()?;
-            Some(format!(
-                "{} {:.0}%/{:.0}%",
-                resource.name(),
-                pressure.avg10,
-                pressure.avg60
-            ))
-        })
-        .collect::<Vec<_>>();
-    (!readings.is_empty()).then(|| format!("{} (avg10/avg60)", readings.join(" · ")))
-}
-
 /// The machine's current readings beside any configured limit, one
 /// `(label, text)` row each, for task `name`; a reading this host cannot take
 /// is left out.
@@ -1007,10 +986,7 @@ fn readings_in(host: &dyn Host, config: &ThrottleConfig, run: &Run) -> Vec<(&'st
             rows.push((
                 resource.label(),
                 limited(
-                    format!(
-                        "avg10 {:.0}% · avg60 {:.0}%",
-                        pressure.avg10, pressure.avg60
-                    ),
+                    format!("avg10 {:.0}%", pressure.avg10),
                     resource.limit(config).map(|limit| format!("{limit}%")),
                 ),
             ));

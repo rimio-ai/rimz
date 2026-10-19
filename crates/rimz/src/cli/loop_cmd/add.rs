@@ -1221,7 +1221,7 @@ fn write_add_feedback(
                     .unwrap_or_else(|| "the checkout".to_owned());
                 writeln!(
                     out,
-                    "before launch: takes over {place} (stops its idle agents, waits while any is busy)"
+                    "before launch: stops idle agents in {place} first (waits while any is busy)"
                 )?;
             }
             for binding in &entry.subscribe {

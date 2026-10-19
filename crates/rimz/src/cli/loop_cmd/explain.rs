@@ -36,7 +36,7 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
     let mut out = ui::out();
     writeln!(out, "when: {expr}")?;
     writeln!(out, "scope: {}", entry.run_dir().display())?;
-    condition::write_terms(&mut out, &expr, &verdict)?;
+    condition::write_terms(&mut out, &entry, &expr, &verdict)?;
     writeln!(out, "now: {}", verdict.ok)?;
     if !render::room_open(&entry.resolved_root()) {
         condition::write_no_room_hint(

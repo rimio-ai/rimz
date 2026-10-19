@@ -525,6 +525,7 @@ pub(crate) fn verdict(role: status::StateRole) -> (&'static str, anstyle::Style)
         status::StateRole::Paused => "⏸",
         status::StateRole::Failed | status::StateRole::Unavailable => "✗",
         status::StateRole::Neutral => "·",
+        status::StateRole::Unknown => "?",
     };
     (glyph, status::role(role))
 }

@@ -127,6 +127,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         has_agent_runs_section(&entry, Some(&TaskAction::Spawn("sweeper".into())));
     ShowView {
         name: "sweep".into(),
+        kind: schedule::TaskKind::Routine,
         entry,
         source: TaskSource::Config,
         timing,
@@ -152,7 +153,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             ),
         ]),
         in_flight: None,
-        condition: "condition: waiting\n  pr=open   ✓ open\n  ci=passed   ✗ unknown\n".into(),
+        condition: "  pr=open   ✓ open\n  ci=passed   ? not checked yet\n".into(),
         subscriptions: vec![SubscriptionView {
             name: "wake".into(),
             checkout: "/repo/newer".into(),
@@ -166,9 +167,7 @@ fn show_view(each_worktree: bool) -> ShowView {
         leader_statuses: BTreeMap::new(),
         you: false,
         config: MachineConfig::default().into(),
-        throttle: ShowThrottle::Compact(Some(
-            "cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)".into(),
-        )),
+        throttle: ShowThrottle::Off,
         show_agent_runs,
         worktrees: [("older", "old-leader", 10), ("newer", "new-leader", 90)]
             .map(
@@ -210,6 +209,95 @@ fn named_launch_rows_and_failed_attention_show_destination_not_scope() {
 }
 
 #[test]
+fn show_header_names_kind_checkout_and_condition_progress_once() {
+    let mut view = show_view(false);
+    view.entry.dir = Some("/repo/card-ux".into());
+    view.timing = schedule::TaskTiming::evaluate(
+        schedule::TaskShape::compile("sweep", &view.entry).trigger(),
+        TaskSource::Config,
+        Some(view.now_zoned.timestamp()),
+        None,
+        &view.now_zoned,
+    )
+    .with_condition(
+        &Verdict {
+            ok: false,
+            readings: BTreeMap::from([("pr".into(), Some("open".into())), ("ci".into(), None)]),
+        },
+        None,
+        view.now_zoned.timestamp(),
+    );
+    let text = show_text(&view);
+    assert_eq!(
+        text.lines().next(),
+        Some("sweep · routine · worktree card-ux · waiting · 1 of 2 met"),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_keeps_grouped_condition_and_hold_once_for_each_scope() {
+    for each in [false, true] {
+        let mut view = show_view(each);
+        view.entry.when = Some(vec!["pr=open || (ci=passed && !pr.queue=queued)".into()]);
+        view.entry.hold = Some("5m".into());
+        view.timing = schedule::TaskTiming::evaluate(
+            schedule::TaskShape::compile("sweep", &view.entry).trigger(),
+            TaskSource::Config,
+            None,
+            None,
+            &view.now_zoned,
+        );
+        let text = show_text(&view);
+        let expression = "when pr=open || ci=passed && !pr.queue=queued, for 5m";
+        assert_eq!(text.matches(expression).count(), 1, "{text}");
+        let following = if each { "WORKTREES" } else { "pr=open   ✓" };
+        assert!(
+            text.find(expression).unwrap() < text.find(following).unwrap(),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn show_keeps_recent_overlapping_runs() {
+    let mut view = show_view(false);
+    view.records = vec![
+        record(10, LoopRunResult::Overlapped),
+        record(20, LoopRunResult::Completed),
+    ];
+    let text = show_text(&view);
+    assert!(text.contains("RECENT RUNS"), "{text}");
+    assert!(text.contains("skipped"), "{text}");
+}
+
+#[test]
+fn worktrees_unread_cells_are_unknown_with_a_reason() {
+    use schedule::fanout::CheckoutState;
+    let mut view = worktree_view();
+    view.worktrees.retain(|row| row.name == "ready");
+    let CheckoutState::Ready { verdict, .. } = &mut view.worktrees[0].state else {
+        panic!("ready fixture")
+    };
+    verdict.readings.insert("ci".into(), None);
+    let text = show_text(&view);
+    assert!(text.contains("? not read"), "{text}");
+    assert!(!text.contains("✗ unknown"), "{text}");
+}
+
+#[test]
+fn show_omits_a_recent_table_that_only_repeats_the_last_run() {
+    let mut view = show_view(false);
+    view.records = (1..=4)
+        .map(|second| record(second, LoopRunResult::Completed))
+        .collect();
+    let text = show_text(&view);
+    assert!(!text.contains("RECENT RUNS"), "{text}");
+    assert!(text.contains("4 runs in a row"), "{text}");
+    assert!(text.contains("LAST RUN"), "{text}");
+}
+
+#[test]
 fn last_run_ignores_fifty_heard_siblings() {
     let mut completed = record(10, LoopRunResult::Completed);
     completed.check = Some(check(Some(0), "ok"));
@@ -226,24 +314,57 @@ fn last_run_ignores_fifty_heard_siblings() {
 }
 
 #[test]
-fn empty_history_hints_only_for_spawn_and_check() {
-    let mut view = show_view(false);
-    view.records.clear();
-    assert!(show_text(&view).contains("try `rimz loop fire sweep`"));
-    view.entry.agent = None;
-    assert!(show_text(&view).contains("try `rimz loop fire sweep`"));
-    view.entry.check = None;
-    view.entry.wait = Some(rimz::config::TaskTarget {
-        kind: rimz::ids::AgentKind::new_unchecked("claude"),
-        session: "current".into(),
-        handle: "@coder".into(),
-    });
-    for you in [false, true] {
-        view.you = you;
-        let text = show_text(&view);
-        assert!(
-            text.contains("not fired yet") && !text.contains("loop fire"),
+fn empty_history_hints_only_for_clock_triggers() {
+    for entry in [
+        TaskEntry {
+            when: Some(vec!["pr=open".into()]),
+            ..Default::default()
+        },
+        TaskEntry {
+            signal: Some("ci.failed".into()),
+            ..Default::default()
+        },
+        TaskEntry {
+            watch: Some(rimz::config::WatchSpec::Command("true".into())),
+            ..Default::default()
+        },
+        TaskEntry {
+            every: Some("1h".into()),
+            ..Default::default()
+        },
+    ] {
+        let mut out = Vec::new();
+        write_empty_history(&mut out, "sweep", Some(&entry)).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text.contains("try `rimz loop fire sweep`"),
+            entry.every.is_some(),
             "{text}"
+        );
+        assert!(text.starts_with("no runs recorded"), "{text}");
+    }
+}
+
+#[test]
+fn empty_delivery_history_names_the_wake_target_without_a_fire_hint() {
+    for trigger in ["clock", "signal", "watch"] {
+        let entry = TaskEntry {
+            wait: Some(TaskTarget {
+                kind: rimz::ids::AgentKind::new_unchecked("claude"),
+                session: "sess-planner".into(),
+                handle: "@planner#topic".into(),
+            }),
+            fire_at: (trigger == "clock").then(|| "2030-01-01T00:00:00Z".parse().unwrap()),
+            signal: (trigger == "signal").then(|| "ci.failed".into()),
+            watch: (trigger == "watch").then(|| rimz::config::WatchSpec::Command("true".into())),
+            ..TaskEntry::default()
+        };
+        let mut out = Vec::new();
+        write_empty_history(&mut out, "wake", Some(&entry)).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "wakes @planner#topic; not fired yet\n",
+            "{trigger}"
         );
     }
 }
@@ -293,12 +414,7 @@ fn show_fanout_verdict_precedes_worktrees_and_has_no_subscriptions_section() {
         text.lines().next().unwrap().ends_with(" · each worktree"),
         "{text}"
     );
-    let sections = [
-        "WORKTREES (2 owned · 2 launched)",
-        "LAST RUN",
-        "RECENT RUNS",
-        "  action:",
-    ];
+    let sections = ["WORKTREES (2 owned · 2 launched)", "LAST RUN", "  action:"];
     let positions = sections.map(|section| text.find(section).expect(section));
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
     assert!(!text.contains("SUBSCRIPTIONS"), "{text}");
@@ -534,10 +650,27 @@ fn negated_leaf_glyphs_and_short_read_through_the_negation() {
         panic!("ready fixture must carry a verdict");
     };
     let mut out = Vec::new();
-    super::super::condition::write_terms(&mut out, &expr, verdict).unwrap();
+    super::super::condition::write_terms(&mut out, &view.entry, &expr, verdict).unwrap();
     assert_eq!(
         anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
         "  pr=open   ✓ open\n  !ci=pending,failed   ✗ failed\n"
+    );
+    let mut unread = verdict.clone();
+    unread.readings.insert("ci".into(), None);
+    let mut out = Vec::new();
+    super::super::condition::write_terms(&mut out, &view.entry, &expr, &unread).unwrap();
+    assert!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
+            .to_string()
+            .contains("!ci=pending,failed   ✓ readings paused (room closed)")
+    );
+    unread.readings.insert("pr".into(), None);
+    let mut out = Vec::new();
+    super::super::condition::write_terms(&mut out, &view.entry, &expr, &unread).unwrap();
+    assert!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
+            .to_string()
+            .contains("pr=open   ? readings paused (room closed)")
     );
 }
 
@@ -666,7 +799,7 @@ fn worktrees_all_unfolds_declined_and_launched_rows() {
         .find(|line| line.starts_with("  waiting-many "))
         .expect("unfolded waiting row");
     assert!(
-        many.contains("✗ unknown") && many.contains("✗ failed"),
+        many.contains("? not checked yet") && many.contains("✗ failed"),
         "{text}"
     );
     assert!(
@@ -692,7 +825,7 @@ fn worktrees_all_unfolds_declined_and_launched_rows() {
             .any(|line| line.contains("LEADER") && line.ends_with("REASON")),
         "{text}"
     );
-    assert!(table.contains("judge haiku: Nothing"), "{text}");
+    assert!(table.contains("judge haiku:"), "{text}");
     assert!(!table.contains("A whole judge paragraph."), "{text}");
     assert!(!table.contains("ci and pr readings come"), "{text}");
 }
@@ -708,9 +841,14 @@ fn show_single_checkout_condition_follows_verdict_and_keeps_subscriptions() {
             .is_some_and(|line| line.starts_with("  ✗ failing")),
         "{text}"
     );
-    assert_eq!(text.lines().nth(2), Some("condition: waiting"), "{text}");
+    assert_eq!(
+        text.lines().nth(2),
+        Some("  when pr=open && ci=passed"),
+        "{text}"
+    );
+    assert_eq!(text.lines().nth(3), Some("  pr=open   ✓ open"), "{text}");
     assert!(
-        text.find("RECENT RUNS").unwrap() < text.find("SUBSCRIPTIONS").unwrap(),
+        text.find("LAST RUN").unwrap() < text.find("SUBSCRIPTIONS").unwrap(),
         "{text}"
     );
     assert!(
@@ -930,7 +1068,7 @@ fn show_resident_facts_name_action_and_wakes_without_timeout() {
     view.entry.account = Some("work".parse().unwrap());
     let text = show_text(&view);
     assert!(
-        text.contains("check, then start sweeper · account work · stays · takes over the checkout"),
+        text.contains("check, then start sweeper · account work · pane stays open · stops idle agents in the checkout first"),
         "{text}"
     );
     assert!(
@@ -991,7 +1129,7 @@ fn show_check_only_action_and_timeout_for_nonresident_agents() {
 }
 
 #[test]
-fn show_check_only_omits_throttle_unless_the_switch_is_set() {
+fn show_without_limits_omits_even_an_explicit_throttle_switch() {
     let mut view = show_view(false);
     view.entry.agent = None;
     view.entry.subscribe.clear();
@@ -1001,22 +1139,14 @@ fn show_check_only_omits_throttle_unless_the_switch_is_set() {
         !text.contains("throttle:") && !text.contains("load:") && !text.contains("THROTTLE"),
         "{text}"
     );
-    for (switch, label) in [
-        (rimz::config::ThrottleSwitch::On, "on"),
-        (
-            rimz::config::ThrottleSwitch::Off,
-            "off (starts without taking a turn)",
-        ),
+    for switch in [
+        rimz::config::ThrottleSwitch::On,
+        rimz::config::ThrottleSwitch::Off,
     ] {
         view.entry.throttle = Some(switch);
         let text = show_text(&view);
-        let throttle = text
-            .lines()
-            .find(|line| line.trim_start().starts_with("throttle:"))
-            .unwrap();
-        assert!(throttle.ends_with(label), "{text}");
         assert!(
-            !text.contains("load:") && !text.contains("THROTTLE"),
+            !text.contains("throttle:") && !text.contains("load:") && !text.contains("THROTTLE"),
             "{text}"
         );
     }
@@ -1056,8 +1186,6 @@ fn show_facts_follow_the_reference_order() {
             "source",
             "timeout",
             "will not fire",
-            "throttle",
-            "load",
             "budget",
             "surplus",
             "spend",
@@ -1068,11 +1196,10 @@ fn show_facts_follow_the_reference_order() {
 }
 
 #[test]
-fn show_no_limits_uses_compact_throttle_facts() {
+fn show_no_limits_omits_throttle_and_load() {
     let text = show_text(&show_view(true));
-    assert!(text.contains("throttle: no limits set"), "{text}");
     assert!(
-        text.contains("load:     cpu 14%/18% · io 26%/22% · memory 0%/0% (avg10/avg60)"),
+        !text.contains("throttle:") && !text.contains("load:"),
         "{text}"
     );
     assert!(!text.contains("THROTTLE"), "{text}");
@@ -1081,10 +1208,7 @@ fn show_no_limits_uses_compact_throttle_facts() {
 #[test]
 fn show_configured_limits_keep_full_throttle_section() {
     let mut view = show_view(true);
-    view.throttle = ShowThrottle::Full(vec![(
-        "cpu pressure",
-        "avg10 2% · avg60 3% (limit 25%)".into(),
-    )]);
+    view.throttle = ShowThrottle::Full(vec![("cpu pressure", "avg10 2% (limit 25%)".into())]);
     let text = show_text(&view);
     assert!(text.contains("THROTTLE\n"), "{text}");
     assert!(!text.contains("no limits set"), "{text}");
@@ -1424,9 +1548,9 @@ fn true_condition_without_hold_renders_due() {
     let mut out = Vec::new();
     super::super::condition::write_show(&mut out, &entry, &timing).unwrap();
     assert!(
-        String::from_utf8(out)
-            .unwrap()
-            .starts_with("condition: due\n")
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap())
+            .to_string()
+            .contains("team.stage=Done   ✓ Done")
     );
 }
 
@@ -1715,7 +1839,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     .unwrap();
     assert_eq!(
         healthy,
-        "✓ healthy · last run 10s ago, completed in 5.0s · 2 in a row since a failure 40s ago"
+        "✓ healthy · last run 10s ago, completed in 5.0s · 2 runs in a row since a failure 40s ago"
     );
     assert_eq!(style, ui::palette::good());
 
@@ -1728,7 +1852,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     .unwrap();
     assert_eq!(
         failing,
-        "✗ failing · last run 10s ago, error · 2 in a row since a good run 10s ago"
+        "✗ failing · last run 10s ago, error · 2 runs in a row since a good run 10s ago"
     );
     assert_eq!(style, ui::palette::alarm());
 
@@ -1740,7 +1864,7 @@ fn verdict_names_the_newest_run_and_the_bound_of_its_streak() {
     let (unbounded, _) = verdict_line(&[completed.clone(), completed], now).unwrap();
     assert_eq!(
         unbounded,
-        "✓ healthy · last run 10s ago, completed in 5.0s · 2 in a row"
+        "✓ healthy · last run 10s ago, completed in 5.0s · 2 runs in a row"
     );
     assert!(verdict_line(&[neutral], now).is_none());
 }
@@ -2117,7 +2241,16 @@ fn signal_timing_renders_trigger_matches_and_listening_state() {
     );
 
     let mut out = Vec::new();
-    write_show_headline(&mut out, "task", &timing, None, now, false).unwrap();
+    write_show_headline(
+        &mut out,
+        "task",
+        &timing,
+        None,
+        now,
+        &entry,
+        schedule::TaskKind::Routine,
+    )
+    .unwrap();
     let show = String::from_utf8(out).unwrap();
     assert!(
         show.contains("on ci.failed [branch=feature] · listening"),
@@ -2204,7 +2337,16 @@ fn running_replaces_the_headline_state_and_scales_its_elapsed_time() {
         held: Vec::new(),
     };
     let mut out = Vec::new();
-    write_show_headline(&mut out, "task", &timing, Some(&in_flight), now, false).unwrap();
+    write_show_headline(
+        &mut out,
+        "task",
+        &timing,
+        Some(&in_flight),
+        now,
+        &TaskEntry::default(),
+        schedule::TaskKind::Routine,
+    )
+    .unwrap();
     let show = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(
         show.ends_with(" · ▸ running 3m · pid 4162080\n") && !show.contains("paused"),
@@ -2224,7 +2366,16 @@ fn show_headline_keeps_blocked_before_pause() {
     let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
     let mut out = Vec::new();
 
-    write_show_headline(&mut out, "task", &timing, None, now, false).unwrap();
+    write_show_headline(
+        &mut out,
+        "task",
+        &timing,
+        None,
+        now,
+        &TaskEntry::default(),
+        schedule::TaskKind::Routine,
+    )
+    .unwrap();
 
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("next blocked · trust"), "{out}");
