@@ -133,7 +133,11 @@ fn output_sweep_does_not_hold_the_store_lock() {
         .unwrap();
     collect_state(
         &paths,
-        retention::DEFAULT_TMP_GRACE,
+        GcPolicy {
+            older_than: retention::DEFAULT_OLDER_THAN,
+            tmp_grace: retention::DEFAULT_TMP_GRACE,
+            transcript_retention: TranscriptRetention::Forever,
+        },
         false,
         &|_| {
             assert!(
@@ -562,10 +566,17 @@ fn owned_sweep_keeps_a_relaunch_with_a_fresh_direct_child() {
 #[test]
 fn audit_expires_then_trims_oldest_with_dry_run_parity() {
     let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    fs::create_dir_all(paths.audit_path("")).unwrap();
     let now = SystemTime::now();
-    let expired = temp.path().join("expired.jsonl");
-    let oldest = temp.path().join("a-oldest.jsonl");
-    let newest = temp.path().join("newest.jsonl");
+    let expired = paths.audit_path("expired.jsonl");
+    let oldest = paths.audit_path("a-oldest.jsonl");
+    let newest = paths.audit_path("newest.jsonl");
     for (path, days, bytes) in [
         (&expired, 31, 1),
         (&oldest, 29, crate::disk::retention::AUDIT_MAX_BYTES),
@@ -577,11 +588,87 @@ fn audit_expires_then_trims_oldest_with_dry_run_parity() {
             .unwrap();
     }
     let mut preview = GcReport::default();
-    collect_audit(temp.path(), &mut Sweep::new(true), &mut preview).unwrap();
+    collect_audit(&paths, &mut Sweep::new(true), &mut preview).unwrap();
     assert_eq!(preview.sidecar_files_removed, 2);
     assert!(expired.exists() && oldest.exists() && newest.exists());
     let mut actual = GcReport::default();
-    collect_audit(temp.path(), &mut Sweep::new(false), &mut actual).unwrap();
+    collect_audit(&paths, &mut Sweep::new(false), &mut actual).unwrap();
     assert_eq!(preview, actual);
     assert!(!expired.exists() && !oldest.exists() && newest.exists());
+}
+
+#[test]
+fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::StatePaths::under(
+        crate::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    paths.ensure_dirs().unwrap();
+    let expired = paths.audit_path("expired.jsonl");
+    let oldest = paths.audit_path("a-oldest.jsonl");
+    let newest = paths.audit_path("newest.jsonl");
+    let transcript = paths.transcript_dir.join("old.jsonl");
+    let messages = paths.message_history_dir.join("old.jsonl");
+    let history_size = 40 * 1024 * 1024;
+    for dir in [&paths.transcript_dir, &paths.message_history_dir] {
+        fs::create_dir_all(dir.join("empty")).unwrap();
+    }
+    let now = SystemTime::now();
+    for (path, days, bytes) in [
+        (&expired, 31, 1),
+        (&oldest, 29, retention::AUDIT_MAX_BYTES),
+        (&newest, 29, 1),
+        (&transcript, 60, history_size),
+        (&messages, 60, history_size),
+    ] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = fs::File::create(path).unwrap();
+        file.set_len(bytes).unwrap();
+        file.set_modified(now - Duration::from_secs(days * 86_400))
+            .unwrap();
+    }
+    let sweep = |dry_run| {
+        collect_state(
+            &paths,
+            GcPolicy {
+                older_than: retention::DEFAULT_OLDER_THAN,
+                tmp_grace: retention::DEFAULT_TMP_GRACE,
+                transcript_retention: TranscriptRetention::Forever,
+            },
+            dry_run,
+            &|_| Ok(false),
+            &temp_owner,
+        )
+        .unwrap()
+        .0
+    };
+    let preview = sweep(true);
+    assert!(transcript.exists() && messages.exists() && expired.exists() && oldest.exists());
+    let actual = sweep(false);
+    assert!(
+        transcript.exists() && messages.exists(),
+        "history has its own retention"
+    );
+    assert!(
+        paths.transcript_dir.join("empty").exists()
+            && paths.message_history_dir.join("empty").exists()
+    );
+    assert!(!expired.exists() && !oldest.exists() && newest.exists());
+    for (class, removed, retained) in [("audit", 2, 1), ("transcript", 0, 2 * history_size)] {
+        let row = actual
+            .iter()
+            .find(|row| row.class == class)
+            .expect("class row");
+        assert_eq!(preview.iter().find(|row| row.class == class), Some(row));
+        assert_eq!(row.files_removed, removed);
+        if class == "transcript" {
+            assert_eq!(row.bytes_removed, 0);
+        }
+        assert_eq!(
+            serde_json::to_value(row).unwrap()["bytes_retained"],
+            retained
+        );
+    }
 }

@@ -1134,6 +1134,7 @@ fn parse_set_value(path: &[String], raw: &str) -> Value {
         || is_turn_budget_edit(path)
         || is_auto_redeem_min_gain_edit(path)
         || is_gc_duration_edit(path)
+        || matches!(path, [root, leaf] if root == "gc" && leaf == "transcript_retention")
         || matches!(path, [root, leaf] if root == "gc" && leaf == "tmp_floor_min")
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
@@ -1151,6 +1152,10 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if matches!(path, [root, leaf] if root == "gc" && leaf == "transcript_retention") {
+        super::TranscriptRetention::parse(value.as_str().unwrap_or_default())
+            .map_err(ConfigEditErr::InvalidValue)?;
+    }
     if is_auto_redeem_min_gain_edit(path) {
         let Some(raw) = value.as_str() else {
             invalid_value!("resume.auto_redeem_min_gain must be a duration string");

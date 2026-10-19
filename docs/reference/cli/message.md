@@ -226,7 +226,7 @@ A wait is refused before sending when a target has no lifecycle state, is not ru
 | `expired` | An automatic command remained queued for ten minutes without delivery. It no longer blocks later messages, even before the next sweep records this status. Prompts and operator commands never expire. |
 | `archived` | The recipient, its channel, or a watched `--when` agent ended first. |
 
-The last seven are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to the room's audit retention. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained. Requeueing an expired automatic command starts a fresh ten-minute window. Steer and interrupt cannot deliver an expired queued command.
+The last seven are final. A final record keeps its text in `audit/messages/<bucket-start>.jsonl`, subject to [`gc.transcript_retention`](../../guide/configuration.md#garbage-collection), which defaults to `forever` and governs transcript history too. `show`, `list`, and `requeue` read the room's newest 500 final records, so they display or resend a final message while it is among those and still retained. Requeueing an expired automatic command starts a fresh ten-minute window. Steer and interrupt cannot deliver an expired queued command.
 
 ## Inbox and queue verbs
 

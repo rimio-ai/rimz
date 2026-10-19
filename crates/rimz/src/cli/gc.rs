@@ -106,6 +106,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let policy = gc::GcPolicy {
         older_than: args.older_than.unwrap_or(gc_config.older_than),
         tmp_grace: gc_config.tmp_grace,
+        transcript_retention: gc_config.transcript_retention,
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the room for gc; run inside a room or pass --root")?;
@@ -628,13 +629,17 @@ fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
                 )?;
                 continue;
             }
-            writeln!(
+            write!(
                 w,
                 "    {} · {} · {}",
                 class.class,
                 plural(class.files_removed, "file", "files"),
                 fmt_bytes(class.bytes_removed)
             )?;
+            if let Some(kept) = class.bytes_retained {
+                write!(w, " · {} kept", fmt_bytes(kept))?;
+            }
+            writeln!(w)?;
         }
     }
 

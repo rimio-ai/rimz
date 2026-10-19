@@ -118,6 +118,7 @@ These keys always take a string, so `200k`, `50/day`, or a theme named `0x96f` n
 | `resume.auto_redeem_min_gain` | a duration |
 | `resume.spend_order` | `credits_first` (default) or `resets_first`; paid credit before useful banked resets, or the reverse. Expiry rescue is independent of this order. |
 | `gc.older_than` | a duration such as `8h` or `3d` |
+| `gc.transcript_retention` | `forever` (default) or a positive duration (`s`, `m`, `h`, `d`); governs transcript and message history together |
 | `gc.tmp_grace` | positive duration (`s`, `m`, `h`, `d`); default `1d`, separate from owned-state retention |
 | `gc.tmp_floor_percent` | integer from 0 to 100; default 10 |
 | `gc.tmp_floor_min` | byte size (`B`, `KB`, `KiB`, `MB`, `MiB`, `GB`, `GiB`, or decimal `K`/`M`/`G`); default `10GiB` |

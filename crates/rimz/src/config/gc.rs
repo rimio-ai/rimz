@@ -14,7 +14,47 @@ const OLDER_THAN_UNITS: &[DurationUnit] = &[
     DurationUnit::Day,
 ];
 
-/// Garbage collection policy: runtime retention, temp-unit grace and free-space reserve.
+const TRANSCRIPT_RETENTION_FORMAT: &str = "gc.transcript_retention must be \"forever\" or a non-zero duration such as 30d or 12h (s/m/h/d)";
+
+/// Independent retention for RimZ transcripts and message history.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TranscriptRetention {
+    #[default]
+    Forever,
+    Duration(Duration),
+}
+
+impl TranscriptRetention {
+    pub(super) fn parse(raw: &str) -> Result<Self, String> {
+        if raw == "forever" {
+            return Ok(Self::Forever);
+        }
+        parse_older_than(raw)
+            .map(Self::Duration)
+            .map_err(|_| TRANSCRIPT_RETENTION_FORMAT.to_owned())
+    }
+}
+
+impl Serialize for TranscriptRetention {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Forever => serializer.serialize_str("forever"),
+            Self::Duration(duration) => {
+                serializer.serialize_str(&crate::utils::time::format_duration_compact(*duration))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TranscriptRetention {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)
+            .map_err(|_| serde::de::Error::custom(TRANSCRIPT_RETENTION_FORMAT))?;
+        Self::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Garbage collection policy: history retention, temp-unit grace and free-space reserve.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GcConfig {
@@ -23,6 +63,7 @@ pub struct GcConfig {
     /// Age cutoff `rimz gc` uses when `--older-than` is absent.
     #[serde(with = "older_than_serde")]
     pub older_than: Duration,
+    pub transcript_retention: TranscriptRetention,
     /// Grace after a temp unit's latest owner ends and its latest modification.
     #[serde(
         serialize_with = "older_than_serde::serialize",
@@ -40,6 +81,7 @@ impl Default for GcConfig {
         Self {
             auto: true,
             older_than: DEFAULT_OLDER_THAN,
+            transcript_retention: TranscriptRetention::Forever,
             tmp_grace: DEFAULT_TMP_GRACE,
             tmp_floor_percent: DEFAULT_TMP_FLOOR_PERCENT,
             tmp_floor_min: DEFAULT_TMP_FLOOR_MIN.to_owned(),
@@ -127,7 +169,7 @@ mod tests {
         assert_eq!(config.older_than, Duration::from_secs(7 * 86_400));
         assert_eq!(
             toml::to_string(&config).expect("serialize"),
-            "auto = true\nolder_than = \"7d\"\ntmp_grace = \"1d\"\ntmp_floor_percent = 10\ntmp_floor_min = \"10GiB\"\n"
+            "auto = true\nolder_than = \"7d\"\ntranscript_retention = \"forever\"\ntmp_grace = \"1d\"\ntmp_floor_percent = 10\ntmp_floor_min = \"10GiB\"\n"
         );
     }
 
@@ -138,6 +180,30 @@ mod tests {
                 parse_older_than(raw),
                 Ok(Duration::from_secs(secs)),
                 "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn transcript_retention_accepts_forever_and_durations() {
+        for raw in ["forever", "30d", "12h"] {
+            let config: GcConfig =
+                toml::from_str(&format!("transcript_retention = {raw:?}")).unwrap();
+            let serialized = serde_json::to_value(config).unwrap();
+            assert_eq!(serialized["transcript_retention"], raw);
+        }
+    }
+
+    #[test]
+    fn transcript_retention_refuses_invalid_values_with_the_key() {
+        for raw in ["\"0d\"", "\"never\"", "30"] {
+            let result = toml::from_str::<GcConfig>(&format!("transcript_retention = {raw}"));
+            assert!(result.is_err(), "accepted {raw}");
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("gc.transcript_retention")
             );
         }
     }

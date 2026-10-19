@@ -73,6 +73,7 @@ pub(super) fn collect_runtime_classes(
                 + removed.sidebar_sockets_removed,
             bytes_removed: removed.bytes_removed,
             locks_would_check: removed.locks_would_check,
+            bytes_retained: None,
         });
         report.heartbeat_files_removed += removed.heartbeat_files_removed;
         report.sidecar_files_removed += removed.sidecar_files_removed;
@@ -346,6 +347,14 @@ pub(super) struct Sweep {
 
 impl Sweep {
     pub(super) fn files_under(&mut self, dir: &Path) -> Result<Vec<(PathBuf, SystemTime, u64)>> {
+        self.files_under_except(dir, &[])
+    }
+
+    pub(super) fn files_under_except(
+        &mut self,
+        dir: &Path,
+        excluded: &[&Path],
+    ) -> Result<Vec<(PathBuf, SystemTime, u64)>> {
         self.remember_dir_size(dir);
         let mut files = Vec::new();
         for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
@@ -354,13 +363,16 @@ impl Sweep {
                 source,
             })?;
             let path = entry.path();
+            if excluded.contains(&path.as_path()) {
+                continue;
+            }
             let metadata = match fs::symlink_metadata(&path) {
                 Ok(metadata) => metadata,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
                 Err(source) => return Err(GcErr::Io { path, source }),
             };
             if metadata.is_dir() {
-                files.extend(self.files_under(&path)?);
+                files.extend(self.files_under_except(&path, excluded)?);
             } else {
                 let modified = metadata.modified().map_err(|source| GcErr::Io {
                     path: path.clone(),
@@ -370,6 +382,15 @@ impl Sweep {
             }
         }
         Ok(files)
+    }
+
+    pub(super) fn retained_bytes(&mut self, dir: &Path) -> Result<u64> {
+        Ok(self
+            .files_under(dir)?
+            .into_iter()
+            .filter(|(path, _, _)| !self.planned.contains(path))
+            .map(|(_, _, bytes)| bytes)
+            .sum())
     }
 
     pub(super) fn remove_empty_dirs(
