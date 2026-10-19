@@ -22,7 +22,12 @@ fn fixed_time(second: i64) -> jiff::Timestamp {
 }
 
 fn fetch_failed(reason: &str, committed: &SidebarSnapshot, health: &Health) -> RenderState {
-    compute_next_state(Err(reason.to_owned()), committed, health)
+    compute_next_state(
+        Err(reason.to_owned()),
+        committed,
+        health,
+        jiff::Timestamp::now(),
+    )
 }
 
 fn active_alert(health: &Health) -> &Alert {
@@ -382,6 +387,7 @@ impl ApplyHarness {
         let (observe_tx, _observe_rx) = std::sync::mpsc::sync_channel(64);
         let (_result_tx, result_rx) = super::super::fetch::result_channel();
         let mut state = LoopState::new(
+            crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
             None,
             runtime,
@@ -576,7 +582,12 @@ fn diagnostics_record_group_migrations() {
 fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     let ws = workspace();
     let committed = snapshot(&ws);
-    let ok = compute_next_state(Ok(snapshot(&ws)), &committed, &Health::default());
+    let ok = compute_next_state(
+        Ok(snapshot(&ws)),
+        &committed,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     assert!(ok.health.alert.is_none());
     assert_eq!(ok.health.failure_streak, 0);
     assert_eq!(ok.snapshot.workspace_id, ws);
@@ -603,7 +614,8 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     assert_eq!(alert.since, first_since, "since must remain pinned");
     assert!(alert.reason.contains("second"));
 
-    let recovered = compute_next_state(Ok(snapshot(&ws)), &previous, &armed);
+    let recovered =
+        compute_next_state(Ok(snapshot(&ws)), &previous, &armed, jiff::Timestamp::now());
     let alert = recovered.health.alert.expect("recovered alert lingers");
     assert!(!alert.is_active());
     assert!(alert.recovered_at.is_some());

@@ -15,7 +15,7 @@ use crate::diag::record::{
 };
 use crate::ids::{FocusNonce, PaneId};
 use crate::mux::focus_anchor::{
-    FocusActionError, FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
+    FocusObservation, FocusObservationOutcome, FocusOrigin, FocusPresentation,
 };
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::enrich::project_local;
@@ -23,9 +23,7 @@ use crate::sidebar::event_store::EventStore;
 use crate::sidebar::fuse::{focus_intent_confirmed_from, fuse_owned};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::{ReadMarks, write_read_marks};
-use crate::sidebar::timing::{
-    FOCUS_REPAIR_RETRY_STEP, FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE, TAB_READ_DWELL,
-};
+use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, LAYOUT_FREEZE, TAB_READ_DWELL};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pixel::{PixelRenderCaps, PixelSlot};
 use crate::sidebar_pane::render::{self, UiState};
@@ -39,10 +37,14 @@ use ratatui::Terminal;
 use tracing::{debug, trace, warn};
 
 use super::backend::PaneBackend;
+use super::clock::LoopClock;
 use super::fetch::{
     FetchDispatcher, FetchPhase, FetchRequest, FetchUpdate, ResultReceiver, SnapshotSource,
     WorkspaceFold,
 };
+use super::focus::{FocusRepairDispatch, spawn_pane_focus};
+#[cfg(test)]
+use super::focus::{finish_focus_request, request_focus_until};
 use super::focus_push::{FocusPeers, FocusPush};
 use super::gate::{GateState, apply_gate, gate_remaining};
 use super::health::{Health, degraded_too_long};
@@ -72,6 +74,8 @@ use super::timing::{
 };
 use super::width_control::WidthController;
 use super::{Result, ServeConfig, fetch_deadline_timeout};
+#[cfg(test)]
+use crate::mux::focus_anchor::FocusActionError;
 
 const RESIZE_CAPS_SETTLE: Duration = Duration::from_millis(300);
 
@@ -127,6 +131,7 @@ pub(super) struct LoopState {
     /// The keymap beside the `[sidebar.keys]` table it was built from, rebuilt only when the snapshot's table differs.
     nav_keys: (crate::config::SidebarKeys, super::NavKeymap),
     config: ServeConfig,
+    clock: LoopClock,
     runtime: RuntimePaths,
     host_wake_path: PathBuf,
     diag: crate::diag::DiagSink,
@@ -147,6 +152,7 @@ pub(super) struct LoopState {
     focus_rollback: Option<FocusRollback>,
     painted_focus_anchor_ms: u64,
     painted_height: u16,
+    paints: u64,
     retired_anchor: Option<(Instant, u64)>,
     filter_observed_at: Option<Instant>,
     last_pulled_rows: usize,
@@ -291,6 +297,7 @@ impl LoopState {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
+        clock: LoopClock,
         config: ServeConfig,
         baseline_pane: Option<PaneId>,
         runtime: RuntimePaths,
@@ -302,13 +309,13 @@ impl LoopState {
         pet_render_caps: PixelRenderCaps,
         pixel_slot: Option<PixelSlot>,
     ) -> Self {
-        let snapshot_now = Timestamp::now();
+        let snapshot_now = clock.timestamp();
         let current = SidebarSnapshot::build_with_agents(
             config.workspace_id.clone(),
             Vec::new(),
             snapshot_now,
         );
-        let now = Instant::now();
+        let now = clock.now();
         let pixel_wrap = config.mux == MuxName::Tmux;
         let width = crate::mux::SidebarWidth::from_config(
             &crate::config::MachineConfig::load_lenient().theme,
@@ -331,6 +338,7 @@ impl LoopState {
                 super::NavKeymap::from_config(&current.sidebar.keys),
             ),
             config,
+            clock,
             runtime,
             host_wake_path,
             diag,
@@ -346,6 +354,7 @@ impl LoopState {
             focus_rollback: None,
             painted_focus_anchor_ms: 0,
             painted_height: 0,
+            paints: 0,
             retired_anchor: None,
             filter_observed_at: None,
             last_pulled_rows: 0,
@@ -405,8 +414,21 @@ impl LoopState {
     ) -> Result<()> {
         self.report_baseline();
         let (_, mut timeout) = self.frame_timing();
-        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
-        inbox.dispatch_next(self, fetch, terminal, timeout)?;
+        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.clock.now());
+        inbox.wait(timeout);
+        self.advance(inbox, fetch, terminal).map(|_| ())
+    }
+
+    /// Run the nonblocking iteration and return whether it painted and the next driver deadline.
+    pub(super) fn advance(
+        &mut self,
+        inbox: &mut WakeupInbox,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<PaneBackend>,
+    ) -> Result<(bool, Instant)> {
+        let paints = self.paints;
+        self.report_baseline();
+        inbox.dispatch_next(self, fetch, terminal, Duration::ZERO)?;
         // A pane the mux had not laid out at attach gets its title
         // with its first size.
         if !self.titled {
@@ -417,7 +439,17 @@ impl LoopState {
         self.run_width_control_backstop(terminal);
         self.maybe_remind(fetch, terminal);
         let (active, _) = self.frame_timing();
-        self.paint_frame_if_due(terminal, active)
+        self.paint_frame_if_due(terminal, active)?;
+        let (_, timeout) = self.frame_timing();
+        let now = self.clock.now();
+        let timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), now);
+        let mut deadline = now + timeout;
+        if let Some(remaining) =
+            self.freeze_remaining(self.clock.timestamp_at(now).as_millisecond())
+        {
+            deadline = deadline.min(now + remaining.max(FRAME_MIN_TIMEOUT));
+        }
+        Ok((self.paints != paints, deadline))
     }
 
     pub(super) fn report_baseline(&mut self) {
@@ -473,8 +505,16 @@ impl LoopState {
         self.watched()
     }
 
+    fn freeze_remaining(&self, now_ms: i64) -> Option<Duration> {
+        let hold = self.ui.freeze.as_ref()?;
+        Some(Duration::from_millis(
+            (hold.deadline_ms(self.parked(now_ms as u64)) - now_ms).max(0) as u64,
+        ))
+    }
+
     fn frame_timing(&self) -> (bool, Duration) {
         let clock = frame_clock(
+            self.clock.now(),
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
         );
@@ -486,26 +526,29 @@ impl LoopState {
         let active = !self.self_close.confirming_empty() && watched && (animating || self.dirty);
         let mut timeout = if active {
             self.next_frame
-                .saturating_duration_since(Instant::now())
+                .saturating_duration_since(self.clock.now())
                 .max(FRAME_MIN_TIMEOUT)
         } else {
             // Cap by the watchdog so the self-close backstop fires on time even
             // when the data tick is much longer. Also wake at layout-freeze expiry:
             // a fold must run to release the frozen row/group order after idle.
-            let watchdog_due =
-                SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
+            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
+                self.clock
+                    .now()
+                    .saturating_duration_since(self.last_self_close_check),
+            );
             let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
             if !watched && self.result_rx.has_pending_snapshot() {
                 timeout = timeout.min(
-                    tick_for(self.config.tick_seconds)
-                        .saturating_sub(self.last_content_fold.elapsed()),
+                    tick_for(self.config.tick_seconds).saturating_sub(
+                        self.clock
+                            .now()
+                            .saturating_duration_since(self.last_content_fold),
+                    ),
                 );
             }
-            if let Some(hold) = self.ui.freeze.as_ref() {
-                let now_ms = jiff::Timestamp::now().as_millisecond();
-                let remaining = Duration::from_millis(
-                    (hold.deadline_ms(self.parked(now_ms as u64)) - now_ms).max(0) as u64,
-                );
+            if let Some(remaining) = self.freeze_remaining(self.clock.timestamp().as_millisecond())
+            {
                 timeout = timeout.min(remaining);
             }
             timeout.max(FRAME_MIN_TIMEOUT)
@@ -516,7 +559,7 @@ impl LoopState {
         {
             timeout = timeout.min(
                 until
-                    .saturating_duration_since(Instant::now())
+                    .saturating_duration_since(self.clock.now())
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
@@ -529,11 +572,11 @@ impl LoopState {
         {
             timeout = timeout.min(
                 deadline
-                    .saturating_duration_since(Instant::now())
+                    .saturating_duration_since(self.clock.now())
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
-        if let Some(remaining) = gate_remaining(&self.gate, jiff::Timestamp::now()) {
+        if let Some(remaining) = gate_remaining(&self.gate, self.clock.timestamp()) {
             timeout = timeout.min(remaining.max(FRAME_MIN_TIMEOUT));
         }
         (active, timeout)
@@ -560,7 +603,7 @@ impl LoopState {
     fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
         if self
             .optimistic_watch_until
-            .is_some_and(|until| Instant::now() < until)
+            .is_some_and(|until| self.clock.now() < until)
         {
             return true;
         }
@@ -587,7 +630,11 @@ impl LoopState {
                     && !self.watches_view(own_view, viewed_panes)
                     && own_view == self.current.own_view.as_ref()
                     && self.admits_clock_only(false)
-                    && self.last_content_fold.elapsed() < tick_for(self.config.tick_seconds)
+                    && self
+                        .clock
+                        .now()
+                        .saturating_duration_since(self.last_content_fold)
+                        < tick_for(self.config.tick_seconds)
             },
             |fold, own_pane, refresh_override| {
                 #[cfg(test)]
@@ -602,7 +649,7 @@ impl LoopState {
             self.projections += projections;
         }
         if deferred {
-            self.fetched_at = Instant::now();
+            self.fetched_at = self.clock.now();
             self.last_self_close_check = self.fetched_at;
         }
         let delivered = pending.snapshot.is_some() || pending.outcome.is_some();
@@ -622,9 +669,9 @@ impl LoopState {
         // deadline. Eager finals can otherwise feed themselves through the
         // fast fold and pin the renderer to its 1 ms gate wakeup.
         if !self.should_exit && saw_final && rejected {
-            let defer_for = gate_remaining(&self.gate, jiff::Timestamp::now())
+            let defer_for = gate_remaining(&self.gate, self.clock.timestamp())
                 .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
-            fetch.defer_until(FetchRequest::default(), Instant::now() + defer_for);
+            fetch.defer_until(FetchRequest::default(), self.clock.now() + defer_for);
         }
     }
 
@@ -657,6 +704,7 @@ impl LoopState {
             last_pulled_rows: _,
             // Loop wiring and identity, fixed for the attachment.
             config: _,
+            clock: _,
             runtime: _,
             host_wake_path: _,
             diag: _,
@@ -678,6 +726,7 @@ impl LoopState {
             focus_rollback: _,
             painted_focus_anchor_ms: _,
             painted_height: _,
+            paints: _,
             retired_anchor: _,
             confirmed_focus_intent_ms: _,
             // Overlay events: an active one holds `overlay_baseline`.
@@ -785,11 +834,11 @@ impl LoopState {
         self.focus_landing = None;
         // Dispatch removed the failed intent. Fence older retained cuts from reviving it,
         // but do not fence the pulled baseline that the failed jump must restore.
-        self.observed_anchor = Some((Instant::now(), None));
+        self.observed_anchor = Some((self.clock.now(), None));
         self.retired_anchor = None;
         self.fold_fused_now();
         if !self.alert_active() {
-            let now = Timestamp::now();
+            let now = self.clock.timestamp();
             self.health.alert = Some(render::Alert {
                 reason: format!("focus failed: {label}: {error}"),
                 since: now,
@@ -813,9 +862,9 @@ impl LoopState {
         if let FetchUpdate::Unchanged { clock, .. } = update {
             clock.apply(&mut self.current);
             self.last_focus_observation.panes_observed_at_ms = self.current.panes_observed_at_ms;
-            self.fetched_at = Instant::now();
+            self.fetched_at = self.clock.now();
             self.last_content_fold = self.fetched_at;
-            self.last_self_close_check = Instant::now();
+            self.last_self_close_check = self.clock.now();
             self.dirty = true;
             self.fold_inputs = None;
             self.result_rx.acknowledge(delivered, false);
@@ -830,19 +879,19 @@ impl LoopState {
                 phase,
                 source,
             } => {
-                self.last_content_fold = Instant::now();
+                self.last_content_fold = self.clock.now();
                 #[cfg(test)]
                 {
                     self.content_applications += 1;
                 }
-                let now_ms = crate::utils::time::unix_now_ms();
+                let now_ms = self.clock.now_ms();
                 self.events().prune(now_ms);
                 let pulled = *snapshot;
                 self.last_focus_observation = FocusObservation::from_snapshot(&pulled);
                 if self.observation.is_some() {
                     self.last_pulled_rows = pulled.rows().count();
                 }
-                let intent = self.pending_focus_intent(now_ms);
+                let intent = self.pending_focus_intent(now_ms, self.clock.now());
                 let (snapshot, baseline, focus_event_sent_at_ms) =
                     fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
                 fused_event_sent_at_ms = focus_event_sent_at_ms;
@@ -858,12 +907,12 @@ impl LoopState {
             FetchUpdate::Shared { .. } => unreachable!("unwrapped above"),
             FetchUpdate::Fold { .. } => unreachable!("projected at take"),
         };
-        self.fetched_at = Instant::now();
+        self.fetched_at = self.clock.now();
         let rejected = self.fold_outcome(update, true, seed, fused_event_sent_at_ms);
         self.result_rx.acknowledge(delivered, false);
         self.fold_inputs = None;
         if snapshot_ok {
-            self.last_self_close_check = Instant::now();
+            self.last_self_close_check = self.clock.now();
             self.retry_pending_focus_repair();
         }
         self.release_paint_hold_after_snapshot(rejected);
@@ -896,7 +945,7 @@ impl LoopState {
             .overlay_baseline
             .take()
             .unwrap_or_else(|| self.current.clone());
-        let intent = self.pending_focus_intent(now_ms);
+        let intent = self.pending_focus_intent(now_ms, self.clock.now());
         let (fused, baseline, focus_event_sent_at_ms) =
             fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
         self.overlay_baseline = baseline;
@@ -907,8 +956,7 @@ impl LoopState {
     /// turn's frame phase paints it now.
     fn fold_fused_now(&mut self) {
         self.result_rx.invalidate();
-        let (fused, fused_event_sent_at_ms) =
-            self.fused_snapshot(crate::utils::time::unix_now_ms());
+        let (fused, fused_event_sent_at_ms) = self.fused_snapshot(self.clock.now_ms());
         self.fold_outcome(
             FetchUpdate::Snapshot {
                 snapshot: Box::new(fused),
@@ -919,7 +967,7 @@ impl LoopState {
             false,
             fused_event_sent_at_ms,
         );
-        self.next_frame = Instant::now();
+        self.next_frame = self.clock.now();
     }
 
     fn fold_focus_intent(
@@ -947,7 +995,7 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
-        let arrived = Instant::now();
+        let arrived = self.clock.now();
         push.peer.received_ms = Some(push.elapsed_ms());
         if self.current.row_owning_pane(&push.anchor.pane_id).is_some()
             && !self.owns_focus_target(&push.anchor.pane_id)
@@ -1019,7 +1067,7 @@ impl LoopState {
             }
             SidebarEvent::BodyFilterChanged => {
                 self.prepare_action(fetch);
-                self.filter_observed_at = Some(Instant::now());
+                self.filter_observed_at = Some(self.clock.now());
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
                 if set_make_up_filter(&mut self.ui, &self.current, filter) {
                     self.dirty = true;
@@ -1060,8 +1108,11 @@ impl LoopState {
                     return;
                 }
                 self.prepare_action(fetch);
-                if let Some(anchor) = self.focus_anchor().filter(|anchor| anchor.nonce == nonce) {
-                    self.fold_focus_intent(anchor, Instant::now());
+                if let Some(anchor) = self
+                    .focus_anchor(self.clock.now())
+                    .filter(|anchor| anchor.nonce == nonce)
+                {
+                    self.fold_focus_intent(anchor, self.clock.now());
                 } else {
                     self.fold_fused_now();
                 }
@@ -1093,6 +1144,9 @@ impl LoopState {
     }
 
     fn handle_notification(&mut self, terminal: &mut Terminal<PaneBackend>, event: SidebarEvent) {
+        if !self.clock.effects_enabled() {
+            return;
+        }
         // `on_event` calls this helper only from the typed notification arm.
         let SidebarEvent::Notify {
             title,
@@ -1121,14 +1175,14 @@ impl LoopState {
             },
             &self.diag,
         ) {
-            Ok(true) => self.remind.note_ring(crate::utils::time::unix_now_ms()),
+            Ok(true) => self.remind.note_ring(self.clock.now_ms()),
             Ok(false) => {}
             Err(err) => debug!(error = %err, "terminal notification emit failed"),
         }
     }
 
     fn handle_focus_stranded(&mut self, repair: &PendingFocusRepair) -> bool {
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = self.clock.now_ms();
         let own_pane = self.config.own_pane.clone();
         let verdict = focus_stranded_target(
             &self.current,
@@ -1167,6 +1221,7 @@ impl LoopState {
         };
         let placement = self.focus_placement(&target);
         spawn_pane_focus(
+            &self.clock,
             target,
             &self.config.session_name,
             self.runtime.clone(),
@@ -1191,7 +1246,7 @@ impl LoopState {
         if self.handle_focus_stranded(&repair) {
             return;
         }
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = self.clock.now_ms();
         if focus_repair_still_viable(repair.sent_at_ms, now_ms) {
             self.pending_focus_repair = Some(repair);
         } else {
@@ -1215,7 +1270,7 @@ impl LoopState {
         crate::diag::focus_repair::spawn_append(
             &self.runtime,
             &FocusRepairRecord {
-                at: jiff::Timestamp::now(),
+                at: self.clock.timestamp(),
                 nonce: None,
                 workspace_id: self.runtime.workspace_id.clone(),
                 session_name: self.config.session_name.clone(),
@@ -1247,14 +1302,14 @@ impl LoopState {
         let own_unfocused = matches!(&event, SidebarEvent::FocusChanged { unfocused, .. }
             if own.is_some_and(|pane| unfocused.contains(pane)));
         let requests_verification = event.requests_producer_verification();
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = self.clock.now_ms();
         self.events().append(event, sent_at_ms, now_ms);
         self.fold_fused_now();
         if !self.should_exit && (requests_verification || own_focused) {
             fetch.request(FetchRequest::fresh_panes(), true);
         }
         if own_focused {
-            self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
+            self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         } else if own_unfocused {
             self.optimistic_watch_until = None;
             self.ui.help_visible = false;
@@ -1273,8 +1328,10 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         settled_width: Option<u16>,
     ) -> Result<()> {
-        self.caps_refresh_deadline = Some(Instant::now() + RESIZE_CAPS_SETTLE);
-        self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
+        if self.clock.effects_enabled() {
+            self.caps_refresh_deadline = Some(self.clock.now() + RESIZE_CAPS_SETTLE);
+        }
+        self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
         // A resize may reveal a hidden pane: paint the newest fold, not a deferred one.
         self.drain_snapshot(fetch, false);
         // Once a sibling has been seen, hold only a grow beyond the configured
@@ -1299,7 +1356,7 @@ impl LoopState {
         {
             self.dirty = true;
             self.paint_hold
-                .engage(Instant::now(), crate::utils::time::unix_now_ms());
+                .engage(self.clock.now(), self.clock.now_ms());
         } else {
             if self.apply_input([Wakeup::Resize], terminal)?.redraw {
                 self.dirty = false;
@@ -1308,7 +1365,7 @@ impl LoopState {
             // left pending so it cannot suppress this frame.
             self.paint_hold.release();
         }
-        self.last_self_close_check = Instant::now();
+        self.last_self_close_check = self.clock.now();
         // The heartbeat carries this pane's size for `sidebar frame`: restamp
         // it on this pass rather than a beat later.
         self.last_heartbeat = None;
@@ -1409,6 +1466,7 @@ impl LoopState {
                     let placement = self.focus_placement(&pane);
                     let peers = self.focus_peers_for(&pane);
                     spawn_pane_focus(
+                        &self.clock,
                         pane,
                         &self.config.session_name,
                         self.runtime.clone(),
@@ -1438,17 +1496,19 @@ impl LoopState {
     }
 
     fn persist_body_filter(&mut self, filter: BodyLens) {
-        self.filter_observed_at = Some(Instant::now());
+        self.filter_observed_at = Some(self.clock.now());
         let persisted = crate::sidebar::body_filter::write(&self.runtime, &filter);
         if let Err(err) = persisted {
             debug!(error = %err, "sidebar body filter write failed");
             return;
         }
-        if let Err(err) = crate::wakeup::broadcast(
-            &self.runtime,
-            Some(&self.config.session_name),
-            SidebarEvent::BodyFilterChanged,
-        ) {
+        if self.clock.effects_enabled()
+            && let Err(err) = crate::wakeup::broadcast(
+                &self.runtime,
+                Some(&self.config.session_name),
+                SidebarEvent::BodyFilterChanged,
+            )
+        {
             debug!(error = %err, "sidebar body filter broadcast failed");
         }
     }
@@ -1465,7 +1525,7 @@ impl LoopState {
         wakeups: impl IntoIterator<Item = Wakeup>,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<InputOutcome> {
-        self.apply_input_at(wakeups, terminal, Instant::now())
+        self.apply_input_at(wakeups, terminal, self.clock.now())
     }
 
     fn apply_input_at(
@@ -1524,7 +1584,7 @@ impl LoopState {
                         baseline: self.ui.baseline_pane.clone(),
                         label: row.display_name().to_owned(),
                     });
-                    self.arm_clicked_row(pane, Instant::now());
+                    self.arm_clicked_row(pane, now);
                 }
             }
             if applied.redraw && !wheel {
@@ -1540,7 +1600,7 @@ impl LoopState {
             && (outcome.redraw || !outcome.effects.is_empty())
             && !outcome.effects.contains(&InputEffect::Reload)
         {
-            layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
         }
         if outcome.redraw {
             if !self.watched() {
@@ -1550,6 +1610,7 @@ impl LoopState {
             // Carry the live spin phase into the instant paint so a keypress
             // mid-spin never rewinds the animation to a stale frame.
             frame_clock(
+                now,
                 self.anim_start,
                 self.current.theme.display.resolved_refresh_ms(),
             )
@@ -1563,10 +1624,12 @@ impl LoopState {
                 .iter()
                 .any(|effect| matches!(effect, InputEffect::Focus(_)))
             {
-                layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+                layout_freeze::arm_freeze(
+                    &mut self.ui,
+                    self.clock.timestamp_at(now).as_millisecond(),
+                );
             }
-            self.observe_paint(Instant::now());
-            let now = Instant::now();
+            self.observe_paint(now);
             let interval = render::animation_interval(
                 &self.current,
                 &self.ui,
@@ -1592,7 +1655,7 @@ impl LoopState {
         if self.ui.unread_guard.as_deref() == Some(row_id) {
             self.ui.unread_guard = None;
         }
-        let now = jiff::Timestamp::now();
+        let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
         let clear = read_receipt_for_row(
             &self.current,
@@ -1627,7 +1690,7 @@ impl LoopState {
     /// so peers converge through the producer.
     fn mark_all_read(&mut self, fetch: &mut FetchDispatcher) {
         self.ui.unread_guard = None;
-        let now = jiff::Timestamp::now();
+        let now = self.clock.timestamp();
         let marks = ReadMarks::load(&self.runtime);
         let clear = read_receipts_for_all(&self.current, UnreadClearCause::MarkRead, &marks, now);
         self.apply_read_clear(clear, now, fetch);
@@ -1641,7 +1704,7 @@ impl LoopState {
         let Some(row) = self.current.rows().find(|row| row.id == row_id).cloned() else {
             return;
         };
-        let now_ms = jiff::Timestamp::now().as_millisecond();
+        let now_ms = self.clock.timestamp().as_millisecond();
         let opened =
             match unread::mark_rows_unread(&self.runtime, std::slice::from_ref(&row), now_ms) {
                 Ok(opened) => opened,
@@ -1659,38 +1722,42 @@ impl LoopState {
     }
 
     fn commit_local_mark(&mut self, fetch: &mut FetchDispatcher) {
-        wake_room(&self.runtime);
+        if self.clock.effects_enabled() {
+            wake_room(&self.runtime);
+        }
         self.dirty = true;
-        self.next_frame = Instant::now();
+        self.next_frame = self.clock.now();
         fetch.request(FetchRequest::default(), true);
     }
 
     fn run_maintenance(&mut self, fetch: &mut FetchDispatcher, terminal: &Terminal<PaneBackend>) {
         let own_pane = self.config.own_pane.clone();
         let room_caps = self.room_caps.clone();
-        self.refresh_pet_render_caps_if_stale_with(
-            self.config.mux,
-            &self.config.session_name.clone(),
-            Instant::now(),
-            terminal,
-            |mux, session_name, prev| {
-                // A probe publishes its whole sample at once; a panic leaves
-                // the previous sample intact even if the lock was poisoned.
-                room_caps
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .detect(mux, session_name, prev, own_pane.as_ref())
-            },
-        );
+        if self.clock.effects_enabled() {
+            self.refresh_pet_render_caps_if_stale_with(
+                self.config.mux,
+                &self.config.session_name.clone(),
+                self.clock.now(),
+                terminal,
+                |mux, session_name, prev| {
+                    // A probe publishes its whole sample at once; a panic leaves
+                    // the previous sample intact even if the lock was poisoned.
+                    room_caps
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .detect(mux, session_name, prev, own_pane.as_ref())
+                },
+            );
+        }
         // Snapshot wakeups are a latency hint, not the only correctness path.
         // `rimz reload` replaces the renderer in place and a ready-result
         // datagram can be lost around socket teardown/rebind; the frame/tick
         // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(fetch);
-        fetch.fire_due(Instant::now());
+        fetch.fire_due(self.clock.now());
 
-        if gate_remaining(&self.gate, jiff::Timestamp::now())
+        if gate_remaining(&self.gate, self.clock.timestamp())
             .is_some_and(|remaining| remaining.is_zero())
         {
             fetch.request(FetchRequest::force_fold(), false);
@@ -1702,7 +1769,7 @@ impl LoopState {
         if self
             .tab_read_dwell_until
             .filter(|_| self.current.own_view.is_some())
-            .is_some_and(|until| Instant::now() >= until)
+            .is_some_and(|until| self.clock.now() >= until)
         {
             fetch.request(FetchRequest::force_fold(), false);
         }
@@ -1710,14 +1777,16 @@ impl LoopState {
         // Data backstop: catch pane/git drift no store delta announced. It is
         // self-gated to the data tick; an armed clamp-deferred nudge merges
         // into this fold instead of waiting to echo it.
-        if self.fetched_at.elapsed() >= tick_for(self.config.tick_seconds) {
+        if self.clock.now().saturating_duration_since(self.fetched_at)
+            >= tick_for(self.config.tick_seconds)
+        {
             fetch.request(FetchRequest::default(), false);
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
         // exit path never races a background writer.
-        if heartbeat_write_due(self.last_heartbeat) {
-            self.last_heartbeat = Some(Instant::now());
+        if self.clock.effects_enabled() && heartbeat_write_due(self.last_heartbeat) {
+            self.last_heartbeat = Some(self.clock.now());
             if let Err(err) = write_heartbeat(
                 &self.config,
                 &self.runtime,
@@ -1737,8 +1806,13 @@ impl LoopState {
         // close a lone sidebar. Once a zero-sibling verdict is pending, force a
         // new fold so a prior cycle cannot absorb this renderer-local change
         // before the confirm timer can close it.
-        if self.last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
-            self.last_self_close_check = Instant::now();
+        if self
+            .clock
+            .now()
+            .saturating_duration_since(self.last_self_close_check)
+            >= SELF_CLOSE_WATCHDOG
+        {
+            self.last_self_close_check = self.clock.now();
             let request = if self.self_close.confirming_empty() {
                 FetchRequest::fresh_panes()
             } else {
@@ -1746,7 +1820,7 @@ impl LoopState {
             };
             fetch.request(request, false);
         }
-        let now_ms = Timestamp::now().as_millisecond();
+        let now_ms = self.clock.timestamp().as_millisecond();
         if self
             .ui
             .freeze
@@ -1760,14 +1834,19 @@ impl LoopState {
     fn maybe_remind(&mut self, fetch: &mut FetchDispatcher, terminal: &mut Terminal<PaneBackend>) {
         // Scope is checked after flushing; consult only the timer here.
         if self.remind.due(
-            crate::utils::time::unix_now_ms(),
+            self.clock.now_ms(),
             1,
             self.config.notification_prefs.remind_secs,
         ) {
             self.drain_snapshot(fetch, false);
         }
-        self.remind
-            .maybe_remind(&self.config, terminal, &self.current, &self.diag);
+        self.remind.maybe_remind(
+            &self.clock,
+            &self.config,
+            terminal,
+            &self.current,
+            &self.diag,
+        );
     }
 
     pub(super) fn clear_pixel(&mut self, terminal: &mut Terminal<PaneBackend>) {
@@ -1781,7 +1860,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         active: bool,
     ) -> Result<()> {
-        let now = Instant::now();
+        let now = self.clock.now();
         let paint_blocked = self.prepare_paint(terminal, now);
         if let Some(push) = &mut self.pending_focus_push {
             if !self.should_exit && push.peer.blocked_by.is_none() {
@@ -1849,6 +1928,7 @@ impl LoopState {
 
     fn paint_now(&mut self, terminal: &mut Terminal<PaneBackend>, now: Instant) -> Result<()> {
         frame_clock(
+            now,
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
         )
@@ -1865,7 +1945,7 @@ impl LoopState {
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
             self.draw_frame(terminal, now, false)?;
-            self.observe_paint(Instant::now());
+            self.observe_paint(now);
             self.dirty = false;
         }
         self.next_frame = next_frame_after(
@@ -1898,6 +1978,7 @@ impl LoopState {
             self.health.alert.as_ref(),
             &mut self.ui,
         )?;
+        self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
         if user_input {
             self.click_guard = None;
@@ -1924,8 +2005,10 @@ impl LoopState {
             && resize_grew(self.prev_width, width)
             && grow_beyond_legit(width, self.width_control.max_legit_cols())
         {
-            self.paint_hold
-                .engage(now, crate::utils::time::unix_now_ms());
+            self.paint_hold.engage(
+                now,
+                self.clock.timestamp_at(now).as_millisecond().max(0) as u64,
+            );
             return true;
         }
         false
@@ -1974,7 +2057,7 @@ impl LoopState {
             focused_pane,
             cleared,
             authoritative_filter_fold,
-            now.as_millisecond(),
+            self.clock.instant_at(now),
         );
         self.fold_spend_rolls();
         self.exit_verdict(rejected)
@@ -1982,7 +2065,7 @@ impl LoopState {
 
     fn exit_verdict(&mut self, rejected: bool) -> ApplyOutcome {
         // A renderer degraded this long is non-functional. Close the attachment so the supervisor reattaches in place while the mux/store outage clears.
-        if degraded_too_long(&self.health, Timestamp::now()) {
+        if degraded_too_long(&self.health, self.clock.timestamp()) {
             warn!(
                 target: SIDEBAR_HEALTH_TARGET,
                 session = %self.config.session_name,
@@ -2005,7 +2088,7 @@ impl LoopState {
                 .own_view
                 .as_ref()
                 .map(|view| view.sibling_count),
-            Instant::now(),
+            self.clock.now(),
         ) {
             debug!(
                 session = %self.config.session_name,
@@ -2033,7 +2116,9 @@ impl LoopState {
         let fetch_was_ok = application.snapshot.is_ok();
         let fetch_failure = application.snapshot.as_ref().err().cloned();
         let producer_verdict = application.source == Some(SnapshotSource::Produced);
-        let mut computed = compute_next_state(application.snapshot, &self.current, &self.health);
+        let now = self.clock.timestamp();
+        let mut computed =
+            compute_next_state(application.snapshot, &self.current, &self.health, now);
         if fetch_was_ok && !producer_verdict {
             // Published fast folds are paintable data, not a producer-health
             // verdict. Only a completed produce can recover the refresh episode,
@@ -2041,7 +2126,6 @@ impl LoopState {
             computed.health = self.health.clone();
         }
         let incoming_panes_produced_at_ms = computed.snapshot.panes_produced_at_ms;
-        let now = Timestamp::now();
         let (state, next_gate, rejected, released_via_escape_hatch, rejected_snapshot) =
             apply_gate(computed, fetch_was_ok, &self.current, &self.gate, now);
         if self.overlay_baseline.is_none() {
@@ -2142,12 +2226,12 @@ impl LoopState {
             // Left the tab: a scan, not a read. Drop the pending sweep.
             self.tab_read_dwell_until = None;
         } else if switched_in {
-            self.tab_read_dwell_until = Some(Instant::now() + TAB_READ_DWELL);
+            self.tab_read_dwell_until = Some(self.clock.now() + TAB_READ_DWELL);
         }
         if now_viewing
             && self
                 .tab_read_dwell_until
-                .is_some_and(|until| Instant::now() >= until)
+                .is_some_and(|until| self.clock.now() >= until)
         {
             self.tab_read_dwell_until = None;
             clear.merge(read_receipts_for_tab(
@@ -2167,8 +2251,9 @@ impl LoopState {
         focused_pane: Option<PaneId>,
         cleared: bool,
         authoritative_filter_fold: bool,
-        now_ms: i64,
+        now: Instant,
     ) {
+        let now_ms = self.clock.timestamp_at(now).as_millisecond();
         // Presentation sort reorders the snapshot's full row set. The layout freeze
         // below can keep this sorted order stable across a read-clear long enough
         // for the user to confirm where they landed.
@@ -2188,7 +2273,7 @@ impl LoopState {
             let shared_filter = if let Some(inputs) = &self.fold_inputs {
                 inputs.filter.clone()
             } else {
-                self.filter_observed_at = Some(Instant::now());
+                self.filter_observed_at = Some(self.clock.now());
                 crate::sidebar::body_filter::load(&self.runtime)
             };
             set_make_up_filter(&mut self.ui, &self.current, shared_filter);
@@ -2227,6 +2312,7 @@ impl LoopState {
 
     fn fold_spend_rolls(&mut self) {
         frame_clock(
+            self.clock.now(),
             self.anim_start,
             self.current.theme.display.resolved_refresh_ms(),
         )
@@ -2312,7 +2398,7 @@ impl LoopState {
         applied.rejected
     }
 
-    fn focus_anchor(&mut self) -> Option<crate::mux::focus_anchor::FocusAnchor> {
+    fn focus_anchor(&mut self, observed: Instant) -> Option<crate::mux::focus_anchor::FocusAnchor> {
         if let Some(inputs) = &self.fold_inputs {
             if let Some((observed, anchor)) = &self.observed_anchor
                 && inputs.sampled_at <= *observed
@@ -2327,7 +2413,6 @@ impl LoopState {
             self.observed_anchor = Some((inputs.sampled_at, anchor.clone()));
             return anchor;
         }
-        let observed = Instant::now();
         let anchor = crate::mux::focus_anchor::load(&self.runtime)
             .filter(|anchor| anchor.session_name == self.config.session_name);
         if anchor.is_none()
@@ -2426,10 +2511,10 @@ impl LoopState {
     }
 
     fn apply_focus_anchor(&mut self) {
-        let Some(anchor) = self.focus_anchor() else {
+        let Some(anchor) = self.focus_anchor(self.clock.now()) else {
             return;
         };
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = self.clock.now_ms();
         let presentation_at_ms = anchor.applied_at_ms.unwrap_or(anchor.issued_at_ms);
         if self
             .current
@@ -2442,7 +2527,7 @@ impl LoopState {
             self.focus_landing = anchor
                 .placement
                 .as_ref()
-                .map(|_| (anchor.clone(), Instant::now()));
+                .map(|_| (anchor.clone(), self.clock.now()));
             if let Some(placement) = anchor.placement {
                 self.ui.focus_placement = Some(placement);
                 self.ui.scroll_ease.cancel();
@@ -2467,7 +2552,7 @@ impl LoopState {
                 self.focus_rollback = None;
             }
             if crate::mux::focus_anchor::clear_matching(&self.runtime, anchor.nonce) {
-                let retired = Instant::now();
+                let retired = self.clock.now();
                 self.observed_anchor = Some((retired, None));
                 self.retired_anchor = Some((retired, anchor.issued_at_ms));
             }
@@ -2475,8 +2560,8 @@ impl LoopState {
         }
     }
 
-    fn pending_focus_intent(&mut self, now_ms: u64) -> Option<FocusPresentation> {
-        let Some(anchor) = self.focus_anchor() else {
+    fn pending_focus_intent(&mut self, now_ms: u64, now: Instant) -> Option<FocusPresentation> {
+        let Some(anchor) = self.focus_anchor(now) else {
             // A live retirement must fence an older cut's focus observation,
             // not revive either the intent or the pre-jump selection.
             return self
@@ -2519,7 +2604,7 @@ impl LoopState {
                     return None;
                 }
                 if crate::mux::focus_anchor::clear_matching(&self.runtime, anchor.nonce) {
-                    let retired = Instant::now();
+                    let retired = self.clock.now();
                     self.observed_anchor = Some((retired, None));
                     self.retired_anchor = Some((retired, anchor.issued_at_ms));
                     if self.confirmed_focus_intent_ms == anchor.issued_at_ms {
@@ -2550,7 +2635,7 @@ impl LoopState {
         crate::diag::focus_repair::spawn_append(
             &self.runtime,
             &FocusRepairRecord {
-                at: jiff::Timestamp::now(),
+                at: self.clock.timestamp(),
                 nonce: Some(anchor.nonce.to_string()),
                 workspace_id: self.runtime.workspace_id.clone(),
                 session_name: anchor.session_name.clone(),
@@ -2573,7 +2658,7 @@ impl LoopState {
         let Some(common) = &self.observation else {
             return;
         };
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = self.clock.now_ms();
         let sig = observe::OwnFrameSig::extract(
             &self.current,
             (self.last_pulled_rows, common.pulled_panes_produced_at_ms),
@@ -2615,7 +2700,7 @@ impl LoopState {
             Some((verdict, anchor.placement?, applied_at))
         });
         if landing.is_some() {
-            layout_freeze::arm_freeze(&mut self.ui, Timestamp::now().as_millisecond());
+            layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
         }
         let mut seeded_landing = false;
         if let Some((PushVerdict::Displaced, placement, applied_at)) = landing
@@ -2708,7 +2793,7 @@ impl LoopState {
             &self.events(),
             self.gate.reject_streak,
             self.health.failure_streak,
-            crate::utils::time::unix_now_ms(),
+            self.clock.timestamp_at(now).as_millisecond().max(0) as u64,
         );
         self.observer.send_draft(
             observe::AnomalyDraft::from_own_sig(&sig, kind, Some(duration_millis(LAYOUT_FREEZE))),
@@ -2779,173 +2864,6 @@ fn focus_repair_still_viable(sent_at_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(sent_at_ms) <= duration_millis(FOCUS_STRANDED_EVENT_TTL)
 }
 
-struct FocusRepairDispatch {
-    generation: u64,
-    deadline_ms: Option<u64>,
-}
-
-struct FocusRequestOutcome {
-    requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
-    observed: Vec<crate::pane::ClientPaneView>,
-    attempts: u32,
-}
-
-fn request_focus_until(
-    deadline_ms: Option<u64>,
-    expected: &[crate::pane::ClientPaneView],
-    mut request: impl FnMut() -> std::result::Result<FocusNonce, FocusActionError>,
-    mut now_ms: impl FnMut() -> u64,
-    mut sleep: impl FnMut(Duration),
-) -> FocusRequestOutcome {
-    let mut outcome = FocusRequestOutcome {
-        requested: None,
-        observed: Vec::new(),
-        attempts: 0,
-    };
-    while deadline_ms.is_none_or(|deadline| now_ms() < deadline) {
-        outcome.attempts += 1;
-        let requested = request();
-        match &requested {
-            Err(FocusActionError::PreObservationChanged { observed }) => {
-                outcome.observed = observed.clone();
-            }
-            Ok(_) | Err(FocusActionError::Store(_)) => {
-                outcome.observed = expected.to_vec();
-                outcome.observed.sort();
-                outcome.observed.dedup();
-            }
-            _ => {}
-        }
-        let retry = matches!(
-            &requested,
-            Err(FocusActionError::PreObservationChanged { .. })
-        );
-        outcome.requested = Some(requested);
-        if !retry {
-            return outcome;
-        }
-        let Some(deadline) = deadline_ms else {
-            return outcome;
-        };
-        let remaining_ms = deadline.saturating_sub(now_ms());
-        if remaining_ms == 0 {
-            return outcome;
-        }
-        sleep(FOCUS_REPAIR_RETRY_STEP.min(Duration::from_millis(remaining_ms)));
-    }
-    outcome
-}
-
-/// Focus the pane on a detached thread so the keypress/click returns instantly:
-/// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux
-/// equivalent), which must never block the loop. The snapshot-bound pane is
-/// focused directly — no `rimz pane focus` child and no per-click pane roster.
-/// The shared intent helper takes a fresh attached-client sample at request
-/// time and serializes concurrent focus actions. An automatic
-/// Zellij repair re-samples a mismatching fence until its strand deadline.
-/// Errors return to the attachment for selection rollback and a recovered
-/// health notice. A superseded dispatch stays diagnostic only.
-/// A cross-tab user request pushes the stored anchor to host peers
-/// and waits up to 100 ms for the destination's frame (300 ms after fitting a stale tmux view) before mux dispatch;
-/// the dispatch nonce check still fences superseded requests. The durable
-/// request also wakes renderers outside the push path;
-/// command acceptance applies it, and later native observations confirm or
-/// supersede it.
-#[allow(clippy::too_many_arguments)]
-fn spawn_pane_focus(
-    pane_id: PaneId,
-    session_name: &str,
-    runtime: crate::disk::paths::RuntimePaths,
-    origin: crate::mux::focus_anchor::FocusOrigin,
-    expected_pre_action: Option<Vec<crate::pane::ClientPaneView>>,
-    presentation: (
-        Option<crate::mux::focus_anchor::FocusPlacement>,
-        Option<crate::mux::focus_anchor::FrozenOrder>,
-    ),
-    repair: Option<FocusRepairDispatch>,
-    peers: Option<FocusPeers>,
-    wake: Option<SyncSender<Wakeup>>,
-) {
-    let session_name = session_name.to_owned();
-    let requested_at_ms = crate::utils::time::unix_now_ms();
-    std::thread::spawn(move || {
-        crate::harness::hibernate::spawn_wake(&runtime, &pane_id, requested_at_ms);
-        let backend = crate::mux::backend_for(pane_id.mux());
-        let repair_generation = repair.as_ref().map(|repair| repair.generation);
-        let FocusRequestOutcome {
-            requested,
-            observed,
-            attempts,
-        } = request_focus_until(
-            repair.as_ref().and_then(|repair| repair.deadline_ms),
-            expected_pre_action.as_deref().unwrap_or_default(),
-            || {
-                crate::mux::focus_anchor::request_action(
-                    backend.as_ref(),
-                    &runtime,
-                    &session_name,
-                    crate::mux::focus_anchor::FocusActionRequest {
-                        pane_id: pane_id.clone(),
-                        origin,
-                        repair_generation,
-                        expected_pre_action: expected_pre_action.as_deref(),
-                        placement: presentation.0.clone(),
-                        order: presentation.1.clone(),
-                    },
-                )
-            },
-            crate::utils::time::unix_now_ms,
-            std::thread::sleep,
-        );
-        let outcome = finish_focus_request(&pane_id, wake.as_ref(), requested, |nonce| {
-            let dispatch = || {
-                crate::mux::focus_anchor::dispatch_action(
-                    backend.as_ref(),
-                    &runtime,
-                    &session_name,
-                    &pane_id,
-                    nonce,
-                    Default::default(),
-                )
-            };
-            if let Some(peers) = &peers
-                && let Some(anchor) =
-                    crate::mux::focus_anchor::load(&runtime).filter(|anchor| anchor.nonce == nonce)
-            {
-                peers.dispatch(anchor, dispatch)
-            } else {
-                dispatch()
-            }
-        });
-        if let Some(generation) = repair_generation {
-            use crate::diag::focus_repair::{FocusRepairOutcome, FocusRepairRecord};
-            crate::diag::focus_repair::spawn_append(
-                &runtime,
-                &FocusRepairRecord {
-                    at: jiff::Timestamp::now(),
-                    nonce: outcome.0.map(|nonce| nonce.to_string()),
-                    workspace_id: runtime.workspace_id.clone(),
-                    session_name: session_name.clone(),
-                    generation,
-                    evidence: expected_pre_action.clone().unwrap_or_default(),
-                    observed: observed.clone(),
-                    attempts,
-                    target: pane_id.clone(),
-                    outcome: if outcome.1 == "accepted_unconfirmed" {
-                        FocusRepairOutcome::AcceptedUnconfirmed
-                    } else {
-                        FocusRepairOutcome::Failed
-                    },
-                    error: outcome.2.clone(),
-                },
-            );
-        }
-        if let Some(error) = outcome.2 {
-            debug!(pane = %pane_id, error, expected = ?expected_pre_action, observed = ?observed, attempts, "sidebar pane focus failed");
-        }
-    });
-}
-
 /// Ping every sidebar in the room to refold after a mark read/unread — the
 /// host prunes or keeps the episode and peer tabs converge on the new state.
 fn wake_room(runtime: &RuntimePaths) {
@@ -2956,40 +2874,3 @@ fn wake_room(runtime: &RuntimePaths) {
 
 #[cfg(test)]
 mod tests;
-
-fn finish_focus_request(
-    pane: &PaneId,
-    wake: Option<&SyncSender<Wakeup>>,
-    requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
-    dispatch: impl FnOnce(FocusNonce) -> std::result::Result<bool, FocusActionError>,
-) -> (Option<FocusNonce>, &'static str, Option<String>) {
-    let (nonce, dispatched) = match requested {
-        Some(Ok(nonce)) => (Some(nonce), dispatch(nonce)),
-        Some(Err(error)) => (None, Err(error)),
-        None => {
-            return (
-                None,
-                "failed",
-                Some("strand TTL expired before focus request".into()),
-            );
-        }
-    };
-    match dispatched {
-        Ok(true) => (nonce, "accepted_unconfirmed", None),
-        Ok(false) => (
-            nonce,
-            "failed",
-            Some("superseded before focus dispatch".into()),
-        ),
-        Err(error) => {
-            let error = error.to_string();
-            if let Some(wake) = wake {
-                let _ = wake.send(Wakeup::FocusFailed {
-                    pane: pane.clone(),
-                    error: error.clone(),
-                });
-            }
-            (nonce, "failed", Some(error))
-        }
-    }
-}

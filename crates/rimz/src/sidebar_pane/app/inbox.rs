@@ -30,6 +30,10 @@ impl WakeupInbox {
             .unwrap_or_else(|| self.receiver.recv_timeout(timeout).unwrap_or(Wakeup::Tick))
     }
 
+    pub(super) fn wait(&mut self, timeout: Duration) {
+        self.pending = Some(self.recv_timeout(timeout));
+    }
+
     fn scroll_run(&mut self, first: Wakeup) -> impl Iterator<Item = Wakeup> + '_ {
         std::iter::once(first).chain(std::iter::from_fn(|| {
             let wakeup = self.receiver.try_recv().ok()?;

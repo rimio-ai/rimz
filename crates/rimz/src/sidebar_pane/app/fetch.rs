@@ -596,6 +596,7 @@ impl IdleCycleFixture {
                 config.own_pane = subscriber.own_pane.clone();
                 (
                     super::loop_state::LoopState::new(
+                        crate::sidebar_pane::app::clock::LoopClock::wall(),
                         config,
                         None,
                         self.worker.runtime.clone(),

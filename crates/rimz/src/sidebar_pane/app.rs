@@ -15,11 +15,13 @@ use tracing::warn;
 mod attachment;
 mod backend;
 mod cache_refresh;
+mod clock;
 #[cfg(feature = "testkit")]
 mod demo;
 mod fetch;
 #[cfg(test)]
 pub(super) mod fixtures;
+mod focus;
 mod focus_push;
 mod gate;
 mod health;
