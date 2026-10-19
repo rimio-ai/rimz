@@ -1993,6 +1993,7 @@ impl LoopState {
         )?;
         self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
+        self.ui.last_order = layout_freeze::capture_order(&self.current, &self.ui);
         if user_input {
             self.click_guard = None;
             return Ok(());
@@ -2240,6 +2241,7 @@ impl LoopState {
             self.tab_read_dwell_until = None;
         } else if switched_in {
             self.tab_read_dwell_until = Some(self.clock.now() + TAB_READ_DWELL);
+            layout_freeze::arm_freeze(&mut self.ui, now.as_millisecond());
         }
         if now_viewing
             && self
@@ -2320,7 +2322,6 @@ impl LoopState {
         let parked = self.parked(now_ms as u64);
         layout_freeze::apply_freeze(&mut self.ui, &mut self.current, interacted, now_ms, parked);
         self.hold_expired_since_paint |= held && self.ui.freeze.is_none();
-        self.ui.last_order = layout_freeze::capture_order(&self.current, &self.ui);
     }
 
     fn fold_spend_rolls(&mut self) {

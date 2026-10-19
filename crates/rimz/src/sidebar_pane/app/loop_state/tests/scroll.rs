@@ -54,6 +54,35 @@ fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Ins
 }
 
 #[test]
+fn arrival_freezes_the_painted_order_not_a_hidden_fold() {
+    let (mut rig, _) = scroll_rig();
+    let painted = layout_freeze::capture_order(&rig.state.current, &rig.state.ui);
+    let mut hidden = rig.state.current.clone();
+    hidden.own_view = Some(own_view());
+    hidden.viewed_panes.clear();
+    hidden.focused_pane = None;
+    rig.fold(hidden, SnapshotSource::Produced);
+    rig.state.ui.freeze = None;
+    let mut reranked = rig.state.current.clone();
+    Arc::make_mut(&mut Arc::make_mut(&mut reranked.worktree_groups)[0].rows)[1].attention_score =
+        1000;
+    Arc::make_mut(&mut Arc::make_mut(&mut reranked.worktree_groups)[0].rows)[1]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    rig.fold(reranked, SnapshotSource::Produced);
+    rig.state.drain_snapshot(&mut rig.fetch, false);
+    assert_eq!(rig.state.current.worktree_groups[0].rows[0].id, "agent-1");
+    let mut arrival = rig.state.current.clone();
+    arrival.viewed_panes = own_view().working_pane_ids;
+    rig.fold(arrival, SnapshotSource::Produced);
+    rig.state.next_frame = Instant::now();
+    rig.paint(true);
+    assert_eq!(rig.state.ui.last_order.rows, painted.rows);
+    assert!(rig.state.ui.freeze.is_some());
+}
+
+#[test]
 fn automatic_moves_guard_the_first_frame_until_400ms_and_input_paints_clear_it() {
     for (click_ms, input_paint, second_move, target) in [
         (399, false, false, 1),
