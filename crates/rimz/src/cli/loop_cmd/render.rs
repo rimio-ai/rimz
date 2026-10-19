@@ -548,14 +548,12 @@ fn worktree_rows<'a>(view: &'a ShowView, expr: Option<&'a WhenExpr>) -> Vec<Work
             };
             let mut short = Vec::new();
             if let (Some(expr), Some(verdict)) = (expr, worktree_verdict(&condition.state)) {
-                for term in expr.terms() {
-                    if !term.matches(
-                        verdict
-                            .readings
-                            .get(&term.key)
-                            .and_then(|value| value.as_deref()),
-                    ) && !short.contains(&term.key.as_str())
-                    {
+                for (term, negated) in expr.leaves() {
+                    let reading = verdict
+                        .readings
+                        .get(&term.key)
+                        .and_then(|value| value.as_deref());
+                    if term.matches(reading) == negated && !short.contains(&term.key.as_str()) {
                         short.push(term.key.as_str());
                     }
                 }
@@ -622,8 +620,8 @@ fn write_worktrees(
     let mut repeated_keys = std::collections::BTreeSet::new();
     let terms = expr
         .map(|expr| {
-            expr.terms()
-                .filter(|term| {
+            expr.leaves()
+                .filter(|(term, _)| {
                     let first = keys.insert(term.key.as_str());
                     if !first {
                         repeated_keys.insert(term.key.as_str());
@@ -654,13 +652,19 @@ fn write_worktrees(
     let has_reason = rendered.iter().any(|row| {
         row.blocked.is_some() || matches!(row.condition.state, CheckoutState::Declined { .. })
     });
-    let mut headers = vec!["WORKTREE", "STATE"];
-    headers.extend(terms.iter().map(|term| term.key.as_str()));
+    let mut headers = vec!["WORKTREE".to_owned(), "STATE".to_owned()];
+    headers.extend(terms.iter().map(|(term, negated)| {
+        if *negated && !repeated_keys.contains(term.key.as_str()) {
+            format!("!{}", term.key)
+        } else {
+            term.key.clone()
+        }
+    }));
     if has_leader {
-        headers.push("LEADER");
+        headers.push("LEADER".to_owned());
     }
     if has_reason {
-        headers.push("REASON");
+        headers.push("REASON".to_owned());
     }
     let width = ui::terminal_columns(120);
     let mut table = ui::Table::new(headers).indent(2).max_width(width);
@@ -685,7 +689,7 @@ fn write_worktrees(
             }
         };
         let mut cells = vec![ui::cell(&row.condition.name), ui::cell(state)];
-        for term in &terms {
+        for (term, negated) in &terms {
             let Some(verdict) =
                 worktree_verdict(&row.condition.state).filter(|_| row.blocked.is_none())
             else {
@@ -700,7 +704,7 @@ fn write_worktrees(
                 cells.push(ui::cell(value.unwrap_or("unknown")));
                 continue;
             }
-            let role = if term.matches(value) {
+            let role = if term.matches(value) != *negated {
                 ui::status::StateRole::Success
             } else {
                 ui::status::StateRole::Failed
