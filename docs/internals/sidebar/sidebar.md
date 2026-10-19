@@ -249,7 +249,7 @@ Context severity is one four-tier ramp classified once in the domain ([`ContextS
 Three projection rules are not evident from the field catalog:
 
 - The renderer prefers the rich `context` blob over the coarse scalars, except that `row.effort` wins over `context.effort`.
-- The description line uses [`AgentCard::description`](../../../crates/rimz/src/store/snapshot/row.rs): the displayed error or pause label first, then the first pending wait while sleeping, then activity (session name, provider thread preview, launch description, task, first prompt, latest prompt). Codex's generated title replaces its first-message preview.
+- Waiting descriptions prefer `AgentCard::open_ask`: the first sentence ending in `?`, else the whole ask, word-wrapped over at most two indented lines with `…` for overflow or hard-cut words ([the visible rule](../../interface/sidebar.md#the-card)). `description_lines` shares `layout::wrap_words` with pet captions, marks the wrapper's dropped long-word tails, and retains the usual emphasis. Other descriptions stay one line and use [`AgentCard::description`](../../../crates/rimz/src/store/snapshot/row.rs): the displayed error or pause label first, then the first pending wait while sleeping, then activity (session name, provider thread preview, launch description, task, first prompt, latest prompt). Codex's generated title replaces its first-message preview. The stale one-liner and queued `Question` slot are unchanged.
 - Display preferences travel in `SidebarSnapshot.sidebar`.
 
 The status projection is pinned in [`view/tests/status/`](../../../crates/rimz/src/store/snapshot/view/tests/status) and [`project/tests/`](../../../crates/rimz/src/store/snapshot/project/tests).
