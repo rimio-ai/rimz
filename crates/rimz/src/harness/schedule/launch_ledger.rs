@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub struct LaunchRecord {
     pub at: Timestamp,
     pub leader: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<PathBuf>,
 }
 
 pub type Ledger = BTreeMap<String, BTreeMap<PathBuf, LaunchRecord>>;

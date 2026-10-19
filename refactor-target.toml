@@ -825,7 +825,8 @@ path = "crates/rimz/src/harness"
 # catalog::{WorktreePin, worktree_pins, load_worktree_pins} share task holds with GC and doctor (+5).
 # assist_log::Assist::AutoGc::worktree_paths retains bounded removal forensics (+1).
 # catalog::TaskCatalog::source_unavailable classifies strict-load failures for GC (+1).
-surface-budget = 914
+# WhenExpr::scope_checkout_key shares resident destination admission with the CLI (+1).
+surface-budget = 915
 
 [[verdict]]
 kind = "item"
@@ -7368,6 +7369,11 @@ reason = "Run and room-signal helpers share workflow advance argv with the sched
 kind = "item"
 key = "harness::schedule::when::WhenExpr::blocking_evidence"
 reason = "Workflow waits retain typed comparison readings without reparsing rendered conditions."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenExpr::scope_checkout_key"
+reason = "Resident loop admission names scope-reading keys without copying the condition vocabulary into the CLI."
 
 [[verdict]]
 kind = "item"

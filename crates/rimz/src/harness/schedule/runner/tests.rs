@@ -132,6 +132,65 @@ fn resident_plan_carries_the_fire_reminder() {
 }
 
 #[test]
+fn resident_named_destination_keeps_the_guard_history_and_ledger_at_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let destination = root.path().join("destination");
+    let catalog = TaskCatalog::load(Some(root.path())).unwrap();
+    let entry = TaskEntry {
+        worktree: Some("lane".into()),
+        check: Some("pwd > guard-cwd; printf '%s' \"$RIMZ_WORKTREE_PATH\" > guard-env".into()),
+        on: Some(crate::config::CheckOn::Success),
+        throttle: Some(ThrottleSwitch::Off),
+        every: Some("1h".into()),
+        ..resident_entry(root.path())
+    };
+    let mut fire = TaskFire::new(
+        "named",
+        LoadedTask::new("named", entry, catalog::TaskSource::Config),
+        &catalog,
+        LoopRunMode::Scheduled,
+        false,
+        Timestamp::now(),
+        Arc::new(MachineConfig::default()),
+        None,
+        CheckEcho::Capture,
+        Instant::now(),
+    )
+    .unwrap();
+    let plan = fire.prepare(&mut record_room).unwrap();
+    let TaskFirePlan::Resident { cwd, worktree, .. } = plan else {
+        panic!("resident plan")
+    };
+    assert_eq!(cwd, root.path());
+    assert_eq!(worktree.as_deref(), Some("lane"));
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("guard-cwd"))
+            .unwrap()
+            .trim(),
+        root.path().to_str().unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("guard-env")).unwrap(),
+        root.path().to_str().unwrap()
+    );
+    let done = fire
+        .finish(TaskFireEffect::Resident {
+            leader: "otter".into(),
+            handles: vec!["@otter".into()],
+            stopped: Vec::new(),
+            checkout: destination.clone(),
+        })
+        .unwrap();
+    assert_eq!(done.record.checkout.as_deref(), Some(root.path()));
+    let paths = StatePaths::for_project_root(root.path()).unwrap();
+    let ledger = super::super::launch_ledger::load(&paths).unwrap();
+    assert_eq!(
+        serde_json::to_value(&ledger["named"][root.path()]).unwrap()["destination"],
+        serde_json::json!(destination)
+    );
+}
+
+#[test]
 fn a_cold_resident_fire_overlaps_a_launch_completed_during_room_birth() {
     let root = tempfile::tempdir().unwrap();
     let catalog = TaskCatalog::load(Some(root.path())).unwrap();
@@ -167,6 +226,7 @@ fn a_cold_resident_fire_overlaps_a_launch_completed_during_room_birth() {
                 TaskFirePlan::Resident { .. }
             ));
             let done = first.finish(TaskFireEffect::Resident {
+                checkout: root.path().to_owned(),
                 leader: "coder".into(),
                 handles: vec!["@coder".into()],
                 stopped: Vec::new(),
@@ -2170,6 +2230,7 @@ fn a_resident_fire_released_mid_wait_launches_and_records_its_wait() {
 
     let done = fire
         .finish(TaskFireEffect::Resident {
+            checkout: root.path().to_owned(),
             leader: "fixer".to_owned(),
             handles: vec!["@fixer".to_owned()],
             stopped: Vec::new(),

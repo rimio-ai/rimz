@@ -72,6 +72,18 @@ Only clocks need a timekeeper. A signal task and a `rimz wait` watcher are fired
 
 Missed time is never made up in bulk. A task a clock has not seen before is armed rather than fired, so adding one sets nothing off; a task that was already armed and came due while nothing kept time fires once when a clock next sees it, then resumes its schedule. A week of missed 02:00 occurrences does not arrive as a week of fires.
 
+## Book a team after another branch merges
+
+A worktree created when you book a follow-up can be stale, or already cleaned up, by the time the merge arrives. Keep the condition at the project root and let the fire create its destination instead:
+
+```sh
+rimz loop add review-merge --agent recon --stay --worktree review-merge \
+  --when 'pr[topic]=merged' \
+  --prompt 'Review the merged work and propose focused follow-up.'
+```
+
+Here `recon` is your configured team. When `topic` merges, RimZ creates `review-merge` from fetched trunk and opens the team in a background tab there. An existing destination is reused without resetting its work. The condition and guards still read the scope where you added the rule, and that scope remembers the launch even if the destination is later removed. `rimz loop show review-merge` names the destination; `rimz loop remove review-merge` clears the rule and its launch memory without stopping the team. An occupied destination refuses without sending the prompt to its leader; add `--takeover` only when you want to stop its idle occupants first. The [resident launch reference](../reference/cli/loop.md#actions) covers closed cohorts, holds and retries.
+
 ## Leave an agent in each ready worktree
 
 When a team finishes a lane, you may still want someone watching its PR: a fixer to handle later CI failures or conflicts, then a cleanup agent after merge. Opening those panes by hand for every lane repeats the same handoff. A resident loop makes that one standing rule instead.

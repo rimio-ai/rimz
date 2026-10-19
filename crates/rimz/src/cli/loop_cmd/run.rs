@@ -157,6 +157,7 @@ pub(super) fn run_one(
         Ok(rimz::harness::schedule::runner::TaskFirePlan::Resident {
             root,
             cwd,
+            worktree,
             spec,
             prompt,
             loop_reminder,
@@ -172,6 +173,8 @@ pub(super) fn run_one(
                 };
                 launch.cohort.new_tab = true;
                 launch.cohort.bg = true;
+                launch.cohort.worktree = worktree.clone();
+                launch.cohort.fresh = worktree.is_some() && entry.takeover;
                 launch.overrides.ask = entry.mode.as_deref() == Some("ask");
                 launch.overrides.yolo = entry.mode.as_deref() == Some("yolo");
                 launch.overrides.effort = entry.effort.clone();
@@ -183,11 +186,27 @@ pub(super) fn run_one(
                     false,
                     &ctx,
                     config.clone(),
-                    Some(cwd.clone()),
+                    worktree.is_none().then(|| cwd.clone()),
                     Some((name, &loop_reminder)),
                 )?;
                 let stopped = if entry.takeover {
-                    match take_over_checkout(&ctx, &launch_globals, &root, &cwd)? {
+                    let destination = worktree
+                        .as_deref()
+                        .map(|name| {
+                            let requested = rimz::worktree::parse_requested_name(name)?;
+                            rimz::worktree::worktree_path(
+                                ctx.workspace.launch_repo_root(),
+                                &config.agents.worktree,
+                                &requested.name,
+                            )
+                        })
+                        .transpose()?;
+                    match take_over_checkout(
+                        &ctx,
+                        &launch_globals,
+                        &root,
+                        destination.as_deref().unwrap_or(&cwd),
+                    )? {
                         ControlFlow::Continue(stopped) => stopped,
                         ControlFlow::Break(blocked) => return Ok(blocked),
                     }
@@ -202,6 +221,7 @@ pub(super) fn run_one(
                 fire.report_launch(&ctx.workspace.workspace_id, &leader.agent_id);
                 Ok(rimz::harness::schedule::runner::TaskFireEffect::Resident {
                     leader: leader.name.clone(),
+                    checkout: launched.cwd,
                     handles: launched
                         .identities
                         .iter()

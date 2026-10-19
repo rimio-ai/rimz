@@ -448,7 +448,13 @@ fn write_attention(
             format!(
                 "@{} in {}",
                 launch.leader,
-                checkout.file_name().unwrap_or_default().to_string_lossy()
+                launch
+                    .destination
+                    .as_ref()
+                    .unwrap_or(checkout)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
             )
         })
         .collect::<Vec<_>>();
@@ -1055,7 +1061,13 @@ fn render_show(out: &mut impl Write, view: &ShowView, runs: usize) -> Result<()>
             writeln!(
                 out,
                 "  {}  @{}  {}",
-                checkout.file_name().unwrap_or_default().to_string_lossy(),
+                launch
+                    .destination
+                    .as_ref()
+                    .unwrap_or(checkout)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
                 launch.leader,
                 ui::rel_age(launch.at, now)
             )?;

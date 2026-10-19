@@ -527,6 +527,16 @@ impl WhenExpr {
             .any(|term| ForgeKey::parse(&term.key).is_some())
     }
 
+    /// The first key that reads the scope checkout rather than a named branch.
+    pub fn scope_checkout_key(&self) -> Option<&str> {
+        self.terms()
+            .find(|term| {
+                term.key == "team.stage"
+                    || ForgeKey::parse(&term.key).is_some_and(|key| key.branch().is_none())
+            })
+            .map(|term| term.key.as_str())
+    }
+
     /// The spans the expression's `window.*` terms read, in expression order.
     pub(super) fn window_spans(&self) -> impl Iterator<Item = WindowSpan> {
         self.terms().filter_map(|term| window_span(&term.key))
