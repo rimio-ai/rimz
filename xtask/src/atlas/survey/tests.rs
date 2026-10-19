@@ -247,12 +247,26 @@ fn survey_default_families_are_filtered_all_with_identical_drop_tallies() {
     .unwrap();
     let all = build_report(root.path(), &facts, Path::new("."), RankBy::Accretion, true).unwrap();
     assert_eq!(
-        serde_json::to_value(default.guard_families_dropped).unwrap(),
-        serde_json::to_value(all.guard_families_dropped).unwrap()
+        (
+            default.footer.guard_families_dropped_as_std_idiom,
+            default.footer.guard_families_dropped_as_predicate_use,
+        ),
+        (
+            all.footer.guard_families_dropped_as_std_idiom,
+            all.footer.guard_families_dropped_as_predicate_use,
+        )
     );
     assert_eq!(
-        serde_json::to_value(default.shape_families_dropped).unwrap(),
-        serde_json::to_value(all.shape_families_dropped).unwrap()
+        (
+            default.footer.shape_families_dropped_as_std_vocabulary,
+            default.footer.shape_families_below_finding_gate,
+            default.footer.shape_families_dropped_as_one_module_api,
+        ),
+        (
+            all.footer.shape_families_dropped_as_std_vocabulary,
+            all.footer.shape_families_below_finding_gate,
+            all.footer.shape_families_dropped_as_one_module_api,
+        )
     );
     assert_eq!(
         default
@@ -384,8 +398,10 @@ fn survey_output_is_bounded_by_top() {
     let report = Report {
         path: PathBuf::from("src"),
         probes: Vec::new(),
-        totals: rank::totals(&rows),
-        rows,
+        rank: Rank {
+            totals: rank::totals(&rows),
+            rows,
+        },
         hot,
         assemblers: Vec::new(),
         debt: Debt {
@@ -422,32 +438,30 @@ fn survey_output_is_bounded_by_top() {
         }],
         shapes,
         guards,
-        history_commits: 100,
-        pace_window: 25,
-        parse_failures: 0,
-        shape_families_dropped: shapes::FamilyDrops {
-            vocabulary: 6,
-            below_gate: 3,
-            single_provider: 2,
-        },
-        guard_families_dropped: detect::GuardDrops {
-            vocabulary: 4,
-            predicate_use: 2,
-        },
-        suppressed: 0,
-        stale: (0..30)
-            .map(|index| format!("shape:stale-{index}"))
-            .collect(),
-        ambiguous: Vec::new(),
-        ledger: LedgerNote {
-            present: true,
-            intents: 54,
-            holds: 1,
-            problems: (0..30)
-                .map(|index| format!("row {index} is unreadable"))
+        footer: Footer {
+            history_commits: 100,
+            pace_window: 25,
+            parse_failures: 0,
+            shape_families_dropped_as_std_vocabulary: 6,
+            shape_families_below_finding_gate: 3,
+            shape_families_dropped_as_one_module_api: 2,
+            guard_families_dropped_as_std_idiom: 4,
+            guard_families_dropped_as_predicate_use: 2,
+            suppressed_families: 0,
+            stale_verdict_keys: (0..30)
+                .map(|index| format!("shape:stale-{index}"))
                 .collect(),
-            restamps: Vec::new(),
-            restamped: false,
+            ambiguous_verdict_keys: Vec::new(),
+            ledger: LedgerNote {
+                present: true,
+                intents: 54,
+                holds: 1,
+                problems: (0..30)
+                    .map(|index| format!("row {index} is unreadable"))
+                    .collect(),
+                restamps: Vec::new(),
+                restamped: false,
+            },
         },
     };
 
@@ -819,7 +833,7 @@ fn held_rows_are_flagged_from_the_ledger_and_reopen_at_the_commit_count() {
         functions: Vec::new(),
     });
     let report = build_report(root.path(), &facts, &args.path, args.by, args.all).unwrap();
-    ledger::write_restamps(root.path(), &report.ledger.restamps).unwrap();
+    ledger::write_restamps(root.path(), &report.footer.ledger.restamps).unwrap();
     let json: serde_json::Value =
         serde_json::from_str(&render_json(&report, &args.output).unwrap()).unwrap();
     let restamps = json["footer"]["ledger"]["restamps"].as_array().unwrap();
@@ -1109,7 +1123,7 @@ fn stale_verdict_keys_are_judged_crate_wide_whatever_the_scope() {
     let report = build_report(root.path(), &facts, scope, RankBy::default(), false).unwrap();
 
     assert_eq!(
-        report.stale,
+        report.footer.stale_verdict_keys,
         [
             "guard:gone.phase==Phase::Ready",
             "item:outside::cmd::gone",
@@ -1181,23 +1195,17 @@ fn scoped_assemblers_count_modules_outside_the_scope_by_top_module() {
     let report = Report {
         path: PathBuf::from("crates/demo/src/cli"),
         probes: Vec::new(),
-        rows: Vec::new(),
-        totals: Totals::default(),
+        rank: Rank {
+            rows: Vec::new(),
+            totals: Totals::default(),
+        },
         hot: Vec::new(),
         assemblers: rows,
         debt: Debt::default(),
         cycles: Vec::new(),
         shapes: Vec::new(),
         guards: Vec::new(),
-        history_commits: 0,
-        pace_window: 0,
-        parse_failures: 0,
-        shape_families_dropped: shapes::FamilyDrops::default(),
-        guard_families_dropped: detect::GuardDrops::default(),
-        suppressed: 0,
-        stale: Vec::new(),
-        ambiguous: Vec::new(),
-        ledger: LedgerNote::default(),
+        footer: Footer::default(),
     };
     output.push_str(&render_markdown(
         &report,
@@ -1515,21 +1523,30 @@ fn ambiguous_verdict_keys_are_reported_beside_stale_ones() {
     )
     .unwrap();
 
-    assert!(report.stale.is_empty(), "{:?}", report.stale);
-    assert_eq!(report.ambiguous.len(), 2, "{:?}", report.ambiguous);
     assert!(
-        report.ambiguous[0].starts_with(
+        report.footer.stale_verdict_keys.is_empty(),
+        "{:?}",
+        report.footer.stale_verdict_keys
+    );
+    assert_eq!(
+        report.footer.ambiguous_verdict_keys.len(),
+        2,
+        "{:?}",
+        report.footer.ambiguous_verdict_keys
+    );
+    assert!(
+        report.footer.ambiguous_verdict_keys[0].starts_with(
             "item:store::open — ambiguous: 2 visible items named open: src/store.rs:5 (owner Left), src/store.rs:12 (owner Right)"
         ),
         "{:?}",
-        report.ambiguous
+        report.footer.ambiguous_verdict_keys
     );
     assert!(
-        report.ambiguous[1].starts_with(
+        report.footer.ambiguous_verdict_keys[1].starts_with(
             "pass-through:store::forward — ambiguous: 2 production functions named forward"
         ),
         "{:?}",
-        report.ambiguous
+        report.footer.ambiguous_verdict_keys
     );
     let output = render_markdown(&report, 20, &OutputArgs::default());
     assert!(output.contains("stale verdict keys: none\nambiguous verdict keys: item:store::open"));
@@ -1544,10 +1561,13 @@ fn ambiguous_verdict_keys_are_reported_beside_stale_ones() {
     );
 
     let mut clean = report;
-    clean.ambiguous.clear();
+    clean.footer.ambiguous_verdict_keys.clear();
     let output = render_markdown(&clean, 20, &OutputArgs::default());
     assert!(output.contains("stale verdict keys: none\nambiguous verdict keys: none"));
-    clean.stale.push("item:store::gone".to_owned());
+    clean
+        .footer
+        .stale_verdict_keys
+        .push("item:store::gone".to_owned());
     let output = render_markdown(&clean, 20, &OutputArgs::default());
     assert!(
         !output.contains("ambiguous verdict keys"),

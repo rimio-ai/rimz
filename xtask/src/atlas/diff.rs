@@ -5,7 +5,6 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::{Map, Value, json};
 
 use super::contract::{
     AssemblyExpectation, CxExpectation, DeleteExpectation, DependencyExpectation, EscExpectation,
@@ -301,21 +300,58 @@ impl Evidence {
 struct Report {
     base: String,
     paths: Vec<PathBuf>,
-    production: ValueDelta,
-    tests: ValueDelta,
-    base_surface: Vec<BoundarySurface>,
-    current_surface: Vec<BoundarySurface>,
-    dependencies_added: Vec<DependencySite>,
-    dependencies_removed: Vec<DependencySite>,
-    base_dependency_counts: BTreeMap<&'static str, usize>,
-    current_dependency_counts: BTreeMap<&'static str, usize>,
-    interfaces: Vec<InterfaceRow>,
-    rust_files_base: usize,
-    rust_files_current: usize,
-    changed_inside: Vec<PathBuf>,
-    changed_outside: Vec<PathBuf>,
+    totals: Totals,
+    surface: Surface,
+    dependencies: Dependencies,
+    internal: DependencyChanges,
+    interface: Vec<InterfaceRow>,
+    files: Files,
     evidence: Evidence,
     expectations: Vec<ExpectationRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct Totals {
+    production: ValueDelta,
+    tests: ValueDelta,
+    escaping_surface: Vec<SurfaceDelta>,
+    dependency_sites: BTreeMap<&'static str, ValueDelta>,
+    rust_files: ValueDelta,
+}
+
+#[derive(Debug, Serialize)]
+struct SurfaceDelta {
+    scope: PathBuf,
+    #[serde(flatten)]
+    value: ValueDelta,
+}
+
+#[derive(Debug, Serialize)]
+struct Surface {
+    base: Vec<BoundarySurface>,
+    current: Vec<BoundarySurface>,
+    added: Vec<SurfaceItem>,
+    removed: Vec<SurfaceItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct DependencyChanges {
+    added: Vec<DependencySite>,
+    removed: Vec<DependencySite>,
+}
+
+#[derive(Debug, Serialize)]
+struct Dependencies {
+    base_counts: BTreeMap<&'static str, usize>,
+    current_counts: BTreeMap<&'static str, usize>,
+    #[serde(flatten)]
+    changes: DependencyChanges,
+}
+
+#[derive(Debug, Serialize)]
+struct Files {
+    inside: Vec<PathBuf>,
+    outside: Vec<PathBuf>,
     enforcing: bool,
 }
 
@@ -605,26 +641,75 @@ fn build_report(
     });
     let rust_files_base = rust_file_count(base, &paths);
     let rust_files_current = rust_file_count(current, &paths);
+    let base_counts = dependency_counts(&base_dependencies);
+    let current_counts = dependency_counts(&current_dependencies);
+    let escaping_surface = current_surface
+        .iter()
+        .map(|current| SurfaceDelta {
+            scope: current.scope.clone(),
+            value: value_delta(
+                base_surface
+                    .iter()
+                    .find(|base| base.scope == current.scope)
+                    .map_or(0, |base| base.items.len()) as u64,
+                current.items.len() as u64,
+            ),
+        })
+        .collect();
+    let dependency_sites = ["downward", "same", "upward", "unranked", "internal"]
+        .into_iter()
+        .filter_map(|direction| {
+            let base = base_counts.get(direction).copied().unwrap_or(0);
+            let current = current_counts.get(direction).copied().unwrap_or(0);
+            (direction == "internal" || base > 0 || current > 0)
+                .then(|| (direction, value_delta(base as u64, current as u64)))
+        })
+        .collect();
 
     Ok(Report {
         base: base_name,
         paths,
-        production,
-        tests,
-        base_surface,
-        current_surface,
-        dependencies_added,
-        dependencies_removed,
-        base_dependency_counts: dependency_counts(&base_dependencies),
-        current_dependency_counts: dependency_counts(&current_dependencies),
-        interfaces,
-        rust_files_base,
-        rust_files_current,
-        changed_inside,
-        changed_outside,
+        totals: Totals {
+            production,
+            tests,
+            escaping_surface,
+            dependency_sites,
+            rust_files: value_delta(rust_files_base as u64, rust_files_current as u64),
+        },
+        surface: Surface {
+            added: surface_changes(&current_surface, &base_surface),
+            removed: surface_changes(&base_surface, &current_surface),
+            base: base_surface,
+            current: current_surface,
+        },
+        internal: DependencyChanges {
+            added: dependencies_added
+                .iter()
+                .filter(|site| !site.crossing)
+                .cloned()
+                .collect(),
+            removed: dependencies_removed
+                .iter()
+                .filter(|site| !site.crossing)
+                .cloned()
+                .collect(),
+        },
+        dependencies: Dependencies {
+            base_counts,
+            current_counts,
+            changes: DependencyChanges {
+                added: dependencies_added,
+                removed: dependencies_removed,
+            },
+        },
+        interface: interfaces,
+        files: Files {
+            inside: changed_inside,
+            outside: changed_outside,
+            enforcing: contract.is_some(),
+        },
         evidence,
         expectations,
-        enforcing: contract.is_some(),
     })
 }
 
@@ -641,8 +726,10 @@ fn size_delta(base: &Facts, current: &Facts, paths: &[PathBuf], tests: bool) -> 
             .map(|(_, size)| if tests { size.tests } else { size.code })
             .sum::<u64>()
     };
-    let base = total(base);
-    let current = total(current);
+    value_delta(total(base), total(current))
+}
+
+fn value_delta(base: u64, current: u64) -> ValueDelta {
     ValueDelta {
         base,
         current,
@@ -1402,83 +1489,41 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             format_args!("| measure | base | current | delta |"),
         );
         markdown_line(&mut output, format_args!("|---|---:|---:|---:|"));
-        write_value_row(&mut output, "production SLOC", &report.production);
-        write_value_row(&mut output, "test SLOC", &report.tests);
-        for current in &report.current_surface {
-            let base = report
-                .base_surface
-                .iter()
-                .find(|base| base.scope == current.scope)
-                .map_or(0, |base| base.items.len());
-            markdown_line(
+        write_value_row(&mut output, "production SLOC", &report.totals.production);
+        write_value_row(&mut output, "test SLOC", &report.totals.tests);
+        for row in &report.totals.escaping_surface {
+            write_value_row(
                 &mut output,
-                format_args!(
-                    "| esc `{}` | {} | {} | {:+} |",
-                    current.scope.display(),
-                    base,
-                    current.items.len(),
-                    current.items.len() as i64 - base as i64
-                ),
+                &format!("esc `{}`", row.scope.display()),
+                &row.value,
             );
         }
         for direction in ["downward", "same", "upward", "unranked"] {
-            let base = report
-                .base_dependency_counts
-                .get(direction)
-                .copied()
-                .unwrap_or(0);
-            let current = report
-                .current_dependency_counts
-                .get(direction)
-                .copied()
-                .unwrap_or(0);
-            if base > 0 || current > 0 {
-                markdown_line(
+            if let Some(value) = report.totals.dependency_sites.get(direction) {
+                write_value_row(
                     &mut output,
-                    format_args!(
-                        "| dependency sites (crossing, {direction}) | {base} | {current} | {:+} |",
-                        current as i64 - base as i64
-                    ),
+                    &format!("dependency sites (crossing, {direction})"),
+                    value,
                 );
             }
         }
-        let base_internal = report
-            .base_dependency_counts
-            .get("internal")
-            .copied()
-            .unwrap_or(0);
-        let current_internal = report
-            .current_dependency_counts
-            .get("internal")
-            .copied()
-            .unwrap_or(0);
-        markdown_line(
+        write_value_row(
             &mut output,
-            format_args!(
-                "| dependency sites (internal) | {base_internal} | {current_internal} | {:+} |",
-                current_internal as i64 - base_internal as i64
-            ),
+            "dependency sites (internal)",
+            &report.totals.dependency_sites["internal"],
         );
-        markdown_line(
-            &mut output,
-            format_args!(
-                "| Rust files | {} | {} | {:+} |",
-                report.rust_files_base,
-                report.rust_files_current,
-                report.rust_files_current as i64 - report.rust_files_base as i64
-            ),
-        );
+        write_value_row(&mut output, "Rust files", &report.totals.rust_files);
     }
 
     if output_args.wants("interface") {
         markdown_line(&mut output, format_args!("\n## Call-site interface\n"));
-        let moved = moved_interface_rows(&report.interfaces);
+        let moved = moved_interface_rows(&report.interface);
         if moved.is_empty() {
             markdown_line(
                 &mut output,
                 format_args!(
                     "no call-site interface moved ({} pairs measured).",
-                    report.interfaces.len()
+                    report.interface.len()
                 ),
             );
         } else {
@@ -1506,25 +1551,25 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
                 &mut output,
                 format_args!(
                     "{} caller→provider pairs unchanged.",
-                    report.interfaces.len() - moved.len()
+                    report.interface.len() - moved.len()
                 ),
             );
         }
     }
 
     if output_args.wants("surface") {
-        let surface_added = surface_changes(&report.current_surface, &report.base_surface);
-        let surface_removed = surface_changes(&report.base_surface, &report.current_surface);
         markdown_line(&mut output, format_args!("\n## Escaping surface\n"));
         markdown_line(
             &mut output,
             format_args!("| movement | boundary | item | site |"),
         );
         markdown_line(&mut output, format_args!("|---|---|---|---|"));
-        for (movement, item) in surface_added
+        for (movement, item) in report
+            .surface
+            .added
             .iter()
             .map(|item| ("added", item))
-            .chain(surface_removed.iter().map(|item| ("removed", item)))
+            .chain(report.surface.removed.iter().map(|item| ("removed", item)))
             .take(top)
         {
             markdown_line(
@@ -1541,7 +1586,7 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         }
         write_omitted(
             &mut output,
-            surface_added.len() + surface_removed.len(),
+            report.surface.added.len() + report.surface.removed.len(),
             top,
         );
     }
@@ -1549,16 +1594,8 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     if output_args.wants("dependencies") {
         markdown_line(&mut output, format_args!("\n## Dependencies\n"));
         write_dependency_changes(&mut output, report, top, true);
-        let internal_added = report
-            .dependencies_added
-            .iter()
-            .filter(|site| !site.crossing)
-            .count();
-        let internal_removed = report
-            .dependencies_removed
-            .iter()
-            .filter(|site| !site.crossing)
-            .count();
+        let internal_added = report.internal.added.len();
+        let internal_removed = report.internal.removed.len();
         markdown_line(
             &mut output,
             format_args!(
@@ -1576,8 +1613,8 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         markdown_line(&mut output, format_args!("\n## Files\n"));
         markdown_line(&mut output, format_args!("| location | group | path |"));
         markdown_line(&mut output, format_args!("|---|---|---|"));
-        write_changed_paths(&mut output, "inside", &report.changed_inside, top);
-        write_changed_paths(&mut output, "outside", &report.changed_outside, top);
+        write_changed_paths(&mut output, "inside", &report.files.inside, top);
+        write_changed_paths(&mut output, "outside", &report.files.outside, top);
     }
 
     if output_args.wants("evidence") {
@@ -1621,16 +1658,16 @@ fn write_dependency_changes(output: &mut String, report: &Report, top: usize, cr
         format_args!("| movement | direction | module pair | item | site |"),
     );
     markdown_line(output, format_args!("|---|---|---|---|---|"));
-    let sites = report
-        .dependencies_added
+    let changes = if crossing {
+        &report.dependencies.changes
+    } else {
+        &report.internal
+    };
+    let sites = changes
+        .added
         .iter()
         .map(|site| ("added", site))
-        .chain(
-            report
-                .dependencies_removed
-                .iter()
-                .map(|site| ("removed", site)),
-        )
+        .chain(changes.removed.iter().map(|site| ("removed", site)))
         .filter(|(_, site)| site.crossing == crossing)
         .collect::<Vec<_>>();
     for (movement, site) in sites.iter().take(top) {
@@ -1665,127 +1702,15 @@ fn moved_interface_rows(rows: &[InterfaceRow]) -> Vec<&InterfaceRow> {
 }
 
 fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
-    let mut sections = Map::new();
-    if output_args.wants("expectations") {
-        sections.insert(
-            "expectations".to_owned(),
-            serde_json::to_value(&report.expectations)?,
-        );
-    }
-    if output_args.wants("totals") {
-        let escaping_surface = report
-            .current_surface
+    let selected = output_args.select(
+        serde_json::to_value(report)?,
+        SECTIONS
             .iter()
-            .map(|current| {
-                let base = report
-                    .base_surface
-                    .iter()
-                    .find(|base| base.scope == current.scope)
-                    .map_or(0, |base| base.items.len());
-                json!({
-                    "scope": current.scope,
-                    "base": base,
-                    "current": current.items.len(),
-                    "delta": current.items.len() as i64 - base as i64,
-                })
-            })
-            .collect::<Vec<_>>();
-        let dependency_sites = ["downward", "same", "upward", "unranked", "internal"]
-            .into_iter()
-            .filter_map(|direction| {
-                let base = report
-                    .base_dependency_counts
-                    .get(direction)
-                    .copied()
-                    .unwrap_or(0);
-                let current = report
-                    .current_dependency_counts
-                    .get(direction)
-                    .copied()
-                    .unwrap_or(0);
-                (direction == "internal" || base > 0 || current > 0).then(|| {
-                    (
-                        direction.to_owned(),
-                        json!({
-                            "base": base,
-                            "current": current,
-                            "delta": current as i64 - base as i64,
-                        }),
-                    )
-                })
-            })
-            .collect::<Map<_, _>>();
-        sections.insert(
-            "totals".to_owned(),
-            json!({
-                "production": &report.production,
-                "tests": &report.tests,
-                "escaping_surface": escaping_surface,
-                "dependency_sites": dependency_sites,
-                "rust_files": {
-                    "base": report.rust_files_base,
-                    "current": report.rust_files_current,
-                    "delta": report.rust_files_current as i64 - report.rust_files_base as i64,
-                },
-            }),
-        );
-    }
-    if output_args.wants("interface") {
-        sections.insert(
-            "interface".to_owned(),
-            serde_json::to_value(&report.interfaces)?,
-        );
-    }
-    if output_args.wants("surface") {
-        sections.insert(
-            "surface".to_owned(),
-            json!({
-                "base": &report.base_surface,
-                "current": &report.current_surface,
-                "added": surface_changes(&report.current_surface, &report.base_surface),
-                "removed": surface_changes(&report.base_surface, &report.current_surface),
-            }),
-        );
-    }
-    if output_args.wants("dependencies") {
-        sections.insert(
-            "dependencies".to_owned(),
-            json!({
-                "base_counts": &report.base_dependency_counts,
-                "current_counts": &report.current_dependency_counts,
-                "added": &report.dependencies_added,
-                "removed": &report.dependencies_removed,
-            }),
-        );
-    }
-    if output_args.named("internal") {
-        sections.insert(
-            "internal".to_owned(),
-            json!({
-                "added": report.dependencies_added.iter().filter(|site| !site.crossing).collect::<Vec<_>>(),
-                "removed": report.dependencies_removed.iter().filter(|site| !site.crossing).collect::<Vec<_>>(),
-            }),
-        );
-    }
-    if output_args.wants("files") {
-        sections.insert(
-            "files".to_owned(),
-            json!({
-                "inside": &report.changed_inside,
-                "outside": &report.changed_outside,
-                "enforcing": report.enforcing,
-            }),
-        );
-    }
-    if output_args.wants("evidence") {
-        sections.insert(
-            "evidence".to_owned(),
-            serde_json::to_value(&report.evidence)?,
-        );
-    }
-    let mut rendered = serde_json::to_string_pretty(&Value::Object(sections))?;
-    rendered.push('\n');
-    Ok(rendered)
+            .filter(|section| **section != "internal" || output_args.named(section))
+            .map(|section| (*section, std::slice::from_ref(section))),
+        &[],
+    );
+    Ok(format!("{}\n", serde_json::to_string_pretty(&selected)?))
 }
 
 fn write_value_row(output: &mut String, name: &str, value: &ValueDelta) {
