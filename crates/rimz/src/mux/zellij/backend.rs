@@ -81,6 +81,8 @@ pub(super) struct RawListedPane {
     #[serde(default)]
     pane_x: Option<u64>,
     #[serde(default)]
+    pane_y: Option<u64>,
+    #[serde(default)]
     pub(super) title: Option<String>,
     #[serde(default)]
     terminal_command: Option<String>,
@@ -280,40 +282,25 @@ impl ZellijBackend {
         anchor: &PaneId,
         timeout: Duration,
     ) -> Result<Option<(Vec<GridPane>, Vec<GridPane>)>> {
-        #[derive(Deserialize)]
-        struct Geometry {
-            #[serde(flatten)]
-            pane: RawListedPane,
-            pane_y: Option<u64>,
-        }
-        let output = self
-            .zellij_action(session)
-            .args(["list-panes", "--all", "--json"])
-            .run_with_timeout(timeout)?;
-        let listed: Vec<Geometry> = serde_json::from_slice(&output.stdout)
-            .map_err(|err| output_error(format!("parsing companion geometry: {err}")))?;
+        let listed = self.raw_listed_panes(session, timeout)?;
         let native = ZellijPaneId::try_from(anchor)
             .ok()
             .and_then(ZellijPaneId::terminal_id);
         let Some(tab) = listed
             .iter()
-            .find(|item| !item.pane.is_plugin && Some(item.pane.id) == native)
-            .and_then(|item| item.pane.tab_id)
+            .find(|pane| !pane.is_plugin && Some(pane.id) == native)
+            .and_then(|pane| pane.tab_id)
         else {
             return Ok(None);
         };
         let mut work = Vec::new();
         let mut chrome = Vec::new();
-        for item in listed
-            .into_iter()
-            .filter(|item| item.pane.tab_id == Some(tab))
-        {
-            let pane = item.pane;
+        for pane in listed.into_iter().filter(|pane| pane.tab_id == Some(tab)) {
             if pane.is_fullscreen || pane.is_suppressed {
                 return Ok(None);
             }
             let (Some(x), Some(y), Some(cols), Some(rows)) =
-                (pane.pane_x, item.pane_y, pane.pane_columns, pane.pane_rows)
+                (pane.pane_x, pane.pane_y, pane.pane_columns, pane.pane_rows)
             else {
                 return Ok(None);
             };

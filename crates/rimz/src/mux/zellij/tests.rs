@@ -1803,6 +1803,83 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn companion_append_recovers_from_transient_geometry_reply() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; exit 0; fi
+case " $* " in
+  *" new-pane "*) touch "$dir/opened" ;;
+  *" action list-panes --all --json "*)
+    n=$(($(cat "$dir/runs" 2>/dev/null || echo 0) + 1))
+    echo "$n" > "$dir/runs"
+    if [ "$n" -eq 1 ]; then exit 0; fi
+    if [ -f "$dir/opened" ]; then
+      printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":80,"pane_rows":80},{"id":8,"tab_id":42,"pane_x":110,"pane_y":0,"pane_columns":40,"pane_rows":80}]\n'
+    else
+      printf '[{"id":7,"tab_id":42,"pane_x":30,"pane_y":0,"pane_columns":120,"pane_rows":80}]\n'
+    fi ;;
+esac
+exit 0
+"#,
+    );
+    let result =
+        ZellijBackend::with_program_for_test(&shim).append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            command: Some(vec!["sleep".to_owned(), "600".to_owned()]),
+            ..Default::default()
+        });
+    assert!(
+        matches!(result, Ok(crate::mux::CompanionPaneAppend::Opened)),
+        "{result:?}"
+    );
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "action new-pane"), 1, "{log}");
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        4,
+        "{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn companion_append_spawns_nothing_when_geometry_stays_unreadable() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.45.0\n'; fi
+exit 0
+"#,
+    );
+    let result =
+        ZellijBackend::with_program_for_test(&shim).append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "rimz-test".to_owned(),
+                pane_id: PaneId::from_parts(crate::MuxName::Zellij, "terminal_7"),
+            },
+            ..Default::default()
+        });
+    assert!(
+        matches!(&result, Err(MuxErr::Output { reason, .. }) if reason.contains("returned no array on every attempt")),
+        "{result:?}"
+    );
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action list-panes --all --json"),
+        TRANSIENT_EMPTY_ATTEMPTS as usize,
+        "{log}"
+    );
+    assert_eq!(command_count(&log, "action new-pane"), 0, "{log}");
+}
+
+#[cfg(unix)]
+#[test]
 fn companion_append_does_not_retry_after_geometry_failure() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
