@@ -2,7 +2,7 @@
 //! socket-path budget, hook wiring, agent problems, and message-delivery
 //! failures.
 //!
-//! The report is collected once into a [`model::DoctorReport`], then either
+//! The report is collected concurrently into a [`model::DoctorReport`], then either
 //! rendered as the human report ([`render`]) or serialized as JSON — to stdout
 //! or atomically to a file. Collection lives in the sibling modules; presentation
 //! lives in [`render`]; this file only assembles and emits.
@@ -79,57 +79,95 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         .and_then(|ws| rimz::StatePaths::for_project_root(&ws.project_root).ok())
         .as_ref()
         .and_then(watermark::read);
-    let mut accounts = agents::collect_accounts(ws);
-    let agents = ws.map(|ws| agents::collect_agent_rollup(ws, audit, &mut accounts));
-    DoctorReport {
-        schema: "rimz.doctor.v1",
-        audit,
-        version: rimz::build_id::VERSION,
-        host: runtime::collect_host(),
-        workspace: match &workspace {
-            Ok(ws) => model::Probe::Ready(workspace_view(ws)),
-            Err(err) => model::Probe::Unavailable {
-                diagnosis: None,
-                error: err.to_string(),
+    std::thread::scope(|scope| {
+        let mux =
+            scope.spawn(|| runtime::collect_mux(globals.mux, ws, history_cleared_at, log_text));
+        let terminal = scope.spawn(runtime::collect_terminal);
+        let machine_config = scope.spawn(collect_machine_config);
+        let sandbox = scope.spawn(runtime::collect_sandbox);
+        let hibernate = scope.spawn(|| {
+            rimz::harness::hibernate::inspect(&crate::cli::machine_config().agents.hibernate)
+        });
+        let hooks = scope.spawn(agents::collect_hooks);
+        let accounts = scope.spawn(|| {
+            let mut accounts = agents::collect_accounts(ws);
+            let agents = ws.map(|ws| agents::collect_agent_rollup(ws, audit, &mut accounts));
+            (accounts, agents)
+        });
+        let plugins = scope.spawn(agents::collect_plugins);
+        let loop_tasks = scope.spawn(collect_loop);
+        let lsp = scope.spawn(|| collect_lsp(ws, globals));
+        let remote_control =
+            scope.spawn(|| runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())));
+        let disk_usage = scope.spawn(|| audit.then(runtime::collect_storage));
+        let temp_units = scope.spawn(|| runtime::collect_temp_units(audit));
+        let protocols = scope.spawn(|| ws.map(protocol::collect_protocols));
+        let trust = scope.spawn(|| ws.map(agents::collect_trust));
+        let folder_trust = scope.spawn(|| {
+            ws.map(|ws| match crate::cli::folder_trust::collect(ws) {
+                Ok(rows) => model::Probe::Ready(model::FolderTrust {
+                    rows: rows
+                        .iter()
+                        .map(crate::cli::folder_trust::Row::from)
+                        .collect(),
+                }),
+                Err(error) => model::Probe::Unavailable {
+                    diagnosis: None,
+                    error: error.to_string(),
+                },
+            })
+        });
+        let empty_dir = scope.spawn(|| agents::collect_empty_dir(ws));
+        let messages =
+            scope.spawn(|| ws.map(|ws| messages::collect_messages(ws, history_cleared_at, audit)));
+        let diagnostics =
+            scope.spawn(|| ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)));
+        let last_incident = scope
+            .spawn(|| ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)));
+        let (accounts, agents) = collected(accounts);
+        DoctorReport {
+            schema: "rimz.doctor.v1",
+            audit,
+            version: rimz::build_id::VERSION,
+            host: runtime::collect_host(),
+            workspace: match &workspace {
+                Ok(ws) => model::Probe::Ready(workspace_view(ws)),
+                Err(err) => model::Probe::Unavailable {
+                    diagnosis: None,
+                    error: err.to_string(),
+                },
             },
-        },
-        mux: runtime::collect_mux(globals.mux, ws, history_cleared_at, log_text),
-        terminal: runtime::collect_terminal(),
-        home: collect_home(),
-        machine_config: collect_machine_config(),
-        sandbox: runtime::collect_sandbox(),
-        hibernate: rimz::harness::hibernate::inspect(
-            &crate::cli::machine_config().agents.hibernate,
-        ),
-        hooks: agents::collect_hooks(),
-        accounts,
-        plugins: agents::collect_plugins(),
-        loop_tasks: collect_loop(),
-        lsp: collect_lsp(ws, globals),
-        remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),
-        disk_usage: audit.then(runtime::collect_storage),
-        temp_units: runtime::collect_temp_units(audit),
-        protocols: ws.map(protocol::collect_protocols),
-        trust: ws.map(agents::collect_trust),
-        folder_trust: ws.map(|ws| match crate::cli::folder_trust::collect(ws) {
-            Ok(rows) => model::Probe::Ready(model::FolderTrust {
-                rows: rows
-                    .iter()
-                    .map(crate::cli::folder_trust::Row::from)
-                    .collect(),
-            }),
-            Err(error) => model::Probe::Unavailable {
-                diagnosis: None,
-                error: error.to_string(),
-            },
-        }),
-        empty_dir: agents::collect_empty_dir(ws),
-        agents,
-        history_cleared_at,
-        messages: ws.map(|ws| messages::collect_messages(ws, history_cleared_at, audit)),
-        diagnostics: ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)),
-        last_incident: ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)),
-    }
+            mux: collected(mux),
+            terminal: collected(terminal),
+            home: collect_home(),
+            machine_config: collected(machine_config),
+            sandbox: collected(sandbox),
+            hibernate: collected(hibernate),
+            hooks: collected(hooks),
+            accounts,
+            plugins: collected(plugins),
+            loop_tasks: collected(loop_tasks),
+            lsp: collected(lsp),
+            remote_control: collected(remote_control),
+            disk_usage: collected(disk_usage),
+            temp_units: collected(temp_units),
+            protocols: collected(protocols),
+            trust: collected(trust),
+            folder_trust: collected(folder_trust),
+            empty_dir: collected(empty_dir),
+            agents,
+            history_cleared_at,
+            messages: collected(messages),
+            diagnostics: collected(diagnostics),
+            last_incident: collected(last_incident),
+        }
+    })
+}
+
+fn collected<T>(check: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    check
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 /// Startup checks for the current checkout; failures stay apart from the machine-wide table.
