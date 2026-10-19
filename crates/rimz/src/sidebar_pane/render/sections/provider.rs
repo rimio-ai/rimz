@@ -1277,6 +1277,16 @@ impl CreditDisplay {
             Self::Unlimited
         }
     }
+
+    /// Whether paid extra usage can still be spent: unlimited, or dollars left
+    /// above zero. Only available credit takes a metered row from a window.
+    fn is_available(self) -> bool {
+        match self {
+            Self::Unlimited => true,
+            Self::Balance(left) | Self::Drain { left, .. } => left > 0.0,
+            Self::Off | Self::Missing | Self::Unknown => false,
+        }
+    }
 }
 
 fn select_provider_bars<'a>(
@@ -1298,10 +1308,7 @@ fn select_provider_bars<'a>(
         .filter(|window| window.is_spent())
         .max_by_key(|window| window.duration_mins.unwrap_or(0))
     {
-        if matches!(
-            credits,
-            CreditDisplay::Unlimited | CreditDisplay::Balance(_) | CreditDisplay::Drain { .. }
-        ) {
+        if credits.is_available() {
             return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
         }
         if !std::ptr::eq(first, longest_spent) {

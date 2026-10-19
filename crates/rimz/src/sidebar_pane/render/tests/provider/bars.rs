@@ -562,8 +562,8 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     ));
     assert_eq!(
         labels(&panel),
-        vec!["7d", "ex"],
-        "exhausted extra credits keep the binding spent window first"
+        vec!["5h", "7d"],
+        "exhausted extra credits fall back to the included-window pair"
     );
 
     panel.windows = vec![
@@ -636,8 +636,14 @@ fn provider_bar_selection_puts_the_binding_window_before_extra_usage() {
     ));
     assert_eq!(
         labels(&panel),
-        vec!["5h", "ex"],
-        "exhausted extra credits still show their zero balance"
+        vec!["5h", "7d"],
+        "exhausted extra credits show 7d in place of a zero balance"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(None, Some(0.0), None));
+    assert_eq!(
+        labels(&panel),
+        vec!["5h", "7d"],
+        "a zero uncapped balance shows 7d in place of ex"
     );
 }
 
@@ -810,6 +816,11 @@ fn credit_balances_draw_full_or_spent_on_extra_and_api_rows() {
             panel.extra_credits = Some(crate::agents::ExtraCredits::known(None, Some(left), None));
             let rows = metered_bar_rows(&theme, &panel);
             assert_eq!(rows.len(), if metered { 2 } else { 1 });
+            if metered && left == 0.0 {
+                let labels: Vec<_> = rows.iter().map(|row| row.spans[0].content.trim()).collect();
+                assert_eq!(labels, ["5h", "7d"], "a spent balance yields to 7d");
+                continue;
+            }
             if metered {
                 assert!(rows[0].to_string().starts_with("7d"));
             }

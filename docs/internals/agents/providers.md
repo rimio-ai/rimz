@@ -37,7 +37,7 @@ Five account-scoped facts feed a panel. Account identity and included balance ri
 
 A window's identity is its duration or its scope id. Duration windows sort short to long (`5h`, `7d`) and support reset roll-forward, not-started detection, pace, and surplus; a window with an unknown duration makes each of those claims fail closed. Named provider windows (Copilot's monthly `AIC`, Qwen's Alibaba windows) fuse by scope id, display their real reset, and never roll forward.
 
-Paid usage keeps missing fields missing: an uncapped `ex` row invents no cap, and an absent reading or a limit alone leaves no `ex` row. Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, which shows the earliest expiry within a week and never blinks; for Codex its glyph also forecasts what [auto-redeem](#auto-redeem) would do. `rimz providers` lists the deadlines when credits are banked.
+Paid usage keeps missing fields missing: an uncapped `ex` row invents no cap, and an absent reading, a limit alone, or a zero balance leaves no `ex` row (`CreditDisplay::is_available` in `sidebar_pane/render/sections/provider.rs`). Disabled or exhausted paid usage does not make a parked turn terminal while a subscription window still has a future reset. Reset credits draw the compact dashboard marker, which shows the earliest expiry within a week and never blinks; for Codex its glyph also forecasts what [auto-redeem](#auto-redeem) would do. `rimz providers` lists the deadlines when credits are banked.
 
 ### Metered and unmetered
 
