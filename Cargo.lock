@@ -3443,6 +3443,7 @@ dependencies = [
  "uuid",
  "vt100",
  "which",
+ "winnow",
 ]
 
 [[package]]

@@ -1176,6 +1176,66 @@ surface-budget = 243
 
 [[verdict]]
 kind = "item"
+key = "sidebar::scenario"
+reason = "Testkit scenario admission and pure snapshot sources serve the contributor CLI and loop player; the typed IR stays crate-visible."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::check"
+reason = "The binary validates and folds scenario files through one library entry without rendering."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::ScenarioError"
+reason = "The CLI and reload status present the same typed line/column refusal."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::fixture_snapshot"
+reason = "Temporary binary fixture/gallery bridge to library presets, removed with those commands during scenario migration."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::Scenario"
+reason = "The loop player consumes parsed geometry, ordered beat data and pure at(Duration) snapshots inside the library."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::Beat"
+reason = "The player schedules typed actions by offset and records their source labels."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::Action"
+reason = "The player dispatches UI actions through the real input path while the model folds agent verbs."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::UiAction"
+reason = "Scenario UI beats remain data until the loop player resolves their handles against a painted frame."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::Verb"
+reason = "Typed agent actions belong to the crate-visible beat vocabulary rather than an untyped player callback."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::Field"
+reason = "Typed metric edits are part of the admitted agent-action vocabulary."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::unread::reconcile_snapshot"
+reason = "Production fetch and testkit playback share runtime unread reconciliation without notification execution."
+
+[[verdict]]
+kind = "item"
+key = "store::snapshot::view::SidebarSnapshot::score_scenario_rows"
+reason = "The testkit source stamps rows with production attention scoring before presentation sorting."
+
+[[verdict]]
+kind = "item"
 key = "sidebar::timing::CLICK_GUARD"
 reason = "The renderer resolves clicks against their painted frame for a bounded automatic-move window."
 

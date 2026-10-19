@@ -151,6 +151,7 @@ required-features = ["testkit"]
 workspace = true
 
 [dependencies]
+winnow.workspace = true
 anstream.workspace = true
 anstyle.workspace = true
 pulldown-cmark.workspace = true

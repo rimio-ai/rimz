@@ -17,8 +17,9 @@ use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::sidebar::produce::{HostInputs, PaneProducer};
-use crate::sidebar::read_marks::{ReadMarks, prune_read_marks};
-use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
+#[cfg(test)]
+use crate::sidebar::unread::UnreadEpisodes;
+use crate::sidebar::unread::{ClearedUnread, OpenedUnread, reconcile_snapshot};
 use crate::store::snapshot::{SidebarOwnView, SidebarSnapshot};
 use crate::wakeup::events::{SidebarEvent, SidebarEventEnvelope};
 use crate::{RuntimePaths, StatePaths};
@@ -1101,22 +1102,8 @@ fn evaluate_notifications(
     snapshot: &mut SidebarSnapshot,
 ) -> Vec<NotificationDelivery> {
     let now_ms = crate::utils::time::unix_now_ms();
-    let mut episodes = UnreadEpisodes::load(runtime);
-    let silent_opens = episodes.was_absent_on_load();
-    let marks = ReadMarks::load(runtime);
-    if snapshot.panes_produced_at_ms.is_some() {
-        prune_read_marks(
-            runtime,
-            &snapshot.rows().map(|row| row.id.clone()).collect(),
-        );
-    }
-    let unread = episodes.reconcile(snapshot, &marks, silent_opens);
+    let unread = reconcile_snapshot(runtime, snapshot);
     emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
-    if (episodes.was_absent_on_load() || unread.changed)
-        && let Err(err) = episodes.persist(runtime)
-    {
-        tracing::debug!(error = %err, "unread episodes persist failed");
-    }
 
     let notifications = state.evaluate(snapshot, &unread.opened, prefs, now_ms);
     if let Some(alert) = link_state.evaluate(snapshot, now_ms) {
