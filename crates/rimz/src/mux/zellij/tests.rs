@@ -418,6 +418,33 @@ struct TestRoom {
 }
 
 #[cfg(unix)]
+#[test]
+fn birth_seeds_presence_permissions_before_spawning_the_client() {
+    let room = TestRoom::new();
+    let (_temp, shim) = support::zellij_shim(
+        r#"#!/bin/sh
+if [ -s "$HOME/zellij/permissions.kdl" ]; then
+    printf seeded > "$HOME/birth-grant"
+else
+    printf missing > "$HOME/birth-grant"
+fi
+printf 'intentional birth refusal\n' >&2
+exit 1
+"#,
+    );
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, room.runtime_root.path());
+    assert!(
+        backend
+            .create_session_with_sidebar(&room.sidebar_options(120), None)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(room.runtime_root.path().join("birth-grant")).unwrap(),
+        "seeded"
+    );
+}
+
+#[cfg(unix)]
 impl TestRoom {
     fn new() -> Self {
         let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");

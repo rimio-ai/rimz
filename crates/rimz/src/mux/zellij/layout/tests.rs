@@ -2,6 +2,48 @@ use super::*;
 use crate::ids::WorkspaceId;
 use crate::mux::{PaneCmd, SidebarWidth};
 
+#[test]
+fn session_layout_carries_one_resolved_plugin_block_and_omits_unknown_lists() {
+    let opts = sidebar_opts("rimz-contract", None, None);
+    let mut plugins: kdl::KdlDocument = "zellij:link\nmy_alias cwd=\"/a b\" { setting \"v\"; }\n"
+        .parse()
+        .unwrap();
+    let presence = super::super::tests::support::presence_opts("rimz-contract", "/usr/bin/rimz");
+    plugins
+        .nodes_mut()
+        .push(super::super::presence::presence_plugin_entry(&presence));
+    let layout = render_session_layout(&opts, None, &[], Some(&plugins)).unwrap();
+    let document: kdl::KdlDocument = layout.parse().expect("whole layout parses as KDL");
+    assert_eq!(
+        document
+            .nodes()
+            .iter()
+            .filter(|node| node.name().value() == "load_plugins")
+            .count(),
+        1,
+        "{layout}"
+    );
+    let carried = document.get("load_plugins").unwrap().children().unwrap();
+    assert_eq!(carried.nodes().len(), 3);
+    assert_eq!(carried.nodes()[0].name().value(), "zellij:link");
+    assert_eq!(
+        carried.nodes()[1].to_string(),
+        plugins.nodes()[1].to_string()
+    );
+    assert_eq!(
+        carried.nodes()[2].name().value(),
+        format!("file:{}", presence.wasm.display())
+    );
+    let unknown = render_session_layout(&opts, None, &[], None).unwrap();
+    assert!(
+        unknown
+            .parse::<kdl::KdlDocument>()
+            .unwrap()
+            .get("load_plugins")
+            .is_none()
+    );
+}
+
 fn sidebar_opts(
     session_name: &str,
     refresh_ms: Option<u16>,
@@ -180,8 +222,13 @@ fn resume_tab_with_columns(label: &str, columns: &[&[&[&str]]], cwd: &str) -> Re
 
 #[test]
 fn session_layout_renders_terminal_template_bar_and_runtime_args() {
-    let layout =
-        render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[]).unwrap();
+    let layout = render_session_layout(
+        &sidebar_opts("rimz-contract", Some(50), None),
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
     assert_work_area_template(&layout, 2, 3);
     let shell = crate::proc::shell_pane_name();
     assert_eq!(
@@ -210,7 +257,7 @@ fn session_layout_uses_configured_birth_fixed_options() {
     opts.config.zellij.scroll_buffer_size = Some(123_456);
     opts.config.zellij.pane_frames = Some(true);
 
-    let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+    let layout = render_session_layout(&opts, None, &[], None).expect("render layout");
 
     assert!(
         layout.ends_with(concat!(
@@ -237,7 +284,7 @@ fn session_layout_uses_configured_birth_fixed_options() {
 #[test]
 fn session_layout_seeds_template_and_birth_from_probed_width() {
     let opts = sidebar_opts("rimz-width", None, Some(120));
-    let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+    let layout = render_session_layout(&opts, None, &[], None).expect("render layout");
     assert_eq!(
         layout
             .matches(r#"pane size="25%" name="rimz-sidebar" borderless=true"#)
@@ -253,7 +300,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
         "a probed narrow launch does not use the wide fallback:\n{layout}",
     );
     let capped = sidebar_opts("rimz-width", None, Some(340));
-    let layout = render_session_layout(&capped, None, &[]).expect("render layout");
+    let layout = render_session_layout(&capped, None, &[], None).expect("render layout");
     assert_eq!(
         layout
             .matches(r#"pane size="21%" name="rimz-sidebar" borderless=true"#)
@@ -281,7 +328,7 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
     assert_sidebar_sizes_are_percent(&layout);
 
     let unprobed = sidebar_opts("rimz-width", None, None);
-    let layout = render_session_layout(&unprobed, None, &[]).expect("render layout");
+    let layout = render_session_layout(&unprobed, None, &[], None).expect("render layout");
     let new_tab_template = layout
         .split("new_tab_template")
         .nth(1)
@@ -589,7 +636,7 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         ),
         resume_tab("#main", &[&["pi", "resume", "sess-3"]], "/proj/main"),
     ];
-    let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+    let layout = render_session_layout(&opts, None, &resume, None).expect("render resume layout");
     assert_work_area_template(&layout, 4, 5);
     assert!(layout.contains(r#"command "claude""#), "{layout}");
     assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
@@ -614,7 +661,7 @@ fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
     );
     assert!(layout.contains("new_tab_template"), "{layout}");
 
-    let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+    let layout = render_session_layout(&opts, None, &[], None).expect("render layout");
     assert_work_area_template(&layout, 2, 3);
     assert!(layout.contains("tab focus=true"), "{layout}");
     assert!(
@@ -635,7 +682,7 @@ fn session_layout_renders_resume_columns() {
         "/proj/team",
     )];
 
-    let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+    let layout = render_session_layout(&opts, None, &resume, None).expect("render resume layout");
 
     assert!(
         layout.contains(r##"tab name="#team" focus=true"##),
@@ -660,7 +707,7 @@ fn session_layout_names_an_empty_resumed_channel_pane() {
     tab.layout.columns[0].panes[0].name = Some("#feature".to_owned());
     let resume = vec![tab];
 
-    let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
+    let layout = render_session_layout(&opts, None, &resume, None).expect("render resume layout");
 
     assert!(
         layout.contains(r##"pane focus=true name="#feature""##),
@@ -690,7 +737,7 @@ fn session_layout_injects_resume_tab_env_into_every_pane_without_renaming() {
         pane.name = Some(name.to_owned());
     }
 
-    let layout = render_session_layout(&opts, None, &[tab]).expect("render resume layout");
+    let layout = render_session_layout(&opts, None, &[tab], None).expect("render resume layout");
 
     assert_eq!(layout.matches(r#"command "env""#).count(), 3, "{layout}");
     for argv in [r#""claude""#, r#""codex""#, r#""/bin/sh""#] {
@@ -716,8 +763,13 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
             "/proj/worktree",
         ),
     ]);
-    let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.view.hosts.clone())), &[])
-        .expect("render session layout with daemon");
+    let layout = render_session_layout(
+        &bg.sidebar,
+        Some(&daemon_view(bg.view.hosts.clone())),
+        &[],
+        None,
+    )
+    .expect("render session layout with daemon");
     assert_work_area_template(&layout, 3, 4);
     let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
     let work_at = layout.find("tab focus=true").expect("working tab");
@@ -747,7 +799,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
     assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
     let bg = background_view_opts(vec![]);
-    let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(vec![])), &[])
+    let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(vec![])), &[], None)
         .expect("render content-only daemon tab");
     assert_work_area_template(&layout, 3, 4);
     assert!(layout.contains(r#"tab name="rimzd""#), "{layout}");

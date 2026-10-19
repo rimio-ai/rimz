@@ -139,6 +139,7 @@ fn materialize_presence_plugin_bytes(
 /// falls back to `rimz` on the host PATH. Workspace ids are `ws_` + hex by
 /// construction, always expressible.
 struct PresencePluginIdentity {
+    pairs: Vec<(String, String)>,
     configuration: String,
     config_hash: String,
 }
@@ -208,7 +209,9 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
     let config_hash = crate::build_id::of_bytes(configuration.as_bytes());
     configuration.push_str(",plugin_config=");
     configuration.push_str(&config_hash);
+    pairs.push(("plugin_config".to_owned(), config_hash.clone()));
     PresencePluginIdentity {
+        pairs,
         configuration,
         config_hash,
     }
@@ -225,6 +228,21 @@ fn current_presence_writer<'a>(
         .writer
         .as_ref()
         .filter(|writer| writer_matches(writer, build, config))
+}
+
+pub(super) fn presence_plugin_entry(opts: &super::super::PresencePluginOptions) -> KdlNode {
+    let location = format!("file:{}", opts.wasm.display());
+    let mut node = KdlNode::new(location.clone());
+    node.name_mut()
+        .set_repr(kdl::KdlValue::String(location).to_string());
+    let mut children = KdlDocument::new();
+    for (key, value) in presence_plugin_identity(opts).pairs {
+        let mut setting = KdlNode::new(key);
+        setting.push(value);
+        children.nodes_mut().push(setting);
+    }
+    node.set_children(children);
+    node
 }
 
 fn writer_matches(writer: &TopologyWriter, build: &str, config: &str) -> bool {
@@ -353,7 +371,7 @@ impl ZellijBackend {
             Err(MuxErr::Timeout { .. }) => {
                 tracing::debug!(
                     session = %opts.session_name,
-                    "presence boot pipe held past its deadline (permission pending); launch delivered",
+                    "presence boot pipe held past its deadline (permission pending or no client attached yet); launch delivered",
                 );
                 Ok(())
             }
@@ -515,7 +533,7 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {
+    pub(super) fn seed_presence_permissions(&self, opts: &super::super::PresencePluginOptions) {
         let cache_root = self.runtime_dir.clone().unwrap_or_else(paths::cache_home);
         seed_presence_permissions_in(&cache_root, opts);
     }
@@ -526,9 +544,9 @@ impl ZellijBackend {
         pipe_name: &str,
         payload: &str,
     ) -> Result<()> {
-        // `zellij action pipe --plugin` is the only load verb: it launches a
-        // missing identity as a background plugin, works without an attached
-        // client, and otherwise routes to the live instance. Skip-cache
+        // The owner pipe remains the birth safety net and the load route for
+        // re-entry and convergence: it launches a missing identity without an
+        // attached client and otherwise routes to the live instance. Skip-cache
         // defeats Zellij's path-keyed compiled-module cache when owner flows
         // replace the wasm bytes at the canonical artifact path.
         let url = format!("file:{}", opts.wasm.display());

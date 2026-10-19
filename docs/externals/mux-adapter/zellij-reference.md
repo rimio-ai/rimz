@@ -442,7 +442,7 @@ Login tokens have their own flags. `--create-token` (shown once) and `--create-r
 
 ## Configuration
 
-Zellij reads one KDL file. It looks for the configuration directory in this order: `--config-dir`, `$ZELLIJ_CONFIG_DIR`, `$HOME/.config/zellij`, the platform default (the XDG path on Linux; `~/Library/Application Support/org.Zellij-Contributors.Zellij` on macOS), then `/etc/zellij`. Because `$HOME/.config/zellij` comes before the platform default, Zellij uses and creates it even when `$XDG_CONFIG_HOME` points elsewhere. `zellij setup --dump-config` prints the default file. Zellij watches the active configuration file and applies most changes live.
+Zellij layers one user KDL file over its built-in defaults. `--config` or `$ZELLIJ_CONFIG_FILE` selects that file directly. Otherwise `--config-dir` or `$ZELLIJ_CONFIG_DIR` selects the directory; without either, Zellij takes the first existing directory among `$HOME/.config/zellij`, the platform default (the XDG path on Linux; `~/Library/Application Support/org.Zellij-Contributors.Zellij` on macOS), and `/etc/zellij`. It uses `config.kdl` inside the selected directory if present, otherwise defaults alone: it does not fall through to the next directory. `zellij setup --dump-config` prints the default file. Zellij watches the active configuration file and applies most changes live ([config resolution](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/input/config.rs), [directory order](https://github.com/zellij-org/zellij/blob/v0.45.1/zellij-utils/src/home.rs)).
 
 A server that finds no configuration file starts a first-run setup wizard, and while it shows, `action new-pane` mounts are dropped; panes from a layout mount normally (observed on 0.44.3).
 
@@ -508,7 +508,7 @@ Frame style resolves as follows: `pane_frames false` gives none; otherwise `pane
 
 Set one pane's frame independently with `--borderless true` on `new-pane`, `run`, `edit`, or `plugin`. Existing panes accept `action set-pane-borderless`. Layout panes accept `borderless=true`.
 
-The file also takes `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins when a session starts. It is a configuration-file block only; layouts have no `load_plugins` (observed on 0.44.3).
+The file also takes `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. A top-level `load_plugins` block starts background plugins when a session starts. Layout files can carry it too: the layout is also parsed as configuration and merged over the client's config. The block replaces the background-plugin list rather than extending it; without an override, the built-in list contains `zellij:link`. Observed on 0.45.1; the same layout-to-config and replacement paths exist in 0.44.2+ ([layout loading](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-utils/src/input/layout.rs), [configuration merge](https://github.com/zellij-org/zellij/blob/v0.44.2/zellij-utils/src/kdl/mod.rs)).
 
 Nested-session detection negotiates over the terminal stream: every client announces itself to the host client whether or not `ZELLIJ` is set in its environment, so `nested_session_handling` also applies across SSH.
 

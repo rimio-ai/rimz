@@ -274,6 +274,154 @@ fn presence_plugin_panes(xdg: &Path, session: &str) -> Result<Vec<ListedPane>, S
     })
 }
 
+#[test]
+fn birth_keeps_presence_suppressed_across_attach_floating_toggle_and_reentry() {
+    require_zellij!();
+    if !zellij::capabilities().is_ok_and(|caps| {
+        caps.parsed_version
+            .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION)
+    }) {
+        crate::common::skip("zellij below the presence-plugin floor");
+        return;
+    }
+    let room = LiveZellijSession::new("background-birth");
+    let config = room.path().join(".config/zellij/config.kdl");
+    std::fs::write(
+        &config,
+        "show_startup_tips false\nshow_release_notes false\nload_plugins { zellij:link; }\n",
+    )
+    .unwrap();
+    let cwd = TempDir::new().unwrap();
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let poke_log = room.path().join("birth-pokes.log");
+    std::fs::write(&stub, format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nif [ \"${{1:-}}\" = sidebar ] && [ \"${{2:-}}\" = serve ]; then exec sleep 600; fi\n",
+        sh_quote(&poke_log.display().to_string()),
+    )).unwrap();
+    let mut sidebar = sidebar_opts(room.name(), cwd.path(), stub, 120);
+    sidebar.extra_env.insert(
+        "ZELLIJ_CONFIG_FILE".to_owned(),
+        config.display().to_string(),
+    );
+    publish_room_bin(room.path(), &sidebar);
+    let backend = ZellijBackend::with_runtime_dir(room.path());
+    assert!(!room.path().join("zellij/permissions.kdl").exists());
+    backend
+        .open_sidebar(&sidebar, None)
+        .expect("birth seeds its own grant");
+    let assert_background = || {
+        let presence = presence_plugin_panes(room.path(), room.name()).unwrap();
+        assert_eq!(presence.len(), 1, "{presence:?}");
+        assert!(
+            presence[0].is_suppressed && !presence[0].is_floating,
+            "{presence:?}"
+        );
+        let panes = list_panes(room.path(), room.name()).unwrap();
+        assert!(
+            panes.panes.iter().any(|pane| {
+                pane.is_plugin
+                    && pane
+                        .title
+                        .as_deref()
+                        .is_some_and(|title| title.ends_with("zellij:link"))
+            }),
+            "{panes:?}"
+        );
+        presence[0].id
+    };
+    let original_id = assert_background();
+    let mut client = AttachedClient::attach(&room, 120, 40);
+    assert_eq!(assert_background(), original_id);
+    let before: BTreeSet<_> = work_pane_geometry(room.path(), room.name())
+        .into_iter()
+        .map(|pane| pane.id)
+        .collect();
+    let different_cwd = TempDir::new().unwrap();
+    spawn_sleep_pane(room.path(), room.name(), different_cwd.path());
+    let work = work_pane_geometry(room.path(), room.name())
+        .into_iter()
+        .find(|pane| !before.contains(&pane.id))
+        .unwrap();
+    let work = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", work.id));
+    client.press_alt_until('l', &work, "different-cwd birth key source");
+    for (key, command) in [('p', "sidebar focus"), ('g', "pane zoom")] {
+        poll_until(
+            SPAWN_TIMEOUT,
+            || {
+                client.press_alt(key);
+                Ok(poke_lines(&poke_log))
+            },
+            |lines| {
+                lines.iter().any(|line| {
+                    line.starts_with(command)
+                        && logged_arg(line, "--session-name") == Some(room.name())
+                })
+            },
+            "birth plugin receives room keys from a different cwd",
+        );
+    }
+    let output = room.action(&["toggle-floating-panes"]);
+    assert!(output.status.success(), "{output:?}");
+    poll_until(
+        SPAWN_TIMEOUT,
+        || list_panes(room.path(), room.name()),
+        |snapshot| {
+            snapshot
+                .panes
+                .iter()
+                .filter(|pane| !pane.is_plugin && pane.is_floating)
+                .count()
+                == 1
+        },
+        "one floating terminal, not a presence pane",
+    );
+    assert_eq!(assert_background(), original_id);
+    let machine = rimz::config::MachineConfig::load_lenient();
+    // The test runner's machine config is the default; match birth's identity.
+    assert_eq!(machine.sidebar, rimz::config::SidebarConfig::default());
+    let state = rimz::StatePaths::under(sidebar.workspace_id.clone(), room.path()).unwrap();
+    backend
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: room.name().to_owned(),
+            workspace_id: sidebar.workspace_id.clone(),
+            wasm: zellij::presence_plugin_path().unwrap(),
+            rimz_bin: state.room_bin,
+            focus_key: Some(machine.sidebar.focus_key.clone()),
+            zoom_key: Some(machine.sidebar.zoom_key.clone()),
+            session_options: zellij::zellij_session_options(&sidebar.config.zellij),
+        })
+        .expect("room re-entry boot");
+    assert_eq!(assert_background(), original_id);
+}
+
+#[test]
+fn background_plugin_defaults_match_installed_zellij() {
+    require_zellij!();
+    if !zellij::capabilities().is_ok_and(|caps| {
+        caps.parsed_version
+            .is_some_and(|v| v >= zellij::MIN_ZELLIJ_VERSION)
+    }) {
+        crate::common::skip("zellij below the presence-plugin floor");
+        return;
+    }
+    let namespace = ZellijNamespace::new();
+    let output = namespace
+        .command()
+        .args(["setup", "--dump-config"])
+        .bounded_output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let mut installed =
+        zellij::background_plugins_for_test(std::str::from_utf8(&output.stdout).unwrap());
+    let mut defaults = zellij::background_plugins_for_test("");
+    installed.clear_fmt_recursive();
+    defaults.clear_fmt_recursive();
+    assert_eq!(
+        defaults, installed,
+        "RimZ's carried defaults must track Zellij"
+    );
+}
+
 struct FocusRepairLogs<'a> {
     xdg: &'a Path,
     trace: &'a Path,

@@ -584,15 +584,15 @@ Every host fork runs from `/`, so the session-lifetime plugin does not depend on
 
 ### Loading and permissions
 
-RimZ loads the plugin itself, never through the user's `config.kdl`, because a layout cannot load plugins.
+At session birth, RimZ loads the presence plugin through a top-level `load_plugins` block in the birth layout. That block replaces Zellij's background-plugin list, so RimZ first resolves the birth client's configuration and carries its entries over verbatim, then appends the presence entry. Without a user block, it preserves Zellij's built-in `zellij:link`. If the selected config cannot be read or parsed, RimZ omits the block, logs the path and error at debug level, and falls back to the boot pipe. The user's config is read-only.
 
-The load verb is the idempotent `zellij … action pipe --plugin --skip-plugin-cache`, the one verb in Zellij 0.44 that works on a clientless session and carries the cache-bypass bit. Only owner flows use it: room birth, and `rimz reload` upgrade and repair. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
+The idempotent `zellij … action pipe --plugin --skip-plugin-cache` remains the route for room re-entry, reload upgrade and convergence, and post-retirement boots. Birth also keeps this pipe to publish the desired identity, deliver the boot payload, and cover hosts that did not load the layout entry. A clientless birth can still hold the pipe through its two-second deadline. Generic pane and topology readers broadcast the name-only `rimz:dump_topology` pipe instead and never launch a plugin.
 
-Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. Every desired identity is created only through this pipe, so an identity-matching writer is a background instance and receives global pane and tab updates. Changing an identity launches another background writer; the host accepts its proof and retires the old identity.
+Load-time configuration pins the workspace, the session, the room's `rimz` pointer (`ws/<workspace-dir>/rimz`), runtime mouse options, the focus and zoom chords, `launch_scope=background`, the embedded-wasm digest (computed once, lazily), and a hash of the configuration itself. One ordered configuration supplies both the layout entry and the pipe string, so the boot and re-entry pipes address the same suppressed background instance. Changing an identity uses the pipe route; the host accepts the replacement's proof and retires the old identity.
 
-The canonical artifact path is the same across upgrades, but Zellij keys its compiled-module cache by that path, not the wasm bytes. Every plugin-addressed pipe therefore skips the cache: a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path.
+The canonical artifact path is the same across upgrades, but Zellij keys its compiled-module cache by that path, not the wasm bytes. Every plugin-addressed pipe therefore skips the cache: a live identity treats the flag as a no-op, and a missing identity compiles the bytes currently installed at the path. Background layout loads do not bypass that cache, so a birth immediately after a build swap can still load stale compiled bytes.
 
-RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin, so the first attach shows no prompt, even in a clientless session:
+RimZ seeds Zellij's `permissions.kdl` cache for its embedded plugin before spawning the birth client, so the background loader sees the grant and the first attach shows no prompt. Pipe loads also repeat the idempotent seed:
 
 | Permission | What it grants |
 | --- | --- |

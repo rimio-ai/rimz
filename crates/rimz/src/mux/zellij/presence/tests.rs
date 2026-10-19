@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+fn layout_entry_and_pipe_configuration_have_identical_maps() {
+    for (session, bin, focus, zoom) in [
+        ("room", "/tmp/a\"\\ b/rimz", "Alt+\"\\ p", "Alt+g"),
+        ("room,bad", "/tmp/a=b/rimz", "Alt=p", "Alt,g"),
+        ("room=bad", "/tmp/a,b/rimz", "Alt+p", "Alt+g"),
+    ] {
+        let mut opts = presence_opts(session, bin);
+        opts.wasm = "/tmp/a\"\\ b.wasm".into();
+        opts.focus_key = Some(focus.to_owned());
+        opts.zoom_key = Some(zoom.to_owned());
+        let rendered = presence_plugin_entry(&opts).to_string();
+        let document: KdlDocument = rendered.parse().expect("entry round-trips through KDL");
+        let entry = &document.nodes()[0];
+        assert_eq!(
+            entry.name().value(),
+            format!("file:{}", opts.wasm.display())
+        );
+        assert!(rendered.starts_with('"'), "location is quoted: {rendered}");
+        let children = entry.children().unwrap().nodes();
+        let layout_map = children
+            .iter()
+            .map(|node| {
+                (
+                    node.name().value().to_owned(),
+                    node.get(0).unwrap().value().as_string().unwrap().to_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let identity = presence_plugin_identity(&opts);
+        let pipe_map = identity
+            .configuration
+            .split(',')
+            .map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap();
+                (key.to_owned(), value.to_owned())
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(layout_map, pipe_map);
+        assert_eq!(children.last().unwrap().name().value(), "plugin_config");
+    }
+}
+
 use super::super::pane_topology::TopologyWriter;
 use super::super::tests::support::presence_opts;
 #[cfg(unix)]
