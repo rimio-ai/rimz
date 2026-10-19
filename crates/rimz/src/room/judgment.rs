@@ -2,7 +2,7 @@
 
 use crate::ResolvedWorkspace;
 use crate::config::definitions::{DefinitionCause, DefinitionErr};
-use crate::config::{AccountsConfig, ConfigErr, MachineConfig};
+use crate::config::{AccountsConfig, ConfigErr, MachineConfig, TmuxConfig};
 use crate::harness::hibernate::Admission;
 use crate::ids::{AgentKind, MuxName};
 use crate::remote_control::{HostLoginEnvs, ReadinessSnapshot};
@@ -166,12 +166,12 @@ pub(super) fn judge(
         ("history_limit", machine.tmux.history_limit),
         ("escape_time_ms", machine.tmux.escape_time_ms),
     ] {
-        if value > i32::MAX as u32 {
+        if value > TmuxConfig::INT_MAX {
             warn(
                 format!("tmux.{key}"),
                 format!(
                     "tmux.{key} = {value} exceeds tmux's maximum {}; the option is skipped; lower `tmux.{key}`",
-                    i32::MAX
+                    TmuxConfig::INT_MAX
                 ),
             );
         }

@@ -164,6 +164,12 @@ pub struct TmuxConfig {
     pub pane_border_lines: Option<TmuxPaneBorderLines>,
 }
 
+impl TmuxConfig {
+    /// The largest integer tmux accepts for an option (its `INT_MAX`); RimZ
+    /// skips writing a larger `history_limit` or `escape_time_ms`.
+    pub const INT_MAX: u32 = i32::MAX as u32;
+}
+
 impl Default for TmuxConfig {
     fn default() -> Self {
         Self {
