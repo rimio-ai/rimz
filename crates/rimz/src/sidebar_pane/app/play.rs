@@ -585,7 +585,7 @@ impl<'a> Filmstrip<'a> {
             let path = entry?.path();
             if path
                 .extension()
-                .is_some_and(|ext| ext == "txt" || ext == "ansi")
+                .is_some_and(|ext| ext == "txt" || ext == "ansi" || ext == "png")
                 && path
                     .file_stem()
                     .and_then(|stem| stem.to_str())

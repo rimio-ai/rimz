@@ -82,6 +82,7 @@ fn filmstrip_reexport_removes_only_previous_export_files() {
     for name in [
         "0000.txt",
         "0017.ansi",
+        "0017.png",
         "10000.ansi",
         "index.jsonl",
         "notes.txt",
@@ -89,7 +90,7 @@ fn filmstrip_reexport_removes_only_previous_export_files() {
         std::fs::write(dir.path().join(name), "old").unwrap();
     }
     Filmstrip::new(dir.path()).unwrap();
-    for name in ["0000.txt", "0017.ansi", "10000.ansi"] {
+    for name in ["0000.txt", "0017.ansi", "0017.png", "10000.ansi"] {
         assert!(!dir.path().join(name).exists(), "stale export {name}");
     }
     assert_eq!(
