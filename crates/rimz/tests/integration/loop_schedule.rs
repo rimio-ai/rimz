@@ -248,6 +248,59 @@ fn adding_machine_refuses_rootless_row() {
 }
 
 #[test]
+fn removing_rootless_machine_row_succeeds() {
+    for resident in [false, true] {
+        let env = Env::new();
+        write_loop_config(
+            &env,
+            &format!(
+                "[tasks.same]\ncheck='true'\nevery='1h'\n{}",
+                if resident {
+                    "agent='codex'\nstay=true\n"
+                } else {
+                    ""
+                },
+            ),
+        );
+        let output = loop_ok(&env, &["loop", "remove", "same"]);
+        assert!(output.contains("removed loop task `same`"), "{output}");
+        let config: LoopConfig =
+            toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+        assert!(!config.tasks.0.contains_key("same"));
+    }
+}
+
+#[test]
+fn renaming_rootless_machine_row_succeeds() {
+    for resident in [false, true] {
+        let env = Env::new();
+        write_loop_config(
+            &env,
+            &format!(
+                "[tasks.same]\ncheck='true'\nevery='1h'\n{}",
+                if resident {
+                    "agent='codex'\nstay=true\n"
+                } else {
+                    ""
+                },
+            ),
+        );
+        let output = loop_ok(&env, &["loop", "rename", "same", "renamed"]);
+        assert!(
+            output.contains("renamed loop task `same` to `renamed`"),
+            "{output}"
+        );
+        let config: LoopConfig =
+            toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+        assert!(!config.tasks.0.contains_key("same"));
+        let entry = &config.tasks.0["renamed"];
+        assert_eq!(entry.check, Some("true".into()));
+        assert_eq!(entry.stay, resident);
+        assert!(entry.root.as_os_str().is_empty());
+    }
+}
+
+#[test]
 fn adding_instance_removes_only_same_root_machine() {
     let env = Env::new();
     env.record(&env.project_root);
