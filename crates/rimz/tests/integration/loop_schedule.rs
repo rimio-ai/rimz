@@ -45,6 +45,76 @@ fn judge_refuses_below_version_floor_before_provider_spawn() {
     );
 }
 
+#[test]
+fn tick_fires_instance_despite_same_named_foreign_machine() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    write_loop_config(
+        &env,
+        &format!("[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1m'\n"),
+    );
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "same".into(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                check: Some("true".into()),
+                fire_at: Some(Timestamp::now() - SignedDuration::from_mins(1)),
+                ..TaskEntry::default()
+            },
+        )])),
+    );
+    let prior = Timestamp::now() - SignedDuration::from_mins(2);
+    write_loop_fire_state(&env, BTreeMap::from([("same".into(), prior)]));
+
+    loop_ok(&env, &["loop", "tick"]);
+
+    assert!(
+        rimz::harness::schedule::last_stamps(&env.runtime_paths())
+            .get("same")
+            .is_some_and(|stamp| *stamp > prior)
+    );
+}
+
+#[test]
+fn adding_instance_removes_only_same_root_machine() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    for root in [&other, &env.project_root] {
+        write_loop_config(
+            &env,
+            &format!("[tasks.same]\nroot={root:?}\ncheck='true'\nevery='1h'\n"),
+        );
+
+        loop_ok(
+            &env,
+            &[
+                "loop",
+                "add",
+                "same",
+                "--signal",
+                "ci.failed",
+                "--check",
+                "true",
+                "--once",
+            ],
+        );
+
+        let config: LoopConfig =
+            toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+        assert_eq!(config.tasks.0.contains_key("same"), root == &other);
+        if root == &other {
+            assert_eq!(config.tasks.0["same"].resolved_root(), *root);
+        }
+        assert_eq!(read_loop_instances(&env).0["same"].root, env.project_root);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn judge_with_unreadable_version_still_reads_verdict() {

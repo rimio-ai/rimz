@@ -3,8 +3,7 @@
 //! Durable recurring definitions live in `loop.toml`. Session deliveries,
 //! one-shots, and poll-until instances live here as workspace state, using
 //! the same task entry shape without turning runtime churn into user config
-//! edits. Readers merge both backings here; durable config wins when both
-//! stores contain a name.
+//! edits. In the catalog, durable config wins only for the same name and root.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

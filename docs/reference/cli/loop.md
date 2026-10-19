@@ -244,6 +244,8 @@ Each task lives in one of three stores, which `rimz loop list` names in its SOUR
 
 Adding a state task requires an existing room: run `rimz start` in its root first, or pass `--root <room>`. Machine and project definitions can be added without a room and create no room state.
 
+A machine task takes precedence over a same-named state task only within the same root. A machine task rooted elsewhere neither hides the room's state task nor is removed when you add that state task. `loop show`, `remove`, `rename`, `pause`, `run`, and `stop` in that room address its state task; the machine task remains reachable from its own room or outside any room.
+
 `loop list`, `enable --all`, and `disable --all` cover machine tasks plus the state and project tasks of the project resolved from the current directory or `--root`. Enable, disable, pause, and strike state belong to this machine: machine-wide for machine tasks, per project for state and project tasks.
 
 ### Project tasks

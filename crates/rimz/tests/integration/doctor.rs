@@ -464,6 +464,61 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
 }
 
 #[test]
+fn doctor_keeps_same_named_cross_root_instance_and_its_worktree_hold() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
+    assert!(
+        env.rimz()
+            .args(["worktree", "new", "followup"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let worktree = env.home_root.join("project-worktrees/followup");
+    let other = env.home_root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!("[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1h'\n"),
+    )
+    .unwrap();
+    let instances = env
+        .state_path_for(&env.project_root)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(instances.parent().unwrap()).unwrap();
+    std::fs::write(
+        instances,
+        serde_json::to_vec(&json!({"same": {
+            "root": env.project_root, "dir": worktree, "check": "true", "signal": "ci.failed", "once": true
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    let tasks = report["loop_tasks"]["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2, "{report}");
+    let instance = tasks
+        .iter()
+        .find(|task| task["root"] == json!(env.project_root))
+        .unwrap();
+    assert_eq!(instance["name"], "same");
+    assert_eq!(instance["holds_worktrees"], json!([worktree]));
+    let machine = tasks
+        .iter()
+        .find(|task| task["root"] == json!(other))
+        .unwrap();
+    assert_eq!(machine["name"], "same");
+    assert_eq!(machine["holds_worktrees"], json!([]));
+}
+
+#[test]
 fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
     if crate::common::git::git_missing() {
         return;

@@ -167,7 +167,7 @@ pub fn arm_delivery(
         return Ok(ArmOutcome::AlreadySubscribed { name });
     }
     if entry.team.is_none() && entry.loop_task.is_none() {
-        super::config_edit::remove(super::config_edit::TaskStore::Machine, &name)
+        super::config_edit::remove_machine_at_root(&name, &entry.resolved_root())
             .map_err(|err| ArmFailure::State(err.into()))?;
     }
     if entry.watch.is_some() {

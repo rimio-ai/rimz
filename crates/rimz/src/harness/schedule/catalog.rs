@@ -387,7 +387,7 @@ impl TaskCatalog {
                 }
             })?;
             instances::insert(&instance_root, name, entry)?;
-            config_edit::remove(config_edit::TaskStore::Machine, name)?;
+            config_edit::remove_machine_at_root(name, &entry.resolved_root())?;
         } else {
             config_edit::set_entry(config_edit::TaskStore::Machine, name, entry)?;
             instances::remove(&instance_root, name, None)?;
@@ -640,10 +640,16 @@ fn merge_base(instances: Tasks, machine: Tasks) -> BTreeMap<String, LoadedTask> 
             (name, task)
         })
         .collect::<BTreeMap<_, _>>();
-    tasks.extend(machine.0.into_iter().map(|(name, entry)| {
+    for (name, entry) in machine.0 {
+        if tasks
+            .get(&name)
+            .is_some_and(|task| task.entry().resolved_root() != entry.resolved_root())
+        {
+            continue;
+        }
         let task = LoadedTask::new(&name, entry, TaskSource::Config);
-        (name, task)
-    }));
+        tasks.insert(name, task);
+    }
     tasks
 }
 
@@ -883,6 +889,34 @@ mod tests {
             ]
         );
         assert_eq!(waits.len(), 2);
+    }
+
+    #[test]
+    fn foreign_machine_preserves_instance_and_both_overlay_keys() {
+        let instance = task("instance");
+        let mut machine = task("machine");
+        machine.root = PathBuf::from("/other");
+        let catalog = TaskCatalog::from_layers(
+            Tasks(BTreeMap::from([("same".to_owned(), instance.clone())])),
+            Tasks(BTreeMap::from([("same".to_owned(), machine.clone())])),
+            None,
+            Some(Path::new("/repo")),
+        );
+
+        for loaded in [&catalog.visible()["same"], catalog.for_run("same").unwrap()] {
+            assert_eq!(loaded.source(), TaskSource::Instance);
+            assert_eq!(loaded.entry(), &instance);
+        }
+        for (source, entry) in [
+            (TaskSource::Instance, instance),
+            (TaskSource::Config, machine),
+        ] {
+            assert!(catalog.overlay_keys.contains(&TaskKey::for_task(
+                "same",
+                source,
+                &entry.resolved_root(),
+            )));
+        }
     }
 
     #[test]
