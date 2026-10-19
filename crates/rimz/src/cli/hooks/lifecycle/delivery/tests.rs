@@ -225,6 +225,102 @@ fn user_shell_message_withdraws_idle_stop() {
 }
 
 #[test]
+fn failed_idle_stop_withdrawal_keeps_the_rest_of_the_frame() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::idle_stop::{self, IdleStopRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = workspace();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let id = rimz::ids::AgentSessionId::from(rimz::ids::EventId::new().to_string());
+    let kind = rimz::ids::AgentKind::new_unchecked("claude");
+    idle_stop::arm(
+        store.paths(),
+        IdleStopRequest {
+            kind: kind.clone(),
+            agent_id: id.clone(),
+            stop: rimz::agents::state::IdleStop {
+                after_secs: 300,
+                requested_at: jiff::Timestamp::from_second(1_000).unwrap(),
+                requested_by: Some("@lead".into()),
+            },
+        },
+    )
+    .unwrap();
+    let before = std::fs::read(&store.paths().idle_stop_requests).unwrap();
+    // A read-only records directory fails the withdrawal's publish and nothing
+    // else this frame writes: the transcript lives under the audit class.
+    let records = store
+        .paths()
+        .idle_stop_requests
+        .parent()
+        .unwrap()
+        .to_owned();
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o500)).unwrap();
+    // Permissions do not bind root, so there is nothing to prove.
+    if std::fs::write(records.join("probe"), b"").is_ok() {
+        return;
+    }
+    let payload = serde_json::json!({"session_id": id, "prompt": "keep working"});
+    let frame = rimz::store::ingress::HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::ids::EventId::new(),
+        ts: jiff::Timestamp::from_second(1_001).unwrap(),
+        source: kind,
+        event: Some("UserPromptSubmit".into()),
+        payload: payload.to_string(),
+        cwd: workspace.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: Default::default(),
+    };
+    let mut decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    let recovered = store.read_events().unwrap();
+    let handled = with_frame_env(&frame, FrameAttempt::First, || {
+        super::super::handle_lifecycle_frame(
+            &workspace,
+            &store,
+            agent,
+            &mut decoded,
+            &payload,
+            rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+            &crate::cli::GlobalFlags {
+                root: None,
+                mux: None,
+                zellij: false,
+                tmux: false,
+                color: crate::cli::ColorWhen::Never,
+            },
+            &recovered,
+        )
+    });
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+    handled.unwrap();
+
+    assert_eq!(
+        std::fs::read(&store.paths().idle_stop_requests).unwrap(),
+        before
+    );
+    assert!(
+        !rimz::harness::assist_log::recent(&rimz::disk::paths::logs_dir(), None)
+            .into_iter()
+            .map(|record| serde_json::to_value(record).unwrap())
+            .any(|record| record["assist"] == "idle_stop_withdrawn"
+                && record["agent_id"] == id.as_str())
+    );
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert!(
+        entries.iter().any(|entry| {
+            entry.entry == rimz::transcript::TranscriptKind::Prompt && entry.text == "keep working"
+        }),
+        "{entries:?}"
+    );
+}
+
+#[test]
 fn earlier_tied_supervised_and_replayed_turns_keep_idle_stop() {
     for (offset, run, replay) in [
         (-1, IdleStopRun::None, false),
