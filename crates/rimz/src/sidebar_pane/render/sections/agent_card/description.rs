@@ -128,12 +128,10 @@ pub(super) fn description_spans(
 ) -> Vec<Span<'static>> {
     let theme = ctx.theme;
     let mut left = Vec::new();
-    match row.as_agent().map_or(CardDescription::None, |agent| {
-        agent.open_ask().map_or_else(
-            || agent.description(ctx.now),
-            |ask| CardDescription::Activity(ask.to_owned()),
-        )
-    }) {
+    match row
+        .as_agent()
+        .map_or(CardDescription::None, |agent| agent.description(ctx.now))
+    {
         CardDescription::Error(label) => left.extend(body_spans(theme, attention, &label, true)),
         CardDescription::Wait(label) => left.push(Span::styled(
             label,
