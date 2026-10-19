@@ -3046,7 +3046,7 @@ reason = "Pass 29e: cx 7.6 (cognitive/cyclomatic/SLOC 29/27/90) remains in stage
 
 [[verdict]]
 kind = "item"
-key = "sidebar_pane::render::sections::worktree::worktree_group_lines_projected"
+key = "sidebar_pane::render::sections::worktree::worktree_group_lines_windowed"
 reason = "Pass 29e: cx 5.3 (cognitive/cyclomatic/SLOC 18/27/127) remains in selected-lane and folded-team placement, header toggle versus first-row routing, hyperlink gutter offsets, and pipeline owner then same-team actionable then first-row precedence. Render pins preserve row ordinals and inert empty pipelines; More-before-Less and collapsing-only totals retain their tail policy. A shared routing helper would conceal decisions that belong to different rendered lines."
 
 [[verdict]]

@@ -37,6 +37,7 @@ mod process;
 mod provider;
 mod scroll;
 mod search;
+mod visible_compose;
 mod worktree;
 
 use super::*;
@@ -341,6 +342,7 @@ fn expanded_line_frame_bypasses_group_cap_and_fits_content() {
         theme.as_ref(),
         54,
         u16::MAX,
+        None,
         None,
     );
     assert_eq!(

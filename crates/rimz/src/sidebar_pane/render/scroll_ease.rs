@@ -6,6 +6,7 @@ pub(in crate::sidebar_pane) const SCROLL_EASE_DURATION: Duration = Duration::fro
 pub(in crate::sidebar_pane) const SCROLL_EASE_FRAME: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(in crate::sidebar_pane) struct ScrollEase {
     armed: bool,
     from: isize,

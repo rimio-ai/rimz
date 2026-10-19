@@ -155,6 +155,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Pane-local context-meter interning state, persisted across frames so a
     /// quantized raster keeps its image id while ratatui diffs placeholders.
     pub(in crate::sidebar_pane) meter_pixels: Option<MeterPixels>,
+    pub(in crate::sidebar_pane) card_heights: super::heights::CardHeights,
     /// Shared room-runtime lens narrowing the body through one `VisibleRoster` projection.
     ///
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.

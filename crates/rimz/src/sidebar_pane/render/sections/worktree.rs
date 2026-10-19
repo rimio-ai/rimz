@@ -6,7 +6,8 @@
 //! or the finished age when that record is absent,
 //! pinned right.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use crate::agents::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use crate::config::GlyphRole;
@@ -21,6 +22,7 @@ use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::fmt::{
     activity_short, age_label, age_secs, compact_count, dollars2,
 };
+use crate::sidebar_pane::render::heights::{CardHeights, CardKey};
 use crate::sidebar_pane::render::labels::{
     TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
     status_rest_style, status_style_at, token_breakdown_spans, token_total_glyph,
@@ -31,7 +33,7 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
-use super::agent_card::row_lines;
+use super::agent_card::{CardLine, row_lines};
 use super::{CardExpansion, Gutter, RowCtx, content_width, pin_right, with_gutter};
 
 /// Inputs needed to render one projected worktree group.
@@ -42,6 +44,47 @@ pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snaps
     pub(in crate::sidebar_pane::render) meter_pixels: Option<&'render mut MeterPixels>,
 }
 
+pub(in crate::sidebar_pane::render) struct CardWalk<'a> {
+    pub(in crate::sidebar_pane::render) window: Range<usize>,
+    pub(in crate::sidebar_pane::render) origin: usize,
+    pub(in crate::sidebar_pane::render) heights: Option<&'a mut CardHeights>,
+    pub(in crate::sidebar_pane::render) measuring: bool,
+    measured: HashMap<usize, Vec<CardLine>>,
+}
+
+impl<'a> CardWalk<'a> {
+    pub(in crate::sidebar_pane::render) fn new(heights: Option<&'a mut CardHeights>) -> Self {
+        Self {
+            window: if heights.is_some() {
+                0..0
+            } else {
+                0..usize::MAX
+            },
+            origin: 0,
+            heights,
+            measuring: true,
+            measured: HashMap::new(),
+        }
+    }
+
+    fn contains(&self, line: usize) -> bool {
+        self.window.contains(&(self.origin + line))
+    }
+
+    fn intersects(&self, start: usize, height: usize) -> bool {
+        !self.window.is_empty()
+            && self.origin + start < self.window.end
+            && self.window.start < self.origin + start + height
+    }
+}
+
+#[cfg(test)]
+pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
+    render: WorktreeRenderContext<'_, '_>,
+) -> RenderedBlock {
+    worktree_group_lines_windowed(render, &mut CardWalk::new(None))
+}
+
 /// Compose one worktree group's lines and interaction geometry together.
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
@@ -49,8 +92,9 @@ pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snaps
 /// a finished agent pod the collapse empties still renders its header and
 /// two-line receipt when totals exist. The live more/less line is
 /// filter-suppressed because a narrowed body is already uncapped.
-pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
+pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
     render: WorktreeRenderContext<'_, '_>,
+    walk: &mut CardWalk<'_>,
 ) -> RenderedBlock {
     let WorktreeRenderContext {
         row: ctx,
@@ -92,27 +136,34 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     } else {
         team
     };
-    let (header, header_link) =
-        group_header(ctx.theme, group, header_team, ctx.width, group_selected);
     let collapses = group.collapses();
-    let header_hit = collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
-    let header_link = header_link.into_iter().map(|(columns, url)| {
-        (
-            columns.start.saturating_add(1)..columns.end.saturating_add(1),
-            HitTarget::Hyperlink(url),
-        )
-    });
     // A collapsing worktree's name toggles its roster. Every other worktree's
     // name lands on the first row — the adjacent agent — while the `external`
     // divider stays inert chrome.
     let header_target = (!collapses && group.kind != SidebarWorktreeKind::External && passing > 0)
         .then_some(first_row);
-    block.push_with_regions(
-        with_gutter(ctx.theme, header, lane, None, ctx.width),
-        header_target,
-        header_hit.into_iter().chain(header_link),
-    );
-    if let Some(pipeline) = pipeline {
+    if walk.contains(block.lines.len()) {
+        let (header, header_link) =
+            group_header(ctx.theme, group, header_team, ctx.width, group_selected);
+        let header_hit =
+            collapses.then(|| (0..u16::MAX, HitTarget::ToggleGroup(group.key.clone())));
+        let header_link = header_link.into_iter().map(|(columns, url)| {
+            (
+                columns.start.saturating_add(1)..columns.end.saturating_add(1),
+                HitTarget::Hyperlink(url),
+            )
+        });
+        block.push_with_regions(
+            with_gutter(ctx.theme, header, lane, None, ctx.width),
+            header_target,
+            header_hit.into_iter().chain(header_link),
+        );
+    } else {
+        block.push_with_regions(Line::default(), header_target, []);
+    }
+    if pipeline.is_some() && !walk.contains(block.lines.len()) {
+        block.push_inert(Line::default());
+    } else if let Some(pipeline) = pipeline {
         let rows = visible_group.rows(roster);
         let owner = pipeline.owner.as_deref().and_then(|owner| {
             rows.iter().position(|row| {
@@ -161,20 +212,57 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         );
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
-        for line in row_lines(
-            ctx,
-            row,
+        let key = CardKey {
+            expansion: expanded,
             selected,
-            expanded,
-            gutter,
-            cost_usd,
-            meter_pixels.as_deref_mut(),
-        ) {
-            block.push_with_regions(
-                line.line,
-                Some(this_row),
-                line.target.map(|target| (0..u16::MAX, target)),
-            );
+            matched: ctx.matched,
+        };
+        let cached = walk
+            .heights
+            .as_deref()
+            .and_then(|cache| cache.get(&row.id, key));
+        let paint = |pixels| row_lines(ctx, row, selected, expanded, gutter, cost_usd, pixels);
+        #[cfg(test)]
+        if let Some(height) = cached {
+            assert_eq!(height, paint(None).len(), "cached height for {}", row.id);
+        }
+        let visible = cached.is_some_and(|height| walk.intersects(block.lines.len(), height));
+        let lines = if cached.is_none() || visible {
+            Some(walk.measured.remove(&this_row).unwrap_or_else(|| {
+                let lines = paint(meter_pixels.as_deref_mut());
+                if let Some(cache) = walk.heights.as_deref_mut() {
+                    if cached.is_none() {
+                        cache.insert(&row.id, key, lines.len());
+                    }
+                    #[cfg(test)]
+                    cache.painted.push(this_row);
+                }
+                lines
+            }))
+        } else {
+            None
+        };
+        // Misses always paint; intersecting hits either carry or paint their lines.
+        let height = lines
+            .as_ref()
+            .map(Vec::len)
+            .or(cached)
+            .expect("a cache miss paints the card to measure it");
+        if walk.intersects(block.lines.len(), height) {
+            for line in lines.expect("intersecting cards are painted or carried from measurement") {
+                block.push_with_regions(
+                    line.line,
+                    Some(this_row),
+                    line.target.map(|target| (0..u16::MAX, target)),
+                );
+            }
+        } else {
+            if let Some(lines) = lines {
+                walk.measured.insert(this_row, lines);
+            }
+            for _ in 0..height {
+                block.push_with_regions(Line::default(), Some(this_row), []);
+            }
         }
     }
     let target = HitTarget::ToggleGroup(group.key.clone());

@@ -53,7 +53,9 @@ pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{
     DashboardContext, dashboard_block, fleet_store_lines, fleet_total_lines,
 };
-pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
+#[cfg(test)]
+pub(super) use worktree::worktree_group_lines_projected;
+pub(super) use worktree::{CardWalk, WorktreeRenderContext, worktree_group_lines_windowed};
 
 /// How far live or held selection reaches a row: the source row itself, a named
 /// teammate opened alongside it, or neither. This controls expansion, not
@@ -117,7 +119,7 @@ pub(super) fn row_selection_reach(
 /// What a card opens: reach distinguishes live or held selections from teammates,
 /// which open without session stats. Delegation entries follow the sticky header override, else open
 /// for a live or held source row or under `expanded` density.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CardExpansion {
     pub(super) reach: SelectionReach,
     pub(super) delegation: bool,

@@ -83,7 +83,7 @@ Each lane's cost and the bound that holds it down. Reproducible figures come fro
 
 | Operation | Cost | Bound |
 | --- | --- | --- |
-| Frame redraw | Sub-millisecond in process; 413 µs at 40 agents | The base `refresh_ms` grid, briefly finer for a wheel glide; off-screen animation relaxes to the data backstop; a frame never starts a fetch |
+| Frame redraw | Sub-millisecond in process; 413 µs at 40 agents. Card painting scales with the viewport plus height-cache misses: one full paint per snapshot, clock, width, theme, focus, or card-configuration epoch, and the cards whose expansion, selection, or match changed within it | A cold epoch paints in one walk; a warm frame measures geometry from cached heights, then paints the window. The base `refresh_ms` grid is briefly finer for a wheel glide; off-screen animation relaxes to the data backstop; geometry still scans the roster and a frame never starts a fetch |
 | Overlay fuse | 75 µs with no active overlay, at 40 agents | Pure: no IO, no subprocess, no clock read |
 | Jump to a pane | One mux client fork, tens to hundreds of ms | Detached thread; the focus intent it writes reaches the frame through the fold ([state.md](./sidebar/state.md#focus-intent)) |
 | Tmux graphics capabilities | One room-wide client/process/version sample and one pane-option listing | Ten-second plane cadence; a missing pane or unavailable listing uses a targeted permission query; escalation remains per pane |
