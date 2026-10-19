@@ -295,6 +295,7 @@ fn collect_loop() -> model::LoopTasks {
     let arming = arming::load();
     let now = jiff::Timestamp::now();
     let mut rooms = std::collections::BTreeMap::new();
+    let mut markers = std::collections::BTreeMap::new();
     let mut unscheduled = Vec::new();
     let machine = TaskCatalog::load_lenient(None);
     let instances = workspace_instance_roots()
@@ -335,6 +336,26 @@ fn collect_loop() -> model::LoopTasks {
                 (Err(err), _) => (format!("invalid: {err}"), false),
                 (Ok(trigger), Ok(_)) => (trigger.describe(), true),
             };
+            let mut held = std::collections::BTreeMap::new();
+            for pin in rimz::harness::schedule::catalog::worktree_pins(
+                name,
+                task,
+                arming.get(&task.key(name)),
+                now,
+            ) {
+                let marker = markers.entry(pin.path).or_insert_with_key(|path| {
+                    let existing = path.ancestors().find(|ancestor| ancestor.is_dir())?;
+                    rimz::worktree::read_marker_for_worktree(existing)
+                        .ok()
+                        .flatten()
+                });
+                if let Some(marker) = marker {
+                    held.insert(
+                        rimz::utils::path::normalize_path_lexical(&marker.worktree_path),
+                        marker.name.clone(),
+                    );
+                }
+            }
             model::LoopTaskRow {
                 name: name.clone(),
                 spec: match task.action() {
@@ -352,6 +373,10 @@ fn collect_loop() -> model::LoopTasks {
                 root: entry.root.display().to_string(),
                 valid,
                 room_open,
+                holds_worktrees: held
+                    .into_iter()
+                    .map(|(path, name)| model::HeldWorktree { path, name })
+                    .collect(),
             }
         })
         .collect();

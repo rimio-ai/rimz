@@ -987,6 +987,37 @@ fn account_error_fixes_only_appear_in_the_closing_block() {
 }
 
 #[test]
+fn loop_worktree_holders_render_without_audit_and_do_not_raise_tally() {
+    let tasks = LoopTasks {
+        tasks: vec![LoopTaskRow {
+            name: "nightly".into(),
+            spec: "claude".into(),
+            when: "on ci.failed".into(),
+            root: "/repo".into(),
+            valid: true,
+            room_open: true,
+            holds_worktrees: vec![super::super::model::HeldWorktree {
+                path: "/trees/renamed-directory".into(),
+                name: "followup".into(),
+            }],
+        }],
+        timer: LoopTimer::NotInstalled,
+        unscheduled: Vec::new(),
+    };
+    let mut tally = Tally::default();
+    let out = strip(|w| {
+        render_loop(w, &tasks, &mut tally)?;
+        render_tally(w, &tally)
+    });
+    assert!(
+        out.contains("nightly") && out.contains("holds worktree followup"),
+        "{out}"
+    );
+    assert!(tally.warns.is_empty());
+    assert!(tally.alarms.is_empty());
+}
+
+#[test]
 fn loop_section_lists_tasks_and_flags_invalid_ones() {
     let loop_tasks = LoopTasks {
         tasks: vec![
@@ -997,6 +1028,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
                 root: "/home/you/code/app".to_owned(),
                 valid: true,
                 room_open: true,
+                holds_worktrees: Vec::new(),
             },
             LoopTaskRow {
                 name: "broken".to_owned(),
@@ -1005,6 +1037,7 @@ fn loop_section_lists_tasks_and_flags_invalid_ones() {
                 root: "/home/you/code/other".to_owned(),
                 valid: false,
                 room_open: false,
+                holds_worktrees: Vec::new(),
             },
         ],
         timer: LoopTimer::NotInstalled,
@@ -1726,6 +1759,7 @@ fn loop_section_reports_scheduler_coverage() {
                 root: "/project".into(),
                 valid: true,
                 room_open: false,
+                holds_worktrees: Vec::new(),
             }],
             timer,
             unscheduled,

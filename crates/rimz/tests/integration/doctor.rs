@@ -464,6 +464,57 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
 }
 
 #[test]
+fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    crate::common::git::init_repo(&env.project_root);
+    env.record(&env.project_root);
+    assert!(
+        env.rimz()
+            .args(["worktree", "new", "followup"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let path = env.home_root.join("project-worktrees/followup");
+    let subdir = path.join("src");
+    std::fs::create_dir(&subdir).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n[tasks.project]\nagent = 'claude'\nroot = '{}'\nsignal = 'ci.failed'\n", path.display(), subdir.display(), env.project_root.display())).unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(
+        report["loop_tasks"]["tasks"][0]["holds_worktrees"],
+        json!([path])
+    );
+    assert_eq!(
+        report["loop_tasks"]["tasks"][1]["holds_worktrees"],
+        json!([])
+    );
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n",
+            env.project_root.display(),
+            subdir.join("not-created-yet").display()
+        ),
+    )
+    .unwrap();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert_eq!(
+        report["loop_tasks"]["tasks"][0]["holds_worktrees"],
+        json!([path])
+    );
+    let output = env.rimz().arg("doctor").output().unwrap();
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("holds worktree followup")
+    );
+}
+
+#[test]
 fn doctor_flags_clock_tasks_without_a_scheduler() {
     let env = Env::new();
     std::fs::write(env.rimz_home().join("loop.toml"), format!(
