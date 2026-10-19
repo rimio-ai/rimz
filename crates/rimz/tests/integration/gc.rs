@@ -810,6 +810,28 @@ fn gc_older_than_takes_day_spans_and_the_configured_default() {
 }
 
 #[test]
+fn gc_unattended_records_removed_worktree_paths() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/followup");
+    env.rimz().args(["gc", "--unattended"]).assert().success();
+    assert!(!path.exists());
+    let records = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    assert_eq!(records.len(), 1);
+    let record = serde_json::to_value(&records[0]).unwrap();
+    assert_eq!(record["worktree_paths"], serde_json::json!([path]));
+    assert_eq!(record["worktrees_removed"], 1);
+}
+
+#[test]
 fn gc_unattended_records_the_assist_and_stamp_unless_auto_is_off() {
     let env = Env::new();
     let state = env.state_path_for(&env.project_root);

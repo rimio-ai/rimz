@@ -298,6 +298,8 @@ pub enum Assist {
         #[serde(default)]
         class_bytes: std::collections::BTreeMap<String, u64>,
         worktrees_removed: usize,
+        #[serde(default)]
+        worktree_paths: Vec<PathBuf>,
         workspaces_pruned: usize,
         files_removed: usize,
         messages_archived: usize,

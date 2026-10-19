@@ -823,8 +823,9 @@ path = "crates/rimz/src/harness"
 # launch_plan::agent_temp_owner shares temp-unit ownership with GC (+1).
 # tmp_floor::{TmpFloorErr, FloorReport, TempUnits, run, inspect} serve GC and doctor (+5).
 # catalog::{WorktreePin, worktree_pins, load_worktree_pins} share task holds with GC and doctor (+5).
+# assist_log::Assist::AutoGc::worktree_paths retains bounded removal forensics (+1).
 # catalog::TaskCatalog::source_unavailable classifies strict-load failures for GC (+1).
-surface-budget = 913
+surface-budget = 914
 
 [[verdict]]
 kind = "item"
