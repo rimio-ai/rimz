@@ -964,7 +964,7 @@ pub(in crate::cli) fn run_supervised(
     if let Some(reason) = provider_budget_gate() {
         return Ok(Some(SupervisedRunOutcome::BudgetExceeded { reason }));
     }
-    render::room::present_birth_outcome(
+    let birth = render::room::present_birth_outcome(
         room.birth(rimz::room::RoomBirth::Supervised {
             cwd: prepared.launch.cwd.clone(),
             recovery: if std::io::stdin().is_terminal() {
@@ -975,6 +975,9 @@ pub(in crate::cli) fn run_supervised(
         }),
         room.session_name(),
     )?;
+    for warning in &birth.skipped {
+        writeln!(render::err(), "rimz: warning: {}", warning.message)?;
+    }
     prepared.workspace.session_name = room.session_name().to_owned();
     let retries = request.retries;
     let base_prompt = prepared.prompt.clone();

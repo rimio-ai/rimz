@@ -157,8 +157,10 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
             "extended-keys-format",
             config.extended_keys_format.as_str().to_owned(),
         ),
-        ("escape-time", config.escape_time_ms.to_string()),
     ];
+    if config.escape_time_ms <= i32::MAX as u32 {
+        opts.push(("escape-time", config.escape_time_ms.to_string()));
+    }
     if config.extended_keys {
         // tmux accepts `ESC[27;1u` as Escape but leaks Ghostty's bare
         // `ESC[27u`; name that sequence so the root binding can normalize it.
@@ -252,16 +254,19 @@ pub(super) fn tmux_extended_key_bindings(config: &TmuxConfig) -> Vec<Vec<String>
 }
 
 pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
-    vec![
-        ("mouse", tmux_bool(config.mouse)),
-        ("history-limit", config.history_limit.to_string()),
+    let mut opts = vec![("mouse", tmux_bool(config.mouse))];
+    if config.history_limit <= i32::MAX as u32 {
+        opts.push(("history-limit", config.history_limit.to_string()));
+    }
+    opts.extend([
         ("renumber-windows", tmux_bool(config.renumber_windows)),
         ("set-titles", "on".to_owned()),
         (
             "set-titles-string",
             "#S | #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}}".to_owned(),
         ),
-    ]
+    ]);
+    opts
 }
 
 /// `pane-border-format` RimZ writes when it owns `pane-border-status`: titled
@@ -529,6 +534,38 @@ mod tests {
                     .to_owned(),
             ],
         );
+    }
+
+    #[test]
+    fn tmux_options_skip_only_out_of_range_integers() {
+        let mut config = TmuxConfig {
+            history_limit: u32::MAX,
+            escape_time_ms: 3_000_000_000,
+            ..Default::default()
+        };
+        assert!(
+            !tmux_session_options(&config)
+                .iter()
+                .any(|(key, _)| *key == "history-limit"),
+            "invalid history-limit must not reach tmux"
+        );
+        assert!(
+            !tmux_server_options(&config)
+                .iter()
+                .any(|(key, _)| *key == "escape-time"),
+            "invalid escape-time must not reach tmux"
+        );
+        assert!(
+            tmux_session_options(&config)
+                .iter()
+                .any(|(key, _)| *key == "mouse")
+        );
+        for value in [0, i32::MAX as u32] {
+            config.history_limit = value;
+            config.escape_time_ms = value;
+            assert!(tmux_session_options(&config).contains(&("history-limit", value.to_string())));
+            assert!(tmux_server_options(&config).contains(&("escape-time", value.to_string())));
+        }
     }
 
     #[test]

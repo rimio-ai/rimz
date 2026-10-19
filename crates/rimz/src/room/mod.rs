@@ -1,6 +1,7 @@
 //! Managed room context and lifecycle seam.
 
 mod birth;
+mod judgment;
 mod recovery;
 pub mod session;
 mod standing;
@@ -81,7 +82,7 @@ fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoo
     }
 }
 
-/// Resolve the room's pins plus explicit requests and preflight its launch accounts.
+/// Resolve room pins and preflight only the accounts explicitly requested at entry.
 pub fn resolve_birth_logins(
     project_root: &Path,
     machine_config: &MachineConfig,
@@ -106,7 +107,7 @@ pub fn resolve_birth_logins(
     }
     let accounts = crate::agents::resolve_room_accounts(&pins, project_root, machine_config);
     let ambient = crate::agents::ambient_env();
-    for kind in accounts.kinds() {
+    for kind in requested.keys() {
         accounts
             .login(kind, &machine_config.accounts)?
             .preflight(&ambient)?;
@@ -175,7 +176,6 @@ pub struct RoomContext {
     runtime: RuntimePaths,
     birth_owner: BirthOwner,
     birth_logins: Option<crate::ids::RoomLogins>,
-    birth_remote_control_off: Option<std::collections::BTreeSet<crate::ids::AgentKind>>,
     birth_admission: Option<birth::BirthAdmission>,
 }
 
@@ -303,7 +303,6 @@ impl RoomContext {
             runtime,
             birth_owner: BirthOwner::Preserve,
             birth_logins: None,
-            birth_remote_control_off: None,
             birth_admission: None,
         })
     }
@@ -322,13 +321,6 @@ impl RoomContext {
         Ok(())
     }
 
-    /// The remote-control hosts this birth runs without, as the user chose at an
-    /// interactive refusal. Birth records the set, empty included, so a later
-    /// start asks again.
-    pub fn waive_remote_control(&mut self, off: std::collections::BTreeSet<crate::ids::AgentKind>) {
-        self.birth_remote_control_off = Some(off);
-    }
-
     fn record_remote_control_off(
         &self,
         off: std::collections::BTreeSet<crate::ids::AgentKind>,
@@ -338,7 +330,7 @@ impl RoomContext {
         let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
         store
             .set_remote_control_off(&self.workspace, off)
-            .context("recording run-only remote-control choice")?;
+            .context("recording skipped remote-control hosts")?;
         Ok(())
     }
 

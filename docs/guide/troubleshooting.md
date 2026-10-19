@@ -179,13 +179,13 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 
 `rimz start -- /path/to/project` only creates a room for a directory that already exists. Correct a typo or create the directory first, then run the command again. Remote path targets follow the same rule before attach; `rimz remote list` shows a saved alias so you can correct its target.
 
-### The room refuses because of a provider account
+### The room warns about a provider account
 
-`rimz start` checks every selected named account before it builds anything, rather than opening a room whose agents cannot reach their home. Three refusals and their fixes are in [start a room on an account](./accounts.md#start-a-room-on-an-account): an account name that is not declared, a declared account whose home carries no RimZ hooks, and a room still selecting an account you removed.
+`rimz start` warns about selected accounts that cannot launch, records the warnings for the sidebar and `rimz doctor`, and opens the room. An explicit `--account` request still refuses if that account cannot work. The fixes are in [start a room on an account](./accounts.md#start-a-room-on-an-account): declare a missing account, install its hooks, or clear a selection of an account you removed.
 
-One more refusal comes from project config rather than from the account itself. `project account selections in .rimz/config.toml are untrusted` means the repository's `[accounts]` table sits behind the trust gate, because choosing which provider account your agents run under is part of the surface you grant. Run `rimz trust status`, read the diff, then `rimz trust grant`.
+`project account selections in .rimz/config.toml are untrusted` means the repository's `[accounts]` table sits behind the trust gate, because choosing which provider account your agents run under is part of the surface you grant. The room opens, but launches following that selection refuse. Run `rimz trust status`, read the diff, then `rimz trust grant`.
 
-A provider following defaults or pinned to a named account refuses when the machine `config.toml` is unreadable, rather than falling back to the wrong account. Correct the file; `rimz config get` shows the strict error. A provider pinned to `default` needs neither project nor machine configuration. An invalid deciding `[accounts.use]` selection names its source and the commands to declare or clear it. Each refusal affects that provider only; start checks them all. See [account selection](./accounts.md#start-a-room-on-an-account).
+A provider following defaults or pinned to a named account refuses to launch when the machine `config.toml` is unreadable, rather than falling back to the wrong account. Correct the file; `rimz config get` shows the strict error. A provider pinned to `default` needs neither project nor machine configuration. An invalid deciding `[accounts.use]` selection names its source and the commands to declare or clear it. Each launch refusal affects that provider only; start warns about them all. See [account selection](./accounts.md#start-a-room-on-an-account).
 
 ### Sandbox isolation is unavailable
 
@@ -419,7 +419,7 @@ Two fields load, enter the trust hash so a grant covers them, and are then read 
 
 ### RimZ cannot parse a config file
 
-The `MACHINE CONFIG` section names parse and validation errors in `config.toml`, `theme.toml`, and `loop.toml`. An unreadable `config.toml` refuses a provider following defaults or pinned to a named account, so account resolution cannot silently fall back. Only a pin to `default` bypasses that read; merely inheriting `default` does not. Unreadable `theme.toml` and `loop.toml` produce warnings and built-in defaults for that file. Invalid accounts, account budgets, or notification settings do stop start. Invalid palette sources only produce notices; other theme settings still apply. Fix the reported error, then restart so RimZ loads the values you meant.
+The `MACHINE CONFIG` section names parse and validation errors in `config.toml`, `theme.toml`, and `loop.toml`. An unreadable `config.toml` refuses a launch following defaults or pinned to a named account, so account resolution cannot silently fall back. Only a pin to `default` bypasses that read; merely inheriting `default` does not. Unreadable `theme.toml` and `loop.toml` produce warnings and built-in defaults for that file. Invalid accounts, account budgets, and notification settings warn at start without stopping the room. Invalid palette sources also produce warnings; other theme settings still apply. Fix the reported error, then start or attach again to refresh the room's recorded warnings.
 
 Markdown definitions fail differently. A broken profile, team, or subagent definition refuses only the launches that select it, while read-only views keep showing the definitions that loaded. `rimz start` summarizes broken definitions in a few lines grouped by cause; `rimz agents validate` lists each file and error. Nothing rewrites a definition for you.
 

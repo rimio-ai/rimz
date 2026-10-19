@@ -1078,7 +1078,13 @@ surface-budget = 176
 path = "crates/rimz/src/remote_control.rs"
 # The injected readiness probe verifies per-host account failure at the daemon-view consumer (+1).
 # StartBlock carries host and blocker; persist_toggle and ToggleErr share the config/start transition (+5).
-surface-budget = 24
+# HostLoginEnvs::reject keeps failed account homes out of host preparation (+1).
+surface-budget = 25
+
+[[verdict]]
+kind = "item"
+key = "remote_control::HostLoginEnvs::reject"
+reason = "Room judgment excludes logins that failed preflight before host preparation."
 
 [[module]]
 path = "crates/rimz/src/blocker.rs"
@@ -1871,7 +1877,18 @@ allowed-dependencies = [
 # inspect_cohort_hold shares checkout/channel hold ownership with addressed board commands (+1).
 # plan_provider_resume adopts an exact session through the flat resume planner (+1).
 # LaneResumeAction::agents_needing_preflight exposes only restored session rows (+1).
-surface-budget = 68
+# RecoveryPlan::skip_agent and planned_team_matches_agent let rebirth retain unavailable candidates and whole cohorts (+2).
+surface-budget = 70
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::RecoveryPlan::skip_agent"
+reason = "Rebirth records health and isolation skips through the existing recovery reason index."
+
+[[verdict]]
+kind = "item"
+key = "harness::resume::planned_team_matches_agent"
+reason = "Rebirth keeps a rejected team's original candidates pending using the resume planner's exact cohort match."
 
 [[module]]
 path = "crates/rimz/src/harness/launch.rs"

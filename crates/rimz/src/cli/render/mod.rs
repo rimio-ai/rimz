@@ -141,14 +141,6 @@ fn write_report_with_args(
     if error.downcast_ref::<AlreadyReported>().is_some() {
         return Ok(());
     }
-    if let Some(block) = error.downcast_ref::<rimz::remote_control::StartBlock>() {
-        write_blocker(w, &block.blocker, &paint(palette::alarm().bold(), "error:"))?;
-        return writeln!(
-            w,
-            "\n  To start with {} remote control off for this run, run `rimz start` in a terminal.",
-            block.host.kind()
-        );
-    }
     if let Some(blocker) = error.downcast_ref::<rimz::blocker::Blocker>() {
         return write_blocker(w, blocker, &paint(palette::alarm().bold(), "error:"));
     }

@@ -722,7 +722,7 @@ pub enum BirthLoginErr {
 }
 
 impl ProviderLogin {
-    /// Fail fast on a named account a room cannot be born on or switched to:
+    /// Check a named account before a requested room pin or account switch:
     /// its home must exist and carry trusted RimZ hooks. The default account
     /// is skipped here, for room birth and account switching only, where it
     /// keeps the provider's own hook flow that `rimz start` walks; a launch
@@ -735,9 +735,9 @@ impl ProviderLogin {
     }
 
     /// Whether this account's home is a directory carrying trusted RimZ
-    /// hooks. It is the gate every RimZ launch and relaunch runs on the login
-    /// it launches under, `default` included, and what the account rows
-    /// display; pass it the [`LoginCatalog::native_ambient`] of its kind.
+    /// hooks. Interactive launches, relaunches, recovery, and account rows use
+    /// this check, `default` included; supervised preflight checks named accounts.
+    /// Pass it the [`LoginCatalog::native_ambient`] of its kind.
     pub fn health(&self, ambient: &BTreeMap<String, String>) -> Result<(), BirthLoginErr> {
         let Some(adapter) = crate::agents::find_definition(&self.kind) else {
             return Ok(());

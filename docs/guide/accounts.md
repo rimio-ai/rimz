@@ -95,9 +95,9 @@ A room keeps its pins across starts. Without a pin, each launch follows the trus
 claude = "work"
 ```
 
-That selection sits in the project trust hash, so a repository you cloned cannot quietly move your agents onto another account. An untrusted or stale selection refuses a launch for a provider following defaults and prints the fix; a pinned provider ignores it. An unreadable machine `config.toml` also refuses a provider following defaults or pinned to a named account. A provider pinned to `default` needs neither the project selection nor the machine file. These refusals belong to that provider only; a healthy provider can still launch. Start checks all providers before opening the room.
+That selection sits in the project trust hash, so a repository you cloned cannot quietly move your agents onto another account. An untrusted or stale selection refuses a launch for a provider following defaults and prints the fix; a pinned provider ignores it. An unreadable machine `config.toml` also refuses a provider following defaults or pinned to a named account. A provider pinned to `default` needs neither the project selection nor the machine file. These refusals belong to that provider only; a healthy provider can still launch. Room start warns and records configuration problems for the sidebar and `rimz doctor`, without silently selecting another account for a later launch.
 
-`rimz start` also checks every selected named account before it builds the room, and refuses rather than opening a room whose agents cannot reach their home or report from it:
+An explicit `rimz start --account` still refuses an account it cannot use, naming the fix:
 
 ```console
 $ rimz start --account claude@personal
@@ -106,7 +106,7 @@ $ rimz start --account claude@work
 error: RimZ hooks are missing for claude account `work` at `/home/me/.rimz/accounts/claude/work`; run `rimz accounts add claude work`
 ```
 
-Every launch checks the account it launches under, `default` included: a fresh agent or team, a restart, a resume, a fork, and a supervised launch (`rimz subagents`, `rimz agents -p`) refuse, naming the fix, when that account's home or hooks are not usable. A broken account of another provider never stops a launch; that account refuses when something launches under it. `rimz start` alone stays lenient on `default`, so a room still opens and the refusal waits for the first launch under it.
+Interactive launches check the account they launch under, `default` included: a fresh agent or team, a restart, a resume, and a fork refuse, naming the fix, when that account's home or hooks are not usable. Supervised launches (`rimz subagents`, `rimz agents -p`) check named accounts too. A broken account of another provider never stops a launch; that account refuses when something launches under it. Without an explicit `--account`, the room opens with warnings and the refusal waits for the command that uses the account.
 
 RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that agent's account. A fresh launch takes the room's current account for its provider: human launches, loop tasks, and the peers an agent launches alike. There are two exceptions. A `rimz subagents` child runs on its parent's account when both are the same provider, and on the room's current account for its own provider otherwise. A loop task added with `--account` runs every fire on that account ([loops](./loops.md#budgets-and-strikes)). A restart, resume, or fork reopens a session on the room's current account, as long as that account shares the session's history ([switching](#change-a-rooms-account)). `rimz agents explain @coder` prints the account that agent launches under, as `claude@work`. Every other provider has only `default` and launches as it always has.
 

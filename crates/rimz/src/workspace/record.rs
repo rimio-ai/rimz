@@ -82,11 +82,11 @@ pub struct WorkspaceRecord {
     /// Generic re-records preserve pins; `rimz reset` clears them.
     #[serde(skip_serializing_if = "RoomLogins::is_empty")]
     pub pins: RoomLogins,
-    /// Remote-control hosts the user waived for this room's life at an
-    /// interactive `rimz start` refusal. Machine config still says on; the
+    /// Remote-control hosts skipped for this room's life at birth.
+    /// Machine config still says on; the
     /// room's readers apply this through `remote_control::room_config`.
-    /// Omitted when empty. Generic re-records preserve it; the attended start
-    /// that births the room sets it and `rimz reset` clears it.
+    /// Omitted when empty. Generic re-records preserve it; every stopped birth
+    /// sets it and `rimz reset` clears it.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub remote_control_off: BTreeSet<AgentKind>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

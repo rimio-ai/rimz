@@ -2,7 +2,6 @@
 
 mod attach_exec;
 mod resume;
-mod start_gate;
 mod start_notice;
 #[cfg(test)]
 mod tests;
@@ -13,7 +12,6 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use rimz::blocker::{Blocker, Surface};
-use rimz::config::ConfigErr;
 use rimz::ids::{MuxName, RoomLogins, WorkspaceId};
 use rimz::room::session::{
     pick_mux_for_session, session_is_live, session_probe_retry_timeout, session_probe_timeout,
@@ -179,26 +177,6 @@ impl RoomEntry<'_> {
     }
 }
 
-/// A host whose config still sits in pre-home roots would get a fresh default
-/// config here and silently lose its own, so every room entry that can bootstrap
-/// config or birth a room refuses first. Keyed on the machine config, not the
-/// home dir: logs, stats, and loop state create the home on their own.
-fn refuse_legacy_only_home() -> Result<()> {
-    if rimz::config::MachineConfig::config_path().exists() {
-        return Ok(());
-    }
-    let legacy = rimz::disk::paths::legacy_config_roots();
-    if legacy.is_empty() {
-        return Ok(());
-    }
-    let home = rimz::disk::paths::rimz_home();
-    bail!(
-        "{} has no config.toml but legacy RimZ roots exist. {}",
-        home.display(),
-        rimz::disk::paths::legacy_roots_fix(&legacy, &home)
-    )
-}
-
 fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePromptMode {
     if confirm_resume || stdin_is_terminal {
         ResumePromptMode::Interactive
@@ -216,14 +194,6 @@ fn start_attended() -> bool {
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
-    refuse_legacy_only_home()?;
-    let machine = crate::cli::machine_config();
-    rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
-    rimz::harness::schedule::throttle::preflight(&machine.r#loop.throttle)?;
-    if let Some(shell) = &machine.agents.shell {
-        rimz::harness::launch::validate_agent_shell(shell).map_err(Blocker::from)?;
-    }
-    validate_agent_plugins()?;
     let workspace = match rimz::WorkspaceResolver::resolve(&args.path, globals.root.clone()) {
         Ok(workspace) => workspace,
         Err(err) => {
@@ -232,8 +202,6 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)?;
-    let admission =
-        rimz::harness::hibernate::admit(&machine.agents.hibernate).map_err(Blocker::from)?;
     rimz::harness::hibernate::reconcile_at(&paths, &workspace.workspace_id)?;
     // A live room owns this path's session, so attach on its backend rather
     // than the auto-selected default. An explicit rival `--mux` still flows to
@@ -265,7 +233,7 @@ pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         report_already_inside(mux, &workspace.session_name, situation)?;
         return Ok(());
     }
-    report_start_notices(&workspace, &admission)?;
+    report_start_notices(&workspace)?;
     let first_run = ensure_default_config_for_start()?;
     enter_room(
         RoomEntry::Start {
@@ -294,18 +262,11 @@ pub(crate) fn ensure_workspace_room_detached(
     no_resume: bool,
     confirm_resume: bool,
 ) -> Result<RoomContext> {
-    refuse_legacy_only_home()?;
-    let machine = crate::cli::machine_config();
-    rimz::sandbox::preflight(machine.agents.isolation).map_err(Blocker::from)?;
-    if let Some(shell) = &machine.agents.shell {
-        rimz::harness::launch::validate_agent_shell(shell).map_err(Blocker::from)?;
-    }
-    validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let mux =
         render::room::present_mux_pick(pick_mux_for_session(&workspace.session_name, globals.mux))?;
-    setup::ensure_default_config()?;
+    ensure_default_config_for_start()?;
     let ready = prepare_room(
         RoomEntry::StartDetached {
             workspace,
@@ -316,22 +277,6 @@ pub(crate) fn ensure_workspace_room_detached(
         globals,
     )?;
     managed_context_from_ready(ready)
-}
-
-fn validate_agent_plugins() -> Result<()> {
-    let loaded = rimz::agents::plugins::loaded();
-    if loaded.errors.is_empty() {
-        return Ok(());
-    }
-    let details = loaded
-        .errors
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    bail!(
-        "agent plugin validation failed before room start:\n{details}\nfix or remove the manifest, then run `rimz agents register --check`"
-    )
 }
 
 pub(crate) fn ensure_session_room_for_web(
@@ -409,6 +354,9 @@ fn ensure_default_config_for_start() -> Result<bool> {
         std::fs::symlink_metadata(rimz::config::MachineConfig::config_path()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound
     );
+    if config_was_missing && !rimz::disk::paths::legacy_config_roots().is_empty() {
+        return Ok(false);
+    }
     let initialized_config = setup::ensure_default_config()?;
     let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
     if initialized_config && !(first_run && start_attended()) {
@@ -443,7 +391,6 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
             globals,
         ),
         None => {
-            refuse_legacy_only_home()?;
             let workspace = rimz::WorkspaceResolver::resolve(".", globals.root.clone())?;
             enter_room(
                 RoomEntry::AttachCwd {
@@ -475,12 +422,6 @@ enum ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
-    if matches!(
-        entry,
-        RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
-    ) {
-        preflight_machine_config(rimz::config::broken_machine_files())?;
-    }
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartDetached { mux, .. } => *mux,
@@ -575,7 +516,13 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         .transpose()?;
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
-        ensure_detected_agent_hooks(start_attended())?
+        match ensure_detected_agent_hooks(start_attended()) {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                writeln!(render::err(), "rimz: warning: {error:#}")?;
+                false
+            }
+        }
     } else {
         false
     };
@@ -643,29 +590,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         writeln!(crate::cli::render::err(), "rimz: folder trust: {error}")?;
     }
 
-    let mut remote_control_off = std::collections::BTreeSet::new();
-    let background_view = if let Some(logins) = logins.as_ref().filter(|_| starting) {
-        // Fail-fast precondition for installed agents: fixable host misconfiguration
-        // aborts the launch here with the fix, before session side effects, and
-        // after account resolution so each host is judged in the home it will run
-        // under. An attended start of a stopped room may instead run a blocked host
-        // off for this run. An enabled host whose agent is not installed is an inert
-        // toggle, skipped here so the room still starts; `rimz doctor` surfaces it.
-        let envs =
-            rimz::remote_control::HostLoginEnvs::from_logins(&machine_config.accounts, logins);
-        let gate = start_gate::Gate {
-            envs: &envs,
-            project_root: birth_root,
-            live: was_live,
-            offers_choice: !was_live
-                && start_attended()
-                && matches!(entry, RoomEntry::Start { .. }),
-        };
-        let readiness = gate.run(&mut machine_config, &mut remote_control_off)?;
-        Some(readiness)
-    } else {
-        None
-    };
+    let background_view = starting;
 
     let ready = if let Some((source, admission)) = admitted {
         let mut context = RoomContext::prepare_birth(
@@ -675,15 +600,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             Some(&requested),
             admission,
         )?;
-        // Every birth of a stopped room records its own choice, so a waiver
-        // from an earlier run never outlives a detached birth gated without it.
-        if matches!(
-            entry,
-            RoomEntry::Start { .. } | RoomEntry::StartDetached { .. }
-        ) && !was_live
-        {
-            context.waive_remote_control(remote_control_off);
-        }
         let cwd = match source {
             RoomBirthSource::Resolved(workspace) => workspace.worktree_root.clone(),
             RoomBirthSource::Recorded(record) => record.project_root.clone(),
@@ -744,7 +660,7 @@ fn birth_managed_room(
     no_resume: bool,
     resume_prompt: ResumePromptMode,
     refresh_ms: Option<u16>,
-    background_view: Option<rimz::remote_control::ReadinessSnapshot>,
+    background_view: bool,
     cwd: std::path::PathBuf,
 ) -> Result<()> {
     let was_live = preflight_health.is_some();
@@ -789,6 +705,9 @@ fn birth_managed_room(
         }),
         context.session_name(),
     )?;
+    for warning in &outcome.skipped {
+        writeln!(render::err(), "rimz: warning: {}", warning.message)?;
+    }
     for launch in &outcome.resume.team_launches {
         rimz::harness::assist_log::record_tier_fallbacks(launch.batch.identities());
     }
@@ -845,9 +764,6 @@ fn preflight_recovery(
     if !disposition.recovers() {
         return Ok(());
     }
-    if plan.preview().requires_sandbox() {
-        rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
-    }
     let paths = rimz::StatePaths::for_workspace(workspace_id.clone())?;
     rimz::harness::hibernate::reconcile_at(&paths, workspace_id)?;
     for root in plan.checkout_roots() {
@@ -856,31 +772,6 @@ fn preflight_recovery(
         }
     }
     Ok(())
-}
-
-fn blocks_room_start(err: &ConfigErr) -> bool {
-    match err {
-        ConfigErr::AccountBudget { .. }
-        | ConfigErr::UnreadableCore { .. }
-        | ConfigErr::Account { .. }
-        | ConfigErr::Notifications { .. } => true,
-        ConfigErr::Definition { .. }
-        | ConfigErr::Worktree { .. }
-        | ConfigErr::Theme { .. }
-        | ConfigErr::Io { .. }
-        | ConfigErr::Parse { .. }
-        | ConfigErr::Agents { .. }
-        | ConfigErr::Loop { .. }
-        | ConfigErr::RemovedTable { .. }
-        | ConfigErr::RemovedKey { .. } => false,
-    }
-}
-
-fn preflight_machine_config(errors: Vec<ConfigErr>) -> Result<()> {
-    match errors.into_iter().find(blocks_room_start) {
-        Some(error) => Err(error.into()),
-        None => Ok(()),
-    }
 }
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {

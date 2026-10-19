@@ -74,7 +74,7 @@ fn snapshot_returns_each_host_state_and_ready_claude_argv() {
 }
 
 #[test]
-fn start_gate_skips_uninstalled_hosts_and_keeps_hard_refusals() {
+fn readiness_names_blocked_installed_hosts_and_their_fixes() {
     let skipped = ReadinessSnapshot::from_states(
         RuntimeControlReadiness::Uninstalled(RuntimeControlIssue::new(
             "claude",

@@ -121,11 +121,11 @@ Declaring an account probe sets `direct_account_usage` without running the probe
 
 ## Invalid manifests at each entry point
 
-A broken bundle is a failed precondition for a room and an absent agent everywhere else:
+A broken bundle warns at room entry and is absent from the agent registry:
 
 | Entry point | Behaviour |
 | --- | --- |
-| `rimz start` and detached start (`validate_agent_plugins` in [`cli/room/mod.rs`](../../../crates/rimz/src/cli/room/mod.rs)) | refuse after sandbox preflight and before resolving the workspace, listing every error and pointing at `rimz agents register --check` |
+| Managed room entry | open with a recorded warning per rejected manifest, pointing at `rimz agents register --check`; launching the rejected kind refuses as unknown |
 | Registry reads through `all_definitions()` | see valid plugins only; `loaded()` warned once per rejected manifest |
 | `rimz hooks feed --source <kind>` | when the kind is not a definition and a load error's `kind_hint` matches, warn and exit 0 with empty stdout; the body is read and parsed first, so non-JSON input still fails the command |
 | `rimz doctor` | one row per `PluginDiagnostic`: validity, error, setup doc, and each probe's presence and executable bit |

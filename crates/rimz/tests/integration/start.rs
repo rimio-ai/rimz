@@ -71,26 +71,21 @@ fn assert_health_before_presence(trace: &str) {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn start_refuses_sandbox_without_bwrap() {
+fn start_warns_and_records_an_unavailable_sandbox_without_overwriting_config() {
     let env = Env::new();
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let agents_path = config_dir.join("config.toml");
     let seed = "[agents]\nisolation = \"sandbox\"\n";
     std::fs::write(&agents_path, seed).expect("write sandbox config");
-    let empty_bin = env.home_root.join("empty-bin");
-    std::fs::create_dir(&empty_bin).expect("mkdir empty PATH");
-    let mux_log = env.home_root.join("zellij.log");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "start", "--no-attach"])
-        .env("PATH", &empty_bin)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
-        .bounded_output()
-        .expect("run sandbox start");
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("configuration warnings must permit birth"),
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("bubblewrap"), "{stderr}");
     assert!(
         stderr.contains("rimz config set agents.isolation host"),
@@ -100,16 +95,45 @@ fn start_refuses_sandbox_without_bwrap() {
         stderr.contains("[security; RimZ won't change this]"),
         "{stderr}"
     );
-    assert_eq!(std::fs::read_to_string(agents_path).unwrap(), seed);
-    assert!(
-        !config_dir.join("theme.toml").exists(),
-        "no theme bootstrap"
+    assert_eq!(std::fs::read_to_string(&agents_path).unwrap(), seed);
+    assert_skipped(&env, &stderr, "agents.isolation", "bubblewrap");
+
+    let broken = "[agents\nisolation = \"sandbox\"\n";
+    std::fs::write(&agents_path, broken).unwrap();
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("configuration warnings must permit birth"),
     );
-    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(std::fs::read_to_string(&agents_path).unwrap(), broken);
+    assert_skipped(
+        &env,
+        &stderr,
+        &agents_path.display().to_string(),
+        "unparseable",
+    );
 }
 
 #[test]
-fn start_refuses_a_missing_configured_agent_shell() {
+fn start_warns_and_records_an_uninstalled_mux_default() {
+    let env = Env::new();
+    write_machine_config(&env, "[mux]\ndefault = 'tmux'\n");
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("an unavailable default must permit birth"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_skipped(&env, &stderr, "mux.default", "zellij");
+}
+
+#[test]
+fn start_warns_and_records_a_missing_configured_agent_shell() {
     let env = Env::new();
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
@@ -119,65 +143,44 @@ fn start_refuses_a_missing_configured_agent_shell() {
         format!("[agents]\nshell = \"{}\"\n", missing.display()),
     )
     .expect("write agent shell config");
-    let mux_log = env.home_root.join("zellij.log");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "start", "--no-attach"])
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
-        .bounded_output()
-        .expect("run start");
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("configuration warnings must permit birth"),
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
     assert!(
         stderr.contains("[agents] shell") && stderr.contains("does not exist"),
         "{stderr}"
     );
-    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+    assert_skipped(&env, &stderr, "agents.shell", "does not exist");
 }
 
 #[test]
-fn start_refuses_a_legacy_only_host_without_creating_the_home() {
+fn start_warns_about_a_legacy_only_host_without_writing_config() {
     let env = Env::new();
     std::fs::remove_dir_all(env.rimz_home()).expect("remove fixture home");
     let legacy = env.state_root().join("rimz");
     std::fs::create_dir_all(&legacy).expect("seed legacy root");
-    let mux_log = env.home_root.join("zellij.log");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "start", "--no-attach"])
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
-        .bounded_output()
-        .expect("run start");
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("configuration warnings must permit birth"),
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains(&legacy.display().to_string()), "{stderr}");
     assert!(stderr.contains("moving-from-the-xdg-roots"), "{stderr}");
-    assert!(
-        !env.rimz_home().exists(),
-        "no empty home beside legacy roots"
-    );
-    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
-
-    // A home that other commands created (stats, hook logs) holds no config
-    // yet, so start and a cwd attach still refuse.
-    std::fs::create_dir_all(env.rimz_home().join("cache/providers")).expect("seed home");
-    for args in [&["start", "--no-attach"][..], &["attach"][..]] {
-        let output = env
-            .rimz()
-            .args(["--mux", "zellij"])
-            .args(args)
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &mux_log)
-            .bounded_output()
-            .expect("run room entry");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(!output.status.success(), "{args:?}: {stderr}");
-        assert!(stderr.contains("moving-from-the-xdg-roots"), "{stderr}");
-    }
     assert!(!env.rimz_home().join("config.toml").exists());
-    assert!(!mux_log.exists(), "no multiplexer calls before refusal");
+    assert_skipped(
+        &env,
+        &stderr,
+        &env.rimz_home().join("config.toml").display().to_string(),
+        "legacy",
+    );
 }
 
 #[test]
@@ -229,7 +232,7 @@ fn start_names_a_broken_definition_and_still_opens_the_room() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
     assert!(
-        stderr.contains("rimz: 1 definition with another error: agents/broken"),
+        stderr.contains("rimz: warning: 1 definition with another error: agents/broken"),
         "{stderr}"
     );
     assert!(
@@ -621,30 +624,25 @@ fn attach_unknown_name_preserves_a_record_lookup_error_as_its_cause() {
 }
 
 #[test]
-fn start_rejects_unsupported_account_budget_before_room_state() {
+fn start_warns_and_records_an_unsupported_account_budget() {
     let env = Env::new();
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
     std::fs::write(config, "[accounts.budget]\nantigravity = \"50/day\"\n")
         .expect("machine config");
-    let workspace_state = env.state_path_for(&env.project_root).root;
-
-    let output = env
-        .rimz()
-        .arg("start")
-        .bounded_output()
-        .expect("run rimz start");
-
-    assert!(!output.status.success(), "start accepted unsupported cap");
+    let output = start_with_accounts(&env, "", &[], Some("budget warnings must permit birth"));
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("accounts.budget.antigravity"), "{stderr}");
     assert!(
         stderr.contains("authoritative account-level dollars"),
         "{stderr}"
     );
-    assert!(
-        !workspace_state.exists(),
-        "account-budget preflight must run before room state is created"
+    assert_skipped(
+        &env,
+        &stderr,
+        "accounts.budget.antigravity",
+        "authoritative account-level dollars",
     );
 }
 
@@ -720,11 +718,9 @@ fn start_rejects_old_zellij_with_copyable_backend_alternative() {
     assert!(!env.state_path_for(&env.project_root).root.exists());
 }
 
-/// A run-only waiver is the user's choice for the run they started; a detached
-/// birth of the stopped room (here a scheduled loop check) cannot ask, so a
-/// blocked host refuses it rather than inheriting the earlier waiver.
+/// A detached birth judges every host again without requiring an attended choice.
 #[test]
-fn detached_birth_of_a_stopped_room_refuses_a_waived_blocked_host() {
+fn detached_birth_warns_and_waives_a_blocked_host_again() {
     let env = Env::new();
     env.record(&env.project_root);
     let record_path = env.state_path_for(&env.project_root).workspace_record;
@@ -757,6 +753,9 @@ fn detached_birth_of_a_stopped_room_refuses_a_waived_blocked_host() {
         String::from_utf8_lossy(&added.stderr)
     );
 
+    let trace = env.home_root.join("zellij.log");
+    let mut room = ShimRoom::watch(&env, &trace);
+    room.allow_no_trigger("blocked remote control must permit birth");
     let output = env
         .rimz()
         .args(["--mux", "zellij", "loop", "run", "probe"])
@@ -768,12 +767,22 @@ fn detached_birth_of_a_stopped_room_refuses_a_waived_blocked_host() {
         .bounded_output()
         .expect("run loop");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("disableRemoteControl"), "{stderr}");
+    assert!(!stderr.contains("Choose [t/p/q]"), "{stderr}");
+    assert_skipped(
+        &env,
+        &stderr,
+        "remote_control.claude",
+        "disableRemoteControl",
+    );
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(record_path).unwrap()).unwrap();
+    assert_eq!(record["remote_control_off"], serde_json::json!(["claude"]));
 }
 
 #[test]
-fn start_rejects_invalid_notifications_before_room_state() {
+fn start_warns_and_records_invalid_notifications() {
     let env = Env::new();
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
@@ -782,16 +791,14 @@ fn start_rejects_invalid_notifications_before_room_state() {
         "[[notifications.handler]]\nname = \"bad\"\ncommand = \"\"\n",
     )
     .expect("machine config");
-    let workspace_state = env.state_path_for(&env.project_root).root;
-
-    let output = env
-        .rimz()
-        .arg("start")
-        .bounded_output()
-        .expect("run rimz start");
-
-    assert!(!output.status.success(), "start accepted invalid handler");
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("notification warnings must permit birth"),
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains(&config.display().to_string()), "{stderr}");
     assert!(
         stderr.contains(
@@ -803,10 +810,7 @@ fn start_rejects_invalid_notifications_before_room_state() {
         !stderr.contains("every setting in it is ignored and built-in defaults apply"),
         "{stderr}"
     );
-    assert!(
-        !workspace_state.exists(),
-        "notifications preflight must run before room state is created"
-    );
+    assert_skipped(&env, &stderr, "notifications", "command must not be empty");
 }
 
 #[test]
@@ -1459,7 +1463,7 @@ fn start_replaces_an_old_layout_room_before_birth() {
     }
 }
 
-fn start_with_accounts(
+pub(super) fn start_with_accounts(
     env: &Env,
     sessions: &str,
     accounts: &[&str],
@@ -1483,6 +1487,30 @@ fn write_machine_config(env: &Env, text: &str) {
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
     std::fs::write(config, text).expect("machine config");
+}
+
+pub(super) fn assert_skipped(env: &Env, stderr: &str, setting: &str, detail: &str) {
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        record["skipped"].is_array(),
+        "missing recorded warnings: {record}"
+    );
+    let entry = record["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["setting"] == setting)
+        .expect("recorded setting");
+    let message = entry["message"].as_str().unwrap();
+    assert!(message.contains(detail), "{entry}");
+    assert_eq!(
+        stderr.matches(&format!("rimz: warning: {message}")).count(),
+        1,
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -1581,31 +1609,29 @@ fn start_pins_only_requested_accounts_until_reset() {
 }
 
 #[test]
-fn start_takes_project_accounts_only_under_trust() {
+fn start_warns_and_records_untrusted_project_accounts_without_pinning_them() {
     let env = Env::new();
     let project_config = env.project_root.join(".rimz/config.toml");
     std::fs::create_dir_all(project_config.parent().expect("project config dir"))
         .expect("mkdir .rimz");
     std::fs::write(&project_config, "[accounts]\ncodex = \"default\"\n").expect("project config");
 
-    let untrusted = start_with_accounts(
-        &env,
-        "",
-        &[],
-        Some("untrusted project accounts refuse before room birth"),
-    );
+    let untrusted =
+        start_with_accounts(&env, "", &[], Some("untrusted accounts must permit birth"));
     let stderr = String::from_utf8_lossy(&untrusted.stderr);
-    assert!(!untrusted.status.success(), "{stderr}");
+    assert!(untrusted.status.success(), "{stderr}");
     assert!(
         stderr.contains("project account selections in .rimz/config.toml are untrusted"),
         "{stderr}"
     );
     assert!(stderr.contains("rimz trust grant"), "{stderr}");
+    assert_skipped(&env, &stderr, "accounts.codex", "untrusted");
     assert_eq!(room_logins(&env), None);
 
     // `attach` births a room that is not live under the same rule.
     let bin_dir = seed_actionable_agent(&env);
     let attach_log = env.project_root.join("zellij-attach.log");
+    let _room = ShimRoom::watch(&env, &attach_log);
     let attach = env
         .rimz()
         .args(["--mux", "zellij", "attach", "--print"])
@@ -1617,24 +1643,86 @@ fn start_takes_project_accounts_only_under_trust() {
         .bounded_output()
         .expect("run rimz attach");
     let stderr = String::from_utf8_lossy(&attach.stderr);
-    assert!(!attach.status.success(), "{stderr}");
+    assert!(attach.status.success(), "{stderr}");
     assert!(
         stderr.contains("project account selections in .rimz/config.toml are untrusted"),
         "{stderr}"
     );
     assert_eq!(room_logins(&env), None);
+    assert_skipped(&env, &stderr, "accounts.codex", "untrusted");
 
     env.rimz()
         .args(["trust", "grant"])
         .bounded_output()
         .expect("trust grant");
-    let trusted = start_with_accounts(&env, "", &[], None);
+    let trusted = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("cached live topology needs neither room birth nor a topology dump"),
+    );
     assert!(
         trusted.status.success(),
         "trusted start failed: {}",
         String::from_utf8_lossy(&trusted.stderr)
     );
     assert_eq!(room_logins(&env), None);
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.state_path_for(&env.project_root).workspace_record).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        record.get("skipped").is_none(),
+        "a new judgment replaces the warnings: {record}"
+    );
+}
+
+#[test]
+fn start_warns_about_a_configured_missing_account_and_launch_refuses_it() {
+    let env = Env::new();
+    let home = env.home_root.join("accounts/work");
+    write_machine_config(
+        &env,
+        &format!(
+            "[accounts.claude.work]\nhome = \"{}\"\n[accounts.use]\nclaude = \"work\"\n",
+            home.display(),
+        ),
+    );
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("unavailable accounts must permit birth"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_skipped(
+        &env,
+        &stderr,
+        "accounts.claude.work",
+        "rimz accounts add claude work",
+    );
+    let bin = seed_actionable_agent(&env);
+    crate::common::write_path_shim(&bin, "claude", "exit 0");
+    let output = env
+        .rimz()
+        .args(["--mux", "zellij", "agents", "claude"])
+        .env("PATH", &bin)
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!(
+                "{} [Created 1s ago]\n",
+                env.resolve_workspace(&env.project_root).session_name
+            ),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES)
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    assert!(stderr.contains("rimz accounts add claude work"), "{stderr}");
+    assert!(!home.exists(), "no empty account home is created");
 }
 
 type LostAgent = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
@@ -1682,6 +1770,7 @@ fn seed_lost_tmux_agent(env: &Env) -> (LostAgent, std::ffi::OsString) {
 
 /// Host-isolation machine config and a PATH whose `claude` sleeps until killed.
 fn host_claude_path(env: &Env) -> std::ffi::OsString {
+    env.install_agent_hooks("claude");
     std::fs::write(
         env.rimz_home().join("config.toml"),
         "[agents]\nisolation = 'host'\n",

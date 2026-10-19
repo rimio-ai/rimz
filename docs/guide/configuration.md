@@ -502,7 +502,7 @@ Set either one with `rimz config set`, not by editing the file, because `set` al
 
 A hand edit does not reach a running room the same way. A Claude host catches up on the daemon view's next repair pass, within about thirty seconds. A Codex edit only changes what the next room start decides, so a daemon already running keeps running.
 
-A `codex` CLI on `PATH` adds its per-session app-server broker whatever this toggle says. `rimz start` and the live Claude enable path both refuse when an enabled host is installed but misconfigured in a way you can fix, such as an incompatible Claude version. An enabled host whose agent is not installed at all is skipped so the room still starts, and `rimz doctor` reports it with the install fix. In a terminal the refusal offers to start without the blocked host for this run only, shown as a muted `rc off` on the dashboard; the choice never edits the file. The security boundary is in [security.md](./security.md).
+A `codex` CLI on `PATH` adds its per-session app-server broker whatever this toggle says. When an enabled host is installed but misconfigured, such as an incompatible Claude version, room start warns and runs that host off for this run without asking or editing the file. The dashboard shows a muted `rc off`, and `rimz doctor` keeps the warning and fixes visible. Re-entering a live room warns without changing its applied policy. An enabled host whose agent is not installed at all is skipped, and `rimz doctor` reports the install fix. The live Claude enable command still refuses a blocked host. The security boundary is in [security.md](./security.md).
 
 ### Daemon view
 
@@ -757,7 +757,7 @@ Agents launch through your login shell, so its startup files set their PATH and 
 shell = "/bin/bash"
 ```
 
-Each launch then runs its wrapper under that shell and sets `SHELL` and `CLAUDE_CODE_SHELL` to the path, so a provider that picks its tool shell from either uses it too. Claude Code honours them only for bash or zsh: under fish its tools fall back to zsh or bash ([Claude's tool shell](../externals/agent-adapter/claude-reference.md#tool-shell)). The value must be the absolute path of an installed bash, zsh, fish, or sh-family shell. A relative name, a missing path, `false` or `nologin`, or csh and tcsh refuse at `rimz config set`, at `rimz start`, and at every launch, with the fix, rather than quietly falling back to your shell. Remove the line to go back to your login shell.
+Each launch then runs its wrapper under that shell and sets `SHELL` and `CLAUDE_CODE_SHELL` to the path, so a provider that picks its tool shell from either uses it too. Claude Code honours them only for bash or zsh: under fish its tools fall back to zsh or bash ([Claude's tool shell](../externals/agent-adapter/claude-reference.md#tool-shell)). The value must be the absolute path of an installed bash, zsh, fish, or sh-family shell. A relative name, a missing path, `false` or `nologin`, or csh and tcsh refuse at `rimz config set` and at every launch, with the fix, rather than quietly falling back to your shell. Room start warns and records the problem instead of refusing the room. Remove the line to go back to your login shell.
 
 Bash runs as an interactive non-login shell (`bash -i -c`), so it reads `~/.bashrc`, not `~/.bash_profile`: put the PATH entries that find your provider CLIs in `~/.bashrc`. A supervised run (`rimz agents -p`) looks the provider up under the configured shell before it starts, so an entry only `~/.bash_profile` sets fails there, naming the provider.
 
@@ -974,7 +974,7 @@ A trusted repo profile, team, or task overlays your machine config and wins a na
 
 ## Moving from the XDG roots
 
-Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rimz/` now and does not move the old roots for you. `rimz doctor` lists all four old roots when present: config, state, data, and cache. Its fix says to move the contents of the first three into the home and delete the obsolete cache. `rimz start` and `rimz attach` refuse to open a room on a machine that has a config, state, or data root but no `~/.rimz/config.toml`, naming this section; a leftover cache alone blocks neither command. Setting `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, or `XDG_CACHE_HOME` no longer moves any RimZ file; `RIMZ_HOME` does.
+Earlier releases split RimZ across four XDG directories. RimZ reads only `~/.rimz/` now and does not move the old roots for you. `rimz doctor` lists all four old roots when present: config, state, data, and cache. Its fix says to move the contents of the first three into the home and delete the obsolete cache. `rimz start` and `rimz attach` warn and open the room when a config, state, or data root exists but `~/.rimz/config.toml` does not; they write no template and run no first-run setup. Account-following launches refuse until the move is completed, rather than silently selecting the default account; an explicit default pin can still launch. A leftover cache alone blocks neither command. Setting `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, or `XDG_CACHE_HOME` no longer moves any RimZ file; `RIMZ_HOME` does.
 
 | Old location | New location |
 | --- | --- |

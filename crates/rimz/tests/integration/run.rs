@@ -1019,7 +1019,7 @@ fn assert_tier_launch(routing: &str, surface: &str) {
 
 #[cfg(unix)]
 #[test]
-fn fresh_background_supervised_run_uses_shared_room_birth() {
+fn supervised_birth_records_warnings_but_live_runs_leave_them_untouched() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(&env);
@@ -1122,10 +1122,11 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         record.get("logins").is_none(),
         "birth must not freeze inherited accounts: {record}"
     );
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains("claude account"),
-        "a codex launch says nothing about claude's account:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    super::start::assert_skipped(
+        &env,
+        &String::from_utf8_lossy(&output.stderr),
+        "accounts.claude.work",
+        "rimz accounts add claude work",
     );
     assert!(
         !heartbeat_path.exists(),
@@ -1161,6 +1162,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     );
 
     // Into the live room, a launch re-reads its accounts from the record.
+    std::fs::write(env.rimz_home().join("config.toml"), "").unwrap();
     let live = env
         .rimz()
         .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
@@ -1184,6 +1186,14 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         live.status.success(),
         "live-room launch failed:\n{}",
         String::from_utf8_lossy(&live.stderr)
+    );
+    let live_record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.store().paths().workspace_record.clone()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        live_record["skipped"], record["skipped"],
+        "a live supervised run does not judge the room"
     );
     assert_eq!(
         rimz::harness::run::list(env.store().paths())

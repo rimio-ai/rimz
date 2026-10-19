@@ -15,7 +15,6 @@ use crate::mux::{
     SidebarPaneOptions,
 };
 use crate::proc::ProcInfo;
-use crate::remote_control::ReadinessSnapshot;
 use crate::{RuntimePaths, StatePaths, Store};
 
 use super::{RoomBirthSource, RoomContext};
@@ -79,8 +78,8 @@ pub enum RoomBirth {
         rebirth: NormalRebirth,
         /// Health already proved for a session that was live before birth.
         preflight_health: Option<SessionHealth>,
-        /// `None` requests no configured background-view launch.
-        background_view: Option<ReadinessSnapshot>,
+        /// Request the configured background view using this birth's readiness.
+        background_view: bool,
         refresh_ms: Option<u16>,
         recovery: AttendedRecovery,
     },
@@ -113,6 +112,7 @@ pub struct ResetRecoveryError {
 pub struct BirthOutcome {
     pub resume: ResumePlan,
     pub reset: Option<RoomResetReport>,
+    pub skipped: Vec<crate::workspace::record::SkippedSetting>,
 }
 
 /// Room admission retained across startup prompts and consumed by birth.
@@ -206,7 +206,7 @@ impl RoomContext {
                     false,
                 ),
                 RoomBirth::Supervised { cwd, recovery } => {
-                    (cwd, None, None, None, None, recovery, true)
+                    (cwd, None, None, None, false, recovery, true)
                 }
             };
         let BirthAdmission {
@@ -233,9 +233,6 @@ impl RoomContext {
         if let Some(logins) = &self.birth_logins {
             self.pin_room_logins(logins)?;
         }
-        if let Some(off) = self.birth_remote_control_off.take() {
-            self.record_remote_control_off(off)?;
-        }
         if !pre_existed {
             if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
                 bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");
@@ -261,6 +258,21 @@ impl RoomContext {
         let hibernation = crate::harness::hibernate::admit(&self.machine_config.agents.hibernate)
             .map_err(crate::blocker::Blocker::from)?;
         self.publish_hibernation_admission(&hibernation)?;
+
+        let judgment = (!supervised || !pre_existed)
+            .then(|| {
+                super::judgment::judge(
+                    &self.machine_config,
+                    &self.workspace,
+                    self.backend.name(),
+                    &hibernation,
+                    pre_existed,
+                )
+            })
+            .transpose()?;
+        if !pre_existed && let Some(judgment) = &judgment {
+            self.record_remote_control_off(judgment.remote_control_off.clone())?;
+        }
 
         #[cfg(unix)]
         {
@@ -317,9 +329,10 @@ impl RoomContext {
             self.detected_size = None;
         }
 
-        let background_view = background_view
+        let background_view = judgment
             .as_ref()
-            .map(|readiness| self.background_view(readiness, refresh_ms));
+            .filter(|_| background_view)
+            .map(|judgment| self.background_view(&judgment.readiness, refresh_ms));
 
         let seeded = match rebirth {
             Some(rebirth) => match rebirth {
@@ -387,6 +400,14 @@ impl RoomContext {
             })
             .unwrap_or_default();
         let reset = health?;
+        let skipped = if let Some(judgment) = judgment {
+            let paths = StatePaths::for_project_root(&self.workspace.project_root)?;
+            Store::open(paths, self.runtime.clone())?
+                .set_skipped_settings(&self.workspace, judgment.skipped.clone())?;
+            judgment.skipped
+        } else {
+            Vec::new()
+        };
         self.publish_hibernation_admission(&hibernation)?;
         self.load_presence();
         // Health recovery can rebirth the session; only its own heartbeat
@@ -409,7 +430,11 @@ impl RoomContext {
                 std::thread::sleep(Duration::from_millis(25));
             }
         }
-        Ok(BirthOutcome { resume, reset })
+        Ok(BirthOutcome {
+            resume,
+            reset,
+            skipped,
+        })
     }
 
     fn publish_hibernation_admission(

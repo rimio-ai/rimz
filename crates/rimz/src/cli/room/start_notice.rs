@@ -1,116 +1,11 @@
-//! Start-time workspace, configuration, and version notices.
+//! Start-time workspace and version notices.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::path::Path;
 
 use anyhow::Result;
 use rimz::RuntimePaths;
-use rimz::config::definitions::{DefinitionCause, DefinitionErr};
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::sidebar::SessionBuildDrift;
-
-use crate::cli::render;
-
-fn definition_summary(
-    errors: &[&DefinitionErr],
-    agents_home: &Path,
-    home: Option<&str>,
-) -> Vec<String> {
-    let mut missing = BTreeMap::<_, (BTreeSet<_>, BTreeSet<_>)>::new();
-    let mut dependent = BTreeSet::new();
-    let mut invalid = BTreeSet::new();
-    for error in errors {
-        match &error.cause {
-            DefinitionCause::MissingSkill { skill, roots } => {
-                let (paths, searched) = missing.entry(skill).or_default();
-                paths.insert(error.path.as_path());
-                searched.extend(roots.iter().map(|root| root.as_path()));
-            }
-            DefinitionCause::DependsOnFailed { .. } => {
-                dependent.insert(error.path.as_path());
-            }
-            DefinitionCause::Invalid => {
-                invalid.insert(error.path.as_path());
-            }
-        }
-    }
-    let mut lines = Vec::new();
-    for (skill, (paths, roots)) in missing {
-        let roots = roots
-            .into_iter()
-            .map(|root| render::home_relative_path_to(home, root))
-            .collect::<Vec<_>>()
-            .join(" or ");
-        lines.push(definition_group(
-            &paths,
-            agents_home,
-            home,
-            &format!("missing skill '{skill}' (not installed in {roots})"),
-        ));
-    }
-    for (paths, reason) in [
-        (dependent, "depending on one that failed"),
-        (invalid, "with another error"),
-    ] {
-        if !paths.is_empty() {
-            lines.push(definition_group(&paths, agents_home, home, reason));
-        }
-    }
-    if !lines.is_empty() {
-        lines.push("launches that select them are refused until the files are fixed; `rimz agents validate` lists every error".to_owned());
-    }
-    lines
-}
-
-fn definition_group(
-    paths: &BTreeSet<&Path>,
-    agents_home: &Path,
-    home: Option<&str>,
-    reason: &str,
-) -> String {
-    let mut names: Vec<_> = paths
-        .iter()
-        .map(|path| {
-            path.strip_prefix(agents_home)
-                .ok()
-                .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
-                .map_or_else(
-                    || render::home_relative_path_to(home, path),
-                    |path| path.with_extension("").display().to_string(),
-                )
-        })
-        .collect();
-    names.sort();
-    let count = names.len();
-    names.truncate(6);
-    if count > 6 {
-        names.push(format!("+{} more", count - 6));
-    }
-    let suffix = if count == 1 { "" } else { "s" };
-    format!("{count} definition{suffix} {reason}: {}", names.join(", "))
-}
-
-fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
-    let path = render::home_relative(&err.path().display().to_string());
-    if let rimz::config::ConfigErr::Theme { message, .. } = err {
-        let detail = render::one_line(message);
-        return format!("{path}: {detail}");
-    }
-    let detail = err
-        .diagnosis()
-        .map(rimz::config::ConfigFileDiagnosis::summary)
-        .unwrap_or_else(|| render::one_line_error(err));
-    if err.diagnosis().is_some() {
-        format!(
-            "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {detail}; fix the file, then restart"
-        )
-    } else {
-        format!(
-            "{path} is invalid — every setting in it is ignored and built-in defaults apply: {detail}; fix the file, then restart"
-        )
-    }
-}
 
 fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     use rimz::workspace::RootClass;
@@ -127,59 +22,12 @@ fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     }
 }
 
-/// The `rimz start` notices: configuration notices plus the root-class line
-/// for a non-repo room. Notices go to stderr; stdout stays the protocol surface.
-pub(super) fn report_start_notices(
-    workspace: &rimz::ResolvedWorkspace,
-    admission: &rimz::harness::hibernate::Admission,
-) -> Result<()> {
-    let errors = rimz::config::broken_machine_files();
-    let definitions: Vec<_> = errors
-        .iter()
-        .filter_map(|error| match error {
-            rimz::config::ConfigErr::Definition(error) => Some(error),
-            _ => None,
-        })
-        .collect();
-    let home = std::env::var_os("HOME");
-    let mut notices = definition_summary(
-        &definitions,
-        &rimz::disk::paths::agents_home(),
-        home.as_ref().and_then(|home| home.to_str()),
-    );
-    notices.extend(
-        errors
-            .iter()
-            .filter(|error| !matches!(error, rimz::config::ConfigErr::Definition(_)))
-            .filter(|error| !super::blocks_room_start(error))
-            .map(broken_config_notice),
-    );
-    let machine = rimz::config::MachineConfig::load_lenient();
-    notices.extend(machine.notices.unknown_keys.iter().map(ToString::to_string));
-    notices.extend(machine.notices.host_isolation_fallback.iter().cloned());
-    notices.extend(machine.notices.hibernate_unavailable.iter().cloned());
-    notices.extend(hibernate_notice(&machine.agents.hibernate, admission));
-    notices.extend(root_class_notice(workspace));
-    if notices.is_empty() {
-        return Ok(());
-    }
-    let mut stderr = std::io::stderr().lock();
-    for notice in notices {
-        writeln!(stderr, "rimz: {notice}")?;
+/// Report the root class of a non-repository room on stderr.
+pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
+    if let Some(notice) = root_class_notice(workspace) {
+        writeln!(std::io::stderr().lock(), "rimz: {notice}")?;
     }
     Ok(())
-}
-
-fn hibernate_notice(
-    config: &rimz::config::HibernateConfig,
-    admission: &rimz::harness::hibernate::Admission,
-) -> Option<String> {
-    if !config.explicit() || admission.available {
-        return None;
-    }
-    admission.reason.as_ref().map(|reason| {
-        format!("agents.hibernate.enabled is set but hibernation is skipped: {reason}")
-    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -270,26 +118,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    #[test]
-    fn hibernate_notice_only_for_explicit_unavailable_capability() {
-        let mut config = rimz::config::HibernateConfig::default();
-        let mut admission = rimz::harness::hibernate::Admission {
-            available: false,
-            reason: Some("no swap".into()),
-        };
-        assert_eq!(hibernate_notice(&config, &admission), None);
-        config.enabled = Some(false);
-        assert_eq!(hibernate_notice(&config, &admission), None);
-        config.enabled = Some(true);
-        assert_eq!(
-            hibernate_notice(&config, &admission).as_deref(),
-            Some("agents.hibernate.enabled is set but hibernation is skipped: no swap")
-        );
-        admission.available = true;
-        admission.reason = None;
-        assert_eq!(hibernate_notice(&config, &admission), None);
-    }
-
     fn resolved(root: &str, class: rimz::workspace::RootClass) -> rimz::ResolvedWorkspace {
         use rimz::ids::WorkspaceId;
         let root = PathBuf::from(root);
@@ -321,154 +149,6 @@ mod tests {
             dir.contains("directory workspace rooted at /tmp/scratch"),
             "names the class and root: {dir}",
         );
-    }
-
-    #[test]
-    fn broken_config_notice_is_one_line_and_names_the_fallback() {
-        let err = rimz::config::MachineConfig::parse_text(
-            std::path::Path::new("/tmp/theme.toml"),
-            "[theme.display]\nmax_cols = 64\nmax_cols = 72\n",
-            std::path::Path::new("/tmp/missing-agents-home"),
-        )
-        .expect_err("duplicate key fails");
-
-        let notice = broken_config_notice(&err);
-
-        assert_eq!(
-            notice.lines().count(),
-            1,
-            "notice stays on one line: {notice}"
-        );
-        assert!(
-            notice.contains("/tmp/theme.toml is unparseable"),
-            "{notice}"
-        );
-        assert!(notice.contains("line 3"), "{notice}");
-        assert!(
-            notice.contains("`max_cols` is defined more than once"),
-            "{notice}"
-        );
-        assert!(notice.contains("built-in defaults apply"), "{notice}");
-    }
-
-    #[test]
-    fn theme_notice_preserves_the_effective_palette_without_dropping_other_settings() {
-        let message = "unknown sidebar theme scheme `missing`; the sidebar keeps the inline `[colors]` palette until it is fixed";
-        let err = rimz::config::ConfigErr::Theme {
-            path: "/tmp/theme.toml".into(),
-            message: message.to_owned(),
-        };
-        assert_eq!(
-            broken_config_notice(&err),
-            format!("/tmp/theme.toml: {message}")
-        );
-    }
-
-    #[test]
-    fn definition_summary_groups_causes_and_deduplicates_team_roles() {
-        let home = PathBuf::from("/home/tester");
-        let agents_home = home.join(".rimz");
-        let missing = DefinitionCause::MissingSkill {
-            skill: "rimz-lsp".parse().unwrap(),
-            roots: vec![home.join(".claude/skills"), agents_home.join("skills")],
-        };
-        let failed = DefinitionCause::DependsOnFailed {
-            name: "finder".to_owned(),
-        };
-        let names = [
-            "agents/coder",
-            "agents/planner",
-            "subagents/finder",
-            "subagents/newcomer",
-            "subagents/surveyor",
-        ];
-        let mut errors: Vec<_> = names
-            .iter()
-            .map(|name| DefinitionErr {
-                path: agents_home.join(format!("{name}.md")),
-                message: "detail".to_owned(),
-                cause: missing.clone(),
-            })
-            .collect();
-        for name in ["agents/astra", "agents/reviewer", "teams/x", "teams/x"] {
-            errors.push(DefinitionErr {
-                path: agents_home.join(format!("{name}.md")),
-                message: "detail".to_owned(),
-                cause: failed.clone(),
-            });
-        }
-        let lines = definition_summary(
-            &errors.iter().collect::<Vec<_>>(),
-            &agents_home,
-            Some("/home/tester"),
-        );
-        assert_eq!(lines.len(), 3, "{lines:?}");
-        assert!(lines[0].starts_with("5 definitions"));
-        assert!(lines[0].contains("'rimz-lsp'"));
-        assert!(lines[0].contains("~/.claude/skills or ~/.rimz/skills"));
-        for name in names {
-            assert!(lines[0].contains(name));
-        }
-        assert!(lines[1].starts_with("3 definitions"));
-        assert_eq!(lines[1].matches("teams/x").count(), 1);
-        assert!(lines[2].contains("rimz agents validate"));
-        assert!(
-            lines
-                .iter()
-                .all(|line| line.len() <= 210 && !line.contains(&home.display().to_string())),
-            "{lines:?}"
-        );
-    }
-
-    #[test]
-    fn definition_summary_caps_names_and_handles_other_errors() {
-        let home = PathBuf::from("/definitions");
-        let mut errors: Vec<_> = (0..9)
-            .rev()
-            .map(|n| DefinitionErr {
-                path: home.join(format!("agents/a{n}.md")),
-                message: "detail".to_owned(),
-                cause: DefinitionCause::MissingSkill {
-                    skill: "one".parse().unwrap(),
-                    roots: vec![home.join("skills")],
-                },
-            })
-            .collect();
-        errors.push(DefinitionErr {
-            path: PathBuf::from("/outside/bad.md"),
-            message: "detail".to_owned(),
-            cause: DefinitionCause::Invalid,
-        });
-        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home, None);
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].starts_with("9 definitions"));
-        assert!(lines[0].ends_with(
-            "agents/a0, agents/a1, agents/a2, agents/a3, agents/a4, agents/a5, +3 more"
-        ));
-        assert!(lines[1].starts_with("1 definition"));
-        assert!(lines[1].ends_with("/outside/bad.md"));
-        assert!(definition_summary(&[], &home, None).is_empty());
-    }
-
-    #[test]
-    fn definition_summary_unions_roots_per_skill() {
-        let home = PathBuf::from("/definitions");
-        let errors: Vec<_> = [("one", "/a"), ("one", "/b"), ("two", "/a")]
-            .into_iter()
-            .map(|(skill, root)| DefinitionErr {
-                path: home.join("agents/same.md"),
-                message: "detail".to_owned(),
-                cause: DefinitionCause::MissingSkill {
-                    skill: skill.parse().unwrap(),
-                    roots: vec![PathBuf::from(root)],
-                },
-            })
-            .collect();
-        let lines = definition_summary(&errors.iter().collect::<Vec<_>>(), &home, None);
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].starts_with("1 definition"));
-        assert!(lines[0].contains("'one'") && lines[0].contains("/a or /b"));
-        assert!(lines[1].contains("'two'"));
     }
 
     #[test]
