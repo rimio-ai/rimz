@@ -1,9 +1,10 @@
 //! Pending `rimz agents stop --when-idle` requests, at most one per session.
 //!
-//! The CLI arms or withdraws a request and session retirement removes it, each
-//! a read-modify-write from its own process, so every writer takes the
-//! workspace lock and publishes durably. Readers stay lock-free; an absent or
-//! unreadable record reads as no requests.
+//! The CLI arms or withdraws a request, the hook drainer withdraws it on a
+//! human prompt, and session retirement removes it, each a read-modify-write
+//! from its own process, so every writer takes the workspace lock and
+//! publishes durably. Readers stay lock-free; an absent or unreadable record
+//! reads as no requests.
 
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +53,7 @@ pub fn arm(paths: &StatePaths, request: IdleStopRequest) -> Result<(), IdleStopE
         paths,
         &request.kind.clone(),
         &request.agent_id.clone(),
+        |_| true,
         Some(request),
     )?;
     Ok(())
@@ -71,23 +73,48 @@ pub fn withdraw(
     {
         return Ok(false);
     }
-    update(paths, kind, agent_id, None)
+    Ok(update(paths, kind, agent_id, |_| true, None)?.is_some())
 }
 
-/// Drop the session's request and append `replacement`; returns whether one was dropped.
+/// Withdraw the session's request only when it was made strictly before `at`,
+/// the human turn's frame time; returns the removed stop. Rechecked under the
+/// lock, so a request re-armed after the prompt survives.
+pub fn withdraw_before(
+    paths: &StatePaths,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    at: jiff::Timestamp,
+) -> Result<Option<IdleStop>, IdleStopErr> {
+    if !read(paths)
+        .iter()
+        .any(|request| request.kind == *kind && request.agent_id == *agent_id)
+    {
+        return Ok(None);
+    }
+    update(paths, kind, agent_id, |stop| stop.requested_at < at, None)
+}
+
+/// Drop the session's request when `drops` admits it, then append
+/// `replacement`; returns the dropped stop.
 fn update(
     paths: &StatePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
+    drops: impl Fn(&IdleStop) -> bool,
     replacement: Option<IdleStopRequest>,
-) -> Result<bool, IdleStopErr> {
+) -> Result<Option<IdleStop>, IdleStopErr> {
     let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
     let mut requests = read(paths);
-    let before = requests.len();
-    requests.retain(|request| request.kind != *kind || request.agent_id != *agent_id);
-    let dropped = requests.len() != before;
-    if !dropped && replacement.is_none() {
-        return Ok(false);
+    let mut dropped = None;
+    requests.retain(|request| {
+        let drop = request.kind == *kind && request.agent_id == *agent_id && drops(&request.stop);
+        if drop {
+            dropped = Some(request.stop.clone());
+        }
+        !drop
+    });
+    if dropped.is_none() && replacement.is_none() {
+        return Ok(None);
     }
     requests.extend(replacement);
     atomic::write_temp_then_rename(
@@ -151,6 +178,34 @@ mod tests {
         assert!(!withdraw(&paths, &AgentKind::new_unchecked("codex"), &"a".into()).expect("kind"));
         assert!(withdraw(&paths, &kind, &"a".into()).expect("withdraw a"));
         assert_eq!(read(&paths), [request("b", 60)]);
+    }
+
+    #[test]
+    fn human_turn_withdraws_only_an_earlier_request_for_its_session() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StatePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+            .expect("paths");
+        let kind = AgentKind::new_unchecked("claude");
+        arm(&paths, request("a", 180)).unwrap();
+        arm(&paths, request("b", 60)).unwrap();
+        let before = std::fs::read(&paths.idle_stop_requests).unwrap();
+        for at in [Timestamp::UNIX_EPOCH, Timestamp::from_second(-1).unwrap()] {
+            assert_eq!(
+                withdraw_before(&paths, &kind, &"a".into(), at).unwrap(),
+                None
+            );
+            assert_eq!(std::fs::read(&paths.idle_stop_requests).unwrap(), before);
+        }
+        let after = Timestamp::from_nanosecond(1).unwrap();
+        assert_eq!(
+            withdraw_before(&paths, &kind, &"a".into(), after).unwrap(),
+            Some(request("a", 180).stop)
+        );
+        assert_eq!(read(&paths), [request("b", 60)]);
+        assert_eq!(
+            withdraw_before(&paths, &kind, &"a".into(), after).unwrap(),
+            None
+        );
     }
 
     #[test]

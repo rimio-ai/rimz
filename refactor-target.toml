@@ -226,7 +226,8 @@ upward-dependencies = ["address"]
 # HookInstallOptions carries the machine's routine-command policy into managed install and preview (+1).
 # `AgentState::compacted_since_prompt` gates keep-warm and idle compaction in harness (+1).
 # HookCapability::hook_inherits_env and definition::hook_owner_env restore scrubbed hook runners before path resolution (+2).
-surface-budget = 1097
+# payload::is_task_notification_turn shares raw-notice recognition with human turn classification (+1).
+surface-budget = 1098
 
 [[verdict]]
 kind = "item"
@@ -1310,7 +1311,8 @@ path = "crates/rimz/src/store"
 # workflow::RunRecord::started_by shares live task-run selection with the CLI (+1).
 # GcPolicy and tmp inventory, hold, unit and grace predicate serve both GC passes (+5).
 # pending_recovery::{seed, confirm} share locked tab-confirmation transitions with rebirth (+2).
-surface-budget = 478
+# idle_stop::withdraw_before and message::human_opened_turn share conditional withdrawal and authorship with hooks (+2).
+surface-budget = 480
 
 [[verdict]]
 kind = "item"
@@ -7478,3 +7480,18 @@ reason = "One runtime-class machine lock elects the temp-floor evictor."
 kind = "item"
 key = "disk::usage::dir_allocated_size"
 reason = "Pressure eviction estimates delayed reclamation using allocated blocks through the shared usage walk."
+
+[[verdict]]
+kind = "item"
+key = "agents::payload::is_task_notification_turn"
+reason = "Turn authorship must recognize raw task notices after sanitized prompt text has omitted them."
+
+[[verdict]]
+kind = "item"
+key = "store::message::human_opened_turn"
+reason = "Lifecycle hooks in the binary share one record-aware decision between spend accounting and idle-stop withdrawal."
+
+[[verdict]]
+kind = "item"
+key = "store::idle_stop::withdraw_before"
+reason = "The hook drainer conditionally removes a request under the workspace lock without withdrawing a later re-arm."

@@ -352,6 +352,30 @@ fn launch_retries_count_relaunches_and_preserve_spawn_failures() {
 }
 
 #[test]
+fn idle_stop_withdrawals_are_recorded_and_name_the_request() {
+    let decoded = serde_json::from_value::<AssistRecord>(serde_json::json!({
+        "at": "2026-01-01T01:00:00Z", "assist": "idle_stop_withdrawn",
+        "kind": "claude", "agent_id": "session-1", "label": "@coder",
+        "idle_after_secs": 180, "requested_by": "@lead",
+        "requested_at": "2026-01-01T00:00:00Z"
+    }));
+    assert!(decoded.is_ok(), "withdrawal is an assist: {decoded:?}");
+    let stats = AssistStats::from_records("all", vec![decoded.unwrap()]);
+    assert_effect_counts(&stats);
+    let json = serde_json::to_value(&stats).unwrap();
+    assert_eq!(json["rollup"]["idle_stop_withdrawals"], 1);
+    assert!(json["rollup"].get("held").is_none());
+    assert_eq!(json["events"][0]["assist"], "idle_stop_withdrawn");
+    assert_eq!(json["events"][0]["requested_at"], "2026-01-01T00:00:00Z");
+    assert!(category_rows(&stats.rollup)[0].contains("Idle stop withdrawn:"));
+    let line = forensic_line(&stats.events[0], &jiff::tz::TimeZone::UTC);
+    assert!(
+        line.contains("↶ @coder idle stop withdrawn (threshold 3m) — requested by @lead"),
+        "{line}"
+    );
+}
+
+#[test]
 fn idle_stop_stats_count_stops_and_preserve_failures() {
     let records = [true, false]
         .into_iter()

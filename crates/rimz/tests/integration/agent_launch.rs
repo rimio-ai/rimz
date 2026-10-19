@@ -2062,6 +2062,7 @@ fn molt_at_chain_cap_keeps_generation_note_and_launcher_and_arms_only_after_plac
                 receipt.contains("@planner")
                     && receipt.contains(successor.name.as_deref().unwrap())
                     && receipt.contains("new tab")
+                    && receipt.contains("typing into it keeps it")
                     && receipt.contains("5m")
                     && receipt.contains("next: rimz agents show"),
                 "{receipt}"

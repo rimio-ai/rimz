@@ -1,5 +1,300 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy)]
+enum IdleStopRun {
+    None,
+    Child,
+    Team,
+    Peer,
+}
+
+fn idle_stop_turn(
+    prompt: &str,
+    sender: Option<rimz::store::message::MessageSender>,
+    frame_offset: i64,
+    run: IdleStopRun,
+    replay: bool,
+    withdraws: bool,
+) {
+    use rimz::harness::hook_drain::{FrameAttempt, with_frame_env};
+    use rimz::store::idle_stop::{self, IdleStopRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = workspace();
+    let paths = rimz::disk::paths::StatePaths::under(workspace_id(), dir.path()).unwrap();
+    let runtime = rimz::disk::paths::RuntimePaths::under(workspace_id(), dir.path()).unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let agent = rimz::agents::definition_by_kind("claude").unwrap();
+    let id = rimz::ids::AgentSessionId::from(rimz::ids::EventId::new().to_string());
+    let mut state = rimz::testkit::agent_state("claude", id.as_str(), jiff::Timestamp::UNIX_EPOCH);
+    if matches!(run, IdleStopRun::Team | IdleStopRun::Peer) {
+        store
+            .append_event(&rimz::store::event::EventEnvelope::agent_launched(
+                workspace_id(),
+                &workspace.session_name,
+                &state.kind,
+                rimz::store::event::AgentLaunchPayload {
+                    system_prompt_digest: None,
+                    agent_id: id.clone(),
+                    launch_id: Some(id.clone()),
+                    agent_name: "idle-seat".into(),
+                    agent_name_explicit: true,
+                    launch: rimz::agents::LaunchParams {
+                        launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+                            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                            agent_id: "launcher-id".into(),
+                        })),
+                        team: matches!(run, IdleStopRun::Team).then(|| "forge".into()),
+                        ..Default::default()
+                    },
+                    state: rimz::store::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(workspace.worktree_root.to_string_lossy().into_owned()),
+                    worktree_branch: None,
+                    prompt: None,
+                    description: None,
+                },
+            ))
+            .unwrap();
+        state = agent_state(&store, agent, &id).unwrap();
+        let record = rimz::harness::run::create_peer_prompt(
+            store.paths(),
+            &state,
+            None,
+            agent,
+            "original task",
+            &workspace.worktree_root,
+            rimz::store::run::ReportTo::Launcher,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            super::super::session_run_id(&store, agent, Some(&id)),
+            Some(record.run_id)
+        );
+    }
+    if let Some(sender) = sender {
+        let mut message = rimz::store::message::MessageRecord::new(
+            workspace_id(),
+            &state,
+            rimz::store::message::parse_message_header(prompt)
+                .map(|(_, _, body)| body)
+                .unwrap_or_else(|| prompt.into()),
+            rimz::store::message::DeliveryGate::Done,
+        )
+        .with_sender(sender);
+        message.status = rimz::store::message::MessageStatus::Sent;
+        if prompt == "/compact" {
+            message = message.with_body(rimz::store::message::MessageBody::Command);
+        }
+        store
+            .queue_message(&message, &workspace.session_name)
+            .unwrap();
+    }
+    let at = jiff::Timestamp::from_second(1_000).unwrap();
+    idle_stop::arm(
+        store.paths(),
+        IdleStopRequest {
+            kind: state.kind.clone(),
+            agent_id: id.clone(),
+            stop: rimz::agents::state::IdleStop {
+                after_secs: 300,
+                requested_at: at,
+                requested_by: Some("@lead".into()),
+            },
+        },
+    )
+    .unwrap();
+    let before = std::fs::read(&store.paths().idle_stop_requests).unwrap();
+    let payload = serde_json::json!({"session_id": id, "prompt": prompt});
+    let mut frame = rimz::store::ingress::HookIngress {
+        schema_version: "1".into(),
+        event_id: rimz::ids::EventId::new(),
+        ts: jiff::Timestamp::from_second(1_000 + frame_offset).unwrap(),
+        source: state.kind.clone(),
+        event: Some("UserPromptSubmit".into()),
+        payload: payload.to_string(),
+        cwd: workspace.project_root.clone(),
+        hook_pid: std::process::id(),
+        env: Default::default(),
+    };
+    if matches!(run, IdleStopRun::Child) {
+        frame.env.insert(
+            rimz::harness::launch::ENV_RUN_ID.into(),
+            rimz::ids::RunId::new().to_string(),
+        );
+    }
+    let mut decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    if replay {
+        store
+            .append_agent_lifecycle(rimz::store::writer::AgentLifecycleIntent {
+                session_name: &workspace.session_name,
+                agent_kind: state.kind.clone(),
+                event_name: "UserPromptSubmit",
+                observation: decoded.lifecycle().unwrap(),
+                spawned_subagents: &[],
+            })
+            .unwrap();
+    }
+    let recovered = store.read_events().unwrap();
+    let attempt = if replay {
+        FrameAttempt::Replay
+    } else {
+        FrameAttempt::First
+    };
+    for _ in 0..if withdraws { 2 } else { 1 } {
+        with_frame_env(&frame, attempt, || {
+            super::super::handle_lifecycle_frame(
+                &workspace,
+                &store,
+                agent,
+                &mut decoded,
+                &payload,
+                rimz::agents::HookIngressOwner::agent(Some(std::process::id())),
+                &crate::cli::GlobalFlags {
+                    root: None,
+                    mux: None,
+                    zellij: false,
+                    tmux: false,
+                    color: crate::cli::ColorWhen::Never,
+                },
+                &recovered,
+            )
+        })
+        .unwrap();
+        decoded = agent.decode_hook("UserPromptSubmit", &payload).unwrap();
+    }
+    assert_eq!(
+        idle_stop::read(store.paths()).is_empty(),
+        withdraws,
+        "{prompt}, {frame_offset}, run={run:?}, replay={replay}"
+    );
+    if !withdraws {
+        assert_eq!(
+            std::fs::read(&store.paths().idle_stop_requests).unwrap(),
+            before
+        );
+    }
+    let assists = rimz::harness::assist_log::recent(&rimz::disk::paths::logs_dir(), None)
+        .into_iter()
+        .map(|record| serde_json::to_value(record).unwrap())
+        .filter(|record| {
+            record["assist"] == "idle_stop_withdrawn" && record["agent_id"] == id.as_str()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(assists.len(), usize::from(withdraws));
+    if withdraws {
+        assert_eq!(assists[0]["idle_after_secs"], 300);
+        assert_eq!(assists[0]["requested_by"], "@lead");
+        assert_eq!(assists[0]["requested_at"], at.to_string());
+    }
+    if prompt.starts_with("<task-notification>") || !matches!(run, IdleStopRun::None) {
+        assert!(
+            rimz::agents::spending::user_input::load_in(user_input_state_root(&store).unwrap())
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn typed_human_turn_withdraws_idle_stop() {
+    idle_stop_turn("keep working", None, 1, IdleStopRun::None, false, true);
+}
+
+#[test]
+fn human_turn_on_team_run_withdraws_idle_stop_without_spend_input() {
+    idle_stop_turn("keep working", None, 1, IdleStopRun::Team, false, true);
+}
+
+#[test]
+fn human_turn_on_peer_run_withdraws_idle_stop_without_spend_input() {
+    idle_stop_turn("keep working", None, 1, IdleStopRun::Peer, false, true);
+}
+
+#[test]
+fn user_shell_message_withdraws_idle_stop() {
+    idle_stop_turn(
+        "Type: USER_MESSAGE\nFrom: @user\nContent:\nkeep working",
+        Some(rimz::store::message::MessageSender::Human),
+        1,
+        IdleStopRun::None,
+        false,
+        true,
+    );
+}
+
+#[test]
+fn earlier_tied_supervised_and_replayed_turns_keep_idle_stop() {
+    for (offset, run, replay) in [
+        (-1, IdleStopRun::None, false),
+        (0, IdleStopRun::None, false),
+        (1, IdleStopRun::Child, false),
+        (1, IdleStopRun::None, true),
+    ] {
+        idle_stop_turn("keep working", None, offset, run, replay, false);
+    }
+}
+
+#[test]
+fn rimz_deliveries_and_background_notices_keep_idle_stop() {
+    use rimz::store::message::{HarnessNotice, MessageSender};
+    for (notice, header) in [
+        (HarnessNotice::Wait, "WAIT"),
+        (HarnessNotice::Signal, "SIGNAL"),
+        (HarnessNotice::Stage, "STAGE"),
+        (HarnessNotice::SubagentReport, "SUBAGENT_REPORT"),
+    ] {
+        idle_stop_turn(
+            &format!("Type: {header}\nFrom: @rimz\nContent:\na delivery"),
+            Some(MessageSender::Harness { notice }),
+            1,
+            IdleStopRun::None,
+            false,
+            false,
+        );
+    }
+    idle_stop_turn(
+        "Type: AGENT_MESSAGE\nFrom: @codex\nContent:\nan agent message",
+        Some(MessageSender::Agent {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            agent_id: None,
+            name: None,
+            profile: None,
+            role: None,
+            channel: None,
+        }),
+        1,
+        IdleStopRun::None,
+        false,
+        false,
+    );
+    idle_stop_turn(
+        "--no-from text",
+        Some(MessageSender::System),
+        1,
+        IdleStopRun::None,
+        false,
+        false,
+    );
+    idle_stop_turn(
+        "/compact",
+        Some(MessageSender::System),
+        1,
+        IdleStopRun::None,
+        false,
+        false,
+    );
+    idle_stop_turn(
+        "<task-notification><task-id>b1</task-id><status>completed</status></task-notification>",
+        None,
+        1,
+        IdleStopRun::None,
+        false,
+        false,
+    );
+}
+
 #[test]
 fn registered_checkpoint_spawns_delivery_for_the_queued_head() {
     let dir = tempfile::tempdir().unwrap();
@@ -64,7 +359,17 @@ fn record_user_input_for_lifecycle(
         &[],
     );
     super::record_user_input_for_lifecycle(
-        workspace, agent, recorded, &sections, delivered, supervised, state_root,
+        workspace,
+        agent,
+        recorded,
+        rimz::store::message::human_opened_turn(
+            &recorded.observation,
+            &Value::Null,
+            &sections,
+            delivered,
+            supervised,
+        ),
+        state_root,
     );
 }
 
@@ -233,9 +538,13 @@ fn turn_started_records_only_unsupervised_user_inputs() {
             &workspace,
             agent,
             &turn_started(),
-            &[],
-            &delivered,
-            false,
+            rimz::store::message::human_opened_turn(
+                &turn_started().observation,
+                &Value::Null,
+                &[],
+                &delivered,
+                false,
+            ),
             Some(dir.path()),
         );
         let after = rimz::agents::spending::user_input::load_in(dir.path()).len();

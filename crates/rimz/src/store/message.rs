@@ -1204,6 +1204,36 @@ pub struct PromptSection<'a> {
     pub record: Option<&'a MessageRecord>,
 }
 
+/// Whether a root, unsupervised turn was opened by human input rather than a
+/// delivery. The raw payload retains task notices that sanitized prompt text
+/// omits.
+pub fn human_opened_turn(
+    observation: &crate::agents::AgentLifecycleObservation,
+    payload: &serde_json::Value,
+    sections: &[PromptSection<'_>],
+    delivered: &[MessageRecord],
+    supervised: bool,
+) -> bool {
+    if !matches!(
+        observation.signal,
+        crate::agents::LifecycleSignal::TurnStarted { .. }
+    ) || observation.parent_agent_id.is_some()
+        || supervised
+        || crate::agents::payload::is_task_notification_turn(payload)
+    {
+        return false;
+    }
+    // Without readable prompt text, a confirmed delivery is the only evidence
+    // that something other than the human opened the turn.
+    if sections.is_empty() {
+        return delivered.is_empty() || delivered.iter().any(MessageRecord::is_user_input);
+    }
+    sections.iter().any(|section| {
+        section.origin == SectionOrigin::Human
+            && section.record.is_none_or(MessageRecord::is_user_input)
+    })
+}
+
 /// Classify submitted text against confirmed records and the pre-ack in-flight view.
 /// Human is the residue when neither a header nor a record accounts for the text.
 pub fn classify_submitted_prompt<'a>(

@@ -308,7 +308,7 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
         .unwrap_or_default();
     writeln!(
         out,
-        "{label} stops once idle for {duration} with nothing owed{replaced}"
+        "{label} stops once idle for {duration} with nothing owed{replaced}; a prompt from the user withdraws it"
     )?;
     Ok(())
 }
