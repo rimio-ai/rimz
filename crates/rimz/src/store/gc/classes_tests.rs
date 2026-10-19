@@ -2,10 +2,7 @@ use super::*;
 use std::fs;
 use std::time::{Duration, SystemTime};
 
-fn temp_owner(
-    agent: &crate::agents::AgentState,
-    _: &crate::store::snapshot::AgentRollup,
-) -> Option<String> {
+fn temp_owner(agent: &crate::agents::AgentState) -> Option<String> {
     match agent.name.as_deref() {
         Some("child") => Some("parent".to_owned()),
         _ => agent.name.clone(),
@@ -148,7 +145,7 @@ fn output_sweep_does_not_hold_the_store_lock() {
             );
             Ok(false)
         },
-        &temp_owner,
+        &|_| temp_owner,
     )
     .unwrap();
     assert!(!output.exists());
@@ -267,7 +264,7 @@ fn tmp_units_follow_the_grace_rule_and_keep_the_unnamed_unit() {
         &paths,
         &vec![ended_row, live_row].into(),
         retention::DEFAULT_TMP_GRACE,
-        &temp_owner,
+        &|agent, _| temp_owner(agent),
         &mut Sweep::new(false),
         &mut report,
     )
@@ -308,7 +305,7 @@ fn tmp_shared_unit_keeps_live_or_open_children() {
             &paths,
             &vec![parent, child].into(),
             retention::DEFAULT_TMP_GRACE,
-            &temp_owner,
+            &|agent, _| temp_owner(agent),
             &mut Sweep::new(false),
             &mut GcReport::default(),
         )
@@ -353,7 +350,7 @@ fn tmp_errors_do_not_abort_other_units() {
         &paths,
         &Vec::new().into(),
         retention::DEFAULT_TMP_GRACE,
-        &temp_owner,
+        &|agent, _| temp_owner(agent),
         &mut Sweep::new(false),
         &mut GcReport::default(),
     );
@@ -639,7 +636,7 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
             },
             dry_run,
             &|_| Ok(false),
-            &temp_owner,
+            &|_| temp_owner,
         )
         .unwrap()
         .0

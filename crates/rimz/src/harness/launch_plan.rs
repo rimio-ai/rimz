@@ -1,6 +1,6 @@
 //! Read-only launch compilation and explicit runtime artifact materialization.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -93,12 +93,15 @@ pub enum LaunchPlanWarning {
 fn temp_owner<'a>(
     own: Option<&'a str>,
     parent: Option<(&crate::ids::AgentKind, &crate::ids::AgentSessionId)>,
-    agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
+    parent_row: impl FnOnce(
+        &crate::ids::AgentKind,
+        &crate::ids::AgentSessionId,
+    ) -> Option<&'a crate::agents::AgentState>,
 ) -> Result<(Option<&'a str>, bool), crate::ids::AgentSessionId> {
     let Some((kind, id)) = parent else {
         return Ok((own, false));
     };
-    crate::address::launch_row(agents, kind, id)
+    parent_row(kind, id)
         .map(|row| (row.name.as_deref(), true))
         .ok_or_else(|| id.clone())
 }
@@ -108,12 +111,65 @@ pub fn agent_temp_owner<'a>(
     agent: &'a crate::agents::AgentState,
     agents: impl IntoIterator<Item = &'a crate::agents::AgentState> + Clone,
 ) -> Option<&'a str> {
+    agent_temp_owner_with(agent, |kind, id| {
+        crate::address::launch_row(agents, kind, id)
+    })
+}
+
+fn agent_temp_owner_with<'a>(
+    agent: &'a crate::agents::AgentState,
+    parent_row: impl FnOnce(
+        &crate::ids::AgentKind,
+        &crate::ids::AgentSessionId,
+    ) -> Option<&'a crate::agents::AgentState>,
+) -> Option<&'a str> {
     let parent = agent
         .parent_agent_id
         .as_ref()
         .map(|id| (agent.parent_agent_kind.as_ref().unwrap_or(&agent.kind), id));
     let own = agent.name.as_deref();
-    temp_owner(own, parent, agents).map_or(own, |(owner, _)| owner)
+    temp_owner(own, parent, parent_row).map_or(own, |(owner, _)| owner)
+}
+
+/// Per-room temp-unit owners, resolving each parent from indexed launch members.
+pub struct AgentTempOwners {
+    owners: HashMap<(crate::ids::AgentKind, crate::ids::AgentSessionId), Option<String>>,
+}
+
+impl AgentTempOwners {
+    pub fn new<'a>(agents: impl IntoIterator<Item = &'a crate::agents::AgentState>) -> Self {
+        let agents: Vec<_> = agents.into_iter().collect();
+        let launch_rows = super::fleet::LaunchRows::new(agents.iter().copied());
+        let mut parents = HashMap::new();
+        let owners = agents
+            .iter()
+            .map(|agent| {
+                let owner = agent_temp_owner_with(agent, |kind, id| {
+                    *parents
+                        .entry((kind.clone(), id.clone()))
+                        .or_insert_with(|| {
+                            let members = launch_rows.members(kind, id);
+                            crate::address::launch_row(
+                                members.iter().map(|&index| agents[index]),
+                                kind,
+                                id,
+                            )
+                        })
+                });
+                (
+                    (agent.kind.clone(), agent.agent_id.clone()),
+                    owner.map(str::to_owned),
+                )
+            })
+            .collect();
+        Self { owners }
+    }
+
+    pub fn owner(&self, agent: &crate::agents::AgentState) -> Option<&str> {
+        self.owners
+            .get(&(agent.kind.clone(), agent.agent_id.clone()))
+            .and_then(|owner| owner.as_deref())
+    }
 }
 
 /// The host temp unit `agent` uses, as its launch resolved it.
@@ -544,7 +600,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     });
     let own = request.identity.name.as_deref();
     let (owner, caller) = match inputs.agents {
-        Ok(agents) => temp_owner(own, parent, agents).unwrap_or_else(|parent| {
+        Ok(agents) => temp_owner(own, parent, |kind, id| {
+            crate::address::launch_row(agents, kind, id)
+        })
+        .unwrap_or_else(|parent| {
             warnings.push(LaunchPlanWarning::ParentUnitMissing(parent));
             // Still a child: it has a caller and no subagents of its own.
             (own, true)

@@ -2288,6 +2288,79 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
 }
 
 #[test]
+fn indexed_temp_owners_match_single_agent_selection() {
+    let at = jiff::Timestamp::UNIX_EPOCH;
+    let parent = |id: &str, name: Option<&str>, launch: &str, ended: bool| {
+        let mut row = crate::testkit::agent_state("claude", id, at);
+        row.name = name.map(str::to_owned);
+        row.launch_id = Some(launch.into());
+        row.ended_at = ended.then_some(at);
+        row
+    };
+    let mut restarted = parent("restarted", Some("restart-owner"), "current-launch", false);
+    restarted.prior_launch_ids = vec!["prior-launch".into()];
+    let mut rows = vec![
+        parent(
+            "legacy-alias",
+            Some("old-alias-owner"),
+            "alias-launch",
+            true,
+        ),
+        parent("alias-current", Some("alias-owner"), "alias-launch", false),
+        parent(
+            "prior-parent",
+            Some("old-restart-owner"),
+            "prior-launch",
+            true,
+        ),
+        restarted,
+        parent("many-ended", Some("ended-owner"), "many-launch", true),
+        parent("many-live-a", Some("live-owner-a"), "many-launch", false),
+        parent("many-live-b", Some("live-owner-b"), "many-launch", false),
+        parent("nameless-parent", None, "nameless-launch", false),
+    ];
+    let cases = [
+        ("alias-child", Some("legacy-alias")),
+        ("prior-child", Some("prior-launch")),
+        ("current-child", Some("current-launch")),
+        ("many-child", Some("many-launch")),
+        ("missing-child", Some("missing-parent")),
+        ("unparented", None),
+        ("nameless-child", Some("nameless-launch")),
+    ];
+    for (name, parent) in cases {
+        let mut row = crate::testkit::agent_state("codex", name, at);
+        row.name = Some(name.to_owned());
+        row.parent_agent_id = parent.map(Into::into);
+        row.parent_agent_kind = parent.map(|_| AgentKind::new_unchecked("claude"));
+        rows.push(row);
+    }
+    let indexed = AgentTempOwners::new(&rows);
+    for row in &rows {
+        assert_eq!(
+            indexed.owner(row),
+            agent_temp_owner(row, &rows),
+            "owner of {}",
+            row.agent_id
+        );
+    }
+    for (name, expected) in [
+        ("alias-child", Some("alias-owner")),
+        ("prior-child", Some("restart-owner")),
+        ("current-child", Some("restart-owner")),
+        ("missing-child", Some("missing-child")),
+        ("unparented", Some("unparented")),
+        ("nameless-child", None),
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.agent_id.as_str() == name)
+            .unwrap();
+        assert_eq!(indexed.owner(row), expected, "{name}");
+    }
+}
+
+#[test]
 fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touching_either() {
     let project = tempfile::tempdir().expect("project");
     let work = project.path().join("codex-work");

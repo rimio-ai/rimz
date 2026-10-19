@@ -834,7 +834,8 @@ path = "crates/rimz/src/harness"
 # catalog::TaskCatalog::source_unavailable classifies strict-load failures for GC (+1).
 # WhenExpr::scope_checkout_key shares resident destination admission with the CLI (+1).
 # tmp_floor::TempUnitBytes keeps measured inventory byte totals all-or-none (+1).
-surface-budget = 916
+# launch_plan::AgentTempOwners and its constructor/lookup share indexed ownership with GC (+3).
+surface-budget = 919
 
 [[verdict]]
 kind = "item"
@@ -1842,6 +1843,7 @@ allowed-dependencies = [
     "config::effective",
     "disk::atomic",
     "disk::paths",
+    "harness::fleet",
     "harness::hibernate",
     "harness::launch",
     "harness::launch_reminders",
@@ -1867,7 +1869,8 @@ allowed-dependencies = [
 # ModelRefreshFailure preserves refresh evidence through a failed launch compile (+1).
 # Headless loop checks pin workspace identity without inheriting an agent or channel.
 # agent_temp_owner shares the launch ownership rule with the caller-supplied GC resolver (+1).
-surface-budget = 14
+# AgentTempOwners and its constructor/lookup share indexed batch ownership (+3).
+surface-budget = 17
 
 [[module]]
 path = "crates/rimz/src/harness/run.rs"
@@ -7484,6 +7487,21 @@ reason = "Grace GC, the floor helper and doctor share one owner-aware per-room i
 kind = "item"
 key = "harness::launch_plan::agent_temp_owner"
 reason = "Launch planning and maintenance resolve a shared temp unit from the same parent row."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::AgentTempOwners"
+reason = "GC and temp-pressure inventory share one per-room owner index."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::AgentTempOwners::new"
+reason = "Batch maintenance builds launch membership once per room without copying the owner rule."
+
+[[verdict]]
+kind = "item"
+key = "harness::launch_plan::AgentTempOwners::owner"
+reason = "Both batch callers read indexed temp owners through the same lookup."
 
 [[verdict]]
 kind = "item"
