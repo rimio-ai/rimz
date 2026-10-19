@@ -965,6 +965,17 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>, tally: &mut Tally) -> io::Re
     }
     if let Some(room) = &mux.room {
         kv.push("room", room_cell(tally, mux.name, room));
+        for skipped in &room.skipped {
+            kv.push(
+                &skipped.setting,
+                counted_verdict(
+                    tally,
+                    Severity::Warning,
+                    &skipped.message,
+                    "fix the setting, then start or attach again",
+                ),
+            );
+        }
     }
     if let Some(health) = &mux.session_health {
         kv.push("session health", session_health_cell(tally, health));
@@ -2424,7 +2435,7 @@ fn render_remote_on(
         detail(
             w,
             palette::muted(),
-            &format!("{} would still refuse:", agent.kind),
+            &format!("{} is still blocked:", agent.kind),
         )?;
         for line in blocker.lines() {
             detail(w, palette::muted(), line)?;
@@ -2434,8 +2445,8 @@ fn render_remote_on(
         counted_note(
             tally,
             w,
-            Severity::Problem,
-            "`rimz start` refuses remote control",
+            Severity::Warning,
+            "remote control skipped at room start",
             refusal.lines().collect::<Vec<_>>().join(" "),
         )?;
     }

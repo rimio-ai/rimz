@@ -717,6 +717,8 @@ The away badge takes the left edge. The remote badge sits there otherwise, and f
 
 ### Notices and alerts
 
+When the room opened with configuration problems, a dim notice above the footer keeps them visible: `⚠ 2 settings skipped at start · rimz doctor` (singular `setting` for one). Doctor lists the settings, warnings, and fixes. Fixing the configuration clears the notice at the next start or attach; an empty or unreadable room record shows no notice.
+
 When RimZ repairs a partial read of the multiplexer's panes by carrying panes over from the last frame, a dim notice appears above the footer and the room stays usable:
 
 ```

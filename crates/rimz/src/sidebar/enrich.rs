@@ -627,6 +627,10 @@ fn enrich_core(
         crate::harness::hibernate::project_hibernation(&mut snapshot, state);
     }
     snapshot.parked_workflows = parked_workflows(state);
+    snapshot.skipped_settings = crate::workspace::record::read_optional(&state.workspace_record)
+        .ok()
+        .flatten()
+        .map_or(0, |record| record.skipped.len());
 
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load(runtime);

@@ -183,6 +183,16 @@ pub(super) fn collect_mux(
     if let Some(ws) = ws {
         let ownership = rimz::room::session::probe_room_ownership(mux, &ws.session_name);
         report.room = Some(room_view(&ws.session_name, &ownership));
+        if let Some(room) = &mut report.room {
+            room.skipped = rimz::StatePaths::for_project_root(&ws.project_root)
+                .ok()
+                .and_then(|state| {
+                    rimz::workspace::record::read_optional(&state.workspace_record)
+                        .ok()
+                        .flatten()
+                })
+                .map_or_else(Vec::new, |record| record.skipped);
+        }
         if mux == MuxName::Tmux {
             report.legacy_session =
                 tmux_mod::legacy_session_conflict(&ws.session_name).map(|conflict| {
@@ -221,6 +231,7 @@ pub(super) fn collect_mux(
 
 fn room_view(session_name: &str, ownership: &rimz::room::session::RoomOwnership) -> model::Room {
     model::Room {
+        skipped: Vec::new(),
         session_name: session_name.to_owned(),
         selected_state: room_state_view(ownership.selected_state()),
         live_on: ownership.live_on(),
@@ -890,8 +901,8 @@ fn remote_control_status(
     }
 }
 
-/// One host's row. A host the user waived at `rimz start` is off for this room
-/// whatever its readiness; the blocker it would still refuse with stays visible.
+/// One host's row. A host skipped at birth is off for this room whatever its
+/// readiness; its blocker stays visible.
 fn remote_agent(
     host: RemoteControlHost,
     readiness: &RuntimeControlReadiness,
@@ -901,7 +912,7 @@ fn remote_agent(
     if waived {
         return model::RemoteAgent {
             kind: host.kind(),
-            detail: "off for this run (chosen at `rimz start`)".to_owned(),
+            detail: "off for this run (skipped at room birth)".to_owned(),
             ready: true,
             blocker: match readiness {
                 RuntimeControlReadiness::Blocked(issue) => Some(issue.to_string()),
@@ -918,9 +929,8 @@ fn remote_agent(
     }
 }
 
-/// Per-machine remote-control auto-launch posture. Doctor separates hard
-/// `rimz start` refusals for installed-agent misconfiguration from enabled
-/// hosts whose agent is not installed; start skips those inert toggles.
+/// Per-machine remote-control auto-launch posture. Doctor separates installed
+/// host blockers from enabled hosts whose agent is not installed.
 pub(super) fn collect_remote_control(
     project_root: Option<&std::path::Path>,
 ) -> model::RemoteControl {

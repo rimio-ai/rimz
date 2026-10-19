@@ -185,6 +185,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,
+        skipped_settings: 0,
         panes_produced_at_ms: None,
         panes_observed_at_ms: None,
         focused_pane: None,
