@@ -246,12 +246,12 @@ Attention always outranks git: a git-backed group with a blocked agent leads wha
 Three partitions hold regardless of any score, so the column keeps one stable outline:
 
 - Agent cards lead their worktree and process rows form the tail, because shells, builds, and servers are context.
-- Finished project groups follow every unfinished project group, behind the landed chip. Like `+K more`, the chip toggles by mouse only, and its open or closed choice belongs to this sidebar view. Opening scrolls only as far as the first receipt it reveals needs; neither opening nor closing changes the selection.
+- Finished project groups follow every unfinished project group, behind the landed chip. Like `+K more`, the chip toggles by mouse only, and its open or closed choice follows the viewed sidebar into unviewed tabs. Opening scrolls only as far as the first receipt it reveals needs; neither opening nor closing changes the selection.
 - Project worktrees lead and out-of-project panes tail, so the `external` divider always sorts last whatever it holds.
 
 Inside an unfinished group, the six-row cap folds idle cards and process rows behind `+K more`; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. After you jump or browse, the column freezes its order and keeps previously selected cards open for five seconds from your last interaction or landing paint, so a glance back finds the cards where they were. Arriving on a tab restarts its hold over the order that sidebar last showed. While any client's focus is on this sidebar pane, the freeze lasts thirty seconds instead; leaving the pane restores the five-second deadline without restarting it. New cards appear at the end of their group, and new groups appear below the live groups. Content and read state keep updating; order, cap exemptions, and held cards settle together when the timer expires. Each tab has its own timer, and a hidden tab settles when its content next updates.
 
-Switching tabs with the multiplexer's own keys moves the highlight without scrolling the cards. The sidebar's own selection keys and jumps still bring an off-screen card into view.
+Switching tabs with the multiplexer's own keys moves the highlight without scrolling the cards. Unviewed sidebars follow the viewed one's cards, order, open cards, and toggles, so the next tab already shows that view. Sidebars watched by another client keep their own view. The sidebar's own selection keys and jumps still bring an off-screen card into view.
 
 ## Tuning
 

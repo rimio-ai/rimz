@@ -167,6 +167,8 @@ impl Attachment {
         state.room_caps = plane.caps.clone();
         state.share_width_geometry(plane.geometry.clone());
         state.events = plane.events.clone();
+        state.viewport = plane.viewport.clone();
+        state.viewport_peers = Some(plane.subscribers.clone());
         state.focus_peers = Some(plane.focus_peers(config.instance_id.clone(), diag.clone()));
         state.wake = Some(wake);
         state.request_reload = request_reload;
@@ -190,6 +192,7 @@ impl Attachment {
         // posts `Wakeup::Snapshot` when a result is ready; the frame/tick path
         // also drains the result channel so that wakeup stays a latency hint.
         let mut fetch = FetchDispatcher::for_plane(subscription.requests, subscription.covered);
+        state.adopt_viewport(&mut fetch, &mut terminal);
 
         // Write the heartbeat immediately so the freshness gate never sees a gap.
         // Errors are non-fatal; the gate re-probes after the TTL.

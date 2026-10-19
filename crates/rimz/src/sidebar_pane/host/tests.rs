@@ -840,6 +840,15 @@ fn hidden_reveal(presence: crate::store::snapshot::SidebarPresence, reveal_by_re
         }
     };
     publish(&snapshot);
+    let mut parser = vt100::Parser::new(20, 40, 0);
+    eventually("the viewed pane paints the initial viewport", || {
+        parser.process(&visible.drain());
+        parser
+            .screen()
+            .contents()
+            .contains(&snapshot.worktree_groups[0].rows[0].name)
+    });
+    // Give the hidden adoption its own frame interval after the source paint.
     std::thread::sleep(Duration::from_millis(600));
     visible.drain();
     hidden.drain();
@@ -1279,7 +1288,15 @@ esac
             .room_wakeup(format!("click:{}:4:{}", source.instance_id, row.unwrap()).as_bytes());
 
         if cross_tab {
-            let received = destination.inbox.recv_timeout(SETTLE);
+            let deadline = Instant::now() + SETTLE;
+            let received = loop {
+                let received = destination
+                    .inbox
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+                if !matches!(received, Ok(Wakeup::Tick)) {
+                    break received;
+                }
+            };
             assert!(
                 matches!(&received, Ok(Wakeup::FocusPush(_))),
                 "a cross-tab room click must push to B before dispatch: {received:?}"
@@ -1304,7 +1321,9 @@ esac
                 "without-push\n"
             }
         );
-        assert_eq!(destination.inbox.try_recv(), Err(Empty));
+        while let Ok(wakeup) = destination.inbox.try_recv() {
+            assert_eq!(wakeup, Wakeup::Tick, "no further focus push is expected");
+        }
         room.host.leave();
         drop(source);
         std::fs::remove_file(dir.join("dispatched")).unwrap();

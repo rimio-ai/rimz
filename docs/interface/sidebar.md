@@ -344,7 +344,7 @@ A card with waits uses the same entry layout:
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, and, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
-Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card where it appears, and that choice outranks selection and `card_density` until the sidebar restarts. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
+Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card where it appears, and that choice outranks selection and `card_density` until the sidebar restarts, and follows the viewed sidebar into unviewed tabs. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
 
 Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 
@@ -571,7 +571,7 @@ Finished groups follow all unfinished project work and precede `external`. At 54
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▸ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ```
 
-Click anywhere on the chip's line to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Click the chip again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice is local to this sidebar, starts closed, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
+Click anywhere on the chip's line to open it. If the receipts it reveals are below the fold, the cards scroll only far enough to show the first receipt in full, keeping the chip on screen. When the chip and receipt cannot fit together, the chip pins to the top of the card view and as much of the receipt shows as fits. Receipts already in view leave the viewport still. Click the chip again to close it; the selection never moves, though the chip may. Under `NO_COLOR` the chip is reverse video. The choice follows the viewed sidebar into unviewed tabs, starts closed after a host restart, and is mouse-only like `+K more`. Open groups remain collapsed to receipts until revealed:
 
 ```
  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ [ ▾ 3 landed ] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
@@ -854,7 +854,7 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
 | click `+K older`, `+K more`, `− less` | unfold or fold rows |
 | click a finished group's header or receipt | show or collapse its cards |
-| click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts in this sidebar; opening scrolls to the first receipt it reveals |
+| click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts, also in unviewed sidebars; opening scrolls to the first receipt it reveals |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |
 | drag the pane border | set the sidebar width for the room |

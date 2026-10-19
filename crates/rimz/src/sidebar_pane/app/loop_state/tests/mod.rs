@@ -222,7 +222,8 @@ impl Rig {
             self.result_tx.send(update).expect("send fetch outcome");
         }
         self.state.last_heartbeat.get_or_insert_with(Instant::now);
-        self.state.run_maintenance(&mut self.fetch, &self.terminal);
+        self.state
+            .run_maintenance(&mut self.fetch, &mut self.terminal);
     }
 
     fn input(&mut self, action: KeyAction) {

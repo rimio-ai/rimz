@@ -73,6 +73,7 @@ pub(in crate::sidebar_pane) fn compose_lines(
 /// landing. An armed layout freeze retains them regardless of geometry or
 /// authoritative scrolling; its expiry releases them together with the frozen
 /// order.
+/// An adopted host viewport supplies the same anchor rows, openings, and toggles.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that

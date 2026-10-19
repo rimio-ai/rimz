@@ -45,6 +45,501 @@ fn queued(wakeups: impl IntoIterator<Item = Wakeup>) -> WakeupInbox {
     WakeupInbox::new(rx)
 }
 
+fn viewport_pair(mux: MuxName) -> (Rig, Rig, FrameOutput) {
+    let (mut source, _) = scroll_rig();
+    let (mut destination, output) = scroll_rig();
+    destination.state.viewport = source.state.viewport.clone();
+    for (rig, own, working) in [(&mut source, 99, 0), (&mut destination, 98, 19)] {
+        rig.state.config.mux = mux;
+        let id = |index| {
+            PaneId::from_parts(
+                mux,
+                match mux {
+                    MuxName::Tmux => format!("%{index}"),
+                    MuxName::Zellij => format!("terminal_{index}"),
+                },
+            )
+        };
+        rig.state.config.own_pane = Some(id(own));
+        let mut snapshot = rig.state.current.clone();
+        for (index, row) in Arc::make_mut(&mut Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
+            .iter_mut()
+            .enumerate()
+        {
+            row.pane.as_mut().unwrap().pane_id = id(index);
+        }
+        snapshot.own_view = Some(SidebarOwnView {
+            sibling_count: 1,
+            working_pane_ids: vec![id(working)],
+            own_view_is_daemon: false,
+        });
+        snapshot.focused_pane = Some(id(0));
+        snapshot.viewed_panes = vec![id(0)];
+        rig.fold(snapshot, SnapshotSource::Produced);
+        rig.state.drain_snapshot(&mut rig.fetch, false);
+    }
+    source.state.dirty = true;
+    paint_at(&mut source, 0);
+    assert!(source.state.watched());
+    assert!(!destination.state.watched());
+    (source, destination, output)
+}
+
+fn publish_scrolled(source: &mut Rig, offset: usize) {
+    source.state.ui.scroll_offset = offset;
+    source.state.ui.offset_authoritative = true;
+    source.state.ui.scroll_ease.cancel();
+    source.state.ui.landed_open = true;
+    source.state.dirty = true;
+    paint_at(source, 0);
+}
+
+fn assert_native_arrival_keeps_shared_frame(mux: MuxName) {
+    let (mut source, mut destination, output) = viewport_pair(mux);
+    publish_scrolled(&mut source, 12);
+    destination.state.click_guard = Some(ClickGuard {
+        until: Instant::now() + Duration::from_secs(1),
+        interactions: destination.state.ui.interactions.clone(),
+        roster: destination.state.ui.painted_roster.clone(),
+    });
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(
+        paints(&output),
+        1,
+        "the hidden destination paints the publication"
+    );
+    assert_eq!(
+        destination.state.ui.painted_rows,
+        source.state.ui.anchored_rows
+    );
+    assert!(destination.state.ui.landed_open);
+    assert!(destination.state.click_guard.is_none());
+    let before = destination.state.ui.painted_rows.clone();
+    let target = destination.state.current.worktree_groups[0].rows[19]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let previous = destination.state.current.focused_pane.clone().unwrap();
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![target.clone()],
+        unfocused: if mux == MuxName::Tmux {
+            vec![]
+        } else {
+            vec![previous]
+        },
+    });
+    assert!(destination.state.watched());
+    paint_at(&mut destination, 0);
+    assert_eq!(destination.state.ui.selected_pane, Some(target));
+    assert_eq!(
+        destination.state.ui.painted_rows, before,
+        "arrival moves only the highlight"
+    );
+    assert!(
+        !destination
+            .state
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-19")
+    );
+    assert!(destination.state.click_guard.is_none());
+    let (y, ordinal) = (0..24)
+        .find_map(
+            |y| match destination.state.ui.interactions.target_at(2, y) {
+                Some(render::HitTarget::Row(ordinal)) => Some((y, ordinal)),
+                _ => None,
+            },
+        )
+        .unwrap();
+    let clicked = destination
+        .state
+        .ui
+        .visible_roster(&destination.state.current)
+        .row(ordinal)
+        .unwrap()
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let applied = destination
+        .state
+        .apply_input(
+            [Wakeup::MouseClick { column: 2, row: y }],
+            &mut destination.terminal,
+        )
+        .unwrap();
+    assert_eq!(applied.effects, vec![InputEffect::Focus(clicked)]);
+}
+
+#[test]
+fn tmux_native_arrival_keeps_the_departing_viewport() {
+    assert_native_arrival_keeps_shared_frame(MuxName::Tmux);
+}
+
+#[test]
+fn tmux_switch_away_from_the_last_pulled_view_allows_hidden_adoption() {
+    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let source_pane = source.state.current.focused_pane.clone().unwrap();
+    let destination_pane = destination
+        .state
+        .current
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    for rig in [&mut source, &mut destination] {
+        let mut pulled = rig.state.current.clone();
+        pulled.focused_pane = Some(destination_pane.clone());
+        pulled.viewed_panes = vec![destination_pane.clone()];
+        pulled.client_views = vec![crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
+            pane_id: destination_pane.clone(),
+        }];
+        rig.fold(pulled, SnapshotSource::Produced);
+        paint_at(rig, 0);
+        rig.event(SidebarEvent::FocusChanged {
+            focused: vec![source_pane.clone()],
+            unfocused: vec![],
+        });
+    }
+    publish_scrolled(&mut source, 12);
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(
+        destination.state.ui.painted_rows, source.state.ui.anchored_rows,
+        "a stale pulled client view must not block hidden adoption"
+    );
+    assert!(!destination.state.watched());
+    for rig in [&mut source, &mut destination] {
+        rig.event(SidebarEvent::FocusChanged {
+            focused: vec![destination_pane.clone()],
+            unfocused: vec![],
+        });
+    }
+    let before = destination.state.ui.painted_rows.clone();
+    paint_at(&mut destination, 0);
+    assert_eq!(destination.state.ui.painted_rows, before);
+    for target in [source_pane, destination_pane].iter().cycle().take(8) {
+        for rig in [&mut source, &mut destination] {
+            rig.event(SidebarEvent::FocusChanged {
+                focused: vec![target.clone()],
+                unfocused: vec![],
+            });
+            rig.maintenance();
+            paint_at(rig, 0);
+            assert_eq!(
+                rig.state.ui.painted_rows, before,
+                "rapid switch without a pull"
+            );
+        }
+    }
+}
+
+#[test]
+fn tmux_focus_overlay_keeps_other_clients_watched() {
+    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let target = source.state.current.focused_pane.clone().unwrap();
+    let other = destination
+        .state
+        .current
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    let mut pulled = destination.state.current.clone();
+    pulled.viewed_panes.push(other.clone());
+    pulled.client_views = [target.clone(), other]
+        .into_iter()
+        .enumerate()
+        .map(|(i, pane_id)| crate::pane::ClientPaneView {
+            client_id: crate::ids::MuxClientId::Tmux(format!("client-{i}")),
+            pane_id,
+        })
+        .collect();
+    destination.fold(pulled, SnapshotSource::Produced);
+    paint_at(&mut destination, 0);
+    let before = destination.state.ui.painted_rows.clone();
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![target],
+        unfocused: vec![],
+    });
+    publish_scrolled(&mut source, 12);
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert!(destination.state.watched());
+    assert_eq!(destination.state.ui.painted_rows, before);
+}
+
+#[test]
+fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
+    let (source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let own = destination.state.config.own_pane.clone().unwrap();
+    destination.state.current.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
+        pane_id: own.clone(),
+    }];
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![own],
+        unfocused: vec![],
+    });
+    assert!(destination.state.optimistic_watch_until.is_some());
+    destination.event(SidebarEvent::FocusChanged {
+        focused: source
+            .state
+            .current
+            .focused_pane
+            .clone()
+            .into_iter()
+            .collect(),
+        unfocused: vec![],
+    });
+    assert!(
+        destination.state.optimistic_watch_until.is_none(),
+        "a single client's switch supersedes optimistic resize/focus watching"
+    );
+    assert!(!destination.state.watched());
+}
+
+#[test]
+fn queued_publication_tick_does_not_paint_ahead_of_a_focus_push() {
+    let (mut source, mut destination, output) = viewport_pair(MuxName::Tmux);
+    publish_scrolled(&mut source, 12);
+    let target = PaneId::from_parts(MuxName::Tmux, "%8");
+    let mut pulled = destination.state.current.clone();
+    pulled.own_view.as_mut().unwrap().working_pane_ids = vec![target.clone()];
+    pulled.pane_session_name = Some("rimz-test".into());
+    destination.fold(pulled, SnapshotSource::Produced);
+    destination.state.titled = true;
+    let anchor = crate::mux::focus_anchor::FocusAnchor {
+        nonce: crate::ids::FocusNonce::new(),
+        session_name: "rimz-test".into(),
+        pane_id: target,
+        origin: crate::mux::focus_anchor::FocusOrigin::User,
+        repair_generation: None,
+        issued_at_ms: crate::utils::time::unix_now_ms(),
+        applied_at_ms: None,
+        state: crate::mux::focus_anchor::FocusIntentState::Requested,
+        pre_action: Vec::new(),
+        placement: Some(crate::mux::focus_anchor::FocusPlacement {
+            row_id: "agent-8".into(),
+            viewport_row: 2,
+            held: Default::default(),
+        }),
+        order: None,
+    };
+    crate::mux::focus_anchor::store(&destination.runtime, &anchor).unwrap();
+    let (push, ack) = focus_push(anchor, destination.state.config.instance_id.clone());
+    let mut inbox = queued([Wakeup::Tick, Wakeup::Tick, push]);
+    destination.state.next_frame = Instant::now();
+    destination
+        .state
+        .step(
+            &mut inbox,
+            &mut destination.fetch,
+            &mut destination.terminal,
+        )
+        .unwrap();
+    assert_push_report(&ack, &destination, PushVerdict::Painted, true);
+    assert_eq!(paints(&output), 1, "only the pushed placement paints");
+    assert!(destination.state.ui.painted_rows.contains(&(
+        "agent-8".into(),
+        destination.state.ui.scroll_zone_top as isize + 2
+    )));
+}
+
+#[test]
+fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
+    let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
+    let previous = destination
+        .state
+        .current
+        .own_view
+        .as_ref()
+        .unwrap()
+        .working_pane_ids[0]
+        .clone();
+    source.event(SidebarEvent::FocusChanged {
+        focused: vec![previous.clone()],
+        unfocused: vec![],
+    });
+    publish_scrolled(&mut source, 12);
+    destination.maintenance();
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![previous.clone()],
+        unfocused: vec![],
+    });
+    paint_at(&mut destination, 0);
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![PaneId::from_parts(MuxName::Tmux, "%20")],
+        unfocused: vec![],
+    });
+    paint_at(&mut destination, 0);
+    assert_eq!(
+        session_focus_baseline(
+            &destination.state.current,
+            destination.state.config.own_pane.as_ref()
+        ),
+        None
+    );
+    assert_eq!(destination.state.ui.selected_pane, Some(previous));
+    assert_eq!(destination.state.ui.selected_index, Some(19));
+    let new_pane = PaneId::from_parts(MuxName::Tmux, "%20");
+    let mut admitted = destination.state.current.clone();
+    let rows = Arc::make_mut(&mut Arc::make_mut(&mut admitted.worktree_groups)[0].rows);
+    let mut row = rows[19].clone();
+    row.id = "agent-20".into();
+    row.pane.as_mut().unwrap().pane_id = new_pane.clone();
+    rows.push(row);
+    destination.fold(admitted, SnapshotSource::Produced);
+    paint_at(&mut destination, 0);
+    assert_eq!(destination.state.ui.selected_pane, Some(new_pane));
+}
+
+#[test]
+fn zellij_native_arrival_keeps_the_departing_viewport() {
+    assert_native_arrival_keeps_shared_frame(MuxName::Zellij);
+}
+
+#[test]
+fn shared_viewport_skips_watched_peers_and_its_source() {
+    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
+    publish_scrolled(&mut source, 12);
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(paints(&output), 1);
+    let held = destination.state.ui.painted_rows.clone();
+    destination
+        .state
+        .current
+        .viewed_panes
+        .push(destination.state.config.own_pane.clone().unwrap());
+    assert!(destination.state.watched());
+    publish_scrolled(&mut source, 20);
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(
+        destination.state.ui.painted_rows, held,
+        "another watched client keeps its own view"
+    );
+    source.state.current.viewed_panes.clear();
+    source.state.ui.scroll_offset = 3;
+    source.maintenance();
+    assert_eq!(
+        source.state.ui.scroll_offset, 3,
+        "never adopt one's own publication"
+    );
+}
+
+#[test]
+fn shared_viewport_publishes_glide_target_once_and_coalesces_hidden_paints() {
+    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
+    source
+        .state
+        .on_input(
+            Wakeup::Scroll { down: true },
+            &mut source.terminal,
+            &mut source.fetch,
+        )
+        .unwrap();
+    assert!(source.state.ui.scroll_ease.in_flight());
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(paints(&output), 1);
+    assert_eq!(
+        destination.state.ui.painted_rows,
+        source.state.ui.anchored_rows
+    );
+    let sequence = source
+        .state
+        .viewport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .sequence;
+    paint_at(&mut source, 16);
+    assert_eq!(
+        source
+            .state
+            .viewport
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .sequence,
+        sequence,
+        "animation alone never republishes"
+    );
+    destination.state.next_frame = Instant::now() + Duration::from_secs(1);
+    for offset in [12, 20] {
+        publish_scrolled(&mut source, offset);
+        destination.maintenance();
+        destination.state.next_frame = Instant::now() + Duration::from_millis(100);
+        destination.paint(false);
+        assert_eq!(paints(&output), 1, "hidden paints obey the frame boundary");
+    }
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(paints(&output), 2);
+    assert_eq!(
+        destination.state.ui.painted_rows,
+        source.state.ui.anchored_rows
+    );
+}
+
+#[test]
+fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
+    let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
+    destination.state.ui.freeze = None;
+    let mut update = destination.state.current.clone();
+    update.display_name = "deferred content".into();
+    let update = destination.lazy_update(update, SnapshotSource::Produced);
+    destination.deliver(update);
+    assert_ne!(destination.state.current.display_name, "deferred content");
+    publish_scrolled(&mut source, 12);
+    destination.maintenance();
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(paints(&output), 1);
+    assert_eq!(destination.state.current.display_name, "deferred content");
+    destination.state.ui = UiState {
+        selected_pane: destination.state.current.focused_pane.clone(),
+        selected_index: Some(0),
+        ..UiState::default()
+    };
+    destination
+        .state
+        .current
+        .viewed_panes
+        .push(destination.state.config.own_pane.clone().unwrap());
+    destination.state.viewport_seen = 0;
+    destination
+        .state
+        .on_input(
+            Wakeup::Resize,
+            &mut destination.terminal,
+            &mut destination.fetch,
+        )
+        .unwrap();
+    assert_eq!(
+        destination.state.ui.painted_rows, source.state.ui.anchored_rows,
+        "newborn uses its own measured cockpit top"
+    );
+}
+
 fn move_cards_without_input(rig: &mut Rig, first: usize, second: usize, now: Instant) {
     rig.state.ui.freeze = None;
     Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows)
