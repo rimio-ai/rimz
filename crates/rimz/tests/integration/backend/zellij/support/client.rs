@@ -462,6 +462,14 @@ impl AttachedClient {
         self.output.titles()
     }
 
+    pub(in crate::backend::zellij) fn watch_output(&self, needle: &[u8]) {
+        self.output.watch_output(needle);
+    }
+
+    pub(in crate::backend::zellij) fn output_seen(&self) -> bool {
+        self.output.output_seen()
+    }
+
     fn output_tail(&self) -> String {
         String::from_utf8_lossy(&self.output_bytes()).into_owned()
     }

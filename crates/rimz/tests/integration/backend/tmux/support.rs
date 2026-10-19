@@ -611,6 +611,14 @@ impl AttachedTmuxClient {
     pub(super) fn titles(&self) -> Vec<String> {
         self.output.titles()
     }
+
+    pub(super) fn watch_output(&self, needle: &[u8]) {
+        self.output.watch_output(needle);
+    }
+
+    pub(super) fn output_seen(&self) -> bool {
+        self.output.output_seen()
+    }
 }
 
 impl Drop for AttachedTmuxClient {
