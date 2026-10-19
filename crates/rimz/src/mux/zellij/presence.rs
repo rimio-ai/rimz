@@ -144,15 +144,14 @@ struct PresencePluginIdentity {
 }
 
 fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> PresencePluginIdentity {
-    let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
+    let mut pairs = vec![("workspace_id".to_owned(), opts.workspace_id.to_string())];
     if opts.session_name.contains([',', '=']) {
         tracing::debug!(
             session = %opts.session_name,
             "session name contains a plugin-configuration separator; session-scoped topology is disabled",
         );
     } else {
-        configuration.push_str(",session_name=");
-        configuration.push_str(&opts.session_name);
+        pairs.push(("session_name".to_owned(), opts.session_name.clone()));
     }
     let bin = opts.rimz_bin.to_string_lossy();
     if bin.contains([',', '=']) {
@@ -161,8 +160,7 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
             "rimz path contains a plugin-configuration separator; the plugin resolves `rimz` from PATH instead",
         );
     } else {
-        configuration.push_str(",rimz_bin=");
-        configuration.push_str(&bin);
+        pairs.push(("rimz_bin".to_owned(), bin.into_owned()));
     }
     // Room chords the plugin binds at load. Grammar validation and user-facing
     // warnings happen at room birth for both backends; here we only guard the
@@ -174,8 +172,7 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
                 "focus_key contains a plugin-configuration separator; the Zellij focus keybind is disabled",
             );
         } else {
-            configuration.push_str(",focus_key=");
-            configuration.push_str(focus_key);
+            pairs.push(("focus_key".to_owned(), focus_key.to_owned()));
         }
     }
     if let Some(zoom_key) = opts.zoom_key.as_deref() {
@@ -185,22 +182,29 @@ fn presence_plugin_identity(opts: &super::super::PresencePluginOptions) -> Prese
                 "zoom_key contains a plugin-configuration separator; the Zellij zoom keybind is disabled",
             );
         } else {
-            configuration.push_str(",zoom_key=");
-            configuration.push_str(zoom_key);
+            pairs.push(("zoom_key".to_owned(), zoom_key.to_owned()));
         }
     }
     // Resolved values are bools, digits, or bare enum words: no ',' or '=' by construction.
     for option in &opts.session_options {
-        configuration.push_str(",opt_");
-        configuration.push_str(option.key);
-        configuration.push('=');
-        configuration.push_str(&option.value.plugin_configuration());
+        pairs.push((
+            format!("opt_{}", option.key),
+            option.value.plugin_configuration(),
+        ));
     }
     // Pipe-launched identities are background plugins. Changing this marker
     // forces one global re-convergence, repairing identities previously
     // created through the tab-scoped action fallback.
-    configuration.push_str(",launch_scope=background,plugin_build=");
-    configuration.push_str(presence_plugin_build());
+    pairs.push(("launch_scope".to_owned(), "background".to_owned()));
+    pairs.push((
+        "plugin_build".to_owned(),
+        presence_plugin_build().to_owned(),
+    ));
+    let mut configuration = pairs
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let config_hash = crate::build_id::of_bytes(configuration.as_bytes());
     configuration.push_str(",plugin_config=");
     configuration.push_str(&config_hash);
