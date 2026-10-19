@@ -219,10 +219,19 @@ fn clicked_row_emits_each_cause_in_priority_order_and_rebaselines() {
         // Lower-priority changes deliberately coincide with each higher one.
         rig.state.ui.anchor_clamped = cause == "no_room_clamp";
         if matches!(cause, "no_room_clamp" | "hold_expired") {
+            rig.state.clock = LoopClock::play(Timestamp::UNIX_EPOCH);
             super::super::super::layout_freeze::arm_freeze(&mut rig.state.ui, 0);
             let prev = rig.state.current.clone();
-            rig.state
-                .reconcile_selection_and_order(&prev, None, None, false, false, 5_000);
+            rig.state.reconcile_selection_and_order(
+                &prev,
+                None,
+                None,
+                false,
+                false,
+                rig.state
+                    .clock
+                    .instant_at(Timestamp::from_millisecond(5_000).unwrap()),
+            );
         }
         rig.state.ui.banner_shown = cause != "height_above_changed";
         if cause == "selection_changed" {

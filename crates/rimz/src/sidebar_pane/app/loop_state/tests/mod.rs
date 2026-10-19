@@ -8,6 +8,7 @@ use crate::sidebar_pane::view::BodyFilter;
 use crate::{SidebarInstanceId, WorkspaceId};
 use std::collections::HashSet;
 
+mod clock;
 mod displacement;
 mod fetch;
 mod focus;
@@ -119,6 +120,15 @@ impl Rig {
     }
 
     fn with_baseline(own_pane: Option<PaneId>, filter: BodyLens, baseline: Option<PaneId>) -> Self {
+        Self::with_clock(own_pane, filter, baseline, LoopClock::wall())
+    }
+
+    fn with_clock(
+        own_pane: Option<PaneId>,
+        filter: BodyLens,
+        baseline: Option<PaneId>,
+        clock: LoopClock,
+    ) -> Self {
         let ws = workspace();
         let dir = tempfile::tempdir_in("/tmp").expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
@@ -135,6 +145,7 @@ impl Rig {
         let (result_tx, result_rx) = super::super::fetch::result_channel();
         Self {
             state: LoopState::new(
+                clock,
                 config,
                 baseline,
                 runtime.clone(),

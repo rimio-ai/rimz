@@ -1,4 +1,4 @@
-//! Wall-clock frame stamps and frame-grid helpers, with receive and focus-resume timing bounds.
+//! Driver-clock frame stamps and frame-grid helpers, with receive and focus-resume timing bounds.
 
 use std::time::{Duration, Instant};
 
@@ -29,8 +29,8 @@ impl FrameClock {
 }
 
 /// Sample both animation units from the same elapsed time; every redraw stamps them together.
-pub(super) fn frame_clock(start: Instant, refresh_ms: u16) -> FrameClock {
-    let elapsed_ms = duration_millis(start.elapsed());
+pub(super) fn frame_clock(now: Instant, start: Instant, refresh_ms: u16) -> FrameClock {
+    let elapsed_ms = duration_millis(now.saturating_duration_since(start));
     FrameClock {
         phase: elapsed_ms / u64::from(refresh_ms),
         elapsed_ms,

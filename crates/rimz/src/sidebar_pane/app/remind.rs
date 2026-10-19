@@ -13,6 +13,7 @@ use crate::store::snapshot::SidebarSnapshot;
 
 use super::ServeConfig;
 use super::backend::PaneBackend;
+use super::clock::LoopClock;
 use super::notify::{BellNotice, emit_terminal_notification};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,6 +37,7 @@ impl RemindState {
 
     pub(super) fn maybe_remind(
         &mut self,
+        clock: &LoopClock,
         config: &ServeConfig,
         terminal: &mut Terminal<PaneBackend>,
         snapshot: &SidebarSnapshot,
@@ -49,7 +51,7 @@ impl RemindState {
             self.clear();
             return;
         }
-        let now_ms = crate::utils::time::unix_now_ms();
+        let now_ms = clock.now_ms();
         self.note_scope_visible(now_ms);
         if !self.due(now_ms, scope.count, config.notification_prefs.remind_secs) {
             return;
@@ -59,23 +61,27 @@ impl RemindState {
         // The reminder scope is already unread `waiting`/`failed` rows, so ring
         // directly rather than re-checking each pane's row. The daemon
         // exclusion in `bell_decision` still applies.
-        if let Err(err) = emit_terminal_notification(
-            config,
-            terminal,
-            snapshot,
-            BellNotice {
-                title: &notification.title,
-                body: &notification.body,
-                panes: &scope.panes,
-                recheck_unread: false,
-                kind: notification.kind_env(),
-            },
-            diag,
-        ) {
+        if clock.effects_enabled()
+            && let Err(err) = emit_terminal_notification(
+                config,
+                terminal,
+                snapshot,
+                BellNotice {
+                    title: &notification.title,
+                    body: &notification.body,
+                    panes: &scope.panes,
+                    recheck_unread: false,
+                    kind: notification.kind_env(),
+                },
+                diag,
+            )
+        {
             debug!(error = %err, "terminal unread reminder emit failed");
         }
         if config.notification_prefs.has_handlers() {
-            spawn_notify_handlers(&config.notification_prefs, &notification);
+            clock.notify(|| {
+                spawn_notify_handlers(&config.notification_prefs, &notification);
+            });
         }
         self.last_reminded_at_ms = Some(now_ms);
     }

@@ -19,15 +19,20 @@ pub(super) fn compute_next_state(
     snapshot: std::result::Result<SidebarSnapshot, String>,
     committed: &SidebarSnapshot,
     previous_health: &Health,
+    now: Timestamp,
 ) -> RenderState {
     match snapshot {
         Ok(snapshot) => RenderState {
             snapshot,
-            health: next_health(previous_health, None),
+            health: next_health(previous_health, None, now),
         },
         Err(reason) => RenderState {
             snapshot: committed.clone(),
-            health: next_health(previous_health, Some(format!("snapshot failed: {reason}"))),
+            health: next_health(
+                previous_health,
+                Some(format!("snapshot failed: {reason}")),
+                now,
+            ),
         },
     }
 }

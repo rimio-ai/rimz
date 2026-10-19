@@ -24,7 +24,7 @@ pub struct Health {
 ///   monotonically across an episode.
 /// - A success resets the streak and marks any active alert recovered, leaving
 ///   it pinned to the bottom until the user dismisses it.
-pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health {
+pub(super) fn next_health(previous: &Health, failure: Option<String>, now: Timestamp) -> Health {
     match failure {
         Some(reason) => {
             let failure_streak = previous.failure_streak.saturating_add(1);
@@ -34,7 +34,7 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
                     .as_ref()
                     .filter(|alert| alert.is_active())
                     .map(|alert| alert.since)
-                    .unwrap_or_else(Timestamp::now);
+                    .unwrap_or(now);
                 Some(Alert::active(reason, since))
             } else {
                 // Below the threshold: absorb the blip, but keep any lingering
@@ -49,7 +49,7 @@ pub(super) fn next_health(previous: &Health, failure: Option<String>) -> Health 
         None => {
             let alert = previous.alert.clone().map(|mut alert| {
                 if alert.is_active() {
-                    alert.recovered_at = Some(Timestamp::now());
+                    alert.recovered_at = Some(now);
                 }
                 alert
             });

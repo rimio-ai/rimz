@@ -63,6 +63,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
+    ensure_sidebar_loop_runtime_uses_driver_clock(root, &files)?;
     ensure_no_hardcoded_ui_colors(root, &files)?;
     ensure_cli_color_provenance(root, &files)?;
     ensure_brand_resolution_single_home(root, &files)?;
@@ -1046,6 +1047,49 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
     }
     bail!(
         "sidebar render runtime must use the snapshot clock; pass snapshot.now/current frame time instead of Timestamp::now()\n{}",
+        violations.join("\n")
+    );
+}
+
+fn ensure_sidebar_loop_runtime_uses_driver_clock(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let app_root = root.join("crates/rimz/src/sidebar_pane/app");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.parent() != Some(app_root.as_path())
+            || !matches!(
+                path.file_name().and_then(OsStr::to_str),
+                Some("loop_state.rs" | "health.rs" | "remind.rs" | "timing.rs")
+            )
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("mod tests") {
+                break;
+            }
+            let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            if [
+                "Instant::now",
+                "Timestamp::now",
+                "SystemTime::now",
+                "unix_now_ms",
+                ".elapsed(",
+            ]
+            .iter()
+            .any(|needle| compact.contains(needle))
+            {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "sidebar loop runtime must use the driver clock; pass loop time instead of sampling a wall clock\n{}",
         violations.join("\n")
     );
 }

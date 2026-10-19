@@ -3,6 +3,64 @@ use std::path::{Path, PathBuf};
 use super::*;
 
 #[test]
+fn sidebar_loop_clock_rejects_wall_reads_and_references_but_not_tests_or_clock_definition() {
+    let root = temp_repo_root("sidebar-loop-clock");
+    let app = root.join("crates/rimz/src/sidebar_pane/app");
+    std::fs::create_dir_all(app.join("tests")).unwrap();
+    for name in ["loop_state.rs", "health.rs", "remind.rs", "timing.rs"] {
+        let path = app.join(name);
+        for read in [
+            "Instant::now()",
+            "std::time::Instant::now",
+            "Timestamp::now()",
+            "jiff::Timestamp::now",
+            "unix_now_ms()",
+            "crate::utils::time::unix_now_ms",
+            "start.elapsed()",
+            "start . elapsed ()",
+            "SystemTime::now()",
+        ] {
+            std::fs::write(&path, format!("fn decision() {{ {read}; }}")).unwrap();
+            let error =
+                ensure_sidebar_loop_runtime_uses_driver_clock(&root, std::slice::from_ref(&path))
+                    .unwrap_err()
+                    .to_string();
+            assert!(
+                error.contains("driver clock") && error.contains(name),
+                "{error}"
+            );
+        }
+        std::fs::write(&path, "fn decision() { clock.now(); }\n#[cfg(test)]\nmod tests {\nfn fixture() { Instant::now(); }\n}").unwrap();
+        ensure_sidebar_loop_runtime_uses_driver_clock(&root, &[path]).unwrap();
+    }
+    let mut files = Vec::new();
+    for name in ["loop_state.rs", "health.rs", "remind.rs", "timing.rs"] {
+        let path = app.join(name);
+        std::fs::write(&path, "fn decision() { Timestamp::now(); }").unwrap();
+        files.push(path);
+    }
+    let error = ensure_sidebar_loop_runtime_uses_driver_clock(&root, &files)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        error.lines().count(),
+        5,
+        "all violations are reported together"
+    );
+    for name in [
+        "clock.rs",
+        "tests.rs",
+        "loop_state_tests.rs",
+        "tests/health.rs",
+    ] {
+        let path = app.join(name);
+        std::fs::write(&path, "fn fixture() { Instant::now(); }").unwrap();
+        ensure_sidebar_loop_runtime_uses_driver_clock(&root, &[path]).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pane_writes_require_an_earlier_wake_in_the_same_function() {
     let root = temp_repo_root("wake-first");
     let path = root.join("crates/rimz/src/message/send.rs");

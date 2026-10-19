@@ -298,6 +298,7 @@ fn reject_holds_prior_frame_as_committed_render() {
         Ok(process_on(&ws, "terminal_9")),
         &prior,
         &Health::default(),
+        jiff::Timestamp::now(),
     );
     let (state, gate, rejected, released_via_escape_hatch, rejected_snapshot) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -314,7 +315,12 @@ fn reject_holds_prior_frame_as_committed_render() {
     assert!(state.health.alert.is_none());
     assert_eq!(state.health.failure_streak, 0);
 
-    let computed = compute_next_state(Ok(snapshot(&ws)), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(snapshot(&ws)),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
 
     let (state, gate, rejected, released_via_escape_hatch, rejected_snapshot) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -338,6 +344,7 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
         Ok(process_on(&ws, "terminal_9")),
         &prior,
         &Health::default(),
+        jiff::Timestamp::now(),
     );
     let (held, gate, rejected, _, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -347,6 +354,7 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
         Err("store not found".to_owned()),
         &held.snapshot,
         &held.health,
+        jiff::Timestamp::now(),
     );
     let (failed, next_gate, rejected, released, _) =
         apply_gate(failed, false, &held.snapshot, &gate, gate_now());
@@ -364,7 +372,12 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
     prior.today_spend_live_usd = Some(8.25);
     let incoming = spend_snapshot(&ws, None, None, None, 0);
     let incoming_row_id = incoming.worktree_groups[0].rows[0].id.clone();
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
 
     let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -417,7 +430,12 @@ fn accept_keeps_different_nonzero_spend() {
     let ws = workspace();
     let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
     let incoming = spend_snapshot(&ws, Some(20.00), Some(18.00), Some(9.00), 0);
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
 
     let (state, gate, rejected, released_via_escape_hatch, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -458,7 +476,12 @@ fn spend_carry_repairs_only_collapsed_families_and_recovers_independently() {
     incoming
         .providers
         .push(provider("claude", Some(spend_tally(3.50)), 0));
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     let (state, gate, _, _, _) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
 
@@ -503,7 +526,12 @@ fn spend_carry_repairs_only_collapsed_families_and_recovers_independently() {
     recovered
         .providers
         .push(provider("claude", Some(spend_tally(4.00)), 0));
-    let computed = compute_next_state(Ok(recovered), &state.snapshot, &Health::default());
+    let computed = compute_next_state(
+        Ok(recovered),
+        &state.snapshot,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     let (state, gate, _, _, _) = apply_gate(computed, true, &state.snapshot, &gate, gate_now());
 
     assert_eq!(state.snapshot.workspace_value_tally.unwrap().year.usd, 8.00);
@@ -547,7 +575,12 @@ fn spend_carry_expires_each_family_without_coupling_mana_zero() {
         base_ms + i64::try_from(CARRY_COLLAPSED_SPEND_FOR.as_millis()).unwrap(),
     )
     .unwrap();
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     let (state, gate, _, _, _) = apply_gate(computed, true, &prior, &gate, now);
 
     assert!(state.snapshot.value_tally.is_none());
@@ -567,7 +600,12 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
     let ws = workspace();
     let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
     let incoming = spend_snapshot(&ws, None, None, None, 0);
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     let base = 1_700_000_000;
     let prev_gate = GateState {
         spend_carry: SpendCarryEpisodes {
@@ -605,6 +643,7 @@ fn failed_fetch_keeps_a_gate_episode_open() {
         Err("pane discovery failed".to_owned()),
         &prior,
         &Health::default(),
+        jiff::Timestamp::now(),
     );
     let prev_gate = GateState {
         reject_streak: 1,
@@ -629,7 +668,12 @@ fn failed_fetch_keeps_a_gate_episode_open() {
 fn accept_resets_the_gate() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
-    let computed = compute_next_state(Ok(agent_snapshot(&ws)), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(agent_snapshot(&ws)),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     // Carry a prior reject episode in; a clean accept clears it.
     let prev_gate = GateState {
         reject_streak: 2,
@@ -650,7 +694,12 @@ fn escape_release_reports_escape_hatch() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
     let incoming = process_on(&ws, "terminal_9");
-    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
+    let computed = compute_next_state(
+        Ok(incoming),
+        &prior,
+        &Health::default(),
+        jiff::Timestamp::now(),
+    );
     let base_ms = 1_700_000_000_000i64;
     let prev_gate = GateState {
         reject_streak: 2,

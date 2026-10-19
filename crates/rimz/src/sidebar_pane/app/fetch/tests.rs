@@ -223,6 +223,7 @@ fn consumer(
 ) -> (LoopState, FetchDispatcher) {
     (
         LoopState::new(
+            crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
             None,
             runtime,
@@ -2139,6 +2140,7 @@ fn shared_observation_extracts_common_once_and_keeps_each_own_view() {
         config.own_pane = sub.own_pane;
         let own = config.own_pane.clone().unwrap();
         let mut state = super::super::loop_state::LoopState::new(
+            crate::sidebar_pane::app::clock::LoopClock::wall(),
             config,
             None,
             fixture.runtime.clone(),
@@ -2209,6 +2211,7 @@ fn fold_file_reads_are_shared_across_forty_attachment_threads() {
         let ready = ready_tx.clone();
         panes.push(std::thread::spawn(move || {
             let mut state = super::super::loop_state::LoopState::new(
+                crate::sidebar_pane::app::clock::LoopClock::wall(),
                 config,
                 None,
                 runtime,

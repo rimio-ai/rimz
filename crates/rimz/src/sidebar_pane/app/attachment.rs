@@ -151,6 +151,7 @@ impl Attachment {
             }
         };
         let mut state = LoopState::new(
+            crate::sidebar_pane::app::clock::LoopClock::wall(),
             config.clone(),
             baseline_pane,
             runtime.clone(),

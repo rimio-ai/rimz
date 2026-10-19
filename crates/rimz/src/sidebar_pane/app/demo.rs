@@ -51,7 +51,7 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
     loop {
-        super::timing::frame_clock(anim_start, refresh_ms).stamp(&mut ui);
+        super::timing::frame_clock(Instant::now(), anim_start, refresh_ms).stamp(&mut ui);
         paint.refresh_view(&mut ui, &snapshot, false);
         paint.draw_and_paint(&mut terminal, &snapshot, None, &mut ui)?;
 
@@ -113,7 +113,7 @@ pub fn serve_gallery(
     let cadence = Duration::from_millis(u64::from(refresh_ms));
 
     loop {
-        let clock = super::timing::frame_clock(anim_start, refresh_ms);
+        let clock = super::timing::frame_clock(Instant::now(), anim_start, refresh_ms);
         let now_ms = u64::from(refresh_ms).saturating_mul(clock.phase);
         for state in &mut states {
             clock.stamp(&mut state.ui);

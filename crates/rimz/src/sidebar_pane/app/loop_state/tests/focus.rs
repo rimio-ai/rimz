@@ -1197,6 +1197,30 @@ fn requested_focus_anchor(
 }
 
 #[test]
+fn retiring_focus_intent_fences_a_sample_taken_after_the_fold_started() {
+    let mut rig = Rig::new();
+    let now_ms = rig.state.clock.now_ms();
+    let anchor = requested_focus_anchor(zellij("terminal_2"), 0, now_ms - 60_000, None);
+    crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    let stale_fold = Instant::now() - Duration::from_secs(1);
+    let sampled_at = Instant::now();
+    assert!(rig.state.pending_focus_intent(now_ms, stale_fold).is_none());
+    assert!(crate::mux::focus_anchor::load(&rig.runtime).is_none());
+    rig.state.fold_inputs = Some(Arc::new(super::super::super::fetch::FoldInputs {
+        sampled_at,
+        anchor: Some(anchor),
+        filter: rig.state.ui.make_up_filter.clone(),
+    }));
+    assert!(
+        matches!(
+            rig.state.pending_focus_intent(now_ms, Instant::now()),
+            Some(FocusPresentation::Fence)
+        ),
+        "a pre-retirement sample cannot revive the removed anchor"
+    );
+}
+
+#[test]
 fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
     let own = zellij("terminal_99");
     let target = zellij("terminal_2");
