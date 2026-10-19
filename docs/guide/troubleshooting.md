@@ -181,7 +181,7 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 
 ### The room warns about a provider account
 
-`rimz start` warns about selected accounts that cannot launch, records the warnings for the sidebar and `rimz doctor`, and opens the room. An explicit `--account` request still refuses if that account cannot work. The fixes are in [start a room on an account](./accounts.md#start-a-room-on-an-account): declare a missing account, install its hooks, or clear a selection of an account you removed.
+`rimz start` warns about selected accounts that cannot launch, records the warnings for the sidebar and `rimz doctor`, and opens the room. With remote control on for that provider, a second warning turns its remote control off for the run and points at the account warning. An explicit `--account` request still refuses if that account cannot work. The fixes are in [start a room on an account](./accounts.md#start-a-room-on-an-account): declare a missing account, install its hooks, or clear a selection of an account you removed.
 
 `project account selections in .rimz/config.toml are untrusted` means the repository's `[accounts]` table sits behind the trust gate, because choosing which provider account your agents run under is part of the surface you grant. The room opens, but launches following that selection refuse. Run `rimz trust status`, read the diff, then `rimz trust grant`.
 

@@ -1725,6 +1725,44 @@ fn start_warns_about_a_configured_missing_account_and_launch_refuses_it() {
     assert!(!home.exists(), "no empty account home is created");
 }
 
+#[test]
+fn start_states_a_missing_account_once_when_its_remote_control_is_waived() {
+    let env = Env::new();
+    let home = env.home_root.join("accounts/work");
+    write_machine_config(
+        &env,
+        &format!(
+            "[accounts.claude.work]\nhome = \"{}\"\n[accounts.use]\nclaude = \"work\"\n[remote_control]\nclaude = true\n",
+            home.display(),
+        ),
+    );
+    let output = start_with_accounts(
+        &env,
+        "",
+        &[],
+        Some("unavailable accounts must permit birth"),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_skipped(
+        &env,
+        &stderr,
+        "accounts.claude.work",
+        "rimz accounts add claude work",
+    );
+    assert_skipped(
+        &env,
+        &stderr,
+        "remote_control.claude",
+        "see accounts.claude.work",
+    );
+    assert_eq!(
+        stderr.matches("rimz accounts add claude work").count(),
+        1,
+        "{stderr}"
+    );
+}
+
 type LostAgent = (rimz::ids::AgentKind, rimz::ids::AgentSessionId);
 
 /// A dead tmux room's one rostered `claude` agent, and the PATH resolving its

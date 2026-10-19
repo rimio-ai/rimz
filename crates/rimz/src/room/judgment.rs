@@ -120,8 +120,10 @@ pub(super) fn judge(
         }
     }
     let (catalog, declarations) = crate::agents::LoginCatalog::room_view(&machine.accounts);
+    let mut account_warnings = BTreeMap::new();
     for (kind, error) in &declarations {
         warn(format!("accounts.{kind}"), error.to_string());
+        account_warnings.insert(kind.clone(), format!("accounts.{kind}"));
     }
     let state = crate::StatePaths::for_project_root(&workspace.project_root)?;
     let logins = crate::agents::room_accounts(
@@ -142,14 +144,16 @@ pub(super) fn judge(
         match logins.login(kind, &machine.accounts) {
             Ok(login) => {
                 if let Err(error) = login.preflight(&catalog.native_ambient(kind, &ambient)) {
-                    warn(
-                        format!("accounts.{kind}.{}", login.name()),
-                        error.to_string(),
-                    );
+                    let setting = format!("accounts.{kind}.{}", login.name());
+                    warn(setting.clone(), error.to_string());
+                    account_warnings.insert(kind.clone(), setting);
                     envs.reject(kind, Box::new(error).into());
                 }
             }
-            Err(error) => warn(format!("accounts.{kind}"), format!("{kind}: {error}")),
+            Err(error) => {
+                warn(format!("accounts.{kind}"), format!("{kind}: {error}"));
+                account_warnings.insert(kind.clone(), format!("accounts.{kind}"));
+            }
         }
     }
     if let Some(default) = machine.mux.default
@@ -182,10 +186,17 @@ pub(super) fn judge(
         let config = config.without(remote_control_off.iter().map(AgentKind::as_str));
         crate::remote_control::prepare_hosts(&config, &envs);
         let readiness = ReadinessSnapshot::probe(&config, &envs, Some(&workspace.project_root));
-        let Err(block) = readiness.start_gate() else {
+        let Err(mut block) = readiness.start_gate() else {
             break (readiness, config);
         };
         let kind = AgentKind::new_unchecked(block.host.kind());
+        if envs.for_host(block.host).is_err()
+            && let Some(setting) = account_warnings.get(&kind)
+        {
+            block.blocker.problem = format!(
+                "{kind} remote control needs the {kind} account, which failed: see {setting}"
+            );
+        }
         let effect = if live {
             "is blocked; the live room's policy is unchanged"
         } else {
@@ -376,18 +387,22 @@ mod tests {
             !home.exists(),
             "judgment must not create a failed account's home"
         );
-        assert!(
+        let message = |setting: &str| {
             judgment
                 .skipped
                 .iter()
-                .any(|entry| entry.setting == "accounts.claude.work")
-        );
+                .find(|entry| entry.setting == setting)
+                .map(|entry| entry.message.as_str())
+                .unwrap_or_else(|| panic!("missing {setting}"))
+        };
+        let account = message("accounts.claude.work");
+        let waiver = message("remote_control.claude");
+        assert!(waiver.contains("see accounts.claude.work"), "{waiver}");
         assert!(
-            judgment
-                .skipped
-                .iter()
-                .any(|entry| entry.setting == "remote_control.claude")
+            waiver.contains("rimz config set remote_control.claude false"),
+            "{waiver}"
         );
+        assert!(!waiver.contains(account), "{waiver}");
         assert!(
             judgment
                 .remote_control_off
