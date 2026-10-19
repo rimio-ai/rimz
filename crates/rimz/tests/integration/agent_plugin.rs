@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
-fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
+fn plugin_scaffold_registry_doctor_and_start_warnings_work_end_to_end() {
     let env = Env::new();
     env.record(&env.project_root);
     let output = env
@@ -94,19 +94,18 @@ fn plugin_scaffold_registry_doctor_and_start_validation_work_end_to_end() {
     )
     .expect("corrupt manifest");
 
-    let output = env
-        .rimz()
-        .arg("start")
-        .bounded_output()
-        .expect("start validation");
-    assert!(!output.status.success(), "start accepted invalid plugin");
+    let output =
+        super::start::start_with_accounts(&env, "", &[], Some("broken plugins must permit birth"));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("agent plugin validation failed"),
-        "{stderr}"
-    );
+    assert!(output.status.success(), "{stderr}");
     assert!(stderr.contains("agent.toml"), "{stderr}");
     assert!(stderr.contains("register --check"), "{stderr}");
+    super::start::assert_skipped(
+        &env,
+        &stderr,
+        &plugin_dir.join("agent.toml").display().to_string(),
+        "register --check",
+    );
 
     let output = env
         .rimz()

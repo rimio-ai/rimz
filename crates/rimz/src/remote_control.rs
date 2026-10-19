@@ -41,7 +41,7 @@ pub struct StartBlock {
 }
 
 /// The remote-control policy one room runs under: machine intent with the hosts
-/// the user waived at `rimz start` turned off. Every per-room reader of
+/// waived at room birth turned off. Every per-room reader of
 /// enablement goes through this.
 pub(crate) fn room_config(
     config: &RemoteControlConfig,
@@ -51,7 +51,7 @@ pub(crate) fn room_config(
 }
 
 /// `room_config` for a reader that holds the record's path. An absent or
-/// unreadable record waives nothing, so every reader, the start gate included,
+/// unreadable record waives nothing, so every reader, room judgment included,
 /// falls back to machine intent: a host stays on rather than silently off.
 pub fn room_config_at(config: &RemoteControlConfig, record_path: &Path) -> RemoteControlConfig {
     match record::read_optional(record_path) {
@@ -105,6 +105,15 @@ impl HostLoginEnvs {
     ) -> Result<Self, crate::agents::RoomLoginErr> {
         let logins = crate::agents::room_accounts(record, None, machine)?;
         Ok(Self::from_logins(&machine.accounts, &logins))
+    }
+
+    pub(crate) fn reject(&mut self, kind: &str, error: crate::agents::RoomLoginErr) {
+        let env = match kind {
+            "claude" => &mut self.claude,
+            "codex" => &mut self.codex,
+            _ => return,
+        };
+        *env = Err(Arc::new(error));
     }
 
     pub fn for_host(
@@ -275,7 +284,7 @@ pub enum ToggleErr {
     Apply(#[from] RuntimeControlError),
 }
 
-/// Persist machine intent and apply it to running hosts, shared by config and start.
+/// Persist machine intent and apply it to running hosts for the config command.
 pub fn persist_toggle(
     host: RemoteControlHost,
     enabled: bool,

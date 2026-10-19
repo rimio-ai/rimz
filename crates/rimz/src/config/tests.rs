@@ -7,6 +7,35 @@ use std::num::NonZeroU16;
 use tempfile::tempdir;
 
 #[test]
+fn broken_machine_files_reports_independent_semantic_errors() {
+    let dir = tempdir().unwrap();
+    let path = write(
+        &dir,
+        "[accounts.budget]\ncopilot = '10/day'\n[accounts.claude.default]\n[[notifications.handler]]\nname = 'bad'\ncommand = ''\n",
+    );
+    let files = MachineConfigFiles::from_paths(&path, no_fragments(&path));
+    let errors = broken_machine_files_in(&files);
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, ConfigErr::AccountBudget { .. })),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, ConfigErr::Account { .. })),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, ConfigErr::Notifications { .. })),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn glyph_set_source_folds_style_after_explicit_set() {
     let mut theme = ThemeConfig::default();
     assert_eq!(theme.glyph_set_source(), None);

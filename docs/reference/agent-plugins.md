@@ -403,7 +403,7 @@ The version probe gets empty stdin. Its first non-empty stdout line is the agent
 | `valid; probe unavailable` | `check <probes>`, naming each declared probe that is missing or not executable. |
 | `invalid` | The manifest error. |
 
-An invalid bundle anywhere under `agents.d` is a failed precondition for a room: `rimz start` refuses before creating anything, lists every manifest error, and names `rimz agents register --check`. Elsewhere the broken kind is absent. `rimz hooks feed --source <kind>` for it exits 0 with no output when stdin is JSON, so the agent's hooks keep working while you fix the manifest.
+An invalid bundle under `agents.d` is skipped: `rimz start` warns, records every manifest error, and names `rimz agents register --check`, while the room still opens. The broken kind is absent and cannot launch. `rimz hooks feed --source <kind>` for it exits 0 with no output when stdin is JSON, so the agent's hooks keep working while you fix the manifest.
 
 ## Protocol version
 

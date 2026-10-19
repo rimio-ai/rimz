@@ -994,18 +994,7 @@ fn traffic_blocker() -> rimz::blocker::Blocker {
 }
 
 #[test]
-fn a_blocked_start_lists_fixes_commands_and_the_run_only_hint() {
-    let error: anyhow::Error = rimz::remote_control::StartBlock {
-        host: rimz::remote_control::RemoteControlHost::Claude,
-        blocker: traffic_blocker(),
-    }
-    .into();
-    let output = strip(|out| write_report_with_args(out, &error, &[]));
-    insta::assert_snapshot!(output);
-}
-
-#[test]
-fn sandbox_start_refusal_prints_fixes_without_offering_a_run_only_choice() {
+fn sandbox_launch_refusal_prints_fixes_without_offering_a_run_only_choice() {
     let error: anyhow::Error =
         rimz::blocker::Blocker::from(rimz::sandbox::SandboxErr::MissingBwrap).into();
     let output = strip(|out| write_report_with_args(out, &error, &[]));
@@ -1018,7 +1007,7 @@ fn sandbox_start_refusal_prints_fixes_without_offering_a_run_only_choice() {
 }
 
 #[test]
-fn a_live_room_refusal_and_a_declined_prompt_carry_no_run_only_hint() {
+fn blocker_and_already_reported_errors_need_no_start_hint() {
     let live: anyhow::Error = traffic_blocker().into();
     let output = strip(|out| write_report_with_args(out, &live, &[]));
     assert!(

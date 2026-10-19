@@ -874,7 +874,7 @@ fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
     assert!(!fix.contains("move"), "{fix}");
     assert!(!fix.contains("or set RIMZ_HOME"), "{fix}");
 
-    // A missing project stops after the legacy guard, without birthing a room.
+    // Workspace resolution still refuses a missing project before any birth.
     let missing_project = env.home_root.join("missing-project");
     assert!(!env.rimz_home().join("config.toml").exists());
     let output = env
@@ -902,8 +902,11 @@ fn doctor_reports_a_legacy_cache_for_deletion_without_blocking_start() {
         .expect("start with legacy config");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stderr}");
-    assert!(stderr.contains("legacy RimZ roots exist"), "{stderr}");
-    assert!(stderr.contains(&config.display().to_string()), "{stderr}");
+    assert!(stderr.contains("resolving workspace at"), "{stderr}");
+    assert!(
+        stderr.contains(&missing_project.display().to_string()),
+        "{stderr}"
+    );
     assert!(!env.rimz_home().join("config.toml").exists());
 }
 

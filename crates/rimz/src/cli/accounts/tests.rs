@@ -520,7 +520,7 @@ fn list_marks_unknown_agent_counts_and_undeclared_selections() {
         .find(|row| row.account.name.as_str() == "gone")
         .expect("an undeclared selection keeps a row");
     assert_eq!(gone.status, AccountStatus::Unavailable);
-    assert!(!gone.active, "birth refuses an undeclared selection");
+    assert!(!gone.active, "an undeclared selection is unavailable");
     assert_eq!(gone.default_for.label(), "new rooms");
     assert!(text.contains("unavailable"), "{text}");
     assert!(

@@ -13,7 +13,7 @@
 //! points use [`MachineConfig::load_lenient`], which degrades a broken machine
 //! file to built-in defaults. A broken Markdown definition drops only that definition from read-only views and blocks launches with its source error.
 //! Strict [`MachineConfig::load`] backs config inspection and reports precise errors.
-//! Room start also checks [`broken_machine_files`] and refuses invalid accounts, account budgets, and notifications before creating room state.
+//! Room judgment checks [`broken_machine_files`] and records warnings; commands that consume a broken launch setting still refuse it.
 
 use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -963,16 +963,43 @@ impl MachineConfig {
 }
 
 /// Diagnose parse, I/O, and semantic failures across the per-machine config files and Markdown definitions.
-/// The core check covers TOML, removed keys, accounts, account budgets, and a switched-on `[notifications]` table; the theme check validates every configured palette source. Runtime loading remains lenient; this feeds the start gate, start notices, and `rimz doctor`.
+/// The core check covers TOML, removed keys, accounts, account budgets, and a switched-on `[notifications]` table; the theme check validates every configured palette source. Runtime loading remains lenient; this feeds room judgment and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
     broken_machine_files_in(&MachineConfigFiles::machine())
 }
 
 fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
-    let mut errors: Vec<_> = load_optional(files.core_path(), parse_core_text_strict)
-        .err()
-        .into_iter()
-        .collect();
+    let mut errors = Vec::new();
+    match load_optional(files.core_path(), parse_core_text) {
+        Ok(Some(core)) => {
+            for kind in core.accounts.budget.keys() {
+                errors.extend(
+                    AccountsConfig::validate_budget_kind(kind)
+                        .err()
+                        .map(|source| ConfigErr::AccountBudget {
+                            path: files.core_path().to_path_buf(),
+                            source,
+                        }),
+                );
+            }
+            errors.extend(
+                crate::agents::LoginCatalog::room_view(&core.accounts)
+                    .1
+                    .into_values()
+                    .map(|source| ConfigErr::Account {
+                        path: files.core_path().to_path_buf(),
+                        source: Box::new(source),
+                    }),
+            );
+            if core.notifications.enabled {
+                errors.extend(
+                    validate_notifications_config(&core.notifications, files.core_path()).err(),
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => errors.push(error),
+    }
     let theme_path = files.path(MachineConfigFileKind::Theme);
     match load_optional(&theme_path, parse_theme_text) {
         Ok(Some(theme)) => {
@@ -1239,12 +1266,7 @@ fn parse_core_text_collecting(path: &Path, text: &str) -> Result<Parsed<CoreConf
     parse_toml_collecting(path, text)
 }
 
-/// Validate core TOML, removed keys, accounts, account budgets, and a switched-on
-/// `[notifications]` table.
-///
-/// A table under `enabled = false` asks for no notifications, so its handlers are
-/// a precondition of nothing and must not refuse a room start. The strict load
-/// still validates it, so `rimz doctor` keeps reporting it.
+#[cfg(test)]
 fn parse_core_text_strict(path: &Path, text: &str) -> Result<CoreConfig> {
     let core = parse_core_text(path, text)?;
     validate_account_budgets(&core.accounts, path)?;

@@ -561,8 +561,8 @@ fn agent_env_with_roots(project_root: &Path, config_root: &Path, kind: &str) -> 
 
 /// The project's `[accounts]` room selection, resolved under the trust gate.
 /// [`ProjectLogins::Apply`] is the default a fresh room births with;
-/// [`ProjectLogins::Blocked`] names the trust state so birth refuses with the
-/// fix rather than silently falling back to the provider's own account.
+/// [`ProjectLogins::Blocked`] names the trust state so room entry warns and
+/// account-following launches refuse rather than selecting the provider's own account.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectLogins {
     /// The project names no account for any kind.

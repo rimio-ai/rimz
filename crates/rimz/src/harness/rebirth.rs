@@ -1,6 +1,6 @@
 //! Two-phase previous-incarnation inspection through the shared recovery plan.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -78,7 +78,6 @@ pub struct RebirthPreview {
     death: Option<LastDeathMarker>,
     pane_count: usize,
     labels: Vec<String>,
-    requires_sandbox: bool,
     candidate_count: usize,
     refilled_count: usize,
     unresumable: Vec<UnresumableAgent>,
@@ -96,12 +95,6 @@ impl RebirthPreview {
 
     pub fn labels(&self) -> &[String] {
         &self.labels
-    }
-
-    /// Whether recovery resumes an agent whose effective isolation is sandbox,
-    /// so the caller must preflight bubblewrap before choosing to recover.
-    pub const fn requires_sandbox(&self) -> bool {
-        self.requires_sandbox
     }
 
     /// Lost roots awaiting a decision: neither ended, live, nor already replaced.
@@ -142,7 +135,6 @@ pub struct RebirthPlan {
     refilled: BTreeSet<(AgentKind, AgentSessionId)>,
     planned: RecoveryPlan,
     recovery_off: bool,
-    requires_sandbox: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -194,6 +186,7 @@ impl RebirthPlan {
             project_root,
             machine,
             logins,
+            &crate::agents::ambient_env(),
             disabled,
             OWNER_EXIT_BOUND,
         )
@@ -217,6 +210,7 @@ impl RebirthPlan {
             runtime,
             project_root,
             machine,
+            &crate::agents::ambient_env(),
             disabled,
         ))
     }
@@ -256,7 +250,6 @@ impl RebirthPlan {
             death: self.death.clone(),
             pane_count,
             labels,
-            requires_sandbox: self.requires_sandbox,
             candidate_count: self.candidates.len(),
             refilled_count: self.refilled.len(),
             unresumable,
@@ -614,6 +607,7 @@ fn inspect_at(
     project_root: &Path,
     machine: &MachineConfig,
     logins: Option<&crate::agents::RoomAccounts>,
+    ambient: &BTreeMap<String, String>,
     disabled: bool,
     owner_exit_bound: Duration,
 ) -> Result<RebirthPlan> {
@@ -681,9 +675,9 @@ fn inspect_at(
         project_root,
         machine,
         logins,
+        ambient,
         recovery_off,
     );
-    let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
     Ok(RebirthPlan {
         paths,
         runtime,
@@ -698,7 +692,6 @@ fn inspect_at(
         refilled: planned.refilled().clone(),
         planned,
         recovery_off,
-        requires_sandbox,
     })
 }
 
@@ -729,11 +722,20 @@ fn inspect_live_at(
     runtime: RuntimePaths,
     project_root: &Path,
     machine: &MachineConfig,
+    ambient: &BTreeMap<String, String>,
     disabled: bool,
 ) -> RebirthPlan {
     // The roster is this session's live set; only parked agents are lost.
     let scope = pending_recovery::read(&paths.pending_recovery);
-    inspect_live_scope(paths, runtime, project_root, machine, disabled, scope)
+    inspect_live_scope(
+        paths,
+        runtime,
+        project_root,
+        machine,
+        ambient,
+        disabled,
+        scope,
+    )
 }
 
 fn inspect_live_scope(
@@ -741,6 +743,7 @@ fn inspect_live_scope(
     runtime: RuntimePaths,
     project_root: &Path,
     machine: &MachineConfig,
+    ambient: &BTreeMap<String, String>,
     disabled: bool,
     scope: BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> RebirthPlan {
@@ -762,9 +765,9 @@ fn inspect_live_scope(
         project_root,
         machine,
         None,
+        ambient,
         recovery_off,
     );
-    let requires_sandbox = planned.requires_sandbox(machine.agents.isolation);
     RebirthPlan {
         paths,
         runtime,
@@ -779,7 +782,6 @@ fn inspect_live_scope(
         refilled: planned.refilled().clone(),
         planned,
         recovery_off,
-        requires_sandbox,
     }
 }
 
@@ -797,6 +799,7 @@ fn plan_settlement(
     project_root: &Path,
     machine: &MachineConfig,
     logins: Option<&crate::agents::RoomAccounts>,
+    ambient: &BTreeMap<String, String>,
     recovery_off: bool,
 ) -> SettlementPlan {
     let Some(projection) = projection else {
@@ -869,6 +872,7 @@ fn plan_settlement(
         machine,
         &teams_and_profiles,
         logins,
+        ambient,
     );
     candidates.retain(|agent| {
         !planned
@@ -954,6 +958,7 @@ fn plan_recovery(
     machine: &MachineConfig,
     teams_and_profiles: &(TeamsConfig, ProfilesConfig),
     logins: Option<&crate::agents::RoomAccounts>,
+    ambient: &BTreeMap<String, String>,
 ) -> RecoveryPlan {
     let (teams, profiles) = teams_and_profiles;
     let recorded_logins =
@@ -961,7 +966,7 @@ fn plan_recovery(
             .unwrap_or_else(crate::agents::RoomAccounts::unavailable);
     let logins = logins.unwrap_or(&recorded_logins);
     let catalog = crate::agents::LoginCatalog::room_view(&machine.accounts).0;
-    let (team, flat_agents, refilled) = split_team_and_flat(
+    let (mut team, mut flat_agents, mut refilled) = split_team_and_flat(
         &agents
             .iter()
             .filter(|agent| agent.workflow.is_none())
@@ -980,6 +985,119 @@ fn plan_recovery(
         &projection.agents,
         agent_liveness,
     );
+    let mut health = BTreeMap::new();
+    let mut sandbox = None;
+    let shell_error = machine.agents.shell.as_deref().and_then(|shell| {
+        crate::harness::launch::validate_agent_shell(shell)
+            .err()
+            .map(|error| error.to_string())
+    });
+    let mut unavailable = |kind: &AgentKind, isolation: crate::config::Isolation| {
+        if let Some(error) = &shell_error {
+            return Some((ResumeSkipReason::ConfigurationUnavailable, error.clone()));
+        }
+        if machine.accounts.budget(kind).is_some()
+            && let Err(error) = crate::config::AccountsConfig::validate_budget_kind(kind)
+        {
+            return Some((
+                ResumeSkipReason::ConfigurationUnavailable,
+                error.to_string(),
+            ));
+        }
+        let error = health.entry(kind.clone()).or_insert_with(|| {
+            logins
+                .login(kind, &machine.accounts)
+                .map_err(|error| error.to_string())
+                .and_then(|login| {
+                    login
+                        .health(&catalog.native_ambient(kind, ambient))
+                        .map_err(|error| error.to_string())
+                })
+                .err()
+        });
+        if let Some(error) = error {
+            return Some((ResumeSkipReason::AccountUnavailable, error.clone()));
+        }
+        if isolation != crate::config::Isolation::Sandbox {
+            return None;
+        }
+        sandbox
+            .get_or_insert_with(|| {
+                crate::sandbox::preflight(isolation)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .as_ref()
+            .map(|error| (ResumeSkipReason::SandboxUnavailable, error.clone()))
+    };
+    let mut skipped = Vec::new();
+    team.retain(|planned| {
+        let problem = planned
+            .layout
+            .agent_cells()
+            .zip(&planned.cohort.seeds)
+            .find_map(|(cell, seed)| {
+                let override_ = match seed {
+                    crate::harness::plan::CohortSeed::Resume(agent) => {
+                        crate::harness::plan::effective_resume_isolation(
+                            cell.launch.isolation,
+                            agent.isolation,
+                        )
+                    }
+                    crate::harness::plan::CohortSeed::Fresh => cell.launch.isolation,
+                };
+                unavailable(
+                    &cell.kind,
+                    crate::config::Isolation::resolve(
+                        override_,
+                        cell.isolation_default,
+                        machine.agents.isolation,
+                    ),
+                )
+            });
+        let Some((reason, message)) = problem else {
+            return true;
+        };
+        for agent in agents
+            .iter()
+            .filter(|agent| crate::harness::resume::planned_team_matches_agent(planned, agent))
+        {
+            refilled.remove(&(agent.kind.clone(), agent.agent_id.clone()));
+            skipped.push((agent.clone(), reason.clone(), message.clone()));
+        }
+        false
+    });
+    flat_agents.retain(|agent| {
+        if !resume_session_present(agent)
+            || crate::harness::resume::relaunch_login(agent, logins, &catalog).is_err()
+            || !agent.lane_path().map(Path::new).is_some_and(Path::is_dir)
+        {
+            return true;
+        }
+        let posture = crate::harness::resume::resolve_posture(
+            crate::harness::resume::PostureRequest {
+                record: agent.record.as_deref(),
+                profile: agent.profile.as_deref(),
+                kind: &agent.kind,
+                stamped_mode: agent.mode,
+                stamped_tier: agent.tier.as_deref(),
+            },
+            profiles,
+        );
+        let isolation = crate::config::Isolation::resolve(
+            crate::harness::plan::effective_resume_isolation(
+                posture.launch.isolation,
+                agent.isolation,
+            ),
+            posture.launch.isolation_default,
+            machine.agents.isolation,
+        );
+        let Some((reason, message)) = unavailable(&agent.kind, isolation) else {
+            return true;
+        };
+        skipped.push((agent.clone(), reason, message));
+        false
+    });
     let team_panes = team
         .iter()
         .map(|planned| planned.cohort.seeds.len())
@@ -1002,6 +1120,9 @@ fn plan_recovery(
         resume_session_present,
     );
     let mut plan = RecoveryPlan::new(teams.clone(), team, flat, refilled);
+    for (agent, reason, message) in skipped {
+        plan.skip_agent(&agent, reason, message);
+    }
     plan.sort_by_freshness();
     plan
 }

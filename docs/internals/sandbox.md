@@ -18,13 +18,13 @@ A subagent launched without its own `--isolation` inherits its parent's recorded
 
 ## Preflight
 
-Every entry point that can start a sandboxed agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change. Start and detached room ensure convert these to structured blockers: cause fixes stay print-only, and the host-isolation command carries the security marker without a run-only bypass.
+Every entry point that can start a sandboxed agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change. Room judgment converts these to recorded warnings with fixes and opens the room; sandboxed launches still refuse. Recovery skips unavailable candidates and leaves them resumable. Cause fixes stay print-only, and the host-isolation command carries the security marker.
 
 | Entry point | When it probes |
 | --- | --- |
 | `rimz config set agents.isolation sandbox` | Before writing the value. |
 | `rimz start` and detached room ensure (`cli/room/mod.rs`) | When machine policy is sandbox. |
-| `rimz start` recovering a rebirth | When a planned launch resolves to sandbox from its override, current profile default, or machine policy (`RebirthPreview::requires_sandbox`). |
+| Room recovery | When a candidate resolves to sandbox from its override, current profile default, or machine policy; an unavailable sandbox skips that candidate. |
 | `rimz agents launch`, `restart`, `fork`, supervised runs | For the launch's effective isolation. |
 | Cohort resume (`launch_resume_layout` in `cli/agents_cmd/launch.rs`) | For each resumed agent's effective isolation. |
 | Parent-message child resume (`cli/subagents/resume.rs`) | For the child's effective isolation after re-reading its profile. |

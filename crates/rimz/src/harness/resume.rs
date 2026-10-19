@@ -285,6 +285,10 @@ pub enum ResumeSkipReason {
     LoginMismatch,
     /// The kind's current account selection refuses a launch.
     AccountUnavailable,
+    /// The effective isolation cannot run on this host.
+    SandboxUnavailable,
+    /// A launch precondition in machine configuration cannot be satisfied.
+    ConfigurationUnavailable,
     /// A fresh lane restores team tabs, not standalone roots.
     FreshRelaunch(String),
 }
@@ -299,6 +303,8 @@ impl ResumeSkipReason {
             Self::PromptUnsupported => "no prompt replacement",
             Self::LoginMismatch => "different account",
             Self::AccountUnavailable => "account unavailable",
+            Self::SandboxUnavailable => "sandbox unavailable",
+            Self::ConfigurationUnavailable => "configuration unavailable",
             Self::FreshRelaunch(spec) => {
                 return format!("no saved team to restore; relaunch with {spec}").into();
             }
@@ -671,10 +677,6 @@ pub(super) struct PlannedResumeTab {
     tab: ResumeTab,
     freshest: Timestamp,
     resumed: BTreeSet<(AgentKind, AgentSessionId)>,
-    isolations: Vec<(
-        Option<crate::config::Isolation>,
-        Option<crate::config::Isolation>,
-    )>,
 }
 
 impl PlannedResumeTab {
@@ -780,32 +782,24 @@ pub(super) struct RecoveryPlan {
 }
 
 impl RecoveryPlan {
-    pub(super) fn requires_sandbox(&self, machine: crate::config::Isolation) -> bool {
-        use crate::config::Isolation;
-        self.entries.iter().any(|entry| match entry {
-            RecoveryEntry::Flat(planned) => {
-                planned.isolations.iter().any(|&(override_, default)| {
-                    Isolation::resolve(override_, default, machine) == Isolation::Sandbox
-                })
-            }
-            RecoveryEntry::Team(planned) => planned
-                .layout
-                .agent_cells()
-                .zip(&planned.cohort.seeds)
-                .any(|(cell, seed)| {
-                    let override_ = match seed {
-                        CohortSeed::Resume(agent) => {
-                            crate::harness::plan::effective_resume_isolation(
-                                cell.launch.isolation,
-                                agent.isolation,
-                            )
-                        }
-                        CohortSeed::Fresh => cell.launch.isolation,
-                    };
-                    Isolation::resolve(override_, cell.isolation_default, machine)
-                        == Isolation::Sandbox
-                }),
-        })
+    pub(super) fn skip_agent(
+        &mut self,
+        agent: &AgentState,
+        reason: ResumeSkipReason,
+        message: String,
+    ) {
+        self.skipped_sessions.insert(
+            (agent.kind.clone(), agent.agent_id.clone()),
+            self.skipped.len(),
+        );
+        self.skipped.push(ResumeSkip {
+            label: agent
+                .name
+                .as_ref()
+                .map_or_else(|| agent.agent_id.to_string(), |name| format!("@{name}")),
+            reason,
+        });
+        self.warnings.push(message);
     }
 
     pub(super) fn new(
@@ -2075,7 +2069,7 @@ pub(super) fn split_team_and_flat(
     (team, flat, refilled)
 }
 
-fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
+pub(super) fn planned_team_matches_agent(planned: &PlannedTeamTab, agent: &AgentState) -> bool {
     agent.team.as_deref() == Some(planned.team.as_str())
         && normalized_agent_worktree(agent).as_deref() == Some(planned.cwd.as_path())
 }
@@ -2311,13 +2305,6 @@ fn plan_resume_candidates_detailed(
         );
         let lane_path = candidate.lane_path();
         let tab_label = channel_label(channel.as_deref(), lane_path);
-        let isolation = (
-            crate::harness::plan::effective_resume_isolation(
-                posture.launch.isolation,
-                candidate.identity.isolation,
-            ),
-            posture.launch.isolation_default,
-        );
         let identity = resume_tab_identity(channel.as_deref(), lane_path);
         let resumed_key = (
             candidate.identity.kind.clone(),
@@ -2334,7 +2321,6 @@ fn plan_resume_candidates_detailed(
                     name: Some(pane_name),
                 });
                 tab.resumed.insert(resumed_key.clone());
-                tab.isolations.push(isolation);
                 plan.resumed.insert(resumed_key);
             }
         } else {
@@ -2347,7 +2333,6 @@ fn plan_resume_candidates_detailed(
             );
             tabs.push(PlannedResumeTab {
                 identity,
-                isolations: vec![isolation],
                 tab: ResumeTab {
                     label: tab_label,
                     cwd: candidate.lane_path().to_path_buf(),

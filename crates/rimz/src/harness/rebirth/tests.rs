@@ -6,6 +6,153 @@ use crate::harness::resume::RecoveryEntry;
 use crate::ids::{MuxName, PaneId};
 
 #[test]
+fn rebirth_skips_an_invalid_shell_and_keeps_it_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
+    fixture.conversation("lost");
+    let mut machine = MachineConfig::default();
+    machine.agents.shell = Some(root.path().join("missing/bash"));
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(
+        plan.preview().pane_count(),
+        0,
+        "an invalid shell must not open recovery panes"
+    );
+    assert_eq!(
+        plan.preview().unresumable[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .label(),
+        "configuration unavailable"
+    );
+    park_roster(&fixture.paths).unwrap();
+    plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
+        .confirm(|_, _| Ok::<_, &str>(()));
+    assert!(pending(&fixture).contains(&key("lost")));
+}
+
+#[test]
+fn rebirth_skips_an_unsupported_budget_and_keeps_it_pending() {
+    let fixture = Fixture::new(&[]);
+    crate::agents::find_definition("qwen")
+        .unwrap()
+        .install_hooks(&fixture.ambient, Default::default())
+        .unwrap();
+    crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked("qwen"))
+        .health(&fixture.ambient)
+        .unwrap();
+    let transcript = fixture.project.join("lost.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let mut observation =
+        AgentLifecycleObservation::new(Some("lost".into()), LifecycleSignal::Registered);
+    observation.worktree_path = Some(fixture.project.display().to_string());
+    observation.transcript_path = Some(transcript.display().to_string());
+    Store::open(fixture.paths.clone(), fixture.runtime.clone())
+        .unwrap()
+        .append_event(&crate::EventEnvelope::agent_lifecycle(
+            fixture.paths.workspace_id.clone(),
+            "rimz-test",
+            "qwen",
+            "SessionStart",
+            &observation,
+        ))
+        .unwrap();
+    let key = (AgentKind::new_unchecked("qwen"), "lost".into());
+    live_roster::publish(&fixture.paths.live_roster, BTreeSet::from([key.clone()])).unwrap();
+    let machine = MachineConfig {
+        accounts: toml::from_str("[budget]\nqwen = '10/day'\n").unwrap(),
+        ..Default::default()
+    };
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(
+        plan.preview().pane_count(),
+        0,
+        "an unsupported budget must not open recovery panes"
+    );
+    assert_eq!(
+        plan.preview().unresumable[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .label(),
+        "configuration unavailable"
+    );
+    park_roster(&fixture.paths).unwrap();
+    plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
+        .confirm(|_, _| Ok::<_, &str>(()));
+    assert!(pending(&fixture).contains(&key));
+}
+
+#[test]
+fn rebirth_skips_an_unhealthy_account_and_keeps_it_pending() {
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
+    fixture.conversation("lost");
+    let machine = MachineConfig {
+        accounts: toml::from_str(&format!(
+            "[claude.work]\nhome = '{}'\n[use]\nclaude = 'work'\n",
+            root.path().join("missing").display()
+        ))
+        .unwrap(),
+        ..Default::default()
+    };
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(
+        plan.preview().pane_count(),
+        0,
+        "an unhealthy account must not be resumed"
+    );
+    assert_eq!(
+        plan.preview().unresumable[0].reason,
+        Some(ResumeSkipReason::AccountUnavailable)
+    );
+    park_roster(&fixture.paths).unwrap();
+    plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
+        .confirm(|_, _| Ok::<_, &str>(()));
+    assert!(pending(&fixture).contains(&key("lost")));
+}
+
+#[test]
+fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
+    if std::env::var_os("RIMZ_TEST_REBIRTH_NO_BWRAP").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::rebirth::tests::rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending", "--nocapture"])
+            .env("PATH", "/no-rimz-test-binaries")
+            .env("RIMZ_TEST_REBIRTH_NO_BWRAP", "1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
+    fixture.conversation("lost");
+    let mut machine = MachineConfig::default();
+    machine.agents.isolation = Isolation::Sandbox;
+    let plan = fixture.inspect_with(&machine, false);
+    assert_eq!(
+        plan.preview().pane_count(),
+        0,
+        "an unavailable sandbox must not be resumed"
+    );
+    assert_eq!(
+        plan.preview().unresumable[0]
+            .reason
+            .as_ref()
+            .unwrap()
+            .label(),
+        "sandbox unavailable"
+    );
+    park_roster(&fixture.paths).unwrap();
+    plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
+        .confirm(|_, _| Ok::<_, &str>(()));
+    assert!(pending(&fixture).contains(&key("lost")));
+}
+
+#[test]
 fn fresh_replacements_end_only_after_their_tab_is_confirmed() {
     for (disposition, confirmed) in [
         (RebirthDisposition::RecoverKeep, true),
@@ -112,6 +259,7 @@ fn live_replacements_settle_only_the_seats_they_fill() {
             fixture.runtime.clone(),
             &fixture.project,
             &team_machine(),
+            &fixture.ambient,
             false,
         );
         assert_eq!(plan.preview().candidate_count(), usize::from(with_planner));
@@ -164,6 +312,7 @@ struct Fixture {
     paths: StatePaths,
     runtime: RuntimePaths,
     project: PathBuf,
+    ambient: BTreeMap<String, String>,
 }
 
 fn materialize(
@@ -201,12 +350,75 @@ fn recovered_count(fixture: &Fixture) -> Option<usize> {
 }
 
 impl Fixture {
+    fn conversation(&self, id: &str) {
+        let path = self.project.join(format!("{id}.jsonl"));
+        std::fs::write(&path, "{}\n").unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some(id.into()), LifecycleSignal::Registered);
+        observation.transcript_path = Some(path.display().to_string());
+        Store::open(self.paths.clone(), self.runtime.clone())
+            .unwrap()
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                self.paths.workspace_id.clone(),
+                "rimz-test",
+                "claude",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+    }
+
     fn new(agents: &[(&str, &Path, bool)]) -> Self {
         Self::with_children(agents, &[])
     }
 
     fn with_children(agents: &[(&str, &Path, bool)], children: &[&str]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
+        let ambient = BTreeMap::from([("HOME".into(), dir.path().display().to_string())]);
+        for kind in ["claude", "codex"] {
+            crate::agents::find_definition(kind)
+                .unwrap()
+                .install_hooks(&ambient, Default::default())
+                .unwrap();
+        }
+        let config_path = dir.path().join(".codex/config.toml");
+        let mut config: toml::Table = std::fs::read_to_string(&config_path)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let state = crate::agents::find_definition("codex")
+            .unwrap()
+            .managed_integration()
+            .unwrap()
+            .untrusted_preflight_hooks(&ambient)
+            .into_iter()
+            .map(|event| {
+                let token = event.chars().fold(String::new(), |mut token, c| {
+                    if c.is_ascii_uppercase() && !token.is_empty() {
+                        token.push('_');
+                    }
+                    token.push(c.to_ascii_lowercase());
+                    token
+                });
+                (
+                    format!("{}:{token}:0:0", config_path.display()),
+                    toml::Value::Table(toml::Table::from_iter([(
+                        "trusted_hash".into(),
+                        toml::Value::String("sha256:deadbeef".into()),
+                    )])),
+                )
+            })
+            .collect();
+        config["hooks"]
+            .as_table_mut()
+            .unwrap()
+            .insert("state".into(), toml::Value::Table(state));
+        std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+        for kind in ["claude", "codex"] {
+            crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked(kind))
+                .health(&ambient)
+                .unwrap();
+        }
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project).expect("project");
         let workspace = WorkspaceId::from_project_root(&project);
@@ -256,6 +468,7 @@ impl Fixture {
             paths,
             runtime,
             project,
+            ambient,
         }
     }
 
@@ -281,6 +494,7 @@ impl Fixture {
             &self.project,
             machine,
             None,
+            &self.ambient,
             disabled,
             owner_exit_bound,
         )
@@ -955,6 +1169,7 @@ fn live_entry_defer_ends_children_and_cancels_their_open_runs() {
             fixture.runtime.clone(),
             &fixture.project,
             &MachineConfig::default(),
+            &fixture.ambient,
             false,
             pending(&fixture),
         );
@@ -1193,6 +1408,7 @@ fn settlement_confirms_each_resume_tab_on_its_own() {
                     fixture.runtime.clone(),
                     &fixture.project,
                     &MachineConfig::default(),
+                    &fixture.ambient,
                     false,
                 )
             } else {
@@ -1330,6 +1546,7 @@ fn unconfirmed_team_tab_fails_its_launch_batch_and_reindexes_the_rest() {
                 fixture.runtime.clone(),
                 &fixture.project,
                 &team_machine(),
+                &fixture.ambient,
                 false,
             );
             assert_eq!(again.planned.resumed_keys(), [key("planner")].into());
@@ -1360,6 +1577,7 @@ fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
     let inspection = std::thread::spawn({
         let fixture_paths = (fixture.paths.clone(), fixture.runtime.clone());
         let project = fixture.project.clone();
+        let ambient = fixture.ambient.clone();
         move || {
             inspect_at(
                 fixture_paths.0,
@@ -1369,6 +1587,7 @@ fn boundary_inspection_offers_an_agent_whose_owner_exits_within_the_bound() {
                 &project,
                 &MachineConfig::default(),
                 None,
+                &ambient,
                 false,
                 Duration::from_secs(60),
             )
@@ -1404,6 +1623,7 @@ fn boundary_inspection_classes_an_owner_that_records_its_end_during_the_wait_as_
     let inspection = std::thread::spawn({
         let fixture_paths = (fixture.paths.clone(), fixture.runtime.clone());
         let project = fixture.project.clone();
+        let ambient = fixture.ambient.clone();
         move || {
             inspect_at(
                 fixture_paths.0,
@@ -1413,6 +1633,7 @@ fn boundary_inspection_classes_an_owner_that_records_its_end_during_the_wait_as_
                 &project,
                 &MachineConfig::default(),
                 None,
+                &ambient,
                 false,
                 Duration::from_secs(60),
             )
@@ -1558,6 +1779,7 @@ fn live_settlement_writes_no_boundary_and_leaves_live_agents_alone() {
             fixture.runtime.clone(),
             &fixture.project,
             &MachineConfig::default(),
+            &fixture.ambient,
             false,
         );
         assert_eq!(plan.preview().candidate_count(), 1);
@@ -1688,7 +1910,6 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
             .isolation,
         Some(Isolation::Host)
     );
-    assert!(!fixture.inspect(false).preview().requires_sandbox());
 
     store
         .attach_agent_pane(
@@ -1719,83 +1940,6 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
             .isolation,
         Some(Isolation::Sandbox)
     );
-    assert!(fixture.inspect(false).preview().requires_sandbox());
-}
-
-#[test]
-fn sandbox_requirement_follows_resumed_agents_effective_isolation() {
-    let dir = tempfile::tempdir().expect("worktrees");
-    let live = dir.path().join("live");
-    let missing = dir.path().join("missing");
-    let fixture = Fixture::new(&[("live", &live, true), ("missing", &missing, false)]);
-    let stamp_sandbox = |id: &str| {
-        let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
-        let mut observation = AgentLifecycleObservation::new(
-            Some(AgentSessionId::from(id)),
-            LifecycleSignal::Registered,
-        );
-        observation.launch.isolation = Some(Isolation::Sandbox);
-        store
-            .append_event(&crate::EventEnvelope::agent_lifecycle(
-                fixture.paths.workspace_id.clone(),
-                "rimz-test",
-                "claude",
-                "SessionStart",
-                &observation,
-            ))
-            .expect("isolation event");
-    };
-    let mut sandbox_machine = MachineConfig::default();
-    sandbox_machine.agents.isolation = Isolation::Sandbox;
-
-    assert!(!fixture.inspect(false).preview().requires_sandbox());
-    assert!(
-        fixture
-            .inspect_with(&sandbox_machine, false)
-            .preview()
-            .requires_sandbox()
-    );
-    stamp_sandbox("missing");
-    assert!(!fixture.inspect(false).preview().requires_sandbox());
-    stamp_sandbox("live");
-    assert!(fixture.inspect(false).preview().requires_sandbox());
-    assert!(!fixture.inspect(true).preview().requires_sandbox());
-}
-
-#[test]
-fn rebirth_preflights_the_current_profile_default() {
-    let dir = tempfile::tempdir().unwrap();
-    let live = dir.path().join("live");
-    let fixture = Fixture::new(&[("live", &live, true)]);
-    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).unwrap();
-    let mut observation = AgentLifecycleObservation::new(
-        Some(AgentSessionId::from("live")),
-        LifecycleSignal::Registered,
-    );
-    observation.launch.profile = Some("boxed".to_owned());
-    store
-        .append_event(&crate::EventEnvelope::agent_lifecycle(
-            fixture.paths.workspace_id.clone(),
-            "rimz-test",
-            "claude",
-            "SessionStart",
-            &observation,
-        ))
-        .unwrap();
-    let mut machine = MachineConfig::default();
-    for (isolation, sandbox) in [("sandbox", true), ("host", false)] {
-        machine.agents.profiles.0.insert(
-            "boxed".to_owned(),
-            toml::from_str(&format!("agent = 'claude'\nisolation = '{isolation}'")).unwrap(),
-        );
-        assert_eq!(
-            fixture
-                .inspect_with(&machine, false)
-                .preview()
-                .requires_sandbox(),
-            sandbox
-        );
-    }
 }
 
 #[test]
@@ -2044,6 +2188,7 @@ fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
         &fixture.project,
         &MachineConfig::default(),
         None,
+        &fixture.ambient,
         false,
         OWNER_EXIT_BOUND,
     )

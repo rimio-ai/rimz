@@ -211,7 +211,7 @@ On a terminal narrower than the table, `HOME` clips with `…` and every other c
 | `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`, or plain `codex` for `default`), run `/hooks`, and trust the RimZ hooks |
 | `unavailable` | A room, project, or machine selection names an account that is not declared, or a kind without named accounts. | `rimz accounts add <kind> <name>`, or the command that clears the selection |
 
-`rimz start` refuses to launch into a named account with a setup problem status ([Accounts at start](./getting-started.md#accounts)); for `default` it walks the provider's own hook setup instead. `list` itself exits 0 whatever the statuses are.
+`rimz start` warns about a configured account with a setup problem status and opens the room; an explicit `--account` request still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts. `list` itself exits 0 whatever the statuses are.
 
 `--json` prints an array with one object per row.
 
