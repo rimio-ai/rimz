@@ -500,6 +500,8 @@ These are the upstream quirks the backend works around. The upstream surfaces ar
 
 tmux offers a control-mode stream any process can attach to. Zellij does not: the only way to learn about pane changes as they happen is to run inside the Zellij server as a plugin. `crates/rimz-presence-zellij/` is that plugin, a headless wasm32-wasip1 binary loaded into every Zellij session RimZ manages. It renders nothing. Its contract is [`crates/rimz-presence-zellij/AGENTS.md`](../../crates/rimz-presence-zellij/AGENTS.md).
 
+`Engine::on_pane_manifest` suppresses its own plugin pane whenever the canonical roster shows it unsuppressed, even on the stable-hash fast path, in an inactive tab, or with the floating layer hidden. This is level-triggered: Zellij can defer pane creation until the first attach, and a hide sent before the pane materializes is dropped rather than retried. Every suppression reports another manifest, but an absent or already suppressed own pane emits no hide, ending the feedback loop. `Engine::on_permission_granted` also hides on every Granted result because a prompt pane may not yet appear in the roster. Grant evidence from other events does not hide. The [upstream lifecycle](../externals/mux-adapter/zellij-reference.md#commands-host-functions) explains the deferred creation and suppression reports.
+
 ### The boundary: observations, never verdicts
 
 The plugin publishes Zellij facts, and the host derives every meaning.

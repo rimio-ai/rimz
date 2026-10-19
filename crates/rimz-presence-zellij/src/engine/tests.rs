@@ -517,13 +517,161 @@ fn pregrant_unknown_patch_is_retained_until_the_manifest_arrives() {
 fn cached_grant_on_first_manifest_hides_and_first_manifest_is_baseline() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, config());
-    let manifest = tabs(vec![pane(1), pane(2)]);
+    let manifest = tabs(vec![pane(1), pane(2), plugin_pane(9)]);
 
     let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest.clone(), 10, &host);
 
-    assert!(effects.contains(&Effect::HideSelf));
+    assert_eq!(
+        effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+        1
+    );
     assert!(effects.contains(&Effect::ListClients));
     assert_eq!(reasons(&effects), vec!["alive"]);
+}
+
+#[test]
+fn visible_own_pane_is_hidden_even_on_the_stable_manifest_fast_path() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    grant(&mut engine, 1, &host);
+    let manifest = tabs(vec![pane(1), plugin_pane(9)]);
+    let hash = raw_hash(&manifest);
+    let effects = engine.on_pane_manifest(hash, |_| manifest, 10, &host);
+    assert_eq!(
+        effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+        1
+    );
+    let effects = engine.on_pane_manifest(hash, |_| panic!("stable projection"), 20, &host);
+    assert_eq!(
+        effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+        1
+    );
+}
+
+#[test]
+fn deferred_own_pane_is_hidden_only_after_it_materializes() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    for (now, panes, hides) in [
+        (10, vec![pane(1)], 0),
+        (
+            20,
+            vec![
+                pane(1),
+                PaneFields {
+                    is_floating: true,
+                    ..plugin_pane(9)
+                },
+            ],
+            1,
+        ),
+        (
+            30,
+            vec![
+                pane(1),
+                PaneFields {
+                    is_suppressed: true,
+                    ..plugin_pane(9)
+                },
+            ],
+            0,
+        ),
+    ] {
+        let manifest = tabs(panes);
+        let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, now, &host);
+        assert_eq!(
+            effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+            hides,
+            "at {now}"
+        );
+    }
+}
+
+#[test]
+fn manifest_hides_only_the_unsuppressed_own_plugin_in_any_tab() {
+    let host = FakeHost::default();
+    for (plugin_id, own_pane, hides) in [
+        (Some(9), plugin_pane(9), 1),
+        (
+            Some(9),
+            PaneFields {
+                is_suppressed: true,
+                ..plugin_pane(9)
+            },
+            0,
+        ),
+        (Some(9), plugin_pane(10), 0),
+        (Some(9), pane(9), 0),
+        (None, plugin_pane(9), 0),
+    ] {
+        let mut engine = Engine::new(
+            0,
+            EngineConfig {
+                plugin_id,
+                ..config()
+            },
+        );
+        grant(&mut engine, 1, &host);
+        let _ = engine.on_tab_update(
+            Some(0),
+            BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            2,
+            &host,
+        );
+        let manifest = tabs_by_index(vec![
+            (0, vec![pane(1)]),
+            (
+                1,
+                vec![PaneFields {
+                    is_plugin: own_pane.is_plugin,
+                    is_suppressed: own_pane.is_suppressed,
+                    ..pane_in_tab(own_pane.id, 1)
+                }],
+            ),
+        ]);
+        let effects = engine.on_pane_manifest(raw_hash(&manifest), |_| manifest, 10, &host);
+        assert_eq!(
+            effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+            hides
+        );
+    }
+}
+
+#[test]
+fn pregrant_events_and_tab_grant_evidence_do_not_hide() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    for effects in [
+        engine.on_load(1, &host),
+        engine.on_timer(2, &host),
+        engine.on_permission_denied(3, &host),
+    ] {
+        assert!(!effects.contains(&Effect::HideSelf));
+    }
+    let effects = engine.on_tab_update(
+        Some(0),
+        BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+        4,
+        &host,
+    );
+    assert!(!effects.contains(&Effect::HideSelf));
+}
+
+#[test]
+fn permission_answers_hide_every_time() {
+    let host = FakeHost::default();
+    let mut engine = Engine::new(0, config());
+    for now in [5, 6] {
+        let effects = engine.on_permission_granted(now, &host);
+        assert_eq!(
+            effects.iter().filter(|e| **e == Effect::HideSelf).count(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -1517,8 +1665,8 @@ fn retire_pipe_mutes_same_plugin_id_and_closes_different_older_instance() {
     assert!(
         same_id
             .on_pane_manifest(
-                raw_hash(&tabs(vec![pane(1)])),
-                |_| tabs(vec![pane(1)]),
+                raw_hash(&tabs(vec![pane(1), plugin_pane(9)])),
+                |_| tabs(vec![pane(1), plugin_pane(9)]),
                 20,
                 &host
             )
