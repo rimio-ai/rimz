@@ -32,6 +32,7 @@ pub(crate) mod ssh_trace;
 pub(crate) mod wait;
 mod zellij;
 
+use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -147,50 +148,211 @@ pub fn exec_args(env: &Env, request: &rimz::harness::launch::ExecRequest) -> Vec
         .collect()
 }
 
-pub fn osc_titles(bytes: &[u8]) -> Vec<String> {
-    let mut titles = Vec::new();
-    let mut cursor = 0;
-    while cursor + 4 <= bytes.len() {
-        if bytes[cursor] != 0x1b
-            || bytes[cursor + 1] != b']'
-            || !matches!(bytes[cursor + 2], b'0' | b'1' | b'2')
-            || bytes[cursor + 3] != b';'
-        {
-            cursor += 1;
-            continue;
-        }
+const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
+const MAX_OSC_TITLE_BYTES: usize = 64 * 1024;
 
-        let payload_start = cursor + 4;
-        let mut end = payload_start;
-        while end < bytes.len() {
-            if bytes[end] == 0x07 {
-                titles.push(String::from_utf8_lossy(&bytes[payload_start..end]).into_owned());
-                cursor = end + 1;
-                break;
+#[derive(Default)]
+pub(crate) struct PtyRecorder {
+    output: Arc<Mutex<PtyOutput>>,
+}
+
+#[derive(Default)]
+struct PtyOutput {
+    tail: Vec<u8>,
+    titles: Vec<String>,
+}
+
+impl PtyRecorder {
+    pub(crate) fn read_from(
+        &self,
+        mut reader: impl std::io::Read + Send + 'static,
+    ) -> std::thread::JoinHandle<()> {
+        let output = Arc::clone(&self.output);
+        std::thread::spawn(move || {
+            // A respawn keeps completed titles, but cannot complete the old PTY's partial OSC.
+            let mut scanner = OscTitleScanner::default();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(read) => read,
+                };
+                let titles = scanner.feed(&buffer[..read]);
+                let mut output = output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                output.titles.extend(titles);
+                let tail = &mut output.tail;
+                tail.extend_from_slice(&buffer[..read]);
+                let excess = tail.len().saturating_sub(OUTPUT_TAIL_BYTES);
+                if excess > 0 {
+                    tail.drain(..excess);
+                }
             }
-            if bytes[end] == 0x1b && bytes.get(end + 1) == Some(&b'\\') {
-                titles.push(String::from_utf8_lossy(&bytes[payload_start..end]).into_owned());
-                cursor = end + 2;
-                break;
-            }
-            end += 1;
-        }
-        if end == bytes.len() {
-            break;
-        }
+        })
     }
-    titles
+
+    pub(crate) fn output_bytes(&self) -> Vec<u8> {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tail
+            .clone()
+    }
+
+    pub(crate) fn titles(&self) -> Vec<String> {
+        self.output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .titles
+            .clone()
+    }
+}
+
+#[derive(Default)]
+struct OscTitleScanner {
+    state: OscTitleState,
+    payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Default)]
+enum OscTitleState {
+    #[default]
+    Ground,
+    Escape,
+    Osc,
+    Separator,
+    Payload,
+    PayloadEscape,
+    Discard,
+    DiscardEscape,
+}
+
+impl OscTitleScanner {
+    fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
+        use OscTitleState::*;
+
+        let mut titles = Vec::new();
+        for &byte in bytes {
+            self.state = match (self.state, byte) {
+                (Escape, b']') => Osc,
+                (Osc, b'0' | b'1' | b'2') => Separator,
+                (Separator, b';') => Payload,
+                (Payload | PayloadEscape, 0x07) | (PayloadEscape, b'\\') => {
+                    if byte == b'\\' {
+                        self.payload.pop();
+                    }
+                    titles.push(String::from_utf8_lossy(&self.payload).into_owned());
+                    self.payload.clear();
+                    Ground
+                }
+                (Payload | PayloadEscape, 0x1b) => {
+                    self.payload.push(byte);
+                    PayloadEscape
+                }
+                (Payload | PayloadEscape, _) => {
+                    self.payload.push(byte);
+                    Payload
+                }
+                (Discard | DiscardEscape, 0x07) | (DiscardEscape, b'\\') => Ground,
+                (Discard | DiscardEscape, 0x1b) => DiscardEscape,
+                (Discard | DiscardEscape, _) => Discard,
+                (_, 0x1b) => Escape,
+                _ => Ground,
+            };
+            // Oversized sequences are ignored through their terminator, without growing carry.
+            if self.payload.len() > MAX_OSC_TITLE_BYTES {
+                self.payload.clear();
+                self.state = if byte == 0x1b { DiscardEscape } else { Discard };
+            }
+        }
+        titles
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::osc_titles;
+    use super::{MAX_OSC_TITLE_BYTES, OUTPUT_TAIL_BYTES, OscTitleScanner, PtyRecorder};
 
     #[test]
     fn osc_titles_parses_bel_and_st_terminators() {
         assert_eq!(
-            osc_titles(b"noise\x1b]0;zero\x07\x1b]1;one\x1b\\\x1b]2;two\x07tail"),
+            OscTitleScanner::default()
+                .feed(b"noise\x1b]0;zero\x07\x1b]1;one\x1b\\\x1b]2;two\x07tail"),
             ["zero", "one", "two"],
+        );
+    }
+
+    #[test]
+    fn osc_titles_are_independent_of_read_boundaries() {
+        let stream = b"noise\x1b]0;zero\x07\x1b]1;one\x1b\\\x1b]2;tw\xc3\xb6;two\x07tail";
+        let expected = ["zero", "one", "twö;two"];
+        let mut scanner = OscTitleScanner::default();
+        let titles: Vec<_> = stream
+            .iter()
+            .flat_map(|byte| scanner.feed(std::slice::from_ref(byte)))
+            .collect();
+        assert_eq!(titles, expected, "one byte per read");
+        for split in 0..=stream.len() {
+            let mut scanner = OscTitleScanner::default();
+            let mut titles = scanner.feed(&stream[..split]);
+            titles.extend(scanner.feed(&stream[split..]));
+            assert_eq!(titles, expected, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn osc_titles_ignore_other_osc_and_unterminated_sequences() {
+        assert_eq!(
+            OscTitleScanner::default()
+                .feed(b"\x1b]8;;https://example.com\x07link\x1b]8;;\x1b\\\x1b]2;title\x07\x1b]0;unfinished\x1b"),
+            ["title"],
+        );
+    }
+
+    #[test]
+    fn osc_titles_bound_unterminated_payload_and_recover() {
+        let mut scanner = OscTitleScanner::default();
+        assert!(scanner.feed(b"\x1b]2;").is_empty());
+        for _ in 0..32 {
+            assert!(scanner.feed(&[b'x'; 4096]).is_empty());
+            assert!(scanner.payload.len() <= MAX_OSC_TITLE_BYTES);
+        }
+        assert_eq!(
+            scanner.feed(b"\x1b\\\x1b]1;after\x07"),
+            ["after"],
+            "discard the oversized title, then resume scanning",
+        );
+    }
+
+    #[test]
+    fn pty_recorder_retains_titles_after_byte_tail_eviction() {
+        let recorder = PtyRecorder::default();
+        let mut stream = b"\x1b]0;room | shell\x07\x1b]2;marvin@evil:~/leak\x1b\\".to_vec();
+        stream.extend(vec![b'x'; OUTPUT_TAIL_BYTES + 4096]);
+        recorder
+            .read_from(std::io::Cursor::new(stream))
+            .join()
+            .expect("reader thread");
+        assert_eq!(recorder.titles(), ["room | shell", "marvin@evil:~/leak"]);
+        assert_eq!(recorder.output_bytes(), vec![b'x'; OUTPUT_TAIL_BYTES]);
+    }
+
+    #[test]
+    fn pty_recorder_keeps_completed_titles_but_not_partial_sequences_across_readers() {
+        let recorder = PtyRecorder::default();
+        let first = b"\x1b]0;first\x07\x1b]2;partial";
+        let second = b"suffix\x07\x1b]1;second\x1b\\";
+        for stream in [first.as_slice(), second.as_slice()] {
+            recorder
+                .read_from(std::io::Cursor::new(stream.to_vec()))
+                .join()
+                .expect("reader thread");
+        }
+        assert_eq!(recorder.titles(), ["first", "second"]);
+        assert_eq!(
+            recorder.output_bytes(),
+            [first.as_slice(), second.as_slice()].concat()
         );
     }
 }

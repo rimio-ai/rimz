@@ -61,14 +61,14 @@ fn attached_terminal_title_ignores_shell_osc_title() {
     let shell = rimz::proc::shell_pane_name();
     let expected = format!("{} | {shell}", room.name());
     let deadline = Instant::now() + Duration::from_secs(5);
-    let (titles, output_len) = loop {
-        let output = client.output_bytes();
-        let titles = crate::common::osc_titles(&output);
+    let titles = loop {
+        let titles = client.titles();
         if titles.iter().any(|title| title == &expected) || Instant::now() >= deadline {
-            break (titles, output.len());
+            break titles;
         }
         std::thread::sleep(Duration::from_millis(25));
     };
+    let output_len = client.output_bytes().len();
     assert!(
         !titles
             .iter()
