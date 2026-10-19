@@ -247,6 +247,8 @@ rimz doctor [--audit] [--json] [--no-log-text] [--output <PATH>] [--clear]
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |
 | `--clear` | Before reporting, dismiss this workspace's recorded diagnostics, last incident, message failures, and multiplexer log records up to now. |
 
+On a terminal, a delayed stderr progress line names the oldest check still running and counts the others. It clears before the report prints, and is absent with `--json`, `--output`, or piped stdout. The usual `RIMZ_NO_PROGRESS` and agent-environment gates also apply.
+
 Plain `--json` carries multiplexer log text verbatim, up to 8 KiB per log record; add `--no-log-text` to omit it without changing other report sections.
 
 The human report opens with the RimZ version, OS user, and binary path, then prints these sections in order. A section marked conditional appears only when it has something to show.

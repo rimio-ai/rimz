@@ -1,6 +1,20 @@
-use super::unscheduled_clock;
+use super::{progress_label, unscheduled_clock};
 use rimz::config::TaskEntry;
 use rimz::harness::schedule::{arming::Arming, catalog::TaskSource, parse_trigger};
+
+#[test]
+fn progress_label_tracks_oldest_in_flight_check() {
+    assert_eq!(
+        progress_label(&["temp units", "hooks", "lsp"]),
+        "checking temp units (+2 more)"
+    );
+    assert_eq!(
+        progress_label(&["hooks", "lsp"]),
+        "checking hooks (+1 more)"
+    );
+    assert_eq!(progress_label(&["lsp"]), "checking lsp");
+    assert_eq!(progress_label(&[]), "checking doctor");
+}
 
 #[test]
 fn refusals_clear_only_for_matching_success_or_later_start() {
