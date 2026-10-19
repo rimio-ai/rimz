@@ -271,7 +271,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_loop(w, &report.loop_tasks, &mut tally)?;
     render_lsp(w, &report.lsp, &mut tally)?;
     render_remote_control(w, &report.remote_control, &mut tally)?;
-    render_storage(w, &report.disk_usage, &mut tally)?;
+    render_storage(w, report.disk_usage.as_ref(), &mut tally)?;
     render_temp_units(w, &report.temp_units, &mut tally)?;
 
     if let Some(protocols) = &report.protocols {
@@ -358,7 +358,7 @@ fn render_temp_units(
     );
     let free = if report.free_bytes >= report.floor_bytes {
         verdict(Health::Ok, &free)
-    } else if report.reclaimable_bytes > 0 {
+    } else if report.reclaimable_units > 0 {
         counted_verdict(tally, Severity::Warning, &free, "run `rimz gc --tmp-floor`")
     } else {
         counted_verdict(
@@ -380,21 +380,21 @@ fn render_temp_units(
                 None if report.past_grace_units == report.reclaimable_units => String::new(),
                 None => ", earliest reclaim unknown".into(),
             };
+            let bytes = report.bytes.as_ref().map_or_else(String::new, |bytes| {
+                format!(", {}", fmt_bytes(bytes.reclaimable_bytes))
+            });
             format!(
-                "{} units, {}; {} past the grace{earliest}",
-                report.reclaimable_units,
-                fmt_bytes(report.reclaimable_bytes),
-                report.past_grace_units,
+                "{} units{bytes}; {} past the grace{earliest}",
+                report.reclaimable_units, report.past_grace_units
             )
         }),
     );
+    let bytes = report.bytes.as_ref().map_or_else(String::new, |bytes| {
+        format!(", {}", fmt_bytes(bytes.in_use_bytes))
+    });
     kv.push(
         "in use",
-        cell(format!(
-            "{} units, {}",
-            report.in_use_units,
-            fmt_bytes(report.in_use_bytes)
-        )),
+        cell(format!("{} units{bytes}", report.in_use_units)),
     );
     kv.render(w)
 }
@@ -2460,8 +2460,22 @@ fn render_remote_on(
     Ok(())
 }
 
-fn render_storage(w: &mut impl Write, disk_usage: &Storage, tally: &mut Tally) -> io::Result<()> {
+fn render_storage(
+    w: &mut impl Write,
+    disk_usage: Option<&Storage>,
+    tally: &mut Tally,
+) -> io::Result<()> {
     section(w, tally, "STORAGE")?;
+    let Some(disk_usage) = disk_usage else {
+        return writeln!(
+            w,
+            "  {}",
+            paint(
+                palette::muted(),
+                "disk use not measured; run `rimz doctor --audit` to measure it"
+            )
+        );
+    };
     writeln!(
         w,
         "  {}",

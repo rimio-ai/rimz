@@ -1242,6 +1242,61 @@ fn doctor_human_report_renders_titled_sections() {
 }
 
 #[test]
+fn doctor_default_json_omits_unmeasured_disk_bytes() {
+    let env = Env::new();
+    let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
+    assert!(report.get("disk_usage").is_none(), "{report}");
+    let units = &report["temp_units"]["ready"];
+    assert!(units.is_object(), "{report}");
+    assert!(units.get("reclaimable_bytes").is_none(), "{units}");
+    assert!(units.get("in_use_bytes").is_none(), "{units}");
+}
+
+#[test]
+fn doctor_audit_json_keeps_measured_disk_bytes() {
+    let env = Env::new();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--audit", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert!(report["disk_usage"]["total_bytes"].is_u64(), "{report}");
+    let units = &report["temp_units"]["ready"];
+    assert!(units["reclaimable_bytes"].is_u64(), "{units}");
+    assert!(units["in_use_bytes"].is_u64(), "{units}");
+}
+
+#[test]
+fn doctor_reclaimable_empty_units_warn_in_both_modes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    write_machine_config(
+        &env,
+        "[gc]\ntmp_floor_percent = 10\ntmp_floor_min = \"0\"\n",
+    );
+    std::fs::create_dir_all(
+        env.state_path_for(&env.project_root)
+            .temp_unit_dir(Some("empty")),
+    )
+    .unwrap();
+    for audit in [false, true] {
+        let mut command = env.rimz();
+        command.arg("doctor").env("RIMZ_TEST_DISK_SPACE", "1,100");
+        if audit {
+            command.arg("--audit");
+        }
+        let output = command.output().unwrap();
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.contains("rimz gc --tmp-floor"),
+            "audit={audit}: {text}"
+        );
+        assert!(!text.contains("stop or restart"), "audit={audit}: {text}");
+    }
+}
+
+#[test]
 fn doctor_temp_units_reports_pressure_without_writing_state() {
     let env = Env::new();
     env.record(&env.project_root);

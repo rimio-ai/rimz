@@ -524,13 +524,6 @@ fn zellij_graphics_capability_does_not_degrade_doctor_health() {
     }
 }
 
-fn storage_fixture() -> Storage {
-    Storage {
-        total_bytes: 0,
-        roots: Vec::new(),
-    }
-}
-
 fn report_fixture() -> DoctorReport {
     DoctorReport {
         audit: false,
@@ -595,7 +588,7 @@ fn report_fixture() -> DoctorReport {
             unscheduled: Vec::new(),
         },
         remote_control: RemoteControl::Off,
-        disk_usage: storage_fixture(),
+        disk_usage: None,
         temp_units: Probe::Ready(rimz::harness::tmp_floor::TempUnits {
             free_bytes: 20,
             total_bytes: 100,
@@ -1786,6 +1779,21 @@ fn loop_section_reports_scheduler_coverage() {
 }
 
 #[test]
+fn default_storage_section_offers_audit_without_sizes() {
+    let out = strip(|w| render_human(&report_fixture(), w));
+    let storage = out
+        .split("STORAGE\n")
+        .nth(1)
+        .unwrap()
+        .split("\n\n")
+        .next()
+        .unwrap();
+    assert!(storage.contains("rimz doctor --audit"), "{storage}");
+    assert!(!storage.contains("rimz on disk"), "{storage}");
+    assert!(!storage.contains("AREA"), "{storage}");
+}
+
+#[test]
 fn storage_section_renders_total_and_roots() {
     let disk_usage = Storage {
         total_bytes: 13_018,
@@ -1806,7 +1814,7 @@ fn storage_section_renders_total_and_roots() {
     };
     let out = strip(|w| {
         let mut tally = Tally::default();
-        render_storage(w, &disk_usage, &mut tally)
+        render_storage(w, Some(&disk_usage), &mut tally)
     });
     assert!(out.contains("STORAGE"), "section title:\n{out}");
     assert!(out.contains("rimz on disk: 13 KB"), "total:\n{out}");
@@ -2413,6 +2421,27 @@ fn remote_agent_fields_render_as_key_and_verdict() {
 }
 
 #[test]
+fn temp_units_without_measurement_show_counts_and_reclaimable_warning() {
+    let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
+        free_bytes: 1,
+        total_bytes: 100,
+        floor_bytes: 10,
+        reclaimable_units: 2,
+        past_grace_units: 2,
+        in_use_units: 3,
+        ..Default::default()
+    });
+    let mut tally = Tally::default();
+    let out = strip(|w| render_temp_units(w, &report, &mut tally));
+    assert!(out.contains("2 units; 2 past the grace"), "{out}");
+    assert!(out.contains("3 units\n"), "{out}");
+    assert!(!out.contains("units, "), "{out}");
+    let closing = strip(|w| render_tally(w, &tally));
+    assert!(closing.contains("rimz gc --tmp-floor"), "{closing}");
+    assert!(!closing.contains("stop or restart"), "{closing}");
+}
+
+#[test]
 fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
     let render = |earliest_reclaim| {
         let report = Probe::Ready(rimz::harness::tmp_floor::TempUnits {
@@ -2420,7 +2449,10 @@ fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
             total_bytes: 100,
             floor_bytes: 10,
             reclaimable_units: 2,
-            reclaimable_bytes: 4,
+            bytes: Some(rimz::harness::tmp_floor::TempUnitBytes {
+                reclaimable_bytes: 4,
+                in_use_bytes: 0,
+            }),
             past_grace_units: 2,
             earliest_reclaim,
             ..Default::default()
@@ -2428,6 +2460,11 @@ fn temp_units_omit_earliest_reclaim_when_every_unit_is_past_the_grace() {
         strip(|w| render_temp_units(w, &report, &mut Tally::default()))
     };
     let all_past = render(None);
+    assert!(
+        all_past.contains("2 units, 4 B; 2 past the grace"),
+        "{all_past}"
+    );
+    assert!(all_past.contains("0 units, 0 B"), "{all_past}");
     assert!(all_past.contains("2 past the grace\n"), "{all_past}");
     assert!(!all_past.contains("earliest reclaim"), "{all_past}");
     let pending = render(Some(jiff::Timestamp::from_second(1_000).unwrap()));

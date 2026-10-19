@@ -37,7 +37,7 @@ use model::DoctorReport;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure): the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
+    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure), and measure disk use for STORAGE and TEMP UNITS by walking every file under the RimZ home: the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.
@@ -107,8 +107,8 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         loop_tasks: collect_loop(),
         lsp: collect_lsp(ws, globals),
         remote_control: runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())),
-        disk_usage: runtime::collect_storage(),
-        temp_units: runtime::collect_temp_units(),
+        disk_usage: audit.then(runtime::collect_storage),
+        temp_units: runtime::collect_temp_units(audit),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         folder_trust: ws.map(|ws| match crate::cli::folder_trust::collect(ws) {

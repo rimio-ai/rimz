@@ -340,6 +340,35 @@ fn pressure_records_failed_removals_and_keeps_evicting() {
 }
 
 #[test]
+fn measured_temp_units_sum_held_and_reclaimable_bytes() {
+    let mut report = TempUnits {
+        bytes: Some(TempUnitBytes::default()),
+        ..Default::default()
+    };
+    let unit = TmpUnit {
+        handle: "scratch".into(),
+        path: "/nonexistent/scratch".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        hold: TmpHold::Unowned,
+    };
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    report.tally(&unit, 4, now, Duration::ZERO);
+    report.tally(&unit, 5, now, Duration::ZERO);
+    report.tally(
+        &TmpUnit {
+            hold: TmpHold::Live,
+            ..unit
+        },
+        7,
+        now,
+        Duration::ZERO,
+    );
+    let json = serde_json::to_value(&report).unwrap();
+    assert_eq!(json["reclaimable_bytes"], 9);
+    assert_eq!(json["in_use_bytes"], 7);
+}
+
+#[test]
 fn earliest_reclaim_counts_only_units_inside_the_grace() {
     let grace = Duration::from_secs(100);
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
@@ -363,6 +392,9 @@ fn earliest_reclaim_counts_only_units_inside_the_grace() {
     assert_eq!(report.reclaimable_units, 4);
     assert_eq!(report.past_grace_units, 2);
     assert_eq!(report.in_use_units, 1);
+    let json = serde_json::to_value(&report).unwrap();
+    assert!(json.get("reclaimable_bytes").is_none(), "{json}");
+    assert!(json.get("in_use_bytes").is_none(), "{json}");
     assert_eq!(
         report.earliest_reclaim,
         Some(jiff::Timestamp::from_second(1_020).unwrap()),
