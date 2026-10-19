@@ -24,7 +24,7 @@ pub enum Effect {
     /// Fire-and-forget host fork: wake pokes and focus-sidebar. The shell pins
     /// its cwd to `/` so a deleted launch worktree cannot strand the plugin.
     RunCommand(Vec<String>),
-    /// Hide the permission-prompt pane left by Zellij.
+    /// Suppress this plugin's own pane.
     HideSelf,
     /// Runtime `reconfigure(kdl, false)`.
     Reconfigure(String),
@@ -589,7 +589,7 @@ impl Engine {
         if self.retired {
             return Vec::new();
         }
-        let mut effects = Vec::new();
+        let mut effects = vec![Effect::HideSelf];
         self.mark_granted(now, host, &mut effects);
         self.apply_runtime_reconfigure(&mut effects);
         self.finish_update(now, host, effects)
@@ -636,6 +636,19 @@ impl Engine {
             if changed && !baseline {
                 self.signal_change(now);
             }
+        }
+        if self
+            .config
+            .plugin_id
+            .and_then(|id| {
+                self.room
+                    .panes
+                    .get(&PaneKey::from(ProjectedPaneId::Plugin(id)))
+            })
+            .and_then(|pane| pane.manifest.as_ref())
+            .is_some_and(|pane| !pane.is_suppressed)
+        {
+            effects.push(Effect::HideSelf);
         }
         self.finish_update(now, host, effects)
     }
@@ -938,16 +951,13 @@ impl Engine {
 
     /// Flip into granted mode once: poke an immediate keepalive so the producer
     /// enters event mode now rather than after the first cadence, unless a
-    /// pre-grant topology signal is already waiting. Hide the pane Zellij
-    /// surfaced for the permission prompt; the plugin is headless, so a visible
-    /// pane is only ever that prompt's leftover.
+    /// pre-grant topology signal is already waiting.
     fn mark_granted(&mut self, now: u64, host: &impl Host, effects: &mut Vec<Effect>) {
         if self.granted {
             self.flush_pregrant_change(now);
             return;
         }
         self.granted = true;
-        effects.push(Effect::HideSelf);
         self.focus.request_general_observation();
         self.apply_runtime_reconfigure(effects);
         if self.pending_pregrant_change {

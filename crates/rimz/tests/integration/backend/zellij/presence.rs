@@ -813,6 +813,88 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 }
 
 #[test]
+fn presence_loaded_before_first_attach_hides_and_leaves_floating_toggle_to_terminals() {
+    assert_presence_hides_and_leaves_floating_toggle_to_terminals(true);
+}
+
+#[test]
+fn presence_loaded_after_attach_hides_and_leaves_floating_toggle_to_terminals() {
+    assert_presence_hides_and_leaves_floating_toggle_to_terminals(false);
+}
+
+fn assert_presence_hides_and_leaves_floating_toggle_to_terminals(load_before_attach: bool) {
+    require_zellij!();
+    let wasm = presence_wasm_artifact();
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|version| version >= zellij::MIN_ZELLIJ_VERSION) => {}
+        _ => {
+            crate::common::skip("zellij below the presence-plugin floor");
+            return;
+        }
+    }
+
+    let room = LiveZellijSession::new("presence-hide");
+    let xdg = room.path();
+    seed_presence_permissions(xdg, &wasm);
+    let cwd = TempDir::new().expect("session cwd tempdir");
+    room.create_plain_background(cwd.path(), "600");
+    let mut client = None;
+    if !load_before_attach {
+        client = Some(AttachedClient::attach(&room, 160, 45));
+    }
+    let backend = ZellijBackend::with_runtime_dir(xdg);
+    if load_before_attach {
+        wait_for_human_client_count(&backend, room.name(), 0);
+    }
+    let opts = rimz::mux::PresencePluginOptions {
+        session_name: room.name().to_owned(),
+        workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
+        wasm,
+        rimz_bin: crate::common::cargo_bin("rimz", env!("CARGO_BIN_EXE_rimz")),
+        focus_key: None,
+        zoom_key: None,
+        session_options: zellij::zellij_session_options(&MultiplexerConfig::default().zellij),
+    };
+    backend
+        .ensure_presence_plugin(&opts)
+        .expect("load presence");
+    if load_before_attach {
+        let presence = presence_plugin_panes(xdg, room.name()).expect("detached roster");
+        assert!(
+            presence.is_empty(),
+            "presence pane already materialized: no longer exercising deferred AddPlugin: {presence:?}"
+        );
+        client = Some(AttachedClient::attach(&room, 160, 45));
+    }
+    let presence = poll_until(
+        SPAWN_TIMEOUT,
+        || presence_plugin_panes(xdg, room.name()),
+        |panes| panes.len() == 1 && panes[0].is_suppressed && !panes[0].is_floating,
+        "exactly one suppressed, non-floating presence pane after attach",
+    );
+    let presence_id = presence[0].id;
+
+    let output = room.action(&["toggle-floating-panes"]);
+    assert!(output.status.success(), "toggle failed: {output:?}");
+    poll_until(
+        SPAWN_TIMEOUT,
+        || list_panes(xdg, room.name()).map(|snapshot| snapshot.panes),
+        |panes| {
+            panes.iter().any(|pane| {
+                pane.is_plugin && pane.id == presence_id && pane.is_suppressed && !pane.is_floating
+            }) && panes
+                .iter()
+                .any(|pane| !pane.is_plugin && pane.is_floating && !pane.is_suppressed)
+        },
+        "floating terminal from toggle while presence stays suppressed",
+    );
+    drop(client);
+}
+
+#[test]
 fn presence_identity_transition_keeps_global_background_updates() {
     require_zellij!();
     let wasm = presence_wasm_artifact();
