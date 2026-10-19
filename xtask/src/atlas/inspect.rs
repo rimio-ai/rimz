@@ -843,7 +843,10 @@ fn item_evidence(
     } else {
         (file, item)
     };
-    let key = format!("{}::{}", declared.module, declared.name);
+    let key = match &declared.owner {
+        Some(owner) => format!("{}::{owner}::{}", declared.module, declared.name),
+        None => format!("{}::{}", declared.module, declared.name),
+    };
     let name = item.name.as_str();
     let references = facts
         .references

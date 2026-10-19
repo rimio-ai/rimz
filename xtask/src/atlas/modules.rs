@@ -77,7 +77,8 @@ fn nearest<'a, T>(
     if exact.is_empty() { matches } else { exact }
 }
 
-/// Every public item a `module::Name` key names: `Name` defined in `module`
+/// Every public item a `module::Name` or `module::Owner::name` key names:
+/// `Owner` is an impl self type or a declaring trait. Items sit in `module`
 /// or any module beneath it, so `message::queue_synthetic` finds
 /// `message::deliver::queue_synthetic`. A free item wins over a method of
 /// the same name (`prefer_free`), then definitions in the named module
@@ -87,17 +88,39 @@ pub(super) fn items_for_key<'a>(
     key: &str,
 ) -> Vec<(&'a FileSyntax, &'a PubItem)> {
     let (module, name) = key.rsplit_once("::").unwrap_or(("", key));
-    let matches = files
+    let owned = module.rsplit_once("::").unwrap_or(("", module));
+    let readings = [(module, None), (owned.0, Some(owned.1))];
+    let owner_fits = |owner: Option<&str>, item: &PubItem| {
+        owner.is_none_or(|owner| item.owner.as_deref() == Some(owner))
+    };
+    let named = files
         .iter()
         .flat_map(|file| {
             file.pub_items
                 .iter()
-                .filter(|item| item.name == name && module_is_within(&item.module, module))
+                .filter(|item| item.name == name)
                 .map(move |item| (file, item))
         })
         .collect::<Vec<_>>();
-    nearest(prefer_free(matches, |item| item.member), |_, item| {
-        item.module == module
+    let name_only = prefer_free(
+        named
+            .iter()
+            .copied()
+            .filter(|(_, item)| module_is_within(&item.module, module))
+            .collect(),
+        |item| item.member,
+    );
+    let matches = named
+        .into_iter()
+        .filter(|(_, item)| {
+            name_only.iter().any(|(_, kept)| std::ptr::eq(*kept, *item))
+                || (module_is_within(&item.module, owned.0) && owner_fits(Some(owned.1), item))
+        })
+        .collect();
+    nearest(matches, |_, item| {
+        readings
+            .iter()
+            .any(|(module, owner)| item.module == *module && owner_fits(*owner, item))
     })
 }
 
@@ -137,7 +160,7 @@ fn prefer_inherent<'a>(
 /// Every production function a `module::name` or `module::Owner::name` key
 /// names, under the key's module. Read as `module::name`, a free function
 /// wins over a method (`prefer_free`); read as `module::Owner::name`, an
-/// inherent method wins over a trait-impl one (`prefer_inherent`); definitions in the key's module
+/// inherent method or trait default wins over a trait-impl one (`prefer_inherent`); definitions in the key's module
 /// itself win over deeper ones.
 pub(super) fn functions_for_key<'a>(
     files: &'a [FileSyntax],
@@ -257,7 +280,7 @@ fn visible_function<'a>(file: &'a FileSyntax, item: &PubItem) -> Option<&'a FnBo
 pub(super) struct KeyDefinition<'a> {
     pub(super) file: &'a FileSyntax,
     pub(super) line: usize,
-    /// The `impl` owner when the key resolved to a method.
+    /// The impl self type or declaring trait when the key resolved to a method.
     pub(super) owner: Option<&'a str>,
     /// The build-configuration predicate gating the definition.
     pub(super) cfg: Option<&'a str>,
@@ -336,7 +359,7 @@ fn tier_definitions<'a>(
         .map(|(file, item)| KeyDefinition {
             file,
             line: item.line,
-            owner: visible_function(file, item).and_then(|function| function.owner.as_deref()),
+            owner: item.owner.as_deref(),
             cfg: item.cfg.as_deref(),
             resolved: Resolved::Visible(item),
         })

@@ -219,6 +219,14 @@ mod private {
             "not_boundary"
         ]
     );
+    assert_eq!(
+        report.files[0]
+            .pub_items
+            .iter()
+            .map(|item| item.owner.as_deref())
+            .collect::<Vec<_>>(),
+        [None, Some("View"), None, Some("Draw"), None, None, None]
+    );
 }
 
 #[test]
@@ -555,7 +563,7 @@ impl View {
             .iter()
             .map(|function| function.label())
             .collect::<Vec<_>>(),
-        ["run", "production"]
+        ["Backend::run", "production"]
     );
     assert_eq!(
         file.test_fns
@@ -563,14 +571,16 @@ impl View {
             .map(|function| function.label())
             .collect::<Vec<_>>(),
         [
-            "test_default",
+            "Backend::test_default",
             "check",
             "fixture",
             "support",
             "View::test_only"
         ]
     );
-    assert_eq!(file.enclosing_fn(3).unwrap().label(), "run");
+    assert_eq!(file.enclosing_fn(3).unwrap().label(), "Backend::run");
+    assert_eq!(file.fns[0].owner.as_deref(), Some("Backend"));
+    assert!(!file.fns[0].trait_impl);
     for function in &file.test_fns {
         assert!(
             file.cfg_kind_at(function.line).is_some(),

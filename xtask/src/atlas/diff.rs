@@ -1162,7 +1162,7 @@ fn definition_site(files: &[FileSyntax], key: &str) -> Option<DefinitionSite> {
         })
 }
 
-/// The `impl` owner a rehomed key's base definition carries: a method moves
+/// The impl self type or trait a rehomed key's base definition carries: a method moves
 /// to a method of the same owner.
 fn rehome_owner<'a>(base: &'a [FileSyntax], key: &str) -> Option<&'a str> {
     super::modules::definitions_for_key(base, key)
@@ -1188,7 +1188,11 @@ fn definition_sites(
             let named = file
                 .pub_items
                 .iter()
-                .filter(|item| module_is_within(&item.module, module) && item.name == name)
+                .filter(|item| {
+                    module_is_within(&item.module, module)
+                        && item.name == name
+                        && item.owner.as_deref() == owner
+                })
                 .collect::<Vec<_>>();
             // A function's span starts at its first attribute, an item's
             // line at its name: the item covers the function it names.
@@ -1197,11 +1201,7 @@ fn definition_sites(
                     .iter()
                     .any(|item| (line..=end_line).contains(&item.line))
             };
-            let items = named
-                .iter()
-                .filter(|_| owner.is_none())
-                .map(|item| item.line)
-                .collect::<Vec<_>>();
+            let items = named.iter().map(|item| item.line);
             let functions = file
                 .fns
                 .iter()
@@ -1209,12 +1209,10 @@ fn definition_sites(
                     module_is_within(&function.module, module)
                         && function.name == name
                         && function.owner.as_deref() == owner
-                        // Items carry no owner, so a method counts here.
-                        && (owner.is_some() || !covered(function.line, function.end_line))
+                        && !covered(function.line, function.end_line)
                 })
                 .map(|function| function.line);
             items
-                .into_iter()
                 .chain(functions)
                 .map(|line| DefinitionSite {
                     path: file.path.clone(),
