@@ -32,7 +32,7 @@ pub(super) struct GuardFamily {
     pub(super) locations: Vec<GuardSite>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct GuardDrops {
     pub(super) vocabulary: usize,
     pub(super) predicate_use: usize,
