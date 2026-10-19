@@ -106,7 +106,7 @@ The verb is read-only apart from the [index cache](#index-cache) and a requested
 
 ## Output flags
 
-Every report verb (`survey`, `inspect`, `index`, `diff`) takes the same three flags. `--json` emits the full report as JSON (`--top` bounds Markdown only where supported); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
+Every report verb (`survey`, `inspect`, `index`, `diff`) takes the same three flags. `--json` emits the report as JSON (`--top` bounds Markdown only where supported); `--out <file>` writes it there instead of stdout; `--section <a,b>` keeps only the named sections in either form. Diff's `internal` section remains opt-in through `--section`. An agent reading a dossier should write it with `--out` and narrow it with `--section` or `jq` rather than let the whole report through stdout.
 
 ```sh
 cargo xtask atlas inspect --module crates/rimz/src/store --json --section verdict,surface --out /tmp/store.json

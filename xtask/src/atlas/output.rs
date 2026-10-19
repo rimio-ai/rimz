@@ -102,6 +102,12 @@ impl OutputArgs {
             .is_none_or(|sections| sections.contains(section))
     }
 
+    pub(super) fn named(&self, section: &str) -> bool {
+        self.sections
+            .as_ref()
+            .is_some_and(|sections| sections.contains(section))
+    }
+
     /// Delivers the rendered report to `--out` or stdout.
     #[expect(
         clippy::print_stdout,

@@ -1563,6 +1563,12 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
     if output_args.wants("hot") {
         sections.insert("hot".to_owned(), serde_json::to_value(&report.hot)?);
     }
+    if output_args.wants("assemblers") {
+        sections.insert(
+            "assemblers".to_owned(),
+            serde_json::to_value(&report.assemblers)?,
+        );
+    }
     if output_args.wants("debt") {
         sections.insert("debt".to_owned(), serde_json::to_value(&report.debt)?);
         sections.insert("cycles".to_owned(), serde_json::to_value(&report.cycles)?);
@@ -1592,7 +1598,7 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
             }),
         );
     }
-    Ok(serde_json::to_string_pretty(&sections)?)
+    Ok(format!("{}\n", serde_json::to_string_pretty(&sections)?))
 }
 
 #[cfg(test)]

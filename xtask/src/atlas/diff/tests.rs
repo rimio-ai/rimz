@@ -179,7 +179,7 @@ fn diff_json_is_stable() {
             raw.extend(["--section".to_owned(), section.to_owned()]);
         }
         let args = parse_args(&raw).unwrap().unwrap();
-        let rendered = render_json(&report, &args.output, args.show_internal).unwrap();
+        let rendered = render_json(&report, &args.output).unwrap();
         assert_eq!(rendered, expected);
     }
 }
@@ -215,7 +215,6 @@ fn diff_args_require_base_and_path_or_expect() {
             },
             top: 20,
             output: OutputArgs::default(),
-            show_internal: false,
         }
     );
 }
@@ -238,7 +237,7 @@ fn diff_args_parse_json_sections_and_reject_unknown_sections() {
     assert!(parsed.output.wants("totals"));
     assert!(parsed.output.wants("dependencies"));
     assert!(!parsed.output.wants("interface"));
-    assert!(!parsed.show_internal);
+    assert!(!parsed.output.named("internal"));
     let internal = parse_args(&[
         "--base".into(),
         "HEAD~1".into(),
@@ -249,7 +248,7 @@ fn diff_args_parse_json_sections_and_reject_unknown_sections() {
     ])
     .unwrap()
     .unwrap();
-    assert!(internal.show_internal);
+    assert!(internal.output.named("internal"));
     assert!(
         parse_args(&[
             "--base".into(),
