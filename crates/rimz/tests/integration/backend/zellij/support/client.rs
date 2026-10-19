@@ -1,17 +1,17 @@
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::ids::PaneId;
 use rimz::mux::{ClientFocusOptions, ClientView, MuxBackend, ZellijBackend};
 
+use crate::common::PtyRecorder;
+
 use super::session::{LiveZellijSession, SPAWN_TIMEOUT};
 
 const REGISTRATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
-const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 const CLIENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(30);
 const INPUT_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -31,7 +31,7 @@ pub(in crate::backend::zellij) struct AttachedClient {
     cols: u16,
     rows: u16,
     mode: AttachMode,
-    output_tail: Arc<Mutex<Vec<u8>>>,
+    output: PtyRecorder,
     process: AttachedClientProcess,
 }
 
@@ -100,22 +100,15 @@ impl AttachedClient {
     }
 
     fn spawn(session: &LiveZellijSession, cols: u16, rows: u16, mode: AttachMode) -> Self {
-        let output_tail = Arc::new(Mutex::new(Vec::new()));
-        let process = spawn_process_at(
-            session.path(),
-            session.name(),
-            cols,
-            rows,
-            &mode,
-            Arc::clone(&output_tail),
-        );
+        let output = PtyRecorder::default();
+        let process = spawn_process_at(session.path(), session.name(), cols, rows, &mode, &output);
         Self {
             xdg: session.namespace().path().to_path_buf(),
             name: session.name().to_owned(),
             cols,
             rows,
             mode,
-            output_tail,
+            output,
             process,
         }
     }
@@ -132,7 +125,7 @@ impl AttachedClient {
             self.cols,
             self.rows,
             &self.mode,
-            Arc::clone(&self.output_tail),
+            &self.output,
         );
     }
 
@@ -462,18 +455,15 @@ impl AttachedClient {
     }
 
     pub(in crate::backend::zellij) fn output_bytes(&self) -> Vec<u8> {
-        self.output_tail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.output.output_bytes()
+    }
+
+    pub(in crate::backend::zellij) fn titles(&self) -> Vec<String> {
+        self.output.titles()
     }
 
     fn output_tail(&self) -> String {
-        let tail = self
-            .output_tail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        String::from_utf8_lossy(&tail).into_owned()
+        String::from_utf8_lossy(&self.output_bytes()).into_owned()
     }
 }
 
@@ -489,7 +479,7 @@ fn spawn_process_at(
     cols: u16,
     rows: u16,
     mode: &AttachMode,
-    output_tail: Arc<Mutex<Vec<u8>>>,
+    output: &PtyRecorder,
 ) -> AttachedClientProcess {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -525,25 +515,8 @@ fn spawn_process_at(
         .expect("spawn zellij attach");
     drop(pair.slave);
     let writer = pair.master.take_writer().expect("PTY writer");
-    let mut reader = pair.master.try_clone_reader().expect("clone reader");
-    std::thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => return,
-                Ok(read) => {
-                    let mut tail = output_tail
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    tail.extend_from_slice(&buffer[..read]);
-                    let excess = tail.len().saturating_sub(OUTPUT_TAIL_BYTES);
-                    if excess > 0 {
-                        tail.drain(..excess);
-                    }
-                }
-            }
-        }
-    });
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    output.read_from(reader);
     AttachedClientProcess {
         _master: pair.master,
         writer,

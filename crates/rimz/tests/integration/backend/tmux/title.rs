@@ -290,7 +290,7 @@ fn attached_terminal_title_ignores_shell_osc_title() {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let titles = loop {
-        let titles = crate::common::osc_titles(&client.output_bytes());
+        let titles = client.titles();
         if !titles.is_empty() || Instant::now() >= deadline {
             break titles;
         }
