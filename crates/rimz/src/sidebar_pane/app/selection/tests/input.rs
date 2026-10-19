@@ -1144,7 +1144,7 @@ fn banner_reveals_the_frozen_lead_where_it_sits_without_changing_selection() {
     assert_eq!(ui.reveal_row, None);
 }
 #[test]
-fn selection_change_reveals_an_offscreen_card_after_a_wheel_peek() {
+fn only_own_input_ends_the_wheel_peek_on_selection_change() {
     let ws = workspace();
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_0");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_1");
@@ -1175,8 +1175,12 @@ fn selection_change_reveals_an_offscreen_card_after_a_wheel_peek() {
         "unchanged selection leaves the peek alone"
     );
 
-    // A genuine selection move ends it.
+    // A native focus move keeps the peek; only this sidebar's input reveals.
+    let peek = ui.painted_rows.clone();
     reconcile_selection(&mut ui, &snapshot, Some(second));
+    paint(&mut ui, &snapshot, 14);
+    assert_eq!(ui.painted_rows, peek);
+    ui.own_input_reveal = true;
     paint(&mut ui, &snapshot, 14);
     assert!(ui.scroll_offset < offset);
     assert!(ui.interactions.line_for_row(1).is_some());
@@ -1511,6 +1515,7 @@ fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     // fresh unread lead stays reachable through the jump banner.
     let mut ui = UiState {
         selected_index: Some(9),
+        own_input_reveal: true,
         ..Default::default()
     };
     let theme = ui.theme(&snapshot.theme);

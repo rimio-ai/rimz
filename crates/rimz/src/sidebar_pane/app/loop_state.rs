@@ -150,6 +150,7 @@ pub(super) struct LoopState {
     focus_landing: Option<(crate::mux::focus_anchor::FocusAnchor, Instant)>,
     // Intent adoption can replace the hold-last baseline before dispatch fails.
     focus_rollback: Option<FocusRollback>,
+    pending_input_focus: Option<PaneId>,
     painted_focus_anchor_ms: u64,
     painted_height: u16,
     paints: u64,
@@ -365,6 +366,7 @@ impl LoopState {
             pending_focus_push: None,
             focus_landing: None,
             focus_rollback: None,
+            pending_input_focus: None,
             painted_focus_anchor_ms: 0,
             painted_height: 0,
             paints: 0,
@@ -705,6 +707,7 @@ impl LoopState {
             tab_read_dwell_until,
             self_close,
             pending_focus_repair,
+            pending_input_focus,
             // The acknowledged baseline the comparison runs against.
             current: _,
             #[cfg(test)]
@@ -784,6 +787,7 @@ impl LoopState {
             && tab_read_dwell_until.is_none()
             && !self_close.confirming_empty()
             && pending_focus_repair.is_none()
+            && pending_input_focus.is_none()
     }
 
     pub(super) fn share_width_geometry(
@@ -834,6 +838,9 @@ impl LoopState {
     }
 
     fn on_focus_failed(&mut self, pane: PaneId, error: String) {
+        if self.pending_input_focus.as_ref() == Some(&pane) {
+            self.pending_input_focus = None;
+        }
         let Some(rollback) = self
             .focus_rollback
             .take_if(|request| request.target == pane)
@@ -1568,6 +1575,11 @@ impl LoopState {
                     )
                 });
             let previous_selection = self.ui.selected_pane.clone();
+            let previous_row = self
+                .ui
+                .selected_index
+                .and_then(|index| self.ui.visible_roster(&self.current).row(index))
+                .map(|row| row.id.clone());
             let applied = handle_wakeup(
                 wakeup,
                 &mut self.ui,
@@ -1580,11 +1592,21 @@ impl LoopState {
                 self.ui.painted_roster = roster;
             }
             self.clicked_row = None;
+            let selected_row = self
+                .ui
+                .selected_index
+                .and_then(|index| self.ui.visible_roster(&self.current).row(index))
+                .map(|row| row.id.clone());
+            if selected_row != previous_row {
+                self.pending_input_focus = None;
+                self.ui.own_input_reveal = true;
+            }
             if self.ui.selected_pane != previous_selection {
                 self.focus_rollback = None;
             }
             for effect in &applied.effects {
                 if let InputEffect::Focus(pane) = effect {
+                    self.pending_input_focus = Some(pane.clone());
                     let owner = self
                         .ui
                         .selected_pane
@@ -2302,15 +2324,18 @@ impl LoopState {
         {
             self.persist_body_filter(self.ui.make_up_filter.clone());
         }
-        // A fresh focus-register derivation that moved the highlight is an external
-        // focus switch. Arm a one-shot reveal so the next paint brings the focused
-        // card's worktree header on-screen with it. A sidebar jump also lands here,
-        // but its fresh focus anchor cancels this in `apply_focus_anchor`.
-        if derived_focus_pane
-            && self.ui.selected_pane.is_some()
-            && self.ui.selected_pane != prev_selected
-        {
-            self.ui.focus_group_reveal = true;
+        if derived_focus_pane && let Some(requested) = &self.pending_input_focus {
+            let landed = self
+                .current
+                .row_owning_pane(requested)
+                .and_then(|row| row.pane.as_ref())
+                .is_some_and(|pane| self.ui.selected_pane.as_ref() == Some(&pane.pane_id));
+            if landed {
+                self.ui.own_input_reveal = true;
+                self.pending_input_focus = None;
+            } else if self.ui.selected_pane != prev_selected {
+                self.pending_input_focus = None;
+            }
         }
         let acted = layout_freeze::focused_interaction(
             prev_good,
@@ -2545,7 +2570,6 @@ impl LoopState {
             if let Some(placement) = anchor.placement {
                 self.ui.focus_placement = Some(placement);
                 self.ui.scroll_ease.cancel();
-                self.ui.focus_group_reveal = false;
             }
             if let Some(order) = anchor.order {
                 layout_freeze::adopt_shared_hold(

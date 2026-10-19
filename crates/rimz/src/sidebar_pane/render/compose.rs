@@ -5,8 +5,7 @@ use crate::config::{GlyphRole, ScrollbarMode};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::view::VisibleRoster;
 use crate::store::snapshot::{
-    SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, actionable_unread_count,
-    lead_unread_row,
+    SidebarSnapshot, SidebarWorktreeGroup, actionable_unread_count, lead_unread_row,
 };
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -54,8 +53,8 @@ pub(in crate::sidebar_pane) fn compose_lines(
 ///
 /// The viewport target is `UiState::scroll_offset`, resolved here each frame:
 /// anchored to the selected or topmost surviving card from the previous target
-/// window, then clamped to the zone. A changed selection reveals only when no
-/// card line is visible; an external-focus reveal includes its group header.
+/// window, then clamped to the zone. Only the sidebar's own input reveals a
+/// changed selection, and only when no card line is visible.
 /// Wheel, banner, and toggle inputs make the offset authoritative once; opening
 /// the landed chip also reveals its first newly shown receipt, and the banner
 /// reveals the full-roster lead where it sits. The unread
@@ -676,10 +675,7 @@ fn resolve_scroll_offset(
     }
     let selected = ui.selected_index.and_then(|index| input.roster.row(index));
     let changed = selected.map(|row| row.id.as_str()) != ui.drawn_selection.as_deref();
-    resolved.snap = changed
-        || ui.focus_group_reveal
-        || ui.focus_placement.is_some()
-        || ui.drawn_scroll_max.is_none();
+    resolved.snap = changed || ui.focus_placement.is_some() || ui.drawn_scroll_max.is_none();
     let first_line = |id: &str| {
         let ordinal = input.roster.ordinal_of_id(id)?;
         input
@@ -734,23 +730,12 @@ fn resolve_scroll_offset(
             )
         });
     // A placement from a taller source zone can land below this one: reveal it.
-    if visible || (!changed && !ui.focus_group_reveal && shared.is_none()) {
+    if visible || (!ui.own_input_reveal && shared.is_none()) {
         return resolved;
     }
-    resolved.offset = if ui.focus_group_reveal
-        && let Some(group_first) = selected_group_first_ordinal(input.roster, selected_index)
-    {
-        auto_scroll_reveal_group(
-            input.scroll_map,
-            group_first,
-            selected_index,
-            resolved.offset,
-            viewport,
-        )
-    } else {
+    resolved.offset =
         auto_scroll_to_selection(input.scroll_map, selected_index, resolved.offset, viewport)
-    }
-    .min(max_offset);
+            .min(max_offset);
     resolved
 }
 
@@ -809,33 +794,6 @@ pub(super) fn auto_scroll_to_selection(
     offset
 }
 
-/// Minimally scroll so the selected row and its worktree header sit in view
-/// together. `group_first` is the visible-row ordinal of the group's first row,
-/// which the header line carries in the map. When that span outgrows the
-/// viewport — or the header line can't be located — fall back to revealing the
-/// card alone, so the focused row stays on-screen.
-pub(super) fn auto_scroll_reveal_group(
-    map: &[Option<usize>],
-    group_first: usize,
-    selected: usize,
-    offset: usize,
-    viewport: usize,
-) -> usize {
-    if viewport == 0 {
-        return offset;
-    }
-    let Some(top) = map.iter().position(|entry| *entry == Some(group_first)) else {
-        return auto_scroll_to_selection(map, selected, offset, viewport);
-    };
-    let Some(bottom) = map.iter().rposition(|entry| *entry == Some(selected)) else {
-        return offset;
-    };
-    if bottom < top || bottom - top + 1 > viewport {
-        return auto_scroll_to_selection(map, selected, offset, viewport);
-    }
-    nudge_into_view(top, bottom, offset, viewport)
-}
-
 fn nudge_into_view(top: usize, bottom: usize, offset: usize, viewport: usize) -> usize {
     if bottom >= offset + viewport {
         bottom + 1 - viewport
@@ -846,16 +804,10 @@ fn nudge_into_view(top: usize, bottom: usize, offset: usize, viewport: usize) ->
     }
 }
 
-/// First visible ordinal of the group containing `selected`.
-fn selected_group_first_ordinal(roster: &VisibleRoster<'_>, selected: usize) -> Option<usize> {
-    let group = roster.group_containing(selected)?;
-    (group.source().kind != SidebarWorktreeKind::External).then(|| group.range().start)
-}
-
 /// The `↑ N need you` jump banner, toned by the lead's status (`failed` the
 /// alarm red, else the caution warn). Rendered only while the lead is scrolled
-/// out of view; its click scrolls the card list back to the top, where the lead
-/// ranks.
+/// out of view; its click minimally reveals the lead where it sits, or scrolls
+/// to the top if the filter hides it.
 fn unread_banner_line(theme: &Theme, lead_status: AgentStatus, count: usize) -> Line<'static> {
     let style = if lead_status == AgentStatus::Failed {
         theme.alarm(Modifier::empty())

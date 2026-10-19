@@ -43,6 +43,7 @@ fn select_card(snapshot: &SidebarSnapshot, ui: &mut UiState, id: &str) {
         armed_ms: fixed_now().as_millisecond(),
     });
     ui.selected_index = ui.visible_roster(snapshot).ordinal_of_id(id);
+    ui.own_input_reveal = true;
     assert!(ui.selected_index.is_some(), "selection exists");
 }
 
@@ -707,11 +708,11 @@ fn selection_follow_cancels_a_flight_even_with_the_same_target() {
 }
 
 #[test]
-fn no_selection_holds_the_clamped_scroll_even_when_revealing_a_group() {
+fn no_selection_holds_the_clamped_scroll_after_own_input() {
     let snapshot = overflowing_fleet();
     let mut ui = UiState {
         scroll_offset: 4,
-        focus_group_reveal: true,
+        own_input_reveal: true,
         ..Default::default()
     };
     let theme = Theme::fixed(false);
@@ -749,43 +750,6 @@ fn auto_scroll_nudges_the_selection_minimally_into_view() {
     assert_eq!(auto_scroll_to_selection(&map, 9, 2, 5), 2);
     // Degenerate zero-height viewport: hold.
     assert_eq!(auto_scroll_to_selection(&map, 1, 2, 0), 2);
-}
-
-#[test]
-fn auto_scroll_reveals_the_selected_group_header_minimally() {
-    // Header lines carry the ordinal of the group's first row. Row 1 is a
-    // two-line card in group 0; row 3 is a three-line card in group 1.
-    let map = vec![
-        None,
-        Some(0),
-        Some(0),
-        Some(1),
-        Some(1),
-        None,
-        Some(2),
-        Some(2),
-        Some(3),
-        Some(3),
-        Some(3),
-    ];
-    // Group above the window: pin the header to the top.
-    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 4, 4), 1);
-    // Group below the window: card lands at the bottom, header visible above.
-    assert_eq!(auto_scroll_reveal_group(&map, 2, 3, 0, 5), 6);
-    // Fully visible: the window doesn't move.
-    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 1, 4), 1);
-    // Taller than the viewport: fall back to card-follow.
-    assert_eq!(
-        auto_scroll_reveal_group(&map, 2, 3, 0, 4),
-        auto_scroll_to_selection(&map, 3, 0, 4)
-    );
-    // Missing header target, as with external catch-all chrome: fall back.
-    assert_eq!(
-        auto_scroll_reveal_group(&map, 4, 1, 4, 4),
-        auto_scroll_to_selection(&map, 1, 4, 4)
-    );
-    // Degenerate zero-height viewport: hold.
-    assert_eq!(auto_scroll_reveal_group(&map, 0, 1, 4, 0), 4);
 }
 
 #[test]
@@ -898,6 +862,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     // this frame doubles as the settled witness: no scroll activity, no bar.
     let ui = UiState {
         selected_index: Some(5),
+        own_input_reveal: true,
         ..Default::default()
     };
     let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 29);
@@ -917,76 +882,6 @@ fn render_scroll_offset_follows_selection_to_bottom() {
         "a settled viewport carries no scrollbar overlay"
     );
     assert_snapshot("scroll_offset_follows_selection_to_bottom", rendered);
-}
-
-#[test]
-fn focus_group_reveal_brings_selected_worktree_header_on_screen() {
-    // Card-follow alone can reveal a non-first row while leaving its worktree
-    // header just above the window. The focus reveal widens the target span to
-    // include the header on an external focus switch.
-    let following = snapshot_to_screen_with_alert_and_ui(
-        &overflowing_fleet(),
-        None,
-        &UiState {
-            selected_index: Some(1),
-            scroll_offset: 99,
-            ..Default::default()
-        },
-        38,
-        21,
-    );
-    assert!(
-        following.contains("task-1"),
-        "card-follow still reaches the focused card:\n{following}"
-    );
-    assert!(
-        !following.contains("⑂ alpha"),
-        "card-follow leaves the worktree header above the window:\n{following}"
-    );
-
-    let revealed = snapshot_to_screen_with_alert_and_ui(
-        &overflowing_fleet(),
-        None,
-        &UiState {
-            selected_index: Some(1),
-            scroll_offset: 99,
-            focus_group_reveal: true,
-            ..Default::default()
-        },
-        38,
-        21,
-    );
-    assert!(
-        revealed.contains("task-1"),
-        "the focused card remains visible:\n{revealed}"
-    );
-    assert!(
-        revealed.contains("⑂ alpha"),
-        "the focus reveal brings the worktree header into view:\n{revealed}"
-    );
-}
-
-#[test]
-fn focus_group_reveal_falls_back_to_card_follow_for_external_group() {
-    // The external divider maps to chrome (`None`), not a header target. A
-    // focus reveal there should behave exactly like ordinary card-follow rather
-    // than treating the group's first card as a header surrogate.
-    let snapshot = external_overflowing_fleet();
-    let mut following_ui = UiState {
-        selected_index: Some(1),
-        scroll_offset: 99,
-        ..Default::default()
-    };
-    let theme = Theme::for_sidebar(&snapshot.theme);
-    let following = compose_lines(&snapshot, None, &following_ui, &theme, 38, 21).scroll_offset;
-
-    following_ui.focus_group_reveal = true;
-    let revealed = compose_lines(&snapshot, None, &following_ui, &theme, 38, 21).scroll_offset;
-
-    assert_eq!(
-        revealed, following,
-        "external groups have no worktree header to reveal, so card-follow wins"
-    );
 }
 
 #[test]
@@ -1118,29 +1013,4 @@ fn line_containing<'a>(rendered: &'a str, needle: &str) -> &'a str {
 
 fn ends_with_rail(line: &str) -> bool {
     matches!(line.chars().last(), Some('▐' | '▕'))
-}
-
-fn external_overflowing_fleet() -> SidebarSnapshot {
-    let mut snapshot = overflowing_fleet();
-    let mut group = std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
-    let beta = std::sync::Arc::make_mut(&mut snapshot.worktree_groups).remove(0);
-    group.key = "external".to_owned();
-    group.label = "external".to_owned();
-    group.kind = crate::store::snapshot::SidebarWorktreeKind::External;
-    group.status_counts = vec![crate::store::snapshot::SidebarStatusCount {
-        status: AgentStatus::Running,
-        count: group.rows.len() + beta.rows.len(),
-    }];
-    std::sync::Arc::make_mut(&mut group.rows).extend(std::sync::Arc::unwrap_or_clone(beta.rows));
-    group.diff_added = None;
-    group.diff_removed = None;
-    group.commits_ahead = None;
-    group.commits_behind = None;
-    group.trunk = None;
-    group.clean = None;
-    group.landed = None;
-    group.trunk_sync = None;
-    group.pr_state = None;
-    snapshot.worktree_groups = vec![group].into();
-    snapshot
 }

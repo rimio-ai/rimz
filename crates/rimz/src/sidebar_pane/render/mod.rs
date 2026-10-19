@@ -38,9 +38,7 @@ use self::compose::compose_lines_with_meter;
 #[cfg(test)]
 use self::compose::lead_unread;
 #[cfg(test)]
-use self::compose::{
-    auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
-};
+use self::compose::{auto_scroll_to_selection, build_bottom_chrome, scroll_thumb};
 pub(in crate::sidebar_pane) use self::frame_rows::SectionLabel;
 use self::interaction::RenderedBlock;
 pub(in crate::sidebar_pane) use self::interaction::{FrameInteractions, HitRegion, HitTarget};
@@ -155,9 +153,7 @@ fn draw_into(
     ui.landed_reveal = false;
     ui.reveal_row = None;
     ui.focus_placement = None;
-    // One paint consumes the focus reveal; later folds with unchanged selection
-    // leave the viewport anchored to the card or scroll by hand.
-    ui.focus_group_reveal = false;
+    ui.own_input_reveal = false;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     paint_hyperlinks(frame, &ui.interactions, area);

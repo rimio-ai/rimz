@@ -80,8 +80,8 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) freeze: Option<LayoutFreeze>,
     /// Target first scroll-zone content line of the agent-cards viewport.
     /// Resolved around the previous target window's selected or topmost card,
-    /// clamped to the zone, and written back like frame interactions. A changed
-    /// off-screen selection reveals once; visible cards never trigger reveal.
+    /// clamped to the zone, and written back like frame interactions. Only this
+    /// sidebar's own input reveals an off-screen selection; visible cards never reveal.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
     pub(in crate::sidebar_pane) scroll_offset: usize,
     /// The wheel glide from the last shown line toward `scroll_offset`: armed
@@ -124,11 +124,9 @@ pub(in crate::sidebar_pane) struct UiState {
     /// its later acceptance cannot seed the viewport a second time. `0` before
     /// any jump handoff.
     pub(in crate::sidebar_pane) last_focus_anchor_ms: u64,
-    /// Armed for one paint when a fold adopts an external focus change — a tab
-    /// switch, or the first focused pane learned on attach. The next draw
-    /// reveals the focused card with its worktree header only if no card line
-    /// is visible, then consumes the flag. A fresh shared placement clears it.
-    pub(in crate::sidebar_pane) focus_group_reveal: bool,
+    /// This sidebar's input changed selection, or its requested focus landed.
+    /// The next draw may reveal that card, then consumes the mark.
+    pub(in crate::sidebar_pane) own_input_reveal: bool,
     /// The row id a manual mark-unread just reopened while it is the focused
     /// pane. While armed, focus-read auto-clear skips that row; moving focus
     /// off it releases the guard so a later revisit clears normally.

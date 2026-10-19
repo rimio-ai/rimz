@@ -272,6 +272,96 @@ fn hidden_destination() -> (Rig, FrameOutput, crate::mux::focus_anchor::FocusAnc
     (rig, output, anchor)
 }
 
+fn assert_external_selection_stays_offscreen(rowless_anchor: bool) {
+    let (mut rig, _) = scroll_rig();
+    rig.state.config.own_pane = None;
+    let target = rig.state.current.worktree_groups[0].rows[19]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    if rowless_anchor {
+        let (_, _, mut anchor) = hidden_destination();
+        anchor.pane_id = target.clone();
+        anchor.placement = None;
+        anchor.order = None;
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+    }
+    let mut focused = rig.state.current.clone();
+    focused.focused_pane = Some(target.clone());
+    rig.fold(focused, SnapshotSource::Produced);
+    paint_at(&mut rig, 0);
+    assert_eq!(rig.state.ui.selected_pane, Some(target));
+    assert_eq!(rig.state.ui.scroll_offset, 0);
+    assert!(
+        !rig.state
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-19")
+    );
+}
+
+#[test]
+fn native_focus_never_reveals_an_offscreen_selection() {
+    assert_external_selection_stays_offscreen(false);
+}
+
+#[test]
+fn rowless_focus_anchor_never_reveals_an_offscreen_selection() {
+    assert_external_selection_stays_offscreen(true);
+}
+
+#[test]
+fn own_key_browse_reveals_an_offscreen_selection() {
+    let (mut rig, _) = scroll_rig();
+    rig.input(KeyAction::Bottom);
+    assert!(rig.state.ui.scroll_offset > 0);
+    assert!(
+        rig.state
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-19")
+    );
+}
+
+#[test]
+fn own_inbox_jump_reveals_when_its_offscreen_target_lands() {
+    let (mut rig, _) = scroll_rig();
+    rig.state.config.own_pane = None;
+    Arc::make_mut(&mut Arc::make_mut(&mut rig.state.current.worktree_groups)[0].rows)[19]
+        .as_agent_mut()
+        .unwrap()
+        .status = crate::agents::AgentStatus::Waiting;
+    let target = rig.state.current.worktree_groups[0].rows[19]
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let outcome = rig
+        .state
+        .apply_input([Wakeup::Key(KeyAction::InboxNext)], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(outcome.effects, vec![InputEffect::Focus(target.clone())]);
+    assert_eq!(rig.state.ui.selected_pane, None);
+    let mut focused = rig.state.current.clone();
+    focused.focused_pane = Some(target.clone());
+    rig.fold(focused, SnapshotSource::Produced);
+    paint_at(&mut rig, 0);
+    assert_eq!(rig.state.ui.selected_pane, Some(target));
+    assert!(rig.state.ui.scroll_offset > 0);
+    assert!(
+        rig.state
+            .ui
+            .painted_rows
+            .iter()
+            .any(|(id, _)| id == "agent-19")
+    );
+}
+
 #[test]
 fn shared_placement_captures_the_painted_opening_set() {
     let (mut rig, _) = scroll_rig();
@@ -463,7 +553,6 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     switched.focused_pane = Some(target.clone());
     switched.viewed_panes = vec![target];
     rig.fold(switched, SnapshotSource::Produced);
-    assert!(!rig.state.ui.focus_group_reveal);
     assert!(rig.state.ui.focus_placement.is_none());
     paint_at(&mut rig, 100);
     assert_eq!(
@@ -530,7 +619,7 @@ fn a_late_duplicate_push_uses_the_painted_frame_unless_the_destination_is_exitin
 }
 
 #[test]
-fn cleared_anchor_without_push_still_reveals_on_the_first_target_fold() {
+fn cleared_anchor_without_push_keeps_the_viewport_on_the_first_target_fold() {
     let (mut rig, _, anchor) = hidden_destination();
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
     assert!(crate::mux::focus_anchor::clear_matching(
@@ -542,10 +631,7 @@ fn cleared_anchor_without_push_still_reveals_on_the_first_target_fold() {
     switched.viewed_panes = vec![anchor.pane_id.clone()];
     rig.fold(switched, SnapshotSource::Produced);
     assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
-    assert!(
-        rig.state.ui.focus_group_reveal,
-        "a missed intent still uses the external-focus fallback"
-    );
+    assert!(!rig.state.ui.own_input_reveal);
     assert!(rig.state.ui.focus_placement.is_none());
     assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
 }
@@ -924,13 +1010,14 @@ fn shared_placement_uses_the_destination_zone_instead_of_its_offset() {
 fn shared_placement_never_leaves_the_selected_card_off_screen() {
     use crate::mux::focus_anchor::FocusPlacement;
     // A placement below a shorter destination zone, and a placement for a row the
-    // selection has since left: either way the selected card must end up visible.
+    // selection has since left through own input: either way the card must be visible.
     for (placed, selected, viewport_row) in [(19, 19, 30), (4, 18, 2)] {
         let (mut rig, _) = scroll_rig();
         let rows = &rig.state.current.worktree_groups[0].rows;
         let placed_id = rows[placed].id.clone();
         let target = rows[selected].clone();
         rig.state.ui.selected_index = Some(selected);
+        rig.state.ui.own_input_reveal = true;
         rig.state.ui.selected_pane = Some(target.pane.as_ref().unwrap().pane_id.clone());
         rig.state.ui.scroll_offset = 0;
         rig.state.ui.focus_placement = Some(FocusPlacement {

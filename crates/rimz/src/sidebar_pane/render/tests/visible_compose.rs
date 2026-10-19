@@ -118,7 +118,7 @@ fn write_back(ui: &mut UiState, frame: compose::ComposedFrame) {
     ui.landed_reveal = false;
     ui.reveal_row = None;
     ui.focus_placement = None;
-    ui.focus_group_reveal = false;
+    ui.own_input_reveal = false;
 }
 
 proptest! {

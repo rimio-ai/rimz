@@ -251,6 +251,8 @@ Three partitions hold regardless of any score, so the column keeps one stable ou
 
 Inside an unfinished group, the six-row cap folds idle cards and process rows behind `+K more`; an agent card that is working, blocked, parked, finished, unread, or selected is never folded. After you jump or browse, the column freezes its order and keeps previously selected cards open for five seconds from your last interaction or landing paint, so a glance back finds the cards where they were. Arriving on a tab restarts its hold over the order that sidebar last showed. While any client's focus is on this sidebar pane, the freeze lasts thirty seconds instead; leaving the pane restores the five-second deadline without restarting it. New cards appear at the end of their group, and new groups appear below the live groups. Content and read state keep updating; order, cap exemptions, and held cards settle together when the timer expires. Each tab has its own timer, and a hidden tab settles when its content next updates.
 
+Switching tabs with the multiplexer's own keys moves the highlight without scrolling the cards. The sidebar's own selection keys and jumps still bring an off-screen card into view.
+
 ## Tuning
 
 Five `[agents.attention]` knobs move the boundaries: `stalled_after_secs` (a silent agent, native and launched children included, escalates to `!`, 30 minutes), `tool_repeat_warn_after` (an identical-tool run gains `⟲`, 3 calls), `tool_repeat_attention_after` (that run escalates to `!`, 20 calls), `inactive_after_secs` (calm and parked cards cool, one hour), and `archive_after_secs` (those cards archive, 24 hours). Details in [configuration](./configuration.md#sidebar-rendering).
