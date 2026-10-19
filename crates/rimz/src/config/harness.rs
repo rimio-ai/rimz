@@ -307,9 +307,113 @@ impl Serialize for KeepWarm {
 
 impl<'de> Deserialize<'de> for KeepWarm {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
+        struct Setting;
+        impl<'de> serde::de::Visitor<'de> for Setting {
+            type Value = KeepWarm;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("off or a duration such as 2h")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                if value {
+                    Err(E::custom(KeepWarmParseError))
+                } else {
+                    Ok(KeepWarm::Off)
+                }
+            }
+        }
+        deserializer.deserialize_any(Setting)
+    }
+}
+
+/// A declared keep-warm shorthand or block, retaining shorthand `off` so solo profiles can distinguish it from an explicit `while`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum KeepWarmPolicy {
+    Shorthand(KeepWarm),
+    Block(KeepWarmFields),
+}
+
+/// Independent keep-warm fields; resolved output uses `None` for cancelled or unset fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeepWarmFields {
+    #[serde(default)]
+    pub max: Option<KeepWarm>,
+    #[serde(default, rename = "while", deserialize_with = "keep_warm_while")]
+    pub while_clause: Option<String>,
+}
+
+fn keep_warm_while<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Setting {
+        Text(String),
+        Boolean(bool),
+    }
+    match Setting::deserialize(deserializer)? {
+        Setting::Text(value) => Ok(Some(value)),
+        Setting::Boolean(false) => Ok(Some("off".into())),
+        Setting::Boolean(true) => Err(serde::de::Error::custom(
+            "keep-warm while takes a condition or off",
+        )),
+    }
+}
+
+impl From<KeepWarm> for KeepWarmPolicy {
+    fn from(value: KeepWarm) -> Self {
+        Self::Shorthand(value)
+    }
+}
+
+impl KeepWarmPolicy {
+    pub(crate) fn fields(&self) -> KeepWarmFields {
+        match self {
+            Self::Shorthand(max) => KeepWarmFields {
+                max: Some(*max),
+                while_clause: (*max == KeepWarm::Off).then(|| "off".into()),
+            },
+            Self::Block(fields) => fields.clone(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for KeepWarmPolicy {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Policy;
+        impl<'de> serde::de::Visitor<'de> for Policy {
+            type Value = KeepWarmPolicy;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("keep-warm takes off or a duration such as 2h, or a max/while block")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse::<KeepWarm>().map(Into::into).map_err(E::custom)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                if value {
+                    Err(E::custom(KeepWarmParseError))
+                } else {
+                    Ok(KeepWarm::Off.into())
+                }
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                KeepWarmFields::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(KeepWarmPolicy::Block)
+            }
+        }
+        deserializer.deserialize_any(Policy)
     }
 }
 
@@ -642,6 +746,31 @@ mod smart_compact_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profiles_accept_max_blocks_but_not_flags_or_invalid_durations() {
+        for value in ["\"2h\"", "\"off\"", "{ max = \"2h\" }", "{ max = \"off\" }"] {
+            let profile = toml::from_str::<crate::config::Profile>(&format!(
+                "agent = 'claude'\nkeep-warm = {value}"
+            ));
+            assert!(profile.is_ok(), "keep-warm {value}: {profile:?}");
+        }
+        for value in [
+            "true",
+            "3",
+            "{ max = '0s' }",
+            "{ max = '2x' }",
+            "{ typo = '2h' }",
+        ] {
+            assert!(
+                toml::from_str::<crate::config::Profile>(&format!(
+                    "agent = 'claude'\nkeep-warm = {value}"
+                ))
+                .is_err(),
+                "{value}"
+            );
+        }
+    }
 
     #[test]
     fn prompt_cache_margin_is_positive_and_validated_against_effective_limits() {

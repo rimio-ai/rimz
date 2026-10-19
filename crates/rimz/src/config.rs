@@ -88,7 +88,9 @@ pub use gc::parse_older_than;
 pub use glyphs::{GlyphRole, ThemeGlyphsConfig};
 use glyphs::{is_named_glyph_set, validate_glyph_source};
 pub(crate) use harness::IdleCompactParseError;
-pub use harness::{CompactSeat, DayCap, HarnessConfig, IdleCompact, KeepWarm};
+pub use harness::{
+    CompactSeat, DayCap, HarnessConfig, IdleCompact, KeepWarm, KeepWarmFields, KeepWarmPolicy,
+};
 use loop_::TaskBudgetError;
 pub(crate) use loop_::WaitMeta;
 pub(crate) use loop_::deserialize_judges;

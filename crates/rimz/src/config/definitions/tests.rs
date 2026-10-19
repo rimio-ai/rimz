@@ -756,23 +756,19 @@ fn keep_warm_lands_on_solo_profiles_with_inheritance_and_on_role_bindings() {
         "Pipeline.",
     );
     let loaded = clean(root.path());
-    let two_hours = Some(crate::config::KeepWarm::For(
-        std::time::Duration::from_secs(7200),
-    ));
+    let two_hours = Some(crate::config::KeepWarm::For(std::time::Duration::from_secs(7200)).into());
     assert_eq!(loaded.agent_profiles.0["warm"].keep_warm, two_hours);
     assert_eq!(loaded.agent_profiles.0["heir"].keep_warm, two_hours);
     assert_eq!(
         loaded.agent_profiles.0["cold"].keep_warm,
-        Some(crate::config::KeepWarm::Off)
+        Some(crate::config::KeepWarm::Off.into())
     );
     assert_eq!(loaded.agent_profiles.0["worker"].keep_warm, None);
     let team = &loaded.teams.0["probe"];
     assert_eq!(team.roles[0].keep_warm, None);
     assert_eq!(
         team.roles[1].keep_warm,
-        Some(crate::config::KeepWarm::For(
-            std::time::Duration::from_secs(5400)
-        ))
+        Some(crate::config::KeepWarm::For(std::time::Duration::from_secs(5400)).into())
     );
     let seat = &loaded.agent_profiles.0[&team.roles[1].profile];
     assert_eq!(
@@ -781,6 +777,54 @@ fn keep_warm_lands_on_solo_profiles_with_inheritance_and_on_role_bindings() {
     );
     let roles = serde_json::to_value(&team.roles).unwrap();
     assert_eq!(roles[1]["keep-warm"], "90m");
+}
+
+#[test]
+fn keep_warm_blocks_resolve_team_fields_and_yaml_off() {
+    let root = team_fixture();
+    team_definition(
+        root.path(),
+        &format!("{TEAM_STAGES}\nkeep-warm:\n  max: 6h\n  while: team.stage!=Done"),
+        &format!("{TEAM_ROLES}\n    keep-warm:\n      max: off\n      while: off"),
+        "Pipeline.",
+    );
+    let loaded = load(
+        root.path(),
+        SkillCheck::Skip,
+        &CommandsConfig::default(),
+        &crate::config::tiers::TierConfig::default(),
+        Some(272_000),
+    );
+    assert!(
+        loaded.errors.is_empty(),
+        "keep-warm blocks must load: {:?}",
+        loaded.errors
+    );
+    let team = serde_json::to_value(&loaded.teams.0["probe"]).unwrap();
+    assert_eq!(team["keep-warm"]["max"], "6h");
+    assert_eq!(team["keep-warm"]["while"], "team.stage!=Done");
+    assert_eq!(team["roles"][1]["keep-warm"]["max"], "off");
+    assert_eq!(team["roles"][1]["keep-warm"]["while"], "off");
+    for value in ["false", "{ max: false }"] {
+        definition(
+            root.path(),
+            "agents/cold.md",
+            &format!("agent: claude\ntools: [Bash]\nkeep-warm: {value}"),
+            "Cold.",
+        );
+        let loaded = load(
+            root.path(),
+            SkillCheck::Skip,
+            &CommandsConfig::default(),
+            &crate::config::tiers::TierConfig::default(),
+            Some(272_000),
+        );
+        assert!(
+            loaded.errors.is_empty(),
+            "YAML false means off: {:?}",
+            loaded.errors
+        );
+    }
 }
 
 #[test]
@@ -802,6 +846,38 @@ fn keep_warm_refuses_flags_numbers_and_unitless_text() {
             "Pipeline.",
         );
         error(root.path(), "keep-warm takes off or a duration such as 2h");
+    }
+}
+
+#[test]
+fn keep_warm_while_is_refused_on_standalone_definitions_in_both_namespaces() {
+    for namespace in ["agents", "subagents"] {
+        for clause in ["team.stage!=Done", "ci=passed", "off"] {
+            let root = fixture();
+            definition(
+                root.path(),
+                &format!("{namespace}/solo.md"),
+                &format!("agent: claude\ntools: [Bash]\nkeep-warm: {{while: '{clause}'}}"),
+                "Solo.",
+            );
+            let loaded = load(
+                root.path(),
+                SkillCheck::Skip,
+                &CommandsConfig::default(),
+                &crate::config::tiers::TierConfig::default(),
+                Some(272_000),
+            );
+            let errors = loaded
+                .errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                errors.contains("solo") && errors.contains(clause) && errors.contains("no board"),
+                "{errors}"
+            );
+        }
     }
 }
 

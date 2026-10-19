@@ -6,6 +6,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use super::schedule::when::{WhenExpr, WindowReadings, evaluate};
 use crate::RuntimePaths;
 use crate::agents::{AgentState, AgentStatus, PendingWaitTrigger};
 use crate::config::{
@@ -25,7 +26,7 @@ pub struct CacheKeepaliveRequest {
     pub label: String,
 }
 
-/// Effective team roles and agent profiles: where a seat declares its keep-warm horizon.
+/// Effective teams, roles, and agent profiles: per-field keep-warm resolution and its stage gate.
 #[derive(Clone, Debug, Default)]
 pub struct SeatPolicy {
     pub teams: TeamsConfig,
@@ -47,34 +48,51 @@ impl SeatPolicy {
         }
     }
 
-    /// The horizon the agent's role (team seat) or profile (solo seat) sets, when the provider's
-    /// known prompt-cache TTL reaches `harness.keep_warm_min_ttl`. A `rimz subagents` child
-    /// never resolves one.
+    /// The role-over-team maximum (or solo profile's), admitted by the TTL floor and the current stage condition. Unknown board readings permit a hold; a while-only hold takes the ping cap. A `rimz subagents` child never resolves one.
     pub fn horizon(&self, agent: &AgentState, harness: &HarnessConfig) -> Option<Duration> {
         if agent.launch_depth.is_some() {
             return None;
         }
         let setting = match &agent.team {
-            Some(team) => {
-                let role = agent.role.as_deref()?;
-                self.teams
-                    .0
-                    .get(team)?
-                    .roles
-                    .iter()
-                    .find(|binding| binding.role == role)?
-                    .keep_warm
-            }
-            None => self.profile_setting(agent.profile.as_deref()?, |profile| profile.keep_warm),
+            Some(team) => self.teams.0.get(team)?.keep_warm(agent.role.as_deref())?,
+            None => crate::config::KeepWarmFields {
+                max: self.profile_setting(agent.profile.as_deref()?, |profile| {
+                    profile
+                        .keep_warm
+                        .as_ref()
+                        .and_then(|policy| policy.fields().max)
+                }),
+                while_clause: None,
+            },
         };
-        let Some(KeepWarm::For(horizon)) = setting else {
-            return None;
-        };
+        let horizon = match setting.max {
+            Some(KeepWarm::For(max)) => Some(max),
+            _ => setting
+                .while_clause
+                .as_ref()
+                .and(harness.cache_keepalive_max),
+        }?;
         let ttl = harness.prompt_cache_ttl(&agent.kind)?;
-        harness
-            .keep_warm_min_ttl
-            .is_none_or(|floor| ttl >= floor)
-            .then_some(horizon)
+        if harness.keep_warm_min_ttl.is_some_and(|floor| ttl < floor) {
+            return None;
+        }
+        if let Some(clause) = setting.while_clause
+            && let Some(root) = agent.lane_path()
+        {
+            let expr = WhenExpr::parse(&[clause]).ok()?;
+            let verdict = evaluate(
+                &expr,
+                Path::new(root),
+                None,
+                None,
+                None,
+                &WindowReadings::new(None, Timestamp::now()),
+            );
+            if !verdict.ok && verdict.readings.values().all(Option::is_some) {
+                return None;
+            }
+        }
+        Some(horizon)
     }
 
     /// The token floor at which this seat is compacted while idle (`None` is off): a TOML team
@@ -134,7 +152,7 @@ impl SeatPolicy {
 /// ping, idle compaction, and the card's held clock share. A hold is a horizon the pings can
 /// still maintain, so it needs pings switched on, an admitted provider TTL, a resting pingable
 /// agent with no idle stop pending (resting in its durable lifecycle too, since only there
-/// does a ping fold as no work), a live cohort for a team seat, a cache still warm from the
+/// does a ping fold as no work), a cache still warm from the
 /// last request (a cold cache is not pinged back), `harness.cache_keepalive_max` still permitting
 /// the next ping, and the horizon counted from the agent's last real turn.
 pub(crate) fn holds(
@@ -161,8 +179,7 @@ pub(crate) fn holds(
         )
         && agent.rests_in_lifecycle()
         && pingable(agent)
-        && !run_reached_cap(agent, harness, ttl)
-        && (agent.team.is_none() || super::idle_compact::cohort_live(agent)))
+        && !run_reached_cap(agent, harness, ttl))
     .then_some(horizon)
 }
 

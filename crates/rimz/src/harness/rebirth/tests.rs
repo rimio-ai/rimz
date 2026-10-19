@@ -2139,6 +2139,7 @@ fn team_machine() -> MachineConfig {
     machine.agents.teams.0.insert(
         "forge".to_owned(),
         Team {
+            keep_warm: None,
             roles: vec![
                 RoleBinding {
                     signals: Vec::new(),

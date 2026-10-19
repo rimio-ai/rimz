@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::agents;
-use crate::config::{
-    FlipCompact, KeepWarm, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding,
-};
+use crate::config::{FlipCompact, Profile, PromptSource, RoleBinding, Team, TeamSignalBinding};
 use crate::harness::team_prompt::BUILT_IN_CONSENSUS;
 use crate::store::message::AutoCompact;
 
@@ -108,6 +106,7 @@ pub(super) fn load(
             for (binding, profile) in profiles {
                 loaded.insert("agents", &binding.profile, &path, profile);
                 if let Some(row) = loaded.rows.last_mut() {
+                    row.keep_warm = team.keep_warm(Some(&binding.role));
                     row.namespace = "team".to_owned();
                     row.team = Some(name.clone());
                     row.role = Some(binding.role.clone());
@@ -188,11 +187,7 @@ fn roster(
             // A Markdown role's value rides its overlay into the seat's
             // `<team>.<role>` profile, inheriting like `auto-compact`.
             idle_compact: None,
-            keep_warm: role
-                .keep_warm
-                .as_deref()
-                .map(|value| keep_warm(path, value))
-                .transpose()?,
+            keep_warm: role.keep_warm.clone(),
             signals: signals(path, role.signals.as_deref())?,
             owns,
             mode: None,
@@ -241,6 +236,7 @@ fn roster(
         }
     }
     Ok(Team {
+        keep_warm: fm.keep_warm.clone(),
         roles,
         leader: Some(leader.to_owned()),
         layout: fm.layout.clone(),
@@ -386,12 +382,6 @@ impl SeatLoader<'_> {
         profile.append_system_prompt_files = crafts;
         Ok(profile)
     }
-}
-
-pub(super) fn keep_warm(path: &Path, value: &str) -> Result<KeepWarm, DefinitionErr> {
-    value
-        .parse::<KeepWarm>()
-        .map_err(|error| DefinitionErr::new(path, format!("sets `keep-warm: {value}`; {error}")))
 }
 
 fn flip_compact(path: &Path, value: &str) -> Result<FlipCompact, DefinitionErr> {

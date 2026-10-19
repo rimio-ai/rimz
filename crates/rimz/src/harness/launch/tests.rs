@@ -640,6 +640,7 @@ fn team() -> crate::harness::launch_reminders::TeamReminder {
         args: None,
     };
     crate::harness::launch_reminders::TeamReminder::new(crate::config::Team {
+        keep_warm: None,
         roles: vec![role("planner", "claude"), role("coder", "codex")],
         leader: Some("planner".to_owned()),
         layout: None,

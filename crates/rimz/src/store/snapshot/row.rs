@@ -450,10 +450,7 @@ pub struct AgentCard {
     pub turn_error_label: Option<String>,
 }
 
-/// How long a card's prompt cache stays warm: the provider TTL its age pin
-/// fills over, the last request (pings included) that TTL counts from, and
-/// while a keep-warm horizon holds the cache, the end of the last real turn and
-/// the instant the horizon lets go.
+/// How long a card's prompt cache stays warm: the provider TTL and last request (pings included), plus the last real turn and finite maximum while keep-warm holds. A stage condition can release the hold before that maximum.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheClock {
     pub ceiling_secs: u32,

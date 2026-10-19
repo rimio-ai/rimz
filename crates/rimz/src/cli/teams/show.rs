@@ -200,6 +200,22 @@ fn write_spec(w: &mut impl Write, report: &TeamReport) -> Result<()> {
     )
     .indent(2)
     .render(w)?;
+    for role in &report.roles {
+        if let Some(policy) = &role.keep_warm {
+            let handle = render::paint(
+                render::palette::identity(role.kind.as_deref().unwrap_or("")),
+                &format!("@{}", role.role),
+            );
+            writeln!(
+                w,
+                "  {handle} keep-warm: max {}; while {}",
+                policy
+                    .max
+                    .map_or_else(|| "—".to_owned(), |max| max.to_string()),
+                policy.while_clause.as_deref().unwrap_or("—")
+            )?;
+        }
+    }
     if report.consensus.is_some()
         || report.roles.iter().any(|role| {
             role.system_prompt_file.is_some() || !role.append_system_prompt_files.is_empty()
@@ -572,6 +588,7 @@ mod tests {
             layout: Some("planner,coder+reviewer".to_owned()),
             leader: Some("planner".to_owned()),
             roles: vec![RoleReport {
+                keep_warm: None,
                 declared: true,
                 tier: None,
                 tier_fallback: None,
@@ -596,6 +613,27 @@ mod tests {
             error: None,
             instances,
         }
+    }
+
+    #[test]
+    fn keep_warm_fields_show_in_the_roster_and_json() {
+        let mut report = report(Vec::new());
+        report.roles[0].keep_warm = Some(rimz::config::KeepWarmFields {
+            max: Some(rimz::config::KeepWarm::For(std::time::Duration::from_secs(
+                21600,
+            ))),
+            while_clause: Some("team.stage!=Done".into()),
+        });
+        let human = rendered(&report, None);
+        assert!(
+            human.contains("keep-warm: max 6h; while team.stage!=Done"),
+            "{human}"
+        );
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["roles"][0]["keep_warm"],
+            serde_json::json!({"max": "6h", "while": "team.stage!=Done"})
+        );
+        insta::assert_snapshot!(human);
     }
 
     #[test]

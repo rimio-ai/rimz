@@ -1,5 +1,4 @@
-//! Producer-published keep-warm horizons. Definitions resolve once per heavy pass here, so the
-//! card's cache clock learns which agents a horizon holds without re-reading definitions per tick.
+//! Producer-published keep-warm horizons, admitted by the TTL floor and stage condition each heavy pass. The card shares that gate without reading definitions or boards per tick.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -138,7 +137,7 @@ mod tests {
 
     fn policy() -> SeatPolicy {
         let mut profile: Profile = toml::from_str("agent = \"claude\"").unwrap();
-        profile.keep_warm = Some(KeepWarm::For(Duration::from_secs(7200)));
+        profile.keep_warm = Some(KeepWarm::For(Duration::from_secs(7200)).into());
         let mut policy = SeatPolicy::default();
         policy.profiles.0.insert("warm".into(), profile);
         policy
@@ -402,6 +401,50 @@ mod tests {
     }
 
     #[test]
+    fn publication_and_the_card_follow_the_while_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = RuntimePaths::under(
+            crate::WorkspaceId::from_project_root(dir.path()),
+            dir.path(),
+        )
+        .unwrap();
+        runtime.ensure_dirs().unwrap();
+        let board = tempfile::tempdir().unwrap();
+        let mut seat = agent("claude", "seat", None, Some(10));
+        seat.team = Some("mill".into());
+        seat.role = Some("lead".into());
+        seat.worktree_path = Some(board.path().to_string_lossy().into_owned());
+        let mut snapshot = snapshot(&runtime, vec![seat]);
+        let mut policy = SeatPolicy::default();
+        policy.teams.0.insert("mill".into(), toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}]").unwrap());
+        let harness = HarnessConfig::default();
+        for (stage, expected) in [("Implement", true), ("Done", false), ("Review", true)] {
+            std::fs::write(
+                board.path().join("blackboard.md"),
+                format!("Stage: {stage}\n"),
+            )
+            .unwrap();
+            publish(&snapshot, &runtime, &harness, &policy);
+            let cache = read_keep_warm_cache(&runtime.keep_warm_path());
+            assert_eq!(
+                cache.horizons.contains_key("claude:seat"),
+                expected,
+                "published {stage}"
+            );
+            project_cache_clocks(&mut snapshot, &cache, &harness, &runtime);
+            let clock = snapshot
+                .rows()
+                .find(|row| row.id == "seat")
+                .unwrap()
+                .as_agent()
+                .unwrap()
+                .cache
+                .unwrap();
+            assert_eq!(clock.warm_until.is_some(), expected, "card {stage}");
+        }
+    }
+
+    #[test]
     fn a_published_horizon_holds_only_an_agent_the_pings_can_maintain() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = crate::WorkspaceId::from_project_root(dir.path());
@@ -464,7 +507,10 @@ mod tests {
             })
         };
         let [done, parked, held] = clocks("");
-        assert_eq!(done, unheld(3600), "a Done cohort is not painted held");
+        assert!(
+            done.unwrap().warm_until.is_some(),
+            "Done alone does not end a hold"
+        );
         assert_eq!(parked, unheld(3600), "a budget-parked agent is not held");
         assert!(held.unwrap().warm_until.is_some());
         assert_eq!(clocks("cache_keepalive = false")[2], unheld(3600));

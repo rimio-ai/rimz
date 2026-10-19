@@ -341,6 +341,7 @@ fn default_machine_teams() -> TeamsConfig {
     TeamsConfig(BTreeMap::from([(
         "peer".to_owned(),
         Team {
+            keep_warm: None,
             roles: Vec::new(),
             leader: None,
             layout: Some("claude,codex".to_owned()),
@@ -469,9 +470,9 @@ pub struct Profile {
     pub fast: Option<bool>,
     #[serde(default)]
     pub budget: Option<String>,
-    /// How long a solo agent's prompt cache is held warm after its last real turn; unset means off.
+    /// A solo agent's keep-warm maximum (shorthand or max-only block); unset inherits through the `agent` base chain.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
-    pub keep_warm: Option<super::KeepWarm>,
+    pub keep_warm: Option<super::KeepWarmPolicy>,
     /// The context size at which this seat is compacted while idle; unset
     /// inherits up the `agent` chain, then `harness.idle_compact`.
     #[serde(
@@ -533,6 +534,9 @@ impl TeamsConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Team {
+    /// Default keep-warm fields inherited separately by each role.
+    #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<super::KeepWarmPolicy>,
     #[serde(default)]
     pub roles: Vec<RoleBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -572,6 +576,32 @@ pub const DONE_STAGE: &str = "Done";
 const DEFAULT_NOTES_PATTERN: &str = "/*-notes.md";
 
 impl Team {
+    /// Resolve each keep-warm field from role over team; explicit `off` cancels it.
+    pub fn keep_warm(&self, role: Option<&str>) -> Option<super::KeepWarmFields> {
+        let role = self
+            .roles
+            .iter()
+            .find(|binding| Some(binding.role.as_str()) == role)
+            .and_then(|binding| binding.keep_warm.as_ref())
+            .map(super::KeepWarmPolicy::fields)
+            .unwrap_or_default();
+        let team = self
+            .keep_warm
+            .as_ref()
+            .map(super::KeepWarmPolicy::fields)
+            .unwrap_or_default();
+        let max = role
+            .max
+            .or(team.max)
+            .filter(|max| *max != super::KeepWarm::Off);
+        let while_clause = role
+            .while_clause
+            .or(team.while_clause)
+            .filter(|clause| clause != "off");
+        (max.is_some() || while_clause.is_some())
+            .then_some(super::KeepWarmFields { max, while_clause })
+    }
+
     pub fn flip_compact(&self, role: &str, default: Option<FlipCompact>) -> Option<AutoCompact> {
         let binding = self.roles.iter().find(|binding| binding.role == role)?;
         match binding.flip_compact.or(default) {
@@ -717,9 +747,9 @@ pub struct RoleBinding {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_compact: Option<super::IdleCompact>,
-    /// How long this team member's prompt cache is held warm after its last real turn; unset means off.
+    /// Keep-warm maximum and stage condition; each unset field inherits the team's, never the profile's.
     #[serde(default, rename = "keep-warm", skip_serializing_if = "Option::is_none")]
-    pub keep_warm: Option<super::KeepWarm>,
+    pub keep_warm: Option<super::KeepWarmPolicy>,
     /// A replacement system prompt. Relative paths use the declaring file's
     /// directory, so a role in `~/.agents/teams/<name>/team.toml` can name a
     /// prompt shipped beside that fragment.

@@ -45,6 +45,8 @@ pub(super) struct TeamReport {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RoleReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<rimz::config::KeepWarmFields>,
     #[serde(skip)]
     pub declared: bool,
     pub signals: Vec<DeclaredSignal>,
@@ -349,6 +351,7 @@ fn definition_report(
         .map(|layout| resolved_roles(team, layout))
         .unwrap_or_else(|| unresolved_roles(team, profiles));
     for role in &mut roles {
+        role.keep_warm = team.keep_warm(Some(&role.role));
         let binding = team.roles.iter().find(|binding| binding.role == role.role);
         if binding.is_none_or(|binding| binding.model.is_none())
             && let Some(tier) = profiles
@@ -436,6 +439,7 @@ fn origins(sources: &[PromptSource]) -> Vec<PathBuf> {
 
 fn role_report(role: String, cell: &AgentCell) -> RoleReport {
     RoleReport {
+        keep_warm: None,
         declared: cell.launch.role.is_some(),
         tier: None,
         tier_fallback: None,
@@ -466,6 +470,7 @@ fn unresolved_roles(team: &Team, profiles: &ProfilesConfig) -> Vec<RoleReport> {
             // An unresolvable profile leaves the binding's own values as the report.
             let resolved = rimz::harness::spec::resolve_role(binding, profiles).ok();
             RoleReport {
+                keep_warm: None,
                 declared: true,
                 tier: None,
                 tier_fallback: None,

@@ -197,7 +197,7 @@ fn rows<'a>(
     out: &mut impl Write,
     rows: impl Iterator<Item = &'a definitions::DefinitionRow>,
 ) -> Result<()> {
-    let mut table = render::Table::new(["NAME", "KIND", "MODEL", "EFFORT", "SOURCE"]);
+    let mut table = render::Table::new(["NAME", "KIND", "MODEL", "EFFORT", "KEEP-WARM", "SOURCE"]);
     for row in rows {
         table.row([
             render::cell(&row.name).fg(render::palette::identity(&row.kind)),
@@ -208,6 +208,18 @@ fn rows<'a>(
                 row.tier_fallback,
             )),
             render::cell(effort_label(row)),
+            render::cell(row.keep_warm.as_ref().map_or_else(
+                || "—".to_owned(),
+                |policy| {
+                    format!(
+                        "max {}; while {}",
+                        policy
+                            .max
+                            .map_or_else(|| "—".to_owned(), |max| max.to_string()),
+                        policy.while_clause.as_deref().unwrap_or("—")
+                    )
+                },
+            )),
             render::cell(row.source.display().to_string()),
         ]);
     }
@@ -229,7 +241,7 @@ fn effort_label(row: &definitions::DefinitionRow) -> String {
 /// A `keep-warm` horizon that will not hold, with the setting that decides it:
 /// a `subagents` definition (no seat reads it), cache pings switched off, a
 /// provider prompt-cache lifetime that is unknown or shorter than the floor, or a
-/// horizon the keepalive maximum cuts short.
+/// horizon the keepalive maximum cuts short. A while-only policy needs a finite ping cap.
 fn keep_warm_warnings(
     loaded: &LoadedDefinitions,
     harness: &rimz::config::HarnessConfig,
@@ -237,26 +249,19 @@ fn keep_warm_warnings(
     use rimz::config::KeepWarm;
     let mut warnings = Vec::new();
     for row in &loaded.rows {
-        let setting = match (&row.team, &row.role) {
-            (Some(team), Some(role)) => loaded.teams.0.get(team).and_then(|team| {
-                let binding = team.roles.iter().find(|binding| &binding.role == role)?;
-                binding.keep_warm
-            }),
-            _ => {
-                let profiles = if row.namespace == "subagents" {
-                    &loaded.subagent_profiles
-                } else {
-                    &loaded.agent_profiles
-                };
-                profiles
-                    .0
-                    .get(&row.name)
-                    .and_then(|profile| profile.keep_warm)
-            }
-        };
-        let Some(KeepWarm::For(horizon)) = setting else {
+        let Some(setting) = &row.keep_warm else {
             continue;
         };
+        if let (None, Some(clause), None) = (
+            setting.max,
+            &setting.while_clause,
+            harness.cache_keepalive_max,
+        ) {
+            warnings.push(Warning {
+                path: row.source.clone(),
+                message: format!("{}: keep-warm while `{clause}` holds nothing: `harness.cache_keepalive_max` is off; set `max`", row.name),
+            });
+        }
         let kind = &row.kind;
         let ttl = harness.prompt_cache_ttl(&rimz::ids::AgentKind::new_unchecked(kind));
         let message = match ttl {
@@ -276,8 +281,8 @@ fn keep_warm_warnings(
                     KeepWarm::For(ttl),
                     KeepWarm::For(floor),
                 ),
-                _ => match harness.cache_keepalive_max {
-                    Some(max) if horizon > max => format!(
+                _ => match (setting.max, harness.cache_keepalive_max) {
+                    (Some(KeepWarm::For(horizon)), Some(max)) if horizon > max => format!(
                         "keep-warm {} is capped at `harness.cache_keepalive_max` ({}): pings stop that long after the agent's last request; raise the maximum or set it to `off`",
                         KeepWarm::For(horizon),
                         KeepWarm::For(max),
@@ -320,6 +325,107 @@ fn lsp_warnings(loaded: &LoadedDefinitions, machine: &rimz::config::MachineConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keep_warm_rows_report_resolved_fields_and_warn_on_an_unbounded_while() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("agents")).unwrap();
+        std::fs::create_dir(root.path().join("teams")).unwrap();
+        for (name, fields) in [
+            ("claude", ""),
+            ("worker", "agent: claude\ntools: []\nkeep-warm: 2h\n"),
+        ] {
+            std::fs::write(
+                root.path().join(format!("agents/{name}.md")),
+                format!("---\ndescription: Test\n{fields}---\nBase."),
+            )
+            .unwrap();
+        }
+        std::fs::write(root.path().join("teams/probe.md"), "---\nleader: lead\nstages: [Plan]\nkeep-warm: { while: 'team.stage!=Done' }\nroles:\n  - agent: worker\n    role: lead\n    owns: [Plan]\n  - agent: worker\n    role: helper\n    keep-warm: 1h\n---\nPipeline.").unwrap();
+        let loaded = load(root.path(), SkillCheck::Skip, &Default::default());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let rows_json = serde_json::to_value(&loaded.rows).unwrap();
+        let row = |name| {
+            rows_json
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == name)
+                .unwrap()
+        };
+        assert_eq!(
+            row("worker")["keep_warm"],
+            serde_json::json!({"max": "2h", "while": null})
+        );
+        assert_eq!(
+            row("probe.lead")["keep_warm"],
+            serde_json::json!({"max": null, "while": "team.stage!=Done"})
+        );
+        assert_eq!(
+            row("probe.helper")["keep_warm"],
+            serde_json::json!({"max": "1h", "while": "team.stage!=Done"})
+        );
+        let warnings = keep_warm_warnings(
+            &loaded,
+            &toml::from_str("cache_keepalive_max = 'off'").unwrap(),
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("holds nothing"));
+        assert!(warnings[0].message.contains("set `max`"));
+        for cap in ["6h", "off"] {
+            for (config, expected) in [
+                (
+                    "cache_keepalive = false",
+                    "`harness.cache_keepalive` is off",
+                ),
+                (
+                    "[prompt_cache_ttl]\nclaude = 'off'",
+                    "no prompt-cache lifetime is known",
+                ),
+                (
+                    "[prompt_cache_ttl]\nclaude = '5m'",
+                    "below `harness.keep_warm_min_ttl`",
+                ),
+            ] {
+                let warnings = keep_warm_warnings(
+                    &loaded,
+                    &toml::from_str(&format!("cache_keepalive_max = '{cap}'\n{config}")).unwrap(),
+                );
+                let applicable: Vec<_> = warnings
+                    .iter()
+                    .filter(|warning| warning.message.contains(expected))
+                    .collect();
+                assert_eq!(
+                    applicable.len(),
+                    3,
+                    "all max/while rows must warn: {config}"
+                );
+                assert_eq!(
+                    applicable
+                        .iter()
+                        .filter(|warning| warning.path.ends_with("probe.md"))
+                        .count(),
+                    2,
+                    "both the max role and the while-only role must warn"
+                );
+            }
+        }
+        let capped = keep_warm_warnings(
+            &loaded,
+            &toml::from_str("cache_keepalive_max = '30m'").unwrap(),
+        );
+        assert_eq!(capped.len(), 2, "only explicit maxima can exceed the cap");
+        assert!(
+            capped
+                .iter()
+                .all(|warning| warning.message.contains("is capped"))
+        );
+        let mut human = Vec::new();
+        rows(&mut human, loaded.rows.iter()).unwrap();
+        let human = String::from_utf8(human).unwrap();
+        assert!(human.contains("team.stage!=Done"));
+        assert!(human.contains("2h"));
+    }
 
     #[test]
     fn keep_warm_warns_at_the_definition_for_an_unknown_or_short_cache_lifetime() {
@@ -526,6 +632,7 @@ mod tests {
                 .tools
                 .insert(name.into(), tools.map(str::to_owned).to_vec());
             loaded.rows.push(definitions::DefinitionRow {
+                keep_warm: None,
                 tier: None,
                 tier_fallback: None,
                 name: name.into(),
@@ -555,6 +662,7 @@ mod tests {
     #[test]
     fn effort_cell_appends_fast_only_when_on() {
         let mut row = definitions::DefinitionRow {
+            keep_warm: None,
             tier: None,
             tier_fallback: None,
             name: "quick".into(),

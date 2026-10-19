@@ -56,7 +56,7 @@ Follow the project's instructions and report what you verified.
 | `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; refused at load on a kind with no fast switch. |
 | `auto-compact` | Native compaction window: integer or string token count from `100k` through `1M`, inclusive; no percentages or decimals. |
 | `budget` | Dollar cap as string or number; a string such as `20/day` selects a daily cap. |
-| `keep-warm` | Prompt-cache [keep-warm](#keep-warm) horizon for a solo seat: `off` or a duration such as `2h`. |
+| `keep-warm` | Prompt-cache [keep-warm](#keep-warm) maximum for a solo seat: `off`, a duration such as `2h`, or a block with `max` only. |
 | `idle-compact` | [Idle compaction](#idle-compaction) token floor: `off` or a positive token count such as `100k`. Refused on a subagent definition. |
 | `model-reminder` | Boolean controlling the model identity in the launch reminder for solo agents and subagents. Defaults on; team members never show model names. |
 | `traits` | Trait names substituted into this definition's body. |
@@ -140,6 +140,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `stages` | Required nonempty ordered list of unique, nonblank stage names. |
 | `traits` | Traits added to every seat's leaf craft. |
 | `roles` | Required nonempty list of role mappings. |
+| `keep-warm` | Default [keep-warm](#keep-warm) `max` and `while` for every role. |
 
 | Role key | Meaning |
 | --- | --- |
@@ -151,7 +152,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | `signals` | Optional nonempty signal-binding list. |
 | `flip-compact` | Stage-handoff compaction threshold or `off`. |
 | `idle-compact` | [Idle compaction](#idle-compaction) token floor for this seat: `off` or a token count; inherited from the definition when omitted. |
-| `keep-warm` | Prompt-cache [keep-warm](#keep-warm) horizon for this seat: `off` or a duration; not inherited from the definition. |
+| `keep-warm` | [Keep-warm](#keep-warm) shorthand or `{ max, while }` block. Inherits each field from the team, never the definition. |
 
 Role fields override inherited definition fields. Unlike standalone chains, a seat's recognized model may select a different runtime kind; an unrecognized model keeps the original kind. That kind needs its own base. Tools are rendered again for the selected kind. Traits combine leaf-definition → role → team, deduplicated; ancestor crafts remain unchanged. Added traits require `${traits}` in the leaf body. Nonleaders lose `AskUserQuestion`. Every nonempty seat skill list gains `reflect`, which must pass the same library checks. Empty and omitted skill lists stay unchanged.
 
@@ -191,9 +192,13 @@ On a standalone definition it sets the floor for an agent launched from that pro
 
 ### Keep-warm
 
-`keep-warm` accepts `off` or a positive duration such as `2h` (units `s`, `m`, `h`, `d`). A bare YAML `off` (the boolean `false`) means `off`; `true`, numbers, and unitless text are refused. Omission means off.
+`keep-warm` accepts a block with optional `max` and `while`. `max` takes `off` or a positive duration (units `s`, `m`, `h`, `d`). `while` takes the [loop `--when` condition grammar](./cli/loop.md#conditions), restricted to `team.stage`, or `off`. The stage values are this team's stages plus `Done` and `unknown`; stage words use ASCII letters, digits, `_`, `.`, or `-`, so names with spaces cannot appear in a condition. Unknown readings (missing or unreadable board, no `Stage:` line, or no checkout path) permit the hold, including before the first flip. A known reading is evaluated anew on every pass; reopening a stage can restore a hold only while the cache remains warm.
 
-On a standalone definition it sets the horizon for a solo agent launched from that profile and is inherited through `agent`; a TOML profile inherits it through its `agent` base the same way. On a team role it sets the seat's horizon; a seat reads only its role, never the definition behind it. The horizon holds only when the provider's prompt-cache lifetime is known and at least `harness.keep_warm_min_ttl`; `rimz agents validate` warns at the definition when it will not: the lifetime is unknown or under the floor, or `harness.cache_keepalive` is off; it also notes a horizon longer than `harness.cache_keepalive_max`, which the pings stop at. A `subagents` definition may carry the field but no seat reads it, and validate says so. See [keep-warm](../guide/configuration.md#keep-warm) for what a horizon does and costs.
+Shorthand `6h` means `{ max: 6h }`; shorthand `off` means `{ max: off, while: off }`. Bare YAML `off` or `false` works at the top level and in either field. `true`, numbers, and unitless durations are refused. TOML accepts the same string shorthand or an inline table, for example `keep-warm = { max = "6h", while = "team.stage!=Done" }`.
+
+For team seats, resolve each field separately: role, then team, then unset. An explicit `off` cancels that field. A role duration still inherits the team's `while`. Neither field reads the profile behind the seat. No resolved fields means no hold. `max` alone continues through `Done`; add `while: team.stage!=Done` to stop there. `while` alone uses `harness.cache_keepalive_max` as a finite maximum; with that cap `off` it holds nothing, and validate warns to set `max`.
+
+Standalone definitions and TOML profiles accept shorthand or a `max`-only block, inherited through `agent`. Any `while` field is refused there, or on an unstaged team: they have no board. Other keys (forge or window readings), undeclared stage values, and malformed conditions are refused at load for teams and roles too. The horizon holds only when the provider's prompt-cache lifetime is known and at least `harness.keep_warm_min_ttl`; `rimz agents validate` warns at the definition when it will not: the lifetime is unknown or under the floor, or `harness.cache_keepalive` is off; it also notes a resolved `max` longer than `harness.cache_keepalive_max`, which the pings stop at. A `subagents` definition may carry `max` but no seat reads it, and validate says so. See [keep-warm](../guide/configuration.md#keep-warm) for what a horizon does and costs.
 
 ### Flip compaction
 

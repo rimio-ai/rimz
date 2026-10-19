@@ -158,6 +158,8 @@ impl DefinitionErr {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct DefinitionRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_warm: Option<super::KeepWarmFields>,
     pub name: String,
     pub namespace: String,
     pub kind: String,
@@ -434,6 +436,15 @@ pub fn load(
 impl LoadedDefinitions {
     fn insert(&mut self, namespace: &str, name: &str, source: &Path, profile: Profile) {
         self.rows.push(DefinitionRow {
+            keep_warm: profile
+                .keep_warm
+                .as_ref()
+                .and_then(|policy| policy.fields().max)
+                .filter(|max| *max != super::KeepWarm::Off)
+                .map(|max| super::KeepWarmFields {
+                    max: Some(max),
+                    while_clause: None,
+                }),
             name: name.to_owned(),
             namespace: namespace.to_owned(),
             kind: profile.agent.clone(),

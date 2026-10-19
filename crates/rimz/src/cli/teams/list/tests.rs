@@ -3,6 +3,50 @@ use rimz::agents::AgentStatus;
 use rimz::config::RoleBinding;
 
 #[test]
+fn keep_warm_reports_use_resolved_role_over_team_fields() {
+    let team: Team = toml::from_str("keep-warm = {max = '6h', while = 'team.stage!=Done'}\nroles = [{role = 'lead', profile = 'claude'}, {role = 'helper', profile = 'claude', keep-warm = {max = 'off'}}, {role = 'cold', profile = 'claude', keep-warm = 'off'}]").unwrap();
+    let report = definition_report(
+        "mill",
+        &team,
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        None,
+        Vec::new(),
+    );
+    let roles = serde_json::to_value(report.roles).unwrap();
+    assert_eq!(
+        roles[0]["keep_warm"],
+        serde_json::json!({"max": "6h", "while": "team.stage!=Done"})
+    );
+    assert_eq!(
+        roles[1]["keep_warm"],
+        serde_json::json!({"max": null, "while": "team.stage!=Done"})
+    );
+    assert!(roles[2].get("keep_warm").is_none());
+
+    let layout_team: Team =
+        toml::from_str("keep-warm = '2h'\nlayout = 'claude,codex'\nroles = []").unwrap();
+    let report = definition_report(
+        "peer",
+        &layout_team,
+        &ProfilesConfig::default(),
+        &CommandsConfig::default(),
+        None,
+        Vec::new(),
+    );
+    assert!(report.valid, "{:?}", report.error);
+    assert_eq!(report.roles.len(), 2);
+    let roles = serde_json::to_value(report.roles).unwrap();
+    for role in roles.as_array().unwrap() {
+        assert_eq!(
+            role["keep_warm"],
+            serde_json::json!({"max": "2h", "while": null}),
+            "layout cell must report the team default"
+        );
+    }
+}
+
+#[test]
 fn tier_role_reports_keep_concrete_models_and_show_fallback() {
     let mut profile: rimz::config::Profile = toml::from_str("agent = 'claude'").unwrap();
     profile.model = Some("fable".into());
@@ -129,6 +173,7 @@ fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
 
 fn team() -> Team {
     Team {
+        keep_warm: None,
         roles: vec![RoleBinding {
             auto_compact: None,
             role: "planner".to_owned(),

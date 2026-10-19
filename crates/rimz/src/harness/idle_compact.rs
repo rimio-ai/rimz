@@ -80,13 +80,6 @@ fn eligible_seat(agent: &AgentState, floor: u64) -> bool {
         })
 }
 
-pub(super) fn cohort_live(agent: &AgentState) -> bool {
-    agent
-        .lane_path()
-        .and_then(|root| super::scratch::board_stage(Path::new(root)))
-        .is_none_or(|stage| stage.name != crate::config::DONE_STAGE)
-}
-
 /// Shared producer/helper decision; spawn pacing is separate from delivery.
 pub fn should_compact(
     agent: &AgentState,
@@ -104,7 +97,7 @@ pub fn should_compact(
         && idle < window.cache_expires.as_secs().min(i64::MAX as u64) as i64
 }
 
-/// Compact each eligible seat whose floor and idle window are due; a seat keep-warm is holding waits for its horizon.
+/// Compact each eligible seat whose floor and idle window are due; a keep-warm hold defers it until its maximum or stage condition lets go.
 pub(crate) fn compact_idle_agents(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
