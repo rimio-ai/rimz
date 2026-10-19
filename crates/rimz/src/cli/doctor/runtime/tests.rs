@@ -82,7 +82,7 @@ fn a_waived_host_reads_off_for_this_run_and_keeps_its_blocker_visible() {
     let blocked = RuntimeControlReadiness::Blocked(issue);
 
     let waived = remote_agent(Claude, &blocked, true, None);
-    assert_eq!(waived.detail, "off for this run (chosen at `rimz start`)");
+    assert_eq!(waived.detail, "off for this run (skipped at room birth)");
     assert!(waived.ready);
     assert!(waived.blocker.is_some());
 

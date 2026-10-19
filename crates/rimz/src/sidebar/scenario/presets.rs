@@ -27,6 +27,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         workspace_id,
         display_name: "query-engine".to_owned(),
         generated_at: now,
+        skipped_settings: 0,
         panes_produced_at_ms: Some(1_781_009_600_000),
         panes_observed_at_ms: None,
         focused_pane: None,

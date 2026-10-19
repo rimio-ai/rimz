@@ -22,6 +22,34 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 #[test]
+fn doctor_reports_recorded_skipped_settings_in_room_json_and_text() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace = env.resolve_workspace(&env.project_root);
+    let skipped = vec![rimz::workspace::record::SkippedSetting {
+        setting: "agents.shell".to_owned(),
+        message: "missing shell; fix agents.shell".to_owned(),
+    }];
+    env.store()
+        .set_skipped_settings(&workspace, skipped.clone())
+        .unwrap();
+    let stub_dir = stub_mux_rooms(&env, StubRoomState::Absent, StubRoomState::Absent);
+    let report = doctor_with_mux(&env, &stub_dir, "--zellij");
+    assert_eq!(report["mux"]["ready"]["room"]["skipped"], json!(skipped));
+    let output = env
+        .rimz()
+        .args(["--zellij", "doctor"])
+        .env("PATH", path_with_only(&[stub_dir]))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("agents.shell") && text.contains("missing shell; fix agents.shell"),
+        "{text}"
+    );
+}
+
+#[test]
 fn doctor_empty_dir_warns_only_for_configured_profiles_and_ungranted_accounts() {
     let env = Env::new();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());

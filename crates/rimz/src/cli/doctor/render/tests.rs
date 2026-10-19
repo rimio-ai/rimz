@@ -15,6 +15,28 @@ fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Res
 }
 
 #[test]
+fn room_skipped_settings_keep_the_setting_and_warning_visible() {
+    let mut mux = mux_fixture();
+    mux.room = Some(Room {
+        session_name: "rimz-test".to_owned(),
+        selected_state: RoomState::Absent,
+        live_on: Vec::new(),
+        conflict: false,
+        zellij: RoomState::Absent,
+        tmux: RoomState::Absent,
+        skipped: vec![rimz::workspace::record::SkippedSetting {
+            setting: "agents.shell".to_owned(),
+            message: "missing shell; fix agents.shell".to_owned(),
+        }],
+    });
+    let text = strip(|w| render_mux(w, &Probe::Ready(mux), &mut Tally::default()));
+    assert!(
+        text.contains("agents.shell") && text.contains("missing shell; fix agents.shell"),
+        "{text}"
+    );
+}
+
+#[test]
 fn hibernate_reports_active_or_skipped() {
     for skipped in [None, Some("swap is absent".to_owned())] {
         let report = rimz::harness::hibernate::PreflightReport {
@@ -1633,6 +1655,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut mux = mux_fixture();
         mux.name = MuxName::Zellij;
         mux.room = Some(Room {
+            skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Live,
             live_on: vec![MuxName::Zellij],
@@ -1655,6 +1678,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
         mux.room = Some(Room {
+            skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Absent,
             live_on: vec![MuxName::Zellij],
@@ -1676,6 +1700,7 @@ fn mux_section_renders_room_ownership_and_neutral_inapplicable_presence() {
         let mut tally = Tally::default();
         let mut mux = mux_fixture();
         mux.room = Some(Room {
+            skipped: Vec::new(),
             session_name: "rimz-test".to_owned(),
             selected_state: RoomState::Live,
             live_on: vec![MuxName::Zellij, MuxName::Tmux],
@@ -2355,7 +2380,7 @@ fn a_waived_host_renders_off_for_this_run_without_a_refusal_line() {
             &RemoteControl::On {
                 agents: vec![RemoteAgent {
                     kind: "claude",
-                    detail: "off for this run (chosen at `rimz start`)".to_owned(),
+                    detail: "off for this run (skipped at room birth)".to_owned(),
                     ready: true,
                     blocker: Some(
                         "Remote control is blocked.\n  - Unset it: unset DISABLE_GROWTHBOOK"
@@ -2370,10 +2395,10 @@ fn a_waived_host_renders_off_for_this_run_without_a_refusal_line() {
         )
     });
     assert!(
-        out.contains("off for this run (chosen at `rimz start`)"),
+        out.contains("off for this run (skipped at room birth)"),
         "{out}"
     );
-    assert!(out.contains("claude would still refuse"), "{out}");
+    assert!(out.contains("claude is still blocked"), "{out}");
     assert!(out.contains("unset DISABLE_GROWTHBOOK"), "{out}");
     assert!(!out.contains("`rimz start` refuses"), "{out}");
 }
@@ -2404,7 +2429,10 @@ fn remote_agent_fields_render_as_key_and_verdict() {
     });
     assert!(out.contains("claude"), "{out}");
     assert!(out.contains("enabled, blocked"), "{out}");
-    assert!(out.contains("`rimz start` refuses"), "{out}");
+    assert!(
+        out.contains("remote control skipped at room start"),
+        "{out}"
+    );
     assert!(out.contains("disableRemoteControl: true"), "{out}");
     assert!(
         out.contains("enabled but not installed")

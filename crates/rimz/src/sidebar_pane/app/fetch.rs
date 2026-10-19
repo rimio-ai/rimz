@@ -323,6 +323,7 @@ fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> boo
         workspace_id,
         display_name,
         generated_at: _,
+        skipped_settings,
         panes_produced_at_ms: _,
         panes_observed_at_ms: _,
         now: _,
@@ -370,6 +371,7 @@ fn same_snapshot_content(left: &SidebarSnapshot, right: &SidebarSnapshot) -> boo
             _ => false,
         }
         && snapshot_version == &right.snapshot_version
+        && skipped_settings == &right.skipped_settings
         && workspace_id == &right.workspace_id
         && display_name == &right.display_name
         && viewed_panes == &right.viewed_panes

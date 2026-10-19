@@ -255,6 +255,7 @@ pub(super) struct Mux {
 
 #[derive(Debug, Serialize)]
 pub(super) struct Room {
+    pub(super) skipped: Vec<rimz::workspace::record::SkippedSetting>,
     pub(super) session_name: String,
     pub(super) selected_state: RoomState,
     pub(super) live_on: Vec<MuxName>,
@@ -706,8 +707,7 @@ pub(super) enum RemoteControl {
     Off,
     On {
         agents: Vec<RemoteAgent>,
-        /// Fixable misconfigurations on installed agents — `rimz start` aborts
-        /// on these.
+        /// Fixable installed-agent blockers; room start warns and skips the host.
         refusals: Vec<String>,
         /// Enabled hosts whose agent is not installed — `rimz start` skips them.
         skipped: Vec<String>,
@@ -721,7 +721,7 @@ pub(super) struct RemoteAgent {
     pub(super) kind: &'static str,
     pub(super) detail: String,
     pub(super) ready: bool,
-    /// The problem and fixes a host waived at `rimz start` would still refuse with.
+    /// The problem and fixes for a host skipped at room birth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) blocker: Option<String>,
 }

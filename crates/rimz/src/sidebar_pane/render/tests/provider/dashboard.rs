@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn skipped_settings_notice_is_above_the_footer_and_absent_at_zero() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.providers = two_provider_panels();
+    for count in [2, 0] {
+        snapshot.skipped_settings = count;
+        let roster = VisibleRoster::new(&snapshot, &BodyLens::default(), &Default::default(), None);
+        let block =
+            compose::build_bottom_chrome(&snapshot, None, &theme, 90, &UiState::default(), &roster);
+        let text = block
+            .lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            text.contains("2 settings skipped at start · rimz doctor"),
+            count > 0,
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn no_selection_derives_no_provider_and_rests_the_pet() {
     let mut snapshot = snapshot_with(vec![agent(
         "running",

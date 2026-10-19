@@ -436,6 +436,7 @@ fn plan_bottom_chrome(
     let folded_footer = owns_store
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
+        && snapshot.skipped_settings == 0
         && alert.is_none();
     let corner = if alert_active || owns_store {
         BottomCorner::None
@@ -503,6 +504,18 @@ pub(super) fn build_bottom_chrome(
         && let Some(notice) = ui.gate_notice.as_ref()
     {
         bottom.extend_inert(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
+    }
+    if !alert.is_some_and(Alert::is_active) && snapshot.skipped_settings > 0 {
+        let count = snapshot.skipped_settings;
+        let suffix = if count == 1 { "" } else { "s" };
+        bottom.push_inert(pad_chrome(Line::styled(
+            format!(
+                "{} {count} setting{suffix} skipped at start {} rimz doctor",
+                theme.glyph(GlyphRole::ChromeAlert),
+                theme.glyph(GlyphRole::Seam)
+            ),
+            theme.muted().add_modifier(Modifier::DIM),
+        )));
     }
     if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
