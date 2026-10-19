@@ -71,7 +71,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// The transient motion or click browse pick riding above the baseline, or `None`
     /// when not browsing (see [`Browse`]).
     pub(in crate::sidebar_pane) browse: Option<Browse>,
-    /// The row/group order and visible row set actually painted last fold; this
+    /// The row/group order and visible row set actually painted last; this
     /// is the source for a layout freeze. Empty before the first paint, which
     /// makes the first hold a no-op for ordering.
     pub(in crate::sidebar_pane) last_order: FrozenOrder,
@@ -83,6 +83,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// clamped to the zone, and written back like frame interactions. Only this
     /// sidebar's own input reveals an off-screen selection; visible cards never reveal.
     /// The line actually shown is [`Self::scroll_ease`]'s visible row.
+    /// Unwatched attachments adopt the watched target window through the host.
     pub(in crate::sidebar_pane) scroll_offset: usize,
     /// The wheel glide from the last shown line toward `scroll_offset`: armed
     /// by a wheel tick, observed at every draw's write-back, translated by card
@@ -96,12 +97,13 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) anchored_rows: Vec<(String, isize)>,
     /// Row id the last draw treated as selected; a different id is a selection change.
     pub(in crate::sidebar_pane) drawn_selection: Option<String>,
-    /// Renderer-local previous selection sources, including their teammates'
+    /// Previous selection sources, including their teammates'
     /// shapes, kept open while the layout freeze is armed. Written back each
     /// draw; departed and live-selected ids drop out. Scrolling and toggles
     /// retain the set until the freeze releases it together with the order.
     /// A shared landing paint uses the source frame's carried set instead of
     /// these local candidates and the previous selection.
+    /// Host viewport adoption copies these sources and the drawn selection.
     pub(in crate::sidebar_pane) held_expansions: BTreeSet<String>,
     /// Absolute pane row of the last draw's scroll-zone top.
     pub(in crate::sidebar_pane) scroll_zone_top: usize,
@@ -141,6 +143,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// a browse: it clears when the selection-derived provider kind *genuinely*
     /// changes from the value captured at pick time (a `None` derivation — a
     /// process row — holds it), or when its target leaves the dashboard.
+    /// The host copies this pick to unviewed attachments.
     pub(in crate::sidebar_pane) dashboard_tab: Option<DashboardTab>,
     /// The last selection-derived agent kind the dashboard followed — its
     /// hold-last, one level finer than `baseline_pane`. Reconciliation
@@ -163,14 +166,14 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Cockpit counts remain full-fleet. Toggling a pick or auto-clearing its empty bucket preserves the query; a zero-match query stays set.
     pub(in crate::sidebar_pane) make_up_filter: BodyLens,
     pub(in crate::sidebar_pane) search_draft: Option<String>,
-    /// Worktree groups expanded through the renderer-local `+K more` affordance.
+    /// Worktree groups expanded through `+K more`, shared with unviewed attachments.
     /// Expansion is presentation state only: the snapshot carries the full
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(in crate::sidebar_pane) expanded_groups: BTreeSet<String>,
-    /// Attachment-local visibility of finished groups' collapsed receipts.
+    /// Visibility of finished groups' receipts, shared with unviewed attachments.
     pub(in crate::sidebar_pane) landed_open: bool,
-    /// Renderer-local open/closed choice for an agent card's delegation
+    /// Open/closed choice, shared with unviewed attachments, for an agent card's delegation
     /// section (row id → open), set by a header click. It outranks the default
     /// (open under selection or `expanded` density) in both directions, stays
     /// for the renderer's life, and drops only when the row leaves the snapshot.
@@ -178,6 +181,7 @@ pub(in crate::sidebar_pane) struct UiState {
     /// Delegation sections showing their older children through `+K older`
     /// (row id → the parent's user turn at the click). Expires at the parent's
     /// next user-authored prompt.
+    /// Copied into unviewed attachments through the host viewport.
     pub(in crate::sidebar_pane) delegation_history: BTreeMap<String, Option<Timestamp>>,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the

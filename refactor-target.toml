@@ -1314,6 +1314,21 @@ kind = "item"
 key = "sidebar_pane::app::focus_push::FocusPeers::with_fit"
 reason = "The host injects a fresh stale-destination fit; unit and host tests exercise both branches without tmux."
 
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::loop_state::ViewportPublication"
+reason = "The host's memory cell carries the last watched viewport to unviewed attachments."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::loop_state::LoopState::adopt_viewport"
+reason = "Attachment startup installs the current viewport before its first paint."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::render::compose::compose_lines_with_meter"
+reason = "A newborn viewport adopter measures its own cockpit before rebasing published card rows."
+
 [[module]]
 path = "crates/rimz/src/sock.rs"
 surface-budget = 14

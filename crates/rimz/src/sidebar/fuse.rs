@@ -101,6 +101,10 @@ fn apply_fusion(
         })
         .max_by_key(|(sent_at_ms, _, _)| *sent_at_ms);
     if let Some(focus) = focus {
+        // An observed single-client switch replaces its old view; pending intents below stay additive.
+        if fused.client_views.len() == 1 && focus.1.len() == 1 {
+            fused.viewed_panes.clear();
+        }
         fused.overlay_focus(focus.1, focus.2);
     }
 
@@ -502,7 +506,8 @@ mod tests {
             12,
         );
         snapshot.panes_observed_at_ms = Some(12);
-        snapshot.focused_pane = Some(observed);
+        snapshot.focused_pane = Some(observed.clone());
+        snapshot.viewed_panes = vec![observed.clone()];
 
         let (fused, _, _) = fuse_owned(
             snapshot,
@@ -511,7 +516,8 @@ mod tests {
             12,
         );
 
-        assert_eq!(fused.focused_pane, Some(target));
+        assert_eq!(fused.focused_pane, Some(target.clone()));
+        assert_eq!(fused.viewed_panes, vec![observed, target]);
     }
 
     #[test]

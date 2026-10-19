@@ -52,7 +52,14 @@ impl WakeupInbox {
         terminal: &mut Terminal<PaneBackend>,
         timeout: Duration,
     ) -> Result<()> {
-        let wakeup = self.recv_timeout(timeout);
+        let mut wakeup = self.recv_timeout(timeout);
+        // Publication hints must not insert a hidden paint ahead of a queued focus push.
+        while matches!(wakeup, Wakeup::Tick) {
+            let Ok(next) = self.receiver.try_recv() else {
+                break;
+            };
+            wakeup = next;
+        }
         if matches!(wakeup, Wakeup::Scroll { .. }) {
             return state.on_inputs(self.scroll_run(wakeup), terminal, fetch);
         }
