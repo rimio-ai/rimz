@@ -15,6 +15,99 @@ fn paths() -> (tempfile::TempDir, StatePaths) {
 }
 
 #[test]
+fn recent_lookups_never_open_expired_buckets() {
+    let (_dir, paths) = paths();
+    let mut ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
+    ask.at = Timestamp::now();
+    ask.id = Some(AskId::parse("ask_0123456789abcdef").unwrap());
+    ask.channel = Some("recent".to_owned());
+    append(&paths, &ask).unwrap();
+    let mut answer = ask.clone();
+    answer.entry = TranscriptKind::Answer;
+    answer.at += jiff::SignedDuration::from_secs(1);
+    append(&paths, &answer).unwrap();
+    fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+
+    assert!(latest_open_ask(&paths, &ask.kind, &ask.agent_id).is_ok_and(|ask| ask.is_none()));
+}
+
+#[test]
+fn answer_append_never_opens_expired_buckets() {
+    let (_dir, paths) = paths();
+    fs::create_dir_all(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    let mut answer = entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
+    answer.at = Timestamp::now();
+    answer.id = Some(AskId::parse("ask_0123456789abcdef").unwrap());
+    assert!(append_answer_if_missing(&paths, &answer).is_ok_and(|appended| appended));
+    assert!(!append_answer_if_missing(&paths, &answer).unwrap());
+}
+
+#[test]
+fn channels_never_open_expired_buckets() {
+    let (_dir, paths) = paths();
+    let mut prompt = entry(TranscriptKind::Prompt, "hello", "2026-06-01T00:00:00Z");
+    prompt.at = Timestamp::now();
+    prompt.channel = Some("recent".to_owned());
+    append(&paths, &prompt).unwrap();
+    fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    assert!(
+        channels(&paths).is_ok_and(|channels| channels == BTreeSet::from(["recent".to_owned()]))
+    );
+}
+
+#[test]
+fn latest_assistant_never_opens_buckets_before_since() {
+    let (_dir, paths) = paths();
+    fs::create_dir_all(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    assert!(
+        latest_assistant(
+            &paths,
+            &AgentKind::new_unchecked("claude"),
+            &AgentSessionId::from("sess-1"),
+            Timestamp::now(),
+        )
+        .is_ok_and(|entry| entry.is_none())
+    );
+}
+
+#[test]
+fn read_since_selects_the_floor_bucket_and_sorts_entries() {
+    let (_dir, paths) = paths();
+    for at in [
+        "2026-06-08T00:00:00Z",
+        "2026-06-01T00:00:02Z",
+        "2026-06-01T00:00:00Z",
+    ] {
+        append(&paths, &entry(TranscriptKind::Prompt, at, at)).unwrap();
+    }
+    let read = read_since(&paths, ts("2026-06-01T00:00:01Z")).unwrap();
+    assert_eq!(
+        read.entries
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "2026-06-01T00:00:00Z",
+            "2026-06-01T00:00:02Z",
+            "2026-06-08T00:00:00Z"
+        ]
+    );
+    assert!(
+        !read.older_omitted,
+        "the overlapping bucket was not omitted"
+    );
+}
+
+#[test]
+fn read_since_reports_older_buckets_without_opening_them() {
+    let (_dir, paths) = paths();
+    fs::create_dir_all(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    let read = read_since(&paths, ts("2026-06-01T00:00:00Z")).unwrap();
+    assert!(read.older_omitted);
+    assert!(read.entries.is_empty());
+}
+
+#[test]
 fn workspaces_with_channel_finds_transcript_evidence() {
     let dir = tempdir().expect("tempdir");
     let state_root = dir.path().join("state");
@@ -44,6 +137,7 @@ fn workspaces_with_channel_finds_transcript_evidence() {
         )
         .expect("write record");
         let mut line = entry(TranscriptKind::Prompt, "hi", "2026-06-01T00:00:00Z");
+        line.at = Timestamp::now();
         line.channel = Some(channel.to_owned());
         append(&paths, &line).expect("append");
         ids.push(id);
@@ -70,6 +164,13 @@ fn entry(entry: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
         entry,
         text.to_owned(),
     )
+}
+
+fn recent_entry(kind: TranscriptKind, text: &str, at: &str) -> TranscriptEntry {
+    let mut entry = entry(kind, text, at);
+    entry.at = Timestamp::now() - jiff::SignedDuration::from_hours(14 * 24)
+        + (entry.at - ts("2026-06-01T00:00:00Z"));
+    entry
 }
 
 #[test]
@@ -392,7 +493,7 @@ fn latest_assistant_picks_the_agents_newest_final_message() {
 #[test]
 fn latest_open_ask_finds_unanswered_ask() {
     let (_dir, paths) = paths();
-    let ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
+    let ask = recent_entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
     append(&paths, &ask).expect("append ask");
 
     let open = latest_open_ask(&paths, &ask.kind, &ask.agent_id).expect("read ask");
@@ -406,8 +507,8 @@ fn latest_open_ask_finds_unanswered_ask() {
 #[test]
 fn latest_open_ask_treats_later_answer_as_closed() {
     let (_dir, paths) = paths();
-    let ask = entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
-    let answer = entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:01Z");
+    let ask = recent_entry(TranscriptKind::Ask, "approve?", "2026-06-01T00:00:00Z");
+    let answer = recent_entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:01Z");
     append(&paths, &ask).expect("append ask");
     append(&paths, &answer).expect("append answer");
 
@@ -419,11 +520,11 @@ fn latest_open_ask_treats_later_answer_as_closed() {
 #[test]
 fn latest_open_ask_pairs_answers_by_id() {
     let (_dir, paths) = paths();
-    let mut old_ask = entry(TranscriptKind::Ask, "old?", "2026-06-01T00:00:00Z");
+    let mut old_ask = recent_entry(TranscriptKind::Ask, "old?", "2026-06-01T00:00:00Z");
     old_ask.id = Some(AskId::parse("ask_0123456789abcdea").unwrap());
-    let mut new_ask = entry(TranscriptKind::Ask, "new?", "2026-06-01T00:00:01Z");
+    let mut new_ask = recent_entry(TranscriptKind::Ask, "new?", "2026-06-01T00:00:01Z");
     new_ask.id = Some(AskId::parse("ask_0123456789abcdeb").unwrap());
-    let mut unrelated = entry(TranscriptKind::Answer, "old answer", "2026-06-01T00:00:02Z");
+    let mut unrelated = recent_entry(TranscriptKind::Answer, "old answer", "2026-06-01T00:00:02Z");
     unrelated.id = old_ask.id.clone();
     append(&paths, &old_ask).expect("append old ask");
     append(&paths, &new_ask).expect("append new ask");
@@ -434,7 +535,7 @@ fn latest_open_ask_pairs_answers_by_id() {
         .expect("new ask stays open");
     assert_eq!(open.id, new_ask.id);
 
-    let mut matching = entry(TranscriptKind::Answer, "new answer", "2026-06-01T00:00:03Z");
+    let mut matching = recent_entry(TranscriptKind::Answer, "new answer", "2026-06-01T00:00:03Z");
     matching.id = new_ask.id.clone();
     append(&paths, &matching).expect("append matching answer");
     assert!(
@@ -447,8 +548,8 @@ fn latest_open_ask_pairs_answers_by_id() {
 #[test]
 fn latest_open_ask_newest_bucket_decides() {
     let (_dir, paths) = paths();
-    let older_answer = entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:00Z");
-    let newer_ask = entry(TranscriptKind::Ask, "approve?", "2026-06-08T00:00:00Z");
+    let older_answer = recent_entry(TranscriptKind::Answer, "yes", "2026-06-01T00:00:00Z");
+    let newer_ask = recent_entry(TranscriptKind::Ask, "approve?", "2026-06-08T00:00:00Z");
     append(&paths, &older_answer).expect("append answer");
     append(&paths, &newer_ask).expect("append ask");
 
@@ -488,7 +589,7 @@ fn append_creates_transcript_dir_lazily() {
 #[test]
 fn answer_append_is_idempotent_by_ask_id() {
     let (_dir, paths) = paths();
-    let mut answer = entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
+    let mut answer = recent_entry(TranscriptKind::Answer, "safe", "2026-06-01T00:00:00Z");
     answer.id = Some(AskId::parse("ask_0123456789abcdef").unwrap());
 
     assert!(append_answer_if_missing(&paths, &answer).expect("first append"));

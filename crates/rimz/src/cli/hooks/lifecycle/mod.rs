@@ -814,10 +814,10 @@ mod tests {
     fn transcript_entry(
         entry: rimz::transcript::TranscriptKind,
         text: &str,
-        at: &str,
+        seconds_after_now: i64,
     ) -> rimz::transcript::TranscriptEntry {
         rimz::transcript::TranscriptEntry::new(
-            at.parse().expect("timestamp"),
+            jiff::Timestamp::now() + jiff::SignedDuration::from_secs(seconds_after_now),
             rimz::ids::AgentKind::new_unchecked("claude"),
             rimz::ids::AgentSessionId::from("sess-1"),
             entry,
@@ -828,11 +828,7 @@ mod tests {
     #[test]
     fn native_ask_log_detects_open_ask() {
         let (_dir, store) = test_store();
-        let ask = transcript_entry(
-            rimz::transcript::TranscriptKind::Ask,
-            "approve?",
-            "2026-06-01T00:00:00Z",
-        );
+        let ask = transcript_entry(rimz::transcript::TranscriptKind::Ask, "approve?", 0);
         rimz::transcript::append(store.paths(), &ask).expect("append ask");
 
         assert!(has_open_native_ask(&store, "claude", "sess-1"));
@@ -841,17 +837,9 @@ mod tests {
     #[test]
     fn native_ask_log_detects_answered_ask() {
         let (_dir, store) = test_store();
-        let mut ask = transcript_entry(
-            rimz::transcript::TranscriptKind::Ask,
-            "approve?",
-            "2026-06-01T00:00:00Z",
-        );
+        let mut ask = transcript_entry(rimz::transcript::TranscriptKind::Ask, "approve?", 0);
         ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
-        let mut answer = transcript_entry(
-            rimz::transcript::TranscriptKind::Answer,
-            "yes",
-            "2026-06-01T00:00:01Z",
-        );
+        let mut answer = transcript_entry(rimz::transcript::TranscriptKind::Answer, "yes", 1);
         answer.id = ask.id.clone();
         rimz::transcript::append(store.paths(), &ask).expect("append ask");
         rimz::transcript::append(store.paths(), &answer).expect("append answer");

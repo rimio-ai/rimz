@@ -526,7 +526,7 @@ enum AgentsSubcmd {
         /// Print new entries as they land.
         #[arg(short = 'f', long, conflicts_with = "all")]
         follow: bool,
-        /// Include prior-session history.
+        /// Include all retained history, including prior sessions.
         #[arg(long)]
         all: bool,
         /// Emit JSON.

@@ -8,7 +8,7 @@ rimz transcript '#cli-docs'              # one channel
 rimz transcript @codex#cli-docs -n 4     # one agent, last 4 entries
 rimz transcript run_0123456789abcdef0123456789abcdef   # a supervised run's agent
 rimz transcript @all                     # every channel in the workspace
-rimz transcript --all                    # include prior sessions
+rimz transcript --all                    # all retained history, including prior sessions
 rimz transcript --flat                   # arrival order, no threads
 rimz transcript '#cli-docs' -f           # follow new entries
 rimz transcript --json > /tmp/chat.json
@@ -71,7 +71,7 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 | `-w, --worktree <channel>` | Channel used to resolve the target. |
 | `-n, --last <N>` (alias `--tail`) | Keep the last `N` entries; `0` reads all entries. The human view defaults to `20`; JSON has no default bound. See [Tail with `--last`](#tail-with---last). |
 | `-f, --follow` | Print the first view, then new entries in view order, including across an agent restart, checking once a second. An answer reprints its ask card. Conflicts with `--all`. |
-| `--all` | Include prior sessions; see [Prior sessions](#prior-sessions). |
+| `--all` | Read all retained history, including prior sessions; see [Prior sessions](#prior-sessions). |
 | `--flat` | Print entries in arrival order instead of grouping replies into threads. |
 | `--json` | Emit JSON; see [JSON output](#json-output). |
 
@@ -79,13 +79,15 @@ A channel named explicitly (`'#<channel>'`, `@<handle>#<channel>`, `@all#<channe
 
 ## Prior sessions
 
+Default views read only the last 30 days. When older weekly files were skipped, a faint stderr hint names a shell-quoted `--all` command that repeats your target, `-w`, and `--root`. The hint also appears for an empty scope; it says older workspace history exists, not that the selected scope has older entries. When the prior-session note below prints, it already names the `--all` command, so `rimz transcript` leaves the older-history hint out. `--all` reads every retained file. Channel discovery across workspaces still uses the last 30 days; pass `--root <path> --all` to read an older channel in a known workspace. Follow stays windowed and conflicts with `--all`.
+
 By default a view starts at the current live cohort: the earliest registration among the live root agents in scope (or the targeted agent, for an agent view). After a same-name team or worktree relaunch, the view opens on the living conversation. A message written before that registration but delivered after it arrived in the living conversation, so it stays in the default view. Earlier entries stay in the log, and a note on stderr counts them:
 
 ```text
 ⋯ 12 earlier entries from a prior session (Fri, Sep 11 2026) — rimz transcript --all
 ```
 
-`--all` prints the earlier entries first, then a `Live · <when>` rule before the current cohort's entries. When nothing in scope is live, or every entry predates the cohort, the whole scope prints without a rule.
+`--all` prints the earlier entries first, then a `Live · <when>` rule before the current cohort's entries. When nothing in scope is live, or every entry predates the cohort, the scope within the chosen history window prints without a rule.
 
 The suggested command repeats the target, `-w`, and `--root` you supplied, shell-quoted for pasting. The note is withheld when `-n` drops any current-session entry, and while following.
 
@@ -188,7 +190,8 @@ With `--follow`, every entry is one JSON object per line, including the first vi
 | `channel` | When the view has a channel | The channel name, without `#`. |
 | `focus` | Agent targets only | The focal agent's handle. |
 | `entries` | Always | The entries, described below. |
-| `archived_count` | When prior-session entries are left out | How many entries `--all` would add, including ones the human view hides. |
+| `archived_count` | When prior-session entries are left out | How many entries within the 30-day window were archived, including ones the human view hides. |
+| `older_omitted` | When older weekly files were skipped | `true`; `--all` reads that older retained history too. Present even for an empty result, absent with `--all`. |
 
 Each entry carries these fields. A field shown as optional is absent when empty or false.
 

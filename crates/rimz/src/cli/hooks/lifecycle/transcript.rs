@@ -67,8 +67,12 @@ pub(super) fn record_assistant_response(
     // Only a redo can meet its own entry, and the drainer applies one frame at a time.
     let recorded = rimz::harness::hook_drain::frame_attempt()
         == rimz::harness::hook_drain::FrameAttempt::Redo
-        && rimz::transcript::read_all(store.paths()).is_ok_and(|entries| {
-            entries
+        && rimz::transcript::read_since(
+            store.paths(),
+            rimz::harness::hook_drain::frame_timestamp(),
+        )
+        .is_ok_and(|read| {
+            read.entries
                 .iter()
                 .any(|existing| existing.entry == entry.entry && existing.ingress == entry.ingress)
         });
@@ -181,8 +185,9 @@ pub(super) fn latest_native_ask_id(
     kind: &str,
     agent_id: &str,
 ) -> Option<rimz::ids::AskId> {
-    rimz::transcript::read_all(store.paths())
+    rimz::transcript::read_since(store.paths(), rimz::transcript::recent_floor())
         .ok()?
+        .entries
         .into_iter()
         .rev()
         .find(|entry| {
@@ -291,7 +296,8 @@ pub(super) fn record_conversation(
     let mut existing = if rimz::harness::hook_drain::frame_attempt()
         != rimz::harness::hook_drain::FrameAttempt::First
     {
-        rimz::transcript::read_all(store.paths())?
+        rimz::transcript::read_since(store.paths(), rimz::harness::hook_drain::frame_timestamp())?
+            .entries
     } else {
         Vec::new()
     };

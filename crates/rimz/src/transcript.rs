@@ -1,8 +1,9 @@
 //! Durable RimZ-owned cross-provider conversation log.
 //!
-//! The log is append-only JSONL under `transcript/<bucket-start>.jsonl` in the
+//! The log is append-only JSONL under `audit/transcript/<bucket-start>.jsonl` in the
 //! workspace state root. This transcript is distinct from provider-native
-//! transcript and session files.
+//! transcript and session files. Routine reads select weekly files overlapping
+//! the last 30 days; explicit full-history views can read every retained bucket.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -332,7 +333,7 @@ pub fn append(paths: &StatePaths, entry: &TranscriptEntry) -> Result<()> {
     append_locked(paths, entry)
 }
 
-/// Append an id-stamped answer exactly once across the native hook and CLI
+/// Append an id-stamped answer once within recent buckets across the native hook and CLI
 /// confirmation writers. The workspace lock covers both the duplicate check
 /// and append, so a PostToolUse racing `rimz answer` still yields one record.
 pub fn append_answer_if_missing(paths: &StatePaths, entry: &TranscriptEntry) -> Result<bool> {
@@ -342,9 +343,13 @@ pub fn append_answer_if_missing(paths: &StatePaths, entry: &TranscriptEntry) -> 
         return Ok(true);
     };
     let _guard = lock::WorkspaceLock::acquire(&paths.workspace_lock)?;
-    if read_all(paths)?.into_iter().any(|existing| {
-        existing.entry == TranscriptKind::Answer && existing.id.as_ref() == Some(id)
-    }) {
+    if read_since(paths, recent_floor())?
+        .entries
+        .into_iter()
+        .any(|existing| {
+            existing.entry == TranscriptKind::Answer && existing.id.as_ref() == Some(id)
+        })
+    {
         return Ok(false);
     }
     append_locked(paths, entry)?;
@@ -374,9 +379,35 @@ pub fn read_all(paths: &StatePaths) -> Result<Vec<TranscriptEntry>> {
     Ok(entries)
 }
 
-/// The distinct channels stamped on the workspace's transcript entries.
+/// Entries from selected buckets, and whether older buckets were skipped.
+pub struct TranscriptRead {
+    pub entries: Vec<TranscriptEntry>,
+    pub older_omitted: bool,
+}
+
+/// The shared 30-day floor for routine lookups and conversation views.
+pub fn recent_floor() -> Timestamp {
+    Timestamp::now() - jiff::SignedDuration::from_hours(30 * 24)
+}
+
+/// Read whole weekly buckets overlapping `since`, opening newest buckets first.
+pub fn read_since(paths: &StatePaths, since: Timestamp) -> Result<TranscriptRead> {
+    let (files, older_omitted) = files_since(paths, since)?;
+    let mut entries = Vec::new();
+    for path in files {
+        entries.extend(read_bucket(&path)?);
+    }
+    entries.sort_by_key(|entry| entry.at);
+    Ok(TranscriptRead {
+        entries,
+        older_omitted,
+    })
+}
+
+/// The distinct channels stamped in the workspace's recent transcript buckets.
 pub fn channels(paths: &StatePaths) -> Result<BTreeSet<String>> {
-    Ok(read_all(paths)?
+    Ok(read_since(paths, recent_floor())?
+        .entries
         .into_iter()
         .filter_map(|entry| entry.channel)
         .collect())
@@ -420,15 +451,14 @@ fn workspaces_with_channel_under(state_root: &Path, channel: &str) -> Vec<KnownW
 /// The agent's latest open native ask: the newest `Ask` entry for
 /// `(kind, agent_id)` with no later `Answer` entry.
 ///
-/// Bucket files and their entries are walked newest-first. Answer ids accumulate
-/// across buckets until the scan reaches the newest ask they do not close.
+/// Recent bucket files and their entries are walked newest-first. Answer ids
+/// accumulate across buckets until the scan reaches the newest ask they do not close.
 pub fn latest_open_ask(
     paths: &StatePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> Result<Option<TranscriptEntry>> {
-    let mut files = transcript_files(&paths.transcript_dir)?;
-    files.sort_by(|left, right| right.cmp(left));
+    let (files, _) = files_since(paths, recent_floor())?;
     let mut closed = std::collections::BTreeSet::new();
 
     for path in files {
@@ -457,19 +487,17 @@ pub fn latest_open_ask(
 /// The agent's newest `Assistant` entry stamped at or after `since`: the final
 /// message of a turn that opened then.
 ///
-/// Buckets are walked newest-first and the walk stops at the first bucket that
-/// reaches back before `since`, since every older bucket predates it.
+/// Bucket names select only files that can contain entries at or after `since`,
+/// walked newest-first without opening older files.
 pub fn latest_assistant(
     paths: &StatePaths,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
     since: Timestamp,
 ) -> Result<Option<TranscriptEntry>> {
-    let mut files = transcript_files(&paths.transcript_dir)?;
-    files.sort_by(|left, right| right.cmp(left));
+    let (files, _) = files_since(paths, since)?;
     for path in files {
         let entries = read_bucket(&path)?;
-        let reaches_before = entries.first().is_some_and(|entry| entry.at < since);
         if let Some(entry) = entries.into_iter().rev().find(|entry| {
             entry.at >= since
                 && entry.entry == TranscriptKind::Assistant
@@ -478,14 +506,11 @@ pub fn latest_assistant(
         }) {
             return Ok(Some(entry));
         }
-        if reaches_before {
-            break;
-        }
     }
     Ok(None)
 }
 
-/// The one decode point for the log, so every reader — [`read_all`] and the
+/// The one decode point for the log, so full-history reads and the
 /// newest-first bucket walks alike — sees the same entries.
 fn read_bucket(path: &Path) -> Result<Vec<TranscriptEntry>> {
     let text = fs::read_to_string(path).map_err(|source| TranscriptLogErr::Io {
@@ -552,6 +577,16 @@ fn transcript_files(dir: &Path) -> Result<Vec<PathBuf>> {
         path: dir.to_path_buf(),
         source,
     })
+}
+
+fn files_since(paths: &StatePaths, since: Timestamp) -> Result<(Vec<PathBuf>, bool)> {
+    let mut files = transcript_files(&paths.transcript_dir)?;
+    files.sort_by(|left, right| right.cmp(left));
+    let floor = bucket_path(paths, since);
+    let count = files.len();
+    files.retain(|path| path >= &floor);
+    let older_omitted = files.len() < count;
+    Ok((files, older_omitted))
 }
 
 fn bucket_path(paths: &StatePaths, at: Timestamp) -> PathBuf {

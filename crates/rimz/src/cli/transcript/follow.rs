@@ -1,6 +1,6 @@
 //! The conversation follow driver shared by `rimz transcript -f` and `rimz agents logs -f`.
 //!
-//! The polled view is recomputed from the whole log on every poll, so it is not append-only:
+//! The polled view is recomputed from recent buckets on every poll, so it is not append-only:
 //! an archive split shrinks it, a later entry can hide an earlier turn, and an arrival can sort
 //! before the tail. Progress is therefore the set of printed entry identities, not a count.
 
@@ -36,6 +36,7 @@ pub(crate) fn follow(
             ViewMode {
                 hidden: Hidden::for_json(json),
                 flat,
+                since: rimz::transcript::recent_floor(),
             },
         )
     };
@@ -60,6 +61,13 @@ pub(crate) fn follow(
         }
     }
 
+    if !json {
+        write_older_history_hint(
+            &initial,
+            &transcript_command(target, worktree),
+            Some(&workspace.project_root),
+        )?;
+    }
     let tz = crate::cli::machine_config().time_zone();
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
