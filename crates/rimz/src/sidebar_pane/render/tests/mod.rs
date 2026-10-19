@@ -37,6 +37,7 @@ mod process;
 mod provider;
 mod scroll;
 mod search;
+mod section_labels;
 mod visible_compose;
 mod worktree;
 

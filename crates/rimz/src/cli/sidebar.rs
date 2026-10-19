@@ -80,6 +80,9 @@ enum SidebarSubcmd {
         /// Every card expanded, every group un-truncated; the frame grows to fit.
         #[arg(long)]
         expand: bool,
+        /// Print only this section's rows of the full-size frame.
+        #[arg(long)]
+        section: Option<String>,
     },
     /// Run the terminal sidebar renderer.
     Serve {
@@ -439,6 +442,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             width,
             height,
             expand,
+            section,
         } => frame(
             globals,
             FrameCommand {
@@ -448,6 +452,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 width,
                 height,
                 expand,
+                section,
             },
         ),
         SidebarSubcmd::Serve {
@@ -683,6 +688,7 @@ struct FrameCommand {
     width: Option<u16>,
     height: Option<u16>,
     expand: bool,
+    section: Option<String>,
 }
 
 struct SnapshotContext {
@@ -784,6 +790,7 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
             command.width,
             command.height,
             command.expand,
+            command.section.as_deref(),
         );
     }
     let context = resolve_snapshot_context(globals, &snapshot_command)?;
@@ -811,6 +818,7 @@ fn frame(globals: &GlobalFlags, command: FrameCommand) -> Result<()> {
         command.width,
         command.height,
         command.expand,
+        command.section.as_deref(),
     )
 }
 
@@ -820,6 +828,7 @@ fn render_frame(
     width: Option<u16>,
     height: Option<u16>,
     expand: bool,
+    section: Option<&str>,
 ) -> Result<()> {
     let sidebar_width = rimz::mux::SidebarWidth::from_config(&snapshot.theme);
     let terminal_size = rimz::mux::detect_terminal_size();
@@ -838,7 +847,15 @@ fn render_frame(
         .unwrap_or_else(|| terminal_size.map_or(24, |(_, rows)| rows));
 
     let mut out = render::out();
-    let write = if expand {
+    let write = if let Some(section) = section {
+        rimz::sidebar_pane::render::render_section_line_ansi(
+            &mut out,
+            snapshot,
+            width,
+            (!expand).then_some(height),
+            section,
+        )
+    } else if expand {
         rimz::sidebar_pane::render::render_expanded_line_ansi(&mut out, snapshot, width)
     } else {
         rimz::sidebar_pane::render::render_fixed_line_ansi(&mut out, snapshot, width, height)

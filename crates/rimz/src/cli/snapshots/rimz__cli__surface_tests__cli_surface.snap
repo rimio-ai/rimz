@@ -2667,6 +2667,7 @@ rimz sidebar frame
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1]
     --root <ROOT>  [action=set takes=1..=1 global]
+    --section <SECTION>  [action=set takes=1..=1]
     --session-name <SESSION_NAME>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
     --width <WIDTH>  [action=set takes=1..=1]

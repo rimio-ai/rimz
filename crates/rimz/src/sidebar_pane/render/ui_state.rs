@@ -44,6 +44,8 @@ pub(in crate::sidebar_pane) struct UiState {
     pub(in crate::sidebar_pane) cost_rolls: CostRolls,
     /// Typed hit geometry from the most recently painted frame.
     pub(in crate::sidebar_pane) interactions: FrameInteractions,
+    /// Section labels in physical-row coordinates from that same paint.
+    pub(in crate::sidebar_pane) sections: Vec<super::SectionLabel>,
     /// Row identity per roster ordinal in the last painted hit map.
     pub(in crate::sidebar_pane) painted_roster: Vec<String>,
     /// The pane the highlight is pinned to — selection keyed by identity, not

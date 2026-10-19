@@ -30,7 +30,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
-use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
+use crate::sidebar_pane::render::{HitTarget, RenderedBlock, SectionLabel};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
 use super::agent_card::{CardLine, row_lines};
@@ -212,6 +212,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
         );
         let gutter = if selected { Gutter::Selected } else { lane };
         let cost_usd = super::agent_card::agent_card_cost_usd(group, row);
+        let start = block.lines.len();
         let key = CardKey {
             expansion: expanded,
             selected,
@@ -264,6 +265,16 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
                 block.push_with_regions(Line::default(), Some(this_row), []);
             }
         }
+        let identity = row.as_agent().map_or_else(
+            || row.name.clone(),
+            |agent| {
+                agent
+                    .handle
+                    .as_ref()
+                    .map_or_else(|| row.id.clone(), |handle| format!("@{handle}"))
+            },
+        );
+        block.sections[start..].fill(SectionLabel(format!("{identity}#{}", group.label)));
     }
     let target = HitTarget::ToggleGroup(group.key.clone());
     for line in worktree_tail(ctx, roster, visible_group)
@@ -275,6 +286,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_windowed(
             target.clone(),
         );
     }
+    block.tag(&format!("#{}", group.label));
     block
 }
 
