@@ -47,6 +47,14 @@ fn survey_flag_errors_are_stable() {
             "atlas survey --all may only be passed once".to_owned(),
         ),
         (
+            &["--indexed", "--indexed"],
+            "atlas survey --indexed may only be passed once".to_owned(),
+        ),
+        (
+            &["--indexed", "--section", "rank"],
+            "atlas survey --indexed requires --section to include assemblers".to_owned(),
+        ),
+        (
             &["--restamp", "--restamp"],
             "atlas survey --restamp may only be passed once".to_owned(),
         ),
@@ -404,6 +412,7 @@ fn survey_output_is_bounded_by_top() {
         },
         hot,
         assemblers: Vec::new(),
+        assemblers_indexed: false,
         debt: Debt {
             configured: true,
             rules: (0..30)
@@ -497,6 +506,7 @@ fn survey_output_is_bounded_by_top() {
     let rendered = render_json(&report, &OutputArgs::default()).unwrap();
     assert_eq!(rendered, include_str!("golden.json"));
     let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    assert!(json.get("assemblers_indexed").is_none());
     let hot = &json["hot"][0];
     assert_eq!(
         (&hot["cyclomatic"], &hot["cognitive"], &hot["sloc"]),
@@ -889,10 +899,11 @@ fn survey_parses_json_out_and_sections() {
         "--out",
         "/tmp/atlas-survey.json",
         "--section",
-        "rank,guards",
+        "rank,guards,assemblers",
         "--by",
         "tc",
         "--all",
+        "--indexed",
     ]
     .map(str::to_owned)
     .to_vec();
@@ -902,6 +913,7 @@ fn survey_parses_json_out_and_sections() {
     assert!(parsed.output.json);
     assert_eq!(parsed.by, RankBy::TestCode);
     assert!(parsed.all);
+    assert!(parsed.indexed);
     assert_eq!(
         parsed.output.out.as_deref(),
         Some(Path::new("/tmp/atlas-survey.json"))
@@ -1192,7 +1204,7 @@ fn scoped_assemblers_count_modules_outside_the_scope_by_top_module() {
         ]
     );
     let mut output = String::new();
-    let report = Report {
+    let mut report = Report {
         path: PathBuf::from("crates/demo/src/cli"),
         probes: Vec::new(),
         rank: Rank {
@@ -1201,6 +1213,7 @@ fn scoped_assemblers_count_modules_outside_the_scope_by_top_module() {
         },
         hot: Vec::new(),
         assemblers: rows,
+        assemblers_indexed: false,
         debt: Debt::default(),
         cycles: Vec::new(),
         shapes: Vec::new(),
@@ -1216,6 +1229,167 @@ fn scoped_assemblers_count_modules_outside_the_scope_by_top_module() {
             .output,
     ));
     assert!(output.contains("1 functions call into 3+ modules (syntax-resolved"));
+    report.assemblers_indexed = true;
+    let args = parse_args(&["--section", "assemblers"].map(String::from))
+        .unwrap()
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &args.output).unwrap()).unwrap();
+    assert_eq!(json["assemblers_indexed"], true);
+    assert!(
+        render_markdown(&report, 20, &args.output)
+            .contains("index-resolved references, owner-folded")
+    );
+    let args = parse_args(&["--section", "footer"].map(String::from))
+        .unwrap()
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&render_json(&report, &args.output).unwrap()).unwrap();
+    assert!(json.get("assemblers_indexed").is_none());
+}
+
+#[test]
+fn indexed_assemblers_resolve_methods_fold_owners_and_filter_sites() {
+    use super::super::references::FnRef;
+    use super::super::sources::SourceKind;
+
+    let syntax = super::super::syntax::analyze_sources(
+        &[
+            Source::new(
+                "crates/demo/src/cli/exec.rs",
+                "fn run() { a.first(); a.second(); b.open(); c.load(); d.render(); }\nfn filtered() {}",
+            ),
+            Source::new(
+                "crates/demo/src/agents/catalog.rs",
+                "pub struct A;\nimpl A {\n pub fn first(&self) {}\n pub fn second(&self) {}\n}\npub type Alias = A;",
+            ),
+            Source::new("crates/demo/src/store.rs", "pub fn open() {}"),
+            Source::new("crates/demo/src/harness/launch.rs", "pub fn load() {}"),
+            Source::new("crates/demo/src/cli/render.rs", "pub fn render() {}"),
+            Source::new("crates/demo/src/lib.rs", "pub fn root() {}"),
+        ],
+        &BTreeSet::new(),
+    );
+    let files = &syntax.files;
+    let caller = &files[0];
+    let known = files.iter().map(|file| file.module_path.clone()).collect();
+    let edge = |file: usize, name: &str| {
+        let item = files[file]
+            .pub_items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap();
+        Edge {
+            from_path: caller.path.clone(),
+            to_path: files[file].path.clone(),
+            from: caller.module_path.clone(),
+            from_line: 1,
+            from_fn: Some(FnRef {
+                label: "run".into(),
+                line: 1,
+            }),
+            to: item.module.clone(),
+            to_line: item.line,
+            item: name.into(),
+            site_kind: SourceKind::Production,
+            cross_target: false,
+        }
+    };
+    let mut edges = vec![
+        edge(1, "first"),
+        edge(1, "second"),
+        edge(2, "open"),
+        edge(3, "load"),
+        edge(4, "render"),
+        edge(5, "root"),
+    ];
+    // Inline providers share their nearest file-module row.
+    edges[0].to.push_str("::inline");
+    let mut own = edges[0].clone();
+    own.to = caller.module_path.clone();
+    edges.push(own);
+    for file in [1, 2, 3] {
+        let mut test = edge(file, ["", "first", "open", "load"][file]);
+        test.from_fn = Some(FnRef {
+            label: "filtered".into(),
+            line: 2,
+        });
+        test.site_kind = SourceKind::Test;
+        edges.push(test.clone());
+        test.site_kind = SourceKind::TestSupport;
+        edges.push(test);
+    }
+    for (file, name) in [(2, "open"), (3, "load")] {
+        let mut production = edge(file, name);
+        production.from_fn = Some(FnRef {
+            label: "filtered".into(),
+            line: 2,
+        });
+        edges.push(production);
+    }
+    let mut alias = edge(1, "Alias");
+    alias.from_fn = Some(FnRef {
+        label: "filtered".into(),
+        line: 2,
+    });
+    edges.push(alias);
+    let outside = edges[..6]
+        .iter()
+        .cloned()
+        .map(|mut edge| {
+            edge.from_path = "crates/demo/src/outside.rs".into();
+            edge
+        })
+        .collect::<Vec<_>>();
+    edges.extend(outside);
+    let mut no_function = edge(2, "open");
+    no_function.from_fn = None;
+    edges.push(no_function);
+    let scope = Path::new("crates/demo/src/cli");
+    assert!(assemblers(files, &known, &BTreeSet::new(), scope).is_empty());
+    let rows = indexed_assemblers(&edges, files, &known, scope);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        (&*rows[0].function, &rows[0].path, rows[0].line),
+        ("run", &caller.path, 1)
+    );
+    assert_eq!(rows[0].callees, 5);
+    assert_eq!(
+        rows[0]
+            .providers
+            .iter()
+            .map(|provider| (provider.provider.as_str(), provider.sites))
+            .collect::<Vec<_>>(),
+        [
+            ("(root)", 1),
+            ("agents", 1),
+            ("cli/render", 1),
+            ("harness", 1),
+            ("store", 1)
+        ]
+    );
+    let root_edges = edges[..6]
+        .iter()
+        .cloned()
+        .map(|mut edge| {
+            edge.from_path = files[5].path.clone();
+            edge.from = files[5].module_path.clone();
+            edge.from_fn = Some(FnRef {
+                label: "root".into(),
+                line: 1,
+            });
+            edge
+        })
+        .collect::<Vec<_>>();
+    let rows = indexed_assemblers(&root_edges, files, &known, Path::new("crates/demo/src"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].providers.len(), 4);
+    assert!(
+        rows[0]
+            .providers
+            .iter()
+            .all(|provider| provider.provider != "(root)")
+    );
 }
 
 #[test]
