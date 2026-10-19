@@ -282,6 +282,34 @@ fn integration_identity_requires_fixture_home() {
 }
 
 #[test]
+fn child_env_resets_reject_bypass_and_allow_owner_tests_and_markdown() {
+    let root = temp_repo_root("child-env");
+    let source = root.join("crates/rimz/src");
+    std::fs::create_dir_all(&source).unwrap();
+    let caller = source.join("caller.rs");
+    let bypass = concat!("command.env_", "clear();\n");
+    std::fs::write(&caller, bypass).unwrap();
+    assert!(
+        ensure_child_env_resets(&root, &[caller]).is_err(),
+        "production child environment resets must use the coverage-preserving helper"
+    );
+    for relative in [
+        "crates/rimz/src/child_process.rs",
+        "crates/rimz/src/tests.rs",
+        "crates/rimz/src/caller/tests.rs",
+        "crates/rimz/src/AGENTS.md",
+        "crates/rimz/tests/integration/caller.rs",
+        "xtask/src/caller.rs",
+    ] {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bypass).unwrap();
+        ensure_child_env_resets(&root, &[path]).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn classed_paths_rejects_caller_bypass_and_allows_path_owner_and_tests() {
     let root = temp_repo_root("classed-paths");
     let source = root.join("crates/rimz/src");

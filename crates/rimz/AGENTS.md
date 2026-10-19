@@ -6,6 +6,7 @@ Local contract for `crates/rimz/` — the CLI binary, hook entrypoints, and the 
 
 - `web` never imports `sidebar_pane`: the kitty placeholder encoding both speak is the leaf `pixel_wire` module, and the renderer's one read of `web` is `web::pixel_ttyd_pids`, the ttyd daemons serving the current pixel page.
 - Command handlers (`src/cli/`) parse, call domain modules, and present; domain logic lives in the domain module, never in a handler.
+- **Invariant.** Production child environments are reset only through `child_process::clear_env_preserving_coverage`, keeping the process's LLVM profile path before caller overrides. `cargo xtask invariants` enforces the boundary.
 - Domain modules stay free of Zellij, tmux, and agent-specific dependencies — backend knowledge enters through `mux/`, agent knowledge through `agents/`.
 - Run-wake matching uses `(workspace_id, run_id)` — never PID alone.
 - Normalized pane IDs (`zellij:terminal_3`, `tmux:%3`) travel everywhere outside `mux/`; raw IDs stay inside the backend adapters.
