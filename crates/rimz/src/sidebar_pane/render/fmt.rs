@@ -17,28 +17,13 @@ pub(super) fn age_secs(at: Timestamp, now: Timestamp) -> i64 {
 
 /// A coarse age as its single highest unit (`8s`, `12m`, `3h`, `2d`) — the pure
 /// core of [`age_short`], so the styling caller can format from a seconds value
-/// it already has.
+/// it already has. Capped at `99d` so every sidebar age fits three cells.
 pub(super) fn age_label(seconds: i64) -> String {
-    crate::utils::time::format_duration_coarse(seconds)
+    crate::utils::time::format_duration_coarse(seconds.min(99 * 86_400))
 }
 
 pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {
     age_label(age_secs(at, now))
-}
-
-/// A row's last-activity age, floored to its highest whole unit: `{m}m` up to an
-/// hour, whole hours `{h}h` from 1h on, capped at `>1d` from a day on — a coarse
-/// "how long since this agent last did something". Ages under five minutes never
-/// reach here; [`activity_short`] withholds them so the card stays quiet until a
-/// real gap opens.
-fn activity_label(seconds: i64) -> String {
-    if seconds < 60 * 60 {
-        format!("{}m", seconds / 60)
-    } else if seconds < 60 * 60 * 24 {
-        format!("{}h", seconds / 3_600)
-    } else {
-        ">1d".to_owned()
-    }
 }
 
 /// The last-activity age once it crosses five minutes (floored), or `None` while
@@ -47,18 +32,18 @@ fn activity_label(seconds: i64) -> String {
 /// stays quiet through normal turn churn.
 pub(super) fn activity_short(at: Timestamp, now: Timestamp) -> Option<String> {
     let seconds = age_secs(at, now);
-    (seconds >= 300).then(|| activity_label(seconds))
+    (seconds >= 300).then(|| age_label(seconds))
 }
 
 /// A subagent's elapsed work span in the age vocabulary, never seconds: `<1m`
-/// under a minute, then the floored `{m}m` / `{h}h` / `>1d` of
-/// [`activity_label`]. Every form is at most three cells, so the caller can
+/// under a minute, then the floored `{m}m` / `{h}h` / `{d}d` of
+/// [`age_label`]. Every form is at most three cells, so the caller can
 /// right-align it into a fixed slot and the clusters stack vertically.
 pub(super) fn elapsed_label(seconds: i64) -> String {
     if seconds < 60 {
         "<1m".to_owned()
     } else {
-        activity_label(seconds)
+        age_label(seconds)
     }
 }
 
@@ -170,7 +155,7 @@ mod tests {
             (60, "1m"),
             (59 * 60, "59m"),
             (3 * 3_600 + 12 * 60, "3h"),
-            (36 * 3_600, ">1d"),
+            (36 * 3_600, "1d"),
         ] {
             assert_eq!(elapsed_label(seconds), expected);
             assert!(elapsed_label(seconds).chars().count() <= 3);
@@ -245,10 +230,18 @@ mod tests {
             (59 * 60, "59m"),
             (60 * 60, "1h"),
             (23 * 3_600, "23h"),
-            (24 * 3_600, ">1d"),
-            (100 * 3_600, ">1d"),
+            (24 * 3_600, "1d"),
+            (36 * 3_600, "1d"),
+            (2 * 86_400, "2d"),
+            (99 * 86_400, "99d"),
+            (99 * 86_400 + 23 * 3_600, "99d"),
+            (100 * 86_400, "99d"),
+            (1_000 * 86_400, "99d"),
         ] {
-            assert_eq!(activity_label(seconds), expected);
+            assert_eq!(age_label(seconds), expected);
+            assert!(age_label(seconds).chars().count() <= 3);
+            assert_eq!(elapsed_label(seconds), expected);
+            assert!(elapsed_label(seconds).chars().count() <= 3);
         }
 
         let now = Timestamp::now();
@@ -261,6 +254,10 @@ mod tests {
         assert_eq!(
             activity_short(now - Duration::from_secs(7 * 60), now),
             Some("7m".to_owned())
+        );
+        assert_eq!(
+            activity_short(now - Duration::from_secs(2 * 86_400), now),
+            Some("2d".to_owned())
         );
     }
 
