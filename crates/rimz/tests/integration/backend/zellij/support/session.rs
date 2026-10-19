@@ -190,7 +190,9 @@ impl LiveZellijSession {
         self.wait_until_ready();
     }
 
-    /// Birth a detached session with one long-lived work pane.
+    /// Birth a detached session with one long-lived work pane. Returns only
+    /// once no human client is registered: the `--create-background` client
+    /// can still be attached when its command exits.
     pub(in crate::backend::zellij) fn create_plain_background(&self, cwd: &Path, sleep: &str) {
         let layout = cwd.join(format!("{}.kdl", self.name));
         std::fs::write(
@@ -215,6 +217,7 @@ impl LiveZellijSession {
             self.name
         );
         self.wait_until_ready();
+        super::client::wait_for_human_client_count(self.backend(), self.name(), 0);
     }
 
     /// Gate on the session action server rather than its earlier listing.

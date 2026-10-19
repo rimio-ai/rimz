@@ -846,9 +846,6 @@ fn assert_presence_hides_and_leaves_floating_toggle_to_terminals(load_before_att
         client = Some(AttachedClient::attach(&room, 160, 45));
     }
     let backend = ZellijBackend::with_runtime_dir(xdg);
-    if load_before_attach {
-        wait_for_human_client_count(&backend, room.name(), 0);
-    }
     let opts = rimz::mux::PresencePluginOptions {
         session_name: room.name().to_owned(),
         workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
