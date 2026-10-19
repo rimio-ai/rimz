@@ -87,6 +87,8 @@ The catalog resolves two maps, and the split keeps an untrusted project task hon
 - **Visible** is what `rimz loop list` shows. A project definition replaces a same-named instance or machine row regardless of trust, rendered under NEEDS YOU as `blocked · project untrusted` or `blocked · project stale`, so the list shows the definition that would win.
 - **Runnable** is what firing reads. A trusted project row replaces a same-named base row; an untrusted one never does, so the base row keeps running. The base is instance rows overlaid by machine rows only within the same resolved root. A machine row rooted elsewhere never displaces a room's same-named instance row.
 
+On durable machine replacement, `config_edit::set_entry` compares the existing and incoming `TaskEntry::resolved_root()` values in the file being edited and refuses a different root (including a rootless row), before writing or clearing any instance or overlay state.
+
 An untrusted project row with no same-named base row still enters the runnable map, so the refusal happens where tasks execute. `fire::runnable_tasks_for`, which both the host and `fire_signal` call, drops every untrusted project row, and the trust gate in `rimz loop run` refuses one, except that a manual fire on a terminal offers an inline grant. During the untrusted window the user sees the project task, the machine task keeps running, and the two never both fire.
 
 ## Triggers

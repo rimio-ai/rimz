@@ -16,7 +16,7 @@ rimz loop fire watchdog
 
 | Command | What it does |
 | --- | --- |
-| `rimz loop add <NAME>` | Add a task, or replace the task of that name. |
+| `rimz loop add <NAME>` | Add a task, or replace a same-named task (machine replacement requires the same project root). |
 | `rimz loop remove <NAME>...` | Delete tasks from the stores that own them. Run history stays. |
 | `rimz loop rename <NAME> <NEW_NAME>` | Rename a task in its store. |
 | `rimz loop enable <NAME>...\|--all` | Arm tasks on this machine and clear holds and strikes. |
@@ -35,7 +35,7 @@ Every command takes the [global flags](../cli.md#global-flags). `loop show --jso
 
 ## Add a task
 
-`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. Adding a name that already exists in the same store replaces that task.
+`rimz loop add <NAME>` takes a name of letters, digits, `-`, and `_`, exactly one action, and exactly one trigger. Adding a name that already exists in the same store replaces that task, except that a machine task rooted in another project, or a hand-edited machine row with no root, is refused.
 
 ### Actions
 
@@ -245,6 +245,8 @@ Each task lives in one of three stores, which `rimz loop list` names in its SOUR
 Adding a state task requires an existing room: run `rimz start` in its root first, or pass `--root <room>`. Machine and project definitions can be added without a room and create no room state.
 
 A machine task takes precedence over a same-named state task only within the same root. A machine task rooted elsewhere neither hides the room's state task nor is removed when you add that state task. `loop show`, `remove`, `rename`, `pause`, `run`, and `stop` in that room address its state task; the machine task remains reachable from its own room or outside any room.
+
+Adding a standing machine task also requires that an existing machine task of that name have the same resolved project root. A cross-project collision refuses without changing either task, names the stored root, and suggests another name or `rimz loop remove <NAME>` from the owning project. Re-adding from that project, or with `--root <owning-project>`, still replaces its task. A machine row with no root refuses too; run `rimz loop remove <NAME>` from a fresh directory outside any repository or RimZ project before reusing its name, so it cannot select a same-named room or project task instead.
 
 `loop list`, `enable --all`, and `disable --all` cover machine tasks plus the state and project tasks of the project resolved from the current directory or `--root`. Enable, disable, pause, and strike state belong to this machine: machine-wide for machine tasks, per project for state and project tasks.
 

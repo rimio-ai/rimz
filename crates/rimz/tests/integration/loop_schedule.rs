@@ -80,6 +80,174 @@ fn tick_fires_instance_despite_same_named_foreign_machine() {
 }
 
 #[test]
+fn adding_machine_refuses_foreign_root_without_mutation() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let other = env.home_root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    env.record(&other);
+    let text =
+        format!("# keep this comment\n[tasks.same]\nroot={other:?}\ncheck='true'\nevery='1h'\n");
+    write_loop_config(&env, &text);
+
+    let keys = [
+        machine_task_key("same"),
+        project_task_key(&env.project_root, "same"),
+    ];
+    write_loop_arming(
+        &env,
+        &keys
+            .iter()
+            .map(|key| {
+                (
+                    key.clone(),
+                    Arming {
+                        enabled: false,
+                        at: None,
+                        pause_until: None,
+                        strikes: Some(2),
+                    },
+                )
+            })
+            .collect(),
+    );
+    std::fs::write(
+        loop_strikes_path(&env),
+        serde_json::to_vec(&BTreeMap::from([
+            (keys[0].clone(), 2),
+            (keys[1].clone(), 3),
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut paths = vec![
+        loop_config_path(&env),
+        loop_arming_path(&env),
+        loop_strikes_path(&env),
+    ];
+    for root in [&env.project_root, &other] {
+        let path = env
+            .state_path_for(root)
+            .root
+            .join("records/loop-declines.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"same":{}}"#).unwrap();
+        paths.push(path);
+    }
+
+    for with_instance in [false, true] {
+        if with_instance {
+            write_loop_instances(
+                &env,
+                Tasks(BTreeMap::from([(
+                    "same".into(),
+                    TaskEntry {
+                        root: env.project_root.clone(),
+                        check: Some("true".into()),
+                        signal: Some("ci.failed".into()),
+                        once: Some(true),
+                        ..TaskEntry::default()
+                    },
+                )])),
+            );
+            paths.push(loop_instances_path(&env));
+        }
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect();
+        let (stdout, error) = loop_fail(
+            &env,
+            &["loop", "add", "same", "--check", "true", "--every", "1h"],
+        );
+        assert!(!stdout.contains("added loop task"), "{stdout}");
+        assert!(
+            error.contains("same") && error.contains("another project"),
+            "{error}"
+        );
+        assert!(error.contains(other.to_str().unwrap()), "{error}");
+        assert!(error.contains("loop remove same"), "{error}");
+        for (path, before) in paths.iter().zip(before) {
+            assert_eq!(std::fs::read(path).unwrap(), before, "{}", path.display());
+        }
+    }
+}
+
+#[test]
+fn adding_machine_replaces_same_root() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.same]\nroot={:?}\ncheck='true'\nevery='1h'\n",
+            env.project_root
+        ),
+    );
+    loop_ok(
+        &env,
+        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = &config.tasks.0["same"];
+    assert_eq!(entry.check, Some("false".into()));
+    assert_eq!(entry.every.as_deref(), Some("2h"));
+    assert_eq!(entry.resolved_root(), env.project_root);
+}
+
+#[test]
+fn adding_machine_refuses_rootless_row() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let instances = Tasks(BTreeMap::from([(
+        "same".into(),
+        TaskEntry {
+            root: env.project_root.clone(),
+            check: Some("true".into()),
+            signal: Some("ci.failed".into()),
+            once: Some(true),
+            ..TaskEntry::default()
+        },
+    )]));
+    write_loop_instances(&env, instances.clone());
+    let text = "# no project owns this row\n[tasks.same]\ncheck='true'\nevery='1h'\n";
+    write_loop_config(&env, text);
+    let (stdout, error) = loop_fail(
+        &env,
+        &["loop", "add", "same", "--check", "false", "--every", "2h"],
+    );
+    assert!(!stdout.contains("added loop task"), "{stdout}");
+    assert!(
+        error.contains("same") && error.contains("no root"),
+        "{error}"
+    );
+    assert!(error.contains("loop remove same"), "{error}");
+    assert!(
+        error.contains("from a fresh directory outside any repository or RimZ project"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(loop_config_path(&env)).unwrap(),
+        text.as_bytes()
+    );
+    assert_eq!(read_loop_instances(&env), instances);
+
+    let outside = env.home_root.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&outside)
+        .args(["loop", "remove", "same"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    assert!(!config.tasks.0.contains_key("same"));
+    assert_eq!(read_loop_instances(&env), instances);
+}
+
+#[test]
 fn adding_instance_removes_only_same_root_machine() {
     let env = Env::new();
     env.record(&env.project_root);

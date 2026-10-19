@@ -70,8 +70,29 @@ impl TaskStore<'_> {
 
 pub(super) fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<()> {
     let path = store.path();
-    let mut doc = store
-        .read_text()?
+    let text = store.read_text()?;
+    if matches!(store, TaskStore::Machine) {
+        let config: crate::config::LoopConfig =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if let Some(existing) = config.tasks.0.get(name)
+            && existing.resolved_root() != entry.resolved_root()
+        {
+            if existing.root.as_os_str().is_empty() {
+                bail!(
+                    "loop task `{name}` has no root in {}; choose another name, or run \
+                     `rimz loop remove {name}` from a fresh directory outside any repository \
+                     or RimZ project to remove it first",
+                    path.display()
+                );
+            }
+            bail!(
+                "loop task `{name}` belongs to another project at {}; choose another name, \
+                 or run `rimz loop remove {name}` from that project first",
+                existing.root.display()
+            );
+        }
+    }
+    let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     root_tasks_table(&mut doc)?.insert(
