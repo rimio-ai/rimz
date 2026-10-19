@@ -769,6 +769,14 @@ impl Engine {
             return Vec::new();
         }
         let mut effects = Vec::new();
+        // Attaching reloads the client's config, replacing runtime bindings
+        // that a clientless plugin already applied. Replay them once per attach.
+        if self.granted
+            && connected_clients
+                .is_some_and(|count| count > self.focus.connected_clients.unwrap_or(0))
+        {
+            self.apply_runtime_reconfigure(&mut effects);
+        }
         self.mark_granted(now, host, &mut effects);
         self.focus.accept_connected_clients(connected_clients);
         if connected_clients == Some(0) && !self.viewed_tabs.is_empty() {

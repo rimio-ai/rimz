@@ -433,6 +433,44 @@ fn has_timeout(effects: &[Effect], delay_ms: u64) -> bool {
 }
 
 #[test]
+fn client_attach_replays_runtime_configuration_once_per_attach_after_grant() {
+    let host = FakeHost::default();
+    let count = |effects: Vec<Effect>| {
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::Reconfigure(_)))
+            .count()
+    };
+    let mut engine = Engine::new(0, reconfigure_config());
+    assert_eq!(count(engine.on_session_update(Some(0), 10, &host)), 1);
+    for (at, clients, expected) in [
+        (20, Some(1), 1),
+        (30, Some(1), 0),
+        (40, Some(2), 1),
+        (50, Some(2), 0),
+        (60, Some(1), 0),
+        (70, None, 0),
+        (80, Some(0), 0),
+        (90, Some(1), 1),
+    ] {
+        assert_eq!(
+            count(engine.on_session_update(clients, at, &host)),
+            expected,
+            "client count {clients:?} at {at}"
+        );
+    }
+    let mut fresh = Engine::new(0, reconfigure_config());
+    assert_eq!(
+        count(fresh.on_session_update(Some(1), 10, &host)),
+        1,
+        "initial grant applies once, without a replay"
+    );
+    let mut unconfigured = Engine::new(0, config());
+    assert_eq!(count(unconfigured.on_session_update(Some(0), 10, &host)), 0);
+    assert_eq!(count(unconfigured.on_session_update(Some(1), 20, &host)), 0);
+}
+
+#[test]
 fn pregrant_unknown_patch_is_retained_until_the_manifest_arrives() {
     let host = FakeHost::default();
     let mut engine = Engine::new(0, reconfigure_config());
