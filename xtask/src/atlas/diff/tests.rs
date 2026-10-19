@@ -6,6 +6,185 @@ use super::super::sources::{Source, SourceKind};
 use super::*;
 
 #[test]
+fn diff_flag_errors_are_stable() {
+    let cases: &[(&[&str], String)] = &[
+        (&["--base"], "atlas diff --base requires a value".to_owned()),
+        (
+            &["--base", "HEAD", "--base", "HEAD"],
+            "atlas diff --base may only be passed once".to_owned(),
+        ),
+        (
+            &["--top", "3", "--top", "4"],
+            "atlas diff --top may only be passed once".to_owned(),
+        ),
+        (
+            &["--top", "0"],
+            "atlas diff --top must be greater than zero".to_owned(),
+        ),
+        (
+            &["--top", "x"],
+            "atlas diff --top requires a positive integer".to_owned(),
+        ),
+        (
+            &["--top", "3", "--top", "0"],
+            "atlas diff --top must be greater than zero".to_owned(),
+        ),
+        (
+            &["--base", "HEAD", "--base", ""],
+            "atlas diff --base requires a non-empty revision".to_owned(),
+        ),
+        (
+            &["--base", "HEAD", "--path", "src", "--expect", "pass.toml"],
+            "atlas diff accepts either --base with --path, or --expect, not both".to_owned(),
+        ),
+        (
+            &["--wat"],
+            format!(
+                "unknown atlas diff flag `--wat`\n\n{USAGE}\n\n{}",
+                output::USAGE
+            ),
+        ),
+        (
+            &["--json", "--json"],
+            "atlas diff --json may only be passed once".to_owned(),
+        ),
+        (&["--out"], "atlas diff --out requires a value".to_owned()),
+        (
+            &["--out", "report.json", "--out", "report.json"],
+            "atlas diff --out may only be passed once".to_owned(),
+        ),
+        (
+            &["--out", "report.json", "--out", ""],
+            "atlas diff --out requires a non-empty path".to_owned(),
+        ),
+        (
+            &["--section"],
+            "atlas diff --section requires a value".to_owned(),
+        ),
+        (
+            &["--section", "totals", "--section", "x"],
+            "atlas diff --section may only be passed once".to_owned(),
+        ),
+        (
+            &["--section", ","],
+            "atlas diff --section requires at least one section name".to_owned(),
+        ),
+    ];
+    for (raw, expected) in cases {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_args(&args).unwrap_err().to_string(),
+            *expected,
+            "{raw:?}"
+        );
+    }
+    for raw in [
+        vec!["--wat", "--help"],
+        vec!["--help", "--wat"],
+        vec!["--path", "--help"],
+        vec!["--wat", "-h"],
+    ] {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert!(parse_args(&args).unwrap().is_none(), "{raw:?}");
+    }
+}
+
+#[test]
+fn diff_json_is_stable() {
+    let surface_item = |name: &str| SurfaceItem {
+        scope: "src".into(),
+        id: ItemId {
+            module: "a".to_owned(),
+            kind: "function".to_owned(),
+            name: name.to_owned(),
+        },
+        path: "src/a.rs".into(),
+        line: 1,
+    };
+    let report = Report {
+        base: "base".to_owned(),
+        paths: vec!["src".into()],
+        production: ValueDelta {
+            base: 10,
+            current: 7,
+            delta: -3,
+        },
+        tests: ValueDelta {
+            base: 2,
+            current: 3,
+            delta: 1,
+        },
+        base_surface: vec![BoundarySurface {
+            scope: "src".into(),
+            items: vec![surface_item("old")],
+        }],
+        current_surface: vec![BoundarySurface {
+            scope: "src".into(),
+            items: vec![surface_item("new"), surface_item("other")],
+        }],
+        dependencies_added: vec![DependencySite {
+            key: DependencyKey {
+                from: "a".to_owned(),
+                to: "outside".to_owned(),
+                path: "src/a.rs".into(),
+                item: "open".to_owned(),
+                spelling: Spelling::Use,
+            },
+            line: 2,
+            direction: "downward",
+            crossing: true,
+        }],
+        dependencies_removed: Vec::new(),
+        base_dependency_counts: BTreeMap::from([("downward", 1), ("internal", 0), ("upward", 0)]),
+        current_dependency_counts: BTreeMap::from([
+            ("downward", 2),
+            ("internal", 0),
+            ("upward", 0),
+        ]),
+        interfaces: vec![InterfaceRow {
+            from: "a".to_owned(),
+            to: "outside".to_owned(),
+            base: 1,
+            current: 2,
+            base_heaviest: None,
+            current_heaviest: Some("a::f".to_owned()),
+            moved: true,
+        }],
+        rust_files_base: 2,
+        rust_files_current: 1,
+        changed_inside: vec!["src/a.rs".into()],
+        changed_outside: vec!["README.md".into()],
+        evidence: Evidence {
+            base_parse_failures: Vec::new(),
+            current_parse_failures: vec!["src/a.rs".into()],
+            newly_unresolved: Vec::new(),
+        },
+        expectations: vec![ExpectationRow {
+            assertion: "production".to_owned(),
+            landed: true,
+            detail: "-3".to_owned(),
+        }],
+        enforcing: true,
+    };
+    for (section, expected) in [
+        (None, include_str!("golden-all.json")),
+        (
+            Some("internal"),
+            "{\n  \"internal\": {\n    \"added\": [],\n    \"removed\": []\n  }\n}\n",
+        ),
+        (Some("totals"), include_str!("golden-totals.json")),
+    ] {
+        let mut raw = vec!["--expect".to_owned(), "pass.toml".to_owned()];
+        if let Some(section) = section {
+            raw.extend(["--section".to_owned(), section.to_owned()]);
+        }
+        let args = parse_args(&raw).unwrap().unwrap();
+        let rendered = render_json(&report, &args.output, args.show_internal).unwrap();
+        assert_eq!(rendered, expected);
+    }
+}
+
+#[test]
 fn diff_args_require_base_and_path_or_expect() {
     assert!(parse_args(&[]).is_err());
     assert!(parse_args(&["--base".into(), "HEAD".into()]).is_err());

@@ -6,6 +6,49 @@ use super::testkit::{commit, crate_with_files, run, selector};
 use super::*;
 
 #[test]
+fn inspect_flag_errors_are_stable() {
+    let cases: &[(&[&str], String)] = &[
+        (&["--module"], "atlas inspect --module requires a value".to_owned()),
+        (&["--module", "store", "--module", "store"], "atlas inspect --module may only be passed once".to_owned()),
+        (&["--top", "3", "--top", "4"], "atlas inspect --top may only be passed once".to_owned()),
+        (&["--top", "0"], "atlas inspect --top must be greater than zero".to_owned()),
+        (&["--top", "x"], "atlas inspect --top requires a positive integer".to_owned()),
+        (&["--top", "3", "--top", "0"], "atlas inspect --top must be greater than zero".to_owned()),
+        (&["--module", "store", "--module", ""], "atlas inspect --module requires a non-empty value".to_owned()),
+        (&["--module", "store", "--brief", "--section", "verdict"], "atlas inspect --brief and --section are mutually exclusive".to_owned()),
+        (&["--brief", "--section", "x"], "atlas inspect --section: unknown section(s) x; known: verdict, record, callers, heaviest, surface, assembly, calls, flags, shapes, guards, providers, footer, item, pins, passthroughs".to_owned()),
+        (&["--no-index"], "atlas inspect requires the exact SCIP reference index".to_owned()),
+        (&["--all", "--all"], "atlas inspect --all may only be passed once".to_owned()),
+        (&["--brief", "--brief"], "atlas inspect --brief may only be passed once".to_owned()),
+        (&["--wat"], format!("unknown atlas inspect flag `--wat`\n\n{}", usage())),
+        (&["--json", "--json"], "atlas inspect --json may only be passed once".to_owned()),
+        (&["--out"], "atlas inspect --out requires a value".to_owned()),
+        (&["--out", "report.json", "--out", "report.json"], "atlas inspect --out may only be passed once".to_owned()),
+        (&["--out", "report.json", "--out", ""], "atlas inspect --out requires a non-empty path".to_owned()),
+        (&["--section"], "atlas inspect --section requires a value".to_owned()),
+        (&["--section", "verdict", "--section", "x"], "atlas inspect --section may only be passed once".to_owned()),
+        (&["--section", ","], "atlas inspect --section requires at least one section name".to_owned()),
+    ];
+    for (raw, expected) in cases {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_args(&args).unwrap_err().to_string(),
+            *expected,
+            "{raw:?}"
+        );
+    }
+    for raw in [
+        vec!["--wat", "--help"],
+        vec!["--help", "--wat"],
+        vec!["--path", "--help"],
+        vec!["--wat", "-h"],
+    ] {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert!(parse_args(&args).unwrap().is_none(), "{raw:?}");
+    }
+}
+
+#[test]
 fn inspect_args_require_a_module_and_parse_output_flags() {
     let args = parse_args(&[
         "--module".into(),

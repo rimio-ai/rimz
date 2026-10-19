@@ -1,0 +1,180 @@
+{
+  "dependencies": {
+    "added": [
+      {
+        "crossing": true,
+        "direction": "downward",
+        "key": {
+          "from": "a",
+          "item": "open",
+          "path": "src/a.rs",
+          "spelling": "use",
+          "to": "outside"
+        },
+        "line": 2
+      }
+    ],
+    "base_counts": {
+      "downward": 1,
+      "internal": 0,
+      "upward": 0
+    },
+    "current_counts": {
+      "downward": 2,
+      "internal": 0,
+      "upward": 0
+    },
+    "removed": []
+  },
+  "evidence": {
+    "base_parse_failures": [],
+    "current_parse_failures": [
+      "src/a.rs"
+    ],
+    "newly_unresolved": []
+  },
+  "expectations": [
+    {
+      "assertion": "production",
+      "detail": "-3",
+      "landed": true
+    }
+  ],
+  "files": {
+    "enforcing": true,
+    "inside": [
+      "src/a.rs"
+    ],
+    "outside": [
+      "README.md"
+    ]
+  },
+  "interface": [
+    {
+      "base": 1,
+      "base_heaviest": null,
+      "current": 2,
+      "current_heaviest": "a::f",
+      "from": "a",
+      "moved": true,
+      "to": "outside"
+    }
+  ],
+  "surface": {
+    "added": [
+      {
+        "id": {
+          "kind": "function",
+          "module": "a",
+          "name": "new"
+        },
+        "line": 1,
+        "path": "src/a.rs",
+        "scope": "src"
+      },
+      {
+        "id": {
+          "kind": "function",
+          "module": "a",
+          "name": "other"
+        },
+        "line": 1,
+        "path": "src/a.rs",
+        "scope": "src"
+      }
+    ],
+    "base": [
+      {
+        "items": [
+          {
+            "id": {
+              "kind": "function",
+              "module": "a",
+              "name": "old"
+            },
+            "line": 1,
+            "path": "src/a.rs",
+            "scope": "src"
+          }
+        ],
+        "scope": "src"
+      }
+    ],
+    "current": [
+      {
+        "items": [
+          {
+            "id": {
+              "kind": "function",
+              "module": "a",
+              "name": "new"
+            },
+            "line": 1,
+            "path": "src/a.rs",
+            "scope": "src"
+          },
+          {
+            "id": {
+              "kind": "function",
+              "module": "a",
+              "name": "other"
+            },
+            "line": 1,
+            "path": "src/a.rs",
+            "scope": "src"
+          }
+        ],
+        "scope": "src"
+      }
+    ],
+    "removed": [
+      {
+        "id": {
+          "kind": "function",
+          "module": "a",
+          "name": "old"
+        },
+        "line": 1,
+        "path": "src/a.rs",
+        "scope": "src"
+      }
+    ]
+  },
+  "totals": {
+    "dependency_sites": {
+      "downward": {
+        "base": 1,
+        "current": 2,
+        "delta": 1
+      },
+      "internal": {
+        "base": 0,
+        "current": 0,
+        "delta": 0
+      }
+    },
+    "escaping_surface": [
+      {
+        "base": 1,
+        "current": 2,
+        "delta": 1,
+        "scope": "src"
+      }
+    ],
+    "production": {
+      "base": 10,
+      "current": 7,
+      "delta": -3
+    },
+    "rust_files": {
+      "base": 2,
+      "current": 1,
+      "delta": -1
+    },
+    "tests": {
+      "base": 2,
+      "current": 3,
+      "delta": 1
+    }
+  }
+}

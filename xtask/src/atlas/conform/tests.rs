@@ -4,6 +4,49 @@ use super::super::target::{ModuleRule, StranglerRule, Verdict, VerdictKind};
 use super::*;
 
 #[test]
+fn conform_flag_errors_are_stable() {
+    let cases: &[(&[&str], String)] = &[
+        (
+            &["--only"],
+            "atlas conform --only requires a value".to_owned(),
+        ),
+        (
+            &["--ratchet", "--ratchet"],
+            "atlas conform --ratchet and --tighten are mutually exclusive".to_owned(),
+        ),
+        (
+            &["--ratchet", "--tighten"],
+            "atlas conform --ratchet and --tighten are mutually exclusive".to_owned(),
+        ),
+        (
+            &["--only", "x"],
+            "atlas conform --only requires --tighten".to_owned(),
+        ),
+        (
+            &["--wat"],
+            "unknown atlas conform argument `--wat`".to_owned(),
+        ),
+    ];
+    for (raw, expected) in cases {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_args(&args).unwrap_err().to_string(),
+            *expected,
+            "{raw:?}"
+        );
+    }
+    for raw in [
+        vec!["--wat", "--help"],
+        vec!["--help", "--wat"],
+        vec!["--path", "--help"],
+        vec!["--wat", "-h"],
+    ] {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert!(parse_args(&args).unwrap().is_none(), "{raw:?}");
+    }
+}
+
+#[test]
 fn conform_rejects_upward_dependency_spelled_as_a_qualified_path() {
     let root = fixture_root();
     fs::write(root.path().join("src/lib.rs"), "mod lower;\nmod upper;\n").unwrap();

@@ -1,0 +1,39 @@
+{
+  "totals": {
+    "dependency_sites": {
+      "downward": {
+        "base": 1,
+        "current": 2,
+        "delta": 1
+      },
+      "internal": {
+        "base": 0,
+        "current": 0,
+        "delta": 0
+      }
+    },
+    "escaping_surface": [
+      {
+        "base": 1,
+        "current": 2,
+        "delta": 1,
+        "scope": "src"
+      }
+    ],
+    "production": {
+      "base": 10,
+      "current": 7,
+      "delta": -3
+    },
+    "rust_files": {
+      "base": 2,
+      "current": 1,
+      "delta": -1
+    },
+    "tests": {
+      "base": 2,
+      "current": 3,
+      "delta": 1
+    }
+  }
+}
