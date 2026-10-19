@@ -25,6 +25,41 @@ fn analyzed_dependencies_cache_use_and_qualified_resolution() {
 }
 
 #[test]
+fn dependency_sites_resolve_from_the_enclosing_inline_module() {
+    let report = analyze_sources(&[Source::new(
+        "src/a/b.rs",
+        "mod inner {
+            use super::X;
+            fn f() { super::g(); self::h(); }
+            mod nested { fn f() { super::k(); } }
+            fn after() { self::after(); }
+        }
+        mod external;
+        fn outside() { self::outside(); }",
+    )]);
+    assert_eq!(
+        report.files[0]
+            .dependencies
+            .iter()
+            .map(|site| (
+                site.item.as_str(),
+                site.module_path.as_str(),
+                site.resolved.as_deref(),
+                site.spelling,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("X", "a::b", Some("a::b"), Spelling::Use),
+            ("g", "a::b", Some("a::b"), Spelling::Qualified),
+            ("h", "a::b::inner", Some("a::b"), Spelling::Qualified),
+            ("k", "a::b::inner", Some("a::b"), Spelling::Qualified),
+            ("after", "a::b::inner", Some("a::b"), Spelling::Qualified),
+            ("outside", "a::b", Some("a::b"), Spelling::Qualified),
+        ]
+    );
+}
+
+#[test]
 fn functions_carry_their_enclosing_inline_modules() {
     let report = analyze_sources(&[source(
         "mod a { mod b { fn f() {} } struct Owner; impl Owner { fn new() {} } }
