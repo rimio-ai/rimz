@@ -2,6 +2,130 @@ use super::*;
 use unicode_width::UnicodeWidthStr;
 
 #[test]
+fn done_keeps_running_rows_above_the_finished_cut() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut tasks = Vec::new();
+    for i in 0..7 {
+        let mut row = TaskRow::rowless(format!("running-{i}"), None, None);
+        row.section = Section::Done;
+        tasks.push(row);
+    }
+    let room = Room {
+        root: "/repo".into(),
+        open: true,
+        here: true,
+        spend_today_usd: 0.0,
+        tasks,
+        retired: (0..6)
+            .map(|i| Retired {
+                name: format!("finished-{i}"),
+                at: now,
+                result: LoopRunResult::Completed,
+                checkout: None,
+                worktree_here: false,
+            })
+            .collect(),
+    };
+    let model = ListModel {
+        rooms: vec![room],
+        caller_root: Some("/repo".into()),
+        now,
+        warnings: Vec::new(),
+    };
+    let mut out = Vec::new();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    let rendered = String::from_utf8(out).unwrap();
+    for i in 0..7 {
+        assert!(rendered.contains(&format!("running-{i}")), "{rendered}");
+    }
+    assert_eq!(rendered.matches("finished-").count(), 5, "{rendered}");
+    assert!(rendered.contains("(and 1 older · --all)"), "{rendered}");
+}
+
+#[test]
+fn expanded_wake_ups_drop_the_unfold_hint_and_pluralize_worktrees() {
+    let now = Timestamp::from_second(1_000).unwrap();
+    let mut tasks = Vec::new();
+    for count in 1..=2 {
+        let mut row = TaskRow::rowless(format!("wake-{count}"), None, None);
+        row.kind = TaskKind::WakeUp;
+        row.section = Section::WakeUps;
+        row.dir = Some(format!("/repo/topic-{count}").into());
+        row.owner = Some(Owner {
+            kind: OwnerKind::Team,
+            name: "recon".into(),
+        });
+        row.action = Some(Action {
+            kind: ActionKind::Wake,
+            subject: "@coder".into(),
+        });
+        tasks.push(row);
+        let model = ListModel {
+            rooms: vec![Room {
+                root: "/repo".into(),
+                open: true,
+                here: true,
+                spend_today_usd: 0.0,
+                tasks: std::mem::take(&mut tasks),
+                retired: Vec::new(),
+            }],
+            caller_root: Some("/repo".into()),
+            now,
+            warnings: Vec::new(),
+        };
+        for all in [false, true] {
+            let mut out = Vec::new();
+            text::write(&mut out, &model, &[&model.rooms[0]], all, None).unwrap();
+            let rendered = String::from_utf8(out).unwrap();
+            assert_eq!(
+                rendered.contains("rimz loop list --all"),
+                !all,
+                "{rendered}"
+            );
+            if all {
+                let suffix = if count == 1 { "worktree" } else { "worktrees" };
+                assert!(
+                    rendered.contains(&format!("in {count} {suffix}\n")),
+                    "{rendered}"
+                );
+            }
+        }
+        tasks = model.rooms.into_iter().next().unwrap().tasks;
+    }
+}
+
+#[test]
+fn here_marks_only_rows_that_name_a_worktree() {
+    let mut bound = TaskRow::rowless("bound".into(), None, None);
+    bound.worktree = Some("card-ux".into());
+    let mut unbound = TaskRow::rowless("unbound".into(), None, None);
+    unbound.worktree_here = true;
+    let mut tasks = vec![bound, unbound];
+    for row in &mut tasks {
+        row.kind = TaskKind::Routine;
+        row.section = Section::Routine;
+    }
+    let model = ListModel {
+        rooms: vec![Room {
+            root: "/repo".into(),
+            open: true,
+            here: true,
+            spend_today_usd: 0.0,
+            tasks,
+            retired: Vec::new(),
+        }],
+        caller_root: Some("/repo".into()),
+        now: Timestamp::from_second(1_000).unwrap(),
+        warnings: Vec::new(),
+    };
+    let mut out = Vec::new();
+    text::write(&mut out, &model, &[&model.rooms[0]], false, None).unwrap();
+    let rendered = String::from_utf8(out).unwrap();
+    assert!(rendered.contains("card-ux"), "{rendered}");
+    assert!(!rendered.contains("(here)"), "{rendered}");
+}
+
+#[test]
 fn shared_watch_state_preserves_strike_disabled_reason() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut row = TaskRow::rowless("struck".into(), None, None);
@@ -36,6 +160,7 @@ fn needs_you_lists_parked_runs_under_a_stronger_attention() {
             here: true,
             spend_today_usd: 0.0,
             tasks: vec![row],
+            retired: Vec::new(),
         }],
         caller_root: Some("/repo".into()),
         now,
@@ -61,6 +186,8 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
         let record = LoopRunRecord::new(name, result, run_log::LoopRunMode::Manual, 0);
         let mut row = TaskRow::rowless(name.into(), None, None);
         row.state = TaskState::Live;
+        row.kind = TaskKind::Routine;
+        row.section = Section::Routine;
         row.running = None;
         row.head = "off branch=main".into();
         row.last = Some(LastRun {
@@ -79,6 +206,7 @@ fn row_colors_follow_state_not_name_or_trigger_prefixes() {
             here: true,
             spend_today_usd: 0.0,
             tasks: tasks.into(),
+            retired: Vec::new(),
         }],
         caller_root: Some("/repo".into()),
         now,
@@ -147,6 +275,7 @@ fn trigger_wrap_preserves_modifiers_and_prioritizes_boundaries() {
         &mut terminal,
         &["NAME", "TRIGGER", "ACTION", "LAST"],
         &rows,
+        1,
         3,
         Some(100),
     )
@@ -162,6 +291,7 @@ fn trigger_wrap_preserves_modifiers_and_prioritizes_boundaries() {
         &mut piped,
         &["NAME", "TRIGGER", "ACTION", "LAST"],
         &rows,
+        1,
         3,
         None,
     )
@@ -211,6 +341,7 @@ fn trigger_wrap_preserves_modifiers_and_prioritizes_boundaries() {
             &mut terminal,
             &["WORKTREE", "TRIGGER", "WAKES", "LAST", "NAME"],
             &worktrees,
+            1,
             3,
             Some(width),
         )

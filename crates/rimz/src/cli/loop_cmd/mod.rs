@@ -114,7 +114,7 @@ enum LoopSubcmd {
 
 #[derive(Debug, Args)]
 struct ListArgs {
-    /// Show tasks in every known room.
+    /// Show every known room and unfold older one-offs and wake-ups.
     #[arg(long)]
     all: bool,
     /// Print structured, uncollapsed task rows.

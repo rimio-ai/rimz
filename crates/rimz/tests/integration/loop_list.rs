@@ -38,6 +38,303 @@ fn record(name: &str, root: &Path, result: LoopRunResult, minutes: i64) -> LoopR
 }
 
 #[test]
+fn lifecycle_sections_and_retired_one_offs_are_explicit() {
+    use rimz::harness::schedule::TaskKind;
+    let env = Env::new();
+    let clock = task(&env.project_root);
+    let one_off = TaskEntry {
+        every: None,
+        at: Some("08:00".into()),
+        ..clock.clone()
+    };
+    let resident = TaskEntry {
+        every: None,
+        signal: Some("pr.merged".into()),
+        stay: true,
+        agent: Some("claude".into()),
+        prompt: Some("inspect".into()),
+        check: None,
+        ..clock.clone()
+    };
+    config(
+        &env,
+        BTreeMap::from([
+            ("clock".into(), clock.clone()),
+            ("once".into(), one_off),
+            ("resident".into(), resident.clone()),
+            (
+                "fleet".into(),
+                TaskEntry {
+                    signal: None,
+                    when: Some(vec!["pr=merged".into()]),
+                    each_worktree: true,
+                    ..resident
+                },
+            ),
+        ]),
+    );
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([
+            (
+                "wake".into(),
+                TaskEntry {
+                    wait: Some(TaskTarget {
+                        kind: AgentKind::new_unchecked("claude"),
+                        session: "session".into(),
+                        handle: "@coder".into(),
+                    }),
+                    check: None,
+                    ..clock.clone()
+                },
+            ),
+            (
+                "owned".into(),
+                TaskEntry {
+                    team: Some("forge#lane".parse().unwrap()),
+                    wait: Some(TaskTarget {
+                        kind: AgentKind::new_unchecked("claude"),
+                        session: "session".into(),
+                        handle: "@coder".into(),
+                    }),
+                    check: None,
+                    ..clock
+                },
+            ),
+        ])),
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    for (name, kind, section) in [
+        ("clock", "routine", "routine"),
+        ("fleet", "routine", "routine"),
+        ("once", "one_off", "waiting"),
+        ("resident", "one_off", "waiting"),
+        ("wake", "wake_up", "wake_ups"),
+        ("owned", "wake_up", "wake_ups"),
+    ] {
+        let row = value["rooms"][0]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["kind"], kind, "{row}");
+        assert_eq!(row["section"], section, "{row}");
+    }
+    let mut history = (0..7)
+        .map(|index| {
+            let mut run = record(
+                &format!("retired-{index}"),
+                &env.project_root,
+                LoopRunResult::Completed,
+                index + 1,
+            );
+            run.kind = Some(TaskKind::OneOff);
+            run
+        })
+        .collect::<Vec<_>>();
+    let mut routine = record(
+        "removed-routine",
+        &env.project_root,
+        LoopRunResult::Completed,
+        1,
+    );
+    routine.kind = Some(TaskKind::Routine);
+    history.push(routine);
+    let mut old = record("legacy", &env.project_root, LoopRunResult::Completed, 1);
+    old.kind = None;
+    history.push(old);
+    history.push(record(
+        "retired-0",
+        &env.project_root,
+        LoopRunResult::Completed,
+        0,
+    ));
+    let mut changed = record(
+        "formerly-once",
+        &env.project_root,
+        LoopRunResult::Completed,
+        2,
+    );
+    changed.kind = Some(TaskKind::OneOff);
+    history.push(changed.clone());
+    changed.at = Timestamp::now();
+    changed.kind = Some(TaskKind::Routine);
+    history.push(changed);
+    write_loop_run_records(&env, &history);
+    let paths = env.state_path_for(&env.project_root);
+    let ledger = paths.root.join("records/loop-launches.json");
+    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    std::fs::write(ledger, serde_json::to_vec(&json!({"resident": {env.project_root.to_str().unwrap(): {"at": Timestamp::now(), "leader": "@leader"}}})).unwrap()).unwrap();
+    let text = loop_ok(&env, &["loop", "list"]);
+    for section in ["ROUTINE", "WAITING", "DONE", "WAKE-UPS"] {
+        assert!(text.contains(section), "{text}");
+    }
+    assert!(text.contains("2 wake agents · all healthy"), "{text}");
+    assert!(text.contains("launched claude @leader"), "{text}");
+    assert!(text.contains("(and 3 older · --all)"), "{text}");
+    assert!(
+        !text.contains("retired-6")
+            && !text.contains("removed-routine")
+            && !text.contains("legacy")
+            && !text.contains("formerly-once"),
+        "{text}"
+    );
+    assert!(
+        text.find("retired-0").unwrap() < text.find("retired-1").unwrap(),
+        "{text}"
+    );
+    let all = loop_ok(&env, &["loop", "list", "--all"]);
+    assert!(
+        all.contains("retired-6") && all.contains("team forge#lane") && all.contains("wake"),
+        "{all}"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    let output = env
+        .rimz()
+        .current_dir(outside.path())
+        .args(["loop", "list"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let outside_text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        outside_text.contains("WAKE-UPS")
+            && !outside_text.contains("retired-6")
+            && !outside_text.contains("team forge#lane ·"),
+        "{outside_text}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    assert_eq!(
+        value["rooms"][0]["retired"].as_array().unwrap().len(),
+        7,
+        "{value}"
+    );
+    let resident = value["rooms"][0]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "resident")
+        .unwrap();
+    assert_eq!(resident["section"], "done", "{resident}");
+}
+
+#[test]
+fn disabled_one_off_displays_its_state() {
+    let env = Env::new();
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "disabled".into(),
+            TaskEntry {
+                every: None,
+                at: Some("23:59".into()),
+                ..task(&env.project_root)
+            },
+        )])),
+    );
+    loop_ok(&env, &["loop", "disable", "disabled"]);
+    let text = loop_ok(&env, &["loop", "list"]);
+    assert!(text.contains("once at 23:59 · off"), "{text}");
+}
+
+#[test]
+fn plain_one_off_ignores_a_former_resident_launch() {
+    let env = Env::new();
+    let entry = TaskEntry {
+        every: None,
+        at: Some("23:59".into()),
+        ..task(&env.project_root)
+    };
+    write_loop_instances(&env, Tasks(BTreeMap::from([("reused".into(), entry)])));
+    let paths = env.state_path_for(&env.project_root);
+    let ledger = paths.root.join("records/loop-launches.json");
+    std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+    std::fs::write(ledger, serde_json::to_vec(&json!({"reused": {env.project_root.to_str().unwrap(): {"at": Timestamp::now(), "leader": "@old"}}})).unwrap()).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    assert_eq!(
+        value["rooms"][0]["tasks"][0]["section"], "waiting",
+        "{value}"
+    );
+    let text = loop_ok(&env, &["loop", "list"]);
+    assert!(text.contains("once at 23:59"), "{text}");
+    assert!(!text.contains("launched"), "{text}");
+}
+
+#[test]
+fn condition_counts_and_unhealthy_wake_ups_are_visible() {
+    let env = Env::new();
+    config(
+        &env,
+        BTreeMap::from([
+            (
+                "and".into(),
+                TaskEntry {
+                    every: None,
+                    once: Some(true),
+                    when: Some(vec!["pr=merged && ci=passed && pr.queue=queued".into()]),
+                    ..task(&env.project_root)
+                },
+            ),
+            (
+                "or".into(),
+                TaskEntry {
+                    every: None,
+                    when: Some(vec!["pr=merged || ci=passed".into()]),
+                    ..task(&env.project_root)
+                },
+            ),
+        ]),
+    );
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "wake".into(),
+            TaskEntry {
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: "session".into(),
+                    handle: "@coder".into(),
+                }),
+                check: None,
+                ..task(&env.project_root)
+            },
+        )])),
+    );
+    write_loop_run_records(
+        &env,
+        &[record("wake", &env.project_root, LoopRunResult::Failed, 1)],
+    );
+    let text = loop_ok(&env, &["loop", "list"]);
+    assert!(!text.contains("of 3 met"), "{text}");
+    assert!(text.contains("1 wake agents · 1 need you"), "{text}");
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let rows = value["rooms"][0]["tasks"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .find(|row| row["name"] == "and")
+            .unwrap()
+            .get("condition")
+            .is_none()
+    );
+    assert!(
+        rows.iter()
+            .find(|row| row["name"] == "or")
+            .unwrap()
+            .get("condition")
+            .is_none()
+    );
+}
+
+#[test]
 fn acting_history_and_heard_are_not_skips() {
     let env = Env::new();
     config(
@@ -72,7 +369,7 @@ fn acting_history_and_heard_are_not_skips() {
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(text.contains("✓ 10m ago"), "{text}");
     assert!(
-        text.contains("heard ci.passed 3m ago") && !text.contains("skipped"),
+        text.contains("never fired · heard ci.passed 3m ago") && !text.contains("skipped"),
         "{text}"
     );
     let show = loop_ok(&env, &["loop", "show", "acted"]);
@@ -191,7 +488,7 @@ fn gone_checkout_recovers_without_mutating_definition() {
     std::fs::create_dir(&checkout).unwrap();
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(
-        text.contains("WORKTREES") && !text.contains("NEEDS YOU"),
+        text.contains("ROUTINE") && !text.contains("NEEDS YOU"),
         "{text}"
     );
     assert_eq!(std::fs::read(loop_config_path(&env)).unwrap(), before);
@@ -219,12 +516,12 @@ fn checkout_path_forms_share_resolved_group_and_json_dir() {
     config(&env, entries);
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(!text.contains("NEEDS YOU"), "{text}");
-    assert_eq!(text.matches("feature").count(), 1, "{text}");
+    assert_eq!(text.matches("feature").count(), 3, "{text}");
     let value: serde_json::Value =
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     for row in value["rooms"][0]["tasks"].as_array().unwrap() {
         assert_eq!(row["dir"], checkout.to_str().unwrap(), "{row}");
-        assert_eq!(row["section"], "worktrees", "{row}");
+        assert_eq!(row["section"], "routine", "{row}");
     }
 }
 
@@ -482,16 +779,20 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
             ),
         ],
     );
-    let text = loop_ok(&env, &["loop", "list"]);
+    let folded = loop_ok(&env, &["loop", "list"]);
+    assert!(folded.contains("4 wake agents · all healthy"), "{folded}");
     assert!(
-        text.contains("on ci.failed pr.{conflicted,dequeued,merged}"),
+        !folded.contains("generated-") && !folded.contains("sweep"),
+        "{folded}"
+    );
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
+    assert!(
+        text.contains("ci.failed pr.{conflicted,dequeued,merged}"),
         "{text}"
     );
-    assert_eq!(text.matches("↳ sweep").count(), 1, "{text}");
-    assert!(
-        text.contains("✓ 5m ago") && !text.contains("heard ci.passed"),
-        "{text}"
-    );
+    assert_eq!(text.matches("sweep ·").count(), 1, "{text}");
+    assert!(text.contains("in 1 worktree\n"), "{text}");
+    assert!(!text.contains("rimz loop list --all"), "{text}");
     assert!(
         text.contains("4 tasks")
             && !text.contains("generated-")
@@ -510,7 +811,7 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
     tasks.0.insert("user-one".into(), named.clone());
     tasks.0.insert("user-two".into(), named);
     write_loop_instances(&env, tasks);
-    let text = loop_ok(&env, &["loop", "list"]);
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
     assert!(
         text.contains("user-one") && text.contains("user-two") && text.contains("6 tasks"),
         "{text}"
@@ -518,7 +819,7 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
 }
 
 #[test]
-fn subscriptions_only_collapse_uniform_states_and_suffixes() {
+fn wake_ups_group_each_owner_once_across_states_and_suffixes() {
     let env = Env::new();
     let checkout = env.home_root.join("feature");
     std::fs::create_dir(&checkout).unwrap();
@@ -569,27 +870,10 @@ fn subscriptions_only_collapse_uniform_states_and_suffixes() {
             ),
         ]),
     );
-    let text = loop_ok(&env, &["loop", "list"]);
-    assert_eq!(text.matches("↳ sweep").count(), 4, "{text}");
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
+    assert_eq!(text.matches("sweep ·").count(), 1, "{text}");
     assert!(
-        text.lines()
-            .any(|line| line.contains("on ci.signal0") && line.contains("off")),
-        "{text}"
-    );
-    assert!(
-        text.lines().any(|line| line.contains("on ci.signal1")
-            && !line.contains("paused")
-            && !line.contains("gate docs")),
-        "{text}"
-    );
-    assert!(
-        text.lines()
-            .any(|line| line.contains("on ci.signal2 · paused, resumes in")),
-        "{text}"
-    );
-    assert!(
-        text.lines()
-            .any(|line| line.contains("on ci.signal3 · gate docs")),
+        text.contains("ci.{signal0,signal1,signal2,signal3}"),
         "{text}"
     );
 }
@@ -604,9 +888,14 @@ fn empty_room_read_leaves_state_absent() {
     assert!(!paths.root.exists());
     let text = loop_ok(&env, &["loop", "list"]);
     assert!(
-        text.contains("no loop tasks in") && text.contains("1 in other rooms"),
+        text.contains("ROUTINE") && text.contains("remote"),
         "{text}"
     );
+    let scoped = loop_ok(
+        &env,
+        &["--root", env.project_root.to_str().unwrap(), "loop", "list"],
+    );
+    assert!(scoped.contains("no loop tasks in"), "{scoped}");
     assert!(!paths.root.exists());
 }
 
@@ -651,7 +940,7 @@ fn inactive_tasks_do_not_request_attention_for_old_failures() {
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     for row in value["rooms"][0]["tasks"].as_array().unwrap() {
         assert!(row.get("attention").is_none(), "{row}");
-        assert_eq!(row["section"], "room");
+        assert_eq!(row["section"], "routine");
     }
 }
 
@@ -717,7 +1006,7 @@ fn each_worktree_uses_acting_history_and_launch_count() {
 }
 
 #[test]
-fn watch_label_lost_and_caller_markers_are_enrichment() {
+fn lost_watch_needs_attention_and_keeps_caller_markers() {
     let env = Env::new();
     assert!(init_git_repo(&env.project_root));
     env.record(&env.project_root);
@@ -781,8 +1070,9 @@ fn watch_label_lost_and_caller_markers_are_enrichment() {
     );
     assert!(
         text.contains("on command exit · gate docs")
-            && text.contains("lost")
-            && !text.contains("NEEDS YOU")
+            && text.contains("watcher gone · will not wake @coder (you)")
+            && text.contains("NEEDS YOU")
+            && text.contains("→ rimz loop remove wait-docs")
             && !text.contains("private command"),
         "{text}"
     );
@@ -792,7 +1082,7 @@ fn watch_label_lost_and_caller_markers_are_enrichment() {
         started_at: Timestamp::now() - SignedDuration::from_mins(12),
     };
     let _watcher = hold_loop_run_lock(&runtime.lock_path("loop-watch-wait-docs.lock"), &holder);
-    let text = loop_ok(&env, &["loop", "list"]);
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
     assert!(
         text.contains("watching 12m") && !text.contains("lost"),
         "{text}"
@@ -845,9 +1135,12 @@ fn reused_wait_names_ignore_history_before_arming() {
         started_at: armed_at,
     };
     let _watcher = hold_loop_run_lock(&runtime.lock_path("loop-watch-wait-reused.lock"), &holder);
-    let text = loop_ok(&env, &["loop", "list"]);
+    let text = loop_ok(&env, &["loop", "list", "--all"]);
     assert!(
-        text.contains("watching 12m") && text.contains("lost") && !text.contains("NEEDS YOU"),
+        text.contains("watching 12m")
+            && text.contains("watcher gone")
+            && text.contains("NEEDS YOU")
+            && !text.contains("failing"),
         "{text}"
     );
     let value: serde_json::Value =

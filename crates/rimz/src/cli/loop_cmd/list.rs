@@ -2,7 +2,7 @@
 
 use super::*;
 use rimz::config::WatchSpec;
-use rimz::harness::schedule::{Trigger, launch_ledger, signal::watcher_info};
+use rimz::harness::schedule::{TaskKind, Trigger, launch_ledger, signal::watcher_info};
 use serde::Serialize;
 
 #[path = "list_render.rs"]
@@ -19,6 +19,20 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
     let mut held_stats = run_log::HeldStats::new(&rimz::disk::paths::logs_dir());
     let mut model = load(workspace.as_ref(), LoadScope::AllRooms, &mut held_stats)?;
+    if globals.root.is_none()
+        && workspace.as_ref().is_some_and(|workspace| {
+            workspace.root_class == rimz::workspace::RootClass::Directory
+                && StatePaths::for_project_root(&workspace.project_root)
+                    .is_ok_and(|paths| !paths.workspace_record.exists())
+        })
+        && model
+            .rooms
+            .iter()
+            .any(|room| room.here && room.tasks.is_empty() && room.retired.is_empty())
+    {
+        model.rooms.retain(|room| !room.here);
+        model.caller_root = None;
+    }
     let caller_session = workspace
         .as_ref()
         .and_then(|workspace| super::super::open_existing_store(workspace).ok().flatten())
@@ -39,6 +53,9 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
             .is_some_and(|(target, (kind, session))| {
                 kind == &target.kind && session == &target.session
             });
+        if row.you && row.attention == Some(Attention::Lost) {
+            row.reason.push_str(" (you)");
+        }
     }
     for warning in &model.warnings {
         writeln!(
@@ -59,7 +76,7 @@ pub(super) fn run(args: ListArgs, globals: &GlobalFlags) -> Result<()> {
     let width = std::io::stdout()
         .is_terminal()
         .then(|| ui::terminal_columns(100));
-    text::write(&mut ui::out(), &model, &rooms, all, width)
+    text::write(&mut ui::out(), &model, &rooms, args.all, width)
 }
 
 pub(super) struct ListModel {
@@ -76,14 +93,28 @@ pub(super) struct Room {
     pub(super) here: bool,
     pub(super) spend_today_usd: f64,
     pub(super) tasks: Vec<TaskRow>,
+    retired: Vec<Retired>,
+}
+
+#[derive(Serialize)]
+struct Retired {
+    name: String,
+    at: Timestamp,
+    result: LoopRunResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkout: Option<PathBuf>,
+    #[serde(skip)]
+    worktree_here: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Section {
     NeedsYou,
-    Room,
-    Worktrees,
+    Routine,
+    Waiting,
+    Done,
+    WakeUps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -96,6 +127,7 @@ pub(super) enum Attention {
     Blocked,
     Invalid,
     Parked,
+    Lost,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -239,6 +271,9 @@ impl From<&run_log::HeardSignal> for Heard {
 pub(super) struct TaskRow {
     pub(super) name: String,
     pub(super) section: Section,
+    kind: TaskKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    condition: Option<schedule::when::ConditionCount>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) attention: Option<Attention>,
     pub(super) state: TaskState,
@@ -288,6 +323,8 @@ pub(super) struct TaskRow {
     #[serde(skip)]
     launched_count: usize,
     #[serde(skip)]
+    launch: Option<launch_ledger::LaunchRecord>,
+    #[serde(skip)]
     exit: Option<String>,
 }
 
@@ -295,12 +332,29 @@ struct RowContext<'a> {
     open: bool,
     stats: Option<&'a run_log::LoopRunStats>,
     count: u32,
+    watcher_live: bool,
+    launch: Option<&'a launch_ledger::LaunchRecord>,
     now: Timestamp,
 }
 
 pub(super) enum LoadScope {
     CallerRoom,
     AllRooms,
+}
+
+pub(super) fn room_roots(
+    caller_root: Option<&Path>,
+) -> Result<std::collections::BTreeSet<PathBuf>> {
+    let machine = TaskCatalog::load(None)?;
+    let mut roots = schedule::catalog::workspace_instance_roots();
+    roots.extend(
+        machine
+            .visible()
+            .values()
+            .map(|task| task.entry().resolved_root()),
+    );
+    roots.extend(caller_root.map(Path::to_owned));
+    Ok(roots)
 }
 
 pub(super) fn load(
@@ -311,18 +365,7 @@ pub(super) fn load(
     let caller_root = workspace.map(|workspace| workspace.project_root.clone());
     let roots = match (scope, caller_root.as_ref()) {
         (LoadScope::CallerRoom, Some(root)) => std::collections::BTreeSet::from([root.clone()]),
-        _ => {
-            let machine = TaskCatalog::load(None)?;
-            let mut roots = schedule::catalog::workspace_instance_roots();
-            roots.extend(
-                machine
-                    .visible()
-                    .values()
-                    .map(|task| task.entry().resolved_root()),
-            );
-            roots.extend(caller_root.iter().cloned());
-            roots
-        }
+        _ => room_roots(caller_root.as_deref())?,
     };
     let arming = arming::load();
     let strikes = strikes::load();
@@ -394,6 +437,12 @@ pub(super) fn load(
                     open,
                     stats: stats.get(name),
                     count,
+                    watcher_live: runtime.as_ref().is_some_and(|runtime| {
+                        watcher_info(runtime, name).ok().flatten().is_some()
+                    }),
+                    launch: ledger
+                        .get(name)
+                        .and_then(|launches| launches.get(&task.entry().run_dir())),
                     now,
                 },
             );
@@ -402,9 +451,6 @@ pub(super) fn load(
                     .is_some_and(|workspace| task.entry().run_dir() == workspace.worktree_root);
             row.launched_count = ledger.get(name).map_or(0, BTreeMap::len);
             row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
-            row.watcher_live = runtime
-                .as_ref()
-                .is_some_and(|runtime| watcher_info(runtime, name).ok().flatten().is_some());
             tasks.push(row);
         }
         if let Some(locks) = locks {
@@ -417,6 +463,27 @@ pub(super) fn load(
                 tasks.push(TaskRow::rowless(name, holder, history));
             }
         }
+        let retired = stats
+            .iter()
+            .filter_map(|(name, stats)| {
+                if tasks.iter().any(|row| &row.name == name)
+                    || stats.last_kind.map(|(_, kind)| kind) != Some(TaskKind::OneOff)
+                {
+                    return None;
+                }
+                let last = stats.last.as_ref()?;
+                Some(Retired {
+                    name: name.clone(),
+                    at: last.at,
+                    result: last.result,
+                    checkout: last.checkout.clone(),
+                    worktree_here: here
+                        && workspace.is_some_and(|workspace| {
+                            last.checkout.as_ref() == Some(&workspace.worktree_root)
+                        }),
+                })
+            })
+            .collect();
         rooms.push(Room {
             root,
             open,
@@ -425,6 +492,7 @@ pub(super) fn load(
                 .values()
                 .fold(0.0, |total, stats| total + stats.spend_today_usd),
             tasks,
+            retired,
         });
     }
     rooms.sort_by(|a, b| b.here.cmp(&a.here).then(a.root.cmp(&b.root)));
@@ -448,6 +516,8 @@ impl TaskRow {
             open,
             stats,
             count,
+            watcher_live,
+            launch,
             now,
         } = context;
         let entry = task.entry();
@@ -495,7 +565,9 @@ impl TaskRow {
         };
         let mut row = Self {
             name: name.into(),
-            section: Section::Room,
+            section: Section::Routine,
+            kind: task.kind(),
+            condition: timing.condition_count().filter(|_| !entry.each_worktree),
             attention: None,
             state,
             trigger: [head.as_str(), continuation.as_str()]
@@ -528,8 +600,9 @@ impl TaskRow {
             running,
             held,
             worktree_here: false,
-            watcher_live: false,
+            watcher_live,
             launched_count: 0,
+            launch: launch.filter(|_| entry.stay).cloned(),
             exit: None,
         };
         row.set_stats(stats);
@@ -538,10 +611,13 @@ impl TaskRow {
         row.reason = reason;
         row.section = if row.attention.is_some() {
             Section::NeedsYou
-        } else if row.worktree.is_some() {
-            Section::Worktrees
         } else {
-            Section::Room
+            match row.kind {
+                TaskKind::Routine => Section::Routine,
+                TaskKind::WakeUp => Section::WakeUps,
+                TaskKind::OneOff if entry.stay && row.launch.is_some() => Section::Done,
+                TaskKind::OneOff => Section::Waiting,
+            }
         };
         row
     }
@@ -575,7 +651,10 @@ impl TaskRow {
     /// A task owning a parked run needs you, unless a stronger reason already does.
     fn attach_workflow_runs(&mut self, runs: Vec<WorkflowRunRow>, now: Timestamp) {
         self.workflow_runs = runs;
-        if self.attention.is_some() {
+        if self
+            .attention
+            .is_some_and(|attention| attention != Attention::Lost)
+        {
             return;
         }
         let mut parked = self.workflow_runs.iter().filter(|run| run.reason.is_some());
@@ -605,7 +684,9 @@ impl TaskRow {
         let held = Vec::new();
         let mut row = Self {
             name,
-            section: Section::Room,
+            section: Section::Done,
+            kind: TaskKind::OneOff,
+            condition: None,
             attention: None,
             state: TaskState::Running,
             trigger: "one-shot fired".into(),
@@ -632,6 +713,7 @@ impl TaskRow {
             worktree_here: false,
             watcher_live: false,
             launched_count: 0,
+            launch: None,
             exit: None,
         };
         row.set_stats(stats);
@@ -768,7 +850,13 @@ fn last_run_text(
     now: Timestamp,
 ) -> Option<String> {
     let Some(last) = last else {
-        return heard.map(|heard| format!("heard {} {}", heard.signal, ui::rel_age(heard.at, now)));
+        return heard.map(|heard| {
+            format!(
+                "never fired · heard {} {}",
+                heard.signal,
+                ui::rel_age(heard.at, now)
+            )
+        });
     };
     Some(if last.ok {
         let mut text = format!("✓ {}", ui::rel_age(last.at, now));
@@ -888,8 +976,6 @@ fn trigger_text(
                 let mut head = parsed.describe();
                 if state == TaskState::WaitsForRoom {
                     head.push_str(&format!(" · {}", state.label()));
-                } else if let Some(next) = timing.next_timestamp() {
-                    head.push_str(&format!(" · next {}", ui::rel_until(next, now)));
                 }
                 head
             }
@@ -977,6 +1063,25 @@ fn attention(row: &TaskRow, count: u32, now: Timestamp) -> (Option<Attention>, S
             Some(Attention::Failing),
             format!("✗ failing{strikes}{exit}"),
         );
+    }
+    if task.entry().watch.is_some() && !row.watcher_live {
+        let wake = task
+            .entry()
+            .wait
+            .as_ref()
+            .map(|target| {
+                format!(
+                    " · will not wake {}",
+                    action(
+                        TaskActionKind::Deliver,
+                        &target.handle,
+                        Some(task.entry()),
+                        row.you
+                    )
+                )
+            })
+            .unwrap_or_default();
+        return (Some(Attention::Lost), format!("watcher gone{wake}"));
     }
     (None, String::new())
 }
