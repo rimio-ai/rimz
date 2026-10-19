@@ -152,14 +152,24 @@ pub(super) fn template(
             | AgentStatus::Sleeping => IDENTITY_DESCRIPTION,
         };
     }
+    if let CardStage::Fresh { labeled } = stage
+        && expansion.reach != SelectionReach::Selected
+    {
+        return if labeled {
+            IDENTITY_DESCRIPTION
+        } else {
+            IDENTITY
+        };
+    }
 
     match stage {
-        CardStage::Fresh { labeled: false } if !expanded => IDENTITY,
-        CardStage::Fresh { labeled: true } if !expanded => IDENTITY_DESCRIPTION,
         CardStage::Fresh { labeled: false } => IDENTITY_AWAITING_GAUGE,
         CardStage::Fresh { labeled: true } => IDENTITY_DESCRIPTION_GAUGE,
         CardStage::Engaged | CardStage::Stale => match (
-            expansion.reach == SelectionReach::Selected || density == CardDensityMode::Expanded,
+            matches!(
+                expansion.reach,
+                SelectionReach::Selected | SelectionReach::Held
+            ) || density == CardDensityMode::Expanded,
             expansion.delegation,
         ) {
             (true, true) => ENGAGED_EXPANDED,
@@ -216,9 +226,10 @@ mod tests {
         CardDensityMode::Expanded,
         CardDensityMode::Compact,
     ];
-    const REACHES: [SelectionReach; 3] = [
+    const REACHES: [SelectionReach; 4] = [
         SelectionReach::Unreached,
         SelectionReach::Teammate,
+        SelectionReach::Held,
         SelectionReach::Selected,
     ];
 
@@ -246,6 +257,16 @@ mod tests {
             }
             .to_vec();
         }
+        if let CardStage::Fresh { labeled } = stage
+            && expansion.reach != SelectionReach::Selected
+        {
+            return if labeled {
+                IDENTITY_DESCRIPTION
+            } else {
+                IDENTITY
+            }
+            .to_vec();
+        }
         let mut slots = match (stage, expansion.reach.opens_card(), expansion.delegation) {
             (CardStage::Fresh { labeled: false }, false, _) => IDENTITY,
             (CardStage::Fresh { labeled: true }, false, _) => IDENTITY_DESCRIPTION,
@@ -255,7 +276,11 @@ mod tests {
             (CardStage::Engaged | CardStage::Stale, _, false) => ENGAGED,
         }
         .to_vec();
-        if expansion.reach != SelectionReach::Selected && density != CardDensityMode::Expanded {
+        if !matches!(
+            expansion.reach,
+            SelectionReach::Selected | SelectionReach::Held
+        ) && density != CardDensityMode::Expanded
+        {
             slots.retain(|slot| !matches!(slot, CardSlot::Tokens | CardSlot::Cache));
         }
         if expansion.reach == SelectionReach::Unreached

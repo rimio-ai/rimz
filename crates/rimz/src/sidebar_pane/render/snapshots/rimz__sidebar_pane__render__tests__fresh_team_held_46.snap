@@ -1,0 +1,28 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0                          ◇ 0 ↘ 0 ↗ 0 ◌ 0
+ ¤ 3                                    $0.00
+ ────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0        ⢿ 0   ☾ 0   ○ 1
+
+▎⑂ main · crew ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
+▎○ first · opus · high                       🮇
+▌○ second · opus · high                      ▐
+▌  .                                         ▐
+▌  ▢ ────────────────────────────    0%      ▐
+▎○ third · opus · high                       🮇
+
+
+
+
+
+
+ ────────────────────────────────────────────
+  W: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+  M: ◎ 0  ◇ 0 ↘ 0 ↗ 0 ◌ 0               $0.00
+
+                                   ? for help

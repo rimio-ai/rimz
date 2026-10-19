@@ -4,6 +4,77 @@ use crate::config::CardDensityMode;
 use crate::sidebar_pane::render::sections::SelectionReach;
 
 #[test]
+fn fresh_team_keeps_only_the_live_selection_open() {
+    let snapshot = snapshot_with(
+        ["first", "second", "third"]
+            .into_iter()
+            .map(|name| {
+                let mut member = density_agent(name, name, AgentStatus::Idle, None, 0);
+                member.team = Some("crew".into());
+                member
+            })
+            .collect(),
+    );
+    for width in [32, 46] {
+        let mut ui = selected_ui();
+        let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, width, 24);
+        assert_eq!(screen.matches("0%").count(), 1, "{screen}");
+        assert_snapshot(&format!("fresh_team_{width}"), screen);
+        ui.freeze = Some(LayoutFreeze {
+            frozen: Default::default(),
+            armed_ms: fixed_now().as_millisecond(),
+        });
+        ui.held_expansions
+            .insert(snapshot.rows().next().unwrap().id.clone());
+        ui.selected_index = Some(1);
+        let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, width, 24);
+        assert_eq!(screen.matches("0%").count(), 1, "{screen}");
+        assert_snapshot(&format!("fresh_team_held_{width}"), screen);
+    }
+}
+
+#[test]
+fn held_reach_is_distinct_and_live_selection_wins() {
+    let snapshot = snapshot_with(vec![density_agent(
+        "fresh",
+        "claude",
+        AgentStatus::Idle,
+        None,
+        0,
+    )]);
+    let ui = selected_ui();
+    let roster = ui.visible_roster(&snapshot);
+    let group = &roster.groups()[0];
+    let held = [roster.row(0).unwrap().id.clone()].into();
+    for (selected, expected) in [
+        (Some(0), SelectionReach::Selected),
+        (None, SelectionReach::Held),
+    ] {
+        let reach = sections::row_selection_reach(&roster, group, 0, selected, &held);
+        assert_eq!(reach, expected);
+    }
+}
+
+#[test]
+fn held_reach_opens_delegation_by_default() {
+    let snapshot = snapshot_with(vec![density_agent(
+        "fresh",
+        "claude",
+        AgentStatus::Idle,
+        None,
+        0,
+    )]);
+    let expansion = sections::CardExpansion::resolve(
+        &Default::default(),
+        &Default::default(),
+        CardDensityMode::Auto,
+        snapshot.rows().next().unwrap(),
+        SelectionReach::Held,
+    );
+    assert!(expansion.delegation);
+}
+
+#[test]
 fn stale_cards_shrink_only_unread_free_resting_history() {
     let mut snapshot = snapshot_with(vec![density_agent(
         "old",

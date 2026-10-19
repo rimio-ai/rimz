@@ -320,13 +320,13 @@ A card's lines are set by its stage, age, density, and selection reach. Within t
 | card | lines |
 |------|-------|
 | stale: read idle or done, quiet past `stale_after_secs` | one line: state, handle, description, cost, and age; selection, a held expansion, teammate reach, or a subagents and waits section clicked open restores the card |
-| fresh: idle, never prompted | identity, plus the description when it was launched with one |
-| fresh, selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
+| fresh: idle, never prompted, including teammates and held cards | identity, plus the description when it was launched with one |
+| fresh, live-selected | adds the empty meter `▢ 0%`, and animated dots (`.`, `..`, `...`) in the description slot when there is no description |
 | engaged, resting: after its first prompt | identity, description, meter, with `▢ 0%` until data arrives |
 | engaged, with subagents or waits | adds the subagents and waits line, except on unreached idle and done cards with their entries closed |
 | selected or held, engaged | adds the stats line (`▤ 0` until data arrives) below the meter and lists the subagent and wait entries below the card; only the live selection lights the spines |
 
-Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible matching teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. Previous selections keep their stats and entries, and their teammates' open shapes, until the layout freeze expires. Wheel ticks, unread-banner jumps, and toggles keep those cards open; explicit section toggles still apply immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
+Selecting an engaged card inserts its stats line below the meter and appends entries; the lines above the meter stay in place. When the selected agent belongs to a named team, every visible matching engaged teammate's card opens too, but without stats, and with its subagent and wait entries folded behind the `⧉ subagents (n)` / `⧖ waits (n)` summary line. Previous engaged selections keep their stats and entries, and their teammates' open shapes, until the layout freeze expires. Fresh teammates and held cards stay at identity plus any launch description. Wheel ticks, unread-banner jumps, and toggles keep those cards open; explicit section toggles still apply immediately. Only the live selection wears the selected spines. `card_density = "expanded"` keeps stats on every engaged card and lists entries everywhere, teammates included.
 
 `[theme.display] card_density` changes how much a resting card shows:
 

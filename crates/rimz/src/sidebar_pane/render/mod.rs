@@ -298,27 +298,10 @@ fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a S
     ui.visible_roster(snapshot).row(ui.selected_index?)
 }
 
-/// Live or held selection expands a bare, not-yet-prompted idle card whose
-/// compose affordance needs the breath animation grid. This can be the selected
-/// row itself or a visible named teammate expanded alongside it.
+/// Only the live-selected, not-yet-prompted idle card draws compose dots and
+/// needs their breath animation grid.
 fn expanded_row_awaiting_first_prompt(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
-    let roster = ui.visible_roster(snapshot);
-    roster.groups().iter().any(|group| {
-        group
-            .range()
-            .zip(group.rows(&roster).iter().copied())
-            .any(|(row_index, row)| {
-                sections::row_selection_reach(
-                    &roster,
-                    group,
-                    row_index,
-                    ui.selected_index,
-                    &ui.held_expansions,
-                )
-                .opens_card()
-                    && sections::awaiting_first_prompt_affordance(row)
-            })
-    })
+    selected_row(snapshot, ui).is_some_and(sections::awaiting_first_prompt_affordance)
 }
 
 /// Whether a visible card's open delegation section holds something in motion:
