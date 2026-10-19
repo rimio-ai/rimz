@@ -294,7 +294,9 @@ fn project_sub_agent(
                 degraded_subagent_label(&child.agent_id)
             })
     };
-    let silent_secs = child.silent_child_for(now, stalled_after_secs);
+    let silent_secs = child
+        .silent_child_for(now, stalled_after_secs)
+        .map(|(secs, _)| secs);
     let started_at = child.subagent_started_at.or(child.registered_at);
     let tokens = child_tokens(child);
     let context_window = if matches!(tokens, Some(SubAgentTokens::Window(_))) {

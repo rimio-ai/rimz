@@ -415,7 +415,7 @@ pub enum TurnCompletion {
 
 impl TurnCompletion {
     /// Decide from an effective status and the current turn's start stamp.
-    /// `Idle`/`Success` without a stamp is a registration that never opened a turn.
+    /// `Idle`/`Success` without a stamp is a promptless launch or registration that never opened a turn. A prompted launch stamps the clock at launch, and registration restamps it, so a stamp alone does not prove a first turn ran.
     pub fn of(status: AgentStatus, turn_started_at: Option<Timestamp>) -> Self {
         match status {
             AgentStatus::Failed => Self::Failed,
@@ -491,14 +491,7 @@ impl ContextSeverity {
 /// `last_activity`, [`is_stalled`] goes false, and the row leaves attention on
 /// the following snapshot with no human action.
 ///
-/// A `running` agent that has merely delegated to subagents is *not* stalled —
-/// its work is the children's heartbeats, not its own — so the projection
-/// caller suppresses this while a child holds its delegated turn (see the
-/// sidebar's "waiting for subagents" derivation). A silent native or launched child no
-/// longer holds it; `AgentState::silent_child_for` applies this same rule to
-/// children. A clean turn parked on background work
-/// settles to success in the sidebar projection before this predicate becomes
-/// relevant.
+/// A `running` agent that has merely delegated to subagents is *not* stalled — its work is the children's heartbeats, not its own — so the projection caller suppresses this while a child holds its delegated turn (see the sidebar's "waiting for subagents" derivation). A silent native or launched child no longer holds it; the child silence predicate also covers a prompted launched child whose first turn never started, without widening this root-row rule. A clean turn parked on background work settles to success in the sidebar projection before this predicate becomes relevant.
 pub fn is_stalled(
     status: AgentStatus,
     last_activity: Timestamp,
@@ -933,7 +926,7 @@ pub struct AgentState {
     pub subagent_started_at: Option<Timestamp>,
     /// When the current provider turn began, stamped from `opened_turn` or a context reset that rests a session after a turn opened (manual `/compact` or `/clear`). Used for budgets, delivery, and status; child retention uses `user_turn_started_at`.
     ///
-    /// First registration leaves it `None` until a turn opens. Stop, automatic mid-turn compaction, and a prompt waking a parked running row carry the stamp forward.
+    /// A prompted launch stamps it at launch, and registration restamps an existing start clock. A promptless launch's first registration leaves it `None` until a turn opens. Stop, automatic mid-turn compaction, and a prompt waking a parked running row carry the stamp forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// When the last provider request completed: a turn end, interruption, or successful compaction close. Carried across registration so resume does not move the idle-compaction clock.
@@ -1717,19 +1710,32 @@ impl AgentState {
         }
     }
 
-    /// Silence at the stall window for any open native or launched child.
-    /// Effective status and displayed errors exclude sleep, pause, and errors.
-    pub(crate) fn silent_child_for(&self, now: Timestamp, stalled_after_secs: u32) -> Option<u64> {
-        (self.parent_agent_id.is_some()
-            && self.ended_at.is_none()
-            && self.displayed_turn_error().is_none()
-            && is_stalled(
-                self.effective_status(),
-                self.last_activity,
-                now,
-                stalled_after_secs,
-            ))
-        .then(|| now.duration_since(self.last_activity).as_secs() as u64)
+    /// Silence seconds and cause at the stall window for an open child: silent mid-turn, or a prompted launched child resting before its first turn. Raw `Idle` and no end clock distinguish the latter from a settled interrupt or a finished request; the carried prompt excludes promptless launches. Effective status and displayed errors exclude sleep, pause, and errors.
+    pub(crate) fn silent_child_for(
+        &self,
+        now: Timestamp,
+        stalled_after_secs: u32,
+    ) -> Option<(u64, ChildStall)> {
+        if self.parent_agent_id.is_none()
+            || self.ended_at.is_some()
+            || self.displayed_turn_error().is_some()
+        {
+            return None;
+        }
+        let cause = match self.effective_status() {
+            AgentStatus::Running => ChildStall::MidTurn,
+            AgentStatus::Idle
+                if self.status == AgentStatus::Idle
+                    && self.is_launched_child()
+                    && self.prompt.is_some()
+                    && self.turn_ended_at.is_none() =>
+            {
+                ChildStall::NeverStarted
+            }
+            _ => return None,
+        };
+        let silent_secs = now.duration_since(self.last_activity).as_secs();
+        (silent_secs >= i64::from(stalled_after_secs)).then_some((silent_secs as u64, cause))
     }
 
     /// Displayed provider error label, falling back to the effective class words.
@@ -1891,6 +1897,12 @@ pub(crate) fn select_activity_description<'a>(
         .or_else(|| task.filter(|value| usable_description(value)))
         .or_else(|| first_prompt.filter(|value| usable_description(value)))
         .or_else(|| prompt.filter(|value| usable_description(value)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChildStall {
+    MidTurn,
+    NeverStarted,
 }
 
 #[cfg(test)]

@@ -1,6 +1,73 @@
 use super::*;
 
 #[test]
+fn registered_prompted_child_is_silent_even_after_registration_clears_its_task() {
+    for prompted in [false, true] {
+        let mut payload = launch_payload("child", "still-silver");
+        payload.launch.parent_agent_id = Some("parent".into());
+        payload.launch.launch_depth = Some(1);
+        payload.prompt = prompted.then(|| "gate the release".to_owned());
+        let mut launch = launch_event("codex", payload);
+        launch.timestamp = epoch();
+        let registered = raw_lifecycle_at(
+            "codex",
+            1,
+            json!({
+                "agent_id": "child", "signal": {"signal": "registered"}
+            }),
+        );
+        let states = reduce_agent_states(&[launch, registered.clone()]);
+        let child = &states[0];
+        assert_eq!(child.status, AgentStatus::Idle);
+        assert_eq!(
+            child.task, None,
+            "task is activity-bound, not a launch marker"
+        );
+        assert_eq!(child.prompt.is_some(), prompted);
+        assert_eq!(
+            child.turn_started_at,
+            prompted.then_some(registered.timestamp)
+        );
+        assert_eq!(child.turn_ended_at, None);
+        assert_eq!(
+            child.silent_child_for(epoch() + std::time::Duration::from_secs(3_601), 1_800),
+            prompted.then_some((3_600, crate::agents::state::ChildStall::NeverStarted))
+        );
+    }
+}
+
+#[test]
+fn a_launched_child_that_completes_its_first_turn_is_not_silent() {
+    let mut payload = launch_payload("child", "still-silver");
+    payload.launch.parent_agent_id = Some("parent".into());
+    payload.launch.launch_depth = Some(1);
+    let mut events = vec![launch_event("codex", payload)];
+    events[0].timestamp = epoch();
+    for (offset, signal) in [
+        (1, json!({"signal": "registered"})),
+        (2, json!({"signal": "turn_started"})),
+        (
+            3,
+            json!({"signal": "turn_ended", "errored": false, "parked_on_background": false}),
+        ),
+    ] {
+        events.push(raw_lifecycle_at(
+            "codex",
+            offset,
+            json!({"agent_id": "child", "signal": signal}),
+        ));
+    }
+    let states = reduce_agent_states(&events);
+    let child = &states[0];
+    assert_eq!(child.status, AgentStatus::Success);
+    assert_eq!(child.turn_ended_at, Some(events[3].timestamp));
+    assert_eq!(
+        child.silent_child_for(epoch() + std::time::Duration::from_secs(3_603), 1_800),
+        None
+    );
+}
+
+#[test]
 fn resumed_stamp_clears_on_the_next_lifecycle_and_survives_cache_roundtrip() {
     let resumed = raw_lifecycle_at(
         "claude",

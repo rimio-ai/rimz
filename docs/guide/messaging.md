@@ -273,7 +273,7 @@ Your sends arrive as `USER_MESSAGE` from `@user`. RimZ's own deliveries come fro
 - `SUBAGENT_REPORT`, the digest sent once an agent's launched subagents have all settled; `AGENT_REPORT` when the fleet includes solo agents.
 - `TEAM_REPORT`, the leader's final response and the team's board path when an agent-launched team reaches `Done` or ends before `Done`.
 - `SUBAGENT_PAUSED`, sent to a parent once each time one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stops on a provider usage limit.
-- `SUBAGENT_STALLED`, sent to a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent past the stall window.
+- `SUBAGENT_STALLED`, sent to a parent once per run when one of its [subagents](./subagents.md#deadlines-stopping-and-cleanup) stays silent mid-turn or has not started its first turn past the same stall window.
 - `MESSAGE_UNDELIVERED`, sent once to an agent sender when its message ends without delivery.
 - `MESSAGE_QUEUED`, sent once to an agent sender when its message stays queued past five minutes with a receiver not working, or twenty minutes with a receiver busy in a turn.
 - `DEADLINE`, the warnings and the stop request a subagent receives as its work deadline nears.

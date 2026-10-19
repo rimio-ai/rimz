@@ -227,7 +227,13 @@ upward-dependencies = ["address"]
 # `AgentState::compacted_since_prompt` gates keep-warm and idle compaction in harness (+1).
 # HookCapability::hook_inherits_env and definition::hook_owner_env restore scrubbed hook runners before path resolution (+2).
 # payload::is_task_notification_turn shares raw-notice recognition with human turn classification (+1).
-surface-budget = 1098
+# ChildStall shares the child predicate's mid-turn / never-started verdict (+1).
+surface-budget = 1099
+
+[[verdict]]
+kind = "item"
+key = "agents::state::ChildStall"
+reason = "Projection and parent notices share one child silence verdict without changing durable state."
 
 [[verdict]]
 kind = "item"

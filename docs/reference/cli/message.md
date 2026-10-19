@@ -157,7 +157,7 @@ Read plan.md when the planner finishes.
 | `AGENT_REPORT` | The status digest for a fleet containing solo agents, including background runs and interactive peers | `@rimz` |
 | `TEAM_REPORT` | The leader's final response, sent to the agent that launched a [team](./teams.md#team-reports) when its board reaches `Done` or the cohort ends before `Done` | `@rimz` |
 | `SUBAGENT_PAUSED` | A [subagent stopped on a provider limit](./subagents.md#a-child-paused-on-a-provider-limit), sent to its parent once per stop | `@rimz` |
-| `SUBAGENT_STALLED` | A [subagent silent past the stall window](./subagents.md#a-child-silent-past-the-stall-window), sent to its parent once per run | `@rimz` |
+| `SUBAGENT_STALLED` | A [subagent silent mid-turn or not yet started past the stall window](./subagents.md#a-child-silent-past-the-stall-window), sent to its parent once per run | `@rimz` |
 | `MESSAGE_UNDELIVERED` | An agent-sent message ended without delivery, sent once to its live sender | `@rimz` |
 | `MESSAGE_QUEUED` | An agent-sent message remains queued past five minutes with a receiver not working, or twenty minutes with a busy receiver, sent once to its live sender | `@rimz` |
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent | `@rimz` |
