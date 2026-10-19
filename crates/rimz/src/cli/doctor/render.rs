@@ -2287,7 +2287,7 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
     let mut visible = 0;
     for row in &loop_tasks.tasks {
         let unscheduled = loop_tasks.unscheduled.contains(&row.name);
-        if !tally.audit && row.valid && !unscheduled {
+        if !tally.audit && row.valid && !unscheduled && row.holds_worktrees.is_empty() {
             continue;
         }
         visible += 1;
@@ -2313,11 +2313,15 @@ fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks, tally: &mut Tally) ->
         } else {
             badge(Health::Info)
         };
+        let mut when = row.when.clone();
+        for held in &row.holds_worktrees {
+            when.push_str(&format!(" · holds worktree {}", held.name));
+        }
         table.row([
             badge,
             cell(&row.name).fg(palette::accent()),
             cell(&row.spec),
-            cell(&row.when),
+            cell(when),
             cell(home_relative(&row.root)).fg(palette::body()),
             if row.room_open {
                 cell("room open").fg(palette::good())

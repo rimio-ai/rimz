@@ -683,6 +683,15 @@ pub(super) struct LoopTaskRow {
     pub(super) root: String,
     pub(super) valid: bool,
     pub(super) room_open: bool,
+    pub(super) holds_worktrees: Vec<HeldWorktree>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+pub(super) struct HeldWorktree {
+    pub(super) path: std::path::PathBuf,
+    #[serde(skip)]
+    pub(super) name: String,
 }
 
 #[derive(Debug, Serialize)]
