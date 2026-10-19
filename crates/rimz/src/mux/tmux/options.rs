@@ -158,7 +158,7 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
             config.extended_keys_format.as_str().to_owned(),
         ),
     ];
-    if config.escape_time_ms <= i32::MAX as u32 {
+    if config.escape_time_ms <= TmuxConfig::INT_MAX {
         opts.push(("escape-time", config.escape_time_ms.to_string()));
     }
     if config.extended_keys {
@@ -255,7 +255,7 @@ pub(super) fn tmux_extended_key_bindings(config: &TmuxConfig) -> Vec<Vec<String>
 
 pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
     let mut opts = vec![("mouse", tmux_bool(config.mouse))];
-    if config.history_limit <= i32::MAX as u32 {
+    if config.history_limit <= TmuxConfig::INT_MAX {
         opts.push(("history-limit", config.history_limit.to_string()));
     }
     opts.extend([
@@ -560,7 +560,7 @@ mod tests {
                 .iter()
                 .any(|(key, _)| *key == "mouse")
         );
-        for value in [0, i32::MAX as u32] {
+        for value in [0, TmuxConfig::INT_MAX] {
             config.history_limit = value;
             config.escape_time_ms = value;
             assert!(tmux_session_options(&config).contains(&("history-limit", value.to_string())));
