@@ -109,11 +109,9 @@ impl HooksArgs {
         let Some(env) = rimz::agents::definition::hook_owner_env(source)? else {
             return Ok(());
         };
-        Err(std::process::Command::new(std::env::current_exe()?)
-            .args(std::env::args_os().skip(1))
-            .env_clear()
-            .envs(env)
-            .exec())
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        rimz::child_process::clear_env_preserving_coverage(&mut command);
+        Err(command.args(std::env::args_os().skip(1)).envs(env).exec())
     }
 
     /// The low-cardinality command label and the agent it acts on — the hook
@@ -211,8 +209,8 @@ fn process_in_child(
         .create(true)
         .append(true)
         .open(log_path)?;
+    rimz::child_process::clear_env_preserving_coverage(&mut command);
     command
-        .env_clear()
         .envs(&frame.env)
         .current_dir(&frame.cwd)
         .stdin(Stdio::from(std::os::fd::OwnedFd::from(input)))
