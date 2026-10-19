@@ -238,7 +238,7 @@ The notice does not end or change the run, and it is not the fleet report: the r
 
 ## A child silent past the stall window
 
-Any child still running but silent for `[agents.attention] stalled_after_secs` (default `1800`) receives a labelled `!` in the sidebar. Provider-native children lift the parent card's attention but send no notice. A child sleeping on a wait, paused, or already showing an error does not trigger the silence check. For a launched child, the parent gets one message parked for its next eligible turn boundary:
+Any child still running but silent for `[agents.attention] stalled_after_secs` (default `1800`) receives a labelled `!` in the sidebar. The same window covers a launched child given a task that has not started its first turn, whether or not it has registered. A promptless interactive child waiting for a human is excluded. Provider-native children lift the parent card's attention but send no notice. A child sleeping on a wait, paused, or already showing an error does not trigger the silence check. For a launched child, the parent gets one message parked for its next eligible turn boundary:
 
 ```text
 Type: SUBAGENT_STALLED
@@ -247,7 +247,7 @@ Content:
 @still-silver has been silent for 32m and is still running; its pane is open. Its run stays open until its deadline in 24m. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere.
 ```
 
-The deadline clause is omitted when there is no deadline, or reads `, past its deadline, until it is stopped` after the deadline. The notice is once per run, even if the child recovers and stalls again or a follow-up reopens that run. Fresh activity clears the sidebar's stall label. The notice leaves the run open and does not replace its eventual fleet report. Detection needs the room's sidebar producer; delivery waits for the parent's next eligible boundary. The notice attempt is recorded in [assists](../../internals/harness/loops.md#the-assist-log) and shown by `rimz stats`.
+For a never-started child, the opening instead reads `@still-silver has not started its first turn for 32m; its pane is open.` The deadline clause is omitted when there is no deadline, or reads `, past its deadline, until it is stopped` after the deadline. The notice is once per run, even if the child recovers and stalls again or a follow-up reopens that run. Fresh activity clears the sidebar's stall label. The notice leaves the run open and does not replace its eventual fleet report. Detection needs the room's sidebar producer; delivery waits for the parent's next eligible boundary. The notice attempt is recorded in [assists](../../internals/harness/loops.md#the-assist-log) and shown by `rimz stats`.
 
 ## Stop children
 

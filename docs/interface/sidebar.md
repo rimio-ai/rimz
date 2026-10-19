@@ -60,7 +60,7 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | glyph | status | meaning | needs you |
 |-------|--------|---------|-----------|
 | `?` | waiting | asked you something: a permission, a plan approval, a question | yes |
-| `!` | failed | the turn errored, died on a provider API error, went silent past the stall window, or repeated one tool call 20 times | yes |
+| `!` | failed | the turn errored, died on a provider API error, went silent past the stall window (also a launched child whose first turn never started), or repeated one tool call 20 times | yes |
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
 | `⢿` | working | running a turn; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |

@@ -2,6 +2,77 @@ use super::*;
 use crate::agents::TurnSettle;
 
 #[test]
+fn silent_child_includes_a_prompted_launch_that_never_started() {
+    let mut child = test_agent(AgentStatus::Idle, 1_000);
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.prompt = Some("gate the release".to_owned());
+    child.turn_started_at = Some(child.last_activity);
+    let now = Timestamp::from_second(2_800).unwrap();
+    assert_eq!(child.silent_child_for(now, 1_801), None);
+    assert_eq!(
+        child.silent_child_for(now, 1_800),
+        Some((1_800, ChildStall::NeverStarted))
+    );
+}
+
+#[test]
+fn silent_child_excludes_rested_unprompted_and_nonworking_children() {
+    let mut child = test_agent(AgentStatus::Idle, 1_000);
+    child.parent_agent_id = Some("parent".into());
+    child.launch_depth = Some(1);
+    child.prompt = Some("gate the release".to_owned());
+    let now = Timestamp::from_second(2_800).unwrap();
+    for change in 0..10 {
+        let mut child = child.clone();
+        match change {
+            0 => child.turn_ended_at = Some(child.last_activity),
+            1 => child.launch_depth = None,
+            2 => child.prompt = None,
+            3 => child.parent_agent_id = None,
+            4 => child.ended_at = Some(child.last_activity),
+            5 => child.status = AgentStatus::Waiting,
+            6 => child.status = AgentStatus::Paused,
+            7 => child.pending_waits.push(PendingWait {
+                name: "wait-command".to_owned(),
+                trigger: PendingWaitTrigger::Command {
+                    command: "cargo test".to_owned(),
+                },
+                armed_at: Some(child.last_activity),
+            }),
+            8 => {
+                child.budget_park = Some(BudgetPark {
+                    cap_usd: 1.0,
+                    spend_usd: 1.0,
+                    window: BudgetWindow::Day,
+                    at: child.last_activity,
+                    scope: BudgetScope::Agent,
+                    account_kind: None,
+                    resets_at: None,
+                })
+            }
+            _ => {
+                child.status = AgentStatus::Running;
+                child.context = Some(context_settle(Some(1_010), TurnSettleOutcome::Interrupted));
+                assert_eq!(child.effective_status(), AgentStatus::Idle);
+            }
+        }
+        assert_eq!(
+            child.silent_child_for(now, 1_800),
+            None,
+            "condition {change}"
+        );
+    }
+    child.status = AgentStatus::Running;
+    assert_eq!(
+        child.silent_child_for(now, 1_800),
+        Some((1_800, ChildStall::MidTurn))
+    );
+    child.context = Some(context_error(TurnErrorClass::Failed, 1_010));
+    assert_eq!(child.silent_child_for(now, 1_800), None);
+}
+
+#[test]
 fn a_molt_successor_stands_until_it_ends_or_fails_before_registration() {
     let predecessor = AgentSessionId::from("launch_old");
     let mut successor = test_agent(AgentStatus::Running, 1_000);

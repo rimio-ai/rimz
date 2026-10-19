@@ -71,6 +71,38 @@ fn silent_launched_child_is_labelled_and_recovers_on_a_fresh_heartbeat() {
 }
 
 #[test]
+fn never_started_launched_child_uses_the_same_stall_label_and_window() {
+    let parent = agent("claude", "root", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(3_600)
+        .in_pane("%1");
+    let mut child = child_state("root", "child", AgentStatus::Idle, 119);
+    child.launch_depth = Some(1);
+    child.prompt = Some("gate the release".to_owned());
+    let project = |child: AgentState| {
+        let mut snapshot = room(vec![parent.clone(), child]);
+        snapshot.attention.stalled_after_secs = std::num::NonZeroU32::new(120).unwrap();
+        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+    };
+    let snapshot = project(child.clone());
+    let projected = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Idle);
+    assert!(!projected.stalled);
+    assert_eq!(projected.turn_error_label, None);
+    child.last_activity = ago(120);
+    let snapshot = project(child);
+    let projected = &row(&snapshot, "root").sub_agents()[0];
+    assert_eq!(projected.status, AgentStatus::Failed);
+    assert!(projected.stalled);
+    assert_eq!(projected.turn_error_label.as_deref(), Some("silent 2m"));
+    assert_eq!(
+        row(&snapshot, "root").status(),
+        Some(AgentStatus::Failed),
+        "a silent child releases the parent's delegated turn"
+    );
+}
+
+#[test]
 fn child_stall_uses_the_configured_window_but_not_sleep_or_errors() {
     let parent = agent("claude", "root", AgentStatus::Idle, 0)
         .worktree("/repo/main")

@@ -1,4 +1,4 @@
-//! A silent launched child and the one notice its parent gets per run.
+//! A launched child silent mid-turn or never started, and its one parent notice per run.
 //!
 //! Evaluation reads the producer's heartbeat-folded agents. Durable claims,
 //! messages and assists belong to the detached helper, not the sidebar graph.
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
 use crate::agents::AgentState;
+use crate::agents::state::ChildStall;
 use crate::ids::{RunId, WorkspaceId};
 use crate::store::run::{ReportTo, RunRecord};
 use crate::store::snapshot::find_agent;
@@ -25,6 +26,7 @@ pub struct UnnoticedStall<'a> {
     pub child: &'a AgentState,
     pub parent: &'a AgentState,
     pub silent_secs: u64,
+    cause: ChildStall,
 }
 
 /// Select a launcher-reporting run's unnoticed stall from heartbeat-folded agents.
@@ -41,14 +43,30 @@ pub fn unnoticed_stall<'a>(
     {
         return None;
     }
-    let child = find_agent(agents, run.kind.as_str(), run.agent_id.as_ref()?)?;
-    let silent_secs = child.silent_child_for(now, stalled_after_secs)?;
+    let child = match &run.agent_id {
+        Some(id) => find_agent(agents, run.kind.as_str(), id)?,
+        None => {
+            let name = run.agent_name.as_deref()?;
+            agents.iter().find(|child| {
+                child.kind == run.kind
+                    && child.name.as_deref() == Some(name)
+                    && child.is_launched_child()
+                    && child.ended_at.is_none()
+            })?
+        }
+    };
+    let (silent_secs, cause) = child.silent_child_for(now, stalled_after_secs)?;
     let parent = crate::address::launched_parent(agents, child)
         .filter(|parent| parent.ended_at.is_none())?;
     Some(UnnoticedStall {
         child,
         parent,
         silent_secs,
+        cause: if run.agent_id.is_none() {
+            ChildStall::NeverStarted
+        } else {
+            cause
+        },
     })
 }
 
@@ -97,7 +115,9 @@ pub(crate) fn notify_parents(
 }
 
 /// Name the silent child, the still-open run, and the parent's three moves.
-pub fn text(child: &AgentState, run: &RunRecord, silent_secs: u64, now: Timestamp) -> String {
+pub fn text(stall: &UnnoticedStall<'_>, run: &RunRecord, now: Timestamp) -> String {
+    let child = stall.child;
+    let silent_secs = stall.silent_secs;
     let handle = format!(
         "@{}",
         child
@@ -106,6 +126,10 @@ pub fn text(child: &AgentState, run: &RunRecord, silent_secs: u64, now: Timestam
             .unwrap_or_else(|| child.agent_id.to_string())
     );
     let silence = format_duration_coarse(i64::try_from(silent_secs).unwrap_or(i64::MAX));
+    let activity = match stall.cause {
+        ChildStall::MidTurn => format!("has been silent for {silence} and is still running"),
+        ChildStall::NeverStarted => format!("has not started its first turn for {silence}"),
+    };
     let deadline = match run.deadline_at {
         Some(at) if at > now => format!(
             " until its deadline in {}",
@@ -115,7 +139,7 @@ pub fn text(child: &AgentState, run: &RunRecord, silent_secs: u64, now: Timestam
         None => String::new(),
     };
     format!(
-        "{handle} has been silent for {silence} and is still running; its pane is open. Its run stays open{deadline}. RimZ will not stop it: look with `rimz pane capture {handle}`, stop it with `rimz subagents stop {handle}`, or relaunch the task elsewhere."
+        "{handle} {activity}; its pane is open. Its run stays open{deadline}. RimZ will not stop it: look with `rimz pane capture {handle}`, stop it with `rimz subagents stop {handle}`, or relaunch the task elsewhere."
     )
 }
 
@@ -141,6 +165,7 @@ mod tests {
         child.parent_agent_id = Some(parent.agent_id.clone());
         child.parent_agent_kind = Some(parent.kind.clone());
         child.launch_depth = Some(1);
+        child.prompt = Some("gate".to_owned());
         child.last_activity = now() - Duration::from_secs(1_920);
         let mut run = RunRecord::new(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/stall-notice")),
@@ -152,6 +177,7 @@ mod tests {
         run.subagent = true;
         run.status = RunStatus::Running;
         run.agent_id = Some(child.agent_id.clone());
+        run.agent_name = Some("still-silver".to_owned());
         (vec![parent, child], run)
     }
 
@@ -183,7 +209,10 @@ mod tests {
             match change {
                 0 => run.subagent = false,
                 1 => run.report_to = ReportTo::Nobody,
-                2 => run.agent_id = None,
+                2 => {
+                    run.agent_id = None;
+                    run.agent_name = None;
+                }
                 3 => run.agent_id = Some("missing".into()),
                 4 => run.kind = crate::ids::AgentKind::new_unchecked("pi"),
                 _ => run.stall_noticed_at = Some(now()),
@@ -205,7 +234,6 @@ mod tests {
             assert!(!eligible(&run, &agents), "agent condition {change}");
         }
         for status in [
-            AgentStatus::Idle,
             AgentStatus::Success,
             AgentStatus::Paused,
             AgentStatus::Failed,
@@ -215,6 +243,10 @@ mod tests {
             agents[1].status = status;
             assert!(!eligible(&run, &agents), "{status:?}");
         }
+        let mut interrupted = agents.clone();
+        interrupted[1].status = AgentStatus::Idle;
+        interrupted[1].turn_ended_at = Some(now());
+        assert!(!eligible(&run, &interrupted));
         let mut sleeping = agents.clone();
         sleeping[1].status = AgentStatus::Idle;
         sleeping[1].pending_waits.push(PendingWait {
@@ -242,6 +274,62 @@ mod tests {
             errored[1].context = Some(context);
             assert!(!eligible(&run, &errored), "{class:?}");
         }
+    }
+
+    #[test]
+    fn a_prompted_child_resting_before_its_first_turn_owes_a_notice() {
+        let (mut agents, run) = silent();
+        agents[1].status = AgentStatus::Idle;
+        agents[1].turn_started_at = Some(agents[1].last_activity);
+        assert!(unnoticed_stall(&run, &agents, now(), 1_921).is_none());
+        let stall = unnoticed_stall(&run, &agents, now(), 1_800).expect("first turn never started");
+        assert_eq!(stall.cause, ChildStall::NeverStarted);
+        assert_eq!(stall.silent_secs, 1_920);
+    }
+
+    #[test]
+    fn an_unbound_run_finds_its_silent_provisional_child_by_kind_and_name() {
+        let (agents, mut run) = silent();
+        run.agent_id = None;
+        assert!(unnoticed_stall(&run, &agents, now(), 1_921).is_none());
+        let stall = unnoticed_stall(&run, &agents, now(), 1_800).expect("provisional child");
+        assert_eq!(stall.cause, ChildStall::NeverStarted);
+        assert_eq!(stall.child.agent_id.as_str(), "child");
+        assert_eq!(stall.silent_secs, 1_920);
+    }
+
+    #[test]
+    fn provisional_lookup_requires_the_launched_childs_kind_name_and_open_lifetime() {
+        let (agents, mut run) = silent();
+        run.agent_id = None;
+        for change in 0..5 {
+            let mut agents = agents.clone();
+            let mut run = run.clone();
+            match change {
+                0 => run.agent_name = Some("missing".to_owned()),
+                1 => run.kind = crate::ids::AgentKind::new_unchecked("pi"),
+                2 => agents[1].launch_depth = None,
+                3 => agents[1].ended_at = Some(now()),
+                _ => run.agent_id = Some("missing".into()),
+            }
+            assert!(!eligible(&run, &agents), "condition {change}");
+        }
+    }
+
+    #[test]
+    fn text_names_the_first_turn_silence_deadline_and_the_parents_moves() {
+        let (agents, mut run) = silent();
+        run.deadline_at = Some(now() + Duration::from_secs(24 * 60 + 5));
+        let stall = UnnoticedStall {
+            child: &agents[1],
+            parent: &agents[0],
+            silent_secs: 1_920,
+            cause: ChildStall::NeverStarted,
+        };
+        assert_eq!(
+            text(&stall, &run, now()),
+            "@still-silver has not started its first turn for 32m; its pane is open. Its run stays open until its deadline in 24m. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere."
+        );
     }
 
     #[test]
@@ -275,22 +363,40 @@ mod tests {
         let (mut agents, mut run) = silent();
         run.deadline_at = Some(now() + Duration::from_secs(24 * 60 + 5));
         assert_eq!(
-            text(&agents[1], &run, 1_920, now()),
+            text(
+                &unnoticed_stall(&run, &agents, now(), 1_800).unwrap(),
+                &run,
+                now()
+            ),
             "@still-silver has been silent for 32m and is still running; its pane is open. Its run stays open until its deadline in 24m. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere."
         );
         run.deadline_at = Some(now());
         assert!(
-            text(&agents[1], &run, 1_920, now())
-                .contains("Its run stays open, past its deadline, until it is stopped.")
+            text(
+                &unnoticed_stall(&run, &agents, now(), 1_800).unwrap(),
+                &run,
+                now()
+            )
+            .contains("Its run stays open, past its deadline, until it is stopped.")
         );
         run.deadline_at = None;
         agents[1].name = None;
+        agents[1].last_activity = now() - Duration::from_secs(9 * 3_600);
         assert!(
-            text(&agents[1], &run, 9 * 3_600, now()).starts_with("@child has been silent for 9h")
+            text(
+                &unnoticed_stall(&run, &agents, now(), 1_800).unwrap(),
+                &run,
+                now()
+            )
+            .starts_with("@child has been silent for 9h")
         );
         assert!(
-            text(&agents[1], &run, 1_920, now())
-                .contains("Its run stays open. RimZ will not stop it:")
+            text(
+                &unnoticed_stall(&run, &agents, now(), 1_800).unwrap(),
+                &run,
+                now()
+            )
+            .contains("Its run stays open. RimZ will not stop it:")
         );
     }
 }

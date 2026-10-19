@@ -44,7 +44,7 @@ pub(super) fn run(request: StallNoticeRequest) -> Result<()> {
     }
     let message = SyntheticMessage {
         agent: stall.parent,
-        text: text(stall.child, &run, stall.silent_secs, now),
+        text: text(&stall, &run, now),
         sender: MessageSender::Harness {
             notice: HarnessNotice::SubagentStalled,
         },

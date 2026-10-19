@@ -2904,6 +2904,166 @@ fn silent_child_tells_its_parent_once_and_records_the_queued_assist() {
 
 #[cfg(unix)]
 #[test]
+fn registered_child_that_never_starts_tells_its_parent_once_and_records_the_queued_assist() {
+    never_started_child_notice(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn provisional_child_that_never_registers_tells_its_parent_once_and_records_the_queued_assist() {
+    never_started_child_notice(false);
+}
+
+#[cfg(unix)]
+fn never_started_child_notice(registered: bool) {
+    use rimz::harness::stall_notice::StallNoticeRequest;
+    use rimz::store::message::{DeliveryGate, MessageSender};
+
+    let env = Env::new();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    store.record_workspace(&workspace).unwrap();
+    let parent_kind = AgentKind::new_unchecked("claude");
+    let parent_id = AgentSessionId::from("planner-session");
+    let child_kind = AgentKind::new_unchecked("codex");
+    let child_id = AgentSessionId::from("launch_child");
+    let launched_at = jiff::Timestamp::now() - std::time::Duration::from_secs(3_600);
+    for (kind, id, name, launch, prompt, state) in [
+        (
+            &parent_kind,
+            &parent_id,
+            "planner",
+            LaunchParams::default(),
+            None,
+            AgentLaunchState::Bound,
+        ),
+        (
+            &child_kind,
+            &child_id,
+            "still-silver",
+            LaunchParams {
+                parent_agent_id: Some(parent_id.clone()),
+                parent_agent_kind: Some(parent_kind.clone()),
+                launch_depth: Some(1),
+                ..Default::default()
+            },
+            Some("gate the release".to_owned()),
+            AgentLaunchState::Starting,
+        ),
+    ] {
+        let mut event = EventEnvelope::agent_launched(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            kind,
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: id.clone(),
+                launch_id: None,
+                agent_name: name.to_owned(),
+                agent_name_explicit: true,
+                launch,
+                state,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt,
+                description: None,
+            },
+        );
+        event.timestamp = launched_at;
+        store.append_event(&event).unwrap();
+    }
+    let bound_id = AgentSessionId::from("child-session");
+    if registered {
+        let mut observation =
+            AgentLifecycleObservation::new(Some(bound_id.clone()), LifecycleSignal::Registered);
+        observation.agent_name = Some("still-silver".to_owned());
+        let mut event = EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            child_kind.as_str(),
+            "SessionStart",
+            &observation,
+        );
+        event.timestamp = launched_at;
+        store.append_event(&event).unwrap();
+    }
+    let mut run = rimz::store::run::RunRecord::new(
+        workspace.workspace_id.clone(),
+        child_kind,
+        rimz::agents::PermissionMode::Auto,
+        "gate the release".to_owned(),
+        env.project_root.clone(),
+    );
+    run.agent_id = registered.then_some(bound_id);
+    run.agent_name = Some("still-silver".to_owned());
+    run.subagent = true;
+    run.status = rimz::store::run::RunStatus::Running;
+    rimz::harness::run::create(store.paths(), &run).unwrap();
+    let notify = |window| {
+        env.rimz()
+            .args(rimz::child_process::agent_helper_argv(
+                "stall-notice",
+                &StallNoticeRequest {
+                    workspace_id: workspace.workspace_id.clone(),
+                    run_id: run.run_id.clone(),
+                    stalled_after_secs: window,
+                },
+            ))
+            .assert()
+            .success();
+    };
+    let notices = || {
+        store
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                serde_json::to_value(&message.sender).unwrap()["notice"] == "subagent_stalled"
+            })
+            .collect::<Vec<_>>()
+    };
+    notify(7_200);
+    assert!(notices().is_empty(), "inside the configured window");
+    notify(1_800);
+    notify(1_800);
+    let queued = notices();
+    assert_eq!(queued.len(), 1, "one never-started notice per run");
+    assert_eq!(queued[0].agent_id, parent_id);
+    assert_eq!(queued[0].gate, DeliveryGate::Done);
+    assert!(matches!(queued[0].sender, MessageSender::Harness { .. }));
+    assert_eq!(
+        queued[0].text,
+        "@still-silver has not started its first turn for 1h; its pane is open. Its run stays open. RimZ will not stop it: look with `rimz pane capture @still-silver`, stop it with `rimz subagents stop @still-silver`, or relaunch the task elsewhere."
+    );
+    let stamped = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert!(stamped.stall_noticed_at.is_some());
+    assert_eq!(stamped.status, rimz::store::run::RunStatus::Running);
+    let stats = env
+        .rimz()
+        .args(["stats", "--assists", "--all", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        stats.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["rollup"]["stall_notices"], 1);
+    assert_eq!(stats["events"].as_array().unwrap().len(), 1);
+    assert_eq!(stats["events"][0]["assist"], "stall_notice");
+    assert_eq!(
+        stats["events"][0]["message_id"],
+        queued[0].message_id.to_string()
+    );
+    assert!(stats["events"][0]["silent_secs"].as_u64().unwrap() >= 3_600);
+}
+
+#[cfg(unix)]
+#[test]
 fn explain_uses_the_room_account_before_a_launch_batch_exists() {
     let env = Env::new();
     assert!(init_launch_repo(&env.project_root));
