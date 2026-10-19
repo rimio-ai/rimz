@@ -415,6 +415,51 @@ fn attaching_a_pane_takes_its_session_out_of_pending_recovery() {
 }
 
 #[test]
+fn attaching_a_seeded_pane_keeps_its_session_pending() {
+    use crate::store::pending_recovery;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).expect("state paths");
+    let runtime = RuntimePaths::under(workspace, dir.path()).expect("runtime paths");
+    let store = Store::open(paths.clone(), runtime).expect("store");
+    std::fs::create_dir_all(paths.pending_recovery.parent().expect("record parent"))
+        .expect("record directory");
+    std::fs::write(
+        &paths.pending_recovery,
+        r#"{"version":1,"agents":[["claude","resumed"]],"seeded":[["claude","resumed"]]}"#,
+    )
+    .expect("seeded record");
+    let before = std::fs::read(&paths.pending_recovery).expect("record");
+    let kind = AgentKind::new_unchecked("claude");
+    let agent_id = AgentSessionId::from("resumed");
+
+    store
+        .attach_agent_pane(
+            &kind,
+            &agent_id,
+            None,
+            &crate::ids::LoginName::default(),
+            "rimz-test",
+            &crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%4"),
+            crate::pane::RuntimeOwner::new(RuntimeOwnerKind::Agent, agent_id.as_str(), 43, None),
+            None,
+            None,
+            None,
+        )
+        .expect("attach");
+
+    assert_eq!(
+        pending_recovery::read(&paths.pending_recovery),
+        [(kind, agent_id)].into()
+    );
+    assert_eq!(
+        std::fs::read(&paths.pending_recovery).expect("record"),
+        before
+    );
+}
+
+#[test]
 fn launch_event_builder_omits_blank_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

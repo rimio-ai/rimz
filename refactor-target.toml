@@ -1292,7 +1292,18 @@ path = "crates/rimz/src/store"
 # card_status shares displayed status and phase resolution with CLI consumers (+1).
 # workflow::RunRecord::started_by shares live task-run selection with the CLI (+1).
 # GcPolicy and tmp inventory, hold, unit and grace predicate serve both GC passes (+5).
-surface-budget = 476
+# pending_recovery::{seed, confirm} share locked tab-confirmation transitions with rebirth (+2).
+surface-budget = 478
+
+[[verdict]]
+kind = "item"
+key = "store::pending_recovery::seed"
+reason = "Rebirth replaces confirmation markers and settles ended keys in one workspace-locked write."
+
+[[verdict]]
+kind = "item"
+key = "store::pending_recovery::confirm"
+reason = "Rebirth releases confirmed agents and returns unconfirmed agents to parked in one locked write."
 
 [[verdict]]
 kind = "item"
