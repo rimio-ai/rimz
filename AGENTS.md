@@ -131,7 +131,7 @@ rimz events emit deploy.done         # fire a signal for whoever is listening
 
 This indexes what lives where. Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHITECTURE.md), and each module's `//!` header is the per-file authority.
 
-**Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, and the `presence/`, `pricing/`, and `themes/` data that `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `loops/` (one directory per isolated automation task), `examples/` (user-facing sample configuration, read only on request), `ci/`, `docker/`, `scripts/`, `supply-chain/`.
+**Repository** — `crates/rimz/` (the binary plus the runtime/domain library; `benches/`, contributor sidebar stories in `scenarios/`, and the `presence/`, `pricing/`, and `themes/` data that `build.rs` embeds), `crates/rimz-presence-zellij/` (headless Zellij presence plugin, wasm32-wasip1, no rimz-crate deps), `docs/` (product and engineering docs; `docs/externals/` mirrors upstream), `xtask/` (task runner and every gate), `loops/` (one directory per isolated automation task), `examples/` (user-facing sample configuration, read only on request), `ci/`, `docker/`, `scripts/`, `supply-chain/`.
 
 **Subsystems** in `crates/rimz/src/`, each carrying its own `AGENTS.md` contract:
 
@@ -190,5 +190,5 @@ Every other document is a leaf from here, grouped by purpose: **interface** (see
 - [model-upgrades.md](./docs/contributing/model-upgrades.md) — what a new provider model needs: the Codex alias table, its effort check, and the two pricing cases upstream leaves silent.
 - [atlas.md](./docs/contributing/atlas.md) — operating guide for `cargo xtask atlas`: the five verbs (including raw index diagnosis), the pass contract, and the `refactor-target.toml` schema.
 - [refactor-program.md](./docs/contributing/refactor-program.md) — the whole-repository refactor as rounds of passes: the pass kinds (seam, module, complexity, tooling) and the edge-layer rule, running a round, running a pass, what a pass records, and merging; [refactor-ledger.md](./docs/contributing/refactor-ledger.md) is the memory between passes and the program's current status.
-- [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor PNG capture workflow for sidebar frames.
+- [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor scenario playback and PNG capture workflow for sidebar frames.
 - [sidebar-live-check.md](./docs/contributing/sidebar-live-check.md) — live sidebar clock, stage-flip, and click-routing checks in disposable tmux and Zellij rooms, the native-subagent replay, a recorded kitty-graphics capture with its Ghostty parser replay, and a loop agent check against a real provider.

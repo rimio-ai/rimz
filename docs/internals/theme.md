@@ -194,7 +194,7 @@ Four checks in [`xtask/src/invariants.rs`](../../xtask/src/invariants.rs) guard 
 | `ensure_no_hardcoded_ui_colors` | Sidebar render code names a `Component` or a semantic accessor, never a ratatui `Color` variant. Only `Color::Reset` may be written by hand; `Indexed` and `Rgb` values come from the theme pipeline. The render-side `theme.rs`, its `theme/` directory, and the ANSI quantizer `ansi.rs` are exempt. |
 | `ensure_cli_color_provenance` | CLI colors resolve through `cli/render/palette.rs` accessors; no other CLI file constructs an `anstyle` color. |
 | `ensure_no_hardcoded_glyphs` | Sidebar render code outside `render/animation.rs` writes none of the catalog's shipped glyph literals (a fixed list in the check) outside comments; it reads them through `Theme::glyph`. |
-| `ensure_brand_resolution_single_home` | Only the agent definition modules, `theme/provider.rs`, and the sidebar fixture read a definition's brand color field directly; everything else resolves brand through the theme core. |
+| `ensure_brand_resolution_single_home` | Only the agent definition modules and `theme/provider.rs` read a definition's brand color field directly; everything else, including scenario presets, resolves brand through the theme core. |
 
 ## Where to make a change
 

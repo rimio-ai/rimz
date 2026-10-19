@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn scenario_and_frames_are_screenshot_commands() {
+    for command in ["scenario", "frames"] {
+        let result = screenshot(Path::new("."), &[command.into(), "--help".into()]);
+        assert!(result.is_ok(), "{command} unavailable: {result:?}");
+    }
+}
+
+#[test]
 fn frame_grid_measures_ansi_rows_and_zero_width_variation_selectors() {
     let ansi = "\x1b[38;2;1;2;3m☀\u{fe0e} fleet\x1b[0m\n\x1b[48;2;4;5;6mready\x1b[0m\n";
     assert_eq!(frame_grid(ansi.as_bytes()), (7, 2));

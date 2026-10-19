@@ -37,13 +37,46 @@ The task fails at entry when `freeze`, `rsvg-convert`, or the required Cascadia 
 
 For either capture command, `--lines N` renders the last `N` lines, reaching into scrollback on both backends. Trailing blank rows do not count; a pane with fewer content lines renders fewer. Without `--lines`, the visible screen is unchanged.
 
-`cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--output PATH]` renders deterministic fixture frames through the same headless sidebar renderer used by tests. `cockpit` (fleet breadth), `focus` (expanded team cards and the remote footer), `economy` and `reach` (provider spend; pets appear in the gallery with `--pets`) are packed gallery states for review. A fixture card carries only state its agent kind can reach on a default configuration: a cache clock goes on a Claude or Codex card, since only those adapters declare a prompt-cache lifetime.
+`cargo xtask screenshot scenario <file.scn> [--at 0s] [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]` plays from zero to the requested time through the real sidebar loop and renders its ANSI frame as a PNG. Without geometry overrides it uses the scenario's dimensions.
 
 Live sidebar state can also be captured as line-oriented terminal output without the mux through `rimz sidebar frame`.
 
-`cargo run --quiet -p rimz --bin rimz --features testkit -- sidebar gallery [--pets]` opens one frameless compositor pane in the current room with those packed states side by side, split by thin `│` delimiter rules and no real sidebar dock; outside any mux session, the same command renders the compositor inline in the current terminal. The contributor-only gallery and fixture verbs require this `testkit` build. The compositor chooses four columns when the terminal is wider than 240 columns and three at or below that width, decided once at launch. `--pets` turns the dashboard companion on in every column.
+`cargo xtask screenshot frames <dir>` writes a PNG beside each key-frame `.ansi` in a `sidebar play --frames` export, including nested scenario directories.
 
 Set `RIMZ_BIN=/path/to/rimz` to capture with a specific binary. Without it, `xtask` runs the current checkout through `cargo run --quiet -p rimz --bin rimz --features testkit -- ...`.
+
+## Scripted playback
+
+`sidebar play` is hidden and requires a `testkit` build. Checked-in stories live in `crates/rimz/scenarios/`: `pilot.scn` animates delegation, a countdown, an ask held by a layout freeze, its release, and completion. The other files cover the former still scenes, including both clock glyph sets. Cards contain only state their provider can reach on a default configuration.
+
+```sh
+cargo run --quiet -p rimz --bin rimz --features testkit -- sidebar play crates/rimz/scenarios/pilot.scn --check
+cargo run --quiet -p rimz --bin rimz --features testkit -- sidebar play crates/rimz/scenarios/pilot.scn --frames "$TMPDIR/sidebar-frames"
+cargo xtask screenshot frames "$TMPDIR/sidebar-frames"
+cargo xtask screenshot scenario crates/rimz/scenarios/pilot.scn --at 17s -o "$TMPDIR/sidebar-ask.png"
+```
+
+On a terminal, `sidebar play <file.scn>...` plays inline with one fixed-width column per file. Columns must fit at launch; later resizes clip them. Space pauses, left/right seeks to a beat, `r` restarts, `h` hides the reserved status row, and `q`, Escape or Ctrl-C quits. Other input follows the pointer to the column's native input path. A saved file reloads at its current time; a bad save keeps the last good story playing and shows its parse error, even when the status row is hidden.
+
+For agent review, `--at 17s` prints labelled physical rows, `--at 17s --ansi` emits raw ANSI for one file, and `--at 17s --section @coder#main` selects one card. `#main` selects a group and all its cards; other section names are `cockpit`, `providers`, and `chrome`. Process rows use `<process name>#<group label>`; padding has an empty label. Section filtering happens after full-frame layout. With `--at` or `--frames`, `--height N`, `--width N`, `--theme-mode auto|truecolor|256`, and `--theme-scheme NAME` override rendering without editing the story. `--frames` writes labelled text and `index.jsonl` with timestamps, beat labels, changed sections and key-frame filenames; key frames retain ANSI for colour review. Unchanged beat/deadline key frames remain in the index. Ordinary frames freeze cosmetic animation; `--motion 6s..9s` exports every paint in that window with animation enabled. A pipe without `--at`, `--frames`, or `--check` refuses before terminal output.
+
+### Scenario format
+
+A `.scn` is UTF-8 with one statement per line. An optional header precedes at most one preset, then `agent @handle kind [in #channel|worktree]` declarations (root by default), then non-decreasing timed beats. A `# ` starts a comment or trailing beat label; `#main` is a channel. Header defaults are the file stem, width 54, headless height 34, pets off, and a length three seconds after the last beat. Every beat must be strictly before the length. Durations accept `500ms`, `1.5s`, and `1m30s`.
+
+```text
+scenario review width 54 height 34 length 12s pets off glyphs unicode
+agent @coder codex in #main
+0s @coder runs "implement the parser" # opening
+2s @coder spawns @fox claude "review the parser"
+4s @fox done "looks good"
+5s @coder asks "ship it?"
+6s ui expand @coder
+8s @coder answered
+9s @coder done "shipped"
+```
+
+Presets are `empty`, `fleet`, `provider`, `cockpit`, `focus`, `economy`, `reach`, `clocks`, and `clocks-done`; declarations and beats may follow and address their handles. Use `glyphs nerd-font` for the alternate clock icons, or `pets <pet>` for a companion. Other agent verbs are `idle`, `waits <duration> ["reason"]`, `fails "reason"`, `leaves`, and `set context <pct>%|cost $<usd>|tokens <n>|model <name>`. UI beats support `select`, `expand`, `collapse`, or `click @handle`, `key <key>`, and `scroll up|down [n]`. Handle-targeted UI beats address root cards, not spawned children; a child target is refused with its parent handle. Unknown names suggest a correction; undeclared handles and states the provider cannot reach are refused with a line, column and fix.
 
 ## Fidelity
 

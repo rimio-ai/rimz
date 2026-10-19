@@ -204,7 +204,7 @@ The bracket in `draw_and_paint` makes a frame that writes kitty graphics one syn
 
 Graphics traffic stays bounded because some macOS terminals re-evaluate the mouse pointer shape on every image update. `glyphs = "sextant"` removes that traffic entirely.
 
-The pixel context meter shares the transport and the id base: it interns each distinct raster from `base + 0x100`, up to 256 ids, with least-recently-used eviction that protects visible and current-frame ids. When all ids are protected it falls back to cells. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns its mechanics. The testkit fixture and gallery lease slots like live attachments, one per column, so a demo on a shared surface never sweeps a live sidebar's slot.
+The pixel context meter shares the transport and the id base: it interns each distinct raster from `base + 0x100`, up to 256 ids, with least-recently-used eviction that protects visible and current-frame ids. When all ids are protected it falls back to cells. [`pixel/meter.rs`](../../../crates/rimz/src/sidebar_pane/pixel/meter.rs) owns its mechanics. The testkit scenario player leases slots like live attachments, one per column, so playback on a shared surface never sweeps a live sidebar's slot.
 
 The bound depends on peak concurrent attachments, not uptime or restart count. Pets still cost up to 72 decoded 192×208 RGBA frames per slot. Images left by older random-id renderers cannot be swept safely; resetting the terminal surface clears those legacy images.
 
@@ -218,7 +218,7 @@ The command writes its own output without ratatui. The pixel path gives each pet
 
 Pixel previews inside tmux are paced by `LiveGraphicsPacer` in [`pixel/pacing.rs`](../../../crates/rimz/src/sidebar_pane/pixel/pacing.rs), wrapped by `cli/list_pets/pacing.rs`. Without pacing, tmux can discard later image data while it repaints. After each image the command places it with replies enabled and waits for the terminal's kitty graphics acknowledgement before sending the next. If no acknowledgement arrives within `ACK_TIMEOUT` (500 ms), pacing turns off for the rest of the run and later placements are sent quiet. On exit the pacer waits once more for an acknowledgement it is still owed and drains the tty, so the reply does not appear in the shell as typed input.
 
-The contributor gallery (the hidden `rimz sidebar gallery`, `serve_gallery` in `app/demo.rs`, built only with the `testkit` feature) is a different path: it runs the live `FramePainter` per column and offsets each column's id base by `index << 12`, so one column cannot overwrite another's images.
+The contributor player (the hidden `rimz sidebar play`, built only with the `testkit` feature) drives the real attachment loop per column. Each column keeps its own `PixelLease` outside rebuilt loop state, so a seek or wrap preserves its slot without overwriting another column's images. Headless exports use cell art; live playback uses environment-only capability detection without mux probes.
 
 ## Security surface
 

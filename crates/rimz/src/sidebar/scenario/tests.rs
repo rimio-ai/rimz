@@ -1,6 +1,8 @@
 use super::*;
 use crate::agents::AgentStatus;
 
+mod coverage;
+
 fn parse(source: &str) -> Scenario {
     let result = Scenario::parse("test", source);
     assert!(

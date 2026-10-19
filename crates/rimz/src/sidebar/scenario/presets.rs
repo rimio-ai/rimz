@@ -1,4 +1,4 @@
-//! Deterministic sidebar snapshots behind the screenshot and gallery fixture states.
+//! Deterministic sidebar scenes for scripted playback and screenshots.
 //!
 //! A fixture card carries only state its agent kind can reach on a default configuration: a cache
 //! clock goes on a Claude or Codex card, since only those adapters declare a prompt-cache lifetime.
@@ -75,10 +75,7 @@ pub(super) fn snapshot(state: Preset) -> SidebarSnapshot {
         Preset::Focus => add_focus_fixture(&mut snapshot, now),
         Preset::Economy => add_economy_fixture(&mut snapshot, now),
         Preset::Reach => add_reach_fixture(&mut snapshot, now),
-        Preset::Clocks
-        | Preset::ClocksDone
-        | Preset::ClocksNerdFont
-        | Preset::ClocksDoneNerdFont => {
+        Preset::Clocks | Preset::ClocksDone => {
             add_clock_fixture(&mut snapshot, now, state);
         }
     }
@@ -103,10 +100,7 @@ pub(super) fn epoch() -> jiff::Timestamp {
 fn add_clock_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp, state: Preset) {
     use crate::agents::{AgentStatus, TurnPhase};
 
-    let done = matches!(state, Preset::ClocksDone | Preset::ClocksDoneNerdFont);
-    if matches!(state, Preset::ClocksNerdFont | Preset::ClocksDoneNerdFont) {
-        snapshot.theme.style = Some(crate::config::ThemeStyle::Modern);
-    }
+    let done = matches!(state, Preset::ClocksDone);
     let sub_agents = [
         (
             "healthy",
@@ -1789,6 +1783,7 @@ fn add_reach_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
             model: "Opus 4.8",
             context: Some((236_510, 6.88)),
             age_secs: Some(24 * 60),
+            sub_agents: Some(default_sub_agents("claude", now)),
             ..AgentRowSpec::default()
         },
         now,
@@ -2381,9 +2376,21 @@ pub(super) fn status_counts_from_rows(rows: &[SidebarRow]) -> Vec<SidebarStatusC
 }
 
 fn add_provider_fixture(snapshot: &mut SidebarSnapshot, now: jiff::Timestamp) {
-    // The selected row picks the provider tab, so keep Claude first to show its sub-cap tick.
-    std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows)
-        .sort_by_key(|row| row.name != "claude");
+    // Claude must win the real sort so its provider sub-cap tick stays visible.
+    for row in std::sync::Arc::make_mut(
+        &mut std::sync::Arc::make_mut(&mut snapshot.worktree_groups)[0].rows,
+    ) {
+        if row.name == "claude" {
+            apply_verb(
+                row,
+                &Verb::Asks("Allow the auth watcher write?".to_owned()),
+                now,
+            );
+        }
+        if row.name == "codex" && row.status() == Some(crate::agents::AgentStatus::Waiting) {
+            apply_verb(row, &Verb::Answered, now);
+        }
+    }
     snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.providers = vec![
         provider_panel(

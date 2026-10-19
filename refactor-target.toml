@@ -1191,8 +1191,8 @@ reason = "The CLI and reload status present the same typed line/column refusal."
 
 [[verdict]]
 kind = "item"
-key = "sidebar::scenario::fixture_snapshot"
-reason = "Temporary binary fixture/gallery bridge to library presets, removed with those commands during scenario migration."
+key = "sidebar::scenario::Scenario::configure_rendering"
+reason = "The loop player applies explicit screenshot geometry and theme overrides to every modeled snapshot without changing the source file."
 
 [[verdict]]
 kind = "item"
@@ -1431,7 +1431,7 @@ reason = "Fresh restart reserves under the launch lock while preserving the old 
 [[verdict]]
 kind = "item"
 key = "store::snapshot::row::AgentCard::ask_detail"
-reason = "Carry the eligible blocking ask through serialized cards and CLI sidebar fixtures."
+reason = "The public serialized AgentCard schema carries eligible blocking ask text across snapshot consumers."
 
 [[verdict]]
 kind = "item"
@@ -3102,7 +3102,7 @@ reason = "inherit_channel has four conditional callers in agent launch and super
 [[verdict]]
 kind = "item"
 key = "room::from_resolved"
-reason = "RoomSizing is live in both values; the gallery consumes Birth without calling birth (pass 15c)."
+reason = "The binary's resume, reset, and supervised-run entry points choose sizing through the shared room API."
 
 [[verdict]]
 kind = "item"
@@ -5877,7 +5877,7 @@ reason = "Returned by the public AccountCapability::probe_account_usage (capabil
 [[verdict]]
 kind = "item"
 key = "agents::credits::known"
-reason = "ExtraCredits::known is called by the binary's sidebar fixture (cli/sidebar/fixture.rs:1397), which is production binary code this pass may not edit (pass 24b)."
+reason = "The binary's account and provider tests construct known credit readings through this public constructor."
 
 [[verdict]]
 kind = "item"
@@ -5897,7 +5897,7 @@ reason = "Emblem's public field tints: Vec<EmblemTint> (emblems.rs:21-26) floors
 [[verdict]]
 kind = "item"
 key = "agents::emblems::emblem_for"
-reason = "Read by the binary's sidebar fixture (cli/sidebar/fixture.rs:2217) (pass 24b)."
+reason = "Scenario presets, the theme core, and renderer tests resolve emblems inside the library; binary preview callers are retired."
 
 [[verdict]]
 kind = "item"
@@ -6277,7 +6277,7 @@ reason = "ViewId::new_unchecked is called from the binary crate (cli/budget.rs, 
 [[verdict]]
 kind = "item"
 key = "ids::ViewKind"
-reason = "Named by the binary crate (cli/sidebar/fixture.rs:2050) and the separate integration crate (tests/integration/common/env.rs:40) (pass 24c)."
+reason = "The separate integration crate constructs view identities through common::Env; the public pane/frame schema carries ViewKind."
 
 [[verdict]]
 kind = "item"
@@ -6287,7 +6287,7 @@ reason = "Named by the binary crate (cli/sessions/picker/tests.rs:386, cli/trans
 [[verdict]]
 kind = "item"
 key = "ids::LinkTier"
-reason = "Named by the binary crate (cli/sidebar/fixture.rs:3,1083, cli/doctor/runtime/tests.rs) and carried in the pub sidebar frame link (sidebar/frame.rs:77-78) (pass 24c)."
+reason = "The binary's doctor tests construct link tiers, also carried in the public sidebar frame link schema."
 
 [[verdict]]
 kind = "item"
@@ -6487,12 +6487,12 @@ reason = "Carried by the pub warnings field that the binary's exec and agents ex
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::view::WORKTREE_ROW_CAP"
-reason = "cli/sidebar/fixture.rs:2075 reads the cap in the binary crate, refuting the dossier's private proposal (pass 24c)."
+reason = "Scenario presets and the native renderer share the calm-tail row cap within the library."
 
 [[verdict]]
 kind = "item"
 key = "sidebar_pane::view::capped_visible_rows"
-reason = "cli/sidebar/fixture.rs:2073 calls it in the binary crate, refuting the dossier's private proposal (pass 24c)."
+reason = "Scenario presets and native renderer projections share calm-tail visibility inside the library."
 
 [[verdict]]
 kind = "item"

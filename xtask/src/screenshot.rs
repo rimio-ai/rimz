@@ -36,55 +36,14 @@ struct CaptureScreenshotOptions {
 }
 
 #[derive(Debug)]
-struct StateScreenshotOptions {
-    state: SidebarScreenshotState,
-    width: u16,
-    height: u16,
+struct ScenarioScreenshotOptions {
+    file: PathBuf,
+    at: String,
+    width: Option<u16>,
+    height: Option<u16>,
     theme_mode: Option<String>,
     theme_scheme: Option<String>,
     output: Option<PathBuf>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SidebarScreenshotState {
-    Empty,
-    Fleet,
-    Provider,
-    Cockpit,
-    Focus,
-    Economy,
-    Reach,
-}
-
-impl SidebarScreenshotState {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "empty" => Ok(Self::Empty),
-            "fleet" => Ok(Self::Fleet),
-            "provider" => Ok(Self::Provider),
-            "cockpit" => Ok(Self::Cockpit),
-            "focus" => Ok(Self::Focus),
-            "economy" => Ok(Self::Economy),
-            "reach" => Ok(Self::Reach),
-            other => {
-                bail!(
-                    "unknown screenshot state `{other}`; expected empty, fleet, provider, cockpit, focus, economy, or reach"
-                )
-            }
-        }
-    }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Empty => "empty",
-            Self::Fleet => "fleet",
-            Self::Provider => "provider",
-            Self::Cockpit => "cockpit",
-            Self::Focus => "focus",
-            Self::Economy => "economy",
-            Self::Reach => "reach",
-        }
-    }
 }
 
 pub(crate) fn screenshot(root: &Path, args: &[String]) -> Result<()> {
@@ -131,21 +90,26 @@ pub(crate) fn screenshot(root: &Path, args: &[String]) -> Result<()> {
             print_screenshot_path(&output);
             Ok(())
         }
-        "state" => {
-            let opts = parse_state_screenshot_options(&args[1..])?;
+        "scenario" => {
+            let opts = parse_scenario_screenshot_options(&args[1..])?;
             ensure_screenshot_prerequisites()?;
-            let ansi = render_state_ansi(
-                root,
-                opts.state,
-                opts.width,
-                opts.height,
-                opts.theme_mode.as_deref(),
-                opts.theme_scheme.as_deref(),
-            )?;
-            let output = screenshot_output_path(root, opts.output, opts.state.as_str())?;
+            let ansi = render_scenario_ansi(root, &opts)?;
+            let label = opts
+                .file
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .unwrap_or("scenario");
+            let output = screenshot_output_path(root, opts.output, label)?;
             write_screenshot_png(root, &ansi, &output)?;
             print_screenshot_path(&output);
             Ok(())
+        }
+        "frames" => {
+            let [directory] = &args[1..] else {
+                bail!("screenshot frames requires one --frames directory");
+            };
+            ensure_screenshot_prerequisites()?;
+            render_frames(root, &root.join(directory))
         }
         other => bail!("unknown screenshot subcommand `{other}`"),
     }
@@ -165,8 +129,9 @@ fn print_screenshot_help() {
     println!("  cargo xtask screenshot live [--lines N] [--output PATH]");
     println!("  cargo xtask screenshot pane <id> [--lines N] [--output PATH]");
     println!(
-        "  cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
+        "  cargo xtask screenshot scenario <file.scn> [--at TIME] [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
+    println!("  cargo xtask screenshot frames <dir>");
 }
 
 fn print_screenshot_subcommand_help(subcmd: &str) -> Result<()> {
@@ -174,7 +139,8 @@ fn print_screenshot_subcommand_help(subcmd: &str) -> Result<()> {
         "list" => print_screenshot_list_help(),
         "live" => print_screenshot_live_help(),
         "pane" => print_screenshot_pane_help(),
-        "state" => print_screenshot_state_help(),
+        "scenario" => print_screenshot_scenario_help(),
+        "frames" => print_screenshot_frames_help(),
         other => bail!("unknown screenshot subcommand `{other}`"),
     }
     Ok(())
@@ -214,12 +180,22 @@ fn print_screenshot_pane_help() {
     clippy::print_stdout,
     reason = "xtask screenshot help text is a command stdout contract"
 )]
-fn print_screenshot_state_help() {
+fn print_screenshot_scenario_help() {
     println!(
-        "cargo xtask screenshot state <empty|fleet|provider|cockpit|focus|economy|reach> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
+        "cargo xtask screenshot scenario <file.scn> [--at TIME] [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
     println!();
-    println!("Render a deterministic sidebar fixture frame and write a PNG.");
+    println!("Play a scenario to --at (default 0s) and write a PNG.");
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_frames_help() {
+    println!("cargo xtask screenshot frames <dir>");
+    println!();
+    println!("Write a PNG beside every key-frame ANSI in a sidebar play --frames export.");
 }
 
 fn parse_capture_screenshot_options(args: &[String]) -> Result<CaptureScreenshotOptions> {
@@ -243,16 +219,15 @@ fn parse_capture_screenshot_options(args: &[String]) -> Result<CaptureScreenshot
     Ok(opts)
 }
 
-fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOptions> {
-    let Some(state) = args.first() else {
-        bail!(
-            "screenshot state requires empty, fleet, provider, cockpit, focus, economy, or reach"
-        );
+fn parse_scenario_screenshot_options(args: &[String]) -> Result<ScenarioScreenshotOptions> {
+    let Some(file) = args.first().filter(|arg| !arg.starts_with('-')) else {
+        bail!("screenshot scenario requires a .scn file");
     };
-    let mut opts = StateScreenshotOptions {
-        state: SidebarScreenshotState::parse(state)?,
-        width: 54,
-        height: 34,
+    let mut opts = ScenarioScreenshotOptions {
+        file: PathBuf::from(file),
+        at: "0s".to_owned(),
+        width: None,
+        height: None,
         theme_mode: None,
         theme_scheme: None,
         output: None,
@@ -260,14 +235,18 @@ fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOpti
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
+            "--at" => {
+                opts.at = required_option_value(args, index, "--at")?.to_owned();
+                index += 2;
+            }
             "--width" => {
                 let value = required_option_value(args, index, "--width")?;
-                opts.width = parse_u16_flag(value, "--width")?;
+                opts.width = Some(parse_u16_flag(value, "--width")?);
                 index += 2;
             }
             "--height" => {
                 let value = required_option_value(args, index, "--height")?;
-                opts.height = parse_u16_flag(value, "--height")?;
+                opts.height = Some(parse_u16_flag(value, "--height")?);
                 index += 2;
             }
             "--theme-mode" => {
@@ -320,32 +299,47 @@ fn capture_pane_ansi(root: &Path, pane_id: &str, lines: Option<u16>) -> Result<V
     rimz_output(root, &args)
 }
 
-fn render_state_ansi(
-    root: &Path,
-    state: SidebarScreenshotState,
-    width: u16,
-    height: u16,
-    theme_mode: Option<&str>,
-    theme_scheme: Option<&str>,
-) -> Result<Vec<u8>> {
-    let mut args = vec![
-        OsString::from("sidebar"),
-        OsString::from("fixture"),
-        OsString::from(state.as_str()),
-        OsString::from("--width"),
-        OsString::from(width.to_string()),
-        OsString::from("--height"),
-        OsString::from(height.to_string()),
-    ];
-    if let Some(mode) = theme_mode {
-        args.push(OsString::from("--theme-mode"));
-        args.push(OsString::from(mode));
+fn render_scenario_ansi(root: &Path, opts: &ScenarioScreenshotOptions) -> Result<Vec<u8>> {
+    let mut args = os_args(["sidebar", "play"]);
+    args.push(opts.file.as_os_str().to_owned());
+    args.extend(os_args(["--at", &opts.at, "--ansi"]));
+    for (flag, value) in [("--width", opts.width), ("--height", opts.height)] {
+        if let Some(value) = value {
+            args.extend(os_args([flag, &value.to_string()]));
+        }
     }
-    if let Some(scheme) = theme_scheme {
-        args.push(OsString::from("--theme-scheme"));
-        args.push(OsString::from(scheme));
+    for (flag, value) in [
+        ("--theme-mode", opts.theme_mode.as_deref()),
+        ("--theme-scheme", opts.theme_scheme.as_deref()),
+    ] {
+        if let Some(value) = value {
+            args.extend(os_args([flag, value]));
+        }
     }
     rimz_output_with_env(root, &args, &[("COLORTERM", "truecolor")], &["NO_COLOR"])
+}
+
+fn render_frames(root: &Path, directory: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(directory)
+        .with_context(|| format!("reading frame directory {}", directory.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            render_frames(root, &path)?;
+            continue;
+        }
+        if !kind.is_file() || path.extension().and_then(OsStr::to_str) != Some("ansi") {
+            continue;
+        }
+        let output = path.with_extension("png");
+        let ansi = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        write_screenshot_png(root, &ansi, &output)?;
+        print_screenshot_path(&output);
+    }
+    Ok(())
 }
 
 fn ensure_screenshot_prerequisites() -> Result<()> {

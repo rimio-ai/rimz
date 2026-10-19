@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: rendered
 ---
   huddle                            /srv/code/huddle
@@ -8,21 +8,21 @@ expression: rendered
   10  2                                     $268.00
  ────────────────────────────────────────────────────
   1    1    1    2                ⢿ 3   󰤄 0    2
- ↑ 2 need you
 
-▎ feature/auth-router ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +1520 -470🮇
-▌ planner · Opus 4.8 · xhigh · 1M             $14.72▐
-▌  plan router cutover                               ▐
-▌  󰕰 ━━━━━━━━━╺━╺────────────────────────   18% 󰪠 22m▐
-▌  󰿦 183k · 󱥸 157k  18k  7k  22k                  ▐
-▌   subagents (5)                              $1.05▐
-▌     Explore · summarize docs drift           $0.18▐
-▌      󰿦 11k · Haiku · xhigh                       6m▐
-▌     Explore · exercise auth edge cases       $0.27▐
-▌      󰿦 18k · Haiku · xhigh                       6m▐
-▌     Explore · trace handler graph            $0.34▐
-▌      󰿦 20k · Haiku · xhigh                       7m▐
-▌     Plan · split blocking checks             $0.12▐
+▎ rollout-guard  #91 ┄┄┄┄┄┄┄ ⇡2  +1180 -390   main🮇
+▌ reviewer-2 · Opus 4.8 · xhigh · 1M           $9.04▐
+▌  approve staged migration                          ▐
+▌  󰕰 ━━━━━━━━━━━━━━━━╺━╺─────────────────   34% 󰪤 52m▐
+▌  󰿦 347k · 󱥸 299k  34k  13k  43k ·  1           ▐
+▎⢄ coder-2 · GPT 5.5 · xhigh · 272k             $2.93🮇
+▎  patch rollout smoke harness                       🮇
+▎  󰕰 ━━━━━━━━━━━━━━━━━━╺─────────────────   52% 󰪞  5m🮇
+▎   subagents (2)                                   🮇
+
+  ci-retry                  ⇡1 ⇣1  +880 -240   main
+  codex · GPT 5.5 · xhigh · 272k               $4.58
+   API error
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━╺──────────────   61% 󰪣 44m
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

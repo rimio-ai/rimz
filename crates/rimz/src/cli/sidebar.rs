@@ -8,8 +8,6 @@
 //! stdout alone. The room host produces in process on its fetch worker, so
 //! these arms serve inspection and scripting.
 
-#[cfg(feature = "testkit")]
-use std::io;
 use std::io::Write;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -29,11 +27,6 @@ use rimz::wakeup::events::SidebarEvent;
 use rimz::workspace::{WorkspaceResolver, record};
 use rimz::{RuntimePaths, StatePaths};
 
-#[cfg(feature = "testkit")]
-mod fixture;
-
-#[cfg(feature = "testkit")]
-use fixture::sidebar_fixture_snapshot;
 #[derive(Debug, Args)]
 pub struct SidebarArgs {
     #[command(subcommand)]
@@ -115,7 +108,7 @@ enum SidebarSubcmd {
     #[cfg(feature = "testkit")]
     #[command(hide = true, group(clap::ArgGroup::new("headless").args(["at", "frames"])))]
     Play {
-        #[arg(long, conflicts_with_all = ["at", "frames", "motion", "ansi", "section", "height"])]
+        #[arg(long, conflicts_with_all = ["at", "frames", "motion", "ansi", "section", "height", "width", "theme_mode", "theme_scheme"])]
         check: bool,
         #[arg(long, conflicts_with = "frames", value_parser = rimz::sidebar::scenario::parse_duration)]
         at: Option<std::time::Duration>,
@@ -129,33 +122,13 @@ enum SidebarSubcmd {
         section: Option<String>,
         #[arg(long, requires = "headless", value_parser = clap::value_parser!(u16).range(1..))]
         height: Option<u16>,
-        files: Vec<std::path::PathBuf>,
-    },
-    /// Render a deterministic sidebar fixture frame. Hidden — contributor
-    /// screenshot infrastructure, not a user-facing sidebar verb.
-    #[cfg(feature = "testkit")]
-    #[command(hide = true)]
-    Fixture {
-        #[arg(value_enum)]
-        state: SidebarFixtureState,
-        #[arg(long, default_value_t = 54)]
-        width: u16,
-        #[arg(long, default_value_t = 34)]
-        height: u16,
-        #[arg(long)]
-        watch: bool,
-        #[arg(long)]
-        theme_mode: Option<String>,
-        #[arg(long)]
+        #[arg(long, requires = "headless", value_parser = clap::value_parser!(u16).range(1..))]
+        width: Option<u16>,
+        #[arg(long, requires = "headless", value_parser = play_theme_mode_parser())]
+        theme_mode: Option<rimz::config::ThemeMode>,
+        #[arg(long, requires = "headless")]
         theme_scheme: Option<String>,
-    },
-    /// Open a live sidebar feature gallery in a room tab or inline outside a
-    /// mux session. Hidden — contributor visual review tool.
-    #[cfg(feature = "testkit")]
-    #[command(hide = true)]
-    Gallery {
-        #[arg(long)]
-        pets: bool,
+        files: Vec<std::path::PathBuf>,
     },
     /// List live sidebar renderers.
     #[cfg(feature = "testkit")]
@@ -168,14 +141,6 @@ enum SidebarSubcmd {
     #[cfg(feature = "testkit")]
     #[command(hide = true)]
     Click { pane_id: PaneId, col: u16, row: u16 },
-    /// Render the live sidebar gallery compositor. Hidden — launched by
-    /// `sidebar gallery`, not a user-facing sidebar verb.
-    #[cfg(feature = "testkit")]
-    #[command(hide = true)]
-    GalleryRender {
-        #[arg(long)]
-        pets: bool,
-    },
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
     /// or a producer refetch. Hidden — plugin infrastructure, not a human verb.
@@ -388,22 +353,6 @@ fn parse_zellij_focus_clients(raw: &str) -> Vec<rimz::pane::ClientPaneView> {
     projected
 }
 
-#[cfg(feature = "testkit")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-enum SidebarFixtureState {
-    Empty,
-    Fleet,
-    Provider,
-    Cockpit,
-    Focus,
-    Economy,
-    Reach,
-    Clocks,
-    ClocksDone,
-    ClocksNerdFont,
-    ClocksDoneNerdFont,
-}
-
 impl SidebarArgs {
     /// The low-cardinality command label for the Sentry command scope.
     pub(crate) fn command_label(&self) -> &'static str {
@@ -416,15 +365,9 @@ impl SidebarArgs {
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Play { .. } => "sidebar play",
             #[cfg(feature = "testkit")]
-            SidebarSubcmd::Fixture { .. } => "sidebar fixture",
-            #[cfg(feature = "testkit")]
-            SidebarSubcmd::Gallery { .. } => "sidebar gallery",
-            #[cfg(feature = "testkit")]
             SidebarSubcmd::Renderers { .. } => "sidebar renderers",
             #[cfg(feature = "testkit")]
             SidebarSubcmd::Click { .. } => "sidebar click",
-            #[cfg(feature = "testkit")]
-            SidebarSubcmd::GalleryRender { .. } => "sidebar gallery-render",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
@@ -506,6 +449,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             ansi,
             section,
             height,
+            width,
+            theme_mode,
+            theme_scheme,
             files,
         } => play(
             check,
@@ -517,25 +463,15 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 ansi,
                 section,
                 height,
+                width,
+                theme_mode,
+                theme_scheme,
             },
         ),
-        #[cfg(feature = "testkit")]
-        SidebarSubcmd::Fixture {
-            state,
-            width,
-            height,
-            watch,
-            theme_mode,
-            theme_scheme,
-        } => fixture(state, width, height, watch, theme_mode, theme_scheme),
-        #[cfg(feature = "testkit")]
-        SidebarSubcmd::Gallery { pets } => gallery(globals, pets),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Renderers { json } => renderers(globals, json),
         #[cfg(feature = "testkit")]
         SidebarSubcmd::Click { pane_id, col, row } => click(globals, pane_id, col, row),
-        #[cfg(feature = "testkit")]
-        SidebarSubcmd::GalleryRender { pets } => gallery_render(pets),
         SidebarSubcmd::Wake(args) => {
             let telemetry = args.telemetry();
             let WakeArgs {
@@ -622,6 +558,21 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             },
         ),
     }
+}
+
+#[cfg(feature = "testkit")]
+fn play_theme_mode_parser() -> impl clap::builder::TypedValueParser<Value = rimz::config::ThemeMode>
+{
+    use clap::builder::TypedValueParser;
+    use rimz::config::ThemeMode;
+
+    clap::builder::PossibleValuesParser::new(["auto", "truecolor", "256"]).map(|mode| {
+        match mode.as_str() {
+            "truecolor" => ThemeMode::Truecolor,
+            "256" => ThemeMode::Indexed,
+            _ => ThemeMode::Auto,
+        }
+    })
 }
 
 #[cfg(feature = "testkit")]
@@ -1184,149 +1135,6 @@ fn resolve_serve_identity(
             .clone(),
     };
     Ok((workspace_id, session_name))
-}
-
-#[cfg(feature = "testkit")]
-fn fixture(
-    state: SidebarFixtureState,
-    width: u16,
-    height: u16,
-    watch: bool,
-    theme_mode: Option<String>,
-    theme_scheme: Option<String>,
-) -> Result<()> {
-    let mut snapshot = sidebar_fixture_snapshot(state)?;
-    if let Some(mode) = theme_mode.as_deref() {
-        snapshot.theme.mode = parse_fixture_theme_mode(mode)?;
-    }
-    if let Some(scheme) = theme_scheme {
-        snapshot.theme.scheme = Some(scheme);
-    }
-    if watch {
-        let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
-        return rimz::sidebar_pane::app::serve_fixture(snapshot, refresh_ms)
-            .context("serving sidebar fixture");
-    }
-    rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, width, height)
-        .context("rendering sidebar fixture")
-}
-
-#[cfg(feature = "testkit")]
-fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
-    if rimz::mux::ambient_pane_id().is_none() {
-        // No room can host a tab; the compositor owns this terminal.
-        return gallery_render(pets);
-    }
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving current workspace")?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let machine_config = super::machine_config();
-    let room = rimz::room::RoomContext::from_resolved(
-        &workspace,
-        machine_config,
-        mux,
-        rimz::room::RoomSizing::Birth,
-    )?;
-    let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
-    let mut argv = vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()];
-    if pets {
-        argv.push("--pets".to_owned());
-    }
-    let gallery_pane = rimz::mux::PaneCmd { argv, name: None };
-    room.backend()
-        .open_tab(&rimz::mux::TabOptions {
-            env: Default::default(),
-            title: "gallery".to_owned(),
-            panes: rimz::mux::LayoutPanes {
-                columns: vec![rimz::mux::LayoutColumn {
-                    panes: vec![gallery_pane],
-                    stacked: false,
-                }],
-                focused_pane: 0,
-            },
-            focus: true,
-            dock_sidebar: false,
-            after: None,
-            sidebar: room.sidebar_options(&workspace.worktree_root),
-        })
-        .context("opening sidebar gallery")
-}
-
-#[cfg(feature = "testkit")]
-const GALLERY_PETS: [&str; 4] = ["rocky", "seedy", "fireball", "bsod"];
-
-#[cfg(feature = "testkit")]
-fn gallery_render(pets: bool) -> Result<()> {
-    let machine_config = super::machine_config();
-    let refresh_ms = machine_config.theme.display.resolved_refresh_ms();
-    let columns = gallery_render_columns(pets, &machine_config.theme)?;
-    rimz::sidebar_pane::app::serve_gallery(columns, refresh_ms).context("serving sidebar gallery")
-}
-
-#[cfg(feature = "testkit")]
-fn gallery_render_columns(
-    pets: bool,
-    theme: &rimz::config::ThemeConfig,
-) -> Result<Vec<(SidebarSnapshot, usize)>> {
-    let columns = gallery_fixture_columns()
-        .into_iter()
-        .enumerate()
-        .map(|(index, (state, selector))| {
-            let mut snapshot = sidebar_fixture_snapshot(state)?;
-            snapshot.theme.mode = theme.mode;
-            snapshot.theme.display.pixel = theme.display.pixel;
-            snapshot.theme.glyphs = theme.glyphs.clone();
-            snapshot.theme.pets.glyphs = theme.pets.glyphs;
-            snapshot.theme.pets.enabled = pets;
-            snapshot.theme.pets.pet = GALLERY_PETS[index].to_owned();
-            let selected_index = gallery_selected_index(&snapshot, selector);
-            Ok((snapshot, selected_index))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(columns)
-}
-
-#[cfg(feature = "testkit")]
-fn gallery_selected_index(snapshot: &SidebarSnapshot, selector: fn(&SidebarRow) -> bool) -> usize {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-        .position(selector)
-        .unwrap_or(0)
-}
-
-#[cfg(feature = "testkit")]
-type GallerySelector = fn(&SidebarRow) -> bool;
-
-#[cfg(feature = "testkit")]
-fn gallery_fixture_columns() -> [(SidebarFixtureState, GallerySelector); 4] {
-    [
-        (
-            SidebarFixtureState::Focus,
-            (|row: &SidebarRow| row.id == "agent:claude:planner") as GallerySelector,
-        ),
-        (
-            SidebarFixtureState::Cockpit,
-            (|row: &SidebarRow| row.id == "agent:codex:pricing") as GallerySelector,
-        ),
-        (SidebarFixtureState::Reach, |row: &SidebarRow| {
-            row.id == "agent:pi:reach"
-        }),
-        (SidebarFixtureState::Economy, |row: &SidebarRow| {
-            row.id == "agent:opencode:credits"
-        }),
-    ]
-}
-
-#[cfg(feature = "testkit")]
-fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {
-    match value {
-        "auto" => Ok(rimz::config::ThemeMode::Auto),
-        "truecolor" => Ok(rimz::config::ThemeMode::Truecolor),
-        "256" => Ok(rimz::config::ThemeMode::Indexed),
-        other => anyhow::bail!("unknown theme mode `{other}`; expected auto, truecolor, or 256"),
-    }
 }
 
 fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -> Result<()> {

@@ -1246,7 +1246,6 @@ fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result
     let definition = root.join("crates/rimz/src/agents/definition.rs");
     let provider = root.join("crates/rimz/src/theme/provider.rs");
     let plugin_definition = root.join("crates/rimz/src/agents/adapters/plugin/mod.rs");
-    let sidebar_fixture = root.join("crates/rimz/src/cli/sidebar/fixture.rs");
     let needle = concat!(".brand", ".color");
     let mut violations = Vec::new();
     for path in files {
@@ -1254,7 +1253,6 @@ fn ensure_brand_resolution_single_home(root: &Path, files: &[PathBuf]) -> Result
             || path == &definition
             || path == &provider
             || path == &plugin_definition
-            || path == &sidebar_fixture
             || is_test_source_path(root, path)
         {
             continue;

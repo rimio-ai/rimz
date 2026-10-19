@@ -12,7 +12,7 @@ pub(crate) use crate::sidebar::body_filter::BodyFilter;
 pub(super) use crate::sidebar::body_filter::BodyLens;
 
 /// Maximum calm rows painted before overflow moves behind `+K more`.
-pub const WORKTREE_ROW_CAP: usize = 6;
+pub(crate) const WORKTREE_ROW_CAP: usize = 6;
 
 /// One projected group, indexed into its roster's flat row slice.
 #[derive(Clone, Debug)]
@@ -327,7 +327,8 @@ fn process_is_only_live_member(rows: &[SidebarRow]) -> bool {
 }
 
 /// Rows surviving the calm-tail cap, including held exemptions.
-pub fn capped_visible_rows<'a>(
+#[cfg(any(test, feature = "testkit"))]
+pub(crate) fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
