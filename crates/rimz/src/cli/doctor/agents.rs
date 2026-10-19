@@ -686,8 +686,12 @@ fn account_rows(
 pub(super) fn collect_hooks() -> Vec<HookRow> {
     let login_env = rimz::agents::ambient_env();
     let cwd = std::env::current_dir().ok();
-    rimz::agents::all_definitions()
-        .map(|agent| {
+    let definitions: Vec<_> = rimz::agents::all_definitions().collect();
+    rimz::utils::parallel::bounded_map(
+        rimz::utils::parallel::WorkLane::Other,
+        8,
+        &definitions,
+        |agent| {
             let definition = agent.spec();
             let name = definition.kind;
             let detected = rimz::agents::locate_binary(definition).is_some();
@@ -732,8 +736,8 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
                 detected,
                 status,
             }
-        })
-        .collect()
+        },
+    )
 }
 
 pub(super) fn collect_plugins() -> Vec<PluginRow> {
