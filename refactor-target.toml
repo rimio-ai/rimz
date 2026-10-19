@@ -2536,6 +2536,26 @@ reason = "Public sidebar_pane::host::run returns this error to the CLI binary; p
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::app::play::PlayOptions"
+reason = "The testkit sidebar play CLI passes its headless options into the library-owned loop driver."
+
+[[verdict]]
+kind = "item"
+key = "sidebar::scenario::parser::parse_duration"
+reason = "The testkit play CLI parses time options with the scenario grammar before calling the typed player."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::play::PlayError"
+reason = "The public testkit playback entry returns typed parse, I/O, and loop failures to the CLI binary."
+
+[[verdict]]
+kind = "item"
+key = "sidebar_pane::app::play::play"
+reason = "The sidebar play CLI delegates scenario playback and frame export to the library's attachment loop."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::render::render_fixed"
 reason = "Read by benches/hotpath.rs in a separate crate, so pub is the floor, refuting the atlas pub(crate) proposal (pass 26b)."
 

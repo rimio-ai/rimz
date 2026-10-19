@@ -3,6 +3,48 @@ use crate::config::{PetsGlyphMode, PixelMode};
 
 const REFRESH_MS: u16 = 100;
 
+#[test]
+fn playback_settles_offline_disconnected_and_timed_out_loads_without_retrying() {
+    for failure in ["offline", "disconnected", "timeout"] {
+        let (sender, receiver) = mpsc::channel();
+        let mut held_sender = Some(sender);
+        match failure {
+            "offline" => held_sender
+                .as_ref()
+                .unwrap()
+                .send(Err("offline".into()))
+                .unwrap(),
+            "disconnected" => {
+                held_sender.take();
+            }
+            _ => {}
+        }
+        let mut assets = PetAssets {
+            load_state: PetLoadState::Loading {
+                request: PetLoadRequest {
+                    id: "codex".into(),
+                    key: cell_key(),
+                },
+                receiver,
+            },
+            ..Default::default()
+        };
+        assert!(!assets.settle_load(std::time::Duration::ZERO), "{failure}");
+        assert!(matches!(
+            assets.load_state,
+            PetLoadState::Failed {
+                retry_receiver: None,
+                ..
+            }
+        ));
+        let view = assets
+            .view(&enabled_config(), cell_frame(PetAction::Idle, 0))
+            .unwrap();
+        assert_eq!(view.caption.as_deref(), Some("pet unavailable"));
+        assert!(!assets.load_state.is_loading());
+    }
+}
+
 fn local_sheet() -> (tempfile::TempDir, PetsConfig) {
     let dir = tempfile::tempdir().expect("pet directory");
     let path = dir.path().join("sheet.png");

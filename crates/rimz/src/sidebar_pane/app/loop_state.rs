@@ -284,6 +284,19 @@ pub(super) fn handle_wakeup(
 }
 
 impl LoopState {
+    #[cfg(feature = "testkit")]
+    pub(super) fn prepare_play_pet(&mut self, snapshot: &SidebarSnapshot) -> bool {
+        self.paint.prepare_play_pet(&mut self.ui, snapshot)
+    }
+
+    #[cfg(feature = "testkit")]
+    pub(super) fn play_frame_settled(&self) -> bool {
+        !self.dirty
+            && !self.ui.tally.any_rolling(self.ui.animation_phase)
+            && !self.ui.cost_rolls.any_rolling(self.ui.animation_phase)
+            && !self.ui.scroll_ease.in_flight()
+    }
+
     fn parked(&self, now_ms: u64) -> bool {
         self.config.own_pane.as_ref().is_some_and(|pane| {
             crate::sidebar::fuse::pane_is_focused(

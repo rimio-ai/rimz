@@ -19,6 +19,8 @@ pub(in crate::sidebar_pane) struct PaneBackend {
     geometry: Geometry,
     sized: Cell<bool>,
     cursor: Position,
+    #[cfg(any(test, feature = "testkit"))]
+    captured: Option<ratatui::buffer::Buffer>,
 }
 
 enum Geometry {
@@ -28,6 +30,8 @@ enum Geometry {
     Ambient(fn() -> io::Result<WindowSize>),
     #[cfg(test)]
     Absent,
+    #[cfg(any(test, feature = "testkit"))]
+    Fixed(Size),
 }
 
 impl PaneBackend {
@@ -52,6 +56,8 @@ impl PaneBackend {
     pub(super) fn end_frame(&mut self, bracket: bool) -> io::Result<()> {
         let frame = self.frame.take().unwrap_or_default();
         let bracket = bracket && !frame.is_empty();
+        #[cfg(any(test, feature = "testkit"))]
+        let bracket = bracket && self.captured.is_none();
         if bracket {
             self.output.write_all(BEGIN_SYNC)?;
         }
@@ -90,6 +96,8 @@ impl PaneBackend {
             geometry,
             sized: Cell::new(true),
             cursor: Position::ORIGIN,
+            #[cfg(any(test, feature = "testkit"))]
+            captured: None,
         };
         backend.pane_size();
         backend
@@ -104,7 +112,34 @@ impl PaneBackend {
             geometry: Geometry::Absent,
             sized: Cell::new(true),
             cursor: Position::ORIGIN,
+            captured: None,
         }
+    }
+
+    #[cfg(feature = "testkit")]
+    pub(super) fn captured(width: u16, height: u16) -> Self {
+        let size = Size::new(width, height);
+        Self {
+            output: Box::new(io::sink()),
+            frame: None,
+            geometry: Geometry::Fixed(size),
+            sized: Cell::new(true),
+            cursor: Position::ORIGIN,
+            captured: Some(ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(
+                0, 0, width, height,
+            ))),
+        }
+    }
+
+    #[cfg(feature = "testkit")]
+    pub(super) fn buffer(&self) -> &ratatui::buffer::Buffer {
+        // Only the player's capturing backend calls this accessor.
+        self.captured.as_ref().expect("capturing backend")
+    }
+
+    #[cfg(feature = "testkit")]
+    pub(super) fn play_output(&mut self, writer: impl Write + Send + 'static) {
+        self.output = Box::new(writer);
     }
 
     /// The pane's cell size, or `None` while the mux has not sized it.
@@ -143,6 +178,11 @@ impl PaneBackend {
             Geometry::Ambient(read) => read()?,
             #[cfg(test)]
             Geometry::Absent => return Err(io::Error::other("no terminal behind this backend")),
+            #[cfg(any(test, feature = "testkit"))]
+            Geometry::Fixed(size) => WindowSize {
+                columns_rows: *size,
+                pixels: Size::default(),
+            },
         };
         let cells = window.columns_rows;
         self.sized.set(cells.width != 0 && cells.height != 0);
@@ -177,6 +217,13 @@ impl Backend for PaneBackend {
         I: Iterator<Item = (u16, u16, &'a BufferCell)>,
     {
         if !self.sized.get() {
+            return Ok(());
+        }
+        #[cfg(any(test, feature = "testkit"))]
+        if let Some(buffer) = &mut self.captured {
+            for (x, y, cell) in content {
+                buffer[(x, y)] = cell.clone();
+            }
             return Ok(());
         }
         CrosstermBackend::new(self).draw(content)

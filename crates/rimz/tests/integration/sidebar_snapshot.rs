@@ -11,6 +11,124 @@ use sha2::{Digest, Sha256};
 use crate::common::{Env, tmux_pane};
 
 #[test]
+fn play_refuses_a_pipe_before_terminal_output() {
+    let env = Env::new();
+    let pilot = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/pilot.scn");
+    let output = env
+        .rimz()
+        .args(["sidebar", "play"])
+        .arg(pilot)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--frames"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn play_exports_repeatable_frames_and_seeks_through_the_same_loop() {
+    let env = Env::new();
+    let pilot = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios/pilot.scn");
+    let first = env.project_root.join("first");
+    let second = env.project_root.join("second");
+    for dir in [&first, &second] {
+        let output = env
+            .rimz()
+            .args(["sidebar", "play"])
+            .arg(&pilot)
+            .arg("--frames")
+            .arg(dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let first = first.join("pilot");
+    let second = second.join("pilot");
+    let index = std::fs::read_to_string(first.join("index.jsonl")).unwrap();
+    let frames: Vec<serde_json::Value> = index
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        frames.len() > 10,
+        "a real filmstrip, not just the opening frame"
+    );
+    assert_eq!(frames[0]["t_ms"], 0);
+    assert_eq!(frames[0]["key"], true);
+    assert!(frames.iter().any(|frame| {
+        frame["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|label| label == "@coder#main")
+    }));
+    for entry in std::fs::read_dir(&first).unwrap() {
+        let entry = entry.unwrap();
+        assert_eq!(
+            std::fs::read(entry.path()).unwrap(),
+            std::fs::read(second.join(entry.file_name())).unwrap(),
+            "{}",
+            entry.path().display()
+        );
+    }
+    for frame in &frames {
+        let text = std::fs::read_to_string(first.join(frame["text"].as_str().unwrap())).unwrap();
+        assert_eq!(text.lines().count(), 34);
+        assert!(!text.contains('\x1b'));
+    }
+    let frame = &frames[frames.len() / 2];
+    let at = format!("{}ms", frame["t_ms"].as_u64().unwrap());
+    let output = env
+        .rimz()
+        .args(["sidebar", "play"])
+        .arg(&pilot)
+        .args(["--at", &at])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let expected = std::fs::read_to_string(first.join(frame["text"].as_str().unwrap())).unwrap();
+    let output = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        output.lines().skip(1).collect::<Vec<_>>().join("\n"),
+        expected.trim_end_matches('\n')
+    );
+    let output = env
+        .rimz()
+        .args(["sidebar", "play"])
+        .arg(&pilot)
+        .args(["--at", &at, "--section", "@coder#main", "--height", "50"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.lines()
+            .skip(1)
+            .all(|line| line.starts_with("@coder#main"))
+    );
+    assert!(text.lines().count() > 1);
+    let output = env
+        .rimz()
+        .args(["sidebar", "play"])
+        .arg(&pilot)
+        .args(["--at", "1s", "--ansi"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.contains(&0x1b));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 34);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("== pilot"));
+}
+
+#[test]
 fn play_check_parses_every_checked_in_scenario_and_reports_all_errors() {
     let env = Env::new();
     let scenarios = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios");

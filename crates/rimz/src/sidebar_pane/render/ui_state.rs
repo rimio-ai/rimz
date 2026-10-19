@@ -23,6 +23,8 @@ pub(in crate::sidebar_pane) struct UiState {
     /// animation tick. The renderer derives the running-agent spin frame from
     /// it; freshness gating (per row) keeps a quiet agent frozen.
     pub(in crate::sidebar_pane) animation_phase: u64,
+    /// Playback pins this phase for cosmetic cycles outside motion windows, leaving money rolls on `animation_phase`.
+    pub(in crate::sidebar_pane) cosmetic_phase: Option<u64>,
     /// Elapsed milliseconds since the loop's monotonic base, stamped beside the phase.
     pub(in crate::sidebar_pane) frame_ms: u64,
     pub(in crate::sidebar_pane) theme_cache: Option<(ThemeConfig, Rc<Theme>)>,

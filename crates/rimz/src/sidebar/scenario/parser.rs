@@ -647,6 +647,17 @@ fn duration_part<'a>(input: &mut &'a str) -> ModalResult<(&'a str, Option<&'a st
     (digit1, opt(preceded('.', digit1)), alt(("ms", "s", "m"))).parse_next(input)
 }
 
+pub fn parse_duration(raw: &str) -> Result<Duration, ScenarioError> {
+    duration(
+        &Token {
+            text: raw.to_owned(),
+            column: 1,
+            quoted: false,
+        },
+        1,
+    )
+}
+
 fn duration(token: &Token, line: usize) -> Result<Duration, ScenarioError> {
     let invalid = || {
         ScenarioError::new(

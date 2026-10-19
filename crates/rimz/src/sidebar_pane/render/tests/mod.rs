@@ -534,6 +534,7 @@ fn test_row_ctx<'a>(
         held_expansions: const { &std::collections::BTreeSet::new() },
         focused_pane: snapshot.focused_pane.as_ref(),
         animation_phase,
+        money_phase: animation_phase,
         cost_rolls,
         lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,

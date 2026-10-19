@@ -77,6 +77,7 @@ impl CardHeights {
             lead_unread: _, // Derived from the owned groups.
             // Content-only; test builds re-measure every hit to guard this premise.
             animation_phase: _,
+            money_phase: _,
             cost_rolls: _,
         } = *ctx;
         let inputs = HeightInputs {

@@ -263,6 +263,22 @@ struct TrackSelection {
 }
 
 impl PetAssets {
+    #[cfg(feature = "testkit")]
+    pub(super) fn settle_load(&mut self, timeout: std::time::Duration) -> bool {
+        let (request, result) = match &self.load_state {
+            PetLoadState::Loading { request, receiver } => {
+                let result = receiver
+                    .recv_timeout(timeout)
+                    .unwrap_or_else(|error| Err(format!("pet loader: {error}")));
+                (request.clone(), result)
+            }
+            PetLoadState::Failed { .. } => return false,
+            PetLoadState::Empty | PetLoadState::Loaded { .. } => return true,
+        };
+        self.finish_load(request, result, 0);
+        matches!(self.load_state, PetLoadState::Loaded { .. })
+    }
+
     #[cfg(test)]
     pub(super) fn test_loaded_pixel_frame(pet_id: &str) -> Self {
         let frame = Arc::from(encode_png(1, 1, &[255, 0, 0, 255]));
@@ -442,6 +458,10 @@ impl PetAssets {
                 ..
             } => return,
         };
+        self.finish_load(request, result, phase);
+    }
+
+    fn finish_load(&mut self, request: PetLoadRequest, result: LoadResult, phase: u64) {
         match result {
             Ok(asset) => {
                 self.load_state = PetLoadState::Loaded { request, asset };

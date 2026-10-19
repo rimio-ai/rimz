@@ -174,11 +174,8 @@ fn cost_spans(row_ctx: &RowCtx<'_>, row: &SidebarRow, cost_usd: Option<f64>) -> 
     if let Some(target) = cost_usd.filter(|usd| *usd >= 0.005) {
         let usd = row_ctx
             .cost_rolls
-            .display(&row.id, target, row_ctx.animation_phase);
-        let style = if row_ctx
-            .cost_rolls
-            .flashing(&row.id, row_ctx.animation_phase)
-        {
+            .display(&row.id, target, row_ctx.money_phase);
+        let style = if row_ctx.cost_rolls.flashing(&row.id, row_ctx.money_phase) {
             theme.value_flash()
         } else {
             theme.money_style(Modifier::BOLD)

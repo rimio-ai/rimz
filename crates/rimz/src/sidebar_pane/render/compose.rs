@@ -1010,7 +1010,7 @@ pub(super) fn top_lines(
         &snapshot.worktree_groups,
         snapshot.now,
         &ui.make_up_filter,
-        ui.animation_phase,
+        ui.cosmetic_phase.unwrap_or(ui.animation_phase),
         inner,
         lead_unread_status,
     );
@@ -1108,7 +1108,8 @@ fn scroll_lines_windowed(
         matched: true,
         held_expansions,
         focused_pane: snapshot.focused_pane.as_ref(),
-        animation_phase: ui.animation_phase,
+        animation_phase: ui.cosmetic_phase.unwrap_or(ui.animation_phase),
+        money_phase: ui.animation_phase,
         cost_rolls: &ui.cost_rolls,
         lead_unread: lead_unread_id,
         recent_subagent_secs: snapshot.theme.display.recent_subagent_secs,
