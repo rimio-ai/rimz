@@ -759,7 +759,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
     );
 
     let path = dir.path().join("task.lock");
-    let guard = match acquire_run_lock_file(open(&path, true), &path).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(open(&path, true), &path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -767,7 +767,7 @@ fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         serde_json::from_slice(&std::fs::read(&path).expect("read lock")).expect("parse lock info");
     assert_eq!(written.pid, std::process::id());
 
-    match acquire_run_lock_file(open(&path, false), &path).expect("contend for lock") {
+    match acquire_run_lock_file(open(&path, false), &path, None).expect("contend for lock") {
         RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
         RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
         RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
@@ -808,7 +808,7 @@ fn wait_for_run_lock_release_observes_guard_drop() {
         .truncate(false)
         .open(&path)
         .expect("open lock");
-    let guard = match acquire_run_lock_file(file, &path).expect("acquire lock") {
+    let guard = match acquire_run_lock_file(file, &path, None).expect("acquire lock") {
         RunLockAttempt::Acquired(guard) => guard,
         RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
     };
@@ -1564,6 +1564,10 @@ fn condition_evidence_reaches_prompt_and_terminal_record() {
         "Rule `ship` fired here. ci.log: \"red\\nlog\" · pr.state: unknown · team.stage: Done\n\nInspect {{branch}}"
     );
     let record = fire.terminal_record(LoopRunResult::Completed);
+    assert_eq!(
+        record.kind,
+        Some(crate::harness::schedule::TaskKind::Routine)
+    );
     assert_eq!(
         serde_json::to_value(&record).unwrap()["condition"],
         serde_json::to_value(&evidence).unwrap()

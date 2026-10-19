@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::account::read_rate_limits_cache;
 use crate::agents::{ProviderCapacity, RateLimitWindow, RoomLoginSet, WindowSpan};
-use crate::forge::pr_state::{PrQueueFact, PrStateCache};
+use crate::forge::pr_state::{PrQueueFact, PrStateCache, UNSUPPORTED_REPO_KEY};
 use crate::ids::{AgentKind, LoginKey, LoginName};
 use crate::store::snapshot::{WorktreeCi, WorktreePrState};
 
@@ -113,6 +113,24 @@ pub(crate) fn probe_demand(
 /// A room's last-known CI and PR readings. Absence of this source means unknown.
 pub struct CiSource(PrStateCache);
 
+/// Satisfaction of a conjunction, counting repeated leaves separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ConditionCount {
+    pub met: usize,
+    pub total: usize,
+    pub not_read: usize,
+}
+
+/// Why a forge clause has no reading in the cached probe result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnreadReason {
+    NotChecked,
+    NoForge,
+    LookupFailing { last_tried: u64 },
+    NoPr { branch: Option<String> },
+    NoCi { branch: Option<String> },
+}
+
 /// The condition keys read from the room's forge cache. This is the one place
 /// that names them: the parser, the probe scopes, and the no-room hint ask it.
 #[derive(Clone, Copy)]
@@ -189,6 +207,54 @@ impl<'a> ForgeKey<'a> {
 }
 
 impl CiSource {
+    /// Explain an absent forge reading without changing condition truth.
+    pub fn unread_reason(&self, key: &str, scope: &Path) -> Option<UnreadReason> {
+        let key = ForgeKey::parse(key)?;
+        if key.read(&self.0, scope).is_some() {
+            return None;
+        }
+        let path = scope.to_string_lossy();
+        let Some(repo) = self.0.path_repos.get(path.as_ref()) else {
+            return Some(UnreadReason::NotChecked);
+        };
+        if repo.is_empty() || repo == UNSUPPORTED_REPO_KEY {
+            return Some(UnreadReason::NoForge);
+        }
+        let Some(probe) = self.0.repos.get(repo) else {
+            return Some(UnreadReason::NotChecked);
+        };
+        if !probe.ok {
+            return Some(UnreadReason::LookupFailing {
+                last_tried: probe.refreshed_at_ms,
+            });
+        }
+        let link = match key.branch() {
+            Some(branch) => self
+                .0
+                .branches
+                .get(repo)
+                .and_then(|rows| rows.get(branch))
+                .and_then(|row| row.pr.as_ref()),
+            None => self.0.states.get(path.as_ref()),
+        };
+        let branch = key.branch().map(str::to_owned);
+        Some(if link.is_none() && !matches!(key, ForgeKey::Ci(None)) {
+            UnreadReason::NoPr { branch }
+        } else {
+            UnreadReason::NoCi { branch }
+        })
+    }
+
+    /// The successful probe time, available only when the latest attempt succeeded.
+    pub fn checked_at(&self, scope: &Path) -> Option<Timestamp> {
+        let repo = self.0.path_repos.get(scope.to_string_lossy().as_ref())?;
+        if repo.is_empty() || repo == UNSUPPORTED_REPO_KEY {
+            return None;
+        }
+        let probe = self.0.repos.get(repo).filter(|probe| probe.ok)?;
+        Timestamp::from_millisecond(i64::try_from(probe.refreshed_at_ms).ok()?).ok()
+    }
+
     pub fn read(runtime: &crate::RuntimePaths) -> Self {
         Self(crate::forge::pr_state::read_pr_state_cache(
             &runtime.pr_state_path(),
@@ -457,6 +523,34 @@ pub struct WhenError {
 }
 
 impl WhenExpr {
+    pub(super) fn condition_count(
+        &self,
+        readings: &[(String, Option<String>)],
+        satisfied: bool,
+    ) -> Option<ConditionCount> {
+        if !self.0.is_conjunction() {
+            return None;
+        }
+        let mut count = ConditionCount {
+            met: 0,
+            total: 0,
+            not_read: 0,
+        };
+        for (term, negated) in self.leaves() {
+            count.total += 1;
+            let reading = readings
+                .iter()
+                .find(|(key, _)| key == &term.key)
+                .and_then(|(_, value)| value.as_deref());
+            if satisfied || term.matches(reading) != negated {
+                count.met += 1;
+            } else if reading.is_none() {
+                count.not_read += 1;
+            }
+        }
+        Some(count)
+    }
+
     pub(crate) fn blocking_evidence(&self, verdict: &Verdict) -> String {
         let (term, negated) = self.0.blocking_term(&verdict.readings, true);
         let evidence = term.comparison_evidence(verdict.readings[&term.key].as_deref());
@@ -569,6 +663,21 @@ impl fmt::Display for WhenExpr {
 }
 
 impl Node {
+    fn is_conjunction(&self) -> bool {
+        match self {
+            Self::Term(_) => true,
+            Self::And(left, right) => left.is_conjunction() && right.is_conjunction(),
+            Self::Not(node) => {
+                let mut literal = node.as_ref();
+                while let Self::Not(inner) = literal {
+                    literal = inner;
+                }
+                matches!(literal, Self::Term(_))
+            }
+            Self::Or(..) => false,
+        }
+    }
+
     fn blocking_term(
         &self,
         readings: &BTreeMap<String, Option<String>>,

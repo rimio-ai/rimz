@@ -1432,6 +1432,7 @@ fn true_condition_without_hold_renders_due() {
 
 fn record(second: i64, result: LoopRunResult) -> LoopRunRecord {
     LoopRunRecord {
+        kind: None,
         judge: Vec::new(),
         checkout: None,
         task: "wait".to_owned(),

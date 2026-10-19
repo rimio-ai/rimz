@@ -80,9 +80,11 @@ pub(super) fn record_transition(task: &LoadedTask, record: &LoopRunRecord) -> Ru
 
 /// Append a `rimz loop stop` cancellation, which may outlive its task's row. A
 /// cancellation is strike-neutral, so no overlay moves and no row is needed.
-pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord) {
+pub(super) fn record_stopped(root: &Path, record: &LoopRunRecord, kind: Option<super::TaskKind>) {
     debug_assert_eq!(strikes::classify(record), strikes::Signal::Neutral);
-    append_for_root(root, record);
+    let mut record = record.clone();
+    record.kind = kind;
+    append_for_root(root, &record);
 }
 
 fn append_for_root(root: &Path, record: &LoopRunRecord) {
@@ -94,6 +96,8 @@ fn append_for_root(root: &Path, record: &LoopRunRecord) {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoopRunRecord {
     pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<super::TaskKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +181,7 @@ impl LoopRunRecord {
     ) -> Self {
         Self {
             task: task.into(),
+            kind: None,
             checkout: None,
             root: None,
             at: Timestamp::now(),
@@ -449,6 +454,7 @@ pub fn acting_run(records: &[LoopRunRecord]) -> Option<ActingRun> {
 pub struct LoopRunStats {
     pub runs: usize,
     pub last: Option<LoopRunRecord>,
+    pub last_kind: Option<(Timestamp, super::TaskKind)>,
     pub spend_today_usd: f64,
     pub acting: Option<ActingRun>,
     pub heard: Option<HeardSignal>,
@@ -733,10 +739,16 @@ fn fold_record(record: LoopRunRecord, now: &Zoned, stats: &mut BTreeMap<String, 
     let entry = stats.entry(record.task.clone()).or_insert(LoopRunStats {
         runs: 0,
         last: None,
+        last_kind: None,
         spend_today_usd: 0.0,
         acting: None,
         heard: None,
     });
+    if let Some(kind) = record.kind
+        && entry.last_kind.is_none_or(|(at, _)| record.at >= at)
+    {
+        entry.last_kind = Some((record.at, kind));
+    }
     if record.result == LoopRunResult::SignalSkipped {
         if let Some(heard) = HeardSignal::of(&record) {
             entry.heard = Some(heard);

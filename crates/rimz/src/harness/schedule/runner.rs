@@ -51,7 +51,7 @@ use crate::harness::schedule::run_log::{
 use crate::harness::schedule::signal::{
     Signal as TriggerSignal, WAIT_TAIL_CAP, WatchOutcome, WatchVerdict,
 };
-use crate::harness::schedule::{TaskAction, Trigger};
+use crate::harness::schedule::{TaskAction, TaskKind, Trigger};
 use crate::ids::AgentKind;
 use crate::ids::{MessageId, RunId, WorkspaceId};
 use crate::store::run::RunRecord;
@@ -962,7 +962,7 @@ impl<'a> TaskFire<'a> {
             }
             Err(err) => return Err(err),
         };
-        match acquire_run_lock(&path)? {
+        match acquire_run_lock(&path, self.task.kind())? {
             RunLockAttempt::Acquired(guard) => {
                 self.run_lock = Some(guard);
                 Ok(None)
@@ -1605,6 +1605,7 @@ impl<'a> TaskFire<'a> {
     fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
         let mut record =
             LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started));
+        record.kind = Some(self.task.kind());
         record.watch = self.watch_outcome().map(|watch| watch.verdict.clone());
         record.signal = self.signal.as_ref().map(|signal| SignalRecord {
             name: signal.name.clone(),
@@ -2260,6 +2261,11 @@ pub fn stop_task(
     let Some((lock, holder)) = held_run_lock(name, root)? else {
         return Ok(StopOutcome::NoActiveRun);
     };
+    let kind = std::fs::read(&lock)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<RunLockMetadata>(&bytes).ok())
+        .filter(|metadata| Some(metadata.holder) == holder)
+        .and_then(|metadata| metadata.kind);
 
     let (workspace, project_root) = stop_workspace(root)?;
     let paths = StatePaths::for_project_root(&project_root)?;
@@ -2285,7 +2291,7 @@ pub fn stop_task(
         && let Some(info) = holder
         && wait_for_run_lock_release_path(&lock, STOP_GRACE)?
     {
-        append_stopped_record(name, root, info, run.as_ref());
+        append_stopped_record(name, root, info, run.as_ref(), kind);
         // A run stopped while held for its turn dies holding a ticket. The
         // kernel frees the lock before `/proc` reports the holder dead, and the
         // sweep removes a ticket only once its owner reads dead, so wait for
@@ -2329,7 +2335,13 @@ fn stop_workspace(root: &Path) -> Result<(Option<ResolvedWorkspace>, PathBuf)> {
     Ok((workspace, project_root))
 }
 
-fn append_stopped_record(name: &str, root: &Path, info: RunLockInfo, run: Option<&RunRecord>) {
+fn append_stopped_record(
+    name: &str,
+    root: &Path,
+    info: RunLockInfo,
+    run: Option<&RunRecord>,
+    kind: Option<TaskKind>,
+) {
     let elapsed = Timestamp::now()
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
@@ -2343,7 +2355,7 @@ fn append_stopped_record(name: &str, root: &Path, info: RunLockInfo, run: Option
     record.mode = None;
     record.error = Some("stopped by rimz loop stop".to_owned());
     record.run_id = run.map(|record| record.run_id.to_string());
-    run_log::record_stopped(root, &record);
+    run_log::record_stopped(root, &record, kind);
 }
 
 struct RunLockGuard {
@@ -2362,6 +2374,14 @@ pub struct RunLockInfo {
     pub started_at: Timestamp,
 }
 
+#[derive(Serialize, Deserialize)]
+struct RunLockMetadata {
+    #[serde(flatten)]
+    holder: RunLockInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<TaskKind>,
+}
+
 enum RunLockAttempt {
     Acquired(RunLockGuard),
     Held(Option<RunLockInfo>),
@@ -2372,7 +2392,7 @@ pub enum RunLockState {
     Held(Option<RunLockInfo>),
 }
 
-fn acquire_run_lock(path: &Path) -> Result<RunLockAttempt> {
+fn acquire_run_lock(path: &Path, kind: TaskKind) -> Result<RunLockAttempt> {
     let parent = path
         .parent()
         .context("loop run lock path has no runtime parent")?;
@@ -2385,7 +2405,7 @@ fn acquire_run_lock(path: &Path) -> Result<RunLockAttempt> {
         .truncate(false)
         .open(path)
         .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
-    acquire_run_lock_file(file, path)
+    acquire_run_lock_file(file, path, Some(kind))
 }
 
 /// One listing of a root's `locks/`, with every run lock in it probed once.
@@ -2588,7 +2608,11 @@ fn wait_for_process_exit(pid: u32, grace: Duration) -> bool {
     true
 }
 
-fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
+fn acquire_run_lock_file(
+    mut file: File,
+    path: &Path,
+    kind: Option<TaskKind>,
+) -> Result<RunLockAttempt> {
     match crate::disk::lock::try_lock_file(&mut file, path) {
         Ok(()) => {
             let info = RunLockInfo {
@@ -2601,7 +2625,7 @@ fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> 
                 .with_context(|| format!("truncating loop run lock `{}`", path.display()))?;
             file.rewind()
                 .with_context(|| format!("rewinding loop run lock `{}`", path.display()))?;
-            serde_json::to_writer(&mut file, &info)
+            serde_json::to_writer(&mut file, &RunLockMetadata { holder: info, kind })
                 .with_context(|| format!("writing loop run lock `{}`", path.display()))?;
             file.flush()
                 .with_context(|| format!("flushing loop run lock `{}`", path.display()))?;

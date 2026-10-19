@@ -23,6 +23,112 @@ fn scope_checkout_keys_include_nested_terms_but_not_named_branches_or_windows() 
 }
 
 #[test]
+fn unread_forge_reasons_follow_probe_status_before_empty_rows() {
+    use crate::forge::pr_state::{BranchRow, RepoProbe};
+    let scope = Path::new("/checkout");
+    let mut source = CiSource(PrStateCache::default());
+    assert_eq!(
+        source.unread_reason("pr[main]", scope),
+        Some(UnreadReason::NotChecked)
+    );
+    source
+        .0
+        .path_repos
+        .insert("/checkout".into(), "<unsupported>".into());
+    assert_eq!(
+        source.unread_reason("pr", scope),
+        Some(UnreadReason::NoForge)
+    );
+    source.0.repos.insert(
+        "<unsupported>".into(),
+        RepoProbe {
+            refreshed_at_ms: 1_000,
+            ok: true,
+            consecutive_failures: 0,
+        },
+    );
+    assert_eq!(source.checked_at(scope), None);
+    source
+        .0
+        .path_repos
+        .insert("/checkout".into(), String::new());
+    assert_eq!(
+        source.unread_reason("pr", scope),
+        Some(UnreadReason::NoForge)
+    );
+    source
+        .0
+        .path_repos
+        .insert("/checkout".into(), "repo".into());
+    source.0.repos.insert(
+        "repo".into(),
+        RepoProbe {
+            refreshed_at_ms: 1_000,
+            ok: false,
+            consecutive_failures: 1,
+        },
+    );
+    source.0.branches.insert(
+        "repo".into(),
+        BTreeMap::from([("main".into(), BranchRow::default())]),
+    );
+    assert_eq!(
+        source.unread_reason("pr[main]", scope),
+        Some(UnreadReason::LookupFailing { last_tried: 1_000 })
+    );
+    assert_eq!(source.checked_at(scope), None);
+    source.0.repos.get_mut("repo").unwrap().ok = true;
+    assert_eq!(
+        source.checked_at(scope),
+        Some(Timestamp::from_millisecond(1_000).unwrap())
+    );
+    for key in ["pr[main]", "pr.queue[main]", "ci[main]"] {
+        assert_eq!(
+            source.unread_reason(key, scope),
+            Some(UnreadReason::NoPr {
+                branch: Some("main".into())
+            })
+        );
+    }
+    assert_eq!(
+        source.unread_reason("pr", scope),
+        Some(UnreadReason::NoPr { branch: None })
+    );
+    assert_eq!(
+        source.unread_reason("ci", scope),
+        Some(UnreadReason::NoCi { branch: None })
+    );
+    source.0.states.insert(
+        "/checkout".into(),
+        serde_json::from_value(serde_json::json!({"state": "open"})).unwrap(),
+    );
+    source
+        .0
+        .branches
+        .get_mut("repo")
+        .unwrap()
+        .get_mut("main")
+        .unwrap()
+        .pr = source.0.states.get("/checkout").cloned();
+    assert_eq!(
+        source.unread_reason("ci", scope),
+        Some(UnreadReason::NoCi { branch: None })
+    );
+    assert_eq!(
+        source.unread_reason("ci[main]", scope),
+        Some(UnreadReason::NoCi {
+            branch: Some("main".into())
+        })
+    );
+    source
+        .0
+        .branch_ci
+        .insert("/checkout".into(), WorktreeCi::Passing);
+    assert_eq!(source.unread_reason("ci", scope), None);
+    assert_eq!(source.unread_reason("team.stage", scope), None);
+}
+
+#[test]
 fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
     let owned = vec![
         std::path::PathBuf::from("/alias/spare/../one"),

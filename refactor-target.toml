@@ -672,7 +672,8 @@ path = "crates/rimz/src/forge"
 # The merge-queue fact crosses the same seam to the poll cadence and its readers (+1).
 # `PrLink::queue` is the one open-only reading of that fact for cadence, conditions, and the snapshot (+1).
 # BranchRow shares demanded branch readings between sidebar publication and conditions (+1).
-surface-budget = 49
+# UNSUPPORTED_REPO_KEY names the forge-cache marker for both its producer and readers (+1).
+surface-budget = 50
 
 [[module]]
 path = "crates/rimz/src/harness"
@@ -837,7 +838,8 @@ path = "crates/rimz/src/harness"
 # WhenExpr::scope_checkout_key shares resident destination admission with the CLI (+1).
 # tmp_floor::TempUnitBytes keeps measured inventory byte totals all-or-none (+1).
 # launch_plan::AgentTempOwners and its constructor/lookup share indexed ownership with GC (+3).
-surface-budget = 919
+# TaskKind, lifecycle inspection, condition progress and unread-forge reasons (+8).
+surface-budget = 927
 
 [[verdict]]
 kind = "item"
@@ -7740,3 +7742,48 @@ reason = "Agent logs share the transcript's shell-quoted older-history hint."
 kind = "item"
 key = "config::gc::TranscriptRetention"
 reason = "GcPolicy shares the machine's typed forever-or-duration history retention with every sweep."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::TaskKind"
+reason = "The harness classifies compiled tasks once for lifecycle presentation and durable history."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::LoadedTask::kind"
+reason = "The CLI reads the harness lifecycle rather than reclassifying stored rows."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::TaskTiming::condition_count"
+reason = "CLI progress projects already-observed condition readings without another read."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::ConditionCount"
+reason = "The CLI shares typed conjunction satisfaction and unread counts."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::UnreadReason"
+reason = "Forge cache absence is explained independently of condition truth."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::CiSource::unread_reason"
+reason = "Condition presentation reads per-key forge failure reasons without probing."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::CiSource::checked_at"
+reason = "Condition presentation reads the latest successful cache probe timestamp."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::when::WhenExpr::condition_count"
+reason = "TaskTiming projects pure conjunction progress through the expression's private tree."
+
+[[verdict]]
+kind = "item"
+key = "forge::pr_state::UNSUPPORTED_REPO_KEY"
+reason = "The forge cache owns its unsupported-repository marker, shared by producer and readers."
