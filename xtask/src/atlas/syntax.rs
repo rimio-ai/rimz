@@ -18,6 +18,8 @@ use super::modules::{
 };
 use super::sources::{self, Source, SourceKind};
 
+/// A boundary-visible item, including methods declared on an impl self type
+/// or a trait.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct PubItem {
     pub(super) module: String,
@@ -39,6 +41,9 @@ pub(super) struct PubItem {
     /// Declared inside an `impl` or trait: a method rather than a free item.
     #[serde(skip)]
     pub(super) member: bool,
+    /// The impl self type's last path segment or the declaring trait's name.
+    #[serde(skip)]
+    pub(super) owner: Option<String>,
 }
 
 /// A production item no boundary visibility qualifies: a private type,
@@ -433,6 +438,7 @@ fn collect_public_items(
             );
         }
         if let Item::Impl(item) = item {
+            let owner = impl_owner(item);
             for method in &item.items {
                 if let ImplItem::Fn(method) = method
                     && !is_cfg_excluded(&method.attrs)
@@ -454,6 +460,7 @@ fn collect_public_items(
                         target: None,
                         cfg: cfg_predicate(&method.attrs, item_cfg.as_deref()),
                         member: true,
+                        owner: owner.clone(),
                     });
                 }
             }
@@ -478,6 +485,7 @@ fn collect_public_items(
                     target: None,
                     cfg: item_cfg.clone(),
                     member: false,
+                    owner: None,
                 });
                 for method in &item.items {
                     if let TraitItem::Fn(method) = method
@@ -495,6 +503,7 @@ fn collect_public_items(
                             target: None,
                             cfg: cfg_predicate(&method.attrs, item_cfg.as_deref()),
                             member: true,
+                            owner: Some(item.ident.to_string()),
                         });
                     }
                 }
@@ -535,6 +544,7 @@ fn collect_public_items(
                     target: None,
                     cfg: item_cfg.clone(),
                     member: false,
+                    owner: None,
                 });
             }
             if let Some((_, items)) = &item.content {
@@ -629,6 +639,7 @@ fn collect_public_items(
                         }),
                         cfg: item_cfg.clone(),
                         member: false,
+                        owner: None,
                     });
                 }
                 continue;
@@ -652,6 +663,7 @@ fn collect_public_items(
                 target: None,
                 cfg: item_cfg,
                 member: false,
+                owner: None,
             });
         } else if kind != "fn" {
             collected.private.push(PrivateItem {
@@ -1282,17 +1294,22 @@ fn expression_ident(expression: &Expr) -> Option<String> {
         .then(|| path.path.segments[0].ident.to_string())
 }
 
+/// The last path segment of an impl's self type; `None` for a non-path
+/// self type such as `&T`.
+fn impl_owner(item: &ItemImpl) -> Option<String> {
+    match item.self_ty.as_ref() {
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string()),
+        _ => None,
+    }
+}
+
 impl<'ast> Visit<'ast> for FnCollector<'_> {
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        let owner = match item.self_ty.as_ref() {
-            syn::Type::Path(path) => path
-                .path
-                .segments
-                .last()
-                .map(|segment| segment.ident.to_string()),
-            _ => None,
-        };
-        let previous_owner = std::mem::replace(&mut self.owner, owner);
+        let previous_owner = std::mem::replace(&mut self.owner, impl_owner(item));
         let previous_test_region = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
         let enclosing = cfg_predicate(&item.attrs, self.cfg.as_deref());
@@ -1345,6 +1362,7 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
+        let previous_owner = self.owner.replace(item.ident.to_string());
         let previous = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
         let enclosing = cfg_predicate(&item.attrs, self.cfg.as_deref());
@@ -1356,10 +1374,10 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         self.member = previous_member;
         self.cfg = previous_cfg;
         self.in_test_region = previous;
+        self.owner = previous_owner;
     }
 
     fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
-        let previous_owner = self.owner.take();
         let previous_test_region = self.in_test_region;
         self.in_test_region |= is_cfg_excluded(&item.attrs);
         if let Some(block) = &item.default {
@@ -1367,7 +1385,6 @@ impl<'ast> Visit<'ast> for FnCollector<'_> {
         }
         visit::visit_trait_item_fn(self, item);
         self.in_test_region = previous_test_region;
-        self.owner = previous_owner;
     }
 }
 

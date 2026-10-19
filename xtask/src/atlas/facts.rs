@@ -35,7 +35,7 @@ pub(super) struct Facts {
     pub(super) mod_index: ModIndex,
     pub(super) known_modules: BTreeSet<String>,
     /// Every identifier the workspace defines in production code: boundary
-    /// visible items, function names, impl owners, and module names. Family
+    /// visible items, function names, impl/trait owners, and module names. Family
     /// detectors use it to tell crate vocabulary from std vocabulary without
     /// a SCIP index.
     pub(super) defined_names: BTreeSet<String>,

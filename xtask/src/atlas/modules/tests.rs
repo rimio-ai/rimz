@@ -297,7 +297,7 @@ mod key_tests {
         ]);
         assert_eq!(
             resolved(&files, "lsp::check::Report::render"),
-            ["function lsp::check (owner Report)"]
+            ["visible lsp::check (owner Report)"]
         );
         assert_eq!(
             resolved(&files, "lsp::check::render"),
@@ -322,6 +322,23 @@ mod key_tests {
         );
         assert!(resolved(&files, "mux::zellij::Other::converge_presence_plugin_for").is_empty());
         assert!(resolved(&files, "mux::zellij::converge_gone").is_empty());
+    }
+
+    #[test]
+    fn owner_keys_resolve_trait_declarations_and_private_defaults() {
+        let files = files(&[(
+            "crates/demo/src/m.rs",
+            "pub trait Trait { fn required(&self); fn provided(&self) {} }\ntrait Priv { fn provided(&self) {} }",
+        )]);
+        for key in ["m::Trait::required", "m::Trait::provided", "m::required"] {
+            assert_eq!(resolved(&files, key), ["visible m (owner Trait)"], "{key}");
+        }
+        assert_eq!(
+            resolved(&files, "m::Priv::provided"),
+            ["function m (owner Priv)"]
+        );
+        assert!(resolved(&files, "m::Other::required").is_empty());
+        assert!(resolved(&files, "m::Other::provided").is_empty());
     }
 
     #[test]
@@ -428,7 +445,7 @@ mod key_tests {
         // method.
         assert_eq!(sites("store::open"), ["5 (Store)"]);
         assert_eq!(sites("store::load"), ["6 (Store)"]);
-        assert_eq!(sites("store::fetch"), ["10"]);
+        assert_eq!(sites("store::fetch"), ["10 (Source)"]);
     }
 
     #[test]

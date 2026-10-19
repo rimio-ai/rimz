@@ -624,6 +624,56 @@ fn inspect_item_resolves_private_functions_with_their_referrers() {
     );
 }
 
+#[test]
+fn inspect_owned_public_methods_use_visible_reference_edges() {
+    let root =
+        crate_fixture("pub struct Owner;\nimpl Owner {\n    pub fn pub_method(&self) {}\n}\n");
+    run(root.path(), &["init", "--quiet"]);
+    run(
+        root.path(),
+        &[
+            "-c",
+            "user.name=Atlas Test",
+            "-c",
+            "user.email=atlas@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    );
+    let mut facts = Facts::load(root.path(), Path::new("."), Facets::default()).unwrap();
+    let mut reference = super::testkit::edge(
+        "pub_method",
+        "caller",
+        Some(("run", 10)),
+        SourceKind::Production,
+    );
+    reference.to_path = PathBuf::from("src/store.rs");
+    reference.to_line = 3;
+    facts.references = Some(super::super::references::References {
+        edges: vec![reference],
+        ..Default::default()
+    });
+    let evidence = item_evidence(
+        root.path(),
+        &facts,
+        &selector("store"),
+        None,
+        "store::Owner::pub_method",
+    )
+    .unwrap();
+    assert_eq!(evidence.production_referrers, ["caller::run"]);
+    assert_eq!(evidence.key, "store::Owner::pub_method");
+    let definitions = modules::definitions_for_key(&facts.syntax.files, &evidence.key);
+    assert!(matches!(
+        definitions[0].resolved,
+        modules::Resolved::Visible(_)
+    ));
+    assert_eq!(definitions[0].line, evidence.line);
+}
+
 /// A crate mirroring the verdict keys the resolver once missed: private
 /// items in a private child (`disk::usage::FileIdentity`), a private trait at
 /// a module root (`sidebar::SidebarMux`), a method keyed by its owner
@@ -765,7 +815,10 @@ fn inspect_item_resolves_private_items_with_their_referrers() {
         "store::converge_presence_plugin_for",
     )
     .unwrap();
-    assert_eq!(child.key, "store::presence::converge_presence_plugin_for");
+    assert_eq!(
+        child.key,
+        "store::presence::Zellij::converge_presence_plugin_for"
+    );
     let shared = item_evidence(root.path(), &facts, &selector("store"), None, "Shared").unwrap();
     assert_eq!(shared.declared, "pub", "the visible item wins");
     let error = item_evidence(root.path(), &facts, &selector("store"), None, "store::Gone")

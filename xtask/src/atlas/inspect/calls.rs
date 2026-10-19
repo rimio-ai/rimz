@@ -125,20 +125,11 @@ fn owner_for_edge(edge: &Edge, syntax_files: &[FileSyntax]) -> Option<String> {
         .pub_items
         .iter()
         .find(|item| item.line == edge.to_line && item.name == edge.item)?;
-    if matches!(
-        item.kind.as_str(),
-        "struct" | "enum" | "trait" | "type" | "union"
-    ) {
-        return Some(item.name.clone());
+    match item.kind.as_str() {
+        "struct" | "enum" | "trait" | "type" | "union" => Some(item.name.clone()),
+        "fn" => item.owner.clone(),
+        _ => None,
     }
-    file.fns
-        .iter()
-        .find(|function| {
-            function.name == edge.item
-                && function.line <= edge.to_line
-                && edge.to_line <= function.end_line
-        })
-        .and_then(|function| function.owner.clone())
 }
 
 fn is_type_alias_edge(edge: &Edge, syntax_files: &[FileSyntax]) -> bool {

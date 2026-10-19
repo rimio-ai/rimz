@@ -1437,6 +1437,11 @@ fn private_function_and_method_rehome_land_when_defined_once_under_to() {
             true,
         ),
         ("cli::exec::settle", "fn settle() {}", true),
+        (
+            "cli::exec::settle",
+            "fn settle() {}\nstruct Run;\nimpl Run { pub fn settle(&self) {} }",
+            true,
+        ),
         // The method keeps its owner; a free `step` beside it is no match.
         (
             "cli::exec::Run::step",
@@ -1481,6 +1486,43 @@ fn private_function_and_method_rehome_land_when_defined_once_under_to() {
         let row = row(&rows, &format!("rehome {key} → harness"));
         assert_eq!(row.landed, landed, "{destination}: {}", row.detail);
     }
+}
+
+#[test]
+fn trait_method_rehome_counts_required_and_provided_declarations_once() {
+    let facts = facts_for_sources(
+        vec![Source::new(
+            "src/harness.rs",
+            "pub trait Trait {\n    fn required(&self);\n    fn provided(&self) {}\n}\n",
+        )],
+        References::default(),
+    );
+    for (name, line) in [("required", 2), ("provided", 3)] {
+        let key = format!("cli::Trait::{name}");
+        let sites = definition_sites(&facts.syntax.files, "harness", &key, Some("Trait"));
+        assert_eq!(sites.len(), 1, "{key}: {sites:?}");
+        assert_eq!(sites[0].line, line);
+    }
+}
+
+#[test]
+fn assembly_folds_required_and_provided_trait_methods_under_the_trait() {
+    let syntax = super::super::syntax::analyze_sources(
+        &[Source::new(
+            "src/target.rs",
+            "pub trait Trait {\n    fn required(&self);\n    fn provided(&self) {}\n}\n",
+        )],
+        &BTreeSet::new(),
+    );
+    let mut edges = [
+        reference_edge("src/a.rs", "required", Some(10)),
+        reference_edge("src/a.rs", "provided", Some(10)),
+    ];
+    for (edge, line) in edges.iter_mut().zip([2, 3]) {
+        edge.to_line = line;
+    }
+    let folded = collect_reference_edges(edges.iter(), &[PathBuf::from("src/a.rs")], &syntax.files);
+    assert_eq!(folded[&("caller".into(), "target".into())].assembly(), 1);
 }
 
 #[test]
