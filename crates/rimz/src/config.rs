@@ -1074,7 +1074,7 @@ impl ConfigStamp {
 
 fn legacy_roots_without_core(config_path: &Path) -> Vec<PathBuf> {
     if config_path != MachineConfig::config_path()
-        || !matches!(std::fs::symlink_metadata(config_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        || crate::disk::entry_exists(config_path).unwrap_or(true)
     {
         return Vec::new();
     }
@@ -1204,7 +1204,7 @@ fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<
         Ok(text) => parse(path, &text).map(Some),
         Err(err)
             if err.kind() == std::io::ErrorKind::NotFound
-                && matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) =>
+                && !crate::disk::entry_exists(path).unwrap_or(true) =>
         {
             Ok(None)
         }
