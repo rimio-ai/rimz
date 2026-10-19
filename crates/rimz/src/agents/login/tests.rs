@@ -13,6 +13,46 @@ fn project_accounts(root: &Path, value: &str) {
 }
 
 #[test]
+fn legacy_only_config_refuses_inheritance_but_allows_a_default_pin() {
+    if std::env::var_os("RIMZ_TEST_LEGACY_HOME").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "agents::login::tests::legacy_only_config_refuses_inheritance_but_allows_a_default_pin", "--nocapture"])
+            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("XDG_STATE_HOME", home.path().join("state"))
+            .env("RIMZ_TEST_LEGACY_HOME", "1")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let legacy = PathBuf::from(std::env::var_os("XDG_STATE_HOME").expect("isolated test state"))
+        .join("rimz");
+    std::fs::create_dir_all(&legacy).unwrap();
+    let config = crate::config::MachineConfig::load_lenient();
+    let root = tempfile::tempdir().unwrap();
+    let kind = crate::ids::AgentKind::new_unchecked("claude");
+    let following = resolve_room_accounts(&RoomLogins::new(), root.path(), &config);
+    let error = following
+        .login(&kind, &config.accounts)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("legacy RimZ roots"), "{error}");
+    let pins = RoomLogins::from([(kind.clone(), crate::ids::LoginName::default_login())]);
+    let pinned = resolve_room_accounts(&pins, root.path(), &config);
+    assert!(
+        pinned
+            .login(&kind, &config.accounts)
+            .unwrap()
+            .name()
+            .is_default()
+    );
+}
+
+#[test]
 fn inherited_selection_reports_each_layer() {
     let root = tempfile::tempdir().unwrap();
     let kind = crate::ids::AgentKind::new_unchecked("codex");

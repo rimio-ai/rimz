@@ -403,6 +403,23 @@ impl Store {
         })
     }
 
+    /// Replace the warnings from the room's latest configuration judgment.
+    #[must_use = "durability barrier; check the result"]
+    pub fn set_skipped_settings(
+        &self,
+        workspace: &ResolvedWorkspace,
+        skipped: Vec<record::SkippedSetting>,
+    ) -> Result<()> {
+        self.commit(|txn| {
+            let prior = record::read_optional(&txn.paths.workspace_record)?;
+            let mut record =
+                workspace_record_preserving_room_state(prior.as_ref(), workspace, None);
+            record.skipped = skipped;
+            record::write(txn.paths, &record)?;
+            Ok(())
+        })
+    }
+
     /// Pin one provider's future launches without changing existing agent stamps.
     #[must_use = "durability barrier; check the result"]
     pub fn switch_room_login(
@@ -1062,6 +1079,7 @@ fn workspace_record_preserving_room_state(
     let mut record = record::WorkspaceRecord::from_resolved(workspace);
     if let Some(prior) = prior {
         record.pins.clone_from(&prior.pins);
+        record.skipped.clone_from(&prior.skipped);
         record
             .remote_control_off
             .clone_from(&prior.remote_control_off);

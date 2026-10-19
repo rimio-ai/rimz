@@ -176,6 +176,8 @@ pub enum ProgramLookupErr {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentProcessCompileErr {
+    #[error(transparent)]
+    AccountBudget(#[from] crate::config::AccountBudgetConfigError),
     #[error("agent `{kind}` cannot launch: {conflict}")]
     SettingsConflict {
         kind: String,
@@ -900,6 +902,13 @@ fn compile_agent_process_with_extra_env(
     reminders: &LaunchReminders,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
+    if crate::config::MachineConfig::load_lenient()
+        .accounts
+        .budget(kind)
+        .is_some()
+    {
+        crate::config::AccountsConfig::validate_budget_kind(kind)?;
+    }
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
         AgentProcessCompileErr::UnknownAgent {
             kind: kind.to_owned(),

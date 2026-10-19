@@ -405,7 +405,10 @@ fn preflight_web_engine() -> Result<()> {
 }
 
 fn ensure_default_config_for_start() -> Result<bool> {
-    let config_was_missing = !rimz::config::MachineConfig::config_path().exists();
+    let config_was_missing = matches!(
+        std::fs::symlink_metadata(rimz::config::MachineConfig::config_path()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
     let initialized_config = setup::ensure_default_config()?;
     let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
     if initialized_config && !(first_run && start_attended()) {

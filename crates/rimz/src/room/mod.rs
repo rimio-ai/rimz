@@ -713,6 +713,7 @@ mod tests {
             rimz_build: None,
             pins: Default::default(),
             remote_control_off: Default::default(),
+            skipped: Vec::new(),
             updated_at: jiff::Timestamp::now(),
         };
         let workspace = RoomContext::workspace_from_record(&record, MuxName::Tmux);

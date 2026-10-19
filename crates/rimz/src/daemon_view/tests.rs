@@ -572,6 +572,7 @@ fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
         rimz_build: Some("build".to_owned()),
         pins: Default::default(),
         remote_control_off: Default::default(),
+        skipped: Vec::new(),
         updated_at: jiff::Timestamp::from_second(1_750_000_000).unwrap(),
     };
     let inputs = DaemonWorkspaceInputs::from_record(&record);

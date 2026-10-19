@@ -1043,6 +1043,40 @@ fn room_logins_freeze_at_birth_and_survive_a_generic_rerecord() {
 }
 
 #[test]
+fn skipped_settings_are_replaced_preserved_and_reset_with_the_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceResolver::resolve(dir.path(), None).unwrap();
+    let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
+    let store = Store::open(paths.clone(), runtime).unwrap();
+    store.record_workspace(&workspace).unwrap();
+    let skipped = vec![record::SkippedSetting {
+        setting: "agents.shell".to_owned(),
+        message: "fix the shell".to_owned(),
+    }];
+    let read = || record::read(&paths.workspace_record).unwrap().skipped;
+    store
+        .set_skipped_settings(&workspace, skipped.clone())
+        .unwrap();
+    assert_eq!(read(), skipped);
+    store.record_workspace(&workspace).unwrap();
+    assert_eq!(read(), skipped);
+    let bin = dir.path().join("builds/build/rimz");
+    crate::disk::atomic::write_executable_bytes_atomically(&bin, b"build").unwrap();
+    store
+        .record_room_bin(&workspace, bin, "build".to_owned())
+        .unwrap();
+    assert_eq!(read(), skipped);
+    store.reset_records_keeping_logins().unwrap();
+    assert_eq!(read(), skipped);
+    store.set_skipped_settings(&workspace, Vec::new()).unwrap();
+    assert!(read().is_empty());
+    store.set_skipped_settings(&workspace, skipped).unwrap();
+    store.reset_records(false).unwrap();
+    assert!(read().is_empty());
+}
+
+#[test]
 fn remote_control_off_survives_rerecords_and_recovery_but_not_reset() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("project");

@@ -619,6 +619,18 @@ impl MachineConfig {
 
         let mut notices = ConfigNotices::default();
         let core = recover_parsed(files.core_path(), parse_core_text_collecting, &mut notices);
+        let legacy = legacy_roots_without_core(config_path);
+        if !legacy.is_empty() {
+            let home = paths::rimz_home();
+            notices.unreadable_files.insert(
+                config_path.to_path_buf(),
+                format!(
+                    "{} has no config.toml but legacy RimZ roots exist. {}",
+                    home.display(),
+                    paths::legacy_roots_fix(&legacy, &home),
+                ),
+            );
+        }
         let theme = recover_parsed(&theme_path, parse_theme_text_collecting, &mut notices);
         let loop_ = recover_parsed(&loop_path, parse_loop_text_collecting, &mut notices);
 
@@ -1002,6 +1014,7 @@ struct ConfigStamp {
     theme: StampedPath,
     loop_: StampedPath,
     definitions: Vec<StampedPath>,
+    legacy_roots: Vec<PathBuf>,
 }
 
 impl ConfigStamp {
@@ -1017,6 +1030,7 @@ impl ConfigStamp {
             theme: StampedPath::of(&files.path(MachineConfigFileKind::Theme)),
             loop_: StampedPath::of(&files.path(MachineConfigFileKind::Loop)),
             definitions,
+            legacy_roots: legacy_roots_without_core(config_path),
         }
     }
 
@@ -1029,6 +1043,15 @@ impl ConfigStamp {
             .chain(self.definitions.iter())
             .any(|path| stamped_path_modified_within(path, now, quiet))
     }
+}
+
+fn legacy_roots_without_core(config_path: &Path) -> Vec<PathBuf> {
+    if config_path != MachineConfig::config_path()
+        || !matches!(std::fs::symlink_metadata(config_path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Vec::new();
+    }
+    paths::legacy_config_roots()
 }
 
 /// The skill files a sandboxed load reads for `skills:` checks, plus the
@@ -1152,7 +1175,12 @@ impl<T: Default> Default for Parsed<T> {
 fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<Option<T>> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse(path, &text).map(Some),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err)
+            if err.kind() == std::io::ErrorKind::NotFound
+                && matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
         Err(source) => Err(ConfigErr::Io {
             path: path.to_path_buf(),
             source,

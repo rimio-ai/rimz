@@ -42,6 +42,12 @@ pub enum WorkspaceRecordErr {
 
 pub type Result<T> = std::result::Result<T, WorkspaceRecordErr>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkippedSetting {
+    pub setting: String,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "WorkspaceRecordRead")]
 pub struct WorkspaceRecord {
@@ -83,6 +89,8 @@ pub struct WorkspaceRecord {
     /// that births the room sets it and `rimz reset` clears it.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub remote_control_off: BTreeSet<AgentKind>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<SkippedSetting>,
     pub updated_at: Timestamp,
 }
 
@@ -107,6 +115,8 @@ struct WorkspaceRecordRead {
     logins: Option<serde_json::Value>,
     #[serde(default)]
     remote_control_off: BTreeSet<AgentKind>,
+    #[serde(default)]
+    skipped: Vec<SkippedSetting>,
     updated_at: Timestamp,
 }
 
@@ -136,6 +146,7 @@ impl TryFrom<WorkspaceRecordRead> for WorkspaceRecord {
             rimz_build: record.rimz_build,
             pins,
             remote_control_off: record.remote_control_off,
+            skipped: record.skipped,
             updated_at: record.updated_at,
         })
     }
@@ -164,6 +175,7 @@ impl WorkspaceRecord {
             rimz_build: None,
             pins: RoomLogins::new(),
             remote_control_off: BTreeSet::new(),
+            skipped: Vec::new(),
             updated_at: Timestamp::now(),
         }
     }
@@ -315,6 +327,28 @@ mod tests {
             read(&paths.workspace_record).unwrap().remote_control_off,
             record.remote_control_off
         );
+    }
+
+    #[test]
+    fn skipped_settings_round_trip_and_default_to_empty() {
+        let legacy = serde_json::json!({
+            "workspace_id": "ws_0123456789abcdef01234567",
+            "project_root": "/repo", "session_name": "rimz-repo",
+            "updated_at": "2024-01-01T00:00:00Z"
+        });
+        let record: WorkspaceRecord = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(
+            serde_json::to_value(record)
+                .unwrap()
+                .get("skipped")
+                .is_none()
+        );
+        let skipped =
+            serde_json::json!([{ "setting": "agents.shell", "message": "fix the shell" }]);
+        let mut value = legacy;
+        value["skipped"] = skipped.clone();
+        let record: WorkspaceRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(serde_json::to_value(record).unwrap()["skipped"], skipped);
     }
 
     #[test]

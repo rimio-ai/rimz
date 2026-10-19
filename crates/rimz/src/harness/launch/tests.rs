@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn compiler_refuses_only_the_kind_with_an_unsupported_budget() {
+    if std::env::var_os("RIMZ_TEST_COMPILE_BUDGET_HOME").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch::tests::compiler_refuses_only_the_kind_with_an_unsupported_budget",
+                "--nocapture",
+            ])
+            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_TEST_COMPILE_BUDGET_HOME", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = crate::config::MachineConfig::config_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[accounts.budget]\ncopilot = \"10/day\"\n").unwrap();
+    let root = tempfile::tempdir().unwrap();
+    for kind in ["copilot", "codex"] {
+        let result = compile_agent_process_with_extra_env(
+            None,
+            root.path(),
+            &request(
+                kind,
+                ExecAction::Launch {
+                    prompt: None,
+                    extra_args: Vec::new(),
+                },
+            ),
+            root.path(),
+            &BTreeMap::new(),
+            &LaunchReminders::default(),
+        );
+        if kind == "copilot" {
+            let Err(error) = result else {
+                panic!("unsupported budget must refuse");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported `accounts.budget.copilot`")
+            );
+        } else {
+            assert!(result.is_ok(), "{}", result.err().unwrap());
+        }
+    }
+}
+
+#[test]
 fn appended_system_file_and_text_share_one_slot() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("rules.txt"), "keep the user's rules").unwrap();
