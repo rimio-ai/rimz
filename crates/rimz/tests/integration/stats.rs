@@ -23,6 +23,7 @@ fn stats_counts_tmp_evictions_separately_from_sweeps() {
             "scope": "machine", "older_than_secs": 604800,
             "reclaimed_bytes": if error.is_none() { 1024 } else { 0 },
             "worktrees_removed": 0, "workspaces_pruned": 0, "files_removed": 0,
+            "worktree_paths": ["/worktrees/removed"],
             "messages_archived": 0, "problems": 0, "error": error
         }));
     }
@@ -48,6 +49,14 @@ fn stats_counts_tmp_evictions_separately_from_sweeps() {
     assert_eq!(report["rollup"]["held"]["tmp_evictions"], 1, "{report}");
     assert_eq!(report["rollup"]["reclaimed_bytes"], 5120, "{report}");
     assert_eq!(report["events"].as_array().unwrap().len(), 5, "{report}");
+    assert!(
+        report["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event.get("worktree_paths").is_none()),
+        "{report}"
+    );
 
     let output = env
         .rimz()
