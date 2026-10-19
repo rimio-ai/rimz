@@ -1677,7 +1677,14 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
                 crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
             )
             .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
-            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                if each_worktree {
+                    crate::common::room::MATERIALIZED_ROOM_PANES
+                } else {
+                    "[]"
+                },
+            )
             .env(
                 "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                 if each_worktree {
@@ -1740,10 +1747,11 @@ fn resident_launch_case(each_worktree: bool, team: bool) {
             );
         }
         let output = run.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+            !stderr.contains("did not materialize"),
+            "the birth must pass the sidebar layout wait: {stderr}"
         );
     }
     let store = env.store();
