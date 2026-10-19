@@ -114,6 +114,7 @@ pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
     resume: &[ResumeTab],
+    plugins: Option<&kdl::KdlDocument>,
 ) -> Result<String> {
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client. Both
@@ -181,6 +182,11 @@ pub(super) fn render_session_layout(
         .into_iter()
         .map(|option| format!("{} {}\n", option.key, option.value.kdl()))
         .collect::<String>();
+    let background_plugins = plugins.map_or_else(String::new, |plugins| {
+        let mut block = kdl::KdlNode::new("load_plugins");
+        block.set_children(plugins.clone());
+        block.to_string()
+    });
     Ok(format!(
         r#"layout {{
     new_tab_template {{
@@ -192,7 +198,7 @@ pub(super) fn render_session_layout(
         {COMPACT_BAR_KDL}
     }}
 }}
-{session_options}"#,
+{session_options}{background_plugins}"#,
     ))
 }
 

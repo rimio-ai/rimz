@@ -135,9 +135,19 @@ impl ZellijBackend {
         // reorder tabs or add command panes after birth. The same birth layout
         // handles a plain room as `None, &[]`, so every session carries the same
         // new-tab template and fixed sidebar/compact-bar tree shape.
-        let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
-        let layout = TempLayoutFile::new(body)?;
+        let presence = self.birth_presence_options(opts)?;
+        self.seed_presence_permissions(&presence);
+        // Allocate the path first so resolution observes the exact birth spec.
+        let layout = TempLayoutFile::new(String::new())?;
         let spec = self.background_session_command(opts, layout.path());
+        let mut plugins = super::background_plugins::resolve(&spec, &opts.cwd);
+        if let Some(plugins) = &mut plugins {
+            plugins
+                .nodes_mut()
+                .push(super::presence::presence_plugin_entry(&presence));
+        }
+        let body = render_session_layout(opts, daemon, &opts.resume_tabs, plugins.as_ref())?;
+        std::fs::write(layout.path(), body)?;
         let spawn = || -> Result<bool> {
             let output = spec
                 .clone()
@@ -188,7 +198,7 @@ impl ZellijBackend {
         if created {
             record_birth_owners()?;
         }
-        self.ensure_birth_presence_plugin(opts)?;
+        self.ensure_birth_presence_plugin(&presence)?;
         if self.wait_for_sidebar_layout(&opts.session_name) {
             self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
             drop(layout);
@@ -204,7 +214,7 @@ impl ZellijBackend {
             self.delete_session(&opts.session_name)?;
             spawn()?;
             record_birth_owners()?;
-            self.ensure_birth_presence_plugin(opts)?;
+            self.ensure_birth_presence_plugin(&presence)?;
             if self.wait_for_sidebar_layout(&opts.session_name) {
                 self.finalize_birth_focus(&opts.session_name, &opts.workspace_id);
                 drop(layout);
@@ -229,10 +239,10 @@ impl ZellijBackend {
         Ok(())
     }
 
-    fn ensure_birth_presence_plugin(&self, opts: &SidebarPaneOptions) -> Result<()> {
+    fn birth_presence_options(&self, opts: &SidebarPaneOptions) -> Result<PresencePluginOptions> {
         let wasm = super::ensure_presence_plugin_artifact().ok_or_else(|| super::output_error("Zellij presence plugin artifact is unavailable; run `rimz doctor` or use the tmux backend"))?;
         let machine_config = crate::config::MachineConfig::load_lenient();
-        let presence = PresencePluginOptions::from_config(
+        Ok(PresencePluginOptions::from_config(
             &opts.session_name,
             &opts.workspace_id,
             wasm,
@@ -240,11 +250,14 @@ impl ZellijBackend {
                 .room_bin,
             &machine_config.sidebar,
             &opts.config.zellij,
-        );
+        ))
+    }
+
+    fn ensure_birth_presence_plugin(&self, presence: &PresencePluginOptions) -> Result<()> {
         let floor_ms = unix_now_ms();
-        self.ensure_presence_plugin_for(&presence)?;
+        self.ensure_presence_plugin_for(presence)?;
         self.retire_proven_presence_plugin_for(
-            &presence,
+            presence,
             floor_ms,
             Duration::ZERO,
             TOPOLOGY_CACHE_POLL_STEP,

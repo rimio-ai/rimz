@@ -12,6 +12,7 @@
 //! `docs/internals/multiplexers.md` under "Zellij backend caveats".
 
 mod backend;
+mod background_plugins;
 mod layout;
 mod pane_pid;
 pub mod pane_topology;
@@ -28,6 +29,12 @@ mod tab_owner;
 pub use pane_pid::ZellijPaneResolver;
 pub(crate) use presence::PresenceUpgrade;
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_build, presence_plugin_path};
+
+#[cfg(feature = "testkit")]
+#[doc(hidden)]
+pub fn background_plugins_for_test(raw: &str) -> kdl::KdlDocument {
+    background_plugins::from_config(&raw.parse().expect("test config parses"))
+}
 pub(crate) use raw_pane::WidthMemo;
 #[cfg(test)]
 pub(crate) use raw_pane::take_width_derivations;
