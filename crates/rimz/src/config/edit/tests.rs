@@ -1760,6 +1760,44 @@ fn gc_older_than_is_a_validated_duration_string() {
 }
 
 #[test]
+fn gc_transcript_retention_round_trips_both_forms_and_refuses_invalid_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let editor = ConfigEditor::new(MachineConfigFiles::from_paths(
+        dir.path().join("config.toml"),
+        dir.path().join("definitions"),
+    ));
+    for value in ["forever", "30d", "12h"] {
+        let result = editor.set("gc.transcript_retention", value);
+        assert!(result.is_ok(), "retention must be editable: {result:?}");
+        assert_eq!(
+            editor
+                .get(Some("gc.transcript_retention"))
+                .unwrap()
+                .as_str(),
+            Some(value)
+        );
+    }
+    for bad in ["never", "0d", "30"] {
+        let result = editor.set("gc.transcript_retention", bad);
+        assert!(result.is_err(), "accepted {bad}");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("gc.transcript_retention")
+                && error.contains("forever")
+                && error.contains("duration"),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        editor
+            .get(Some("gc.transcript_retention"))
+            .unwrap()
+            .as_str(),
+        Some("12h")
+    );
+}
+
+#[test]
 fn theme_scheme_validation_accepts_bundled_names_and_rejects_auto() {
     let key = parse_key("theme.scheme").expect("key");
 

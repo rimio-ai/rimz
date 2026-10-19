@@ -260,12 +260,26 @@ mod tests {
             let shared = paths.room_shared_dir.join("task/note");
             let cache = paths.cache_dir.join("obsolete.json");
             let record = paths.fleet_budget_record.clone();
-            for path in [&audit, &owned, &tmp, &out, &shared, &cache, &record] {
+            let transcript = paths.transcript_dir.join("old.jsonl");
+            let messages = paths.message_history_dir.join("old.jsonl");
+            for path in [
+                &audit,
+                &owned,
+                &tmp,
+                &out,
+                &shared,
+                &cache,
+                &record,
+                &transcript,
+                &messages,
+            ] {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, b"retained").unwrap();
             }
             store.reset_records(hard).unwrap();
             assert_eq!(audit.exists(), !hard, "audit retention follows reset mode");
+            assert_eq!(transcript.exists(), !hard);
+            assert_eq!(messages.exists(), !hard);
             assert_eq!(owned.exists(), !hard);
             assert_eq!(tmp.exists(), !hard);
             assert_eq!(out.exists(), !hard);

@@ -472,7 +472,8 @@ upward-dependencies = [
 # Schedule and its final-step, target and due calculations share gradual reclaim policy (+4).
 # TaskEntry::repeats_while_true shares sustained workflow/resident retry policy (+1).
 # GcConfig::tmp_floor_bytes shares the validated free-space reserve (+1).
-surface-budget = 203 # SpendOrder shares typed capacity ordering with harness and CLI.
+# TranscriptRetention carries the independent history policy through GC (+1).
+surface-budget = 204 # SpendOrder shares typed capacity ordering with harness and CLI.
 
 [[verdict]]
 kind = "item"
@@ -1663,6 +1664,7 @@ path = "crates/rimz/src/store/gc"
 allowed-dependencies = [
     "(crate)",
     "agents",
+    "config",
     "disk",
     "ids",
     "store::run",
@@ -7556,3 +7558,8 @@ reason = "The hook drainer conditionally removes a request under the workspace l
 kind = "item"
 key = "cli::transcript::write_older_history_hint"
 reason = "Agent logs share the transcript's shell-quoted older-history hint."
+
+[[verdict]]
+kind = "item"
+key = "config::gc::TranscriptRetention"
+reason = "GcPolicy shares the machine's typed forever-or-duration history retention with every sweep."

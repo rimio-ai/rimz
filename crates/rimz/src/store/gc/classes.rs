@@ -3,13 +3,14 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use super::collect::Sweep;
-use super::{GcErr, GcReport, Result, read_dir_if_exists};
+use super::{GcErr, GcPolicy, GcReport, Result, read_dir_if_exists};
+use crate::config::TranscriptRetention;
 use crate::disk::paths::Class;
 use crate::disk::retention;
 
 pub(super) fn collect_state(
     paths: &crate::StatePaths,
-    tmp_grace: Duration,
+    policy: GcPolicy,
     dry_run: bool,
     watcher_is_live: &impl Fn(&str) -> std::io::Result<bool>,
     temp_owner: &impl Fn(
@@ -32,6 +33,7 @@ pub(super) fn collect_state(
     for class in Class::STATE {
         let mut report = GcReport::default();
         let mut sweep = Sweep::new(dry_run);
+        let mut bytes_retained = None;
         let result = match class {
             Class::Log => super::collect::collect_ttl(
                 &paths.events_archive_dir,
@@ -39,7 +41,8 @@ pub(super) fn collect_state(
                 &mut sweep,
                 &mut report,
             ),
-            Class::Audit => collect_audit(&paths.audit_path(""), &mut sweep, &mut report),
+            Class::Audit => collect_audit(paths, &mut sweep, &mut report)
+                .map(|bytes| bytes_retained = Some(bytes)),
             Class::Locks => {
                 super::collect::collect_locks(&paths.lock_path(""), &mut sweep, &mut report)
             }
@@ -51,7 +54,7 @@ pub(super) fn collect_state(
                 Some(agents) => collect_tmp(
                     paths,
                     agents,
-                    tmp_grace,
+                    policy.tmp_grace,
                     temp_owner,
                     &mut sweep,
                     &mut report,
@@ -78,6 +81,7 @@ pub(super) fn collect_state(
             files_removed: report.sidecar_files_removed,
             bytes_removed: report.bytes_removed,
             locks_would_check: report.locks_would_check,
+            bytes_retained,
         });
     }
     let mut report = GcReport::default();
@@ -91,12 +95,39 @@ pub(super) fn collect_state(
         files_removed: report.sidecar_files_removed,
         bytes_removed: report.bytes_removed,
         locks_would_check: report.locks_would_check,
+        bytes_retained: None,
+    });
+    let mut report = GcReport::default();
+    let bytes_retained = match collect_transcript(
+        paths,
+        policy.transcript_retention,
+        &mut Sweep::new(dry_run),
+        &mut report,
+    ) {
+        Ok(bytes) => Some(bytes),
+        Err(err) => {
+            tracing::warn!(workspace = %paths.dir_name, error = %err, "transcript gc stopped at unreadable state");
+            None
+        }
+    };
+    classes.push(super::ClassReport {
+        class: "transcript".to_owned(),
+        files_removed: report.sidecar_files_removed,
+        bytes_removed: report.bytes_removed,
+        locks_would_check: report.locks_would_check,
+        bytes_retained,
     });
     Ok((classes, waits_removed))
 }
 
-fn collect_audit(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result<()> {
-    let mut files = sweep.files_under(dir)?;
+fn collect_audit(
+    paths: &crate::StatePaths,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<u64> {
+    let dir = paths.audit_path("");
+    let mut files =
+        sweep.files_under_except(&dir, &[&paths.transcript_dir, &paths.message_history_dir])?;
     files.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     let mut bytes: u64 = files.iter().map(|(_, _, bytes)| bytes).sum();
     let now = SystemTime::now();
@@ -109,7 +140,35 @@ fn collect_audit(dir: &Path, sweep: &mut Sweep, report: &mut GcReport) -> Result
         sweep.remove_file_if_exists(&path, |report| report.sidecar_files_removed += 1, report)?;
         bytes = bytes.saturating_sub(size);
     }
-    sweep.remove_empty_dirs(dir, None, report)
+    sweep.remove_empty_dirs(&dir, None, report)?;
+    Ok(bytes)
+}
+
+fn collect_transcript(
+    paths: &crate::StatePaths,
+    retention: TranscriptRetention,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+) -> Result<u64> {
+    let mut bytes = 0;
+    for dir in [&paths.transcript_dir, &paths.message_history_dir] {
+        match fs::symlink_metadata(dir) {
+            Ok(metadata) if !metadata.is_dir() => continue,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(GcErr::Io {
+                    path: dir.clone(),
+                    source,
+                });
+            }
+        }
+        if let TranscriptRetention::Duration(ttl) = retention {
+            super::collect::collect_ttl(dir, ttl, sweep, report)?;
+        }
+        bytes += sweep.retained_bytes(dir)?;
+    }
+    Ok(bytes)
 }
 
 fn expired(modified: SystemTime, now: SystemTime, grace: Duration) -> bool {

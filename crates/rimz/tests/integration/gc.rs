@@ -16,6 +16,69 @@ use serde_json::json;
 use crate::common::Env;
 use crate::common::git::git_missing;
 
+#[test]
+fn gc_transcript_retention_expires_both_histories_independently_of_older_than() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let paths = env.state_path_for(&env.project_root);
+    let mut old = Vec::new();
+    let mut recent = Vec::new();
+    for dir in [&paths.transcript_dir, &paths.message_history_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::create_dir(dir.join("empty")).unwrap();
+        for (name, age, files) in [
+            ("old.jsonl", Duration::from_secs(2 * 86_400), &mut old),
+            ("recent.jsonl", Duration::from_secs(3600), &mut recent),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, b"history").unwrap();
+            std::fs::File::open(&path)
+                .unwrap()
+                .set_modified(SystemTime::now() - age)
+                .unwrap();
+            files.push(path);
+        }
+    }
+    write_machine_config(&env, "[gc]\ntranscript_retention = \"1d\"\n");
+    let read = |dry_run| {
+        let mut command = env.rimz();
+        command.args(["gc", "--json", "--older-than", "365d"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let preview = read(true);
+    let row = |report: &serde_json::Value| {
+        report["rooms"][0]["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["class"] == "transcript")
+            .cloned()
+    };
+    assert!(
+        row(&preview).is_some_and(|row| row["files_removed"] == 2 && row["bytes_retained"] == 14)
+    );
+    assert!(old.iter().chain(&recent).all(|path| path.exists()));
+    let actual = read(false);
+    assert_eq!(row(&actual), row(&preview));
+    assert!(old.iter().all(|path| !path.exists()));
+    assert!(recent.iter().all(|path| path.exists()));
+    assert!(
+        !paths.transcript_dir.join("empty").exists()
+            && !paths.message_history_dir.join("empty").exists()
+    );
+    for class in actual["rooms"][0]["classes"].as_array().unwrap() {
+        assert_eq!(
+            class.get("bytes_retained").is_some(),
+            class["class"] == "audit" || class["class"] == "transcript"
+        );
+    }
+}
+
 fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 3] {
     env.record(root);
     let state = env.state_path_for(root);

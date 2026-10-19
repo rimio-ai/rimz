@@ -97,15 +97,36 @@ fn gc_json_and_assist_report_classes() {
     outcome.budget_ledgers.ledgers = 2;
     outcome.runtime.rooms.push(gc::RoomReport {
         name: "test-abcd".to_owned(),
-        classes: vec![gc::ClassReport {
-            class: "audit".to_owned(),
-            files_removed: 2,
-            bytes_removed: 12,
-            locks_would_check: 0,
-        }],
+        classes: vec![
+            gc::ClassReport {
+                class: "audit".to_owned(),
+                files_removed: 2,
+                bytes_removed: 12,
+                locks_would_check: 0,
+                bytes_retained: Some(84),
+            },
+            gc::ClassReport {
+                class: "transcript".to_owned(),
+                files_removed: 1,
+                bytes_removed: 34,
+                bytes_retained: Some(56),
+                ..gc::ClassReport::default()
+            },
+        ],
     });
     let json = serde_json::to_value(JsonReport::from(&outcome)).unwrap();
     assert_eq!(json["rooms"][0]["classes"][0]["bytes_removed"], 12);
+    assert_eq!(json["rooms"][0]["classes"][0]["bytes_retained"], 84);
+    assert_eq!(json["rooms"][0]["classes"][1]["bytes_retained"], 56);
+    let text = strip_report(&outcome);
+    assert!(
+        text.contains("audit · 2 files · 12 B · 84 B kept"),
+        "{text}"
+    );
+    assert!(
+        text.contains("transcript · 1 file · 34 B · 56 B kept"),
+        "{text}"
+    );
     let id = rimz::WorkspaceId::from_project_root(std::path::Path::new("/test"));
     outcome.runtime.rooms.push(gc::RoomReport {
         name: "other-abcd".to_owned(),
@@ -125,6 +146,7 @@ fn gc_json_and_assist_report_classes() {
     let json = serde_json::to_value(assist).unwrap();
     assert_eq!(json["class_bytes"]["audit"], 12);
     assert_eq!(json["worktree_paths"], serde_json::json!([]));
+    assert_eq!(json["class_bytes"]["transcript"], 34);
     assert_eq!(json["files_removed"], 2);
     assert_eq!(json["scope"], "room");
     assert_eq!(json["problems"], 1);

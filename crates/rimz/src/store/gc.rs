@@ -103,6 +103,8 @@ pub struct ClassReport {
     pub files_removed: usize,
     pub bytes_removed: u64,
     pub locks_would_check: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_retained: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,6 +117,7 @@ pub struct TempSweepReport {
 pub struct GcPolicy {
     pub older_than: Duration,
     pub tmp_grace: Duration,
+    pub transcript_retention: crate::config::TranscriptRetention,
 }
 
 /// Sweep one room's state and runtime classes without visiting other rooms or shared runtime files.
@@ -276,7 +279,7 @@ fn collect_room_state(
 ) -> Result<()> {
     let (classes, waits_removed) = classes::collect_state(
         paths,
-        policy.tmp_grace,
+        policy,
         dry_run,
         &|name| watcher_is_live(runtime, name),
         temp_owner,
@@ -305,14 +308,16 @@ fn collect_room_state(
 fn complete_room_reports(report: &mut GcReport) {
     for room in &mut report.rooms {
         use paths::Class;
-        for class in Class::STATE.into_iter().chain(Class::RUNTIME) {
-            if !room
-                .classes
-                .iter()
-                .any(|entry| entry.class == class.dir_name())
-            {
+        for name in Class::STATE
+            .into_iter()
+            .chain(Class::RUNTIME)
+            .map(Class::dir_name)
+            .chain(["transcript"])
+        {
+            if !room.classes.iter().any(|entry| entry.class == name) {
                 room.classes.push(ClassReport {
-                    class: class.dir_name().to_owned(),
+                    class: name.to_owned(),
+                    bytes_retained: matches!(name, "audit" | "transcript").then_some(0),
                     ..ClassReport::default()
                 });
             }
@@ -353,6 +358,7 @@ mod tests {
         GcPolicy {
             older_than,
             tmp_grace: crate::disk::retention::DEFAULT_TMP_GRACE,
+            transcript_retention: crate::config::TranscriptRetention::Forever,
         }
     }
 
