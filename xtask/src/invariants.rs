@@ -40,6 +40,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_classed_paths(root, &files)?;
     ensure_thin_park_image(root)?;
     ensure_hook_stdio(root, &files)?;
+    ensure_child_env_resets(root, &files)?;
     ensure_normalized_agent_process_decisions(root, &files)?;
     ensure_private_agent_adapter_boundary(root, &files)?;
     ensure_adapter_kinds_stay_typed(root, &files)?;
@@ -521,6 +522,21 @@ fn ensure_banned_imports(root: &Path, files: &[PathBuf]) -> Result<()> {
         ensure_no_match(files, needle, |path| is_docs_or_xtask(root, path), message)?;
     }
     Ok(())
+}
+
+fn ensure_child_env_resets(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let source = root.join("crates/rimz/src");
+    ensure_no_match(
+        files,
+        concat!("env_", "clear("),
+        |path| {
+            !path.starts_with(&source)
+                || path == source.join("child_process.rs")
+                || is_test_source_path(root, path)
+                || path.extension().and_then(OsStr::to_str) == Some("md")
+        },
+        "child environment resets must use the coverage-preserving child_process helper",
+    )
 }
 
 fn ensure_hook_stdio(root: &Path, files: &[PathBuf]) -> Result<()> {
