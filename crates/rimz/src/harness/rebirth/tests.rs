@@ -1102,6 +1102,77 @@ fn settlement_drops_parked_agents_ended_by_other_means() {
 }
 
 #[test]
+fn resumed_attachments_wait_for_tab_confirmation() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let fixture = Fixture::new(&[("first", &first, true), ("second", &second, true)]);
+    let plan = fixture.inspect(false);
+    park_roster(&fixture.paths).expect("park before birth");
+    let seeded = plan.settle(RebirthDisposition::RecoverKeep, "rimz-test");
+    assert_eq!(seeded.tabs().len(), 2);
+    let confirmed_id = if seeded.tabs()[0].cwd == first {
+        "first"
+    } else {
+        "second"
+    };
+    let unconfirmed_id = if confirmed_id == "first" {
+        "second"
+    } else {
+        "first"
+    };
+    let store = Store::open(fixture.paths.clone(), fixture.runtime.clone()).expect("store");
+    let attach = |id: &str| {
+        let (kind, agent_id) = key(id);
+        store
+            .attach_agent_pane(
+                &kind,
+                &agent_id,
+                None,
+                &crate::ids::LoginName::default(),
+                "rimz-test",
+                &PaneId::from_parts(MuxName::Tmux, format!("%{id}")),
+                crate::pane::RuntimeOwner::new(
+                    crate::pane::RuntimeOwnerKind::Agent,
+                    id,
+                    u32::MAX,
+                    None,
+                ),
+                None,
+                None,
+                None,
+            )
+            .expect("attach");
+    };
+    for _ in 0..2 {
+        attach("first");
+        attach("second");
+        assert_eq!(
+            pending(&fixture),
+            [key("first"), key("second")].into(),
+            "both wrapper attachments must wait for confirmation"
+        );
+    }
+
+    seeded.confirm(|index, _| if index == 0 { Ok(()) } else { Err("no tab") });
+    assert_eq!(pending(&fixture), [key(unconfirmed_id)].into());
+    assert!(!pending(&fixture).contains(&key(confirmed_id)));
+    let record: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.paths.pending_recovery).expect("record"))
+            .expect("decode record");
+    assert!(
+        record.get("seeded").is_none(),
+        "unconfirmed agents return to parked"
+    );
+
+    attach(unconfirmed_id);
+    assert!(
+        pending(&fixture).is_empty(),
+        "explicit resume releases the parked agent"
+    );
+}
+
+#[test]
 fn settlement_confirms_each_resume_tab_on_its_own() {
     for live in [false, true] {
         for (first_opens, second_opens) in

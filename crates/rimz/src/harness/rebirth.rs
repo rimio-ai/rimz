@@ -272,8 +272,9 @@ impl RebirthPlan {
     /// Commit the boundary, when this birth ends an incarnation, and settle
     /// the candidates as `disposition` says, after the multiplexer session exists.
     /// The caller must park the roster before creating that session. The
-    /// resumed agents stay in the pending record until
-    /// [`SeededRecovery::confirm`] learns whether their tab is open.
+    /// resumed agents are marked seeded in the pending record, so even their
+    /// pane attachments leave them pending until [`SeededRecovery::confirm`]
+    /// learns whether their tab is open.
     pub(crate) fn settle(
         self,
         disposition: RebirthDisposition,
@@ -415,7 +416,12 @@ impl RebirthPlan {
             }
             settled.extend(dropped);
         }
-        if let Err(err) = pending_recovery::settle(&self.paths, &settled) {
+        let resumed = tab_agents
+            .iter()
+            .flat_map(|agents| &agents.resumed)
+            .cloned()
+            .collect();
+        if let Err(err) = pending_recovery::seed(&self.paths, &settled, &resumed) {
             tracing::warn!(workspace = %self.paths.workspace_id, error = %err, "rebirth: settled agents stay in the pending-recovery record");
         }
         if self.boundary {
@@ -476,6 +482,7 @@ impl SeededRecovery {
         } = self;
         let planned = std::mem::take(&mut resume.tabs);
         let mut confirmed = BTreeSet::new();
+        let mut unconfirmed = BTreeSet::new();
         let mut refilled = BTreeSet::new();
         // Where each planned tab sits in the returned plan, if it is there.
         let mut returned = Vec::with_capacity(planned.len());
@@ -488,6 +495,7 @@ impl SeededRecovery {
                     resume.tabs.push(tab);
                 }
                 Err(error) => {
+                    unconfirmed.extend(agents.resumed);
                     returned.push(None);
                     resume.warnings.push(format!(
                         "could not open resumed tab {}: {error}; its agents stay pending for a later rebirth or explicit resume",
@@ -523,7 +531,7 @@ impl SeededRecovery {
                 )),
             }
         }
-        if let Err(err) = pending_recovery::settle(&paths, &confirmed) {
+        if let Err(err) = pending_recovery::confirm(&paths, &confirmed, &unconfirmed) {
             resume
                 .warnings
                 .push(format!("resumed agents stay pending: {err}"));

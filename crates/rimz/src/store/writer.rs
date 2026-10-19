@@ -784,8 +784,9 @@ impl Store {
     /// The owner names the agent process the row belongs to, and `login` the
     /// account that process runs under, which becomes the row's stamp.
     ///
-    /// An agent bound to a pane is no longer waiting for recovery, so once the
-    /// attach is durable the session leaves the pending-recovery record.
+    /// Once the attach is durable, a parked session leaves the pending-recovery
+    /// record. A seeded session stays pending until its rebirth confirms the
+    /// tab.
     #[must_use = "durability barrier; check the result"]
     #[allow(clippy::too_many_arguments)]
     pub fn attach_agent_pane(
@@ -836,10 +837,9 @@ impl Store {
             );
             txn.append_batch(&[attached].into_iter().chain(superseded).collect::<Vec<_>>())
         })?;
-        if let Err(err) = pending_recovery::settle(
-            &self.inner.paths,
-            &[(kind.clone(), agent_id.clone())].into(),
-        ) {
+        if let Err(err) =
+            pending_recovery::attach(&self.inner.paths, &(kind.clone(), agent_id.clone()))
+        {
             warn!(error = %err, %agent_id, "could not take the attached agent out of pending recovery");
         }
         Ok(())
