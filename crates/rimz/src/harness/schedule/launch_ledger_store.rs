@@ -165,6 +165,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn launch_records_round_trip_old_rows_and_named_destinations() {
+        let old = serde_json::json!({"at": "2026-06-01T00:00:00Z", "leader": "otter"});
+        let mut named = old.clone();
+        named["destination"] = serde_json::json!("/worktrees/lane");
+        for value in [old, named] {
+            let record: LaunchRecord = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(record).unwrap(), value);
+        }
+    }
+
+    #[test]
     fn catalog_moves_declines_on_rename_and_clears_on_redefinition_and_removal() {
         use super::super::{catalog::TaskCatalog, instances};
         for operation in ["rename", "replace", "remove"] {
@@ -251,6 +262,7 @@ mod tests {
                 std::collections::BTreeMap::from([(
                     home.path().to_owned(),
                     LaunchRecord {
+                        destination: None,
                         at: jiff::Timestamp::now(),
                         leader: "otter".into(),
                     },
@@ -314,6 +326,7 @@ mod tests {
         let checkout = home.path().join("lane");
         std::fs::create_dir(&checkout).unwrap();
         let launch = LaunchRecord {
+            destination: None,
             at: jiff::Timestamp::now(),
             leader: "otter".into(),
         };
@@ -336,6 +349,7 @@ mod tests {
         let gone = home.path().join("gone");
         std::fs::create_dir(&gone).unwrap();
         let launch = LaunchRecord {
+            destination: None,
             at: jiff::Timestamp::now(),
             leader: "otter".into(),
         };
@@ -357,6 +371,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let paths = crate::StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
         let launch = LaunchRecord {
+            destination: None,
             at: jiff::Timestamp::now(),
             leader: "otter".into(),
         };

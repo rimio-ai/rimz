@@ -156,6 +156,7 @@ pub enum TaskFirePlan {
     Resident {
         root: PathBuf,
         cwd: PathBuf,
+        worktree: Option<String>,
         spec: String,
         prompt: String,
         /// The `### Loop` reminder body for the prompt leader.
@@ -169,6 +170,7 @@ pub enum TaskFirePlan {
 pub enum TaskFireEffect {
     Resident {
         leader: String,
+        checkout: PathBuf,
         handles: Vec<String>,
         /// Handles of the checkout occupants a takeover stopped first.
         stopped: Vec<String>,
@@ -815,6 +817,7 @@ impl<'a> TaskFire<'a> {
         Ok(TaskFirePlan::Resident {
             root,
             cwd,
+            worktree: self.entry.worktree.clone(),
             spec,
             prompt,
             loop_reminder: self.loop_reminder(None),
@@ -995,17 +998,19 @@ impl<'a> TaskFire<'a> {
                 PendingEffect::Resident,
                 TaskFireEffect::Resident {
                     leader,
+                    checkout,
                     handles,
                     stopped,
                 },
             ) => {
                 let cwd = self.launch_checkout();
+                let destination = self.entry.worktree.as_ref().map(|_| checkout);
                 let paths = StatePaths::for_project_root(&self.entry.resolved_root())?;
                 let assist = AssistRecord {
                     at: Timestamp::now(),
                     assist: Assist::ResidentLaunch {
                         task: self.name.clone(),
-                        checkout: cwd.clone(),
+                        checkout: destination.clone().unwrap_or_else(|| cwd.clone()),
                         condition: self.condition.clone(),
                         stopped,
                         handles,
@@ -1018,6 +1023,7 @@ impl<'a> TaskFire<'a> {
                     super::launch_ledger::LaunchRecord {
                         at: assist.at,
                         leader: leader.clone(),
+                        destination,
                     },
                     || assist_log::try_append(&assist),
                 )?;

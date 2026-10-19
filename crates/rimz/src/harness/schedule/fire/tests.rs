@@ -253,6 +253,7 @@ fn workflow_scopes_ignore_a_previous_resident_launch_ledger() {
     let ledger = one(BTreeMap::from([(
         owned[0].clone(),
         super::super::launch_ledger::LaunchRecord {
+            destination: None,
             at: now,
             leader: "old".into(),
         },
@@ -338,6 +339,7 @@ fn worktree_conditions_select_the_checkout_and_skip_ledgered_edges() {
                 BTreeMap::from([(
                     owned[0].clone(),
                     super::super::launch_ledger::LaunchRecord {
+                        destination: None,
                         at: now.timestamp(),
                         leader: "otter".into(),
                     },
@@ -842,6 +844,7 @@ fn resident_conditions_retry_at_five_minutes_until_ledgered() {
             &one(BTreeMap::from([(
                 root.path().to_owned(),
                 super::super::launch_ledger::LaunchRecord {
+                    destination: None,
                     at: now.timestamp(),
                     leader: "otter".into(),
                 },

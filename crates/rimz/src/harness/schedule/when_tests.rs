@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn scope_checkout_keys_include_nested_terms_but_not_named_branches_or_windows() {
+    for (input, key) in [
+        ("pr=merged", Some("pr")),
+        ("!ci=failed", Some("ci")),
+        (
+            "pr[topic]=merged && (window.5h.left<50 || pr.queue=queued)",
+            Some("pr.queue"),
+        ),
+        ("!(pr[topic]=open || team.stage=Done)", Some("team.stage")),
+        (
+            "ci[topic]=passed && pr[topic]=merged && pr.queue[topic]=none",
+            None,
+        ),
+        ("window.5h.left<50", None),
+    ] {
+        let stages = BTreeSet::from(["Done".to_owned()]);
+        let expr = WhenExpr::parse_with_stages(&[input.to_owned()], Some(&stages)).unwrap();
+        assert_eq!(expr.scope_checkout_key(), key, "{input}");
+    }
+}
+
+#[test]
 fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
     let owned = vec![
         std::path::PathBuf::from("/alias/spare/../one"),
@@ -11,6 +33,7 @@ fn worktree_probe_paths_exclude_completed_checkouts_without_canonicalizing() {
         BTreeMap::from([(
             std::path::PathBuf::from("/alias/one"),
             super::super::launch_ledger::LaunchRecord {
+                destination: None,
                 at: Timestamp::now(),
                 leader: "otter".into(),
             },

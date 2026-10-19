@@ -977,6 +977,511 @@ fn resident_subscriptions_require_a_usable_scope_at_add() {
 }
 
 #[test]
+fn resident_named_worktree_saves_at_root_with_checkout_subscriptions_and_receipt() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let text = loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "booked",
+            "--agent",
+            "claude",
+            "--stay",
+            "--worktree",
+            "landing",
+            "--every",
+            "1h",
+            "--subscribe",
+            "pr.merged",
+            "--takeover",
+            "--prompt",
+            "review",
+        ],
+    );
+    let config: LoopConfig =
+        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
+    let entry = &config.tasks.0["booked"];
+    assert_eq!(entry.worktree.as_deref(), Some("landing"));
+    assert_eq!(entry.run_dir(), canonical(&env.project_root));
+    assert!(
+        text.contains("worktree `landing`") && text.contains("when the task fires"),
+        "{text}"
+    );
+    assert!(
+        text.contains("scope") && text.contains("guards") && text.contains("launch memory"),
+        "{text}"
+    );
+    assert!(
+        text.contains("before launch: takes over worktree `landing`"),
+        "{text}"
+    );
+    assert!(!env.project_root.join(".worktrees/landing").exists());
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NamedResident {
+    Create,
+    Solo,
+    Reuse,
+    Live,
+    Closed,
+    OtherTeam,
+    OtherTeamClosed,
+    Takeover,
+    TakeoverMissing,
+    TakeoverOtherTeam,
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_creates_from_fetched_trunk_at_fire() {
+    named_resident_case(NamedResident::Create);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_non_team_uses_configured_base() {
+    named_resident_case(NamedResident::Solo);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_reuses_existing_checkout_without_reseeding() {
+    named_resident_case(NamedResident::Reuse);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_refuses_live_cohort_without_delivering_prompt() {
+    named_resident_case(NamedResident::Live);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_refuses_closed_cohort_without_takeover() {
+    named_resident_case(NamedResident::Closed);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_refuses_a_different_teams_hold() {
+    named_resident_case(NamedResident::OtherTeam);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_refuses_a_stopped_teams_unfinished_board() {
+    named_resident_case(NamedResident::OtherTeamClosed);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_takeover_relaunches_fresh_and_leaves_scope_occupants() {
+    named_resident_case(NamedResident::Takeover);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_takeover_of_missing_destination_stops_nobody() {
+    named_resident_case(NamedResident::TakeoverMissing);
+}
+
+#[cfg(unix)]
+#[test]
+fn resident_named_worktree_takeover_stops_other_team_but_refuses_its_hold() {
+    named_resident_case(NamedResident::TakeoverOtherTeam);
+}
+
+#[cfg(unix)]
+fn named_resident_case(case: NamedResident) {
+    let env = Env::new();
+    assert!(init_git_repo(&env.project_root));
+    env.record(&env.project_root);
+    env.install_agent_hooks("codex");
+    trust_codex_preflight_hooks(&env);
+    env.write_config(
+        &env.project_root,
+        r#"
+        [profiles.codex]
+        agent = "codex"
+        [[agents.teams.forge.roles]]
+        role = "coder"
+        profile = "codex"
+        owns = ["Build"]
+        [agents.teams.forge]
+        stages = ["Build"]
+    "#,
+    );
+    loop_ok(&env, &["trust", "grant"]);
+    let worktrees = env.home_root.join("worktrees");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[agents.worktree]\ndir = {worktrees:?}\n"),
+    )
+    .unwrap();
+    let destination = worktrees.join("landing");
+    let absent = matches!(
+        case,
+        NamedResident::Create | NamedResident::Solo | NamedResident::TakeoverMissing
+    );
+    if !absent {
+        loop_ok(&env, &["worktree", "new", "landing"]);
+        std::fs::write(destination.join("keep.txt"), "existing work\n").unwrap();
+    }
+    // Advance the remote after booking, without moving the scope's HEAD.
+    let remote = env.home_root.join("remote");
+    assert!(git_ok(
+        &env.project_root,
+        &["clone", "-q", "--bare", ".", remote.to_str().unwrap()]
+    ));
+    assert!(git_ok(
+        &env.project_root,
+        &["remote", "add", "origin", remote.to_str().unwrap()]
+    ));
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.resident]\nagent={:?}\nprompt='review'\nroot={:?}\nevery='1h'\nstay=true\nworktree='landing'\ntakeover={}\n",
+            if case == NamedResident::Solo {
+                "codex"
+            } else {
+                "forge"
+            },
+            env.project_root,
+            matches!(
+                case,
+                NamedResident::Takeover
+                    | NamedResident::TakeoverMissing
+                    | NamedResident::TakeoverOtherTeam
+            ),
+        ),
+    );
+    assert!(!absent || !destination.exists());
+    std::fs::write(env.project_root.join("merged.txt"), "new trunk\n").unwrap();
+    assert!(git_ok(&env.project_root, &["add", "merged.txt"]));
+    assert!(git_ok(&env.project_root, &["commit", "-q", "-m", "merged"]));
+    assert!(git_ok(&env.project_root, &["push", "-q", "origin", "main"]));
+    assert!(git_ok(
+        &env.project_root,
+        &["reset", "--hard", "-q", "HEAD~1"]
+    ));
+    trust_codex_project(&env, &env.project_root);
+    let provider_config = env.agent_config_path("codex");
+    let mut provider_table: toml::Table = std::fs::read_to_string(&provider_config)
+        .unwrap()
+        .parse()
+        .unwrap();
+    provider_table
+        .get_mut("projects")
+        .unwrap()
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            destination.to_str().unwrap().to_owned(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "trust_level".into(),
+                "trusted".into(),
+            )])),
+        );
+    std::fs::write(provider_config, toml::to_string(&provider_table).unwrap()).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let store = env.store();
+    let seed = |name: &str, path: &Path, pane: &str, team: Option<&str>| {
+        seed_agent_launch(
+            &env,
+            path,
+            name,
+            rimz::agents::LaunchParams {
+                team: team.map(str::to_owned),
+                role: team.map(|_| "coder".to_owned()),
+                channel: Some(if team.is_some() { "landing" } else { "scope" }.to_owned()),
+                ..Default::default()
+            },
+            None,
+        );
+        let mut command = env.hook_command("claude");
+        command
+            .current_dir(path)
+            .env(rimz::harness::launch::ENV_AGENT_NAME, name)
+            .env("ZELLIJ", "1")
+            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+            .env("ZELLIJ_PANE_ID", pane);
+        let output = env
+            .spawn_payload(
+                command,
+                &json!({"hook_event_name":"SessionStart", "session_id":name, "cwd":path})
+                    .to_string(),
+            )
+            .wait_with_output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        env.drain_hooks();
+    };
+    seed("scope-agent", &env.project_root, "50", None);
+    if case == NamedResident::Reuse {
+        seed("destination-solo", &destination, "52", None);
+    }
+    let occupied = matches!(
+        case,
+        NamedResident::Live
+            | NamedResident::Closed
+            | NamedResident::OtherTeam
+            | NamedResident::OtherTeamClosed
+            | NamedResident::Takeover
+            | NamedResident::TakeoverOtherTeam
+    );
+    if occupied {
+        let team = if matches!(
+            case,
+            NamedResident::OtherTeam
+                | NamedResident::OtherTeamClosed
+                | NamedResident::TakeoverOtherTeam
+        ) {
+            "other"
+        } else {
+            "forge"
+        };
+        seed("old-leader", &destination, "51", Some(team));
+        std::fs::write(destination.join("blackboard.md"), "Stage: Build\n").unwrap();
+        if matches!(case, NamedResident::Closed | NamedResident::OtherTeamClosed) {
+            stamp_session_ended(&env, "old-leader");
+        }
+    }
+    crate::common::room::seed_live_zellij_room(
+        &env.runtime_paths(),
+        &workspace.session_name,
+        Vec::new(),
+    );
+    let agent_bin = crate::common::write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
+    let trace = env.home_root.join("named-resident.log");
+    // The trace shim cannot end a pane's fixture owner. Model the
+    // provider's SessionEnd so reconciliation sees the cohort after its stop.
+    let zellij = crate::common::write_path_shim(
+        &env.home_root.join("mux-bin"),
+        "zellij",
+        r#""$RIMZ_TEST_ZELLIJ_TRACE" "$@" || exit "$?"
+for arg do
+    if [ "$arg" = close-pane ]; then
+        printf '%s\n' "$RIMZ_TEST_ENDED_PAYLOAD" | RIMZ_AGENT_PID="$RIMZ_TEST_AGENT_OWNER_PID" "$RIMZ_TEST_RIMZ" hooks feed --source claude || exit "$?"
+        exec "$RIMZ_TEST_RIMZ" hooks drain --project-root "$RIMZ_TEST_SCOPE" --once
+    fi
+done
+"#,
+    );
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .args(["--mux", "zellij"])
+            .env("SHELL", &shell)
+            .env("PATH", path_with_front(&agent_bin))
+            .env("RIMZ_ZELLIJ_BIN", &zellij)
+            .env(
+                "RIMZ_TEST_ZELLIJ_TRACE",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_RIMZ", env.rimz().get_program())
+            .env("RIMZ_TEST_AGENT_OWNER_PID", env.agent_owner_pid().to_string())
+            .env("RIMZ_TEST_SCOPE", &env.project_root)
+            .env(
+                "RIMZ_TEST_ENDED_PAYLOAD",
+                json!({"hook_event_name":"SessionEnd", "session_id":"old-leader", "cwd":destination}).to_string(),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &trace)
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", "[]")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            );
+        command
+    };
+    let before_queue = store.list_messages().unwrap();
+    let before_history = store.list_message_history().unwrap();
+    let output = command()
+        .args(["loop", "run", "resident"])
+        .output()
+        .unwrap();
+    let trace_text = std::fs::read_to_string(&trace).unwrap_or_default();
+    let refused = matches!(
+        case,
+        NamedResident::Live
+            | NamedResident::Closed
+            | NamedResident::OtherTeam
+            | NamedResident::OtherTeamClosed
+            | NamedResident::TakeoverOtherTeam
+    );
+    let ledger = rimz::harness::schedule::launch_ledger::load(store.paths()).unwrap();
+    let record = last_loop_record(&env);
+    assert_eq!(record.checkout.as_deref(), Some(env.project_root.as_path()));
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    assert!(
+        agents
+            .iter()
+            .find(|agent| agent.name.as_deref() == Some("scope-agent"))
+            .unwrap()
+            .ended_at
+            .is_none()
+    );
+    assert!(!trace_text.contains("--pane-id 50"), "{trace_text}");
+    if matches!(
+        case,
+        NamedResident::Takeover | NamedResident::TakeoverOtherTeam
+    ) {
+        assert!(
+            agents
+                .iter()
+                .find(|agent| agent.name.as_deref() == Some("old-leader"))
+                .unwrap()
+                .ended_at
+                .is_some()
+        );
+    }
+    if refused {
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(record.result, LoopRunResult::Errored);
+        let error = record.error.as_deref().unwrap();
+        assert!(error.contains("landing"), "{error}");
+        if case == NamedResident::Live {
+            for word in [
+                "forge",
+                "@coder#landing",
+                "prompt was not delivered",
+                "--takeover",
+            ] {
+                assert!(error.contains(word), "{error}");
+            }
+        } else if case == NamedResident::Closed {
+            assert!(
+                error.contains("resume") && error.contains("fresh"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                error.contains("other") && error.contains("holds team"),
+                "{error}"
+            );
+        }
+        assert_eq!(store.list_messages().unwrap(), before_queue);
+        assert_eq!(store.list_message_history().unwrap(), before_history);
+        assert!(ledger.is_empty());
+        assert!(!trace_text.contains("new-tab"), "{trace_text}");
+        assert_eq!(
+            trace_text.matches("close-pane").count(),
+            usize::from(case == NamedResident::TakeoverOtherTeam),
+            "{trace_text}"
+        );
+        let strikes: BTreeMap<String, u32> =
+            serde_json::from_slice(&std::fs::read(loop_strikes_path(&env)).unwrap()).unwrap();
+        assert_eq!(strikes[&machine_task_key("resident")], 1);
+        if case == NamedResident::Live {
+            let direct = command()
+                .args(["teams", "forge", "-w", "landing", "ordinary launch prompt"])
+                .output()
+                .unwrap();
+            assert!(
+                direct.status.success(),
+                "{}",
+                String::from_utf8_lossy(&direct.stderr)
+            );
+            let messages = store.list_messages().unwrap();
+            let history = store.list_message_history().unwrap();
+            assert_eq!(
+                messages.len() + history.len(),
+                before_queue.len() + before_history.len() + 1,
+                "{direct:?}"
+            );
+            assert!(
+                messages
+                    .iter()
+                    .chain(&history)
+                    .any(|message| message.text == "ordinary launch prompt")
+            );
+        }
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(record.result, LoopRunResult::Launched);
+    assert_eq!(ledger["resident"].len(), 1);
+    let row = serde_json::to_value(&ledger["resident"][&env.project_root]).unwrap();
+    assert_eq!(row["destination"], json!(destination));
+    let marker = rimz::worktree::read_marker_for_worktree(&destination)
+        .unwrap()
+        .unwrap();
+    assert_eq!(marker.worktree_path, destination);
+    assert_eq!(
+        destination.join("merged.txt").exists(),
+        absent && case != NamedResident::Solo
+    );
+    assert_eq!(destination.join("keep.txt").exists(), !absent);
+    let agents = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .unwrap()
+        .agents;
+    let leader = agents
+        .iter()
+        .find(|agent| agent.loop_task.as_deref() == Some("resident"))
+        .unwrap();
+    assert_eq!(leader.worktree_path.as_deref(), destination.to_str());
+    assert_eq!(leader.channel.as_deref(), Some("landing"));
+    let assists = rimz::harness::assist_log::recent(&env.rimz_home().join("logs"), None);
+    let assist = serde_json::to_value(
+        assists
+            .iter()
+            .find(|record| serde_json::to_value(record).unwrap()["assist"] == "resident_launch")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(assist["checkout"], json!(destination));
+    assert_eq!(
+        trace_text.matches("close-pane").count(),
+        usize::from(case == NamedResident::Takeover),
+        "{trace_text}"
+    );
+    if case == NamedResident::Takeover {
+        assert_eq!(assist["stopped"], json!(["@coder#landing"]));
+    }
+    let shown = command()
+        .args(["loop", "show", "resident", "--json"])
+        .output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["launches"][env.project_root.to_str().unwrap()]["destination"],
+        json!(destination)
+    );
+    let shown = command()
+        .args(["loop", "show", "resident"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&shown.stdout)
+            .lines()
+            .any(|line| line.trim_start().starts_with("landing  @")),
+        "{shown:?}"
+    );
+    assert!(
+        command()
+            .args(["loop", "run", "resident"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(read_loop_run_records(&env).len(), 1);
+}
+
+#[test]
 fn resident_subscribe_requires_prompt_leader_and_installed_hooks() {
     let env = Env::new();
     for (spec, expected) in [("term", "prompt leader"), ("claude", "--subscribe")] {
@@ -1227,6 +1732,7 @@ fn resident_show_drops_a_daemon_leader_reaped_by_agents_list() {
             BTreeMap::from([(
                 env.project_root.clone(),
                 rimz::harness::schedule::launch_ledger::LaunchRecord {
+                    destination: None,
                     at: Timestamp::now(),
                     leader: "ghost-leader".into(),
                 },

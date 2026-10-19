@@ -137,6 +137,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             (
                 PathBuf::from("/repo/older"),
                 schedule::launch_ledger::LaunchRecord {
+                    destination: None,
                     at: Timestamp::from_second(10).unwrap(),
                     leader: "old-leader".into(),
                 },
@@ -144,6 +145,7 @@ fn show_view(each_worktree: bool) -> ShowView {
             (
                 PathBuf::from("/repo/newer"),
                 schedule::launch_ledger::LaunchRecord {
+                    destination: None,
                     at: Timestamp::from_second(90).unwrap(),
                     leader: "new-leader".into(),
                 },
@@ -190,6 +192,21 @@ fn show_text(view: &ShowView) -> String {
     let mut out = Vec::new();
     render_show(&mut out, view, 10).unwrap();
     anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string()
+}
+
+#[test]
+fn named_launch_rows_and_failed_attention_show_destination_not_scope() {
+    let mut view = show_view(false);
+    let launch = view.launches.get_mut(Path::new("/repo/newer")).unwrap();
+    let mut value = serde_json::to_value(&launch).unwrap();
+    value["destination"] = serde_json::json!("/worktrees/landing");
+    *launch = serde_json::from_value(value).unwrap();
+    view.leader_statuses
+        .insert("new-leader".into(), rimz::agents::AgentStatus::Failed);
+    let text = show_text(&view);
+    assert!(text.contains("landing  @new-leader"), "{text}");
+    assert!(text.contains("@new-leader in landing"), "{text}");
+    assert!(!text.contains("@new-leader in newer"), "{text}");
 }
 
 #[test]

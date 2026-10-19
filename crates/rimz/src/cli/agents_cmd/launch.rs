@@ -100,7 +100,7 @@ pub(in crate::cli) struct LaunchedLayout {
     pub(in crate::cli) leader_index: Option<usize>,
     team: Option<(String, rimz::config::Team)>,
     channel: Option<String>,
-    cwd: PathBuf,
+    pub(in crate::cli) cwd: PathBuf,
     in_place: bool,
     pick_session: bool,
     peer: Option<rimz::store::run::RunRecord>,
@@ -187,7 +187,7 @@ fn write_picker_receipt(w: &mut impl Write, kind: &str, lane: Option<&str>) -> R
 
 type LaunchExecution<'a> = Box<dyn FnOnce() -> Result<Option<LaunchedLayout>> + 'a>;
 
-/// Prepare a launch into a resolved host cwd and return its effectful execution.
+/// Prepare a launch into a resolved host cwd or named worktree and return its execution.
 pub(in crate::cli) fn launch_resolved<'a>(
     launch: AgentLaunchArgs,
     globals: &'a GlobalFlags,
@@ -618,6 +618,7 @@ pub(in crate::cli) fn launch_resolved<'a>(
                 prompt,
                 args.launch.cohort.fresh,
                 focus,
+                loop_task.is_some(),
             )? {
                 reconcile::Reconciled::Done | reconcile::Reconciled::PromptDispatched => {
                     return Ok(None);

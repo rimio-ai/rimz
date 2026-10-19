@@ -28,6 +28,7 @@ pub(super) fn reconcile_cohort_launch(
     prompt: Option<&str>,
     fresh: bool,
     focus: LaunchFocus,
+    loop_fire: bool,
 ) -> Result<Reconciled> {
     if !path.exists() {
         return Ok(Reconciled::Continue);
@@ -48,11 +49,24 @@ pub(super) fn reconcile_cohort_launch(
             members,
         } => {
             let running = already_running(name, &subject, team);
-            if let Some(prompt) = prompt {
-                let peers = projection.agents.iter().collect::<Vec<_>>();
+            let peers = projection.agents.iter().collect::<Vec<_>>();
+            let leader = leader
+                .as_ref()
+                .and_then(|id| projection.agents.iter().find(|agent| &agent.agent_id == id));
+            if loop_fire {
                 let leader = leader
-                    .as_ref()
-                    .and_then(|id| projection.agents.iter().find(|agent| &agent.agent_id == id));
+                    .map(|agent| {
+                        format!(
+                            ", leader {}",
+                            rimz::address::agent_handle(agent, &peers, true)
+                        )
+                    })
+                    .unwrap_or_default();
+                bail!(
+                    "{running}{leader}; prompt was not delivered; stop the cohort or retry with --takeover"
+                );
+            }
+            if let Some(prompt) = prompt {
                 let Some(leader) = leader else {
                     let hints = members
                         .iter()
@@ -151,6 +165,9 @@ pub(super) fn reconcile_cohort_launch(
             let protections = rimz::worktree::ProtectionSet::default();
             let memo = rimz::worktree::LandedMemo::load(path);
             let state = rimz::worktree::inspect(path, &marker, &protections, &memo)?;
+            // A loop fire is unattended even when `loop fire` runs from a
+            // terminal: it refuses with the guidance instead of prompting.
+            let terminal = !loop_fire && std::io::stdin().is_terminal();
             let result = if state.removable() {
                 recreate_or_done(
                     workspace,
@@ -163,7 +180,7 @@ pub(super) fn reconcile_cohort_launch(
                     &resume_command,
                     &fresh_command,
                     &memo,
-                    std::io::stdin().is_terminal(),
+                    terminal,
                 )
             } else {
                 resume_or_done(
@@ -172,7 +189,7 @@ pub(super) fn reconcile_cohort_launch(
                     path,
                     &resume_command,
                     &fresh_command,
-                    std::io::stdin().is_terminal(),
+                    terminal,
                 )
             };
             memo.save();

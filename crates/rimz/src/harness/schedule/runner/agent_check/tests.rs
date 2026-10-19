@@ -105,6 +105,7 @@ fn shell_polarity_short_circuits_or_feeds_two_judges_and_the_action() {
         assert!(prompt.find("tier one reason").unwrap() < prompt.find("tier two reason").unwrap());
         let row = run
             .finish(TaskFireEffect::Resident {
+                checkout: root.path().to_owned(),
                 leader: "worker".into(),
                 handles: vec!["worker".into()],
                 stopped: Vec::new(),

@@ -280,7 +280,7 @@ struct AddArgs {
     /// Write the task to the project's `.rimz/config.toml` instead of per-machine loop.toml.
     #[arg(long)]
     project: bool,
-    /// Optional channel/worktree to host the transient task pane.
+    /// Launch worktree or wait channel; with --stay, created or reused when the task fires.
     #[arg(long)]
     worktree: Option<String>,
     /// Permission posture for the supervised turn: auto, ask, or yolo.
