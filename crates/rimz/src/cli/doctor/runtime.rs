@@ -72,11 +72,11 @@ pub(super) fn collect_storage() -> model::Storage {
     }
 }
 
-pub(super) fn collect_temp_units() -> model::Probe<rimz::harness::tmp_floor::TempUnits> {
+pub(super) fn collect_temp_units(audit: bool) -> model::Probe<rimz::harness::tmp_floor::TempUnits> {
     match MachineConfig::load()
         .map_err(|error| error.to_string())
         .and_then(|config| {
-            rimz::harness::tmp_floor::inspect(&config.gc).map_err(|error| error.to_string())
+            rimz::harness::tmp_floor::inspect(&config.gc, audit).map_err(|error| error.to_string())
         }) {
         Ok(report) => model::Probe::Ready(report),
         Err(error) => model::Probe::Unavailable {

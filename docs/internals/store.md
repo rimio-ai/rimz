@@ -63,7 +63,7 @@ The file primitives sit one level down, in `disk/`, which imports nothing from t
 | [`disk/rotating.rs`](../../crates/rimz/src/disk/rotating.rs) | Best-effort rotating JSONL append and decoded visits. |
 | [`disk/parse_cache.rs`](../../crates/rimz/src/disk/parse_cache.rs) | The per-thread parse memo ([Truth and cache](#truth-and-cache)). |
 | [`disk/single_flight.rs`](../../crates/rimz/src/disk/single_flight.rs) | Cross-process cache election: shared reuse, exclusive production, or local-only fallback. Sidebar heavy lanes and launch gating still use it; host-owned pane production does not. It stays free of every writer module; callers own freshness and publication. |
-| [`disk/usage.rs`](../../crates/rimz/src/disk/usage.rs), [`disk/summary.rs`](../../crates/rimz/src/disk/summary.rs) | Symlink-safe, hardlink-aware byte walks for `doctor`, `uninstall`, and `gc`, and text-file measurement. |
+| [`disk/usage.rs`](../../crates/rimz/src/disk/usage.rs), [`disk/summary.rs`](../../crates/rimz/src/disk/summary.rs) | Symlink-safe, hardlink-aware byte walks for `doctor --audit`, `uninstall`, and `gc`, and text-file measurement. |
 
 Start at `writer.rs` for how a fact gets in, at `snapshot/fold.rs` for how it comes back out, and at `disk/atomic.rs` for what durability costs.
 

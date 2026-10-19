@@ -46,14 +46,20 @@ pub struct TempUnits {
     pub total_bytes: u64,
     pub floor_bytes: u64,
     pub reclaimable_units: usize,
-    pub reclaimable_bytes: u64,
     pub past_grace_units: usize,
     pub earliest_reclaim: Option<jiff::Timestamp>,
     pub in_use_units: usize,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<TempUnitBytes>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct TempUnitBytes {
+    pub reclaimable_bytes: u64,
     pub in_use_bytes: u64,
 }
 
-pub fn inspect(config: &GcConfig) -> Result<TempUnits, TmpFloorErr> {
+pub fn inspect(config: &GcConfig, measure_bytes: bool) -> Result<TempUnits, TmpFloorErr> {
     let root = crate::disk::paths::workspaces_dir();
     let space = probe(&root)?;
     let mut report = TempUnits {
@@ -62,11 +68,16 @@ pub fn inspect(config: &GcConfig) -> Result<TempUnits, TmpFloorErr> {
         floor_bytes: config
             .tmp_floor_bytes(space.total)
             .map_err(TmpFloorErr::Config)?,
+        bytes: measure_bytes.then(TempUnitBytes::default),
         ..TempUnits::default()
     };
     let now = SystemTime::now();
     for candidate in inventory(&root, false)? {
-        let bytes = crate::disk::usage::dir_size(&candidate.unit.path);
+        let bytes = if measure_bytes {
+            crate::disk::usage::dir_size(&candidate.unit.path)
+        } else {
+            0
+        };
         report.tally(&candidate.unit, bytes, now, config.tmp_grace);
     }
     Ok(report)
@@ -79,11 +90,15 @@ impl TempUnits {
     fn tally(&mut self, unit: &TmpUnit, bytes: u64, now: SystemTime, grace: Duration) {
         let Some(order) = eviction_time(unit) else {
             self.in_use_units += 1;
-            self.in_use_bytes = self.in_use_bytes.saturating_add(bytes);
+            if let Some(measured) = &mut self.bytes {
+                measured.in_use_bytes = measured.in_use_bytes.saturating_add(bytes);
+            }
             return;
         };
         self.reclaimable_units += 1;
-        self.reclaimable_bytes = self.reclaimable_bytes.saturating_add(bytes);
+        if let Some(measured) = &mut self.bytes {
+            measured.reclaimable_bytes = measured.reclaimable_bytes.saturating_add(bytes);
+        }
         if unit.past_grace(now, grace) {
             self.past_grace_units += 1;
             return;

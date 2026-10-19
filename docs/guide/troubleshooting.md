@@ -10,7 +10,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 rimz doctor
 ```
 
-The report reads top to bottom, machine setup first and live room state last. This capture excerpt uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse, and the machine-dependent `TEMP UNITS` section is omitted:
+The report reads top to bottom, machine setup first and live room state last. This capture excerpt comes from `rimz doctor --audit`, which adds the disk figures under `STORAGE`. It uses a fresh home with hibernation disabled and legacy directories still present; the reporting-agent list reflects that machine at capture time, not the current built-in roster including Muse, and the machine-dependent `TEMP UNITS` section is omitted:
 
 ```console
 RimZ doctor
@@ -119,7 +119,7 @@ DIAGNOSTICS
 
 Most symptoms below show up as a named doctor row, with the next action collected in the closing block, so the report doubles as the fix list.
 
-For low disk space, read `TEMP UNITS` after `STORAGE`: it shows free space against the configured floor, reclaimable scratch, and scratch still in use. A warning offers `rimz gc --tmp-floor` to reclaim ended agents' units early; a problem means no reclaimable units remain, so stop or restart the agents holding the largest directories. `rimz agents show @handle` prints the directory path. The [garbage-collection settings](./configuration.md#garbage-collection) control the floor and grace.
+For low disk space, read `TEMP UNITS` after `STORAGE`: it shows free space against the configured floor and counts of reclaimable scratch units and units still in use. A normal run skips file-tree size walks; `rimz doctor --audit` adds disk use in `STORAGE` and byte totals in `TEMP UNITS`. A warning offers `rimz gc --tmp-floor` to reclaim ended agents' units early; a problem means no reclaimable units remain, so stop or restart the agents holding the largest directories. `rimz agents show @handle` prints the directory path. The [garbage-collection settings](./configuration.md#garbage-collection) control the floor and grace.
 
 If agent state stays stale or messages wait behind queued hooks, look for a drain-lag warning in DIAGNOSTICS. It shows the episode's worst sampled delay and peak backlog size. The warning clears after 15 minutes without another lag report; `rimz doctor --clear` dismisses the retained history immediately without deleting the evidence.
 

@@ -48,7 +48,8 @@ pub(super) struct DoctorReport {
     pub(super) loop_tasks: LoopTasks,
     pub(super) lsp: Probe<Lsp>,
     pub(super) remote_control: RemoteControl,
-    pub(super) disk_usage: Storage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disk_usage: Option<Storage>,
     pub(super) temp_units: Probe<rimz::harness::tmp_floor::TempUnits>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) protocols: Option<Protocols>,

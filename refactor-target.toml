@@ -833,7 +833,8 @@ path = "crates/rimz/src/harness"
 # assist_log::Assist::AutoGc::worktree_paths retains bounded removal forensics (+1).
 # catalog::TaskCatalog::source_unavailable classifies strict-load failures for GC (+1).
 # WhenExpr::scope_checkout_key shares resident destination admission with the CLI (+1).
-surface-budget = 915
+# tmp_floor::TempUnitBytes keeps measured inventory byte totals all-or-none (+1).
+surface-budget = 916
 
 [[verdict]]
 kind = "item"
@@ -7513,6 +7514,11 @@ reason = "The hidden GC CLI renders or serializes the pressure pass and its per-
 kind = "item"
 key = "harness::tmp_floor::TempUnits"
 reason = "Doctor renders or serializes the machine-wide read-only temp-unit assessment."
+
+[[verdict]]
+kind = "item"
+key = "harness::tmp_floor::TempUnitBytes"
+reason = "Doctor renders measured temp-unit byte totals as one optional pair, omitted in count-only inventories."
 
 [[verdict]]
 kind = "item"
