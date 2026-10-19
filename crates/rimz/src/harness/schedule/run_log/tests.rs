@@ -573,6 +573,9 @@ fn daily_spend_uses_the_configured_local_day() {
     today.at = "2026-06-02T04:10:00Z".parse().expect("timestamp");
     today.cost_usd = Some(4.0);
     assert_eq!(spend_on_local_day(&[prior, today], &now), 4.0);
+    let none = spend_on_local_day(&[], &now);
+    assert!(none.is_sign_positive(), "{none}");
+    assert_eq!(format!("${none:.2}"), "$0.00");
 }
 
 #[test]

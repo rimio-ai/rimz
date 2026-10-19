@@ -632,7 +632,8 @@ pub fn spend_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> f64 {
     records
         .iter()
         .filter_map(|record| cost_on_local_day(record, now))
-        .sum()
+        // `Sum` for floats starts at -0.0, which a no-spend day would print as `$-0.00`.
+        .fold(0.0, |total, cost| total + cost)
 }
 
 pub fn has_cost_on_local_day(records: &[LoopRunRecord], now: &Zoned) -> bool {

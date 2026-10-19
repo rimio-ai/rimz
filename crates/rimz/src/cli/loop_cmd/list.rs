@@ -421,7 +421,9 @@ pub(super) fn load(
             root,
             open,
             here,
-            spend_today_usd: stats.values().map(|stats| stats.spend_today_usd).sum(),
+            spend_today_usd: stats
+                .values()
+                .fold(0.0, |total, stats| total + stats.spend_today_usd),
             tasks,
         });
     }
