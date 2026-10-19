@@ -49,7 +49,7 @@ pub(super) struct ShapeFamily {
     pub(super) provider: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FamilyDrops {
     pub(super) vocabulary: usize,
     pub(super) below_gate: usize,

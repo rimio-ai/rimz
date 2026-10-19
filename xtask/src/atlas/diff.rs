@@ -525,8 +525,14 @@ fn build_report(
     let ranks = target.as_ref().map(|target| target.layer_ranks());
     let base_dependencies = dependencies(base, &paths, ranks.as_ref());
     let current_dependencies = dependencies(current, &paths, ranks.as_ref());
-    let dependencies_added = difference(&current_dependencies, &base_dependencies);
-    let dependencies_removed = difference(&base_dependencies, &current_dependencies);
+    let dependencies = Dependencies {
+        base_counts: dependency_counts(&base_dependencies),
+        current_counts: dependency_counts(&current_dependencies),
+        changes: DependencyChanges {
+            added: difference(&current_dependencies, &base_dependencies),
+            removed: difference(&base_dependencies, &current_dependencies),
+        },
+    };
     let base_edges = interface_edges(base, &paths);
     let current_edges = interface_edges(current, &paths);
     let interfaces = interface_rows(&base_edges, &current_edges);
@@ -641,8 +647,43 @@ fn build_report(
     });
     let rust_files_base = rust_file_count(base, &paths);
     let rust_files_current = rust_file_count(current, &paths);
-    let base_counts = dependency_counts(&base_dependencies);
-    let current_counts = dependency_counts(&current_dependencies);
+    let (totals, surface, internal) = report_sections(
+        production,
+        tests,
+        value_delta(rust_files_base as u64, rust_files_current as u64),
+        base_surface,
+        current_surface,
+        &dependencies,
+    );
+    Ok(Report {
+        base: base_name,
+        paths,
+        totals,
+        surface,
+        internal,
+        dependencies,
+        interface: interfaces,
+        files: Files {
+            inside: changed_inside,
+            outside: changed_outside,
+            enforcing: contract.is_some(),
+        },
+        evidence,
+        expectations,
+    })
+}
+
+fn report_sections(
+    production: ValueDelta,
+    tests: ValueDelta,
+    rust_files: ValueDelta,
+    base_surface: Vec<BoundarySurface>,
+    current_surface: Vec<BoundarySurface>,
+    dependencies: &Dependencies,
+) -> (Totals, Surface, DependencyChanges) {
+    let base_counts = &dependencies.base_counts;
+    let current_counts = &dependencies.current_counts;
+    let DependencyChanges { added, removed } = &dependencies.changes;
     let escaping_surface = current_surface
         .iter()
         .map(|current| SurfaceDelta {
@@ -666,51 +707,33 @@ fn build_report(
         })
         .collect();
 
-    Ok(Report {
-        base: base_name,
-        paths,
-        totals: Totals {
+    (
+        Totals {
             production,
             tests,
             escaping_surface,
             dependency_sites,
-            rust_files: value_delta(rust_files_base as u64, rust_files_current as u64),
+            rust_files,
         },
-        surface: Surface {
+        Surface {
             added: surface_changes(&current_surface, &base_surface),
             removed: surface_changes(&base_surface, &current_surface),
             base: base_surface,
             current: current_surface,
         },
-        internal: DependencyChanges {
-            added: dependencies_added
+        DependencyChanges {
+            added: added
                 .iter()
                 .filter(|site| !site.crossing)
                 .cloned()
                 .collect(),
-            removed: dependencies_removed
+            removed: removed
                 .iter()
                 .filter(|site| !site.crossing)
                 .cloned()
                 .collect(),
         },
-        dependencies: Dependencies {
-            base_counts,
-            current_counts,
-            changes: DependencyChanges {
-                added: dependencies_added,
-                removed: dependencies_removed,
-            },
-        },
-        interface: interfaces,
-        files: Files {
-            inside: changed_inside,
-            outside: changed_outside,
-            enforcing: contract.is_some(),
-        },
-        evidence,
-        expectations,
-    })
+    )
 }
 
 fn in_paths(path: &Path, paths: &[PathBuf]) -> bool {

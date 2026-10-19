@@ -89,8 +89,7 @@ fn diff_flag_errors_are_stable() {
     }
 }
 
-#[test]
-fn diff_json_is_stable() {
+fn diff_report_fixture() -> Report {
     let surface_item = |name: &str| SurfaceItem {
         scope: "src".into(),
         id: ItemId {
@@ -101,65 +100,46 @@ fn diff_json_is_stable() {
         path: "src/a.rs".into(),
         line: 1,
     };
-    let report = Report {
-        base: "base".to_owned(),
-        paths: vec!["src".into()],
-        totals: Totals {
-            production: ValueDelta {
-                base: 10,
-                current: 7,
-                delta: -3,
-            },
-            tests: ValueDelta {
-                base: 2,
-                current: 3,
-                delta: 1,
-            },
-            escaping_surface: vec![SurfaceDelta {
-                scope: "src".into(),
-                value: value_delta(1, 2),
+    let dependencies = Dependencies {
+        base_counts: BTreeMap::from([("downward", 1), ("internal", 0), ("upward", 0)]),
+        current_counts: BTreeMap::from([("downward", 2), ("internal", 0), ("upward", 0)]),
+        changes: DependencyChanges {
+            added: vec![DependencySite {
+                key: DependencyKey {
+                    from: "a".to_owned(),
+                    to: "outside".to_owned(),
+                    path: "src/a.rs".into(),
+                    item: "open".to_owned(),
+                    spelling: Spelling::Use,
+                },
+                line: 2,
+                direction: "downward",
+                crossing: true,
             }],
-            dependency_sites: BTreeMap::from([
-                ("downward", value_delta(1, 2)),
-                ("internal", value_delta(0, 0)),
-            ]),
-            rust_files: value_delta(2, 1),
-        },
-        surface: Surface {
-            base: vec![BoundarySurface {
-                scope: "src".into(),
-                items: vec![surface_item("old")],
-            }],
-            current: vec![BoundarySurface {
-                scope: "src".into(),
-                items: vec![surface_item("new"), surface_item("other")],
-            }],
-            added: vec![surface_item("new"), surface_item("other")],
-            removed: vec![surface_item("old")],
-        },
-        dependencies: Dependencies {
-            base_counts: BTreeMap::from([("downward", 1), ("internal", 0), ("upward", 0)]),
-            current_counts: BTreeMap::from([("downward", 2), ("internal", 0), ("upward", 0)]),
-            changes: DependencyChanges {
-                added: vec![DependencySite {
-                    key: DependencyKey {
-                        from: "a".to_owned(),
-                        to: "outside".to_owned(),
-                        path: "src/a.rs".into(),
-                        item: "open".to_owned(),
-                        spelling: Spelling::Use,
-                    },
-                    line: 2,
-                    direction: "downward",
-                    crossing: true,
-                }],
-                removed: Vec::new(),
-            },
-        },
-        internal: DependencyChanges {
-            added: Vec::new(),
             removed: Vec::new(),
         },
+    };
+    let (totals, surface, internal) = report_sections(
+        value_delta(10, 7),
+        value_delta(2, 3),
+        value_delta(2, 1),
+        vec![BoundarySurface {
+            scope: "src".into(),
+            items: vec![surface_item("old")],
+        }],
+        vec![BoundarySurface {
+            scope: "src".into(),
+            items: vec![surface_item("new"), surface_item("other")],
+        }],
+        &dependencies,
+    );
+    Report {
+        base: "base".to_owned(),
+        paths: vec!["src".into()],
+        totals,
+        surface,
+        dependencies,
+        internal,
         interface: vec![InterfaceRow {
             from: "a".to_owned(),
             to: "outside".to_owned(),
@@ -184,7 +164,75 @@ fn diff_json_is_stable() {
             landed: true,
             detail: "-3".to_owned(),
         }],
-    };
+    }
+}
+
+#[test]
+fn diff_sections_preserve_count_surface_and_internal_rules() {
+    let report = diff_report_fixture();
+    let counts = &report.totals.dependency_sites;
+    assert_eq!(
+        counts.keys().copied().collect::<Vec<_>>(),
+        ["downward", "internal"]
+    );
+    assert_eq!(counts["downward"].base, 1);
+    assert_eq!(counts["downward"].current, 2);
+    assert_eq!(counts["downward"].delta, 1);
+    assert_eq!(counts["internal"].base, 0);
+    assert_eq!(counts["internal"].current, 0);
+    assert_eq!(counts["internal"].delta, 0);
+    let escaping = &report.totals.escaping_surface[0];
+    assert_eq!(escaping.scope, Path::new("src"));
+    assert_eq!(escaping.value.base, 1);
+    assert_eq!(escaping.value.current, 2);
+    assert_eq!(escaping.value.delta, 1);
+    assert_eq!(report.surface.added.len(), 2);
+    assert_eq!(report.surface.added[0].id.name, "new");
+    assert_eq!(report.surface.added[1].id.name, "other");
+    assert_eq!(report.surface.removed.len(), 1);
+    assert_eq!(report.surface.removed[0].id.name, "old");
+    assert!(report.internal.added.is_empty());
+    assert!(report.internal.removed.is_empty());
+
+    let mut base = report.surface.base;
+    base.insert(
+        0,
+        BoundarySurface {
+            scope: "other".into(),
+            items: Vec::new(),
+        },
+    );
+    let mut current = report.surface.current;
+    current.push(BoundarySurface {
+        scope: "new".into(),
+        items: Vec::new(),
+    });
+    let mut dependencies = report.dependencies;
+    let mut internal_site = dependencies.changes.added[0].clone();
+    internal_site.crossing = false;
+    dependencies.changes.added.push(internal_site.clone());
+    dependencies.changes.removed =
+        vec![dependencies.changes.added[0].clone(), internal_site.clone()];
+    let (totals, _, internal) = report_sections(
+        report.totals.production,
+        report.totals.tests,
+        report.totals.rust_files,
+        base,
+        current,
+        &dependencies,
+    );
+    assert_eq!(totals.escaping_surface[0].value.base, 1);
+    assert_eq!(totals.escaping_surface[1].value.base, 0);
+    for sites in [&internal.added, &internal.removed] {
+        assert_eq!(sites.len(), 1);
+        assert!(!sites[0].crossing);
+        assert_eq!(sites[0].key, internal_site.key);
+    }
+}
+
+#[test]
+fn diff_json_is_stable() {
+    let report = diff_report_fixture();
     for (section, expected) in [
         (None, include_str!("golden-all.json")),
         (
