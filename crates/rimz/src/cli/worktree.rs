@@ -421,7 +421,7 @@ fn render_worktree_table(dir: &Path, entries: &[InspectedWorktree]) -> Result<()
         parts.push(format!("{unlanded} with unlanded work"));
     }
     writeln!(out, "{}\n", parts.join(" · "))?;
-    let mut table = render::Table::new(["WORKTREE", "BRANCH", "STATE", "AGENTS"]);
+    let mut table = render::Table::new(["WORKTREE", "BRANCH", "STATE", "HOLDERS"]);
     for entry in entries {
         append_worktree_row(&mut table, entry);
     }
@@ -450,9 +450,6 @@ fn append_worktree_row(table: &mut render::Table, entry: &InspectedWorktree) {
 }
 
 fn holder_chips(holders: &Holders, limit: usize) -> String {
-    if holders.agents.is_empty() {
-        return if holders.panes > 0 { "pane" } else { "-" }.to_owned();
-    }
     let mut chips = holders
         .agents
         .iter()
@@ -461,6 +458,18 @@ fn holder_chips(holders: &Holders, limit: usize) -> String {
         .collect::<Vec<_>>();
     if holders.agents.len() > limit {
         chips.push(format!("+{}", holders.agents.len() - limit));
+    }
+    if holders.agents.is_empty() && holders.panes > 0 {
+        chips.push("pane".to_owned());
+    }
+    chips.extend(
+        holders
+            .loop_tasks
+            .iter()
+            .map(|name| format!("loop task {name}")),
+    );
+    if chips.is_empty() {
+        return "-".to_owned();
     }
     chips.join(" ")
 }
@@ -558,7 +567,7 @@ fn sweep_worktrees(
         require_existing_store(workspace)?
     };
     let guard = super::worktree_protection::for_automatic_gc(workspace, &store, globals)
-        .context("reading the live agent roster before sweeping worktrees")?;
+        .context("reading protection facts before sweeping worktrees")?;
     let sweep = rimz::worktree::sweep_owned(
         &workspace.project_root,
         &guard.protections,
@@ -647,17 +656,30 @@ fn report_sweep(sweep: &rimz::worktree::WorktreeSweep, dry_run: bool, dir: &Path
             let mut details = Vec::new();
             if reason == KeepReason::InUse {
                 if !kept.holders.agents.is_empty() {
-                    details.push(holder_chips(&kept.holders, 4));
+                    details.push(holder_chips(
+                        &Holders {
+                            agents: kept.holders.agents.clone(),
+                            ..Holders::default()
+                        },
+                        4,
+                    ));
                 }
                 if kept.holders.panes > 0 {
                     details.push(
                         Holders {
                             agents: Vec::new(),
                             panes: kept.holders.panes,
+                            ..Holders::default()
                         }
                         .to_string(),
                     );
                 }
+                details.extend(
+                    kept.holders
+                        .loop_tasks
+                        .iter()
+                        .map(|name| format!("loop task {name}")),
+                );
             }
             for extra in kept.reasons.iter().skip(1) {
                 details.push(format!(
@@ -845,8 +867,13 @@ pub(super) fn cleanup_worktree(
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let workspace = cleanup_workspace(&marker, globals)?;
-    let protections =
-        super::worktree_protection::for_wrapper_cleanup(&workspace, globals).protections;
+    let protections = match super::worktree_protection::for_wrapper_cleanup(&workspace, globals) {
+        Ok(protection) => protection.protections,
+        Err(error) => {
+            tracing::debug!(%error, "loop tasks unavailable; wrapper checkout kept");
+            return Ok(());
+        }
+    };
     let memo = rimz::worktree::LandedMemo::load(path);
     let state = rimz::worktree::inspect(path, &marker, &protections, &memo)?;
     let result = (|| {
@@ -1087,7 +1114,7 @@ mod tests {
                     "dirty": false,
                     "landed": landed,
                     "reasons": reasons,
-                    "holders": {"agents": [], "panes": 0},
+                    "holders": {"agents": [], "panes": 0, "loop_tasks": []},
                 })
             );
         }

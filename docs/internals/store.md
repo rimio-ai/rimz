@@ -434,6 +434,8 @@ Room scope sweeps orphan atomic-write temps only under its state and runtime roo
 
 The sidebar host remains the sole automatic trigger, once daily per room after a five-minute settle. The helper normally runs room scope; `harness::auto_gc::claim_machine_sweep` elects one machine sweep per 24 hours using a stamp check, a nonblocking lock, and a locked stamp recheck. It holds the guard through the sweep and stamp write. `disk::paths::machine_auto_gc_stamp` names `cache_dir()/auto-gc.json`; `RuntimePaths::shared_auto_gc_lock` names the shared runtime `auto-gc.lock`. Room and machine stamps use `{ "swept_at": <Timestamp> }` and record failed attempts too. Closed rooms wait for the machine sweep. Assist records include `scope` and the helper's own room's `class_bytes`; other totals cover the full selected scope. See [automatic sweeps](../reference/cli/maintenance.md#automatic-sweeps).
 
+When loading the overlay-cleanup catalog fails and loop-task sources are unreadable, GC retains those overlays and continues other maintenance; its worktree area skips. Automatic daily sweeps still require a readable core config so an unreadable opt-out never becomes an enabled default. Worktree protection reads every workspace's task sources strictly; [worktree protection](./harness/worktrees.md#protection-facts) owns the holder rules.
+
 ## What survives what
 
 The owned-class sweep removes terminal workflow homes together when their record mtime exceeds the seven-day grace, under the workspace lock. Active and parked workflow records are never candidates. A workflow home without its record, which only a crash during creation leaves, is removed once the home directory's mtime exceeds the same grace.

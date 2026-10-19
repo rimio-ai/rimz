@@ -1104,6 +1104,162 @@ fn gc_keeps_spawn_and_live_loop_schedules() {
 }
 
 #[test]
+fn gc_keeps_loop_root_until_task_is_removed() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/followup");
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\nevery = '1h'\n",
+            worktree.display()
+        ),
+    )
+    .unwrap();
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .success()
+        .stdout(contains("loop task nightly"));
+    assert!(worktree.exists());
+    env.rimz().args(["gc", "--unattended"]).assert().success();
+    assert!(
+        worktree.exists(),
+        "unattended gc also keeps the booked tree"
+    );
+    env.rimz()
+        .args(["loop", "remove", "nightly", "--root"])
+        .arg(&worktree)
+        .assert()
+        .success();
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .success()
+        .stdout(contains("removed: followup"));
+    assert!(!worktree.exists());
+}
+
+#[test]
+fn gc_fanout_does_not_pin_its_arming_directory() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/followup");
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .success()
+        .stdout(contains("removed: followup"));
+    assert!(!worktree.exists());
+}
+
+#[test]
+fn gc_skips_worktrees_when_another_rooms_instances_are_broken() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/followup");
+    let other = env.home_root.join("other");
+    env.record(&other);
+    let file = env
+        .state_path_for(&other)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "broken json").unwrap();
+    let output = env.rimz().args(["gc", "--json"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["worktrees"]["skipped"], "loop_tasks_unavailable");
+    assert!(worktree.exists());
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .success()
+        .stdout(contains("loop tasks"))
+        .stdout(contains(file.display().to_string()));
+}
+
+#[test]
+fn gc_rejects_invalid_project_tasks_despite_another_rooms_broken_instances() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let project_config = env.project_root.join(".rimz/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(&project_config, "[tasks.bad]\nwatch = 'true'\n").unwrap();
+    let other = env.home_root.join("other");
+    env.record(&other);
+    let instances = env
+        .state_path_for(&other)
+        .root
+        .join("records/loop-instances.json");
+    std::fs::create_dir_all(instances.parent().unwrap()).unwrap();
+    std::fs::write(&instances, "broken json").unwrap();
+
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .failure()
+        .stderr(contains("invalid project tasks config"))
+        .stderr(contains(project_config.display().to_string()));
+}
+
+#[test]
+fn gc_skips_worktrees_when_machine_loop_file_is_unreadable() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let worktree = env.home_root.join("project-worktrees/followup");
+    let file = env.rimz_home().join("loop.toml");
+    std::fs::create_dir(&file).unwrap();
+    env.rimz()
+        .arg("gc")
+        .assert()
+        .success()
+        .stdout(contains("loop tasks"))
+        .stdout(contains(file.display().to_string()));
+    assert!(worktree.exists());
+    let output = env
+        .rimz()
+        .args(["gc", "--unattended", "--json"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["worktrees"]["skipped"], "loop_tasks_unavailable");
+    assert!(worktree.exists());
+}
+
+#[test]
 fn gc_keeps_worktree_with_live_agent() {
     if git_missing() {
         return;

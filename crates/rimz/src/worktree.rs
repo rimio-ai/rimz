@@ -3,7 +3,7 @@
 //! Worktrees are identified by a marker stored in the linked worktree's git
 //! admin directory, not in the checkout. The checkout remains pristine, and
 //! removal only ever removes marked worktrees. Removal assessment combines Git
-//! safety with normalized pane and agent occupancy facts.
+//! safety with normalized pane and agent occupancy facts and loop-task pins.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -426,11 +426,12 @@ pub enum LandedVerdict {
 pub struct Holders {
     pub agents: Vec<String>,
     pub panes: u32,
+    pub loop_tasks: Vec<String>,
 }
 
 impl Holders {
     pub fn is_empty(&self) -> bool {
-        self.agents.is_empty() && self.panes == 0
+        self.agents.is_empty() && self.panes == 0 && self.loop_tasks.is_empty()
     }
 }
 
@@ -442,6 +443,11 @@ impl std::fmt::Display for Holders {
             1 => parts.push("an open pane".to_owned()),
             count => parts.push(format!("{count} open panes")),
         }
+        parts.extend(
+            self.loop_tasks
+                .iter()
+                .map(|name| format!("loop task {name}")),
+        );
         f.write_str(&parts.join(", "))
     }
 }
@@ -528,7 +534,7 @@ struct AgentProtectionFact {
     process_cwd: Option<PathBuf>,
 }
 
-/// Normalized paths whose live panes or agents prevent checkout removal.
+/// Normalized paths whose panes, agents, or loop tasks prevent checkout removal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionSet {
     paths: Vec<(PathBuf, Holder)>,
@@ -538,6 +544,7 @@ pub struct ProtectionSet {
 enum Holder {
     Agent(String),
     Pane(PaneId),
+    LoopTask(String),
 }
 
 /// Which agent records keep a checkout occupied.
@@ -553,6 +560,7 @@ pub enum Occupancy {
 }
 
 /// Fold current pane and agent state into worktree removal protection policy.
+/// Callers add loop-task pins separately through [`ProtectionSet::insert_loop_task`].
 pub fn protection_set_from_runtime(
     panes: &[PaneRef],
     agents: &[AgentState],
@@ -588,6 +596,11 @@ pub fn protection_set_from_runtime(
 }
 
 impl ProtectionSet {
+    /// Add a task's pinned path without importing the scheduler's policy.
+    pub fn insert_loop_task(&mut self, name: &str, path: &Path) {
+        self.insert(Some(path), Holder::LoopTask(name.to_owned()));
+    }
+
     pub fn holders(&self, candidate: &Path) -> Holders {
         let candidate = normalize_path_lexical(candidate);
         let mut holders = Holders::default();
@@ -605,13 +618,18 @@ impl ProtectionSet {
                 Holder::Pane(pane) => {
                     panes.insert(pane);
                 }
+                Holder::LoopTask(name) => {
+                    if !holders.loop_tasks.contains(name) {
+                        holders.loop_tasks.push(name.clone());
+                    }
+                }
             }
         }
         holders.panes = panes.len().try_into().unwrap_or(u32::MAX);
         holders
     }
 
-    /// Fold already-probed pane and agent facts into one normalized set.
+    /// Fold already-probed occupancy facts before adding loop-task pins.
     fn from_facts(
         panes: &[PaneProtectionFact],
         agents: &[AgentProtectionFact],
@@ -1343,7 +1361,7 @@ pub fn land(
     })
 }
 
-/// Remove every clean, landed, unoccupied RimZ-owned worktree in one repo.
+/// Remove every clean, landed RimZ-owned worktree with no holders in one repo.
 /// Per-worktree failures are retained in the report so one broken checkout
 /// does not prevent the remaining safe candidates from being reclaimed.
 pub fn sweep_owned(

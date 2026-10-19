@@ -566,6 +566,43 @@ fn landed_verdict_and_status_constructors() {
 }
 
 #[test]
+fn loop_pins_hold_containing_tree_and_deduplicate_names() {
+    let mut protections = ProtectionSet::default();
+    protections.insert_loop_task("nightly", Path::new("/trees/demo/subdir/../src"));
+    protections.insert_loop_task("nightly", Path::new("/trees/demo"));
+    protections.insert_loop_task("outside", Path::new("/trees/other"));
+    let holders = protections.holders(Path::new("/trees/demo"));
+    assert_eq!(holders.loop_tasks, ["nightly"]);
+    assert!(!holders.is_empty());
+    assert_eq!(
+        WorktreeState {
+            status: WorktreeStatus::default(),
+            holders
+        }
+        .keep_reasons(),
+        [KeepReason::InUse]
+    );
+    assert!(protections.holders(Path::new("/trees/dem")).is_empty());
+}
+
+#[test]
+fn holders_render_loop_tasks_after_agents_and_panes() {
+    let holders = Holders {
+        agents: vec!["@coder".into()],
+        panes: 1,
+        loop_tasks: vec!["nightly".into()],
+    };
+    assert_eq!(
+        holders.to_string(),
+        "@coder, an open pane, loop task nightly"
+    );
+    assert_eq!(
+        serde_json::to_value(Holders::default()).unwrap()["loop_tasks"],
+        serde_json::json!([])
+    );
+}
+
+#[test]
 fn keep_reasons_are_complete_and_ordered() {
     let mut state = WorktreeState {
         status: WorktreeStatus {
@@ -576,6 +613,7 @@ fn keep_reasons_are_complete_and_ordered() {
         holders: Holders {
             agents: vec!["@coder".to_owned()],
             panes: 1,
+            ..Holders::default()
         },
     };
     assert_eq!(
@@ -630,11 +668,13 @@ fn holders_share_occupancy_and_do_not_double_count_bound_panes() {
                 Holders {
                     agents: vec!["@coder#demo".to_owned()],
                     panes: 0,
+                    ..Holders::default()
                 }
             } else {
                 Holders {
                     agents: vec![],
                     panes: 1,
+                    ..Holders::default()
                 }
             }
         );
@@ -650,7 +690,8 @@ fn holders_share_occupancy_and_do_not_double_count_bound_panes() {
         .holders(candidate),
         Holders {
             agents: vec!["@coder#demo".to_owned()],
-            panes: 0
+            panes: 0,
+            ..Holders::default()
         }
     );
     assert!(
