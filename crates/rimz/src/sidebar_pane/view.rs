@@ -179,12 +179,6 @@ impl<'a> VisibleRoster<'a> {
             .map(|pane| pane.pane_id.clone())
     }
 
-    pub(super) fn group_containing(&self, ordinal: usize) -> Option<&VisibleGroup<'a>> {
-        self.groups
-            .iter()
-            .find(|group| group.range.contains(&ordinal))
-    }
-
     pub(super) fn neighboring_group_head(&self, ordinal: usize, step: isize) -> Option<usize> {
         let visible = self
             .groups

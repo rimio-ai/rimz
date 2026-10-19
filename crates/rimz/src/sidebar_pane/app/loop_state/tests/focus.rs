@@ -1762,10 +1762,6 @@ fn rowless_focus_anchor_preserves_scroll_on_matching_fold() {
 
     assert_eq!(rig.state.ui.selected_pane, Some(target));
     assert_eq!(rig.state.ui.scroll_offset, 2);
-    assert!(
-        rig.state.ui.focus_group_reveal,
-        "a rowless anchor preserves external-focus group reveal"
-    );
     assert_eq!(rig.state.ui.last_focus_anchor_ms, stamp_ms);
     assert_eq!(rig.state.ui.freeze.as_ref().unwrap().frozen, order);
 }
@@ -1805,7 +1801,6 @@ fn fresh_requested_focus_anchor_installs_shared_hold_once() {
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert_eq!(rig.state.ui.scroll_offset, 0);
     assert_eq!(rig.state.ui.focus_placement, anchor.placement);
-    assert!(!rig.state.ui.focus_group_reveal);
     assert_eq!(
         rig.state.current.worktree_groups[0]
             .rows
@@ -1953,30 +1948,6 @@ fn superseding_client_observation_leaves_scroll_untouched() {
     assert_eq!(rig.state.ui.selected_pane, Some(selected));
     assert_eq!(rig.state.ui.scroll_offset, 3);
     assert_eq!(rig.state.ui.last_focus_anchor_ms, 0);
-}
-
-#[test]
-fn external_focus_change_arms_group_reveal_once() {
-    let mut rig = Rig::new();
-    let target = zellij("terminal_2");
-
-    let snapshot = snapshot_with_focused_pane(&rig.ws, target.clone());
-    rig.fold(snapshot, SnapshotSource::Produced);
-
-    assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
-    assert!(
-        rig.state.ui.focus_group_reveal,
-        "the first focused pane learned on attach arms a one-shot group reveal"
-    );
-
-    rig.state.ui.focus_group_reveal = false;
-    let snapshot = snapshot_with_focused_pane(&rig.ws, target);
-    rig.fold(snapshot, SnapshotSource::Produced);
-
-    assert!(
-        !rig.state.ui.focus_group_reveal,
-        "unchanged focused pane refolds leave the consumed reveal off"
-    );
 }
 
 #[test]
