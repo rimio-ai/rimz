@@ -350,10 +350,8 @@ fn preflight_web_engine() -> Result<()> {
 }
 
 fn ensure_default_config_for_start() -> Result<bool> {
-    let config_was_missing = matches!(
-        std::fs::symlink_metadata(rimz::config::MachineConfig::config_path()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
+    let config_was_missing =
+        !rimz::disk::entry_exists(&rimz::config::MachineConfig::config_path()).unwrap_or(true);
     if config_was_missing && !rimz::disk::paths::legacy_config_roots().is_empty() {
         return Ok(false);
     }

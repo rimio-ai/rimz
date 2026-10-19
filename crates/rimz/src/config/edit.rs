@@ -233,17 +233,13 @@ impl ConfigEditor {
     pub fn write_defaults(&self, force: bool) -> Result<bool> {
         let mut wrote = false;
         for file in self.files.ordered() {
-            if !force {
-                match std::fs::symlink_metadata(file.path()) {
-                    Ok(_) => continue,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(ConfigEditErr::Read {
-                            path: file.path().to_path_buf(),
-                            source,
-                        });
-                    }
-                }
+            if !force
+                && crate::disk::entry_exists(file.path()).map_err(|source| ConfigEditErr::Read {
+                    path: file.path().to_path_buf(),
+                    source,
+                })?
+            {
+                continue;
             }
             write(file.path(), file.template().as_bytes())?;
             wrote = true;

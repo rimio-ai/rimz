@@ -600,7 +600,8 @@ allowed-dependencies = [
 # DiskSpace, disk_space and the three DEFAULT_TMP_* constants share capacity and retention policy (+5).
 # RuntimePaths::shared_tmp_floor_lock elects one machine pressure helper (+1).
 # usage::dir_allocated_size shares allocated-byte accounting with pressure eviction (+1).
-surface-budget = 265
+# Config bootstrap, loading, and editing share one entry-exists test that keeps dangling links present (+1).
+surface-budget = 266
 
 [[verdict]]
 kind = "item"
