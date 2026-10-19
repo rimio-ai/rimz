@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use serde_json::{Map, json};
 
 use super::detect::{self, GuardFamily};
 use super::facts::{Facets, Facts};
@@ -181,22 +180,35 @@ struct Args {
 struct Report {
     path: PathBuf,
     probes: Vec<Probe>,
-    rows: Vec<Row>,
-    totals: Totals,
+    rank: Rank,
     hot: Vec<Hotspot>,
     assemblers: Vec<Assembler>,
     debt: Debt,
     cycles: Vec<Cycle>,
     shapes: Vec<ShapeFamily>,
     guards: Vec<GuardFamily>,
+    footer: Footer,
+}
+
+#[derive(Serialize)]
+struct Rank {
+    rows: Vec<Row>,
+    totals: Totals,
+}
+
+#[derive(Default, Serialize)]
+struct Footer {
     history_commits: usize,
     pace_window: usize,
     parse_failures: usize,
-    shape_families_dropped: shapes::FamilyDrops,
-    guard_families_dropped: detect::GuardDrops,
-    suppressed: usize,
-    stale: Vec<String>,
-    ambiguous: Vec<String>,
+    shape_families_dropped_as_std_vocabulary: usize,
+    shape_families_below_finding_gate: usize,
+    shape_families_dropped_as_one_module_api: usize,
+    guard_families_dropped_as_std_idiom: usize,
+    guard_families_dropped_as_predicate_use: usize,
+    suppressed_families: usize,
+    stale_verdict_keys: Vec<String>,
+    ambiguous_verdict_keys: Vec<String>,
     ledger: LedgerNote,
 }
 
@@ -215,8 +227,8 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
     )?;
     let mut report = build_report(root, &facts, &args.path, args.by, args.all)?;
     if args.restamp {
-        ledger::write_restamps(root, &report.ledger.restamps)?;
-        report.ledger.restamped = true;
+        ledger::write_restamps(root, &report.footer.ledger.restamps)?;
+        report.footer.ledger.restamped = true;
     }
     let rendered = if args.output.json {
         render_json(&report, &args.output)?
@@ -364,28 +376,32 @@ fn build_report(
     Ok(Report {
         path: facts.scope.clone(),
         probes,
-        rows,
-        totals,
+        rank: Rank { rows, totals },
         hot,
         assemblers,
         debt,
         cycles,
         shapes,
         guards,
-        history_commits: log.len(),
-        pace_window: log.window_len(25),
-        parse_failures: facts
-            .syntax
-            .parse_failures
-            .iter()
-            .filter(|path| path_in_scope(path, scope))
-            .count(),
-        shape_families_dropped,
-        guard_families_dropped,
-        suppressed,
-        stale,
-        ambiguous,
-        ledger: ledger_note,
+        footer: Footer {
+            history_commits: log.len(),
+            pace_window: log.window_len(25),
+            parse_failures: facts
+                .syntax
+                .parse_failures
+                .iter()
+                .filter(|path| path_in_scope(path, scope))
+                .count(),
+            shape_families_dropped_as_std_vocabulary: shape_families_dropped.vocabulary,
+            shape_families_below_finding_gate: shape_families_dropped.below_gate,
+            shape_families_dropped_as_one_module_api: shape_families_dropped.single_provider,
+            guard_families_dropped_as_std_idiom: guard_families_dropped.vocabulary,
+            guard_families_dropped_as_predicate_use: guard_families_dropped.predicate_use,
+            suppressed_families: suppressed,
+            stale_verdict_keys: stale,
+            ambiguous_verdict_keys: ambiguous,
+            ledger: ledger_note,
+        },
     })
 }
 
@@ -1105,7 +1121,7 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
         )
         .unwrap();
-        for row in report.rows.iter().take(top) {
+        for row in report.rank.rows.iter().take(top) {
             let pace = row
                 .pace
                 .map_or_else(|| "—".to_owned(), |pace| format!("{pace:.2}"));
@@ -1141,7 +1157,10 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
         writeln!(
             output,
             "\noverall: code {}, tests {}, esc {}, cx {:.1}",
-            report.totals.code, report.totals.tests, report.totals.esc, report.totals.cx
+            report.rank.totals.code,
+            report.rank.totals.tests,
+            report.rank.totals.esc,
+            report.rank.totals.cx
         )
         .unwrap();
     }
@@ -1270,39 +1289,52 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
     }
 
     if output_args.wants("footer") {
+        let footer = &report.footer;
         writeln!(output, "\n## Footer").unwrap();
         writeln!(
             output,
             "history: {} scoped commits (pace window {})",
-            report.history_commits, report.pace_window
+            footer.history_commits, footer.pace_window
         )
         .unwrap();
-        writeln!(output, "parse failures: {}", report.parse_failures).unwrap();
+        writeln!(output, "parse failures: {}", footer.parse_failures).unwrap();
         writeln!(
             output,
             "shape families dropped as std vocabulary: {}; {} below the finding gate; {} as one module's API (`--all` shows them)",
-            report.shape_families_dropped.vocabulary,
-            report.shape_families_dropped.below_gate,
-            report.shape_families_dropped.single_provider
+            footer.shape_families_dropped_as_std_vocabulary,
+            footer.shape_families_below_finding_gate,
+            footer.shape_families_dropped_as_one_module_api
         )
         .unwrap();
         writeln!(
             output,
             "guard families dropped as std idiom: {}; {} as predicate use (`--all` shows them)",
-            report.guard_families_dropped.vocabulary, report.guard_families_dropped.predicate_use
+            footer.guard_families_dropped_as_std_idiom,
+            footer.guard_families_dropped_as_predicate_use
         )
         .unwrap();
-        writeln!(output, "suppressed families: {}", report.suppressed).unwrap();
+        writeln!(
+            output,
+            "suppressed families: {}",
+            footer.suppressed_families
+        )
+        .unwrap();
         writeln!(
             output,
             "cx: severity-weighted over-threshold excess summed per function; 0 = every function under its warn thresholds"
         )
         .unwrap();
-        render_verdict_keys(&mut output, "stale", &report.stale, top, true);
+        render_verdict_keys(&mut output, "stale", &footer.stale_verdict_keys, top, true);
         // Printed beside a `none` stale line so a clean record says so.
-        let clean = report.stale.is_empty();
-        render_verdict_keys(&mut output, "ambiguous", &report.ambiguous, top, clean);
-        render_ledger_note(&mut output, &report.ledger, top);
+        let clean = footer.stale_verdict_keys.is_empty();
+        render_verdict_keys(
+            &mut output,
+            "ambiguous",
+            &footer.ambiguous_verdict_keys,
+            top,
+            clean,
+        );
+        render_ledger_note(&mut output, &footer.ledger, top);
     }
     output
 }
@@ -1526,59 +1558,19 @@ fn render_provider_sites(rows: &[ProviderSites], top: usize) -> String {
 }
 
 fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
-    let mut sections = Map::new();
-    sections.insert("path".to_owned(), serde_json::to_value(&report.path)?);
-    if output_args.wants("probes") {
-        sections.insert("probes".to_owned(), serde_json::to_value(&report.probes)?);
-    }
-    if output_args.wants("rank") {
-        sections.insert(
-            "rank".to_owned(),
-            json!({
-                "rows": &report.rows,
-                "totals": &report.totals,
-            }),
-        );
-    }
-    if output_args.wants("hot") {
-        sections.insert("hot".to_owned(), serde_json::to_value(&report.hot)?);
-    }
-    if output_args.wants("assemblers") {
-        sections.insert(
-            "assemblers".to_owned(),
-            serde_json::to_value(&report.assemblers)?,
-        );
-    }
-    if output_args.wants("debt") {
-        sections.insert("debt".to_owned(), serde_json::to_value(&report.debt)?);
-        sections.insert("cycles".to_owned(), serde_json::to_value(&report.cycles)?);
-    }
-    if output_args.wants("shapes") {
-        sections.insert("shapes".to_owned(), serde_json::to_value(&report.shapes)?);
-    }
-    if output_args.wants("guards") {
-        sections.insert("guards".to_owned(), serde_json::to_value(&report.guards)?);
-    }
-    if output_args.wants("footer") {
-        sections.insert(
-            "footer".to_owned(),
-            json!({
-                "history_commits": report.history_commits,
-                "pace_window": report.pace_window,
-                "parse_failures": report.parse_failures,
-                "shape_families_dropped_as_std_vocabulary": report.shape_families_dropped.vocabulary,
-                "shape_families_below_finding_gate": report.shape_families_dropped.below_gate,
-                "shape_families_dropped_as_one_module_api": report.shape_families_dropped.single_provider,
-                "guard_families_dropped_as_std_idiom": report.guard_families_dropped.vocabulary,
-                "guard_families_dropped_as_predicate_use": report.guard_families_dropped.predicate_use,
-                "suppressed_families": report.suppressed,
-                "stale_verdict_keys": &report.stale,
-                "ambiguous_verdict_keys": &report.ambiguous,
-                "ledger": &report.ledger,
-            }),
-        );
-    }
-    Ok(format!("{}\n", serde_json::to_string_pretty(&sections)?))
+    let selected = output_args.select(
+        serde_json::to_value(report)?,
+        SECTIONS.iter().map(|section| {
+            let keys = if *section == "debt" {
+                &["debt", "cycles"][..]
+            } else {
+                std::slice::from_ref(section)
+            };
+            (*section, keys)
+        }),
+        &["path"],
+    );
+    Ok(format!("{}\n", serde_json::to_string_pretty(&selected)?))
 }
 
 #[cfg(test)]

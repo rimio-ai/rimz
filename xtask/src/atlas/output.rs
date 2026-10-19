@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use serde_json::Value;
 
 use super::ArgCursor;
 
@@ -94,6 +95,26 @@ impl OutputArgs {
         self.sections
             .as_ref()
             .is_some_and(|sections| sections.contains(section))
+    }
+
+    pub(super) fn select<'a>(
+        &self,
+        mut report: Value,
+        sections: impl IntoIterator<Item = (&'a str, &'a [&'a str])>,
+        always: &[&str],
+    ) -> Value {
+        let object = report
+            .as_object_mut()
+            .expect("serializing Report always produces a JSON object");
+        let keys = sections
+            .into_iter()
+            .filter(|(section, _)| self.wants(section))
+            .flat_map(|(_, keys)| keys.iter().copied())
+            .chain(always.iter().copied());
+        Value::Object(
+            keys.filter_map(|key| object.remove(key).map(|value| (key.to_owned(), value)))
+                .collect(),
+        )
     }
 
     /// Delivers the rendered report to `--out` or stdout.

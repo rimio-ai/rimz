@@ -104,44 +104,63 @@ fn diff_json_is_stable() {
     let report = Report {
         base: "base".to_owned(),
         paths: vec!["src".into()],
-        production: ValueDelta {
-            base: 10,
-            current: 7,
-            delta: -3,
-        },
-        tests: ValueDelta {
-            base: 2,
-            current: 3,
-            delta: 1,
-        },
-        base_surface: vec![BoundarySurface {
-            scope: "src".into(),
-            items: vec![surface_item("old")],
-        }],
-        current_surface: vec![BoundarySurface {
-            scope: "src".into(),
-            items: vec![surface_item("new"), surface_item("other")],
-        }],
-        dependencies_added: vec![DependencySite {
-            key: DependencyKey {
-                from: "a".to_owned(),
-                to: "outside".to_owned(),
-                path: "src/a.rs".into(),
-                item: "open".to_owned(),
-                spelling: Spelling::Use,
+        totals: Totals {
+            production: ValueDelta {
+                base: 10,
+                current: 7,
+                delta: -3,
             },
-            line: 2,
-            direction: "downward",
-            crossing: true,
-        }],
-        dependencies_removed: Vec::new(),
-        base_dependency_counts: BTreeMap::from([("downward", 1), ("internal", 0), ("upward", 0)]),
-        current_dependency_counts: BTreeMap::from([
-            ("downward", 2),
-            ("internal", 0),
-            ("upward", 0),
-        ]),
-        interfaces: vec![InterfaceRow {
+            tests: ValueDelta {
+                base: 2,
+                current: 3,
+                delta: 1,
+            },
+            escaping_surface: vec![SurfaceDelta {
+                scope: "src".into(),
+                value: value_delta(1, 2),
+            }],
+            dependency_sites: BTreeMap::from([
+                ("downward", value_delta(1, 2)),
+                ("internal", value_delta(0, 0)),
+            ]),
+            rust_files: value_delta(2, 1),
+        },
+        surface: Surface {
+            base: vec![BoundarySurface {
+                scope: "src".into(),
+                items: vec![surface_item("old")],
+            }],
+            current: vec![BoundarySurface {
+                scope: "src".into(),
+                items: vec![surface_item("new"), surface_item("other")],
+            }],
+            added: vec![surface_item("new"), surface_item("other")],
+            removed: vec![surface_item("old")],
+        },
+        dependencies: Dependencies {
+            base_counts: BTreeMap::from([("downward", 1), ("internal", 0), ("upward", 0)]),
+            current_counts: BTreeMap::from([("downward", 2), ("internal", 0), ("upward", 0)]),
+            changes: DependencyChanges {
+                added: vec![DependencySite {
+                    key: DependencyKey {
+                        from: "a".to_owned(),
+                        to: "outside".to_owned(),
+                        path: "src/a.rs".into(),
+                        item: "open".to_owned(),
+                        spelling: Spelling::Use,
+                    },
+                    line: 2,
+                    direction: "downward",
+                    crossing: true,
+                }],
+                removed: Vec::new(),
+            },
+        },
+        internal: DependencyChanges {
+            added: Vec::new(),
+            removed: Vec::new(),
+        },
+        interface: vec![InterfaceRow {
             from: "a".to_owned(),
             to: "outside".to_owned(),
             base: 1,
@@ -150,10 +169,11 @@ fn diff_json_is_stable() {
             current_heaviest: Some("a::f".to_owned()),
             moved: true,
         }],
-        rust_files_base: 2,
-        rust_files_current: 1,
-        changed_inside: vec!["src/a.rs".into()],
-        changed_outside: vec!["README.md".into()],
+        files: Files {
+            inside: vec!["src/a.rs".into()],
+            outside: vec!["README.md".into()],
+            enforcing: true,
+        },
         evidence: Evidence {
             base_parse_failures: Vec::new(),
             current_parse_failures: vec!["src/a.rs".into()],
@@ -164,7 +184,6 @@ fn diff_json_is_stable() {
             landed: true,
             detail: "-3".to_owned(),
         }],
-        enforcing: true,
     };
     for (section, expected) in [
         (None, include_str!("golden-all.json")),

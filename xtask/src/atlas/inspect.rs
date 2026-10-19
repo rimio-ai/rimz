@@ -1069,18 +1069,13 @@ fn definition_verdict(
 }
 
 fn render_json(report: &Report, output: &OutputArgs) -> Result<String> {
-    let mut value = serde_json::to_value(report)?;
-    let object = value
-        .as_object_mut()
-        .expect("serializing Report always produces a JSON object");
-    let mut selected = serde_json::Map::new();
-    for section in SECTIONS {
-        if output.wants(section)
-            && let Some(value) = object.remove(*section)
-        {
-            selected.insert((*section).to_owned(), value);
-        }
-    }
+    let selected = output.select(
+        serde_json::to_value(report)?,
+        SECTIONS
+            .iter()
+            .map(|section| (*section, std::slice::from_ref(section))),
+        &[],
+    );
     let mut rendered = serde_json::to_string_pretty(&selected)?;
     rendered.push('\n');
     Ok(rendered)
