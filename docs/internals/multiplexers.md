@@ -302,7 +302,7 @@ The sidebar's in-pane keys fire only when its pane is focused, so a room-scoped 
 The backends bind the chords differently:
 
 - **tmux** binds a server-global root-table key that carries no room identity and resolves the pressing pane's session at keypress.
-- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration, and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. The focus pipe runs the sidebar toggle and the zoom pipe runs `rimz pane zoom`. The user's `config.kdl` is unchanged, and the bindings end with the session.
+- **Zellij** routes through the presence plugin. RimZ passes both chords in the plugin's load configuration, and the plugin installs them in one runtime `Reconfigure`, each as a `MessagePluginId` action to its own instance. A client attach reloads its stock bindings, so the plugin replays already-applied runtime configuration once per observed increase in connected clients. The focus pipe runs the sidebar toggle and the zoom pipe runs `rimz pane zoom`. The user's `config.kdl` is unchanged, and the bindings end with the session.
 
 ## One sidebar per view
 
