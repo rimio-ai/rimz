@@ -863,6 +863,48 @@ fn truncated_ingress_receipts_do_not_reuse_the_old_offset() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn apply_child_preserves_the_process_coverage_profile_path() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let socket = store.runtime_paths().sock_dir.join("profile-apply.sock");
+    let barrier = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let mut frame = stop_frame(&env);
+    frame
+        .env
+        .insert("RIMZ_TEST_HOOK_APPLY".into(), socket.display().to_string());
+    frame.env.remove("LLVM_PROFILE_FILE");
+    append_frame(&env, frame);
+    let mut hook = env.hook_command("claude");
+    hook.env("RIMZ_BIN", env.project_root.join("missing-rimz"))
+        .env("LLVM_PROFILE_FILE", "/dev/null");
+    let mut child = env.spawn_payload(
+        hook,
+        &json!({"hook_event_name": "Stop", "session_id": "profile-stop"}).to_string(),
+    );
+    let mut release = apply_barrier(
+        &store,
+        Some(&mut child),
+        &barrier,
+        "apply never reached its barrier",
+    );
+    let pid = nix::sys::socket::getsockopt(&release, nix::sys::socket::sockopt::PeerCredentials)
+        .unwrap()
+        .pid();
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).unwrap();
+    release.write_all(&[1]).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        environ
+            .split(|byte| *byte == 0)
+            .any(|entry| entry == b"LLVM_PROFILE_FILE=/dev/null"),
+        "apply must inherit the process's profile path even when the ingress frame lacks it"
+    );
+}
+
+#[test]
 fn inline_drain_finishes_a_started_frame_after_the_reply_deadline() {
     use std::os::unix::net::UnixListener;
 

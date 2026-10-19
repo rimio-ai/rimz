@@ -25,6 +25,14 @@ const WAIT_STEP: Duration = Duration::from_millis(25);
 
 const TAIL_BYTES: usize = 8 * 1024;
 
+/// Clear inherited environment while preserving this process's LLVM profile path.
+pub fn clear_env_preserving_coverage(command: &mut Command) {
+    command.env_clear();
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+}
+
 /// A line-boundary stderr tail with an 8 KiB text budget.
 #[derive(Default)]
 pub struct StderrTail {
