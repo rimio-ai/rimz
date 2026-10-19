@@ -61,8 +61,6 @@ use std::num::NonZeroU16;
 use std::time::Duration;
 
 use crate::agents::{AgentStatus, TurnPhase};
-#[cfg(any(test, feature = "testkit"))]
-use crate::config::GlyphRole;
 use crate::config::{AnimationRole, CardDensityMode};
 use crate::sidebar_pane::pets::PetAction;
 use crate::sidebar_pane::view::VisibleRoster;
@@ -272,87 +270,6 @@ fn draw_help_overlay(
     frame.render_widget(Clear, rect);
     frame.render_widget(Paragraph::new(Text::from(lines)), rect);
     Some(rect)
-}
-
-#[cfg(any(test, feature = "testkit"))]
-pub(in crate::sidebar_pane) struct GalleryColumn<'a> {
-    pub(in crate::sidebar_pane) snapshot: &'a SidebarSnapshot,
-    pub(in crate::sidebar_pane) ui: &'a mut UiState,
-}
-
-/// Terminal width above which the gallery packs a fourth fixture column.
-#[cfg(any(test, feature = "testkit"))]
-const GALLERY_FOUR_COLUMN_MIN_WIDTH: u16 = 240;
-
-/// Returns the number of gallery columns that fit at the launch width.
-#[cfg(any(test, feature = "testkit"))]
-pub(in crate::sidebar_pane) fn gallery_column_cap(width: u16) -> usize {
-    if width > GALLERY_FOUR_COLUMN_MIN_WIDTH {
-        4
-    } else {
-        3
-    }
-}
-
-#[cfg(any(test, feature = "testkit"))]
-pub(in crate::sidebar_pane) fn draw_gallery_to_terminal<B: Backend>(
-    terminal: &mut Terminal<B>,
-    columns: &mut [GalleryColumn<'_>],
-) -> Result<(), B::Error> {
-    terminal
-        .draw(|frame| draw_gallery(frame, columns))
-        .map(|_| ())
-}
-
-#[cfg(any(test, feature = "testkit"))]
-fn draw_gallery(frame: &mut Frame<'_>, columns: &mut [GalleryColumn<'_>]) {
-    let area = frame.area();
-    let (column_areas, delimiter_xs) = gallery_layout(area, columns.len());
-    for (column, column_area) in columns.iter_mut().zip(column_areas) {
-        draw_into(frame, column.snapshot, None, column.ui, column_area);
-    }
-    let Some(first) = columns.first_mut() else {
-        return;
-    };
-    let theme = first.ui.theme(&first.snapshot.theme);
-    let style = theme.rule();
-    let delimiter = theme.glyph(GlyphRole::ChromeBoxVertical).to_owned();
-    let buffer = frame.buffer_mut();
-    for x in delimiter_xs {
-        for y in area.y..area.bottom() {
-            buffer[(x, y)].set_symbol(&delimiter).set_style(style);
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testkit"))]
-fn gallery_layout(area: Rect, column_count: usize) -> (Vec<Rect>, Vec<u16>) {
-    if column_count == 0 || area.width == 0 {
-        return (Vec::new(), Vec::new());
-    }
-    let count = column_count.min(usize::from(u16::MAX)) as u16;
-    let delimiter_count = count.saturating_sub(1);
-    let available_width = area.width.saturating_sub(delimiter_count);
-    let base_width = available_width / count;
-    let mut remainder = available_width % count;
-    let mut x = area.x;
-    let mut columns = Vec::with_capacity(column_count);
-    let mut delimiters = Vec::with_capacity(column_count.saturating_sub(1));
-
-    for index in 0..column_count {
-        let mut width = base_width;
-        if remainder > 0 {
-            width = width.saturating_add(1);
-            remainder -= 1;
-        }
-        columns.push(Rect::new(x, area.y, width, area.height));
-        x = x.saturating_add(width);
-        if index + 1 < column_count && x < area.right() {
-            delimiters.push(x);
-            x = x.saturating_add(1);
-        }
-    }
-    (columns, delimiters)
 }
 
 fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {

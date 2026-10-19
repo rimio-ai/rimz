@@ -25,7 +25,7 @@ pub(in crate::sidebar_pane) struct PaneBackend {
 
 enum Geometry {
     Fd(OwnedFd),
-    /// The fixture/gallery terminal, which its output need not be.
+    /// A fixture terminal, which its output need not be.
     #[cfg(any(feature = "testkit", test))]
     Ambient(fn() -> io::Result<WindowSize>),
     #[cfg(test)]
@@ -77,7 +77,7 @@ impl PaneBackend {
         Ok(Self::painting(writer, Geometry::Fd(fd)))
     }
 
-    /// Paint a fixture/gallery into `output`, reading geometry through `read`.
+    /// Paint a fixture into `output`, reading geometry through `read`.
     #[cfg(any(feature = "testkit", test))]
     pub(in crate::sidebar_pane) fn ambient(
         output: OwnedFd,

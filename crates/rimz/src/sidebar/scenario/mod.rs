@@ -22,12 +22,10 @@ enum Preset {
     Reach,
     Clocks,
     ClocksDone,
-    ClocksNerdFont,
-    ClocksDoneNerdFont,
 }
 
 impl Preset {
-    const NAMED: [(&str, Self); 11] = [
+    const NAMED: [(&str, Self); 9] = [
         ("empty", Self::Empty),
         ("fleet", Self::Fleet),
         ("provider", Self::Provider),
@@ -37,8 +35,6 @@ impl Preset {
         ("reach", Self::Reach),
         ("clocks", Self::Clocks),
         ("clocks-done", Self::ClocksDone),
-        ("clocks-nerd-font", Self::ClocksNerdFont),
-        ("clocks-done-nerd-font", Self::ClocksDoneNerdFont),
     ];
 
     fn named(name: &str) -> Option<Self> {
@@ -46,12 +42,6 @@ impl Preset {
             .iter()
             .find_map(|(key, preset)| (*key == name).then_some(*preset))
     }
-}
-
-pub fn fixture_snapshot(name: &str) -> Result<SidebarSnapshot, ScenarioError> {
-    let preset =
-        Preset::named(name).ok_or_else(|| ScenarioError::new(1, 1, "unknown fixture preset"))?;
-    Ok(presets::snapshot(preset))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -136,6 +126,23 @@ pub(crate) enum UiAction {
 }
 
 impl Scenario {
+    pub(crate) fn configure_rendering(
+        &mut self,
+        width: Option<u16>,
+        mode: Option<crate::config::ThemeMode>,
+        scheme: Option<&str>,
+    ) {
+        if let Some(width) = width {
+            self.width = width;
+        }
+        if let Some(mode) = mode {
+            self.initial.snapshot.theme.mode = mode;
+        }
+        if let Some(scheme) = scheme {
+            self.initial.snapshot.theme.scheme = Some(scheme.to_owned());
+        }
+    }
+
     pub(crate) fn parse(name: &str, source: &str) -> Result<Self, ScenarioError> {
         parser::parse(name, source)
     }

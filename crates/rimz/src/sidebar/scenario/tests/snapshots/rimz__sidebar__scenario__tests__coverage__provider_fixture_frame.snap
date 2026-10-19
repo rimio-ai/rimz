@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: rendered
 ---
  ⌘ query-engine                /srv/code/query-engine
@@ -10,8 +10,8 @@ expression: rendered
  ? 1   ! 1   ⏸︎ 0   ✓ 0                ⢿ 1   ☾ 0   ○ 6
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
-▌⢄ claude · Opus 4.8 · xhigh · 1M              $12.40▐
-▌  port auth watcher                                 ▐
+▌? claude · Opus 4.8 · xhigh · 1M              $12.40▐
+▌  Allow the auth watcher write?                     ▐
 ▌  ▣ ━━━━━━━━━━━━━━━━╺━╺─────────────────   34%      ▐
 ▌  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 ▐
 ▌  ⧉ subagents (2)                              $0.46▐
@@ -19,10 +19,10 @@ expression: rendered
 ▌      ▤ 18k · Haiku · xhigh                       3m▐
 ▌    ✓ Explore · audit auth watcher changes     $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
-▎? codex · GPT 5.5 · xhigh · 272k               $4.36🮇
-▎  Allow the pricing cache write?                    🮇
-▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━──────────   71% ◉ 40m🮇
-▎⣾ cargo nextest                                     🮇
+▎⠁ codex · GPT 5.5 · xhigh · 272k               $4.36🮇
+▎  approve pricing cache write                       🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━╺━──────────   71%      🮇
+▎○ codex-2 · GPT 5.1 Codex · xhigh                   🮇
 
  ─── Claude ──── Codex ──────────────────────────────
 

@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: rendered
 ---
  ⌘ query-engine                /srv/code/query-engine

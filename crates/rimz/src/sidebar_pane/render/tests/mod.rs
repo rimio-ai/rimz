@@ -3,7 +3,7 @@ use crate::agents::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentState,
     AgentStatus, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
-use crate::config::{AnimationSpec, ScrollbarMode};
+use crate::config::{AnimationSpec, GlyphRole, ScrollbarMode};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::pane::PaneRef;
 use crate::store::snapshot::{SidebarProviderPanel, SidebarSnapshot};
@@ -29,7 +29,6 @@ mod budget;
 mod capping;
 mod fleet;
 mod fuzz;
-mod gallery;
 mod landed;
 mod link;
 mod presence;

@@ -171,7 +171,7 @@ fn parse_rgb(value: &str) -> (u8, u8, u8) {
 
 /// Resolve the emblem for `kind`: definition brand override, curated catalog
 /// entry, or the shared fallback.
-pub fn emblem_for(kind: &str) -> Emblem {
+pub(crate) fn emblem_for(kind: &str) -> Emblem {
     if let Some(art) = super::spec_by_kind(kind).and_then(|definition| definition.brand.emblem) {
         return Emblem {
             lines: emblem_from(art),

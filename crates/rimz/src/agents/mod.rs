@@ -97,7 +97,8 @@ use definition::{
     CompactCommand, CompactInstruction, FastSwitch, LaunchPermissionArgs, LaunchSpec,
     PresetMatchers, PromptStyle, SessionCommand, StaticPresetMatcher, program_names_kind,
 };
-pub use emblems::{Emblem, EmblemTint, emblem_for};
+pub(crate) use emblems::emblem_for;
+pub use emblems::{Emblem, EmblemTint};
 pub use folder_trust::{
     FolderTrust, FolderTrustErr, FolderTrustGap, FolderTrustPreview, FolderTrustRow,
     folder_trust_rows, grant_folder_trust,

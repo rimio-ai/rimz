@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: strip_sgr(&ansi)
 ---
   flightdeck                    /srv/code/flightdeck
@@ -9,11 +9,32 @@ expression: strip_sgr(&ansi)
  ────────────────────────────────────────────────────
   2    1    2    1                ⢿ 5   󰤄 0    2
 
-▎ pricing-refresh  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
-▌ codex · GPT 5.5 · xhigh · 272k               $4.82▐
-▌  approve pricing cache write                       ▐
-▌  󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪠 18m▐
-▌  󰿦 158k · 󱥸 151k  6k  19k                        ▐
+▎ theme-tune  #94 ┄┄┄┄┄┄┄ ⇡2 ⇣1  +1320 -540   main🮇
+▌ opencode-2 · GPT 5.5 · xhigh · 272k          $0.68▐
+▌  pick gallery color ramp                           ▐
+▌  󰕰 ━━━━━╺──────────────────────────────   15% 󰪥  1h▐
+▌  󰿦 42k · 󱥸 40k  1k  5k                           ▐
+▎⢄ claude-5 · Opus 4.8 · xhigh · 1M             $6.95🮇
+▎  verify 256-color fallback                         🮇
+▎  󰕰 ━━━━━━━━━━━━━━━╺━╺──────────────────   31% 󰪞  6m🮇
+▎  󰿦 314k · 󱥸 270k  31k  12k  39k                 🮇
+▎   subagents (2)                              $0.46🮇
+▎    ⠁ Plan · run focused nextest               $0.12🮇
+▎      󰿦 18k · Haiku · xhigh                       3m🮇
+▎     Explore · audit auth watcher changes     $0.34🮇
+▎       22k · Haiku · xhigh                       5m🮇
+
+  zellij-health                        ⇡1  +760 -210
+  pi-2 · GPT 5.5 · xhigh · 272k                $5.76
+   API error
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84% 󰪣 42m
+   󰿦 228k · 󱥸 219k  9k  28k
+
+  pricing-refresh  #91               ⇡1  +1180 -430
+  codex · GPT 5.5 · xhigh · 272k               $4.82
+   approve pricing cache write
+   󰕰 ━━━━━━━━━━━━━━━━━━━━╺───────────────   58% 󰪠 18m
+   󰿦 158k · 󱥸 151k  6k  19k
 
   main                     ⇡3 ⇣1  +1840 -620   main
  ⢄ claude · Opus 4.8 · xhigh · 1M               $8.64
@@ -25,7 +46,7 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes     $0.34
         22k · Haiku · xhigh                       5m
- ▁ claude · Opus 4.8 · xhigh · 1M              $28.90
+ ▁ claude-2 · Opus 4.8 · xhigh · 1M            $28.90
    compact provider trace
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━────   79% 󰪟  8m
    󰿦 797k · 󱥸 685k  79k  31k  99k ·  3
@@ -33,16 +54,11 @@ expression: strip_sgr(&ansi)
    integration::backend
 
   observer-lag                 ⇡1  +980 -360   main
-  claude · Opus 4.8 · xhigh · 1M              $29.84
-   API Error: Overloaded
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% ◉  1h
-   󰿦 853k · 󱥸 734k  85k  34k  106k
  ⠁ opencode · GPT 5.5 · xhigh · 272k            $3.07
    trace tmux layout parity
    󰕰 ━━━━━━━━━━━━━╺──────────────────────   38%
    󰿦 103k · 󱥸 99k  4k  12k ·  1
-  pi · GPT 5.5 · xhigh
- ⢄ codex · GPT 5.5 · xhigh · 272k               $3.83
+ ⢄ codex-2 · GPT 5.5 · xhigh · 272k             $3.83
    triage stale pane sample
    󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺───────────   68% 󰪥 54m
    󰿦 185k · 󱥸 178k  7k  23k
@@ -51,45 +67,29 @@ expression: strip_sgr(&ansi)
        󰿦 18k · Haiku · xhigh                       3m
       Explore · audit auth watcher changes
         22k · Haiku · xhigh                       5m
-  claude · Opus 4.8 · xhigh
-
-  zellij-health                        ⇡1  +760 -210
-  pi · GPT 5.5 · xhigh · 272k                  $5.76
-   API error
-   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   84% 󰪣 42m
-   󰿦 228k · 󱥸 219k  9k  28k
-
-  theme-tune  #94         ⇡2 ⇣1  +1320 -540   main
-  opencode · GPT 5.5 · xhigh · 272k            $0.68
-   pick gallery color ramp
-   󰕰 ━━━━━╺──────────────────────────────   15% 󰪥  1h
-   󰿦 42k · 󱥸 40k  1k  5k
- ⢄ claude · Opus 4.8 · xhigh · 1M               $6.95
-   verify 256-color fallback
-   󰕰 ━━━━━━━━━━━━━━━╺━╺──────────────────   31% 󰪞  6m
-   󰿦 314k · 󱥸 270k  31k  12k  39k
-    subagents (2)                              $0.46
-     ⠁ Plan · run focused nextest               $0.12
-       󰿦 18k · Haiku · xhigh                       3m
-      Explore · audit auth watcher changes     $0.34
-        22k · Haiku · xhigh                       5m
+  claude-3 · Opus 4.8 · xhigh · 1M            $29.84
+   API Error: Overloaded
+   󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% ◉  1h
+   󰿦 853k · 󱥸 734k  85k  34k  106k
+  pi · GPT 5.5 · xhigh
+  claude-4 · Opus 4.8 · xhigh
 
   mux-merge #91                                main
-  claude · Opus 4.8 · xhigh · 1M              $15.38
+  claude-6 · Opus 4.8 · xhigh · 1M            $15.38
    API Error: Overloaded
    󰕰 ━━━━━━━━━━━━━━━━━━━╺━━╺─────────────   46% ◉  1h
    󰿦 469k · 󱥸 403k  46k  18k  58k
-  claude · Opus 4.8 · xhigh · 1M               $2.41
+  claude-7 · Opus 4.8 · xhigh · 1M             $2.41
    land tmux hook fix
    󰕰 ━━━━━━━╺╺───────────────────────────   13% ◉  2h
    󰿦 132k · 󱥸 114k  13k  5k  16k
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 
-           ChatGPT Pro · v0.135.0      󰁪 2 · 3h  ⇅ rc
-  ▗▛▀▀▀▜▖   24   31M  21M  6M 󱥸 3M        $428.00
- ▐█ ▜▖  █▌ 5h  ▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 󰑐  2h00m
-  ▝▀▀▀▀▀▘  7d  ▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 󰑐  4d21h
+           OpenAI OAuth · v0.7.2
+  ▗▛▀▀▀▜▖   14   9M  6M  1M 󱥸 980k        $156.00
+ ▝▜▌ █ ▐▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱ 󰑐  2h00m
+  ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱ 󰑐  2d00h
 
   ── Total: ─────────────────────────────────────────
   W:   269   255.1M  178.6M   51.0M 󱥸   $3,990.00

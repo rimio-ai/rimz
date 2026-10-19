@@ -1253,8 +1253,7 @@ pub trait MuxBackend: Send + Sync {
     /// Open one user-facing tab/window with a caller-built pane layout. Most
     /// callers include the global sidebar by backend convention: tmux relies on
     /// the session's `after-new-window` hook; Zellij renders it into the tab
-    /// layout. Contributor gallery tabs can opt out through
-    /// [`TabOptions::dock_sidebar`].
+    /// layout. A caller-built layout can opt out through [`TabOptions::dock_sidebar`].
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
 
     /// Whether each tab a birth seeded is open in `session`, one result per

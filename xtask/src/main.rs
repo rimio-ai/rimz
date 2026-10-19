@@ -207,7 +207,7 @@ const TASKS: &[TaskInfo] = &[
     TaskInfo {
         name: "screenshot",
         summary: "Render sidebar ANSI captures to PNG with freeze.",
-        runs: "list, live, pane <id>, or state <empty|fleet|provider>",
+        runs: "list, live, pane <id>, scenario <file.scn> [--at TIME], or frames <dir>",
     },
     TaskInfo {
         name: "gate",

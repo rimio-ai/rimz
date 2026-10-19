@@ -144,7 +144,7 @@ fn pane_identity_env_with_ambient(
 /// Terminal sizing policy for room operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoomSizing {
-    /// Resolve one terminal-size seed for a room/session or gallery birth.
+    /// Resolve one terminal-size seed for a room/session birth.
     Birth,
     /// Leave view sizing unknown for a tab opened inside a live room.
     OrdinaryTab,

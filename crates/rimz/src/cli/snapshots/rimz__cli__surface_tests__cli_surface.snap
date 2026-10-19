@@ -1295,15 +1295,9 @@ rimz help sidebar [hidden]
 
 rimz help sidebar click [hidden]
 
-rimz help sidebar fixture [hidden]
-
 rimz help sidebar focus [hidden]
 
 rimz help sidebar frame
-
-rimz help sidebar gallery [hidden]
-
-rimz help sidebar gallery-render [hidden]
 
 rimz help sidebar host [hidden]
 
@@ -2638,20 +2632,6 @@ rimz sidebar click [hidden]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
-rimz sidebar fixture [hidden]
-    <state>  [action=set takes=1..=1 required values=empty|fleet|provider|cockpit|focus|economy|reach|clocks|clocks-done|clocks-nerd-font|clocks-done-nerd-font]
-    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    --height <HEIGHT>  [action=set takes=1..=1 default=34]
-    -h, --help  [action=help takes=0..=0]
-    --mux <MUX>  [action=set takes=1..=1 global]
-    --root <ROOT>  [action=set takes=1..=1 global]
-    --theme-mode <THEME_MODE>  [action=set takes=1..=1]
-    --theme-scheme <THEME_SCHEME>  [action=set takes=1..=1]
-    --tmux  [action=set-true takes=0..=0 global]
-    --watch  [action=set-true takes=0..=0]
-    --width <WIDTH>  [action=set takes=1..=1 default=54]
-    --zellij  [action=set-true takes=0..=0 global]
-
 rimz sidebar focus [hidden]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
@@ -2676,37 +2656,13 @@ rimz sidebar frame
     --workspace-id <WORKSPACE_ID>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
-rimz sidebar gallery [hidden]
-    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    -h, --help  [action=help takes=0..=0]
-    --mux <MUX>  [action=set takes=1..=1 global]
-    --pets  [action=set-true takes=0..=0]
-    --root <ROOT>  [action=set takes=1..=1 global]
-    --tmux  [action=set-true takes=0..=0 global]
-    --zellij  [action=set-true takes=0..=0 global]
-
-rimz sidebar gallery-render [hidden]
-    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
-    -h, --help  [action=help takes=0..=0]
-    --mux <MUX>  [action=set takes=1..=1 global]
-    --pets  [action=set-true takes=0..=0]
-    --root <ROOT>  [action=set takes=1..=1 global]
-    --tmux  [action=set-true takes=0..=0 global]
-    --zellij  [action=set-true takes=0..=0 global]
-
 rimz sidebar help
 
 rimz sidebar help click [hidden]
 
-rimz sidebar help fixture [hidden]
-
 rimz sidebar help focus [hidden]
 
 rimz sidebar help frame
-
-rimz sidebar help gallery [hidden]
-
-rimz sidebar help gallery-render [hidden]
 
 rimz sidebar help help
 
@@ -2790,7 +2746,10 @@ rimz sidebar play [hidden]
     --mux <MUX>  [action=set takes=1..=1 global]
     --root <ROOT>  [action=set takes=1..=1 global]
     --section <SECTION>  [action=set takes=1..=1]
+    --theme-mode <THEME_MODE>  [action=set takes=1..=1 values=auto|truecolor|256]
+    --theme-scheme <THEME_SCHEME>  [action=set takes=1..=1]
     --tmux  [action=set-true takes=0..=0 global]
+    --width <WIDTH>  [action=set takes=1..=1]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz sidebar record-focus-repair [hidden]

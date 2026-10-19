@@ -106,7 +106,7 @@ fn sandbox_forwards_the_command() {
 
 #[test]
 fn screenshot_accepts_subcommands() {
-    let argv = args(&["screenshot", "state", "fleet"]);
+    let argv = args(&["screenshot", "scenario", "crates/rimz/scenarios/fleet.scn"]);
 
     assert_eq!(
         parse_args(&argv).unwrap(),
@@ -119,7 +119,7 @@ fn screenshot_accepts_subcommands() {
 
 #[test]
 fn screenshot_subcommand_help_reaches_the_task_parser() {
-    let argv = args(&["screenshot", "state", "--help"]);
+    let argv = args(&["screenshot", "scenario", "--help"]);
 
     assert_eq!(
         parse_args(&argv).unwrap(),

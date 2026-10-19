@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: rendered
 ---
  ⌘ farlink                          /srv/code/farlink
@@ -8,21 +8,21 @@ expression: rendered
  ¤ 12 ⑃ 1                                     $204.00
  ────────────────────────────────────────────────────
  ? 2   ! 0   ⏸︎ 1   ✓ 2                ⢿ 5   ☾ 0   ○ 2
- ↑ 2 need you
 
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +720 -160🮇
-▌⢄ claude · Opus 4.8 · xhigh · 1M              $13.56▐
-▌  verify remote attach                              ▐
-▌  ▣ ━━━━━━━━━━━━━━━━╺━╺─────────────────   33%      ▐
-▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
+▎⑂ network-check ┄┄┄┄┄┄┄┄┄┄ ⇡1 ⇣1  +1680 -610  ⑂ main🮇
+▌? claude-3 · Opus 4.8 · xhigh · 1M             $6.88▐
+▌  approve firewall rule change                      ▐
+▌  ▣ ━━━━━━━━━━━━╺━╺─────────────────────   23% ◑ 24m▐
+▌  ▤ 236k · ◌ 203k ◍ 23k ↘ 9k ↗ 29k                  ▐
 ▌  ⧉ subagents (2)                              $0.46▐
 ▌    ⠁ Plan · run focused nextest               $0.12▐
 ▌      ▤ 18k · Haiku · xhigh                       3m▐
 ▌    ✓ Explore · audit auth watcher changes     $0.34▐
 ▌      ◇ 22k · Haiku · xhigh                       5m▐
-
- ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main
- ? codex · GPT 5.5 · xhigh · 272k               $3.71
+▎⢄ pi-2 · GPT 5.5 · xhigh · 272k                $6.24🮇
+▎  debug jump-host DNS                               🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━───   92% ● 51m🮇
+▎  ⧉ subagents (2)                                   🮇
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

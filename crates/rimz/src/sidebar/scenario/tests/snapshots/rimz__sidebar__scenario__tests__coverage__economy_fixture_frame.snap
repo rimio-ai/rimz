@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/cli/sidebar/tests.rs
+source: crates/rimz/src/sidebar/scenario/tests/coverage.rs
 expression: rendered
 ---
   abacus                            /srv/code/abacus
@@ -9,20 +9,20 @@ expression: rendered
  ────────────────────────────────────────────────────
   2    0    1    1                ⢿ 3   󰤄 0    2
 
-▎ provider-store  #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1580 -520🮇
-▌⢄ opencode · GPT 5.5 · xhigh · 272k            $7.44▐
-▌  rebalance metered sessions                        ▐
-▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━╺─────────────   64%      ▐
-▌  󰿦 175k · 󱥸 168k  7k  21k                        ▐
-▌   subagents (2)                                   ▐
-▌    ⠁ Plan · run focused nextest                    ▐
-▌      󰿦 18k · Haiku · xhigh                       3m▐
-▌     Explore · audit auth watcher changes          ▐
-▌       22k · Haiku · xhigh                       5m▐
-▎⢄ claude · Opus 4.8 · xhigh · 1M              $12.62🮇
-▎  audit provider spend                              🮇
-▎  󰕰 ━━━━━━━━━━━━━━╺━╺───────────────────   29% 󰪞  6m🮇
+▎ usage-alerts ┄┄┄┄┄┄┄┄┄┄┄ ⇡2 ⇣1  +1980 -740   main🮇
+▌ opencode-2 · GPT 5.5 · xhigh · 272k          $5.18▐
+▌  approve burst throttle                            ▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━───────   79% 󰪠 19m▐
+▌  󰿦 216k · 󱥸 208k  8k  27k                        ▐
+▎▁ claude-3 · Opus 4.8 · xhigh · 1M             $8.91🮇
+▎  repair budget alert webhook                       🮇
+▎  󰕰 ━━━━━━━━━━━━━━━━━╺━╺────────────────   37% 󰪤 48m🮇
 ▎   subagents (2)                              $0.46🮇
+▎ claude-2 · Opus 4.8 · xhigh · 1M            $29.36🮇
+▎  API Error: rate limit exceeded                    🮇
+▎  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━╺━───   85% ◉  2h🮇
+
+  pricing-refresh                      ⇡1  +700 -210
 
  ─── Claude ──── Codex ──── Pi ──── Open Code ───────
 

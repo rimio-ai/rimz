@@ -39,6 +39,9 @@ pub struct PlayOptions {
     pub ansi: bool,
     pub section: Option<String>,
     pub height: Option<u16>,
+    pub width: Option<u16>,
+    pub theme_mode: Option<crate::config::ThemeMode>,
+    pub theme_scheme: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -65,11 +68,6 @@ fn load(path: &Path) -> Result<(Scenario, String)> {
 }
 
 pub fn play(files: &[PathBuf], options: PlayOptions) -> Result<()> {
-    if options.height.is_some() && options.at.is_none() && options.frames.is_none() {
-        return Err(PlayError::Invalid(
-            "--height requires --at or --frames".into(),
-        ));
-    }
     if options.at.is_none() && options.frames.is_none() && !io::stdout().is_terminal() {
         return Err(PlayError::Invalid(
             "sidebar play needs a terminal; use --frames <dir> for headless playback".into(),
@@ -77,7 +75,15 @@ pub fn play(files: &[PathBuf], options: PlayOptions) -> Result<()> {
     }
     let scenarios = files
         .iter()
-        .map(|path| load(path))
+        .map(|path| {
+            let (mut scenario, source) = load(path)?;
+            scenario.configure_rendering(
+                options.width,
+                options.theme_mode,
+                options.theme_scheme.as_deref(),
+            );
+            Ok((scenario, source))
+        })
         .collect::<Result<Vec<_>>>()?;
     let mut names = BTreeSet::new();
     for (scenario, _) in &scenarios {

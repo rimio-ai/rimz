@@ -16,8 +16,6 @@ mod attachment;
 mod backend;
 mod cache_refresh;
 mod clock;
-#[cfg(feature = "testkit")]
-mod demo;
 mod fetch;
 #[cfg(test)]
 pub(super) mod fixtures;
@@ -56,8 +54,6 @@ pub(super) use self::input::{Wakeup, decode_wakeup};
 pub(super) use self::plane::DataPlane;
 pub(super) use self::socket::EventForwarder;
 
-#[cfg(feature = "testkit")]
-pub use demo::{serve_fixture, serve_gallery};
 #[cfg(feature = "testkit")]
 pub use fetch::IdleCycleFixture;
 pub use keymap::NavKeymap;
@@ -114,23 +110,6 @@ pub enum SidebarAppErr {
 }
 
 pub(super) type Result<T> = std::result::Result<T, SidebarAppErr>;
-
-/// The fixture/gallery terminal as crossterm finds it: the controlling tty.
-#[cfg(feature = "testkit")]
-fn ambient_window() -> io::Result<ratatui::backend::WindowSize> {
-    ratatui::crossterm::terminal::window_size()
-        .map(|window| ratatui::backend::WindowSize {
-            columns_rows: ratatui::layout::Size::new(window.columns, window.rows),
-            pixels: ratatui::layout::Size::new(window.width, window.height),
-        })
-        .or_else(|_| {
-            let (columns, rows) = ratatui::crossterm::terminal::size()?;
-            Ok(ratatui::backend::WindowSize {
-                columns_rows: ratatui::layout::Size::new(columns, rows),
-                pixels: ratatui::layout::Size::default(),
-            })
-        })
-}
 
 fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {
     deadline.map_or(base, |deadline| {

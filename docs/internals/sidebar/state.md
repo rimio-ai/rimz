@@ -510,6 +510,8 @@ Each row is a staleness budget. The constants and the reasoning behind each live
 
 ### The paint clock
 
+The attachment's `LoopClock` owns transition time and effect policy: production uses wall time, while the testkit scenario player drives the same loop with virtual time and external effects disabled.
+
 Data cadence and paint cadence are separate clocks, which is why the sidebar stays responsive while the data layer runs slow. The fetch worker's 250 ms post-cycle rest bounds data folds even under continuous requests and adds up to 250 ms of card-state latency; the production data-tick gate remains separate. Input, resize, and overlay paints do not wait for the worker.
 
 `[theme.display] refresh_ms` sets the base render grid, `DEFAULT_REFRESH_MS` (100 ms) by default, clamped to 16 through 1000 ms. It rides `snapshot.theme.display`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself. Money rolls sample every `refresh_ms * CLICK_PHASES` (two base frames), matching the odometer's phase counter, and row animations sample on `BREATH_ANIMATION_FRAME` (120 ms), never faster than the base grid.
