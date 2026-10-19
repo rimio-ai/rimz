@@ -12,12 +12,16 @@
 //! section and never replaces data the section already showed. A broken config
 //! is exactly when someone runs doctor.
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread::{Scope, ScopedJoinHandle};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Args;
 
-use super::GlobalFlags;
+use super::{GlobalFlags, spinner::Spinner};
 use crate::cli::render as ui;
 use rimz::workspace::WorkspaceResolver;
 
@@ -68,11 +72,22 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         mux_log::LogText::Include
     };
-    let report = collect_report(globals, args.audit, log_text);
+    let progress = Progress {
+        spinner: (!args.json && args.output.is_none() && std::io::stdout().is_terminal())
+            .then(|| Spinner::delayed(progress_label(&[]), Duration::from_millis(150))),
+        in_flight: Mutex::new(Vec::new()),
+    };
+    let report = collect_report(globals, args.audit, log_text, &progress);
+    drop(progress);
     emit(&report, args.json, args.output.as_deref())
 }
 
-fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText) -> DoctorReport {
+fn collect_report(
+    globals: &GlobalFlags,
+    audit: bool,
+    log_text: mux_log::LogText,
+    progress: &Progress,
+) -> DoctorReport {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
     let ws = workspace.as_ref().ok();
     let history_cleared_at = ws
@@ -80,30 +95,32 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
         .as_ref()
         .and_then(watermark::read);
     std::thread::scope(|scope| {
-        let mux =
-            scope.spawn(|| runtime::collect_mux(globals.mux, ws, history_cleared_at, log_text));
-        let terminal = scope.spawn(runtime::collect_terminal);
-        let machine_config = scope.spawn(collect_machine_config);
-        let sandbox = scope.spawn(runtime::collect_sandbox);
-        let hibernate = scope.spawn(|| {
+        let mux = progress.spawn(scope, "multiplexer", || {
+            runtime::collect_mux(globals.mux, ws, history_cleared_at, log_text)
+        });
+        let terminal = progress.spawn(scope, "terminal", runtime::collect_terminal);
+        let machine_config = progress.spawn(scope, "machine config", collect_machine_config);
+        let sandbox = progress.spawn(scope, "sandbox", runtime::collect_sandbox);
+        let hibernate = progress.spawn(scope, "hibernate", || {
             rimz::harness::hibernate::inspect(&crate::cli::machine_config().agents.hibernate)
         });
-        let hooks = scope.spawn(agents::collect_hooks);
-        let accounts = scope.spawn(|| {
+        let hooks = progress.spawn(scope, "hooks", agents::collect_hooks);
+        let accounts = progress.spawn(scope, "accounts and agents", || {
             let mut accounts = agents::collect_accounts(ws);
             let agents = ws.map(|ws| agents::collect_agent_rollup(ws, audit, &mut accounts));
             (accounts, agents)
         });
-        let plugins = scope.spawn(agents::collect_plugins);
-        let loop_tasks = scope.spawn(collect_loop);
-        let lsp = scope.spawn(|| collect_lsp(ws, globals));
-        let remote_control =
-            scope.spawn(|| runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path())));
-        let disk_usage = scope.spawn(|| audit.then(runtime::collect_storage));
-        let temp_units = scope.spawn(|| runtime::collect_temp_units(audit));
-        let protocols = scope.spawn(|| ws.map(protocol::collect_protocols));
-        let trust = scope.spawn(|| ws.map(agents::collect_trust));
-        let folder_trust = scope.spawn(|| {
+        let plugins = progress.spawn(scope, "agent plugins", agents::collect_plugins);
+        let loop_tasks = progress.spawn(scope, "loop tasks", collect_loop);
+        let lsp = progress.spawn(scope, "lsp", || collect_lsp(ws, globals));
+        let remote_control = progress.spawn(scope, "remote control", || {
+            runtime::collect_remote_control(ws.map(|ws| ws.project_root.as_path()))
+        });
+        let disk_usage = progress.spawn(scope, "storage", || audit.then(runtime::collect_storage));
+        let temp_units = progress.spawn(scope, "temp units", || runtime::collect_temp_units(audit));
+        let protocols = progress.spawn(scope, "protocols", || ws.map(protocol::collect_protocols));
+        let trust = progress.spawn(scope, "trust", || ws.map(agents::collect_trust));
+        let folder_trust = progress.spawn(scope, "folder trust", || {
             ws.map(|ws| match crate::cli::folder_trust::collect(ws) {
                 Ok(rows) => model::Probe::Ready(model::FolderTrust {
                     rows: rows
@@ -117,13 +134,16 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
                 },
             })
         });
-        let empty_dir = scope.spawn(|| agents::collect_empty_dir(ws));
-        let messages =
-            scope.spawn(|| ws.map(|ws| messages::collect_messages(ws, history_cleared_at, audit)));
-        let diagnostics =
-            scope.spawn(|| ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at)));
-        let last_incident = scope
-            .spawn(|| ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at)));
+        let empty_dir = progress.spawn(scope, "empty dir", || agents::collect_empty_dir(ws));
+        let messages = progress.spawn(scope, "messages", || {
+            ws.map(|ws| messages::collect_messages(ws, history_cleared_at, audit))
+        });
+        let diagnostics = progress.spawn(scope, "diagnostics", || {
+            ws.map(|ws| runtime::collect_diagnostics(ws, history_cleared_at))
+        });
+        let last_incident = progress.spawn(scope, "last incident", || {
+            ws.and_then(|ws| runtime::collect_last_incident(ws, history_cleared_at))
+        });
         let (accounts, agents) = collected(accounts);
         DoctorReport {
             schema: "rimz.doctor.v1",
@@ -164,10 +184,56 @@ fn collect_report(globals: &GlobalFlags, audit: bool, log_text: mux_log::LogText
     })
 }
 
-fn collected<T>(check: std::thread::ScopedJoinHandle<'_, T>) -> T {
+fn collected<T>(check: ScopedJoinHandle<'_, T>) -> T {
     check
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+struct Progress {
+    spinner: Option<Spinner>,
+    in_flight: Mutex<Vec<&'static str>>,
+}
+
+impl Progress {
+    fn spawn<'scope, 'env, T: Send + 'scope>(
+        &'scope self,
+        scope: &'scope Scope<'scope, 'env>,
+        label: &'static str,
+        collect: impl FnOnce() -> T + Send + 'scope,
+    ) -> ScopedJoinHandle<'scope, T> {
+        scope.spawn(move || {
+            let started = Instant::now();
+            self.update(|checks| checks.push(label));
+            let report = collect();
+            self.update(|checks| checks.retain(|check| *check != label));
+            tracing::debug!(
+                check = label,
+                elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                "doctor check completed"
+            );
+            report
+        })
+    }
+
+    fn update(&self, update: impl FnOnce(&mut Vec<&'static str>)) {
+        let mut checks = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        update(&mut checks);
+        if let Some(spinner) = &self.spinner {
+            spinner.set(progress_label(&checks));
+        }
+    }
+}
+
+fn progress_label(in_flight: &[&str]) -> String {
+    match in_flight.split_first() {
+        None => "checking doctor".into(),
+        Some((oldest, [])) => format!("checking {oldest}"),
+        Some((oldest, others)) => format!("checking {oldest} (+{} more)", others.len()),
+    }
 }
 
 /// Startup checks for the current checkout; failures stay apart from the machine-wide table.
