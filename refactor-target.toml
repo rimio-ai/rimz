@@ -821,7 +821,29 @@ path = "crates/rimz/src/harness"
 # hibernate::Check::{summary,fix} carry producer-owned remedies to doctor without changing JSON (+2).
 # launch_plan::agent_temp_owner shares temp-unit ownership with GC (+1).
 # tmp_floor::{TmpFloorErr, FloorReport, TempUnits, run, inspect} serve GC and doctor (+5).
-surface-budget = 908
+# catalog::{WorktreePin, worktree_pins, load_worktree_pins} share task holds with GC and doctor (+5).
+# catalog::TaskCatalog::source_unavailable classifies strict-load failures for GC (+1).
+surface-budget = 913
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::TaskCatalog::source_unavailable"
+reason = "GC distinguishes unreadable task sources from project failures without exposing private instance errors or rereading task files."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::WorktreePin"
+reason = "The CLI carries the shared task pin rule into worktree protection and doctor."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::worktree_pins"
+reason = "GC and doctor share the armed-task and path selection rule."
+
+[[verdict]]
+kind = "item"
+key = "harness::schedule::catalog::load_worktree_pins"
+reason = "Unattended removers require a strict machine-wide task protection read."
 
 [[verdict]]
 kind = "item"
@@ -5327,7 +5349,12 @@ reason = "The public bounded_map signature carries lane attribution through util
 [[verdict]]
 kind = "item"
 key = "worktree::Holders"
-reason = "Shared inspection and sweep records carry live holder handles and bare-pane counts to the CLI."
+reason = "Shared inspection and sweep records carry agent handles, bare-pane counts, and loop-task names to the CLI."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ProtectionSet::insert_loop_task"
+reason = "The CLI supplies task pins as plain facts without coupling worktree removal to the schedule catalog."
 
 [[verdict]]
 kind = "item"

@@ -340,7 +340,7 @@ fn worktree_new_list_and_remove_round_trip() {
             "dirty": false,
             "landed": true,
             "reasons": [],
-            "holders": {"agents": [], "panes": 0},
+            "holders": {"agents": [], "panes": 0, "loop_tasks": []},
         })
     );
 
@@ -569,6 +569,114 @@ fn worktree_sweep_previews_then_removes_only_safe_checkouts() {
 }
 
 #[test]
+fn loop_tasks_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/followup");
+    std::fs::write(
+        env.rimz_home().join("loop.toml"),
+        format!(
+            "[tasks.nightly]\nagent = 'claude'\nroot = '{}'\ndir = '{}'\nevery = '1h'\n",
+            env.project_root.display(),
+            path.display()
+        ),
+    )
+    .unwrap();
+    for args in [
+        vec!["worktree", "sweep", "--json"],
+        vec!["worktree", "sweep", "--dry-run", "--json"],
+    ] {
+        let output = env.rimz().args(args).assert().success();
+        let report: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+        assert_eq!(
+            report["kept"][0]["holders"]["loop_tasks"],
+            serde_json::json!(["nightly"])
+        );
+        assert_eq!(report["kept"][0]["reasons"], serde_json::json!(["in_use"]));
+    }
+    let output = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .assert()
+        .success();
+    let rows: Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(
+        rows[0]["holders"]["loop_tasks"],
+        serde_json::json!(["nightly"])
+    );
+    env.rimz()
+        .args(["worktree", "list"])
+        .assert()
+        .success()
+        .stdout(contains("loop task nightly"));
+    env.rimz()
+        .args(["worktree", "sweep"])
+        .assert()
+        .success()
+        .stdout(contains("loop task nightly"));
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(path.exists());
+    env.rimz()
+        .args(["worktree", "merge", "followup", "--yes"])
+        .assert()
+        .success();
+    env.rimz()
+        .args(["worktree", "remove", "followup"])
+        .assert()
+        .success();
+    assert!(!path.exists());
+}
+
+#[test]
+fn loop_source_failure_refuses_sweep_and_keeps_wrapper_checkout() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.record(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "followup"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees/followup");
+    let source = env.rimz_home().join("loop.toml");
+    std::fs::write(&source, "broken toml").unwrap();
+    for args in [
+        vec!["worktree", "sweep"],
+        vec!["worktree", "sweep", "--dry-run"],
+    ] {
+        env.rimz()
+            .args(args)
+            .assert()
+            .code(1)
+            .stderr(contains(source.display().to_string()));
+        assert!(path.exists());
+    }
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .assert()
+        .success();
+    assert!(path.exists());
+    env.rimz().args(["worktree", "list"]).assert().success();
+}
+
+#[test]
 fn worktree_list_state_summary_and_bare_default() {
     let env = Env::new();
     init_repo(&env.project_root);
@@ -585,6 +693,7 @@ fn worktree_list_state_summary_and_bare_default() {
             "1 worktrees in ~/project-worktrees · 1 removable (rimz worktree sweep)",
         ))
         .stdout(contains("STATE"))
+        .stdout(contains("HOLDERS"))
         .stdout(contains("landed"))
         .stdout(contains("MERGED").not());
     let path = env.home_root.join("project-worktrees/demo");

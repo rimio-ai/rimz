@@ -39,6 +39,106 @@ pub fn workspace_instance_roots() -> BTreeSet<PathBuf> {
         .collect()
 }
 
+/// A checkout path an armed loop task still needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorktreePin {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Paths needed by an enabled machine or instance task, including while paused.
+pub fn worktree_pins(
+    name: &str,
+    task: &LoadedTask,
+    arming: Option<&Arming>,
+    now: Timestamp,
+) -> Vec<WorktreePin> {
+    let entry = task.entry();
+    if matches!(task.source(), TaskSource::Project { .. })
+        || matches!(
+            ArmState::resolve(arming, task.source(), now),
+            ArmState::Disabled(_)
+        )
+        || entry.deadline.is_some_and(|deadline| now >= deadline)
+    {
+        return Vec::new();
+    }
+    let root = entry.resolved_root();
+    let mut paths = vec![root.clone()];
+    let needs_run_dir = !entry.each_worktree
+        && (entry.worktree.is_none()
+            || entry.check.is_some()
+            || !entry.judge.is_empty()
+            || entry.when.is_some()
+            || entry.watch.is_some());
+    if needs_run_dir {
+        let dir = entry.run_dir();
+        if dir != root {
+            paths.push(dir);
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| WorktreePin {
+            name: name.to_owned(),
+            path,
+        })
+        .collect()
+}
+
+/// Read machine-wide task protection strictly, without loading project config.
+pub fn load_worktree_pins() -> Result<Vec<WorktreePin>> {
+    let machine = MachineConfig::load_loop()?;
+    pins_from_sources(
+        &workspaces_dir(),
+        machine.tasks,
+        &arming::load(),
+        Timestamp::now(),
+    )
+}
+
+fn pins_from_sources(
+    workspaces: &Path,
+    machine: Tasks,
+    arming: &BTreeMap<String, Arming>,
+    now: Timestamp,
+) -> Result<Vec<WorktreePin>> {
+    let mut roots = BTreeMap::<PathBuf, (Tasks, Tasks)>::new();
+    for workspace in std::fs::read_dir(workspaces)
+        .with_context(|| format!("listing {}", workspaces.display()))?
+    {
+        let workspace = workspace.with_context(|| format!("listing {}", workspaces.display()))?;
+        let path = workspace.path();
+        // A room pruned since the listing carries no tasks to protect.
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+        }
+        for (name, entry) in instances::load_strict_from(&path)?.0 {
+            let (instances, _) = roots.entry(entry.resolved_root()).or_default();
+            instances.0.insert(name, entry);
+        }
+    }
+    for (name, entry) in machine.0 {
+        let (_, machine) = roots.entry(entry.resolved_root()).or_default();
+        machine.0.insert(name, entry);
+    }
+    let mut pins = Vec::new();
+    for (root, (instances, machine)) in roots {
+        let catalog = TaskCatalog::from_layers(instances, machine, None, Some(&root));
+        for (name, task) in catalog.visible() {
+            pins.extend(worktree_pins(name, task, arming.get(&task.key(name)), now));
+        }
+    }
+    Ok(pins)
+}
+
+#[cfg(test)]
+#[path = "catalog_pin_tests.rs"]
+mod pin_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TaskSource {
     Config,
@@ -152,6 +252,15 @@ impl TaskCatalog {
     /// Strict room-only load, filtering machine tasks before name precedence.
     pub fn load_room(root: &Path) -> Result<Self> {
         Self::load_scoped(Some(root), true)
+    }
+
+    /// Whether a strict catalog load failed reading machine or instance tasks.
+    pub fn source_unavailable(error: &anyhow::Error) -> bool {
+        error.is::<crate::config::ConfigErr>()
+            || matches!(
+                error.downcast_ref::<instances::InstanceErr>(),
+                Some(instances::InstanceErr::Read { .. } | instances::InstanceErr::Parse { .. })
+            )
     }
 
     fn load_scoped(project_root: Option<&Path>, room_only: bool) -> Result<Self> {

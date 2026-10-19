@@ -46,10 +46,18 @@ pub struct GcArgs {
 
 pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let gc_config = if args.unattended || args.tmp_floor {
-        // A destructive automation never starts from a config that fails to
-        // parse: lenient defaults would re-enable a `gc.auto = false` opt-out.
-        let Ok(config) = MachineConfig::load() else {
-            return Ok(());
+        // Never default an unreadable core config: it may contain a gc opt-out.
+        // Loop-source errors instead skip the worktree area below.
+        let config = match MachineConfig::load() {
+            Ok(config) => config,
+            Err(_) if args.unattended && MachineConfig::load_loop().is_err() => {
+                let config = MachineConfig::load_lenient();
+                if config.require_readable_core("automatic gc").is_err() {
+                    return Ok(());
+                }
+                std::sync::Arc::unwrap_or_clone(config)
+            }
+            Err(_) => return Ok(()),
         };
         if !config.gc.auto {
             return Ok(());
@@ -317,9 +325,19 @@ fn sweep(
             }
         }
         .context("reaping dead loop schedules")?;
-        rimz::harness::schedule::catalog::TaskCatalog::load(Some(&workspace.project_root))?
-            .prune_orphan_overlays()
-            .context("pruning orphan loop arming state")?;
+        match rimz::harness::schedule::catalog::TaskCatalog::load(Some(&workspace.project_root)) {
+            Ok(catalog) => {
+                catalog
+                    .prune_orphan_overlays()
+                    .context("pruning orphan loop arming state")?;
+            }
+            Err(error) => {
+                if !rimz::harness::schedule::catalog::TaskCatalog::source_unavailable(&error) {
+                    return Err(error);
+                }
+                tracing::debug!(%error, "loop tasks unavailable; orphan arming state kept");
+            }
+        }
         (reaped, report.wait_outputs_removed)
     };
     spinner.set("sweeping orphan temps…");
@@ -445,29 +463,32 @@ impl WorktreeSweepStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum WorktreeSkip {
     NotARepo,
     NoStore,
     RosterUnavailable,
+    LoopTasksUnavailable(String),
     ListFailed,
 }
 
 impl WorktreeSkip {
-    fn text(self, root: &std::path::Path) -> String {
+    fn text(&self, root: &std::path::Path) -> String {
         match self {
             Self::NotARepo => "not inside a git repo".to_owned(),
             Self::NoStore => super::no_room(format_args!("at {}", root.display())),
             Self::RosterUnavailable => "agent roster unavailable".to_owned(),
+            Self::LoopTasksUnavailable(error) => format!("loop tasks unavailable: {error}"),
             Self::ListFailed => "worktree listing failed".to_owned(),
         }
     }
 
-    fn json(self) -> &'static str {
+    fn json(&self) -> &'static str {
         match self {
             Self::NotARepo => "not_a_repo",
             Self::NoStore => "no_store",
             Self::RosterUnavailable => "roster_unavailable",
+            Self::LoopTasksUnavailable(_) => "loop_tasks_unavailable",
             Self::ListFailed => "list_failed",
         }
     }
@@ -502,9 +523,16 @@ fn sweep_worktrees(
         Err(err) => {
             tracing::debug!(
                 error = %err,
-                "agent roster unavailable; worktree gc skipped"
+                "protection facts unavailable; worktree gc skipped"
             );
-            return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
+            return WorktreeSweepStatus::Skipped(match err {
+                super::worktree_protection::ProtectionErr::Roster(_) => {
+                    WorktreeSkip::RosterUnavailable
+                }
+                super::worktree_protection::ProtectionErr::LoopTasks(error) => {
+                    WorktreeSkip::LoopTasksUnavailable(format!("{error:#}"))
+                }
+            });
         }
     };
     spinner.set(if dry_run {
@@ -1744,6 +1772,10 @@ mod tests {
             "archive boom"
         );
         assert_eq!(value["worktrees"]["failed"][0]["error"], "remove boom");
+        assert_eq!(
+            value["worktrees"]["kept"][0]["holders"]["loop_tasks"],
+            serde_json::json!([])
+        );
         assert_eq!(
             value["worktrees"]["kept"][0]["reasons"],
             serde_json::json!(["in_use"])
