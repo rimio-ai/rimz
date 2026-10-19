@@ -14,8 +14,9 @@ use super::modules::{
 };
 use super::output::{self, OutputArgs};
 use super::rank::{self, Hotspot, RankBy, Row, Totals};
+use super::references::Edge;
 use super::shapes::{self, ShapeFamily};
-use super::syntax::{FileSyntax, FnBody, Spelling, resolve_import_path};
+use super::syntax::{FileSyntax, Spelling, resolve_import_path};
 use super::target::{self, Direction, LayerRanks, TARGET_FILE, Target, Verdict, VerdictKind};
 use super::{ArgCursor, validate_scope};
 
@@ -23,7 +24,7 @@ const DEFAULT_PATH: &str = "crates/rimz/src";
 const DEFAULT_TOP: usize = 20;
 
 const USAGE: &str = "cargo xtask atlas survey [--path <prefix>] [--top N]
-    [--by <code|esc|churn|pace|cx|tc|depth>] [--all] [--restamp]
+    [--by <code|esc|churn|pace|cx|tc|depth>] [--all] [--indexed] [--restamp]
 
 Emits a bounded Markdown survey of accretion, admitted upward dependencies, and duplicated knowledge.
 Rank order defaults to accretion (code × churn).";
@@ -39,7 +40,7 @@ const SECTIONS: &[&str] = &[
     "footer",
 ];
 
-/// Distinct modules a function must call into before it reads as an
+/// Distinct modules a function must reach before it reads as an
 /// assembler.
 const ASSEMBLER_MIN_MODULES: usize = 3;
 
@@ -67,18 +68,18 @@ struct Probe {
     next: String,
 }
 
-/// One production function that calls into several modules: the scope's
+/// One production function that reaches several modules: the scope's
 /// own rows in their crate-relative spelling (`cli/room`), and every module
 /// outside the scope under its top-level crate module (`room`). The
-/// caller-side `deepen` candidate. Derived from syntax, callees resolved
-/// through the file's imports, so `survey` stays index-free; `inspect
-/// --from` measures the same function exactly.
+/// caller-side `deepen` candidate. Default counts are syntax callees resolved
+/// through the file's imports, keeping `survey` index-free. With `--indexed`,
+/// counts are owner-folded references, exactly as `inspect --from` measures.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct Assembler {
     function: String,
     path: PathBuf,
     line: usize,
-    /// Modules called into, each with its distinct callees, most first.
+    /// Provider modules with distinct callees or owner-folded references, most first.
     providers: Vec<ProviderSites>,
     callees: usize,
 }
@@ -172,6 +173,7 @@ struct Args {
     top: usize,
     by: RankBy,
     all: bool,
+    indexed: bool,
     restamp: bool,
     output: OutputArgs,
 }
@@ -183,6 +185,8 @@ struct Report {
     rank: Rank,
     hot: Vec<Hotspot>,
     assemblers: Vec<Assembler>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    assemblers_indexed: bool,
     debt: Debt,
     cycles: Vec<Cycle>,
     shapes: Vec<ShapeFamily>,
@@ -222,7 +226,7 @@ pub(super) fn run(root: &Path, raw: &[String]) -> Result<()> {
         Facets {
             history: true,
             metrics: true,
-            references: false,
+            references: args.indexed,
         },
     )?;
     let mut report = build_report(root, &facts, &args.path, args.by, args.all)?;
@@ -246,6 +250,7 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
     let mut top = None;
     let mut by = None;
     let mut all = false;
+    let mut indexed = false;
     let mut restamp = false;
     let mut output = OutputArgs::default();
     while let Some(flag) = cursor.next() {
@@ -268,16 +273,21 @@ fn parse_args(args: &[String]) -> Result<Option<Args>> {
                 cursor.once(&mut by, parsed, flag)?;
             }
             "--all" => cursor.switch(&mut all, flag)?,
+            "--indexed" => cursor.switch(&mut indexed, flag)?,
             "--restamp" => cursor.switch(&mut restamp, flag)?,
             _ => bail!("unknown atlas survey argument `{flag}`"),
         }
     }
     output.validate_sections("survey", SECTIONS)?;
+    if indexed && !output.wants("assemblers") {
+        bail!("atlas survey --indexed requires --section to include assemblers");
+    }
     Ok(Some(Args {
         path: path.unwrap_or_else(|| PathBuf::from(DEFAULT_PATH)),
         top: top.unwrap_or(DEFAULT_TOP),
         by: by.unwrap_or_default(),
         all,
+        indexed,
         restamp,
         output,
     }))
@@ -366,12 +376,21 @@ fn build_report(
     let probes = build_probes(scope, &rows, &hot, &shapes, &guards, &debt);
     let ranks = configured.as_ref().map(Target::layer_ranks);
     let cycles = cycles_from_syntax(&facts.syntax.files, scope, ranks.as_ref());
-    let assemblers = assemblers(
-        &facts.syntax.files,
-        &facts.known_modules,
-        &facts.crate_names,
-        scope,
-    );
+    let assemblers = if let Some(references) = &facts.references {
+        indexed_assemblers(
+            &references.edges,
+            &facts.syntax.files,
+            &facts.known_modules,
+            scope,
+        )
+    } else {
+        assemblers(
+            &facts.syntax.files,
+            &facts.known_modules,
+            &facts.crate_names,
+            scope,
+        )
+    };
 
     Ok(Report {
         path: facts.scope.clone(),
@@ -379,6 +398,7 @@ fn build_report(
         rank: Rank { rows, totals },
         hot,
         assemblers,
+        assemblers_indexed: facts.references.is_some(),
         debt,
         cycles,
         shapes,
@@ -897,34 +917,50 @@ fn assemblers(
                 ) else {
                     continue;
                 };
-                // A scope row reads in its crate-relative spelling (`cli/room`)
-                // and a module outside the scope under its top-level crate
-                // module (`room`), so the two never merge: `run_exec` wiring
-                // `harness` and `store` is an assembler even when the survey
-                // stops at `cli`.
-                let row = if module_is_within(&module, &scope_module) {
-                    let row = scope_row(&module, &scope_module);
-                    if row == own_row {
-                        continue;
-                    }
-                    prefixed_row(&row_prefix, row)
-                } else if module == "(crate)" {
-                    // The library root reads as the crate-wide survey's row.
-                    "(root)".to_owned()
-                } else {
-                    target::top_module(&module).to_owned()
+                let Some(row) = assembler_provider(&module, &scope_module, &row_prefix, own_row)
+                else {
+                    continue;
                 };
                 providers
                     .entry(row)
                     .or_default()
                     .insert(callee.rsplit("::").next().unwrap_or(callee));
             }
-            if providers.len() < ASSEMBLER_MIN_MODULES {
-                continue;
+            if let Some(row) = assembler(
+                function.label(),
+                function.path.clone(),
+                function.line,
+                providers
+                    .into_iter()
+                    .map(|(provider, callees)| (provider, callees.len())),
+            ) {
+                assemblers.push(row);
             }
-            assemblers.push(assembler(function, providers));
         }
     }
+    sorted_assemblers(assemblers)
+}
+
+fn assembler_provider(
+    module: &str,
+    scope_module: &str,
+    row_prefix: &str,
+    own_row: &str,
+) -> Option<String> {
+    let module = if module.is_empty() { "(crate)" } else { module };
+    // Keep scope rows (`cli/room`) apart from outside modules (`room`).
+    if module_is_within(module, scope_module) {
+        let row = scope_row(module, scope_module);
+        return (row != own_row).then(|| prefixed_row(row_prefix, row));
+    }
+    Some(if module == "(crate)" {
+        "(root)".to_owned()
+    } else {
+        target::top_module(module).to_owned()
+    })
+}
+
+fn sorted_assemblers(mut assemblers: Vec<Assembler>) -> Vec<Assembler> {
     assemblers.sort_by(|left, right| {
         right
             .providers
@@ -937,27 +973,79 @@ fn assemblers(
     assemblers
 }
 
-fn assembler(function: &FnBody, providers: BTreeMap<String, BTreeSet<&str>>) -> Assembler {
+fn indexed_assemblers(
+    edges: &[Edge],
+    files: &[FileSyntax],
+    known_modules: &BTreeSet<String>,
+    scope: &Path,
+) -> Vec<Assembler> {
+    let scope_module = crate_module_for_row(scope, "(root)");
+    let row_prefix = ledger_prefix(scope);
+    let functions = inspect::group_by_fn(
+        inspect::assembly_edges(edges.iter(), files)
+            .filter(|edge| path_in_scope(&edge.from_path, scope)),
+    );
+    let mut assemblers = Vec::new();
+    for (function, edges) in functions {
+        let mut providers = BTreeMap::<String, Vec<&Edge>>::new();
+        for edge in edges {
+            let mut module = edge.to.as_str();
+            while !known_modules.contains(module) {
+                let Some((parent, _)) = module.rsplit_once("::") else {
+                    break;
+                };
+                module = parent;
+            }
+            let own_module = if edge.from.is_empty() {
+                "(crate)"
+            } else {
+                &edge.from
+            };
+            let own_row = scope_row(own_module, &scope_module);
+            let Some(row) = assembler_provider(module, &scope_module, &row_prefix, own_row) else {
+                continue;
+            };
+            providers.entry(row).or_default().push(edge);
+        }
+        if let Some(row) = assembler(
+            function.label,
+            function.path,
+            function.line,
+            providers
+                .into_iter()
+                .map(|(provider, edges)| (provider, inspect::folded_item_count(&edges, files))),
+        ) {
+            assemblers.push(row);
+        }
+    }
+    sorted_assemblers(assemblers)
+}
+
+fn assembler(
+    function: String,
+    path: PathBuf,
+    line: usize,
+    providers: impl Iterator<Item = (String, usize)>,
+) -> Option<Assembler> {
     let mut providers = providers
-        .into_iter()
-        .map(|(provider, callees)| ProviderSites {
-            provider,
-            sites: callees.len(),
-        })
+        .map(|(provider, sites)| ProviderSites { provider, sites })
         .collect::<Vec<_>>();
+    if providers.len() < ASSEMBLER_MIN_MODULES {
+        return None;
+    }
     providers.sort_by(|left, right| {
         right
             .sites
             .cmp(&left.sites)
             .then_with(|| left.provider.cmp(&right.provider))
     });
-    Assembler {
-        function: function.label(),
-        path: function.path.clone(),
-        line: function.line,
+    Some(Assembler {
+        function,
+        path,
+        line,
         callees: providers.iter().map(|provider| provider.sites).sum(),
         providers,
-    }
+    })
 }
 
 /// Top-level module pairs that import each other, same-layer pairs first.
@@ -1216,9 +1304,14 @@ fn render_markdown(report: &Report, top: usize, output_args: &OutputArgs) -> Str
             )
             .unwrap();
         }
+        let (verb, measure) = if report.assemblers_indexed {
+            ("reference", "index-resolved references, owner-folded")
+        } else {
+            ("call into", "syntax-resolved through imports")
+        };
         writeln!(
             output,
-            "\n{} functions call into {}+ modules (syntax-resolved through imports; `inspect --from` measures one exactly)",
+            "\n{} functions {verb} {}+ modules ({measure}; `inspect --from` measures one exactly)",
             report.assemblers.len(),
             ASSEMBLER_MIN_MODULES
         )
@@ -1563,6 +1656,8 @@ fn render_json(report: &Report, output_args: &OutputArgs) -> Result<String> {
         SECTIONS.iter().map(|section| {
             let keys = if *section == "debt" {
                 &["debt", "cycles"][..]
+            } else if *section == "assemblers" {
+                &["assemblers", "assemblers_indexed"][..]
             } else {
                 std::slice::from_ref(section)
             };
