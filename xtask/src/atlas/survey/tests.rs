@@ -4,6 +4,103 @@ use super::super::sources::Source;
 use super::*;
 
 #[test]
+fn survey_flag_errors_are_stable() {
+    let cases: &[(&[&str], String)] = &[
+        (
+            &["--path"],
+            "atlas survey --path requires a value".to_owned(),
+        ),
+        (
+            &["--path", "src", "--path", "src"],
+            "atlas survey --path may only be passed once".to_owned(),
+        ),
+        (
+            &["--top", "3", "--top", "4"],
+            "atlas survey --top may only be passed once".to_owned(),
+        ),
+        (
+            &["--top", "0"],
+            "atlas survey --top must be greater than zero".to_owned(),
+        ),
+        (
+            &["--top", "x"],
+            "atlas survey --top requires a positive integer".to_owned(),
+        ),
+        (
+            &["--top", "3", "--top", "0"],
+            "atlas survey --top must be greater than zero".to_owned(),
+        ),
+        (
+            &["--by", "bogus"],
+            "atlas survey --by must be one of code, esc, churn, pace, cx, tc, depth".to_owned(),
+        ),
+        (
+            &["--by", "code", "--by", "bogus"],
+            "atlas survey --by must be one of code, esc, churn, pace, cx, tc, depth".to_owned(),
+        ),
+        (
+            &["--wat"],
+            "unknown atlas survey argument `--wat`".to_owned(),
+        ),
+        (
+            &["--all", "--all"],
+            "atlas survey --all may only be passed once".to_owned(),
+        ),
+        (
+            &["--restamp", "--restamp"],
+            "atlas survey --restamp may only be passed once".to_owned(),
+        ),
+        (
+            &["--json", "--json"],
+            "atlas survey --json may only be passed once".to_owned(),
+        ),
+        (&["--out"], "atlas survey --out requires a value".to_owned()),
+        (
+            &["--out", "report.json", "--out", "report.json"],
+            "atlas survey --out may only be passed once".to_owned(),
+        ),
+        (
+            &["--out", "report.json", "--out", ""],
+            "atlas survey --out requires a non-empty path".to_owned(),
+        ),
+        (
+            &["--section"],
+            "atlas survey --section requires a value".to_owned(),
+        ),
+        (
+            &["--section", "rank", "--section", "x"],
+            "atlas survey --section may only be passed once".to_owned(),
+        ),
+        (
+            &["--section", ","],
+            "atlas survey --section requires at least one section name".to_owned(),
+        ),
+    ];
+    for (raw, expected) in cases {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            parse_args(&args).unwrap_err().to_string(),
+            *expected,
+            "{raw:?}"
+        );
+    }
+    for raw in [
+        vec!["--wat", "--help"],
+        vec!["--help", "--wat"],
+        vec!["--path", "--help"],
+        vec!["--wat", "-h"],
+    ] {
+        let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        assert!(parse_args(&args).unwrap().is_none(), "{raw:?}");
+    }
+    let parsed = parse_args(&["--out", "--json"].map(String::from))
+        .unwrap()
+        .unwrap();
+    assert_eq!(parsed.output.out.as_deref(), Some(Path::new("--json")));
+    assert!(!parsed.output.json);
+}
+
+#[test]
 fn debt_keeps_upward_admissions_overlap_and_missing_rules() {
     let root = tempfile::tempdir().unwrap();
     for (path, text) in [
@@ -383,8 +480,9 @@ fn survey_output_is_bounded_by_top() {
     assert!(output.contains("2 as predicate use"));
     assert!(output.contains("cx: severity-weighted over-threshold excess"));
 
-    let json: serde_json::Value =
-        serde_json::from_str(&render_json(&report, &OutputArgs::default()).unwrap()).unwrap();
+    let rendered = render_json(&report, &OutputArgs::default()).unwrap();
+    assert_eq!(rendered, include_str!("golden.json"));
+    let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
     let hot = &json["hot"][0];
     assert_eq!(
         (&hot["cyclomatic"], &hot["cognitive"], &hot["sloc"]),

@@ -1,0 +1,2224 @@
+{
+  "cycles": [
+    {
+      "a": "(crate)",
+      "a_to_b": 2,
+      "b": "harness",
+      "b_to_a": 20,
+      "same_layer": null
+    }
+  ],
+  "debt": {
+    "configured": true,
+    "rules": [
+      {
+        "path": "src/rule-0",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 29
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 30
+      },
+      {
+        "path": "src/rule-1",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 28
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 29
+      },
+      {
+        "path": "src/rule-2",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 27
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 28
+      },
+      {
+        "path": "src/rule-3",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 26
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 27
+      },
+      {
+        "path": "src/rule-4",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 25
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 26
+      },
+      {
+        "path": "src/rule-5",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 24
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 25
+      },
+      {
+        "path": "src/rule-6",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 23
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 24
+      },
+      {
+        "path": "src/rule-7",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 22
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 23
+      },
+      {
+        "path": "src/rule-8",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 21
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 22
+      },
+      {
+        "path": "src/rule-9",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 20
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 21
+      },
+      {
+        "path": "src/rule-10",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 19
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 20
+      },
+      {
+        "path": "src/rule-11",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 18
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 19
+      },
+      {
+        "path": "src/rule-12",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 17
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 18
+      },
+      {
+        "path": "src/rule-13",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 16
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 17
+      },
+      {
+        "path": "src/rule-14",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 15
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 16
+      },
+      {
+        "path": "src/rule-15",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 14
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 15
+      },
+      {
+        "path": "src/rule-16",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 13
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 14
+      },
+      {
+        "path": "src/rule-17",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 12
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 13
+      },
+      {
+        "path": "src/rule-18",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 11
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 12
+      },
+      {
+        "path": "src/rule-19",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 10
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 11
+      },
+      {
+        "path": "src/rule-20",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 9
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 10
+      },
+      {
+        "path": "src/rule-21",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 8
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 9
+      },
+      {
+        "path": "src/rule-22",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 7
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 8
+      },
+      {
+        "path": "src/rule-23",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 6
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 7
+      },
+      {
+        "path": "src/rule-24",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 5
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 6
+      },
+      {
+        "path": "src/rule-25",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 4
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 5
+      },
+      {
+        "path": "src/rule-26",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 3
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 4
+      },
+      {
+        "path": "src/rule-27",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 2
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 3
+      },
+      {
+        "path": "src/rule-28",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 1
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 2
+      },
+      {
+        "path": "src/rule-29",
+        "reviewed": [
+          {
+            "intent": "keep",
+            "provider": "cli",
+            "sites": 0
+          }
+        ],
+        "unadmitted": [],
+        "unreviewed": [
+          {
+            "provider": "cli::render",
+            "sites": 1
+          }
+        ],
+        "upward_sites": 1
+      }
+    ],
+    "stranglers": [
+      {
+        "baseline": 3,
+        "current": 2,
+        "path": "src/store",
+        "symbol": "legacy_open"
+      }
+    ]
+  },
+  "footer": {
+    "ambiguous_verdict_keys": [],
+    "guard_families_dropped_as_predicate_use": 2,
+    "guard_families_dropped_as_std_idiom": 4,
+    "history_commits": 100,
+    "ledger": {
+      "holds": 1,
+      "intents": 54,
+      "present": true,
+      "problems": [
+        "row 0 is unreadable",
+        "row 1 is unreadable",
+        "row 2 is unreadable",
+        "row 3 is unreadable",
+        "row 4 is unreadable",
+        "row 5 is unreadable",
+        "row 6 is unreadable",
+        "row 7 is unreadable",
+        "row 8 is unreadable",
+        "row 9 is unreadable",
+        "row 10 is unreadable",
+        "row 11 is unreadable",
+        "row 12 is unreadable",
+        "row 13 is unreadable",
+        "row 14 is unreadable",
+        "row 15 is unreadable",
+        "row 16 is unreadable",
+        "row 17 is unreadable",
+        "row 18 is unreadable",
+        "row 19 is unreadable",
+        "row 20 is unreadable",
+        "row 21 is unreadable",
+        "row 22 is unreadable",
+        "row 23 is unreadable",
+        "row 24 is unreadable",
+        "row 25 is unreadable",
+        "row 26 is unreadable",
+        "row 27 is unreadable",
+        "row 28 is unreadable",
+        "row 29 is unreadable"
+      ],
+      "restamps": []
+    },
+    "pace_window": 25,
+    "parse_failures": 0,
+    "shape_families_below_finding_gate": 3,
+    "shape_families_dropped_as_one_module_api": 2,
+    "shape_families_dropped_as_std_vocabulary": 6,
+    "stale_verdict_keys": [
+      "shape:stale-0",
+      "shape:stale-1",
+      "shape:stale-2",
+      "shape:stale-3",
+      "shape:stale-4",
+      "shape:stale-5",
+      "shape:stale-6",
+      "shape:stale-7",
+      "shape:stale-8",
+      "shape:stale-9",
+      "shape:stale-10",
+      "shape:stale-11",
+      "shape:stale-12",
+      "shape:stale-13",
+      "shape:stale-14",
+      "shape:stale-15",
+      "shape:stale-16",
+      "shape:stale-17",
+      "shape:stale-18",
+      "shape:stale-19",
+      "shape:stale-20",
+      "shape:stale-21",
+      "shape:stale-22",
+      "shape:stale-23",
+      "shape:stale-24",
+      "shape:stale-25",
+      "shape:stale-26",
+      "shape:stale-27",
+      "shape:stale-28",
+      "shape:stale-29"
+    ],
+    "suppressed_families": 0
+  },
+  "guards": [
+    {
+      "files": 3,
+      "key": "guard-0",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-0.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-1",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-1.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-2",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-2.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-3",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-3.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-4",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-4.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-5",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-5.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-6",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-6.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-7",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-7.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-8",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-8.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-9",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-9.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-10",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-10.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-11",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-11.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-12",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-12.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-13",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-13.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-14",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-14.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-15",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-15.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-16",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-16.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-17",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-17.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-18",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-18.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-19",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-19.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-20",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-20.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-21",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-21.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-22",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-22.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-23",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-23.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-24",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-24.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-25",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-25.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-26",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-26.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-27",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-27.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-28",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-28.rs"
+        }
+      ],
+      "sites": 3
+    },
+    {
+      "files": 3,
+      "key": "guard-29",
+      "locations": [
+        {
+          "kind": "if",
+          "line": 1,
+          "path": "src/guard-29.rs"
+        }
+      ],
+      "sites": 3
+    }
+  ],
+  "hot": [
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-0",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-0.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-1",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-1.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-2",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-2.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-3",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-3.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-4",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-4.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-5",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-5.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-6",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-6.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-7",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-7.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-8",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-8.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-9",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-9.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-10",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-10.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-11",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-11.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-12",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-12.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-13",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-13.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-14",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-14.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-15",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-15.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-16",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-16.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-17",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-17.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-18",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-18.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-19",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-19.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-20",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-20.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-21",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-21.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-22",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-22.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-23",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-23.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-24",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-24.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-25",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-25.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-26",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-26.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-27",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-27.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-28",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-28.rs",
+      "sloc": 118.0
+    },
+    {
+      "churn": 1.0,
+      "cognitive": 29.0,
+      "cx": 12.7,
+      "cyclomatic": 26.0,
+      "function": "hot-29",
+      "hot": 1.0,
+      "line": 1,
+      "path": "src/hot-29.rs",
+      "sloc": 118.0
+    }
+  ],
+  "path": "src",
+  "probes": [],
+  "rank": {
+    "rows": [
+      {
+        "churn": 0.0,
+        "code": 0,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-0",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 1,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-1",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 2,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-2",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 3,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-3",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 4,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-4",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 5,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-5",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 6,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-6",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 7,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-7",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 8,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-8",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 9,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-9",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 10,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-10",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 11,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-11",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 12,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-12",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 13,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-13",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 14,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-14",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 15,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-15",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 16,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-16",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 17,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-17",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 18,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-18",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 19,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-19",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 20,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-20",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 21,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-21",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 22,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-22",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 23,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-23",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 24,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-24",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 25,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-25",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 26,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-26",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 27,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-27",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 28,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-28",
+        "pace": null,
+        "tests": 0
+      },
+      {
+        "churn": 0.0,
+        "code": 29,
+        "cx": 0.0,
+        "depth": null,
+        "esc": 0,
+        "flags": [],
+        "module": "module-29",
+        "pace": null,
+        "tests": 0
+      }
+    ],
+    "totals": {
+      "code": 435,
+      "cx": 0.0,
+      "esc": 0,
+      "tests": 0
+    }
+  },
+  "shapes": [
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-0.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-0",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-1.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-1",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-2.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-2",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-3.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-3",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-4.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-4",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-5.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-5",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-6.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-6",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-7.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-7",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-8.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-8",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-9.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-9",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-10.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-10",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-11.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-11",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-12.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-12",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-13.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-13",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-14.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-14",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-15.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-15",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-16.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-16",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-17.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-17",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-18.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-18",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-19.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-19",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-20.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-20",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-21.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-21",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-22.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-22",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-23.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-23",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-24.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-24",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-25.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-25",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-26.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-26",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-27.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-27",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-28.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-28",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    },
+    {
+      "files": 1,
+      "mean_sloc": 40.0,
+      "members": [
+        {
+          "line": 1,
+          "name": "work",
+          "path": "src/shape-29.rs",
+          "sloc": 40
+        }
+      ],
+      "name": "shape-29",
+      "provider": null,
+      "role": null,
+      "score": 40.0,
+      "siblings": 0,
+      "sloc_in_play": 40.0
+    }
+  ]
+}

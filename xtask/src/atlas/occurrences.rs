@@ -383,6 +383,40 @@ fn render_markdown(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn index_flag_errors_are_stable() {
+        let cases: &[(&[&str], String)] = &[
+            (&["--doc"], "atlas index --doc requires a value".to_owned()),
+            (&["--doc", "src/lib.rs", "--doc", "src/lib.rs"], "atlas index --doc may only be passed once".to_owned()),
+            (&["--symbol", "a#b"], "atlas index: invalid --symbol `a#b`; --symbol takes one item name such as `open`; narrow with --doc <file that defines it>".to_owned()),
+            (&["--symbol", "open", "--symbol", "a#b"], "atlas index: invalid --symbol `a#b`; --symbol takes one item name such as `open`; narrow with --doc <file that defines it>".to_owned()),
+            (&["--wat"], format!("unknown atlas index argument `--wat`\n\n{}", usage())),
+            (&["--json", "--json"], "atlas index --json may only be passed once".to_owned()),
+            (&["--out"], "atlas index --out requires a value".to_owned()),
+            (&["--out", "report.json", "--out", "report.json"], "atlas index --out may only be passed once".to_owned()),
+            (&["--out", "report.json", "--out", ""], "atlas index --out requires a non-empty path".to_owned()),
+            (&["--section"], "atlas index --section requires a value".to_owned()),
+            (&["--section", "symbols", "--section", "x"], "atlas index --section may only be passed once".to_owned()),
+            (&["--section", ","], "atlas index --section requires at least one section name".to_owned()),
+        ];
+        for (raw, expected) in cases {
+            let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+            assert_eq!(
+                parse_args(&args).unwrap_err().to_string(),
+                *expected,
+                "{raw:?}"
+            );
+        }
+        for raw in [
+            vec!["--wat", "--help"],
+            vec!["--help", "--wat"],
+            vec!["--path", "--help"],
+            vec!["--wat", "-h"],
+        ] {
+            let args = raw.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+            assert!(parse_args(&args).unwrap().is_none(), "{raw:?}");
+        }
+    }
     use super::super::{sources::Source, syntax};
     use super::*;
     use scip::types::{
