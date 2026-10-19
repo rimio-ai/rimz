@@ -1402,7 +1402,8 @@ path = "crates/rimz/src/transcript.rs"
 # `agents wait` reads an interactive agent's final message from the transcript.
 # Entry origin is projected once here and read by rendering, thread assembly and attribution.
 # Submitted-prompt author vocabulary and its entry encoding sit beside the read-side origin projection.
-surface-budget = 24
+# TranscriptRead, read_since and recent_floor share bounded bucket reads with the CLI.
+surface-budget = 27
 
 [[module]]
 path = "crates/rimz/src/trust.rs"
@@ -1503,8 +1504,8 @@ surface-budget = 6
 
 [[module]]
 path = "crates/rimz/src/cli/transcript"
-# Shared follow driver and broken-pipe rendering edge for agents logs.
-surface-budget = 20
+# Shared follow driver, broken-pipe edge, and older-history hint for agents logs.
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/cli/room"
@@ -6013,6 +6014,21 @@ reason = "Pass 24a: carried by the public transcript::Result alias (:42) and by 
 
 [[verdict]]
 kind = "item"
+key = "transcript::TranscriptRead"
+reason = "Bounded CLI views need entries and the skipped-older-bucket hint without opening old history."
+
+[[verdict]]
+kind = "item"
+key = "transcript::read_since"
+reason = "Hook ingress dedupe and routine CLI readers select weekly files against their own floors."
+
+[[verdict]]
+kind = "item"
+key = "transcript::recent_floor"
+reason = "Ask, answer, channel and view readers share the same 30-day horizon."
+
+[[verdict]]
+kind = "item"
 key = "mux::reconcile::SidebarLiveness"
 reason = "Carried by the pub MuxBackend::reconcile_sidebars (mux/mod.rs:1025-1028) and driven from the separate integration crate, which sees only pub (pass 24c)."
 
@@ -7535,3 +7551,8 @@ reason = "Lifecycle hooks in the binary share one record-aware decision between 
 kind = "item"
 key = "store::idle_stop::withdraw_before"
 reason = "The hook drainer conditionally removes a request under the workspace lock without withdrawing a later re-arm."
+
+[[verdict]]
+kind = "item"
+key = "cli::transcript::write_older_history_hint"
+reason = "Agent logs share the transcript's shell-quoted older-history hint."

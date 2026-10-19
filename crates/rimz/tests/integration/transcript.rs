@@ -6,6 +6,95 @@ use rimz::transcript::{TranscriptEntry, TranscriptKind};
 use crate::common::Env;
 
 #[test]
+fn transcript_and_agent_logs_window_old_history_with_an_all_hint() {
+    let env = Env::new();
+    let now = jiff::Timestamp::now();
+    for (text, at) in [
+        (
+            "old-history",
+            now - jiff::SignedDuration::from_hours(60 * 24),
+        ),
+        ("recent-history", now),
+    ] {
+        let mut line = entry(
+            "session-history",
+            "history",
+            TranscriptKind::Prompt,
+            text,
+            "2026-06-01T00:00:00Z",
+        );
+        line.at = at;
+        append_transcript(&env, line);
+    }
+    for args in [
+        vec!["transcript", "#history"],
+        vec!["agents", "logs", "session-history"],
+    ] {
+        let output = env.rimz().args(&args).arg("--json").output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["older_omitted"], true);
+        assert_eq!(json["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(json["entries"][0]["text"], "recent-history");
+        assert!(output.stderr.is_empty());
+
+        let output = env.rimz().args(&args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let hint = String::from_utf8(output.stderr).unwrap();
+        assert!(hint.contains("older history"), "{hint}");
+        assert!(hint.contains("--all"), "{hint}");
+        assert!(hint.contains(args[0]), "{hint}");
+
+        let output = env
+            .rimz()
+            .args(&args)
+            .args(["--all", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(json.get("older_omitted").is_none());
+        assert_eq!(json["entries"].as_array().unwrap().len(), 2);
+        assert_eq!(json["entries"][0]["text"], "old-history");
+    }
+}
+
+#[test]
+fn empty_window_reports_omitted_history() {
+    let env = Env::new();
+    let mut old = entry(
+        "old-session",
+        "old-only",
+        TranscriptKind::Prompt,
+        "old-history",
+        "2026-06-01T00:00:00Z",
+    );
+    old.at = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(60 * 24);
+    append_transcript(&env, old);
+    let output = env
+        .rimz()
+        .args(["transcript", "#old-only", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["entries"], json!([]));
+    assert_eq!(json["older_omitted"], true);
+    let output = env
+        .rimz()
+        .args(["transcript", "#old-only"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let hint = String::from_utf8(output.stderr).unwrap();
+    assert!(hint.contains("No conversation recorded yet."), "{hint}");
+    assert!(
+        hint.contains("older history") && hint.contains("--all"),
+        "{hint}"
+    );
+}
+
+#[test]
 fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
     let env = Env::new();
     for n in 0..25 {
@@ -16,7 +105,7 @@ fn transcript_cli_bounds_human_stdout_but_not_json_or_zero() {
                 "bounded",
                 TranscriptKind::Prompt,
                 &format!("entry-{n:03}"),
-                "2026-06-01T00:00:00Z",
+                &recent_time(0).to_string(),
             ),
         );
     }
@@ -420,7 +509,7 @@ fn transcript_from_main_checkout_resolves_peer_and_me() {
             channel,
             TranscriptKind::Prompt,
             &id,
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         );
         line.role = Some(role.to_owned());
         append_transcript(&env, line);
@@ -463,7 +552,7 @@ fn transcript_live_empty_focus_does_not_use_other_channel_lines() {
         "b",
         TranscriptKind::Prompt,
         "other lane",
-        "2026-06-01T00:00:00Z",
+        &recent_time(0).to_string(),
     );
     other.role = Some("peer".to_owned());
     append_transcript(&env, other);
@@ -513,7 +602,7 @@ fn assert_unknown_transcript_target(populated: bool) {
                 "a",
                 TranscriptKind::Prompt,
                 "hello",
-                "2026-06-01T00:00:00Z",
+                &recent_time(0).to_string(),
             ),
         );
     }
@@ -546,7 +635,7 @@ fn assert_historical_ambiguity_round_trips(shadowed: bool) {
             channel,
             TranscriptKind::Prompt,
             channel,
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         );
         line.role = Some("coder".to_owned());
         append_transcript(&env, line);
@@ -946,7 +1035,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
             branch,
             TranscriptKind::Prompt,
             "first prompt",
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
     append_transcript(
@@ -956,7 +1045,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
             branch,
             TranscriptKind::Prompt,
             "second prompt",
-            "2026-06-01T00:00:03Z",
+            &recent_time(3).to_string(),
         ),
     );
     append_transcript(
@@ -966,7 +1055,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
             branch,
             TranscriptKind::Assistant,
             "first answer",
-            "2026-06-01T00:00:02Z",
+            &recent_time(2).to_string(),
         ),
     );
     append_transcript(
@@ -976,7 +1065,7 @@ fn transcript_groups_chronological_entries_across_append_order() {
             branch,
             TranscriptKind::Assistant,
             "second answer",
-            "2026-06-01T00:00:04Z",
+            &recent_time(4).to_string(),
         ),
     );
 
@@ -1008,7 +1097,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
             branch,
             TranscriptKind::Prompt,
             "prompt from a",
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
     append_transcript(
@@ -1018,7 +1107,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
             branch,
             TranscriptKind::Assistant,
             "answer from a",
-            "2026-06-01T00:00:01Z",
+            &recent_time(1).to_string(),
         ),
     );
     append_transcript(
@@ -1028,7 +1117,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
             branch,
             TranscriptKind::Prompt,
             "prompt from b",
-            "2026-06-01T00:00:02Z",
+            &recent_time(2).to_string(),
         ),
     );
     append_transcript(
@@ -1038,7 +1127,7 @@ fn transcript_exact_session_target_filters_same_handle_peers() {
             branch,
             TranscriptKind::Assistant,
             "answer from b",
-            "2026-06-01T00:00:03Z",
+            &recent_time(3).to_string(),
         ),
     );
 
@@ -1073,7 +1162,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             branch,
             "@codex",
             "ack",
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
     append_transcript(
@@ -1084,7 +1173,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             branch,
             TranscriptKind::Assistant,
             "visible claude reply",
-            "2026-06-01T00:00:01Z",
+            &recent_time(1).to_string(),
         ),
     );
     append_transcript(
@@ -1095,7 +1184,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             branch,
             "@claude",
             "do the thing",
-            "2026-06-01T00:00:02Z",
+            &recent_time(2).to_string(),
         ),
     );
     append_transcript(
@@ -1106,7 +1195,7 @@ fn transcript_attributes_agent_messages_and_filters_agent_view() {
             branch,
             TranscriptKind::Assistant,
             "visible codex reply",
-            "2026-06-01T00:00:03Z",
+            &recent_time(3).to_string(),
         ),
     );
 
@@ -1311,7 +1400,7 @@ fn transcript_scopes_launched_child_and_attributes_brief() {
         branch,
         TranscriptKind::Prompt,
         "root conversation",
-        "2026-06-01T00:00:00Z",
+        &recent_time(0).to_string(),
     );
     parent_entry.role = Some("planner".to_owned());
     append_transcript(&env, parent_entry);
@@ -1422,7 +1511,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
         branch,
         TranscriptKind::Ask,
         "Prior question?",
-        "2020-01-01T00:01:00Z",
+        &recent_time(60).to_string(),
     );
     prior_ask.id = Some(ask_id.clone());
     append_transcript(&env, prior_ask);
@@ -1433,7 +1522,7 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
             branch,
             TranscriptKind::Prompt,
             "prior prompt",
-            "2020-01-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
     register_live_codex_turn(
@@ -1453,6 +1542,16 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
     late_answer.id = Some(ask_id);
     late_answer.from = Some("user".to_owned());
     append_transcript(&env, late_answer);
+    append_transcript(
+        &env,
+        entry(
+            "sess-prior-life",
+            branch,
+            TranscriptKind::Prompt,
+            "outside the window",
+            &(recent_time(0) - jiff::SignedDuration::from_hours(60 * 24)).to_string(),
+        ),
+    );
 
     let output = env
         .rimz()
@@ -1478,15 +1577,22 @@ fn transcript_defaults_to_live_session_and_archives_prior_life() {
         stderr.contains("3 earlier entries from a prior session"),
         "{stderr}"
     );
+    let prior_date = recent_time(60)
+        .to_zoned(rimz::config::MachineConfig::default().time_zone())
+        .strftime("%a, %b %-d %Y")
+        .to_string();
     assert!(
-        // The stamp is the prior session's last arrival (2020-01-01T00:01Z, local
-        // date either side of the new year), never the carried answer's 2098.
-        (stderr.contains(" 2019)") || stderr.contains(" 2020)")) && !stderr.contains(" 209"),
-        "{stderr}"
+        stderr.contains(&format!("({prior_date})")) && !stderr.contains(" 209"),
+        "the stamp uses the prior session's last arrival, not its carried answer: {stderr}"
     );
     assert!(
         stderr.contains("rimz transcript '#living-transcript' --all"),
         "{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("--all").count(),
+        1,
+        "one hint names the --all command when older files were skipped too: {stderr}"
     );
 
     append_transcript(
@@ -1556,7 +1662,7 @@ fn transcript_archive_hint_echoes_worktree_root_and_plural_entries() {
                 "archive",
                 TranscriptKind::Prompt,
                 text,
-                "2020-01-01T00:00:00Z",
+                &recent_time(0).to_string(),
             ),
         );
     }
@@ -1611,7 +1717,7 @@ fn follow_prints_appended_entries(command: &[&str]) {
             "following",
             TranscriptKind::Prompt,
             "excluded by tail",
-            "2026-01-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
     append_transcript(
@@ -1621,7 +1727,7 @@ fn follow_prints_appended_entries(command: &[&str]) {
             "following",
             TranscriptKind::Prompt,
             "initial entry",
-            "2026-01-01T00:01:00Z",
+            &recent_time(60).to_string(),
         ),
     );
     let mut child = env
@@ -1650,7 +1756,7 @@ fn follow_prints_appended_entries(command: &[&str]) {
                 "following",
                 TranscriptKind::Prompt,
                 "appended entry",
-                "2026-01-01T00:02:00Z",
+                &recent_time(120).to_string(),
             ),
         );
     }
@@ -1687,7 +1793,7 @@ fn transcript_empty_scope_exits_zero_with_note_or_empty_json() {
             "other-scope",
             TranscriptKind::Prompt,
             "other prompt",
-            "2026-06-01T00:00:00Z",
+            &recent_time(0).to_string(),
         ),
     );
 
@@ -1726,6 +1832,11 @@ fn transcript_details_flag_is_gone() {
     assert!(!output.status.success(), "--details should be rejected");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--details"), "{stderr}");
+}
+
+fn recent_time(seconds: i64) -> jiff::Timestamp {
+    let yesterday = jiff::Timestamp::now().as_second().div_euclid(86_400) * 86_400 - 86_400;
+    jiff::Timestamp::from_second(yesterday + seconds).unwrap()
 }
 
 fn entry(

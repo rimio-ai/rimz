@@ -690,8 +690,8 @@ A live agent with no messages exits 0 and prints `@handle has no messages yet (l
 | --- | --- |
 | `-n, --tail <N>` (alias `--last`) | Keep the last `N` entries; a thread keeps its opening message. |
 | `-f, --follow` | Follow the view as [`rimz transcript -f`](./transcript.md#flags) does. Conflicts with `--all`. |
-| `--all` | Include earlier sessions. |
-| `--json` | Emit `{"entries": [...]}` with the [transcript entry fields](./transcript.md#json-output) and no `channel`, `focus`, or `archived_count`; with `--follow`, one entry per line. |
+| `--all` | Read all retained history, including earlier sessions, rather than the default last 30 days. When older weekly files were skipped, human output hints at the `--all` command, even for an empty scope. |
+| `--json` | Emit `{"entries": [...]}` with the [transcript entry fields](./transcript.md#json-output) and no `channel`, `focus`, or `archived_count`. Adds `older_omitted: true` when older weekly files were skipped; absent otherwise. With `--follow`, one entry per line. |
 
 #### `history`
 

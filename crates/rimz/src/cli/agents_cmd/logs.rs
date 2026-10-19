@@ -37,9 +37,11 @@ pub(super) fn logs_agent(
     )?;
     let selected = crate::cli::transcript::selected_lines(&view);
     if json {
-        render::finish(write_json_pretty(
-            &serde_json::json!({ "entries": selected }),
-        ))?;
+        let mut value = serde_json::json!({ "entries": selected });
+        if view.older_omitted {
+            value["older_omitted"] = true.into();
+        }
+        render::finish(write_json_pretty(&value))?;
     } else if selected.is_empty() {
         let mut out = render::err();
         writeln!(
@@ -61,6 +63,13 @@ pub(super) fn logs_agent(
             &tz,
             Prose::for_stdout(),
         ))?;
+    }
+    if !json {
+        crate::cli::transcript::write_older_history_hint(
+            &view,
+            &["rimz", "agents", "logs", &target],
+            globals.root.as_deref(),
+        )?;
     }
     Ok(())
 }

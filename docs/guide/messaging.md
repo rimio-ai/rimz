@@ -288,6 +288,8 @@ An agent's message lands as an ordinary conversation line, so the exchange belon
 
 To keep watching a conversation, run `rimz transcript '#feature' -f`. Add `-n 10` to start with the last ten entries, then see new entries as they arrive. Stop following with Ctrl-C.
 
+Transcript and agent-log views read the last 30 days by default. A faint hint names the `--all` command when older history exists; use it to read every retained entry, including prior sessions. Following stays within the 30-day window.
+
 ## Asks and answers
 
 An agent holding a permission prompt, a plan approval, or a blocking question has handed that prompt its input, and your queued messages wait behind it until it is answered. Answering is part of keeping the fleet moving, so RimZ lets you do it from any shell. Codex can also ask while it keeps working: these async questions appear in `rimz asks` and as a question line on its running card, without holding your messages. Sending an ordinary or steered prompt clears its listed async questions.

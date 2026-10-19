@@ -1,5 +1,84 @@
 use super::*;
 
+fn recent_at() -> jiff::Timestamp {
+    jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60)
+}
+
+#[test]
+fn newest_ask_never_opens_expired_buckets() {
+    let (_dir, store) = store();
+    let mut ask = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::now(),
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        rimz::transcript::TranscriptKind::Ask,
+        "approve?".to_owned(),
+    );
+    ask.id = Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap());
+    rimz::transcript::append(store.paths(), &ask).unwrap();
+    std::fs::create_dir(store.paths().transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    assert_eq!(latest_native_ask_id(&store, "claude", "sess-1"), ask.id);
+}
+
+#[test]
+fn replay_dedupe_never_opens_buckets_before_frame() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let frame = conversation_frame(&workspace);
+    std::fs::create_dir_all(store.paths().transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    let observation = recorded(LifecycleSignal::TurnStarted { turn_id: None });
+    let result = rimz::harness::hook_drain::with_frame_env(
+        &frame,
+        rimz::harness::hook_drain::FrameAttempt::Replay,
+        || {
+            record_conversation(
+                &workspace,
+                &store,
+                rimz::agents::definition_by_kind("claude").unwrap(),
+                &observation,
+                conversation_input(None, &[], &[]),
+            )
+        },
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn assistant_redo_never_opens_buckets_before_frame() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let frame = conversation_frame(&workspace);
+    let store = store.for_hook_ingress(frame.event_id.clone(), frame.ts);
+    let agent = rimz::agents::definition_by_kind("cursor").unwrap();
+    let decoded = agent
+        .decode_hook(
+            "afterAgentResponse",
+            &serde_json::json!({
+                "conversation_id": "conv-1", "text": "final answer",
+            }),
+        )
+        .unwrap();
+    for attempt in [
+        rimz::harness::hook_drain::FrameAttempt::First,
+        rimz::harness::hook_drain::FrameAttempt::Redo,
+    ] {
+        rimz::harness::hook_drain::with_frame_env(&frame, attempt, || {
+            record_assistant_response(&workspace, &store, agent, &decoded, None).unwrap();
+        });
+        std::fs::create_dir_all(store.paths().transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    }
+    let lines = std::fs::read_dir(&store.paths().transcript_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file())
+        .map(|path| std::fs::read_to_string(path).unwrap().lines().count())
+        .sum::<usize>();
+    assert_eq!(
+        lines, 1,
+        "redo must deduplicate without reading the old bucket"
+    );
+}
+
 fn store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::TempDir::new().unwrap();
     let workspace_id =
@@ -137,7 +216,7 @@ fn claude_wrapped_stage_records_only_the_delivered_notice() {
     let (_dir, store) = store();
     let workspace = workspace();
     let agent = rimz::agents::definition_by_kind("claude").unwrap();
-    let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let state = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let message = MessageRecord::new(
         workspace.workspace_id.clone(),
         &state,
@@ -229,7 +308,7 @@ fn one_terminal_extraction_is_shared_when_run_and_conversation_both_need_it() {
 fn conversation_entries_follow_confirmed_message_turn_causality() {
     let (_dir, store) = store();
     let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let parent = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
     let mut first = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
@@ -449,7 +528,7 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
     ] {
         let (_dir, store) = store();
         let workspace = workspace();
-        let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+        let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
         let message = rimz::store::message::MessageRecord::new(
             workspace.workspace_id.clone(),
             &agent,
@@ -484,7 +563,7 @@ fn harness_notices_retain_delivery_attribution_in_transcripts() {
 fn mixed_submit_records_stray_text_as_direct_input() {
     let (_dir, store) = store();
     let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
@@ -527,7 +606,7 @@ fn mixed_submit_records_stray_text_as_direct_input() {
 fn user_message_header_records_prompt_without_envelope() {
     let (_dir, store) = store();
     let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let message = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
@@ -921,9 +1000,9 @@ fn run_briefs_keep_loop_human_and_unresolved_parent_origins() {
 fn agent_message_does_not_answer_open_ask() {
     let (_dir, store) = store();
     let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let mut ask = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("sess-1"),
         rimz::transcript::TranscriptKind::Ask,
@@ -1025,7 +1104,7 @@ fn prompt_without_waiting_transition_does_not_answer_stale_ask() {
     let (_dir, store) = store();
     let workspace = workspace();
     let mut ask = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("sess-1"),
         rimz::transcript::TranscriptKind::Ask,
@@ -1058,7 +1137,7 @@ fn idless_ask_does_not_capture_prompt() {
     let (_dir, store) = store();
     let workspace = workspace();
     let ask = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("sess-1"),
         rimz::transcript::TranscriptKind::Ask,
@@ -1092,7 +1171,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     let workspace = workspace();
     let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
     let mut ask = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("sess-1"),
         rimz::transcript::TranscriptKind::Ask,
@@ -1100,7 +1179,7 @@ fn prompt_after_answered_ask_starts_a_new_turn() {
     );
     ask.id = Some(ask_id.clone());
     let mut answer = ask.clone();
-    answer.at = "1970-01-01T00:00:01Z".parse().unwrap();
+    answer.at += jiff::SignedDuration::from_secs(1);
     answer.entry = rimz::transcript::TranscriptKind::Answer;
     rimz::transcript::append(store.paths(), &ask).unwrap();
     rimz::transcript::append(store.paths(), &answer).unwrap();
@@ -1130,7 +1209,7 @@ fn duplicate_answer_race_preserves_prompt() {
     let (_dir, store) = store();
     let ask_id = rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap();
     let prompt = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         rimz::ids::AgentKind::new_unchecked("claude"),
         rimz::ids::AgentSessionId::from("sess-1"),
         rimz::transcript::TranscriptKind::Prompt,
@@ -1140,7 +1219,7 @@ fn duplicate_answer_race_preserves_prompt() {
     answer.entry = rimz::transcript::TranscriptKind::Answer;
     answer.id = Some(ask_id);
     let mut existing_answer = answer.clone();
-    existing_answer.at = "1970-01-01T00:00:01Z".parse().unwrap();
+    existing_answer.at += jiff::SignedDuration::from_secs(1);
     rimz::transcript::append(store.paths(), &existing_answer).unwrap();
 
     append_turn_entry(store.paths(), &answer, Some(&prompt)).unwrap();
@@ -1157,7 +1236,7 @@ fn replay_keeps_a_prompt_that_answered_a_native_ask() {
     let workspace = workspace();
     let agent = rimz::agents::definition_by_kind("claude").unwrap();
     let mut ask = rimz::transcript::TranscriptEntry::new(
-        jiff::Timestamp::UNIX_EPOCH,
+        recent_at(),
         agent.spec().kind_id(),
         "sess-1".into(),
         rimz::transcript::TranscriptKind::Ask,
@@ -1371,7 +1450,7 @@ fn replay_does_not_count_a_queued_ask_as_the_blocking_ask() {
 fn unheadered_system_batch_keeps_each_confirmed_message_causal() {
     let (_dir, store) = store();
     let workspace = workspace();
-    let agent = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+    let agent = rimz::testkit::agent_state("claude", "sess-1", recent_at());
     let first = rimz::store::message::MessageRecord::new(
         workspace.workspace_id.clone(),
         &agent,
@@ -1461,7 +1540,7 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
         let (dir, store) = store();
         let workspace = workspace();
         let agent = rimz::agents::definition_by_kind("claude").unwrap();
-        let state = rimz::testkit::agent_state("claude", "sess-1", jiff::Timestamp::UNIX_EPOCH);
+        let state = rimz::testkit::agent_state("claude", "sess-1", recent_at());
         let mut message = MessageRecord::new(
             workspace.workspace_id.clone(),
             &state,

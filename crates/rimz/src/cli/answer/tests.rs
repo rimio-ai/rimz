@@ -2,6 +2,28 @@ use super::*;
 use rimz::agents::AskKind;
 use rimz::transcript::{AskOption, AskQuestion};
 
+#[test]
+fn has_answer_never_opens_expired_buckets() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = rimz::StatePaths::under(
+        rimz::WorkspaceId::from_project_root(root.path()),
+        root.path(),
+    )
+    .unwrap();
+    let id = AskId::parse("ask_0123456789abcdef").unwrap();
+    let mut answer = TranscriptEntry::new(
+        jiff::Timestamp::now(),
+        rimz::ids::AgentKind::new_unchecked("claude"),
+        rimz::ids::AgentSessionId::from("sess-1"),
+        TranscriptKind::Answer,
+        "safe".to_owned(),
+    );
+    answer.id = Some(id.clone());
+    rimz::transcript::append(&paths, &answer).unwrap();
+    std::fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    assert!(transcript_has_answer(&paths, &id).is_ok_and(|answered| answered));
+}
+
 fn question(multi_select: bool) -> AskQuestion {
     AskQuestion {
         question: "Choose?".to_owned(),

@@ -38,7 +38,7 @@ pub struct TranscriptArgs {
     /// Print new entries as they land.
     #[arg(short = 'f', long, conflicts_with = "all")]
     follow: bool,
-    /// Include prior-session history archived before the current live cohort.
+    /// Include all retained history, including prior sessions.
     #[arg(long)]
     all: bool,
     /// Emit JSON.
@@ -66,6 +66,8 @@ pub(crate) struct ChatView {
     pub entries: Vec<ChatLine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     archived_count: Option<usize>,
+    #[serde(skip_serializing_if = "is_false")]
+    older_omitted: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -178,6 +180,7 @@ impl Hidden {
 struct ViewMode {
     hidden: Hidden,
     flat: bool,
+    since: jiff::Timestamp,
 }
 
 #[derive(Clone, Debug)]
@@ -290,7 +293,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let paths = rimz::StatePaths::for_project_root(&workspace.project_root)
         .context("preparing state paths")?;
-    let view = chat_view_with_mode(
+    let mut view = chat_view_with_mode(
         &workspace,
         &paths,
         args.target.as_deref(),
@@ -300,23 +303,25 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         ViewMode {
             hidden: Hidden::for_json(args.json),
             flat: args.flat,
+            since: rimz::transcript::recent_floor(),
         },
     )?;
     let selected = selected_lines(&view);
     if selected.is_empty() {
-        return write_empty_chat(
+        write_empty_chat(
             args.json,
             view.empty_message
                 .as_deref()
                 .unwrap_or("No conversation recorded yet."),
-        );
-    }
-    if args.json {
+            view.older_omitted,
+        )?;
+    } else if args.json {
         render::json_pretty(&ChatView {
             channel: view.channel.clone(),
             focus: view.focus.clone(),
             entries: selected,
             archived_count: (view.archived_hidden > 0).then_some(view.archived_hidden),
+            older_omitted: view.older_omitted,
         })?;
     } else {
         let tz = super::machine_config().time_zone();
@@ -325,6 +330,8 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
         render_lines_to(&mut out, &view, &tz, prose)?;
         write_default_bound_hint(&view, args.last)?;
         if view.archived_hidden > 0 && selected.len() == view.entries.len() {
+            // The archive hint already names the `--all` command, so it covers older history too.
+            view.older_omitted = false;
             write_archive_hint(
                 view.archived_hidden,
                 view.newest_archived_at,
@@ -333,6 +340,13 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                 globals,
             )?;
         }
+    }
+    if !args.json {
+        write_older_history_hint(
+            &view,
+            &transcript_command(args.target.as_deref(), args.worktree.as_deref()),
+            globals.root.as_deref(),
+        )?;
     }
     Ok(())
 }
@@ -467,6 +481,7 @@ pub(crate) struct RenderedChat {
     pub(crate) empty_message: Option<String>,
     pub(crate) last: Option<usize>,
     pub(crate) flat: bool,
+    pub(crate) older_omitted: bool,
 }
 
 pub(crate) fn chat_view(
@@ -499,6 +514,7 @@ pub(crate) fn chat_view_with_hidden(
         ViewMode {
             hidden,
             flat: false,
+            since: rimz::transcript::recent_floor(),
         },
     )
 }
@@ -515,7 +531,12 @@ fn chat_view_with_mode(
     let store = crate::cli::open_existing_store(workspace).ok().flatten();
     let current = current_channel(workspace, store.as_ref());
     let target = resolve_run_target(paths, target)?;
-    let log = rimz::transcript::read_all(paths)?;
+    let (log, older_omitted) = if all {
+        (rimz::transcript::read_all(paths)?, false)
+    } else {
+        let read = rimz::transcript::read_since(paths, mode.since)?;
+        (read.entries, read.older_omitted)
+    };
     let asked_ids = log
         .iter()
         .filter(|entry| entry.entry == TranscriptKind::Ask)
@@ -556,6 +577,7 @@ fn chat_view_with_mode(
             empty_message: Some("No conversation recorded yet.".to_owned()),
             last,
             flat: mode.flat,
+            older_omitted,
         });
     }
     let live_agents = live_agents(store.as_ref());
@@ -621,6 +643,7 @@ fn chat_view_with_mode(
             empty_message: Some(empty_message),
             last,
             flat: mode.flat,
+            older_omitted,
         });
     }
 
@@ -658,6 +681,7 @@ fn chat_view_with_mode(
         empty_message: None,
         last,
         flat: mode.flat,
+        older_omitted,
     })
 }
 
@@ -781,9 +805,13 @@ fn display_count(entries: &[thread::DisplayEntry]) -> usize {
     entries.len() - display_answer_asks(entries).len()
 }
 
-fn write_empty_chat(json: bool, message: &str) -> Result<()> {
+fn write_empty_chat(json: bool, message: &str, older_omitted: bool) -> Result<()> {
     if json {
-        render::json_pretty(&serde_json::json!({ "entries": [] }))?;
+        let mut value = serde_json::json!({ "entries": [] });
+        if older_omitted {
+            value["older_omitted"] = true.into();
+        }
+        render::json_pretty(&value)?;
     } else {
         let mut out = render::err();
         writeln!(out, "{}", render::paint(render::palette::faint(), message))?;
@@ -854,6 +882,47 @@ fn resolve_run_target(paths: &rimz::StatePaths, target: Option<&str>) -> Result<
     Ok(Some(agent_id.to_string()))
 }
 
+fn transcript_command<'a>(target: Option<&'a str>, worktree: Option<&'a str>) -> Vec<&'a str> {
+    let mut command = vec!["rimz", "transcript"];
+    if let Some(target) = target {
+        command.push(target);
+    }
+    if let Some(worktree) = worktree {
+        command.extend(["-w", worktree]);
+    }
+    command
+}
+
+fn all_history_command(command: &[&str], root: Option<&std::path::Path>) -> String {
+    let root = root.map(|root| root.to_string_lossy());
+    let mut command = command.to_vec();
+    if let Some(root) = &root {
+        command.extend(["--root", root.as_ref()]);
+    }
+    command.push("--all");
+    super::usage::shell_command(command)
+}
+
+pub(crate) fn write_older_history_hint(
+    view: &RenderedChat,
+    command: &[&str],
+    root: Option<&std::path::Path>,
+) -> Result<()> {
+    if !view.older_omitted {
+        return Ok(());
+    }
+    let command = all_history_command(command, root);
+    writeln!(
+        render::err(),
+        "{}",
+        render::paint(
+            render::palette::faint(),
+            &format!("⋯ older history exists — {command}")
+        )
+    )?;
+    Ok(())
+}
+
 fn write_archive_hint(
     hidden: usize,
     newest_archived_at: Option<jiff::Timestamp>,
@@ -862,19 +931,10 @@ fn write_archive_hint(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let entry = if hidden == 1 { "entry" } else { "entries" };
-    let mut command = vec!["rimz", "transcript"];
-    if let Some(target) = args.target.as_deref() {
-        command.push(target);
-    }
-    if let Some(worktree) = args.worktree.as_deref() {
-        command.extend(["-w", worktree]);
-    }
-    let root = globals.root.as_ref().map(|root| root.to_string_lossy());
-    if let Some(root) = &root {
-        command.extend(["--root", root.as_ref()]);
-    }
-    command.push("--all");
-    let command = super::usage::shell_command(command);
+    let command = all_history_command(
+        &transcript_command(args.target.as_deref(), args.worktree.as_deref()),
+        globals.root.as_deref(),
+    );
     let when = newest_archived_at
         .map(|at| {
             let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();

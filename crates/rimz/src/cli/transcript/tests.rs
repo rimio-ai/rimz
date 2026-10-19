@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn default_view_never_opens_expired_buckets() {
+    let project = tempfile::TempDir::new().unwrap();
+    let (workspace, paths) = temp_workspace(&project);
+    let mut prompt = log_entry("claude", "receiver", TranscriptKind::Prompt, None, "recent");
+    prompt.at = jiff::Timestamp::now();
+    rimz::transcript::append(&paths, &prompt).unwrap();
+    std::fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+    let view = chat_view_with_mode(
+        &workspace,
+        &paths,
+        Some("@all"),
+        None,
+        None,
+        false,
+        ViewMode {
+            hidden: Hidden::Show,
+            flat: true,
+            since: rimz::transcript::recent_floor(),
+        },
+    );
+    assert!(view.is_ok_and(|view| selected_lines(&view).len() == 1));
+}
+
+#[test]
 fn empty_live_focus_explains_launch_age_and_turn_state() {
     let now = ts("2026-06-01T12:00:00Z");
     let mut scope = Scope::for_channel(None, None);
@@ -950,6 +974,7 @@ fn flat_and_last_apply_to_display_order() {
         empty_message: None,
         last: Some(3),
         flat: false,
+        older_omitted: false,
     };
     assert_eq!(
         selected_chat_lines(&view)
@@ -973,6 +998,7 @@ fn follow_view(entries: Vec<RenderEntry>) -> RenderedChat {
         empty_message: None,
         last: None,
         flat: false,
+        older_omitted: false,
     }
 }
 
@@ -1181,6 +1207,7 @@ fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_sl
             ViewMode {
                 hidden: Hidden::for_json(false),
                 flat,
+                since: ts("2026-05-01T00:00:00Z"),
             },
         )
         .expect("human view");
@@ -1206,6 +1233,7 @@ fn subagent_reports_and_waits_are_json_only_and_do_not_consume_the_human_last_sl
         ViewMode {
             hidden: Hidden::for_json(true),
             flat: true,
+            since: ts("2026-05-01T00:00:00Z"),
         },
     )
     .expect("json view");
@@ -1408,6 +1436,7 @@ fn harness_turn_output_hides_with_its_opener() {
             ViewMode {
                 hidden: Hidden::for_json(json),
                 flat,
+                since: ts("2026-05-01T00:00:00Z"),
             },
         )
         .expect("view")
@@ -1784,7 +1813,8 @@ fn transcript_entry(
     at: &str,
 ) -> rimz::transcript::TranscriptEntry {
     let mut entry = rimz::transcript::TranscriptEntry::new(
-        ts(at),
+        jiff::Timestamp::now() - jiff::SignedDuration::from_secs(60)
+            + (ts(at) - ts("2026-06-01T00:00:00Z")),
         AgentKind::new_unchecked("claude"),
         AgentSessionId::from("sess-1"),
         entry,
@@ -2188,6 +2218,7 @@ fn scheduled_message_reads_where_it_was_delivered() {
             ViewMode {
                 hidden: Hidden::for_json(false),
                 flat: false,
+                since: ts("2026-05-01T00:00:00Z"),
             },
         )
         .expect("view")

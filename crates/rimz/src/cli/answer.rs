@@ -475,9 +475,14 @@ fn record_answer_if_missing(
 }
 
 fn transcript_has_answer(paths: &rimz::StatePaths, ask_id: &AskId) -> Result<bool> {
-    Ok(rimz::transcript::read_all(paths)?
-        .into_iter()
-        .any(|entry| entry.entry == TranscriptKind::Answer && entry.id.as_ref() == Some(ask_id)))
+    Ok(
+        rimz::transcript::read_since(paths, rimz::transcript::recent_floor())?
+            .entries
+            .into_iter()
+            .any(|entry| {
+                entry.entry == TranscriptKind::Answer && entry.id.as_ref() == Some(ask_id)
+            }),
+    )
 }
 
 fn parse_wait(raw: &str) -> std::result::Result<Duration, String> {

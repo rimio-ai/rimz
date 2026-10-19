@@ -8,7 +8,9 @@ use crate::agents::{
     AgentErr, AgentState, AnswerPlanErr, AskDelivery, AskKind, OpenAsk, definition_by_kind,
 };
 use crate::disk::paths::StatePaths;
-use crate::transcript::{AskQuestion, TranscriptKind, TranscriptLogErr, latest_open_ask, read_all};
+use crate::transcript::{
+    AskQuestion, TranscriptKind, TranscriptLogErr, latest_open_ask, read_since, recent_floor,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AskRoute {
@@ -52,12 +54,16 @@ pub fn read_open_ask(
             let entry = match delivery {
                 AskDelivery::Blocking => latest_open_ask(paths, &agent.kind, &agent.agent_id)?
                     .filter(|entry| entry.id.as_ref() == Some(&open.id)),
-                AskDelivery::Async => read_all(paths)?.into_iter().rev().find(|entry| {
-                    entry.entry == TranscriptKind::Ask
-                        && entry.kind == agent.kind
-                        && entry.agent_id == agent.agent_id
-                        && entry.id.as_ref() == Some(&open.id)
-                }),
+                AskDelivery::Async => read_since(paths, recent_floor())?
+                    .entries
+                    .into_iter()
+                    .rev()
+                    .find(|entry| {
+                        entry.entry == TranscriptKind::Ask
+                            && entry.kind == agent.kind
+                            && entry.agent_id == agent.agent_id
+                            && entry.id.as_ref() == Some(&open.id)
+                    }),
             };
             entry
                 .map(|entry| {
@@ -115,6 +121,45 @@ fn synthetic_questions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn async_ask_never_opens_expired_buckets() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = StatePaths::under(
+            crate::ids::WorkspaceId::from_project_root(root.path()),
+            root.path(),
+        )
+        .unwrap();
+        let mut agent = AgentState::stub("opencode", "session", crate::agents::AgentStatus::Idle);
+        let id = crate::ids::AskId::parse("ask_0123456789abcdef").unwrap();
+        agent.queued_asks.push(crate::agents::QueuedAsk {
+            id: id.clone(),
+            detail: "Question?".to_owned(),
+            native_key: "question".to_owned(),
+            since: agent.last_activity,
+        });
+        let mut ask = crate::transcript::TranscriptEntry::new(
+            jiff::Timestamp::now(),
+            agent.kind.clone(),
+            agent.agent_id.clone(),
+            TranscriptKind::Ask,
+            "recorded context".to_owned(),
+        );
+        ask.id = Some(id);
+        crate::transcript::append(&paths, &ask).unwrap();
+        assert_eq!(
+            read_open_ask(&paths, &agent, None)
+                .unwrap()
+                .unwrap()
+                .context
+                .as_deref(),
+            Some("recorded context")
+        );
+        std::fs::create_dir(paths.transcript_dir.join("1970-01-01.jsonl")).unwrap();
+        assert!(read_open_ask(&paths, &agent, None).is_ok_and(|detail| {
+            detail.is_some_and(|detail| detail.context.as_deref() == Some("recorded context"))
+        }));
+    }
 
     fn detail(provider: &str, kind: AskKind, asynchronous: bool) -> OpenAskDetail {
         let root = tempfile::tempdir().unwrap();
