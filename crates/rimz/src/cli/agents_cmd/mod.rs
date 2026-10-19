@@ -580,7 +580,7 @@ enum AgentsSubcmd {
     Fork(ForkArgs),
     /// Move yourself into a fresh session in a new tab (agent-only).
     #[command(
-        long_about = "Run only inside an agent. Move into a fresh session in a new, unfocused tab with NOTE as its first prompt. Molting does not count toward max-chain-length. The old session stops once idle for 5m with nothing owed."
+        long_about = "Run only inside an agent. Move into a fresh session in a new, unfocused tab with NOTE as its first prompt. Molting does not count toward max-chain-length. The old session stops once idle for 5m with nothing owed; typing into it keeps it."
     )]
     Molt(MoltArgs),
     /// Wait for supervised runs or interactive agents; several references join.
@@ -619,7 +619,7 @@ enum AgentsSubcmd {
         #[arg(long)]
         all: bool,
         /// Stop the agent once it has rested this long with nothing owed
-        /// (`3m` when bare); `off` withdraws the request.
+        /// (`3m` when bare); a prompt from the user withdraws the request, as does `off`.
         #[arg(
             long,
             value_name = "DURATION|off",

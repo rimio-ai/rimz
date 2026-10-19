@@ -1500,9 +1500,13 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
             &workspace,
             agent,
             &started,
-            &sections,
-            &[],
-            false,
+            rimz::store::message::human_opened_turn(
+                &started.observation,
+                &Value::Null,
+                &sections,
+                &[],
+                false,
+            ),
             Some(dir.path()),
         );
         let entries = rimz::transcript::read_all(store.paths()).unwrap();
@@ -1530,9 +1534,13 @@ fn in_flight_turn_openers_keep_origin_causality_and_spend() {
             &workspace,
             agent,
             &started,
-            &typed,
-            &[],
-            false,
+            rimz::store::message::human_opened_turn(
+                &started.observation,
+                &Value::Null,
+                &typed,
+                &[],
+                false,
+            ),
             Some(dir.path()),
         );
         assert_eq!(

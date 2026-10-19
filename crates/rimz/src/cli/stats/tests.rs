@@ -2674,6 +2674,7 @@ fn assists_fold_rolls_up_benefit_and_keeps_failed_attempts_forensics() {
             compacts: 2,
             keepalives: 0,
             idle_stops: 0,
+            idle_stop_withdrawals: 0,
             molts: 0,
             hibernations: 0,
             hibernate_reclaimed_bytes: 0,

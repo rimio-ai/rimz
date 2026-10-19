@@ -208,6 +208,14 @@ pub fn decide(
     if agent.is_team_seat() && successor.is_none() && !board_done(agent) {
         return Ok(Verdict::Hold(Hold::Board));
     }
+    let cursor = crate::store::ingress::read_cursor(store.paths())?;
+    let (pending, _) = crate::store::ingress::read_from_offset(store.paths(), cursor.applied)?;
+    if pending
+        .iter()
+        .any(|(frame, _)| frame.source == agent.kind && frame.ts > stop.requested_at)
+    {
+        return Ok(Verdict::Hold(Hold::Busy));
+    }
     let idle = now
         .duration_since(rested_since(agent, stop.requested_at))
         .as_secs();

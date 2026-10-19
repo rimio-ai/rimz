@@ -42,6 +42,7 @@ pub(super) struct AssistRollup {
     pub(super) compacts: usize,
     pub(super) keepalives: usize,
     pub(super) idle_stops: usize,
+    pub(super) idle_stop_withdrawals: usize,
     pub(super) hibernations: usize,
     pub(super) hibernate_reclaimed_bytes: u64,
     pub(super) hibernate_holds: BTreeMap<String, String>,
@@ -254,6 +255,17 @@ pub(super) enum AssistEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    IdleStopWithdrawn {
+        at: Timestamp,
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_after_secs: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requested_by: Option<String>,
+        requested_at: Timestamp,
+    },
     Hibernate {
         at: Timestamp,
         kind: AgentKind,
@@ -401,6 +413,7 @@ impl AssistStats {
                 AssistEvent::Compact { .. } => rollup.compacts += 1,
                 AssistEvent::CacheKeepalive { .. } => rollup.keepalives += 1,
                 AssistEvent::IdleStop { .. } => rollup.idle_stops += 1,
+                AssistEvent::IdleStopWithdrawn { .. } => rollup.idle_stop_withdrawals += 1,
                 AssistEvent::Hibernate {
                     frozen,
                     reclaimed_bytes,
@@ -480,6 +493,7 @@ impl AssistEvent {
             Self::Redeem { windows_reset, .. } => *windows_reset,
             Self::Gc { error, .. } | Self::TmpEvict { error, .. } => error.is_none(),
             Self::Molt { .. }
+            | Self::IdleStopWithdrawn { .. }
             | Self::WorkflowStart { .. }
             | Self::WorkflowStep { .. }
             | Self::WorkflowRoute { .. }
@@ -519,6 +533,7 @@ impl AssistEvent {
             }
             Self::CacheKeepalive { .. } => "keepalives",
             Self::IdleStop { .. } => "idle_stops",
+            Self::IdleStopWithdrawn { .. } => "idle_stop_withdrawals",
             Self::Hibernate { .. } => "hibernations",
             Self::LaunchRetry { .. } => "launch_retries",
             Self::Resume { .. } => "restores",
@@ -805,6 +820,22 @@ impl AssistEvent {
                 stopped,
                 error,
             },
+            Assist::IdleStopWithdrawn {
+                kind,
+                agent_id,
+                label,
+                idle_after_secs,
+                requested_by,
+                requested_at,
+            } => Self::IdleStopWithdrawn {
+                at: record.at,
+                kind,
+                agent_id,
+                label,
+                idle_after_secs,
+                requested_by,
+                requested_at,
+            },
             Assist::Hibernate {
                 kind,
                 agent_id,
@@ -968,6 +999,7 @@ impl AssistEvent {
             | Self::Compact { at, .. }
             | Self::IdleCompact { at, .. }
             | Self::IdleStop { at, .. }
+            | Self::IdleStopWithdrawn { at, .. }
             | Self::Hibernate { at, .. }
             | Self::LaunchRetry { at, .. }
             | Self::CacheKeepalive { at, .. }
@@ -1108,6 +1140,12 @@ fn category_entries(rollup: &AssistRollup) -> Vec<(&'static str, String)> {
     row("Auto-compact:", "compacts", rollup.compacts, None);
     row("Keepalive:", "keepalives", rollup.keepalives, None);
     row("Idle stop:", "idle_stops", rollup.idle_stops, None);
+    row(
+        "Idle stop withdrawn:",
+        "idle_stop_withdrawals",
+        rollup.idle_stop_withdrawals,
+        None,
+    );
     row("Molts:", "molts", rollup.molts, None);
     let reclaimed = (rollup.hibernations > 0).then(|| {
         let bytes = render::fmt_bytes(rollup.hibernate_reclaimed_bytes);
@@ -1359,6 +1397,22 @@ pub(super) fn benefit_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> St
                 compact(*idle_secs),
                 compact(*idle_after_secs),
             )
+        }
+        AssistEvent::IdleStopWithdrawn {
+            kind,
+            label,
+            idle_after_secs,
+            requested_by,
+            ..
+        } => {
+            let agent = label.as_deref().unwrap_or(kind.as_str());
+            let threshold =
+                rimz::utils::time::format_duration_compact(Duration::from_secs(*idle_after_secs));
+            let requester = requested_by
+                .as_deref()
+                .map(|by| format!(" — requested by {by}"))
+                .unwrap_or_default();
+            format!("{time} ↶ {agent} idle stop withdrawn (threshold {threshold}){requester}")
         }
         AssistEvent::Hibernate {
             label,
@@ -1649,6 +1703,13 @@ pub(super) fn forensic_line(event: &AssistEvent, zone: &jiff::tz::TimeZone) -> S
         AssistEvent::IdleStop {
             agent_id, stopped, ..
         } => format!("{at} {benefit} · agent {agent_id} · stopped {stopped}"),
+        AssistEvent::IdleStopWithdrawn {
+            agent_id,
+            requested_at,
+            ..
+        } => {
+            format!("{at} {benefit} · agent {agent_id} · requested at {requested_at}")
+        }
         AssistEvent::Hibernate {
             agent_id, frozen, ..
         } => format!("{at} {benefit} · agent {agent_id} · frozen {frozen}"),

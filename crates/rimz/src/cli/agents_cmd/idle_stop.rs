@@ -45,15 +45,15 @@ pub fn run_idle_stop(request: IdleStopHelperRequest, globals: &GlobalFlags) -> R
             return Ok(());
         }
     }
-    // A request withdrawn or replaced while this helper read is not this one.
-    if pending().as_ref() != Some(&stop) {
-        return Ok(());
-    }
     let Verdict::Stop { idle_secs } =
         decide(&ctx.store, &snapshot.agents, agent, &stop, Timestamp::now())?
     else {
         return Ok(());
     };
+    // A request withdrawn or replaced while this helper read is not this one.
+    if pending().as_ref() != Some(&stop) {
+        return Ok(());
+    }
     // A stop that closes the agent's pane retires the session, and with it the
     // request; one that leaves the pane open leaves the request armed for the
     // producer's next ask.

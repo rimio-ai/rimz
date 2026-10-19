@@ -225,7 +225,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
     let idle = rimz::harness::schedule::arm::duration_label(Duration::from_secs(300));
     writeln!(
         crate::cli::render::out(),
-        "molted {predecessor} into {successor} (new tab); {predecessor} stops once idle for {idle} with nothing owed\nnext: rimz agents show {successor}"
+        "molted {predecessor} into {successor} (new tab); {predecessor} stops once idle for {idle} with nothing owed; typing into it keeps it\nnext: rimz agents show {successor}"
     )?;
     Ok(())
 }

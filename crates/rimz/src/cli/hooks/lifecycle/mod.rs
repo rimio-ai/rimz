@@ -333,16 +333,24 @@ pub(super) fn handle_lifecycle_frame(
             &delivered.iter().collect::<Vec<_>>(),
             &in_flight.iter().collect::<Vec<_>>(),
         );
+        let opened_by_human = rimz::store::message::human_opened_turn(
+            &recorded.observation,
+            payload,
+            &sections,
+            &delivered,
+            env_run_id().is_some(),
+        );
         if !replay {
             record_user_input_for_lifecycle(
                 workspace,
                 agent,
                 recorded,
-                &sections,
-                &delivered,
-                run_id.is_some(),
+                opened_by_human && run_id.is_none(),
                 user_input_state_root(store),
             );
+            if opened_by_human && let Some(agent_id) = recorded.observation.agent_id.as_ref() {
+                withdraw_idle_stop(store, agent, agent_id);
+            }
         }
         let questions = match &recorded.observation.signal {
             LifecycleSignal::AwaitingInput { .. } => decoded.questions(),
@@ -654,6 +662,45 @@ fn record_run_lifecycle(
             None
         }
     }
+}
+
+/// A human prompt withdraws the session's pending idle stop. Best effort after
+/// the hook transaction: a failure warns and leaves the rest of the frame to
+/// run, and the stop stays armed.
+fn withdraw_idle_stop(
+    store: &Store,
+    agent: &AgentDefinition,
+    agent_id: &rimz::ids::AgentSessionId,
+) {
+    let stop = match rimz::store::idle_stop::withdraw_before(
+        store.paths(),
+        &agent.spec().kind_id(),
+        agent_id,
+        rimz::harness::hook_drain::frame_timestamp(),
+    ) {
+        Ok(Some(stop)) => stop,
+        Ok(None) => return,
+        Err(error) => {
+            warn!(%error, "lifecycle: failed to withdraw idle stop on a human prompt");
+            return;
+        }
+    };
+    let label = store.snapshot_cached().ok().and_then(|snapshot| {
+        find_agent(&snapshot.agents, agent.spec().kind, agent_id).map(|peer| {
+            rimz::address::agent_handle(peer, &rimz::address::addressable_agents(&snapshot), true)
+        })
+    });
+    rimz::harness::assist_log::append(&rimz::harness::assist_log::AssistRecord {
+        at: jiff::Timestamp::now(),
+        assist: rimz::harness::assist_log::Assist::IdleStopWithdrawn {
+            kind: agent.spec().kind_id(),
+            agent_id: agent_id.clone(),
+            label,
+            idle_after_secs: stop.after_secs,
+            requested_by: stop.requested_by,
+            requested_at: stop.requested_at,
+        },
+    });
 }
 
 fn session_run_id(

@@ -43,6 +43,60 @@ fn rested() -> (AgentState, IdleStop) {
 const DUE: i64 = 1_180;
 
 #[test]
+fn pending_ingress_holds_only_newer_same_kind_frames_until_applied() {
+    use crate::disk::lock::{IngressAppendLock, WorkspaceLock};
+    use crate::store::ingress::{self, HookDrainCursor, HookIngress};
+    for (kind, at, holds) in [
+        ("claude", 501, true),
+        ("codex", 501, false),
+        ("claude", 500, false),
+        ("claude", 499, false),
+    ] {
+        let (_dir, store) = fixture();
+        let (agent, stop) = rested();
+        let frame = HookIngress {
+            schema_version: "1".into(),
+            event_id: crate::ids::EventId::new(),
+            ts: ts(at),
+            source: AgentKind::new_unchecked(kind),
+            event: Some("UserPromptSubmit".into()),
+            payload: "{}".into(),
+            cwd: _dir.path().into(),
+            hook_pid: std::process::id(),
+            env: Default::default(),
+        };
+        let end = {
+            let lock = IngressAppendLock::acquire(&store.paths().hook_ingress_lock).unwrap();
+            ingress::append(store.paths(), &frame, &lock).unwrap()
+        };
+        let decision = verdict(&store, &agent, &stop, DUE);
+        assert_eq!(
+            matches!(decision, Verdict::Hold(_)),
+            holds,
+            "{kind} {at}: {decision:?}"
+        );
+        let lock = WorkspaceLock::acquire(&store.paths().workspace_lock).unwrap();
+        ingress::write_cursor(
+            store.paths(),
+            &HookDrainCursor {
+                applied: end,
+                claimed: end,
+                applied_event_id: Some(frame.event_id.clone()),
+                claimed_event_id: Some(frame.event_id),
+                ..Default::default()
+            },
+            &lock,
+        )
+        .unwrap();
+        drop(lock);
+        assert_eq!(
+            verdict(&store, &agent, &stop, DUE),
+            Verdict::Stop { idle_secs: 180 }
+        );
+    }
+}
+
+#[test]
 fn molted_team_seat_stops_before_done_but_keeps_context_if_successor_fails() {
     let (_dir, store) = fixture();
     let (mut predecessor, stop) = rested();
@@ -256,7 +310,7 @@ fn the_clock_runs_from_the_later_of_turn_end_and_request() {
         Verdict::Hold(Hold::Clock)
     );
 
-    // A new turn before the deadline restarts the clock at its end.
+    // A RimZ-delivered turn before the deadline restarts the clock at its end.
     agent.turn_ended_at = Some(ts(1_100));
     assert_eq!(
         verdict(&store, &agent, &stop, DUE),

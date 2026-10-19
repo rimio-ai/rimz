@@ -169,6 +169,13 @@ pub fn peel_rimz_blocks(text: &str) -> String {
 const TASK_NOTIFICATION_OPEN: &str = "<task-notification>";
 const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
 
+pub(crate) fn is_task_notification_turn(payload: &Value) -> bool {
+    payload
+        .get("prompt")
+        .and_then(Value::as_str)
+        .is_some_and(|prompt| prompt.trim_start().starts_with(TASK_NOTIFICATION_OPEN))
+}
+
 /// The ids of background tasks a `<task-notification>` prompt reports as no
 /// longer running. One prompt may carry several notification blocks; a block
 /// without a task id or status is skipped. Empty for any other prompt.

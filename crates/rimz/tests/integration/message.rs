@@ -2879,6 +2879,120 @@ fn auto_continue_queues_a_pinned_system_resume_then_defers_on_a_closed_gate() {
 }
 
 #[test]
+fn human_prompt_withdraws_idle_stop_but_harness_turn_still_stops() {
+    use rimz::harness::idle_stop::IdleStopHelperRequest;
+    use rimz::store::idle_stop::{self, IdleStopRequest};
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    run_hook(
+        &env,
+        json!({"hook_event_name": "SessionStart", "session_id": "provider-session", "source": "startup"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let store = env.store();
+    let kind = AgentKind::new_unchecked("claude");
+    let arm = || {
+        idle_stop::arm(
+            store.paths(),
+            IdleStopRequest {
+                kind: kind.clone(),
+                agent_id: "provider-session".into(),
+                stop: rimz::agents::state::IdleStop {
+                    after_secs: 0,
+                    requested_at: jiff::Timestamp::now(),
+                    requested_by: Some("@lead".into()),
+                },
+            },
+        )
+        .unwrap()
+    };
+    arm();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session", "prompt": "keep working"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    assert!(
+        idle_stop::read(store.paths()).is_empty(),
+        "human turn withdraws the booking"
+    );
+    let session = env.resolve_workspace(&env.project_root).session_name;
+    let mut pane = agent_pane(&env, "claude");
+    pane.session_name = session.clone();
+    let fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
+    let shown = run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &fixture)
+            .args(["agents", "show", "@claude", "--json"]),
+        "agents show",
+    );
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert!(shown["agent"]["idle_stop"].is_null(), "{shown}");
+    let stats = run_success(
+        env.rimz().args(["stats", "--assists", "--all", "--json"]),
+        "assist stats",
+    );
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["rollup"]["idle_stop_withdrawals"], 1);
+    assert_eq!(
+        stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["assist"] == "idle_stop_withdrawn")
+            .count(),
+        1
+    );
+    arm();
+    let pending = std::fs::read(&store.paths().idle_stop_requests).unwrap();
+    run_hook(
+        &env,
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session", "prompt": "Type: WAIT\nFrom: @rimz\nContent:\nready"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    assert_eq!(
+        std::fs::read(&store.paths().idle_stop_requests).unwrap(),
+        pending
+    );
+    run_hook(
+        &env,
+        json!({"hook_event_name": "Stop", "session_id": "provider-session"}),
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    let frame = rimz::sidebar::frame::assemble_frame(
+        vec![pane],
+        rimz::utils::time::unix_now_ms(),
+        session.clone(),
+    );
+    rimz::disk::atomic::write_temp_then_rename_cache(
+        &store.runtime_paths().pane_frame_path(),
+        &frame,
+    )
+    .unwrap();
+    run_success(
+        traced_rimz(&env, "idle-stop-human.log")
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{session} [Created 1s ago]\n"),
+            )
+            .env("RIMZ_TEST_PANE_LIST", &fixture)
+            .args(rimz::child_process::agent_helper_argv(
+                "idle-stop",
+                &IdleStopHelperRequest {
+                    workspace_id: env.workspace_id.clone(),
+                    kind,
+                    agent_id: "provider-session".into(),
+                    pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+                    label: "@claude".into(),
+                },
+            )),
+        "idle stop after a harness turn",
+    );
+    assert!(idle_stop::read(store.paths()).is_empty());
+}
+
+#[test]
 fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;
     use rimz::store::run::{RunRecord, RunStatus};
@@ -2961,7 +3075,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle"]),
             (
                 true,
-                "@claude#main stops once idle for 3m with nothing owed\n".to_owned()
+                "@claude#main stops once idle for 3m with nothing owed; a prompt from the user withdraws it\n".to_owned()
             )
         );
         let shown = run_success(
@@ -2980,7 +3094,7 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
             stop(&["@claude", "--when-idle", "0s"]),
             (
                 true,
-                "@claude#main stops once idle for 0s with nothing owed (replaces the pending 3m request)\n"
+                "@claude#main stops once idle for 0s with nothing owed (replaces the pending 3m request); a prompt from the user withdraws it\n"
                     .to_owned()
             )
         );

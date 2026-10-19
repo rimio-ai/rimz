@@ -210,6 +210,16 @@ pub enum Assist {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    IdleStopWithdrawn {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        idle_after_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requested_by: Option<String>,
+        requested_at: Timestamp,
+    },
     Hibernate {
         kind: AgentKind,
         agent_id: AgentSessionId,
@@ -650,6 +660,24 @@ mod tests {
         });
         let decoded: AssistRecord = serde_json::from_value(stopped.clone()).expect("idle stop");
         assert_eq!(serde_json::to_value(decoded).unwrap(), stopped);
+    }
+
+    #[test]
+    fn idle_stop_withdrawal_wire_format_round_trips() {
+        let json = serde_json::json!({
+            "at": "2026-06-02T12:00:00Z", "assist": "idle_stop_withdrawn",
+            "kind": "claude", "agent_id": "session-1", "label": "@coder",
+            "idle_after_secs": 180, "requested_by": "@lead",
+            "requested_at": "2026-06-02T11:00:00Z"
+        });
+        let decoded = serde_json::from_value::<AssistRecord>(json.clone());
+        assert!(decoded.is_ok(), "withdrawal is an assist: {decoded:?}");
+        assert_eq!(serde_json::to_value(decoded.unwrap()).unwrap(), json);
+        let mut minimal = json;
+        minimal.as_object_mut().unwrap().remove("label");
+        minimal.as_object_mut().unwrap().remove("requested_by");
+        let decoded: AssistRecord = serde_json::from_value(minimal.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), minimal);
     }
 
     #[test]
