@@ -854,16 +854,25 @@ fn room_rebirth_cancels_root_attempt_and_wakes_its_next_check() {
     fs::write(&presence, b"test-presence").unwrap();
     let _shim_room =
         crate::common::room::ShimRoom::watch(&room.env, &room.env.project_root.join("spawn.log"));
-    success(
-        room.command(&["start", "--no-attach", "--no-resume"])
-            .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
-            .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
-            .env("RIMZ_PRESENCE_PLUGIN", presence)
-            .env("RIMZ_PETS_OFFLINE", "1")
-            .env("TERM", "dumb")
-            .bounded_output()
-            .unwrap(),
+    let start = room
+        .command(&["start", "--no-attach", "--no-resume"])
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        )
+        .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("RIMZ_PETS_OFFLINE", "1")
+        .env("TERM", "dumb")
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&start.stderr).into_owned();
+    assert!(
+        !stderr.contains("did not materialize"),
+        "the birth must pass the sidebar layout wait: {stderr}"
     );
+    success(start);
     let value = settled(&room.env, &id, "done");
     assert_eq!(value["record"]["prev_attempt"]["outcome"], "canceled");
     assert_eq!(
