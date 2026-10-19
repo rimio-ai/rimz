@@ -484,7 +484,7 @@ A task whose previous run is still active records `overlapped` and does not star
 
 ## Read run history
 
-Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` and `logs` read records for the current project, and keep reading a task's history after the task is removed.
+Every fire appends one record to `~/.rimz/logs/loop-runs.log.jsonl`. `show` searches known rooms, while `logs` reads records for the current project. Both keep reading a task's history after the task is removed.
 
 ### `loop list`
 
@@ -500,7 +500,7 @@ Empty sections are omitted:
 - DONE has NAME, FIRED, with the note `recent one-offs`. It merges recorded single-checkout resident launches, retired one-offs, and rowless active runs, newest first. It shows five entries by default, then `(and N older · --all)`. FIRED gives launch age, subject, and leader; a retired task's age and result; or `▸ running <duration>`. Only history stamped as one-off is included, so one-offs retired before that stamp was introduced stay accessible through `loop show` and `loop logs`, not DONE.
 - WAKE-UPS folds to a count of tasks that wake agents, their health, and `rimz loop list --all`. With `--all`, the unfold hint is omitted, and owned subscriptions use one line per team or loop owner, with their signals, targets, and worktree count (`in 1 worktree` or `in N worktrees`). Unowned wake-ups keep their real names. A target matching the calling agent is marked `(you)`.
 
-Every table keeps the task name first. A WORKTREE column appears only when a row is checkout-bound, and the caller's checkout is marked `(here)`. Rows sort by task name except DONE, which sorts newest first. A dead watcher moves to NEEDS YOU with `watcher gone · will not wake <handle>` and a `loop remove` hint; stronger attention reasons still win. Ended delivery targets are retired by the harness, not diagnosed by list.
+Every table keeps the task name first. A WORKTREE column appears only when a row is checkout-bound, and the caller's checkout is marked `(here)`. A resident task with `--worktree` names its launch destination, not the checkout its guards read; `loop show <destination>` resolves that name too. Rows sort by task name except DONE, which sorts newest first. A dead watcher moves to NEEDS YOU with `watcher gone · will not wake <handle>` and a `loop remove` hint; stronger attention reasons still win. Ended delivery targets are retired by the harness, not diagnosed by list.
 
 Trigger text omits the checkout's matching `path` filter, includes labels and pauses, and puts `for <hold>` and `each worktree` on a continuation line. Watched commands read `on command exit`, not their command preview. On a terminal, the trigger wraps at modifier, condition, and word boundaries down to 24 columns; no cell is clipped. If the other columns plus that floor exceed the terminal width, the table overflows. Piped output keeps only the fixed continuation line.
 
@@ -517,6 +517,8 @@ Listing is read-only and never creates a room store. Malformed local task state 
 `loop watch` holds this room's tasks open as a compact live dashboard, repainting countdowns and each running task's `▸ running 3m` every second. From a worktree it still shows the whole room; outside any project it shows every known room. Its last-run columns use the same acting results as `list` and `show`, so sibling signals do not replace a good or failed run; with no acting run they read `heard <signal>`. Off, paused, and waiting-for-room tasks keep the list's state words. The band counts running, failed, held, and ok tasks; clocks waiting for a room are excluded from `next:`. A run whose task row is gone is a running row there too, counted in the band's totals and never its `next:`; the dashboard prints no lock warnings. It is the loop pane in the room's `rimzd` tab.
 
 ### `loop show`
+
+`loop show <word>` resolves an exact task name in the caller's room first, then the other rooms known to `loop list`. A name present in several other rooms prints one `rimz --root <root> loop show <name>` command per room and refuses to choose. Retired names with retained history come next (text only; JSON still requires a task row), then worktree names among routine and one-off tasks, then subscription owners: a team name, `team#channel`, or loop-task name. A unique worktree match starts with `worktree <worktree> → <task>`; several matches print the real task names, triggers, inspection commands, and wake-up count. An owner shows `SUBSCRIPTIONS` with every real name (text only; use `loop list --json` for structured subscription rows). A task found outside the caller's room names its room and the `--root` needed by other commands. Mutating commands and `loop logs` still require exact task names and keep their existing room selection.
 
 A condition adds a `condition: <STATE text>` block below the verdict. Each leaf term appears in expression order, followed by `✓` or `✗` for whether that leaf is satisfied and its current reading (`unknown` if absent). A leaf under `!` prints with a `!` prefix, and its glyph counts the negation: on `!ci=pending,failed`, a `failed` reading shows `✗` and a `passed` reading shows `✓`. An `each-worktree` task instead appends `· each worktree` to the headline and shows a `WORKTREES` table; the headline has no single-checkout holding, waiting, or fired suffix.
 

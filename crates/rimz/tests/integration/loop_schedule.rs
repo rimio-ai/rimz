@@ -1309,6 +1309,28 @@ fn resident_named_worktree_saves_at_root_with_checkout_subscriptions_and_receipt
         "{text}"
     );
     assert!(!env.project_root.join(".worktrees/landing").exists());
+    let listing: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    let row = listing["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|room| room["tasks"].as_array().unwrap())
+        .find(|row| row["name"] == "booked")
+        .unwrap();
+    assert_eq!(row["worktree"], "landing", "{row}");
+    let text = loop_ok(&env, &["loop", "list"]);
+    assert!(
+        text.contains("landing") && !text.contains("landing (here)"),
+        "{text}"
+    );
+    let shown = loop_ok(&env, &["loop", "show", "landing"]);
+    assert!(shown.contains("worktree landing → booked"), "{shown}");
+    assert!(
+        shown.contains("booked · one-off · worktree landing"),
+        "{shown}"
+    );
+    assert!(!env.project_root.join(".worktrees/landing").exists());
 }
 
 #[cfg(unix)]

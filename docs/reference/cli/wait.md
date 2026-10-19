@@ -214,7 +214,7 @@ A wait is one row in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`; i
 
 The row retires when the timer fires, the watch reaches its final outcome, the wait is canceled, or the target session ends, is lost, or is stopped. A check-in does not retire it. If a watcher dies without reporting, the room's host notices the missing lock after a 30-second grace and delivers the `watcher died` verdict. `rimz gc` removes rows left behind.
 
-Every fire writes loop history, so `rimz loop show <name>` and `rimz loop logs <name>` keep working after the wait retires. The mechanics are in [watched commands](../../internals/harness/loops.md#watched-commands) and [waits](../../internals/harness/loops.md#waits).
+Every fire writes loop history, so `rimz loop show <name>` and `rimz loop logs <name>` keep working after the wait retires. Text `show` can find it in another known room; `logs` keeps its existing room selection, so use `--root <root>` there. The mechanics are in [watched commands](../../internals/harness/loops.md#watched-commands) and [waits](../../internals/harness/loops.md#waits).
 
 ## Recipes
 

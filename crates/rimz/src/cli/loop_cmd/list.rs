@@ -370,7 +370,8 @@ pub(super) fn load(
     let arming = arming::load();
     let strikes = strikes::load();
     let now = Timestamp::now();
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    let config = MachineConfig::load_lenient();
+    let now_zoned = now.to_zoned(config.time_zone());
     let mut rooms = Vec::new();
     let mut warnings = Vec::new();
     for root in roots {
@@ -447,8 +448,13 @@ pub(super) fn load(
                 },
             );
             row.worktree_here = here
-                && workspace
-                    .is_some_and(|workspace| task.entry().run_dir() == workspace.worktree_root);
+                && workspace.is_some_and(|workspace| match task.entry().worktree.as_deref() {
+                    Some(name) => {
+                        rimz::worktree::worktree_path(&root, &config.agents.worktree, name)
+                            .is_ok_and(|path| path == workspace.worktree_root)
+                    }
+                    None => task.entry().run_dir() == workspace.worktree_root,
+                });
             row.launched_count = ledger.get(name).map_or(0, BTreeMap::len);
             row.attach_workflow_runs(WorkflowRunRow::of_task(&workflows, name, &root), now);
             tasks.push(row);
@@ -532,19 +538,7 @@ impl TaskRow {
             },
         });
         let dir = entry.dir.as_ref().map(|_| entry.run_dir());
-        let worktree = (entry.wait.is_some() || dir.is_some()).then(|| {
-            dir.as_deref()
-                .map(checkout_name)
-                .or_else(|| {
-                    entry.wait.as_ref().and_then(|target| {
-                        target
-                            .handle
-                            .split_once('#')
-                            .map(|(_, channel)| channel.to_owned())
-                    })
-                })
-                .unwrap_or_else(|| checkout_name(&entry.resolved_root()))
-        });
+        let worktree = worktree_name(entry);
         let owner = entry
             .team
             .as_ref()
@@ -933,6 +927,27 @@ impl WorkflowRunRow {
             checkout_name(&self.checkout)
         )
     }
+}
+
+pub(super) fn worktree_name(entry: &TaskEntry) -> Option<String> {
+    if let Some(name) = &entry.worktree {
+        return Some(name.clone());
+    }
+    (entry.wait.is_some() || entry.dir.is_some()).then(|| {
+        entry
+            .dir
+            .as_ref()
+            .map(|_| checkout_name(&entry.run_dir()))
+            .or_else(|| {
+                entry.wait.as_ref().and_then(|target| {
+                    target
+                        .handle
+                        .split_once('#')
+                        .map(|(_, channel)| channel.to_owned())
+                })
+            })
+            .unwrap_or_else(|| checkout_name(&entry.resolved_root()))
+    })
 }
 
 fn checkout_name(path: &Path) -> String {

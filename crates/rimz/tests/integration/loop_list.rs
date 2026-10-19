@@ -38,6 +38,233 @@ fn record(name: &str, root: &Path, result: LoopRunResult, minutes: i64) -> LoopR
 }
 
 #[test]
+fn show_resolves_other_rooms_and_retired_names_but_mutations_stay_local() {
+    let env = Env::new();
+    let other = env.home_root.join("other-room");
+    std::fs::create_dir(&other).unwrap();
+    config(&env, BTreeMap::from([("remote".into(), task(&other))]));
+    let outside = env.home_root.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let output = env
+        .rimz()
+        .current_dir(&outside)
+        .args(["loop", "show", "remote"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains(&format!("other commands need --root {}", other.display())),
+        "{text}"
+    );
+    write_loop_run_records(
+        &env,
+        &[record("retired", &other, LoopRunResult::Completed, 1)],
+    );
+    let text = loop_ok(&env, &["loop", "show", "retired"]);
+    assert!(text.contains("completed"), "{text}");
+    assert!(
+        text.contains(&format!("other commands need --root {}", other.display())),
+        "{text}"
+    );
+    let json = env
+        .rimz()
+        .args(["loop", "show", "retired", "--json"])
+        .output()
+        .unwrap();
+    assert!(!json.status.success());
+    assert!(json.stdout.is_empty());
+}
+
+#[test]
+fn show_resolves_worktree_names_and_lists_ambiguous_tasks_and_wakeups() {
+    let env = Env::new();
+    let checkout = env.home_root.join("card-ux");
+    let bound = TaskEntry {
+        dir: Some(checkout.clone()),
+        ..task(&env.project_root)
+    };
+    config(
+        &env,
+        BTreeMap::from([("card-ux-merged".into(), bound.clone())]),
+    );
+    let text = loop_ok(&env, &["loop", "show", "card-ux"]);
+    assert!(
+        text.starts_with("worktree card-ux → card-ux-merged\n"),
+        "{text}"
+    );
+    loop_ok(&env, &["loop", "remove", "card-ux"]);
+    let listed: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
+    assert!(
+        listed["rooms"][0]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|task| task["name"] == "card-ux-merged"),
+        "mutations must not accept worktree aliases"
+    );
+    config(
+        &env,
+        BTreeMap::from([
+            ("card-ux-merged".into(), bound.clone()),
+            ("review".into(), bound.clone()),
+        ]),
+    );
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "wake".into(),
+            TaskEntry {
+                check: None,
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: "session".into(),
+                    handle: "@coder#card-ux".into(),
+                }),
+                ..bound
+            },
+        )])),
+    );
+    let output = env
+        .rimz()
+        .args(["loop", "show", "card-ux"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for fragment in [
+        "rimz loop show card-ux-merged",
+        "rimz loop show review",
+        "+ 1 wake-ups",
+        "every 1h",
+    ] {
+        assert!(text.contains(fragment), "missing {fragment}: {text}");
+    }
+    let output = env
+        .rimz()
+        .args(["loop", "show", "card-ux", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("rimz loop show review"),
+        "{output:?}"
+    );
+}
+
+#[test]
+fn worktree_ambiguity_commands_select_the_matching_room() {
+    let env = Env::new();
+    let other = env.home_root.join("other-room");
+    std::fs::create_dir(&other).unwrap();
+    let mut tasks = BTreeMap::new();
+    for (name, root) in [("local", &env.project_root), ("remote", &other)] {
+        let dir = root.join("lane");
+        std::fs::create_dir(&dir).unwrap();
+        tasks.insert(
+            name.into(),
+            TaskEntry {
+                dir: Some(dir),
+                ..task(root)
+            },
+        );
+    }
+    config(&env, tasks);
+    let output = env.rimz().args(["loop", "show", "lane"]).output().unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("rimz loop show local"), "{text}");
+    assert!(
+        text.contains(&format!("rimz --root {} loop show remote", other.display())),
+        "{text}"
+    );
+}
+
+#[test]
+fn show_resolves_team_owners_and_disambiguates_exact_names_by_room() {
+    let env = Env::new();
+    let wake = TaskEntry {
+        team: Some("forge#lane".parse().unwrap()),
+        wait: Some(TaskTarget {
+            kind: AgentKind::new_unchecked("claude"),
+            session: "session".into(),
+            handle: "@coder#lane".into(),
+        }),
+        check: None,
+        ..task(&env.project_root)
+    };
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([(
+            "generated-subscription".into(),
+            wake.clone(),
+        )])),
+    );
+    for owner in ["forge", "forge#lane"] {
+        let text = loop_ok(&env, &["loop", "show", owner]);
+        assert!(text.contains("SUBSCRIPTIONS"), "{text}");
+        assert!(text.contains("generated-subscription"), "{text}");
+    }
+    loop_ok(&env, &["loop", "remove", "generated-subscription"]);
+    for name in ["first-room", "second-room"] {
+        let root = env.home_root.join(name);
+        std::fs::create_dir(&root).unwrap();
+        let path = env
+            .state_path_for(&root)
+            .root
+            .join("records/loop-instances.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            serde_json::to_vec(&Tasks(BTreeMap::from([(
+                "same".into(),
+                TaskEntry {
+                    root,
+                    ..wake.clone()
+                },
+            )])))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let output = env.rimz().args(["loop", "show", "same"]).output().unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for room in ["first-room", "second-room"] {
+        assert!(
+            text.contains(&format!(
+                "rimz --root {} loop show same",
+                env.home_root.join(room).display()
+            )),
+            "{text}"
+        );
+    }
+    let output = env
+        .rimz()
+        .args(["loop", "show", "same", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("loop show same"),
+        "{output:?}"
+    );
+    write_loop_instances(
+        &env,
+        Tasks(BTreeMap::from([("same".into(), task(&env.project_root))])),
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&loop_ok(&env, &["loop", "show", "same", "--json"])).unwrap();
+    assert_eq!(
+        value["entry"]["root"],
+        env.project_root.to_string_lossy().as_ref()
+    );
+}
+
+#[test]
 fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     use rimz::harness::schedule::TaskKind;
     let env = Env::new();
