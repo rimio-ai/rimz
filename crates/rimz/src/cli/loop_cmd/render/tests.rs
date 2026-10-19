@@ -474,6 +474,57 @@ fn worktrees_repeated_key_readings_have_no_leaf_glyph() {
 }
 
 #[test]
+fn negated_leaf_glyphs_and_short_read_through_the_negation() {
+    let mut view = worktree_view();
+    view.entry.when = Some(vec!["pr=open && !ci=pending,failed".into()]);
+    view.timing = schedule::TaskTiming::evaluate(
+        schedule::TaskShape::compile("sweep", &view.entry).trigger(),
+        view.source,
+        None,
+        None,
+        &view.now_zoned,
+    );
+    view.room_is_open = true;
+    view.worktrees.retain(|row| row.name == "ready");
+    let ready_row = |view: &ShowView| {
+        let text = show_text(view);
+        assert!(
+            text.lines()
+                .any(|line| line.contains("WORKTREE ") && line.contains("!ci")),
+            "{text}"
+        );
+        text.lines()
+            .find(|line| line.starts_with("  ready "))
+            .unwrap()
+            .to_owned()
+    };
+    let short =
+        |view: &ShowView| serde_json::to_value(worktrees_json(view)).unwrap()[0]["short"].clone();
+    let row = ready_row(&view);
+    assert!(row.contains("✓ open") && row.contains("✓ passed"), "{row}");
+    assert_eq!(short(&view), serde_json::json!([]));
+
+    let CheckoutState::Ready { verdict, .. } = &mut view.worktrees[0].state else {
+        panic!("ready fixture must carry a verdict");
+    };
+    verdict.readings.insert("ci".into(), Some("failed".into()));
+    let row = ready_row(&view);
+    assert!(row.contains("✗ failed"), "{row}");
+    assert_eq!(short(&view), serde_json::json!(["ci"]));
+
+    let expr = schedule::when::WhenExpr::parse(&["pr=open && !ci=pending,failed".into()]).unwrap();
+    let CheckoutState::Ready { verdict, .. } = &view.worktrees[0].state else {
+        panic!("ready fixture must carry a verdict");
+    };
+    let mut out = Vec::new();
+    super::super::condition::write_terms(&mut out, &expr, verdict).unwrap();
+    assert_eq!(
+        anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string(),
+        "  pr=open   ✓ open\n  !ci=pending,failed   ✗ failed\n"
+    );
+}
+
+#[test]
 fn worktrees_order_counts_terms_and_fold_lines() {
     let view = worktree_view();
     let text = show_text(&view);

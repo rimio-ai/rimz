@@ -510,9 +510,15 @@ impl WhenExpr {
 
     /// Leaf terms in expression order, including repeated keys.
     pub fn terms(&self) -> impl Iterator<Item = &WhenTerm> {
-        let mut terms = Vec::new();
-        self.0.terms(&mut terms);
-        terms.into_iter()
+        self.leaves().map(|(term, _)| term)
+    }
+
+    /// Leaf terms in expression order, each with whether an odd number of `!` wraps it:
+    /// a leaf is satisfied when `term.matches(reading) != negated`.
+    pub fn leaves(&self) -> impl Iterator<Item = (&WhenTerm, bool)> {
+        let mut leaves = Vec::new();
+        self.0.leaves(false, &mut leaves);
+        leaves.into_iter()
     }
 
     /// Whether any term reads the room's forge cache.
@@ -571,13 +577,13 @@ impl Node {
         }
     }
 
-    fn terms<'a>(&'a self, terms: &mut Vec<&'a WhenTerm>) {
+    fn leaves<'a>(&'a self, negated: bool, leaves: &mut Vec<(&'a WhenTerm, bool)>) {
         match self {
-            Self::Term(term) => terms.push(term),
-            Self::Not(node) => node.terms(terms),
+            Self::Term(term) => leaves.push((term, negated)),
+            Self::Not(node) => node.leaves(!negated, leaves),
             Self::And(left, right) | Self::Or(left, right) => {
-                left.terms(terms);
-                right.terms(terms);
+                left.leaves(negated, leaves);
+                right.leaves(negated, leaves);
             }
         }
     }

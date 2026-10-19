@@ -129,12 +129,12 @@ pub(super) fn write_show(
 }
 
 pub(super) fn write_terms(out: &mut impl Write, expr: &WhenExpr, verdict: &Verdict) -> Result<()> {
-    for term in expr.terms() {
+    for (term, negated) in expr.leaves() {
         let value = verdict
             .readings
             .get(&term.key)
             .and_then(|value| value.as_deref());
-        let role = if term.matches(value) {
+        let role = if term.matches(value) != negated {
             ui::status::StateRole::Success
         } else {
             ui::status::StateRole::Failed
@@ -142,7 +142,8 @@ pub(super) fn write_terms(out: &mut impl Write, expr: &WhenExpr, verdict: &Verdi
         let (glyph, style) = ui::verdict(role);
         writeln!(
             out,
-            "  {term}   {} {}",
+            "  {}{term}   {} {}",
+            if negated { "!" } else { "" },
             ui::paint(style, glyph),
             value.unwrap_or("unknown")
         )?;
