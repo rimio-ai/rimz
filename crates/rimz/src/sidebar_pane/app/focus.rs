@@ -78,7 +78,13 @@ pub(super) fn request_focus_until(
 /// A cross-tab user request pushes the stored anchor to host peers
 /// and waits for the destination's frame until click + 500 ms before mux dispatch;
 /// request work and any stale tmux fit spend that same budget, without resetting it.
-/// The dispatch nonce check still fences superseded requests. The durable
+/// The source arms its click-ordered lease before the input paint. Known
+/// non-owners hold room work until dispatch returns or the deadline, but still handle user input;
+/// the destination consumes the priority push first. Checkpoints fence older
+/// requests before store, after fitting, and under the focus-anchor lock before
+/// each mux dispatch attempt. The lease is
+/// released before error rollback, on return, and on unwinding. Same-tab and
+/// automatic repair requests have no lease. The durable
 /// request also wakes renderers outside the push path;
 /// command acceptance applies it, and later native observations confirm or
 /// supersede it.
@@ -106,11 +112,7 @@ pub(super) fn spawn_pane_focus(
             crate::harness::hibernate::spawn_wake(&runtime, &pane_id, requested_at_ms);
             let backend = crate::mux::backend_for(pane_id.mux());
             let repair_generation = repair.as_ref().map(|repair| repair.generation);
-            let FocusRequestOutcome {
-                requested,
-                observed,
-                attempts,
-            } = request_focus_until(
+            let request = || request_focus_until(
                 repair.as_ref().and_then(|repair| repair.deadline_ms),
                 expected_pre_action.as_deref().unwrap_or_default(),
                 || {
@@ -131,22 +133,35 @@ pub(super) fn spawn_pane_focus(
                 crate::utils::time::unix_now_ms,
                 std::thread::sleep,
             );
-            let outcome = finish_focus_request(&pane_id, wake.as_ref(), requested, |nonce| {
+            let requested = match &peers {
+                Some(peers) => peers.request(request),
+                None => Some(request()),
+            };
+            let Some(FocusRequestOutcome { requested, observed, attempts }) = requested else {
+                return;
+            };
+            let outcome = finish_focus_request(&pane_id, wake.as_ref(), requested, peers.as_ref(), |nonce| {
                 let dispatch = || {
-                    crate::mux::focus_anchor::dispatch_action(
+                    crate::mux::focus_anchor::dispatch_action_if_current(
                         backend.as_ref(),
                         &runtime,
                         &session_name,
                         &pane_id,
                         nonce,
                         Default::default(),
+                        || peers.as_ref().is_none_or(FocusPeers::is_current),
                     )
                 };
                 if let Some(peers) = &peers
                     && let Some(anchor) =
                         crate::mux::focus_anchor::load(&runtime).filter(|anchor| anchor.nonce == nonce)
                 {
-                    peers.dispatch(anchor, clicked, dispatch)
+                    peers.dispatch(anchor, clicked, dispatch).unwrap_or(Ok(false))
+                } else if let Some(peers) = &peers {
+                    peers.trace_stage("anchor_changed");
+                    let result = peers.request(dispatch).unwrap_or(Ok(false));
+                    peers.release();
+                    result
                 } else {
                     dispatch()
                 }
@@ -185,12 +200,16 @@ pub(super) fn finish_focus_request(
     pane: &PaneId,
     wake: Option<&SyncSender<Wakeup>>,
     requested: Option<std::result::Result<FocusNonce, FocusActionError>>,
+    peers: Option<&FocusPeers>,
     dispatch: impl FnOnce(FocusNonce) -> std::result::Result<bool, FocusActionError>,
 ) -> (Option<FocusNonce>, &'static str, Option<String>) {
     let (nonce, dispatched) = match requested {
         Some(Ok(nonce)) => (Some(nonce), dispatch(nonce)),
         Some(Err(error)) => (None, Err(error)),
         None => {
+            if let Some(peers) = peers {
+                peers.release();
+            }
             return (
                 None,
                 "failed",
@@ -198,6 +217,12 @@ pub(super) fn finish_focus_request(
             );
         }
     };
+    if let Some(peers) = peers {
+        peers.release();
+        if nonce.is_none() {
+            peers.trace_stage("request_failed");
+        }
+    }
     match dispatched {
         Ok(true) => (nonce, "accepted_unconfirmed", None),
         Ok(false) => (

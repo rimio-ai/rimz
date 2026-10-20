@@ -23,6 +23,7 @@ pub(in crate::sidebar_pane) struct DataPlane {
     pub(super) caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) geometry: Arc<Mutex<crate::mux::zellij::WidthMemo>>,
     pub(super) viewport: Arc<Mutex<Option<super::loop_state::ViewportPublication>>>,
+    jumps: Arc<super::focus_push::JumpHost>,
     request_tx: Sender<FetchRequest>,
     pub(super) subscribers: Subscribers,
     host_data: Arc<Mutex<HostData>>,
@@ -41,8 +42,13 @@ impl DataPlane {
         source: SidebarInstanceId,
         diag: crate::diag::DiagSink,
     ) -> super::focus_push::FocusPeers {
-        super::focus_push::FocusPeers::new(self.subscribers.clone(), source, diag)
-            .with_fit(self.fit.clone())
+        super::focus_push::FocusPeers::new(
+            self.subscribers.clone(),
+            source,
+            diag,
+            self.jumps.clone(),
+        )
+        .with_fit(self.fit.clone())
     }
 
     /// Threads start with the first pane and live as long as the host. Fetch and production run off every render loop, so animation and input never block on them.
@@ -124,6 +130,7 @@ impl DataPlane {
             caps: Arc::default(),
             geometry: Arc::default(),
             viewport: Arc::default(),
+            jumps: Arc::default(),
             request_tx,
             subscribers: Subscribers::default(),
             host_data: Arc::default(),
@@ -163,6 +170,7 @@ impl DataPlane {
         let membership = Membership {
             instance_id: config.instance_id.clone(),
             subscribers: self.subscribers.clone(),
+            jumps: self.jumps.clone(),
         };
         let mut subscribers = lock(&self.subscribers);
         subscribers.insert(config.instance_id.as_str().to_owned(), subscriber);
@@ -191,6 +199,15 @@ impl DataPlane {
             .values()
             .map(|subscriber| subscriber.instance_id.clone())
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(in crate::sidebar_pane) fn take_focus_push(
+        &self,
+        instance_id: &SidebarInstanceId,
+    ) -> Option<super::focus_push::FocusPush> {
+        self.focus_peers(instance_id.clone(), crate::diag::DiagSink::disabled())
+            .take_push()
     }
 
     #[cfg(test)]
@@ -226,12 +243,14 @@ pub(in crate::sidebar_pane) struct Subscription {
 struct Membership {
     instance_id: SidebarInstanceId,
     subscribers: Subscribers,
+    jumps: Arc<super::focus_push::JumpHost>,
 }
 
 impl Drop for Membership {
     fn drop(&mut self) {
         let mut subscribers = lock(&self.subscribers);
         subscribers.remove(self.instance_id.as_str());
+        self.jumps.forget(&self.instance_id);
     }
 }
 

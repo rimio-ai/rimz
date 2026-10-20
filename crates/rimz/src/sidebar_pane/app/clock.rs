@@ -15,6 +15,8 @@ pub(super) struct LoopClock {
     pub(super) focus_calls: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     pub(super) notify_calls: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(test)]
+    pub(super) skip_focus: bool,
 }
 
 impl LoopClock {
@@ -27,6 +29,8 @@ impl LoopClock {
             focus_calls: Arc::default(),
             #[cfg(test)]
             notify_calls: Arc::default(),
+            #[cfg(test)]
+            skip_focus: false,
         }
     }
 
@@ -101,6 +105,10 @@ impl LoopClock {
         }
         #[cfg(test)]
         self.focus_calls.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        if self.skip_focus {
+            return;
+        }
         execute();
     }
 

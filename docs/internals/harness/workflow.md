@@ -113,7 +113,7 @@ A `workflow = "<name>"` task is the fourth loop action (`TaskAction::Workflow`).
 
 ## Attention
 
-`crates/rimz/src/sidebar/enrich.rs::enrich_core` fills `SidebarSnapshot.parked_workflows` from the run records on every fold, producer and consumer alike, through the read-only `store::workflow::list`. The cockpit draws one inert line per entry. The room host refolds every cycle, so a park reaches the live sidebar within one data tick, but the fresh-latest snapshot cache keys on the event-log extent and a park appends no event, so a passive `rimz sidebar snapshot` reader may show it only after the next event.
+`crates/rimz/src/sidebar/enrich.rs::enrich_core` fills `SidebarSnapshot.parked_workflows` from the run records on every fold, producer and consumer alike, through the read-only `store::workflow::list`. The cockpit draws one inert line per entry. The room host refolds every cycle, so a park reaches the live sidebar within one data tick, or when an in-progress cross-tab jump releases the attachment, but the fresh-latest snapshot cache keys on the event-log extent and a park appends no event, so a passive `rimz sidebar snapshot` reader may show it only after the next event.
 
 ## Accounting
 

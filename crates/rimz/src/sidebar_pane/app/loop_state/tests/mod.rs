@@ -18,21 +18,25 @@ mod paint;
 mod scroll;
 
 fn focus_push(
+    rig: &mut Rig,
     anchor: crate::mux::focus_anchor::FocusAnchor,
-    instance_id: SidebarInstanceId,
-) -> (Wakeup, Receiver<PushPeer>) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let sent = Instant::now();
-    (
-        Wakeup::FocusPush(Box::new(super::super::focus_push::FocusPush::new(
-            anchor,
-            super::super::focus_push::PushAck::new(tx),
-            instance_id,
-            sent,
-            sent + Duration::from_secs(10),
-        ))),
-        rx,
-    )
+) -> (FocusPush, Receiver<PushPeer>) {
+    let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+    let _subscription = rig.focus_plane.subscribe(&rig.state.config, tx);
+    let clicked = rig.state.clock.now();
+    let lease = rig
+        .focus_plane
+        .focus_peers(SidebarInstanceId::new(), crate::diag::DiagSink::disabled())
+        .arm(anchor.pane_id.clone(), clicked);
+    let (_, _, _, ack, _) = lease.push(&anchor, clicked, || clicked).unwrap();
+    let peers = rig.focus_plane.focus_peers(
+        rig.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    );
+    let push = peers.take_push().expect("priority slot delivers the push");
+    rig.state.focus_peers = Some(peers);
+    rig.focus_lease = Some(lease);
+    (push, ack)
 }
 
 fn assert_push_report(
@@ -41,7 +45,10 @@ fn assert_push_report(
     verdict: PushVerdict,
     folded: bool,
 ) -> PushPeer {
-    let report = ack.try_recv().expect("peer must report its verdict");
+    let report = ack
+        .try_iter()
+        .find(|report| report.instance_id == rig.state.config.instance_id)
+        .expect("peer must report its verdict");
     assert_eq!(report.instance_id, rig.state.config.instance_id);
     assert_eq!(report.delivery, PushDelivery::Sent);
     assert_eq!(report.verdict, Some(verdict));
@@ -94,6 +101,8 @@ struct Rig {
     fetch: FetchDispatcher,
     requests: Receiver<FetchRequest>,
     terminal: Terminal<PaneBackend>,
+    focus_plane: super::super::plane::DataPlane,
+    focus_lease: Option<FocusPeers>,
 }
 
 impl Rig {
@@ -161,6 +170,8 @@ impl Rig {
             fetch: FetchDispatcher::new(request_tx),
             requests,
             terminal: terminal_with_width(80),
+            focus_plane: super::super::plane::DataPlane::detached(),
+            focus_lease: None,
             runtime,
             ws,
             _dir: dir,

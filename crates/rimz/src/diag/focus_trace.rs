@@ -31,6 +31,7 @@ pub(crate) enum PushOutcome {
     Painted,
     Released,
     TimedOut,
+    Superseded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +109,17 @@ impl PushPeer {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum FocusTraceEvent {
+    ClickDelivery {
+        column: u16,
+        row: u16,
+        delivery: PushDelivery,
+    },
+    JumpProgress {
+        sequence: u64,
+        target: PaneId,
+        stage: String,
+        elapsed_ms: u64,
+    },
     PushHandshake {
         nonce: FocusNonce,
         target: PaneId,
@@ -118,7 +130,8 @@ pub(crate) enum FocusTraceEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fit_ms: Option<u64>,
         decided_ms: u64,
-        dispatched_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispatched_ms: Option<u64>,
         peers: Vec<PushPeer>,
     },
     FramePublished {
@@ -213,7 +226,9 @@ pub(super) struct Edges {
 impl Edges {
     pub(super) fn admit(&mut self, event: &FocusTraceEvent, pane_ids: HashSet<PaneId>) -> bool {
         match event {
-            FocusTraceEvent::PushHandshake { .. } => {}
+            FocusTraceEvent::PushHandshake { .. }
+            | FocusTraceEvent::ClickDelivery { .. }
+            | FocusTraceEvent::JumpProgress { .. } => {}
             FocusTraceEvent::FramePublished {
                 focused_pane,
                 focus_origin,
@@ -406,6 +421,16 @@ mod tests {
             "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "inbox_full"
         });
         [full, minimal]
+    }
+
+    #[test]
+    fn superseded_handshake_omits_dispatch_time() {
+        let mut expected = handshake_rows()[0].clone();
+        expected["outcome"] = "superseded".into();
+        expected.as_object_mut().unwrap().remove("dispatched_ms");
+        let event = serde_json::from_value::<FocusTraceEvent>(expected.clone());
+        assert!(event.is_ok(), "superseded jumps never dispatch: {event:?}");
+        assert_eq!(serde_json::to_value(event.unwrap()).unwrap(), expected);
     }
 
     #[test]

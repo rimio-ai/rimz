@@ -1,4 +1,4 @@
-//! The pane's inbox: a wheel tick takes every tick queued behind it as one run, and the wakeup that ends the run is held back and returned next.
+//! Input stays live during jump holds; queued wheel ticks share one paint and retain the wakeup that ends their run.
 
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -14,13 +14,22 @@ use super::loop_state::LoopState;
 pub(super) struct WakeupInbox {
     receiver: Receiver<Wakeup>,
     pending: Option<Wakeup>,
+    input: Option<Receiver<Wakeup>>,
+    pending_input: Option<Wakeup>,
 }
 
 impl WakeupInbox {
+    pub(super) fn with_input(mut self, input: Receiver<Wakeup>) -> Self {
+        self.input = Some(input);
+        self
+    }
+
     pub(super) fn new(receiver: Receiver<Wakeup>) -> Self {
         Self {
             receiver,
             pending: None,
+            input: None,
+            pending_input: None,
         }
     }
 
@@ -31,18 +40,57 @@ impl WakeupInbox {
     }
 
     pub(super) fn wait(&mut self, timeout: Duration) {
-        self.pending = Some(self.recv_timeout(timeout));
+        if !self.has_input() {
+            self.pending = Some(self.recv_timeout(timeout));
+        }
     }
 
     fn scroll_run(&mut self, first: Wakeup) -> impl Iterator<Item = Wakeup> + '_ {
-        std::iter::once(first).chain(std::iter::from_fn(|| {
-            let wakeup = self.receiver.try_recv().ok()?;
+        Self::scroll_from(first, &self.receiver, &mut self.pending)
+    }
+
+    fn scroll_from<'a>(
+        first: Wakeup,
+        receiver: &'a Receiver<Wakeup>,
+        pending: &'a mut Option<Wakeup>,
+    ) -> impl Iterator<Item = Wakeup> + 'a {
+        std::iter::once(first).chain(std::iter::from_fn(move || {
+            let wakeup = receiver.try_recv().ok()?;
             if matches!(wakeup, Wakeup::Scroll { .. }) {
                 return Some(wakeup);
             }
-            self.pending = Some(wakeup);
+            *pending = Some(wakeup);
             None
         }))
+    }
+
+    pub(super) fn has_input(&mut self) -> bool {
+        if self.pending_input.is_none() {
+            self.pending_input = self.input.as_ref().and_then(|input| input.try_recv().ok());
+        }
+        self.pending_input.is_some()
+    }
+
+    pub(super) fn dispatch_input(
+        &mut self,
+        state: &mut LoopState,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<PaneBackend>,
+    ) -> Result<()> {
+        self.has_input();
+        let Some(wakeup) = self.pending_input.take() else {
+            return Ok(());
+        };
+        if matches!(wakeup, Wakeup::Scroll { .. })
+            && let Some(input) = &self.input
+        {
+            return state.on_inputs(
+                Self::scroll_from(wakeup, input, &mut self.pending_input),
+                terminal,
+                fetch,
+            );
+        }
+        state.on_wakeup(fetch, terminal, wakeup)
     }
 
     pub(super) fn dispatch_next(
@@ -52,8 +100,11 @@ impl WakeupInbox {
         terminal: &mut Terminal<PaneBackend>,
         timeout: Duration,
     ) -> Result<()> {
+        if self.has_input() {
+            return self.dispatch_input(state, fetch, terminal);
+        }
         let mut wakeup = self.recv_timeout(timeout);
-        // Publication hints must not insert a hidden paint ahead of a queued focus push.
+        // Publication hints must not delay already queued work.
         while matches!(wakeup, Wakeup::Tick) {
             let Ok(next) = self.receiver.try_recv() else {
                 break;

@@ -10,124 +10,6 @@ use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
-#[test]
-fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
-    for (outcome, stale) in ["painted", "released", "capped", "superseded"]
-        .into_iter()
-        .flat_map(|outcome| [false, true].map(|stale| (outcome, stale)))
-    {
-        let plane = DataPlane::detached();
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
-        let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
-        let source = serve_config(&workspace());
-        let destination = serve_config(&workspace());
-        let (source_tx, source_rx) = std::sync::mpsc::sync_channel(64);
-        let (destination_tx, destination_rx) = std::sync::mpsc::sync_channel(64);
-        let _source = plane.subscribe(&source, source_tx);
-        let _destination = plane.subscribe(&destination, destination_tx);
-        let peers = plane
-            .focus_peers(source.instance_id, crate::diag::DiagSink::disabled())
-            .with_fit(Some(Arc::new(move |anchor| {
-                stale.then(|| {
-                    std::collections::HashMap::from([(
-                        anchor.pane_id.clone(),
-                        crate::mux::FittedPane {
-                            rows: 70,
-                            cols: None,
-                        },
-                    )])
-                })
-            })));
-        let anchor = crate::mux::focus_anchor::FocusAnchor {
-            nonce: crate::ids::FocusNonce::new(),
-            session_name: source.session_name,
-            pane_id: crate::ids::PaneId::from_parts(MuxName::Zellij, "terminal_2"),
-            origin: crate::mux::focus_anchor::FocusOrigin::User,
-            repair_generation: None,
-            issued_at_ms: crate::utils::time::unix_now_ms(),
-            applied_at_ms: None,
-            state: crate::mux::focus_anchor::FocusIntentState::Requested,
-            pre_action: Vec::new(),
-            placement: None,
-            order: None,
-        };
-        let expected = anchor.clone();
-        crate::mux::focus_anchor::store(&runtime, &anchor).unwrap();
-        let nonce = anchor.nonce;
-        let target = anchor.pane_id.clone();
-        let session = anchor.session_name.clone();
-        let (painted_tx, painted_rx) = std::sync::mpsc::channel();
-        let (dispatched_tx, dispatched_rx) = std::sync::mpsc::channel();
-        let peer_runtime = runtime.clone();
-        let destination = std::thread::spawn(move || {
-            let Wakeup::FocusPush(push) = destination_rx.recv_timeout(SETTLE).unwrap() else {
-                panic!("destination must receive the focus push")
-            };
-            assert_eq!(push.anchor, expected);
-            assert_eq!(
-                push.expected_panes.as_deref(),
-                stale
-                    .then(|| std::collections::HashMap::from([(
-                        expected.pane_id.clone(),
-                        crate::mux::FittedPane {
-                            rows: 70,
-                            cols: None
-                        }
-                    )]))
-                    .as_ref()
-            );
-            if outcome == "superseded" {
-                let mut newer = expected;
-                newer.nonce = crate::ids::FocusNonce::new();
-                crate::mux::focus_anchor::store(&peer_runtime, &newer).unwrap();
-            }
-            painted_tx.send(()).unwrap();
-            match outcome {
-                "painted" | "superseded" => {
-                    push.finish(crate::diag::focus_trace::PushVerdict::Painted)
-                }
-                "capped" => {
-                    dispatched_rx.recv_timeout(SETTLE).unwrap();
-                    drop(push);
-                }
-                _ => drop(push),
-            }
-        });
-        let started = Instant::now();
-        peers.dispatch(anchor, started, || {
-            assert!(
-                painted_rx.try_recv().is_ok(),
-                "dispatch must follow destination paint, release, or cap"
-            );
-            assert_eq!(
-                source_rx.try_recv(),
-                Err(Empty),
-                "the source must not receive its own push"
-            );
-            if outcome == "capped" {
-                assert!(started.elapsed() >= Duration::from_millis(500));
-                dispatched_tx.send(()).unwrap();
-            }
-            if outcome == "superseded" {
-                let backend = crate::mux::backend_for(target.mux());
-                assert!(
-                    !crate::mux::focus_anchor::dispatch_action(
-                        backend.as_ref(),
-                        &runtime,
-                        &session,
-                        &target,
-                        nonce,
-                        Default::default()
-                    )
-                    .unwrap(),
-                    "the post-wait nonce check must still prevent dispatch"
-                );
-            }
-        });
-        destination.join().unwrap();
-    }
-}
-
 struct Room {
     _dir: tempfile::TempDir,
     runtime: RuntimePaths,
@@ -1119,15 +1001,17 @@ fn stream_input_ignores_unknown_lines_and_delivers_keys() {
     let room = Room::new();
     let (attachment, live) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
     let (mut supervisor, host) = UnixStream::pair().unwrap();
-    read_input(&host, live.close);
+    read_input(&host, live.close, || {});
     supervisor
         .write_all(b"unknown\nsnapshot\nreload\npress:-:char:q\nresize\n")
         .unwrap();
     assert_eq!(
-        attachment.inbox.recv_timeout(SETTLE),
+        attachment.input.recv_timeout(SETTLE),
         Ok(decode_wakeup(b"press:-:char:q"))
     );
-    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Resize));
+    assert_eq!(attachment.input.recv_timeout(SETTLE), Ok(Wakeup::Resize));
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
+    assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
     drop(supervisor);
     assert_eq!(attachment.inbox.recv_timeout(SETTLE), Ok(Wakeup::Tick));
 }
@@ -1165,18 +1049,67 @@ fn room_events_are_scoped_once_before_reaching_each_attachment() {
 
 #[test]
 fn a_room_click_reaches_only_the_named_attachment() {
-    let room = Room::new();
+    let mut room = Room::new();
+    Arc::get_mut(&mut room.host).unwrap().diag = crate::diag::DiagSink::under(
+        room._dir.path().to_owned(),
+        workspace(),
+        &room.host.template.session_name,
+        None,
+    );
     let id = SidebarInstanceId::new();
     let (first, _) = room.host.admit(&hello(&id)).unwrap();
     let (second, _) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
+    let close = lock(&room.host.attachments)
+        .get(id.as_str())
+        .unwrap()
+        .close
+        .clone();
+    while close.wake.try_send(Wakeup::Tick).is_ok() {}
     room.host
         .room_wakeup(format!("click:{}:4:7", SidebarInstanceId::new()).as_bytes());
     room.host.room_wakeup(format!("click:{id}:4:7").as_bytes());
     assert_eq!(
-        first.inbox.try_recv(),
+        first.input.try_recv(),
         Ok(Wakeup::MouseClick { column: 4, row: 7 })
     );
-    assert_eq!(second.inbox.try_recv(), Err(Empty));
+    assert_eq!(second.input.try_recv(), Err(Empty));
+    let wake = lock(&room.host.attachments)
+        .get(id.as_str())
+        .unwrap()
+        .close
+        .input
+        .clone();
+    for _ in 0..64 {
+        wake.try_send(Wakeup::MouseClick { column: 4, row: 7 })
+            .unwrap();
+    }
+    room.host.room_wakeup(format!("click:{id}:4:7").as_bytes());
+    drop(first);
+    room.host.room_wakeup(format!("click:{id}:4:7").as_bytes());
+    let rows: Vec<serde_json::Value> =
+        std::fs::read_to_string(crate::diag::focus_trace::log_path(room._dir.path()))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|row: &serde_json::Value| row["instance_id"] == id.as_str())
+            .collect();
+    let deliveries: Vec<_> = rows
+        .iter()
+        .map(|row| row["event"]["delivery"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        deliveries,
+        ["sent", "inbox_full", "inbox_closed"],
+        "click enqueue success must not hide a dropped click"
+    );
+    for row in rows {
+        assert_eq!(row["event"]["kind"], "click_delivery");
+        assert_eq!(row["event"]["column"], 4);
+        assert_eq!(row["event"]["row"], 7);
+        let event: crate::diag::focus_trace::FocusTraceEvent =
+            serde_json::from_value(row["event"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), row["event"]);
+    }
 }
 
 #[test]
@@ -1288,22 +1221,13 @@ esac
             .room_wakeup(format!("click:{}:4:{}", source.instance_id, row.unwrap()).as_bytes());
 
         if cross_tab {
-            let deadline = Instant::now() + SETTLE;
-            let received = loop {
-                let received = destination
-                    .inbox
-                    .recv_timeout(deadline.saturating_duration_since(Instant::now()));
-                if !matches!(received, Ok(Wakeup::Tick)) {
-                    break received;
-                }
-            };
-            assert!(
-                matches!(&received, Ok(Wakeup::FocusPush(_))),
-                "a cross-tab room click must push to B before dispatch: {received:?}"
-            );
-            let Wakeup::FocusPush(push) = received.unwrap() else {
-                unreachable!()
-            };
+            let instance_id = room.host.config_for(&greeting).instance_id;
+            let mut received = None;
+            eventually("a cross-tab room click pushes to B before dispatch", || {
+                received = room.host.plane.take_focus_push(&instance_id);
+                received.is_some()
+            });
+            let push = received.unwrap();
             assert_eq!(push.anchor.pane_id, target);
             assert_eq!(load(&room.runtime), Some(push.anchor.clone()));
             assert!(!dir.join("dispatched").exists(), "dispatch must wait for B");
