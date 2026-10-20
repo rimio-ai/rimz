@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use sha2::{Digest, Sha256};
+
 use crate::agents::capabilities::LaunchCapability;
 use crate::agents::managed_source::{ManagedSource, RIMZ_MANAGED_MARKER};
 use crate::agents::provider_file;
@@ -342,6 +344,64 @@ pub(super) fn snake_event_token(event: &str) -> String {
         }
     }
     out
+}
+
+/// Codex 0.163.0's command-handler hash, conservatively rejecting unsupported fields.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Trust checks adopt the independently pinned mirror next."
+    )
+)]
+pub(super) fn hook_hash(event: &str, group: &toml::Value, handler: &toml::Value) -> Option<String> {
+    let handler = handler.as_table()?;
+    if handler.get("type")?.as_str()? != "command" || handler.contains_key("additionalContextLimit")
+    {
+        return None;
+    }
+    let command = handler.get("command")?.as_str()?;
+    let timeout = match handler.get("timeout") {
+        Some(value) => u64::try_from(value.as_integer()?).ok()?,
+        None if event == "Interrupt" => 1,
+        None => 600,
+    };
+    let timeout = if event == "Interrupt" {
+        timeout.clamp(1, 3)
+    } else {
+        timeout.max(1)
+    };
+    let run_async = match handler.get("async") {
+        Some(value) => value.as_bool()?,
+        None => false,
+    };
+    let mut normalized = BTreeMap::from([
+        ("type", serde_json::Value::from("command")),
+        ("command", command.into()),
+        ("timeout", timeout.into()),
+        ("async", run_async.into()),
+    ]);
+    if let Some(status) = handler.get("statusMessage") {
+        normalized.insert("statusMessage", status.as_str()?.into());
+    }
+    let matcher = match group.as_table()?.get("matcher") {
+        Some(value) => Some(value.as_str()?),
+        None => None,
+    };
+    let mut identity = BTreeMap::from([
+        (
+            "event_name",
+            serde_json::Value::from(snake_event_token(event)),
+        ),
+        ("hooks", serde_json::to_value([normalized]).ok()?),
+    ]);
+    if !matches!(event, "UserPromptSubmit" | "Stop" | "Interrupt")
+        && let Some(matcher) = matcher
+    {
+        identity.insert("matcher", matcher.into());
+    }
+    let json = serde_json::to_vec(&identity).ok()?;
+    Some(format!("sha256:{}", hex::encode(Sha256::digest(json))))
 }
 
 pub(super) fn read_existing_table(path: &Path) -> Result<toml::Table> {

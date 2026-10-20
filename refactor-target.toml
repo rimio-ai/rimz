@@ -2592,6 +2592,11 @@ reason = "The mutable strip_rimz_hook_commands walk keeps the same table shape, 
 
 [[verdict]]
 kind = "item"
+key = "agents::adapters::codex::install::hook_hash"
+reason = "The adapter's trust and drift checks share Codex's normalized hash with independent real-Codex fixture tests."
+
+[[verdict]]
+kind = "item"
 key = "agents::adapters::codex::model_alias::resolve"
 reason = "A sequential alias ladder, not a table or a fold; no shared shape reduces it (pass 31c)."
 

@@ -4,6 +4,116 @@ use super::super::install::{
 };
 use super::*;
 
+#[test]
+fn hook_hash_matches_codex_0163_fixtures() {
+    for (event, timeout, expected) in [
+        (
+            "PermissionRequest",
+            10,
+            "d507ff765254da261ec9f404d15c72eb5cb477404f52152e49eb5f3df9734288",
+        ),
+        (
+            "SessionStart",
+            10,
+            "4e1e409642f1059f95fdfab6cd722db26fd5074b87655d4ac3ffb3984e6b010a",
+        ),
+        (
+            "Interrupt",
+            1,
+            "547a0abe91c51a6ee8d60c18ae3ffc656dfca4eeed2ac0da0ab034842ea6c935",
+        ),
+        (
+            "Stop",
+            10,
+            "c845eca30c0bc24033e916df310b0e57a9d6bea2807d9c5541ee78ad737d847b",
+        ),
+        (
+            "PermissionRequest",
+            2,
+            "2f12042fe7fdd440853775fc23674ce0685e8a5c9ea74403d321231ce0d12750",
+        ),
+        (
+            "SessionStart",
+            2,
+            "72a9e9fff078b1638c9cfa10a70600390ed7f1f74e0d4de53931197b90a3b5ea",
+        ),
+        (
+            "Stop",
+            2,
+            "c12cf5f657a43d32e9d074c0bd2e8d060ac134a0192cbccd25d2ea6bbe0e535d",
+        ),
+    ] {
+        let matcher = if event == "SessionStart" {
+            "startup|resume|clear|compact"
+        } else {
+            ".*"
+        };
+        let group: toml::Value = toml::from_str(&format!("matcher = '{matcher}'")).unwrap();
+        let mut handler: toml::Value = toml::from_str(&format!(
+            "type = 'command'\ncommand = '{RIMZ_HOOK_COMMAND}'\ntimeout = {timeout}\nstatusMessage = 'Routing {event} through RimZ'"
+        )).unwrap();
+        let expected = Some(format!("sha256:{expected}"));
+        assert_eq!(
+            super::super::install::hook_hash(event, &group, &handler),
+            expected,
+            "{event} timeout {timeout}"
+        );
+        handler
+            .as_table_mut()
+            .unwrap()
+            .insert("bogusKey".into(), "ignored".into());
+        assert_eq!(
+            super::super::install::hook_hash(event, &group, &handler),
+            expected,
+            "unknown keys do not affect Codex trust"
+        );
+    }
+}
+
+#[test]
+fn hook_hash_normalizes_defaults_and_rejects_unsupported_fields() {
+    let group: toml::Value = toml::from_str("matcher = '.*'").unwrap();
+    let handler: toml::Value = toml::from_str("type = 'command'\ncommand = 'echo test'").unwrap();
+    for (event, timeout) in [("Stop", 600), ("Interrupt", 1)] {
+        let mut explicit = handler.clone();
+        explicit.as_table_mut().unwrap().extend([
+            ("timeout".into(), timeout.into()),
+            ("async".into(), false.into()),
+        ]);
+        let hash = super::super::install::hook_hash(event, &group, &handler);
+        assert!(hash.is_some());
+        assert_eq!(
+            hash,
+            super::super::install::hook_hash(event, &group, &explicit)
+        );
+        for (raw, normalized) in [(0, 1), (10, if event == "Interrupt" { 3 } else { 10 })] {
+            explicit["timeout"] = raw.into();
+            let mut normalized_handler = explicit.clone();
+            normalized_handler["timeout"] = normalized.into();
+            assert_eq!(
+                super::super::install::hook_hash(event, &group, &explicit),
+                super::super::install::hook_hash(event, &group, &normalized_handler)
+            );
+        }
+    }
+    for (field, value) in [
+        ("type", "prompt".into()),
+        ("command", 1.into()),
+        ("timeout", "2".into()),
+        ("async", "false".into()),
+        ("statusMessage", false.into()),
+        ("additionalContextLimit", 10.into()),
+    ] {
+        let mut invalid = handler.clone();
+        invalid.as_table_mut().unwrap().insert(field.into(), value);
+        assert_eq!(
+            super::super::install::hook_hash("Stop", &group, &invalid),
+            None,
+            "{field}"
+        );
+    }
+}
+
 const EXPECTED_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
