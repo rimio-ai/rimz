@@ -163,8 +163,8 @@ class CheckoutFixture(unittest.TestCase):
         git(self.root, "worktree", "add", "--quiet", "-b", "deps/repair-1", str(self.tree()), "origin/deps/repair-1")
         shutil.rmtree(self.tree())
         with self.planned(), \
-             patch.object(repair, "launch", side_effect=subprocess.CalledProcessError(1, "rimz")), \
-             self.assertRaises(subprocess.CalledProcessError):
+             patch.object(repair, "launch", side_effect=RuntimeError("launch failed")), \
+             self.assertRaisesRegex(RuntimeError, "launch failed"):
             self.run_quietly(repair.run)
         self.assertIn(dict(pruned_batch_branch=True, branch="deps/repair-1", where="origin"), self.lines)
         self.assertEqual([line["attempt_checkout"] for line in self.lines if "attempt_checkout" in line], ["created"])
@@ -459,10 +459,10 @@ class CheckoutFixture(unittest.TestCase):
                           ("agents", "explain", "spot.reviewer", "--json")])
 
     def test_failed_launch_fails_the_run_and_leaves_the_checkout(self):
-        failure = subprocess.CalledProcessError(124, "rimz")
+        failure = RuntimeError("rimz teams launch spot -w deps/repair-1 failed (exit 124)")
         with self.planned(), \
              patch.object(repair, "launch", side_effect=failure), \
-             patch.object(repair, "github") as github, self.assertRaises(subprocess.CalledProcessError):
+             patch.object(repair, "github") as github, self.assertRaisesRegex(RuntimeError, "exit 124"):
             self.run_quietly(repair.run)
         github.assert_not_called()
         self.assertEqual([line.get("attempt_checkout") for line in self.lines[1:]], ["created"])
@@ -507,6 +507,44 @@ class CheckoutFixture(unittest.TestCase):
                                           ("worktree", "new", "deps/repair-1", "--base", "origin/deps/repair-1")])
         self.assertEqual(self.lines[-1], dict(launched="spot#deps-repair-1", branch="deps/repair-1", worktree=str(self.tree())))
         self.assertTrue(self.tree().exists())
+
+
+class LaunchTests(unittest.TestCase):
+    """The team launch is a hand-off from inside a loop check, and its failures stay readable."""
+
+    PLAN = dict(action="repair", branch="deps/repair-1", sources=[dict(number=1, head_sha="sha-1")])
+    LOOP_ENV = {"RIMZ_LOOP_TASK": "dependabot-repair", "RIMZ_WORKSPACE_ID": "ws-1", "RIMZ_PROJECT_ROOT": "/repo"}
+
+    def launch(self, result=None, error=None):
+        completed = subprocess.CompletedProcess([], 0, "", "") if result is None else result
+        with patch.dict(repair.os.environ, self.LOOP_ENV), \
+             patch.object(repair.subprocess, "run", return_value=completed, side_effect=error) as run, \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            try:
+                repair.launch(self.PLAN)
+            finally:
+                self.run_call = run.call_args
+
+    def test_launch_drops_the_loop_marker_and_keeps_the_workspace_pin(self):
+        self.launch()
+        argv, env = self.run_call.args[0], self.run_call.kwargs["env"]
+        self.assertEqual(argv[:4] + argv[5:], ["rimz", "teams", "launch", "spot", "-w", "deps/repair-1", "--bg"])
+        self.assertNotIn("RIMZ_LOOP_TASK", env)
+        self.assertEqual((env["RIMZ_WORKSPACE_ID"], env["RIMZ_PROJECT_ROOT"]), ("ws-1", "/repo"))
+        self.assertEqual(self.run_call.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_failed_launch_names_the_branch_and_rimz_error_without_the_prompt(self):
+        refusal = "a loop check waits for its agent; remove `--bg` to capture the completed run"
+        with self.assertRaises(RuntimeError) as raised:
+            self.launch(subprocess.CompletedProcess([], 1, "", f"error: {refusal}\n"))
+        message = str(raised.exception)
+        self.assertEqual(message, f"rimz teams launch spot -w deps/repair-1 failed (exit 1): error: {refusal}")
+        self.assertNotIn("Dependency repair plan", message)
+
+    def test_timed_out_launch_omits_the_prompt(self):
+        with self.assertRaises(RuntimeError) as raised:
+            self.launch(error=subprocess.TimeoutExpired(["rimz", "teams", "launch", "spot", "PROMPT"], 300))
+        self.assertEqual(str(raised.exception), "rimz teams launch spot -w deps/repair-1 timed out after 300s")
 
 
 class RepairTests(unittest.TestCase):
@@ -646,12 +684,15 @@ class RepairTests(unittest.TestCase):
     def test_launch_passes_prompt_as_data_in_unattended_named_worktree(self):
         plan = select([source(1)], {1: "failed"})
         plan["sources"][0]["title"] = "$(do-not-execute) `neither-this`"
-        with patch.object(repair.subprocess, "run") as run:
+        with patch.object(repair.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             repair.launch(plan)
         args, = run.call_args.args
         prompt = (repair.TASK_DIR / "prompt.md").read_text() + "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
         self.assertEqual(args, ["rimz", "teams", "launch", "spot", prompt, "-w", "deps/repair-1", "--bg"])
-        self.assertEqual(run.call_args.kwargs, dict(cwd=repair.ROOT, check=True))
+        kwargs = {key: value for key, value in run.call_args.kwargs.items() if key != "env"}
+        self.assertEqual(kwargs, dict(cwd=repair.ROOT, stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                                      timeout=300, check=False))
 
     def test_cli_passes_quiet_period_to_run_and_plan(self):
         for action in ("run", "plan"):

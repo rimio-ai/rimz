@@ -12,7 +12,7 @@ uv run --script loops/dependabot/tests/test_dependabot.py
 uv run --script loops/dependabot/dependabot.py plan
 ```
 
-Both scripts require Python >=3.14; `uv` selects a compatible interpreter from their inline metadata. `run` is the scheduled entry point, started read-only at the project root. Each batch gets a fresh RimZ worktree named after its branch (`deps/repair-…`) and one `spot` team; the fire exits after launch. Later fires idle on unfinished lanes, or stop resting seats and sweepers when the board is `Done` and no open PR heads the branch, then reclaim before planning. A tree still in use returns idle for the next fire to retry. Unpushed or uncommitted work is never forced away.
+Both scripts require Python >=3.14; `uv` selects a compatible interpreter from their inline metadata. `run` is the scheduled entry point, started read-only at the project root. Each batch gets a fresh RimZ worktree named after its branch (`deps/repair-…`) and one `spot` team; the fire exits after launch. The launch drops `RIMZ_LOOP_TASK` and keeps the workspace pin, because RimZ refuses a `--bg` launch inside a loop check and the coordinator owns the lane's lifecycle itself. Later fires idle on unfinished lanes, or stop resting seats and sweepers when the board is `Done` and no open PR heads the branch, then reclaim before planning. A tree still in use returns idle for the next fire to retry. Unpushed or uncommitted work is never forced away.
 
 A new batch waits until the newest open Dependabot PR is six hours old, counted from creation. Existing batches are ungated. `plan --quiet-period 0` or a hand-run `run --quiet-period 0` bypasses the delay.
 

@@ -8,6 +8,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import fcntl
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -326,12 +327,28 @@ def require_seat_skills():
                                "add them to the profile's skills list")
 
 
-def launch(plan):
+def launch(plan, timeout=300):
     prompt = (TASK_DIR / "prompt.md").read_text()
     prompt += "\n\nDependency repair plan (JSON):\n" + json.dumps(plan)
     # No shell: titles, prompts, paths, and PR metadata remain argv data.
     argv = ["rimz", "teams", "launch", "spot", prompt, "-w", plan["branch"], "--bg"]
-    subprocess.run(argv, cwd=ROOT, check=True)
+    # Inside a loop check, RimZ turns a prompted launch into a blocking run and refuses --bg
+    # (docs/guide/loops.md). This coordinator owns the lane itself (occupied_repair_lane,
+    # stop_finished_lanes, reclaim_idle_checkouts), so it hands the team off: drop the loop
+    # marker and keep the workspace pin (RIMZ_WORKSPACE_ID, RIMZ_PROJECT_ROOT).
+    env = {key: value for key, value in os.environ.items() if key != "RIMZ_LOOP_TASK"}
+    what = f"rimz teams launch spot -w {plan['branch']}"
+    try:
+        result = subprocess.run(argv, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, text=True,
+                                capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        # The exception text repeats argv, and the prompt would push everything else out of the run's output tail.
+        raise RuntimeError(f"{what} timed out after {timeout}s") from None
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"{what} failed (exit {result.returncode}): {detail}")
 
 
 def run(quiet_period=timedelta(hours=6)):
