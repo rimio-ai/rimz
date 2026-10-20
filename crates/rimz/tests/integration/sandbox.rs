@@ -129,7 +129,7 @@ fn child_cap_launch(explicit_host: bool) {
         &env,
         "subagents",
         "sysadmin",
-        "description: Host worker\nagent: claude\ntools: []\nisolation: host",
+        "description: Host worker\nagent: claude\ntools: []\nisolation: host\nmode: yolo",
         "Work.",
     );
     env.install_agent_hooks("claude");
@@ -240,12 +240,17 @@ fn child_cap_launch(explicit_host: bool) {
             stderr.contains("sysadmin runs sandboxed: its definition asks for host isolation"),
             "{stderr}"
         );
+        assert!(stderr.contains("sysadmin runs in auto mode: its definition asks for yolo, and a subagent never runs looser than its parent"), "{stderr}");
         let agents = store.snapshot().unwrap().agents;
         let child = agents
             .iter()
             .find(|agent| agent.profile.as_deref() == Some("sysadmin"))
             .unwrap();
         assert_eq!(child.isolation, Some(Isolation::Sandbox));
+        assert_eq!(child.mode, Some(rimz::agents::PermissionMode::Auto));
+        let runs = rimz::harness::run::list(store.paths()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].permission_mode, rimz::agents::PermissionMode::Auto);
         assert_eq!(child.worktree_path.as_deref(), cwd.to_str());
         let trace = std::fs::read_to_string(env.project_root.join("mux.log")).unwrap();
         assert!(
@@ -263,6 +268,165 @@ fn sandboxed_parent_refuses_explicit_host_subagent_without_launch_event() {
 #[test]
 fn sandboxed_parent_clamps_host_profile_subagent_and_records_override() {
     child_cap_launch(false);
+}
+
+fn permission_cap_command(env: &Env, mode: rimz::agents::PermissionMode) -> std::process::Command {
+    use rimz::agents::LaunchParams;
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "parent-session".into(),
+                launch_id: Some("parent-launch".into()),
+                agent_name: "parent".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    mode: Some(mode),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: Some(rimz::ids::PaneId::from_parts(
+                    rimz::ids::MuxName::Zellij,
+                    "terminal_2",
+                )),
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    crate::common::room::seed_live_zellij_room(
+        store.runtime_paths(),
+        &workspace.session_name,
+        serde_json::from_value(serde_json::json!([
+            {"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},
+            {"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}
+        ]))
+        .unwrap(),
+    );
+    let mut command = env.rimz();
+    command
+        .args(["--mux", "zellij"])
+        .env("RIMZ_ISOLATION", "host")
+        .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+        .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+        .env(rimz::harness::launch::ENV_AGENT_NAME, "parent")
+        .env(
+            "RIMZ_ZELLIJ_BIN",
+            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+        )
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join("mux.log"))
+        .env("ZELLIJ_PANE_ID", "2")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            crate::common::room::MATERIALIZED_ROOM_PANES,
+        );
+    command
+}
+
+#[test]
+fn auto_parent_refuses_explicit_yolo_subagent_without_launch_event() {
+    let env = Env::new();
+    let mut command = permission_cap_command(&env, rimz::agents::PermissionMode::Auto);
+    let store = env.store();
+    let before = store.read_events().unwrap().len();
+    let output = command
+        .args(["subagents", "claude", "work", "--yolo"])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    for text in [
+        "requested yolo mode",
+        "parent",
+        "auto",
+        "a subagent never runs looser than its parent",
+        "--yolo",
+        "mode: yolo",
+    ] {
+        assert!(stderr.contains(text), "{stderr}");
+    }
+    assert_eq!(store.read_events().unwrap().len(), before);
+}
+
+#[test]
+fn parent_message_refuses_to_resume_a_child_above_its_current_mode() {
+    use rimz::agents::{AgentLifecycleObservation, LaunchParams, LifecycleSignal, PermissionMode};
+    use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
+
+    let env = Env::new();
+    let mut command = permission_cap_command(&env, PermissionMode::Ask);
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    store
+        .append_event(&EventEnvelope::agent_launched(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            &AgentKind::new_unchecked("claude"),
+            AgentLaunchPayload {
+                system_prompt_digest: None,
+                agent_id: "child-session".into(),
+                launch_id: Some("child-launch".into()),
+                agent_name: "otter".into(),
+                agent_name_explicit: true,
+                launch: LaunchParams {
+                    mode: Some(PermissionMode::Yolo),
+                    parent_agent_id: Some("parent-session".into()),
+                    parent_agent_kind: Some(AgentKind::new_unchecked("claude")),
+                    launch_depth: Some(1),
+                    ..Default::default()
+                },
+                state: AgentLaunchState::Bound,
+                run_id: None,
+                pane_id: None,
+                runtime_owner: None,
+                worktree_path: Some(env.project_root.display().to_string()),
+                worktree_branch: None,
+                prompt: None,
+                description: None,
+            },
+        ))
+        .unwrap();
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "test-ended",
+            &AgentLifecycleObservation::new(Some("child-session".into()), LifecycleSignal::Ended),
+        ))
+        .unwrap();
+    let before = store.read_events().unwrap().len();
+    let output = command
+        .args(["message", "@otter", "Follow up."])
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+    for text in ["cannot resume @otter", "yolo", "ask", "launch a new child"] {
+        assert!(stderr.contains(text), "{stderr}");
+    }
+    assert!(
+        store.read_events().unwrap()[before..]
+            .iter()
+            .all(|event| event.method != "agent.launched")
+    );
 }
 
 fn environment(env: &Env) -> BTreeMap<String, String> {

@@ -1731,7 +1731,7 @@ fn fast_suffix_cell(
     )?))
 }
 
-fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
+pub(super) fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
     let (kind, mode) = raw.rsplit_once('-')?;
     let mode = PermissionMode::from_str(mode).ok()?;
     (crate::agents::find_definition(kind).is_some()).then_some((kind, mode))

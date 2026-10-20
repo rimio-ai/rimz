@@ -533,7 +533,6 @@ fn fanout_rejects_the_retired_spec_key() {
 fn unattended_launch_flags_are_rejected() {
     for args in [
         &["rimz", "claude", "review this", "--ask"][..],
-        &["rimz", "claude", "review this", "--yolo"],
         &["rimz", "claude", "review this", "--budget", "5"],
     ] {
         assert!(
@@ -541,6 +540,44 @@ fn unattended_launch_flags_are_rejected() {
             "{args:?} must not be accepted"
         );
     }
+}
+
+#[test]
+fn yolo_launch_flag_maps_to_the_supervised_permission_override() {
+    for verb in [false, true] {
+        let mut argv = vec!["rimz"];
+        if verb {
+            argv.push("launch");
+        }
+        argv.extend(["codex", "work", "--yolo", "--", "--search"]);
+        let parsed = Harness::try_parse_from(argv);
+        assert!(
+            parsed.is_ok(),
+            "--yolo must parse before passthrough: {parsed:?}"
+        );
+        let args = parsed.unwrap().args;
+        let launch = match args.command {
+            Some(SubagentsSubcmd::Launch(args)) => args.launch,
+            None => args.launch,
+            _ => panic!("launch command"),
+        }
+        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .unwrap();
+        assert!(launch.overrides.yolo);
+        assert!(!launch.overrides.ask);
+        assert_eq!(launch.overrides.passthrough, ["--search"]);
+    }
+    let launch = parse(&["rimz", "codex", "work", "--", "--yolo"])
+        .launch
+        .into_agent_launch(&rimz::config::SubagentsConfig::default())
+        .unwrap();
+    assert!(!launch.overrides.yolo);
+    assert_eq!(launch.overrides.passthrough, ["--yolo"]);
+    assert!(Harness::try_parse_from(["rimz", "fanout", "--yolo"]).is_err());
+    assert!(
+        serde_json::from_str::<FanoutTask>(r#"{"profile":"codex","prompt":"work","yolo":true}"#)
+            .is_err()
+    );
 }
 
 #[test]

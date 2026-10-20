@@ -143,7 +143,7 @@ impl LaunchAvailability {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PermissionModeChoice {
     Explicit(PermissionMode),
     Default(PermissionMode),
@@ -372,6 +372,104 @@ pub fn cap_child_isolation(
             ClampSource::MachinePolicy
         }),
     })
+}
+
+/// A default grant lowered to the parent's recorded ceiling.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PermissionClamp {
+    pub mode: PermissionMode,
+    pub requested: PermissionMode,
+    pub source: PermissionClampSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionClampSource {
+    AutoDefault,
+    ProfileDefault,
+    ModeCell,
+}
+
+impl fmt::Display for PermissionClampSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::AutoDefault => "the auto default",
+            Self::ProfileDefault => "its definition",
+            Self::ModeCell => "its <kind>-<mode> cell",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ChildPermissionErr {
+    #[error(
+        "requested {requested} mode exceeds parent mode {parent}: a subagent never runs looser than its parent; launch the parent with --yolo or a mode: yolo definition",
+        parent = parent_permission_label(*.parent)
+    )]
+    Explicit {
+        requested: PermissionMode,
+        parent: Option<PermissionMode>,
+    },
+    #[error(
+        "child mode {child} exceeds parent mode {parent}: a subagent never runs looser than its parent; launch a new child",
+        parent = parent_permission_label(*.parent)
+    )]
+    Resume {
+        child: PermissionMode,
+        parent: Option<PermissionMode>,
+    },
+}
+
+fn parent_permission_label(mode: Option<PermissionMode>) -> String {
+    mode.map_or_else(
+        || "unrecorded (treated as auto)".to_owned(),
+        |mode| mode.to_string(),
+    )
+}
+
+fn cap_child_permission(
+    caller: Option<&crate::agents::AgentState>,
+    explicit: Option<PermissionMode>,
+    default: Option<PermissionMode>,
+    source: PermissionClampSource,
+) -> Result<(PermissionModeChoice, Option<PermissionClamp>), ChildPermissionErr> {
+    let choice = explicit.map_or(
+        PermissionModeChoice::Default(PermissionMode::Auto),
+        PermissionModeChoice::Explicit,
+    );
+    let Some(caller) = caller else {
+        return Ok((choice, None));
+    };
+    let requested = explicit.or(default).unwrap_or(PermissionMode::Auto);
+    let ceiling = caller.mode.unwrap_or(PermissionMode::Auto);
+    if requested.rank() <= ceiling.rank() {
+        return Ok((choice, None));
+    }
+    if explicit.is_some() {
+        return Err(ChildPermissionErr::Explicit {
+            requested,
+            parent: caller.mode,
+        });
+    }
+    Ok((
+        PermissionModeChoice::Explicit(ceiling),
+        Some(PermissionClamp {
+            mode: ceiling,
+            requested,
+            source,
+        }),
+    ))
+}
+
+/// Refuse a parent-message resume above the parent's current recorded grant. Unrecorded modes count as auto; a resumed grant is never lowered.
+pub fn check_child_permission_mode(
+    parent: Option<PermissionMode>,
+    child: Option<PermissionMode>,
+) -> Result<(), ChildPermissionErr> {
+    let child = child.unwrap_or(PermissionMode::Auto);
+    if child.rank() <= parent.unwrap_or(PermissionMode::Auto).rank() {
+        return Ok(());
+    }
+    Err(ChildPermissionErr::Resume { child, parent })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -681,6 +779,10 @@ pub struct SupervisedLaunch {
     pub inferred_lane: Option<String>,
     /// Why a subagent's isolation was capped at its sandboxed parent's.
     pub clamped: Option<ClampSource>,
+    /// A higher default permission grant lowered to the caller's recorded mode.
+    pub permission_clamp: Option<PermissionClamp>,
+    /// A yolo child needs the sandbox's sudo/setuid note, with a usable host override.
+    pub yolo_sandbox: bool,
 }
 
 /// Plan a supervised run's one-cell launch over the caller's one effective
@@ -766,6 +868,36 @@ pub fn plan_supervised_launch(
         commands,
         &effective.teams,
     )?;
+    if resolved.layout.agent_cells().count() != 1 {
+        bail!("--print requires a layout with exactly one agent cell");
+    }
+    let mut cells = resolved
+        .layout
+        .columns
+        .iter()
+        .flat_map(|column| &column.rows);
+    let (Some(Cell::Agent(cell)), None) = (cells.next(), cells.next()) else {
+        bail!("--print requires a single-cell agent layout");
+    };
+    let profiles = effective.profiles_for(scope);
+    let (cell_spec, _) = crate::harness::spec::split_inline_role(spec.trim(), profiles, commands);
+    let mode_cell = crate::harness::spec::fast_suffix_base(cell_spec).unwrap_or(cell_spec);
+    let source = if cell.launch.mode.is_none() {
+        PermissionClampSource::AutoDefault
+    } else if !profiles.0.contains_key(cell_spec)
+        && !profiles.0.contains_key(mode_cell)
+        && crate::harness::spec::virtual_agent_parts(mode_cell).is_some()
+    {
+        PermissionClampSource::ModeCell
+    } else {
+        PermissionClampSource::ProfileDefault
+    };
+    let (permission_mode, permission_clamp) = cap_child_permission(
+        caller.filter(|_| request.subagent),
+        request.permission_mode,
+        cell.launch.mode,
+        source,
+    )?;
     let preset = crate::agents::LaunchPreset {
         model: normalized_preset_value(request.model.as_deref()),
         effort: normalized_preset_value(request.effort.as_deref()),
@@ -778,10 +910,7 @@ pub fn plan_supervised_launch(
         &mut resolved.layout,
         LaunchFinalizeOptions {
             agent_base,
-            permission_mode: Some(request.permission_mode.map_or(
-                PermissionModeChoice::Default(PermissionMode::Auto),
-                PermissionModeChoice::Explicit,
-            )),
+            permission_mode: Some(permission_mode),
             isolation,
             preset: &preset,
             passthrough: &request.passthrough,
@@ -797,16 +926,10 @@ pub fn plan_supervised_launch(
         }
     }
     let mut layout = resolved.layout;
-    if layout.agent_cells().count() != 1 {
-        bail!("--print requires a layout with exactly one agent cell");
-    }
-    let mut cells = layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows);
-    let (Some(Cell::Agent(cell)), None) = (cells.next(), cells.next()) else {
-        bail!("--print requires a single-cell agent layout");
-    };
+    let cell = layout
+        .agent_cells_mut()
+        .next()
+        .expect("the supervised layout was checked to hold exactly one agent cell");
     let mut clamped = None;
     if request.subagent {
         let capped = cap_child_isolation(
@@ -818,11 +941,21 @@ pub fn plan_supervised_launch(
         cell.launch.isolation = capped.isolation;
         clamped = capped.clamped;
     }
+    let yolo_sandbox = request.subagent
+        && cell.launch.mode == Some(PermissionMode::Yolo)
+        && parent_isolation != Some(crate::config::Isolation::Sandbox)
+        && crate::config::Isolation::resolve(
+            cell.launch.isolation,
+            cell.isolation_default,
+            machine_config.agents.isolation,
+        ) == crate::config::Isolation::Sandbox;
     Ok(SupervisedLaunch {
         layout,
         team_name: resolved.team_name,
         inferred_lane,
         clamped,
+        permission_clamp,
+        yolo_sandbox,
     })
 }
 

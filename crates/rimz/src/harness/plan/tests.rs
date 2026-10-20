@@ -532,6 +532,148 @@ fn child_isolation_cap_respects_parent_and_request_source() {
 }
 
 #[test]
+fn child_permission_ranking_orders_grants_not_declaration_order() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    for pair in [Plan, Ask, Auto, Yolo].windows(2) {
+        assert!(pair[0].rank() < pair[1].rank(), "{pair:?}");
+    }
+}
+
+#[test]
+fn child_permission_cap_refuses_explicit_grants_above_the_parent() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    for mode in [Some(Auto), Some(Ask), Some(Plan), None, Some(Yolo)] {
+        let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+        caller.mode = mode;
+        let result = cap_child_permission(
+            Some(&caller),
+            Some(Yolo),
+            None,
+            PermissionClampSource::AutoDefault,
+        );
+        if mode == Some(Yolo) {
+            assert_eq!(
+                result.unwrap(),
+                (PermissionModeChoice::Explicit(Yolo), None)
+            );
+            continue;
+        }
+        assert!(result.is_err(), "yolo must be refused under {mode:?}");
+        let error = result.unwrap_err().to_string();
+        for text in [
+            "yolo",
+            "a subagent never runs looser than its parent",
+            "--yolo",
+            "mode: yolo",
+        ] {
+            assert!(error.contains(text), "{error}");
+        }
+        let parent = mode.map_or_else(|| "unrecorded".to_owned(), |mode| mode.to_string());
+        assert!(error.contains(&parent), "{error}");
+        if mode.is_none() {
+            assert!(error.contains("treated as auto"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn child_permission_defaults_lower_with_their_source_and_preserve_stricter_modes() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    for (parent, default, source, expected) in [
+        (Some(Ask), None, PermissionClampSource::AutoDefault, Ask),
+        (Some(Plan), None, PermissionClampSource::AutoDefault, Plan),
+        (
+            None,
+            Some(Yolo),
+            PermissionClampSource::ProfileDefault,
+            Auto,
+        ),
+        (
+            Some(Auto),
+            Some(Yolo),
+            PermissionClampSource::ModeCell,
+            Auto,
+        ),
+    ] {
+        let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+        caller.mode = parent;
+        assert_eq!(
+            cap_child_permission(Some(&caller), None, default, source).unwrap(),
+            (
+                PermissionModeChoice::Explicit(expected),
+                Some(PermissionClamp {
+                    mode: expected,
+                    requested: default.unwrap_or(Auto),
+                    source
+                }),
+            )
+        );
+    }
+    for parent in [None, Some(Plan), Some(Ask), Some(Auto), Some(Yolo)] {
+        let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+        caller.mode = parent;
+        for default in [None, Some(Plan), Some(Ask), Some(Auto), Some(Yolo)] {
+            if default.unwrap_or(Auto).rank() > parent.unwrap_or(Auto).rank() {
+                continue;
+            }
+            assert_eq!(
+                cap_child_permission(
+                    Some(&caller),
+                    None,
+                    default,
+                    PermissionClampSource::ProfileDefault
+                )
+                .unwrap(),
+                (PermissionModeChoice::Default(Auto), None,)
+            );
+        }
+    }
+    for explicit in [None, Some(Yolo)] {
+        assert_eq!(
+            cap_child_permission(
+                None,
+                explicit,
+                Some(Yolo),
+                PermissionClampSource::ProfileDefault
+            )
+            .unwrap(),
+            (
+                explicit.map_or(
+                    PermissionModeChoice::Default(Auto),
+                    PermissionModeChoice::Explicit
+                ),
+                None,
+            )
+        );
+    }
+}
+
+#[test]
+fn child_permission_resume_refuses_replayed_modes_above_the_current_parent() {
+    use PermissionMode::{Ask, Auto, Plan, Yolo};
+    for (parent, child) in [
+        (Some(Ask), Some(Yolo)),
+        (None, Some(Yolo)),
+        (Some(Plan), None),
+    ] {
+        let result = check_child_permission_mode(parent, child);
+        assert!(result.is_err(), "resume {child:?} under {parent:?}");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains(&child.unwrap_or(Auto).to_string()),
+            "{error}"
+        );
+        assert!(error.contains("launch a new child"), "{error}");
+        let parent = parent.map_or_else(|| "unrecorded".to_owned(), |mode| mode.to_string());
+        assert!(error.contains(&parent), "{error}");
+    }
+    for mode in [Plan, Ask, Auto, Yolo] {
+        assert!(check_child_permission_mode(Some(mode), Some(mode)).is_ok());
+        assert!(check_child_permission_mode(Some(Yolo), Some(mode)).is_ok());
+    }
+}
+
+#[test]
 fn cell_posture_projection_covers_every_agent_cell_field() {
     let mut cell = AgentCell {
         empty_dir: None,
@@ -3403,6 +3545,183 @@ fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
         planned_cell(&launch).launch.isolation,
         Some(crate::config::Isolation::Sandbox)
     );
+}
+
+#[test]
+fn supervised_permission_cap_renders_and_records_only_the_parent_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut request = supervised_request("codex", "work");
+    request.subagent = true;
+    let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    caller.mode = Some(PermissionMode::Ask);
+    let machine = MachineConfig::default();
+    let (planned, _) = SupervisedPlan {
+        request: &request,
+        caller: Some(&caller),
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    let launch = planned.unwrap();
+    assert_eq!(planned_cell(&launch).launch.mode, Some(PermissionMode::Ask));
+    assert_eq!(
+        planned_cell(&launch).args,
+        crate::agents::find_definition("codex")
+            .unwrap()
+            .spec()
+            .launch
+            .permission_args(PermissionMode::Ask)
+    );
+    assert_eq!(
+        launch.permission_clamp,
+        Some(PermissionClamp {
+            mode: PermissionMode::Ask,
+            requested: PermissionMode::Auto,
+            source: PermissionClampSource::AutoDefault,
+        })
+    );
+    // Peer and caller-less launches keep the existing auto default.
+    for (subagent, caller) in [(false, Some(&caller)), (true, None)] {
+        request.subagent = subagent;
+        let (planned, _) = SupervisedPlan {
+            request: &request,
+            caller,
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path());
+        let launch = planned.unwrap();
+        assert_eq!(
+            planned_cell(&launch).launch.mode,
+            Some(PermissionMode::Auto)
+        );
+        assert!(launch.permission_clamp.is_none());
+    }
+}
+
+#[test]
+fn supervised_permission_cap_identifies_profile_and_mode_cell_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine.subagents.profiles.0.insert(
+        "worker".into(),
+        configured_profile("codex", Some(PermissionMode::Yolo), None, None, None, None),
+    );
+    // A virtual mode cell may itself resolve a configured kind base.
+    machine.subagents.profiles.0.insert(
+        "codex".into(),
+        configured_profile("codex", None, None, None, None, None),
+    );
+    machine.subagents.profiles.0.insert(
+        "claude-yolo".into(),
+        configured_profile("codex", Some(PermissionMode::Yolo), None, None, None, None),
+    );
+    let caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    for (spec, source) in [
+        ("worker", PermissionClampSource::ProfileDefault),
+        ("codex-yolo", PermissionClampSource::ModeCell),
+        ("claude-yolo", PermissionClampSource::ProfileDefault),
+    ] {
+        let mut request = supervised_request(spec, "work");
+        request.subagent = true;
+        let (planned, _) = SupervisedPlan {
+            request: &request,
+            caller: Some(&caller),
+            lane: None,
+            parent_isolation: None,
+            machine: &machine,
+        }
+        .run(dir.path());
+        let launch = planned.unwrap();
+        assert_eq!(
+            planned_cell(&launch).launch.mode,
+            Some(PermissionMode::Auto)
+        );
+        assert_eq!(
+            launch.permission_clamp,
+            Some(PermissionClamp {
+                mode: PermissionMode::Auto,
+                requested: PermissionMode::Yolo,
+                source,
+            })
+        );
+        assert_eq!(
+            planned_cell(&launch).args,
+            crate::agents::find_definition("codex")
+                .unwrap()
+                .spec()
+                .launch
+                .permission_args(PermissionMode::Auto)
+        );
+    }
+}
+
+#[test]
+fn supervised_permission_cap_keeps_passthrough_permission_vectors_opaque() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut request = supervised_request("codex-yolo", "work");
+    request.subagent = true;
+    request.passthrough = vec!["--dangerously-bypass-approvals-and-sandbox".into()];
+    let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    caller.mode = Some(PermissionMode::Ask);
+    let (planned, _) = SupervisedPlan {
+        request: &request,
+        caller: Some(&caller),
+        lane: None,
+        parent_isolation: None,
+        machine: &MachineConfig::default(),
+    }
+    .run(dir.path());
+    let launch = planned.unwrap();
+    assert_eq!(planned_cell(&launch).launch.mode, Some(PermissionMode::Ask));
+    let mut expected = crate::agents::find_definition("codex")
+        .unwrap()
+        .spec()
+        .launch
+        .permission_args(PermissionMode::Ask);
+    expected.extend(request.passthrough.clone());
+    assert_eq!(planned_cell(&launch).args, expected);
+}
+
+#[test]
+fn supervised_yolo_sandbox_note_only_offers_a_possible_host_override() {
+    use crate::config::Isolation::{Host, Sandbox};
+    let dir = tempfile::tempdir().unwrap();
+    let mut machine = MachineConfig::default();
+    machine.agents.isolation = Sandbox;
+    let mut request = supervised_request("codex", "work");
+    request.subagent = true;
+    request.permission_mode = Some(PermissionMode::Yolo);
+    let mut caller = crate::agents::AgentState::stub("claude", "parent", AgentStatus::Running);
+    caller.mode = Some(PermissionMode::Yolo);
+    for (parent_isolation, child_isolation, expected) in [
+        (Some(Host), None, true),
+        (None, None, true),
+        (Some(Sandbox), None, false),
+        (Some(Host), Some(Host), false),
+    ] {
+        request.isolation = child_isolation;
+        let (planned, _) = SupervisedPlan {
+            request: &request,
+            caller: Some(&caller),
+            lane: None,
+            parent_isolation,
+            machine: &machine,
+        }
+        .run(dir.path());
+        let launch = planned.unwrap();
+        assert_eq!(launch.yolo_sandbox, expected);
+        assert_eq!(
+            planned_cell(&launch).launch.mode,
+            Some(PermissionMode::Yolo)
+        );
+        assert_eq!(
+            planned_cell(&launch).args,
+            ["--dangerously-bypass-approvals-and-sandbox"]
+        );
+    }
 }
 
 #[test]

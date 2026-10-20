@@ -78,7 +78,9 @@ A native language-server tool starts a full index for every agent and child, so 
 
 A child is an agent in your room, so the [sidebar](./sidebar.md#the-agent-card) treats it as one, nested one level under its parent. The parent's card gains a `⧉ subagents (N)` line with what the children cost; click it to list each child with its state, the task it was given, and, while it runs, its model, tokens, and elapsed time. The parent's dollar figure already includes its children's spend.
 
-A child that stops on a permission prompt or a question flips to `? waiting` and reaches you the way any agent does: the cockpit counts it and your [notification handler](./notifications.md) fires. Answer in the child's pane. Its permission mode is the one its profile's `mode:` sets, or the automatic-approval default every supervised run starts with, so a child with a narrow tool list rarely needs to ask.
+A child that stops on a permission prompt or a question flips to `? waiting` and reaches you the way any agent does: the cockpit counts it and your [notification handler](./notifications.md) fires. Answer in the child's pane. Its permission mode starts with its profile's `mode:`, a permission-mode cell, or auto, but never runs looser than the parent's recorded mode. An ask or plan parent therefore gives its children that same ceiling; an unrecorded parent counts as auto. RimZ prints a note when it lowers a higher default.
+
+When an unattended child needs the same bypass of permission prompts as its parent, the parent can pass `rimz subagents codex "finish the task" --yolo`. This works only when the parent was itself launched with `--yolo` or a `mode: yolo` definition; changing modes inside the provider does not change the recorded grant. Otherwise the launch refuses with that fix. A follow-up that would resume an ended child above the parent's current ceiling also refuses and asks for a new child. The [reference](../reference/cli/subagents.md#launch-one-child) lists the flags and the sandbox note.
 
 From your own shell:
 

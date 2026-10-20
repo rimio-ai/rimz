@@ -184,6 +184,9 @@ struct SubagentLaunchArgs {
     /// Run the child under this isolation instead of inheriting the parent's.
     #[arg(long, value_name = "host|sandbox")]
     isolation: Option<rimz::config::Isolation>,
+    /// Run the child in yolo mode, up to the parent's own mode.
+    #[arg(long)]
+    yolo: bool,
     /// Tell the child to stop after this duration, then allow its reporting grace.
     #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
     timeout: Option<Duration>,
@@ -501,6 +504,7 @@ impl FanoutTask {
             fast: self.fast == Some(true),
             no_fast: self.fast == Some(false),
             isolation: None,
+            yolo: false,
             timeout,
             warn,
             grace,
@@ -594,6 +598,7 @@ impl SubagentLaunchArgs {
                 fast: self.fast,
                 no_fast: self.no_fast,
                 isolation: self.isolation,
+                yolo: self.yolo,
                 passthrough: self.passthrough,
                 ..Default::default()
             },
