@@ -24,7 +24,8 @@ mod tests;
 /// is needless lag on a real refill. Tuned against captured reset traces
 /// (see [`trace_rate_limits`]).
 const REFILL_CONFIRM_SECS: i64 = 120;
-/// Coarse backstop: a live candidate captured longer ago than this is ignored.
+/// Coarse backstop: a live candidate whose content was observed longer ago
+/// than this is ignored, including unchanged best-effort statusline replays.
 /// Content-staleness is already caught upstream — the snapshot view drops a
 /// reading whose shortest applicable window has reset — so this only guards a
 /// wildly old reading slipping through.
@@ -514,7 +515,8 @@ fn project_rate_limits(
 ///
 /// A current authoritative reading supersedes the prior in either direction.
 /// A best-effort reading may overlay authoritative truth only when observed
-/// strictly later; unstamped readings cannot prove freshness at this boundary.
+/// strictly later; unchanged statusline replays keep their first content stamp,
+/// and unstamped readings cannot prove freshness at this boundary.
 /// Among admitted best-effort readings:
 /// - a climb or steady value is adopted immediately;
 /// - a later reset instant (a new window epoch) lowers the bar immediately;

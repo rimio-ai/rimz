@@ -38,12 +38,225 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
 fn write_then_read_round_trips() {
     let (_dir, runtime) = runtime();
     let now = Timestamp::now();
-    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
     let all = read_all(&runtime);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].kind, "claude");
     assert_eq!(all[0].agent_id, "sess-1");
     assert_eq!(all[0].context.model_id.as_deref(), Some("claude-opus-4-8"));
+}
+
+#[test]
+fn statusline_windows_keep_content_stamps_per_key() {
+    use crate::agents::{AgentRateLimits, RateLimitWindow};
+    use jiff::SignedDuration;
+
+    let (_dir, runtime) = runtime();
+    let start = Timestamp::now();
+    let reset = start + SignedDuration::from_secs(86_400);
+    let windows = vec![
+        RateLimitWindow {
+            duration_mins: Some(300),
+            used_percentage: Some(20),
+            resets_at: Some(reset),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            duration_mins: Some(10_080),
+            used_percentage: Some(95),
+            resets_at: Some(reset),
+            ..Default::default()
+        },
+    ];
+    for (seconds, change_weekly, drop_short, expected) in [
+        (0, false, false, vec![0, 0]),
+        (20, false, false, vec![0, 0]),
+        (30, true, false, vec![0, 30]),
+        (40, true, true, vec![30]),
+    ] {
+        let at = start + SignedDuration::from_secs(seconds);
+        let mut context = ctx(at);
+        let mut windows = windows.clone();
+        if change_weekly {
+            windows[1].used_percentage = Some(5);
+        }
+        if drop_short {
+            windows.remove(0);
+        }
+        context.rate_limits = Some(AgentRateLimits { windows }.stamped_at(at));
+        write(&runtime, "claude", "sess-1", &context, None).unwrap();
+        let stored = read_one(&runtime, "claude", "sess-1").unwrap().context;
+        assert_eq!(stored.observed_at, at);
+        assert_eq!(
+            stored
+                .rate_limits
+                .unwrap()
+                .windows
+                .iter()
+                .map(|window| window.observed_at)
+                .collect::<Vec<_>>(),
+            expected
+                .into_iter()
+                .map(|seconds| Some(start + SignedDuration::from_secs(seconds)))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn statusline_window_stamp_changes_only_for_new_content() {
+    use crate::agents::context::WindowSource;
+    use crate::agents::{AgentRateLimits, RateLimitWindow};
+    use jiff::SignedDuration;
+
+    let (_dir, runtime) = runtime();
+    let start = Timestamp::now();
+    let at = start + SignedDuration::from_secs(20);
+    let reset = start + SignedDuration::from_secs(86_400);
+    for (name, prior_stamp, source, reset_change, expected) in [
+        ("unstamped", None, WindowSource::BestEffort, 0, at),
+        (
+            "authoritative",
+            Some(start),
+            WindowSource::Authoritative,
+            0,
+            at,
+        ),
+        ("new-reset", Some(start), WindowSource::BestEffort, 1, at),
+        ("unchanged", Some(start), WindowSource::BestEffort, 0, start),
+    ] {
+        let mut context = ctx(start);
+        context.rate_limits = Some(AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                used_percentage: Some(5),
+                duration_mins: Some(10_080),
+                resets_at: Some(reset),
+                observed_at: prior_stamp,
+                source,
+                ..Default::default()
+            }],
+        });
+        write(&runtime, "claude", name, &context, None).unwrap();
+        context.observed_at = at;
+        let window = &mut context.rate_limits.as_mut().unwrap().windows[0];
+        window.observed_at = Some(at);
+        window.resets_at = Some(reset + SignedDuration::from_secs(reset_change));
+        write(&runtime, "claude", name, &context, None).unwrap();
+        assert_eq!(
+            read_one(&runtime, "claude", name)
+                .unwrap()
+                .context
+                .rate_limits
+                .unwrap()
+                .windows[0]
+                .observed_at,
+            Some(expected),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn first_statusline_windows_use_the_owner_start_floor() {
+    use crate::agents::context::WindowSource;
+    use crate::agents::{AgentRateLimits, RateLimitWindow};
+    use jiff::SignedDuration;
+
+    let (_dir, runtime) = runtime();
+    let capture = Timestamp::from_second(1_700_000_100).unwrap();
+    let older = capture - SignedDuration::from_secs(60);
+    for prior in ["missing", "hook", "empty"] {
+        for (index, owner) in [
+            None,
+            Some(capture + SignedDuration::from_secs(1)),
+            Some(older),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let session = format!("{prior}-{index}");
+            if prior != "missing" {
+                let mut context = ctx(capture);
+                if prior == "empty" {
+                    context.rate_limits = Some(AgentRateLimits::default());
+                }
+                write(&runtime, "claude", &session, &context, None).unwrap();
+            }
+            let mut context = ctx(capture);
+            context.rate_limits = Some(AgentRateLimits {
+                windows: [WindowSource::BestEffort, WindowSource::Authoritative]
+                    .into_iter()
+                    .map(|source| RateLimitWindow {
+                        duration_mins: Some(if source.is_authoritative() {
+                            300
+                        } else {
+                            10_080
+                        }),
+                        used_percentage: Some(95),
+                        observed_at: Some(capture),
+                        source,
+                        ..Default::default()
+                    })
+                    .collect(),
+            });
+            write(&runtime, "claude", &session, &context, owner).unwrap();
+            let windows = read_one(&runtime, "claude", &session)
+                .unwrap()
+                .context
+                .rate_limits
+                .unwrap()
+                .windows;
+            assert_eq!(
+                windows[0].observed_at,
+                Some(owner.map_or(capture, |start| capture.min(start))),
+                "{session}"
+            );
+            assert_eq!(
+                windows[1].observed_at,
+                Some(capture),
+                "authoritative {session}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_new_window_in_a_populated_sidecar_keeps_capture_time() {
+    use crate::agents::{AgentRateLimits, RateLimitWindow};
+    use jiff::SignedDuration;
+
+    let (_dir, runtime) = runtime();
+    let capture = Timestamp::from_second(1_700_000_100).unwrap();
+    let owner = capture - SignedDuration::from_secs(60);
+    let mut context = ctx(capture);
+    context.rate_limits = Some(AgentRateLimits {
+        windows: vec![RateLimitWindow {
+            duration_mins: Some(10_080),
+            used_percentage: Some(95),
+            observed_at: Some(capture),
+            ..Default::default()
+        }],
+    });
+    write(&runtime, "claude", "session", &context, Some(owner)).unwrap();
+    let later = capture + SignedDuration::from_secs(20);
+    context.observed_at = later;
+    let windows = &mut context.rate_limits.as_mut().unwrap().windows;
+    windows[0].observed_at = Some(later);
+    windows.push(RateLimitWindow {
+        duration_mins: Some(300),
+        used_percentage: Some(2),
+        observed_at: Some(later),
+        ..Default::default()
+    });
+    write(&runtime, "claude", "session", &context, Some(owner)).unwrap();
+    let windows = read_one(&runtime, "claude", "session")
+        .unwrap()
+        .context
+        .rate_limits
+        .unwrap()
+        .windows;
+    assert_eq!(windows[0].observed_at, Some(owner));
+    assert_eq!(windows[1].observed_at, Some(later));
 }
 
 #[test]
@@ -74,7 +287,7 @@ fn turn_openers_replace_and_survive_statusline_refresh() {
     let second = crate::ids::MessageId::parse("msg_123456789abcdef0").unwrap();
 
     assert!(merge_turn_opened_by(&runtime, "claude", "sess-1", vec![first.clone()]).unwrap());
-    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
     assert_eq!(
         read_one(&runtime, "claude", "sess-1")
             .unwrap()
@@ -114,7 +327,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         }),
         ..Default::default()
     });
-    write(&runtime, "claude", "sess-1", &folded).unwrap();
+    write(&runtime, "claude", "sess-1", &folded, None).unwrap();
 
     let mut statusline = ctx(now);
     statusline.tokens = Some(crate::agents::AgentTokenUsage {
@@ -122,7 +335,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         used_percentage: Some(25),
         ..Default::default()
     });
-    write(&runtime, "claude", "sess-1", &statusline).unwrap();
+    write(&runtime, "claude", "sess-1", &statusline, None).unwrap();
     let tokens = read_one(&runtime, "claude", "sess-1")
         .unwrap()
         .context
@@ -136,7 +349,7 @@ fn session_usage_survives_whole_context_statusline_refresh() {
         Some(90)
     );
 
-    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
     assert_eq!(
         read_one(&runtime, "claude", "sess-1")
             .unwrap()
@@ -167,7 +380,7 @@ fn statusline_refresh_keeps_the_local_fold_bound_to_its_transcript() {
     record.spend_fold = Some(spend_fold);
     write_record(&runtime, &record).unwrap();
 
-    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
+    write(&runtime, "claude", "sess-1", &ctx(now), None).unwrap();
     let refreshed = read_one(&runtime, "claude", "sess-1").unwrap();
     assert_eq!(
         refreshed.transcript_path.as_deref(),
@@ -190,7 +403,7 @@ fn locally_priced_cost_deduplicates_accumulates_and_survives_statusline_refresh(
     let mut context = ctx(Timestamp::now());
     context.source = "cursor".to_owned();
     context.model_id = Some("auto".to_owned());
-    write(&runtime, "cursor", "sess-1", &context).unwrap();
+    write(&runtime, "cursor", "sess-1", &context, None).unwrap();
     let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
@@ -228,7 +441,7 @@ fn observed_cost_ownership_wins_over_later_local_accumulation() {
         total_cost_usd: Some(10.0),
         ..Default::default()
     });
-    write(&runtime, "cursor", "sess-1", &context).unwrap();
+    write(&runtime, "cursor", "sess-1", &context, None).unwrap();
     let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
@@ -261,7 +474,7 @@ fn statusline_and_locally_priced_cost_writers_serialize_without_lost_fields() {
         context.source = "cursor".to_owned();
         context.model_display_name = Some("Auto".to_owned());
         statusline_barrier.wait();
-        write(&statusline_runtime, "cursor", "sess-race", &context).unwrap();
+        write(&statusline_runtime, "cursor", "sess-race", &context, None).unwrap();
     });
     let cost_runtime = runtime.clone();
     let cost_barrier = barrier.clone();
@@ -298,7 +511,7 @@ fn statusline_and_locally_priced_cost_writers_serialize_without_lost_fields() {
 fn old_record_is_read_liveness_gating_is_the_rollups_job() {
     let (_dir, runtime) = runtime();
     let old = Timestamp::from_second(0).unwrap();
-    write(&runtime, "claude", "sess-old", &ctx(old)).unwrap();
+    write(&runtime, "claude", "sess-old", &ctx(old), None).unwrap();
 
     let all = read_all(&runtime);
 

@@ -228,7 +228,13 @@ upward-dependencies = ["address"]
 # HookCapability::hook_inherits_env and definition::hook_owner_env restore scrubbed hook runners before path resolution (+2).
 # payload::is_task_notification_turn shares raw-notice recognition with human turn classification (+1).
 # ChildStall shares the child predicate's mid-turn / never-started verdict (+1).
-surface-budget = 1099
+# AgentDefinition::context_owner_start shares verified statusline-owner provenance with the CLI (+1).
+surface-budget = 1100
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::AgentDefinition::context_owner_start"
+reason = "Statusline persistence needs the checked owner's start without exposing private process-start readers or reading process state in store code."
 
 [[verdict]]
 kind = "item"

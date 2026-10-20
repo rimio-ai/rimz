@@ -42,7 +42,7 @@ fn warm_fetch_reads_only_agent_keys_despite_orphan_contexts() {
     let now: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
     for slot in 0..200 {
         let id = format!("sess-{slot}");
-        agent_context::write(runtime, "claude", &id, &context_at(now)).unwrap();
+        agent_context::write(runtime, "claude", &id, &context_at(now), None).unwrap();
         rimz::store::subagent_context::update(runtime, "claude", &id, |_| {
             (
                 serde_json::from_value(serde_json::json!({
@@ -107,7 +107,8 @@ fn warm_sidecar_read_is_one_stat_per_file() {
     let now = Timestamp::now();
     let ids: Vec<String> = (0..FLEET).map(|i| format!("sess-{i:02}")).collect();
     for id in &ids {
-        agent_context::write(&runtime, "claude", id, &context_at(now)).expect("write context");
+        agent_context::write(&runtime, "claude", id, &context_at(now), None)
+            .expect("write context");
         agent_activity::touch(
             &runtime,
             "claude",

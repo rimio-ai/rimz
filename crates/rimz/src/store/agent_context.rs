@@ -49,16 +49,18 @@ impl sidecar::SidecarRecord for AgentContextRecord {
 
 /// Persist (latest-wins) one session's context from a CLI producer.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
-/// [`atomic::write_temp_then_rename_cache`].
+/// [`atomic::write_temp_then_rename_cache`]. `owner_started_at` is the
+/// verified owner process's start, the floor for a sidecar's first windows.
 pub fn write(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
     context: &AgentContext,
+    owner_started_at: Option<Timestamp>,
 ) -> Result<(), atomic::AtomicErr> {
     let observed_at = context.observed_at;
     update_record(runtime, kind, agent_id, observed_at, |record, _| {
-        record.apply_context_refresh(kind, agent_id, context.clone())
+        record.apply_context_refresh(kind, agent_id, context.clone(), owner_started_at)
     })
     .map(|_| ())
 }

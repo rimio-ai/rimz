@@ -87,8 +87,43 @@ impl AgentContextRecord {
         kind: &str,
         agent_id: &str,
         context: AgentContext,
+        owner_started_at: Option<Timestamp>,
     ) -> bool {
         let mut context = context;
+        let first_observed_at = self
+            .context
+            .rate_limits
+            .as_ref()
+            .is_none_or(|limits| limits.windows.is_empty())
+            .then_some(owner_started_at)
+            .flatten()
+            .map(|start| context.observed_at.min(start));
+        for window in context
+            .rate_limits
+            .iter_mut()
+            .flat_map(|limits| &mut limits.windows)
+        {
+            if window.source.is_authoritative() {
+                continue;
+            }
+            if let Some(first_observed_at) = first_observed_at {
+                window.observed_at = Some(first_observed_at);
+                continue;
+            }
+            let prior = self.context.rate_limits.as_ref().and_then(|limits| {
+                limits
+                    .windows
+                    .iter()
+                    .find(|prior| prior.key() == window.key())
+            });
+            if let Some(prior) = prior
+                && prior.observed_at.is_some()
+                && prior.used_percentage == window.used_percentage
+                && prior.resets_at == window.resets_at
+            {
+                window.observed_at = prior.observed_at;
+            }
+        }
         let observed_cost = context.cost.is_some();
         context.turn_opened_by = self.context.turn_opened_by.clone();
         if context.cost.is_none() {

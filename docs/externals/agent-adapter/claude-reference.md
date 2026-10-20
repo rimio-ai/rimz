@@ -444,6 +444,8 @@ Gateway dollar amounts refresh about every five minutes while requests run. They
 
 Absent and null are distinct. `session_name`, `prompt_id`, `workspace.git_worktree`, `workspace.repo`, `effort`, `vim`, `agent`, `remote`, `pr`, `pr.review_state`, `pr.kind`, and `worktree` are absent until their data exists. `rate_limits` appears only for Pro and Max subscribers, or behind a gateway with a spend limit, after the first API response; each window can be absent on its own, and Claude Code drops a window once its `resets_at` passes. `prompt_cache` appears after the first main-conversation response. `context_window.current_usage` is `null` before the first API call and again after `/compact` until the next call; `used_percentage` and `remaining_percentage` can be `null` early in a session.
 
+Binary observation in Claude Code 2.1.304: statusline `rate_limits.five_hour` and `seven_day` come from per-process `anthropic-ratelimit-unified-*` response-header state, not the OAuth usage cache. An idle session replays its last values until a qualifying response refreshes them. The startup quota probe and quota auto-resume probe refresh that state outside a turn, as does title generation; `spend_limit` can also be enriched from `/api/oauth/usage`.
+
 ### Prompt cache fields
 
 Timestamps are Unix epoch seconds ([prompt cache fields](https://code.claude.com/docs/en/statusline#prompt-cache-fields)).

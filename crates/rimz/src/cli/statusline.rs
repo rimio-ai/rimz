@@ -125,6 +125,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
         agent.spec().kind,
         observation.agent_id.as_str(),
         &observation.context,
+        agent.context_owner_start(),
     )
     .context("writing agent-context sidecar")?;
     // Push the update so the `$`/token figure repaints within a wakeup rather

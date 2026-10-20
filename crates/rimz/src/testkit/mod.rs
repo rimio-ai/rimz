@@ -365,6 +365,7 @@ pub mod fleet {
                     "observed_at": "2026-01-01T00:00:00Z",
                 }))
                 .map_err(io::Error::other)?,
+                None,
             )
             .map_err(io::Error::other)?;
         }
