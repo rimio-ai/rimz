@@ -534,8 +534,6 @@ fn codex_commands_and_permission_args_match_run_posture() {
             "on-request",
             "-c",
             r#"approvals_reviewer="auto_review""#,
-            "-c",
-            r#"default_permissions="rimz""#,
         ]
     );
     assert_eq!(
@@ -548,8 +546,6 @@ fn codex_commands_and_permission_args_match_run_posture() {
             "on-request",
             "-c",
             r#"approvals_reviewer="user""#,
-            "-c",
-            r#"default_permissions="rimz""#
         ]
     );
     assert_eq!(
@@ -569,7 +565,7 @@ fn codex_commands_and_permission_args_match_run_posture() {
 }
 
 #[test]
-fn host_permission_profile_inherits_and_quotes_room_roots() {
+fn host_room_grants_follow_the_users_permission_selection() {
     let home = tempfile::tempdir().unwrap();
     let config = home.path().join("config.toml");
     let env = BTreeMap::from([("RIMZ_CODEX_CONFIG".into(), config.display().to_string())]);
@@ -578,51 +574,165 @@ fn host_permission_profile_inherits_and_quotes_room_roots() {
         PathBuf::from("/run/room/quote\""),
         PathBuf::from("/run/shared\\root"),
     ];
-    for (content, parent) in [
-        ("", ":workspace"),
-        ("default_permissions = 'mine'", "mine"),
-        ("default_permissions = 'rimz'", ":workspace"),
+    let legacy_grant = |user_roots: &[&str]| {
+        let mut values = toml_edit::Array::new();
+        for root in user_roots {
+            values.push(*root);
+        }
+        for root in &roots {
+            values.push(root.to_str().unwrap());
+        }
+        vec![
+            "-c".to_owned(),
+            format!("sandbox_workspace_write.writable_roots={values}"),
+        ]
+    };
+    let profile_grant = |name: &str| {
+        let mut values = toml_edit::InlineTable::new();
+        for root in &roots {
+            values.insert(root.to_str().unwrap(), true.into());
+        }
+        vec![
+            "-c".to_owned(),
+            format!("permissions.{name}.workspace_roots={values}"),
+        ]
+    };
+    let workspace_grant = roots
+        .iter()
+        .flat_map(|root| ["--add-dir".to_owned(), root.display().to_string()])
+        .collect::<Vec<_>>();
+    let dev = "default_permissions = 'dev'\n[permissions.dev]\nextends = ':workspace'\nnetwork = { enabled = true }";
+    let mut failures = Vec::new();
+    for (content, overrides, expected) in [
+        ("", vec![], legacy_grant(&[])),
+        (
+            "[sandbox_workspace_write]\nwritable_roots = ['/u']\nnetwork_access = true",
+            vec![],
+            legacy_grant(&["/u"]),
+        ),
+        (
+            "sandbox_mode = 'workspace-write'",
+            vec![],
+            legacy_grant(&[]),
+        ),
+        ("sandbox_mode = 'read-only'", vec![], vec![]),
+        ("sandbox_mode = 'danger-full-access'", vec![], vec![]),
+        (
+            "default_permissions = ':workspace'",
+            vec![],
+            workspace_grant,
+        ),
+        ("default_permissions = ':read-only'", vec![], vec![]),
+        (
+            "default_permissions = ':danger-full-access'",
+            vec![],
+            vec![],
+        ),
+        ("default_permissions = ':other'", vec![], vec![]),
+        (dev, vec![], profile_grant("dev")),
+        ("default_permissions = 'dev team'", vec![], vec![]),
+        (
+            "default_permissions = 'Dev_2-x'",
+            vec![],
+            profile_grant("Dev_2-x"),
+        ),
+        (dev, vec!["--sandbox", "danger-full-access"], vec![]),
+        (dev, vec!["-s", "read-only"], vec![]),
+        (dev, vec!["--sandbox=workspace-write"], legacy_grant(&[])),
+        (
+            dev,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--sandbox",
+                "workspace-write",
+            ],
+            vec![],
+        ),
+        (
+            dev,
+            vec!["-c", "sandbox_mode=\"workspace-write\""],
+            legacy_grant(&[]),
+        ),
+        (dev, vec!["--approve-for-me"], legacy_grant(&[])),
+        (dev, vec!["--not-so-yolo"], legacy_grant(&[])),
+        (
+            "",
+            vec!["--approve-for-me", "-c", "default_permissions=\"dev\""],
+            profile_grant("dev"),
+        ),
+        ("", vec!["--profile", "x"], vec![]),
+        ("", vec!["-p=x"], vec![]),
+        (dev, vec!["--profile=x"], vec![]),
+        (
+            "",
+            vec!["--profile", "x", "-c", "sandbox_mode=workspace-write"],
+            legacy_grant(&[]),
+        ),
+        ("default_permissions = 'a.b'", vec![], vec![]),
+        ("", vec!["--config=default_permissions=a.b"], vec![]),
+        (
+            "sandbox_mode = 'read-only'\ndefault_permissions = 'dev'",
+            vec![],
+            profile_grant("dev"),
+        ),
+        (
+            dev,
+            vec!["-s", "read-only", "--sandbox=workspace-write"],
+            legacy_grant(&[]),
+        ),
+        (
+            dev,
+            vec![
+                "-c",
+                "sandbox_mode=workspace-write",
+                "--config=sandbox_mode=read-only",
+            ],
+            vec![],
+        ),
+        (
+            "",
+            vec![
+                "-c",
+                "default_permissions=':read-only'",
+                "--config",
+                "default_permissions=dev",
+            ],
+            profile_grant("dev"),
+        ),
+        (
+            "",
+            vec![
+                "-c",
+                "default_permissions=dev",
+                "-c",
+                "sandbox_mode=read-only",
+            ],
+            profile_grant("dev"),
+        ),
+        (
+            "[sandbox_workspace_write]\nwritable_roots = ['/base']",
+            vec![
+                "-c",
+                "sandbox_workspace_write.writable_roots=['/first']",
+                "--config=sandbox_workspace_write.writable_roots=['/last']",
+            ],
+            legacy_grant(&["/last"]),
+        ),
     ] {
         std::fs::write(&config, content).unwrap();
-        let mut args = vec!["-c".into(), r#"default_permissions="rimz""#.into()];
+        let mut args = overrides
+            .iter()
+            .map(|arg| (*arg).to_owned())
+            .collect::<Vec<_>>();
         CodexAdapter.configure_room_permissions(&mut args, &env, &roots);
-        assert_eq!(args.len(), 4);
-        assert_eq!(args[2], "-c");
-        let profile = args[3].parse::<toml::Table>().unwrap();
-        assert_eq!(
-            profile["permissions"]["rimz"],
-            toml::Value::Table(toml::Table::from_iter([
-                ("extends".into(), toml::Value::String(parent.into())),
-                (
-                    "filesystem".into(),
-                    toml::Value::Table(
-                        roots
-                            .iter()
-                            .map(|root| (
-                                root.to_str().unwrap().into(),
-                                toml::Value::String("write".into())
-                            ))
-                            .collect()
-                    )
-                ),
-                (
-                    "network".into(),
-                    toml::Value::Table(toml::Table::from_iter([(
-                        "enabled".into(),
-                        toml::Value::Boolean(false)
-                    )]))
-                ),
-            ]))
-        );
+        if args[..overrides.len()] != overrides || args[overrides.len()..] != expected {
+            failures.push(format!(
+                "config={content:?}, args={overrides:?}: appended {:?}, expected {expected:?}",
+                &args[overrides.len()..]
+            ));
+        }
     }
-    for overrides in [
-        vec![],
-        vec!["-c".into(), "default_permissions='mine'".into()],
-    ] {
-        let mut args = overrides.clone();
-        CodexAdapter.configure_room_permissions(&mut args, &env, &roots);
-        assert_eq!(args, overrides);
-    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]
