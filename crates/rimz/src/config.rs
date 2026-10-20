@@ -401,7 +401,7 @@ pub struct ConfigNotices {
     pub unknown_keys: Vec<UnknownConfigKey>,
     pub definition_errors: Vec<definitions::DefinitionErr>,
     pub failed_definitions: BTreeMap<String, BTreeSet<PathBuf>>,
-    /// One warning per setting that asked for sandbox isolation on a machine without it, now running on the host.
+    /// One warning per setting that asked for scoped isolation on a machine without it, now running on the host.
     pub host_isolation_fallback: Vec<String>,
     pub hibernate_unavailable: Vec<String>,
 }
@@ -810,11 +810,11 @@ impl MachineConfig {
         sources
     }
 
-    /// Sandbox isolation is Linux bubblewrap, so elsewhere a configured `sandbox` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, for the machine policy, and again after, for the loaded profiles; the definition skill check resolves host off Linux on its own.
+    /// Scoped isolation is Linux bubblewrap, so elsewhere a configured `scoped` falls back to `host` with a notice rather than refusing every launch. Idempotent: it runs before definitions load, for the machine policy, and again after, for the loaded profiles; the definition skill check resolves host off Linux on its own.
     fn fall_back_to_host_isolation(&mut self, notices: &mut ConfigNotices) {
         let mut warn = |setting: &str| {
             notices.host_isolation_fallback.push(format!(
-                "warning: {setting} = \"sandbox\" needs Linux bubblewrap; running agents on the host instead"
+                "warning: {setting} = \"scoped\" needs Linux bubblewrap; running agents on the host instead"
             ));
         };
         if self.agents.isolation.is_scoped() {
@@ -828,7 +828,7 @@ impl MachineConfig {
             .iter_mut()
             .chain(self.subagents.profiles.0.iter_mut());
         for (name, profile) in profiles {
-            if profile.isolation == Some(Isolation::Scoped) {
+            if profile.isolation.is_some_and(Isolation::is_scoped) {
                 profile.isolation = Some(Isolation::Host);
                 warn(&format!("profile `{name}` isolation"));
             }
