@@ -1000,7 +1000,7 @@ fn failed_definitions_refuse_only_the_requested_launch() {
             None
         ),
         Err(ResolveLaunchError::Layout(
-            crate::harness::spec::LayoutErr::UnknownTeam { .. }
+            crate::harness::spec::LayoutErr::UnknownSpec(_)
         ))
     ));
     assert!(matches!(

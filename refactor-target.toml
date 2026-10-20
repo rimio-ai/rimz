@@ -854,7 +854,8 @@ path = "crates/rimz/src/harness"
 # WhenTerm::reads_forge lets condition presentation classify a leaf without reparsing it (+1).
 # plan::{PermissionClamp, PermissionClampSource, ChildPermissionErr, check_child_permission_mode}
 # carry child-mode notes and the parent-message resume guard across the library/CLI seam (+4).
-surface-budget = 932
+# UnknownSpec, SpecCandidate, SpecKind, choices and team_summary serve CLI rendering (+5).
+surface-budget = 937
 
 [[verdict]]
 kind = "item"
@@ -4773,6 +4774,31 @@ reason = "Returned by pub decode_exec_envelope, the production exec decoder; atl
 kind = "item"
 key = "harness::spec::LayoutErr"
 reason = "Source field of pub ConfigErr::Agents, EffectiveConfigErr::Agents and ResolveLaunchError::Layout; private_interfaces refuses pub(crate) (pass 20a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::UnknownSpec"
+reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::SpecCandidate"
+reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::SpecKind"
+reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::UnknownSpec::choices"
+reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
+
+[[verdict]]
+kind = "item"
+key = "harness::spec::team_summary"
+reason = "Shares resolver-owned launch choices and facts with scene-specific CLI error rendering."
 
 [[verdict]]
 kind = "item"
