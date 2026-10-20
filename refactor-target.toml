@@ -3752,6 +3752,21 @@ reason = "Agents and teams render the same oldest-first attention block."
 
 [[verdict]]
 kind = "item"
+key = "cli::usage::scene_verbs"
+reason = "Shares scene discovery and presentation without duplicating resolver facts or profile-card summaries."
+
+[[verdict]]
+kind = "item"
+key = "cli::profile_report::profile_summary"
+reason = "Shares scene discovery and presentation without duplicating resolver facts or profile-card summaries."
+
+[[verdict]]
+kind = "item"
+key = "cli::render::launch_suggestions::agents_error"
+reason = "Shares scene discovery and presentation without duplicating resolver facts or profile-card summaries."
+
+[[verdict]]
+kind = "item"
 key = "cli::teams::list::instance_state"
 reason = "Catalog and wait diagnostics fold the same typed attention statuses."
 

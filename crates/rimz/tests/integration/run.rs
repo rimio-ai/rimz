@@ -4946,7 +4946,8 @@ fn bare_word_naming_a_live_agent_refuses_with_show_and_launch() {
     let out = run_in(&["teams", "planner"], None);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !stderr.contains("names a live agent") && !stderr.contains("unknown team"),
+        !stderr.contains("names a live agent")
+            && !stderr.contains("no team, profile, or command named"),
         "`rimz teams <name>` launches through the explicit verb, past the bare-word check: {stderr}"
     );
 }

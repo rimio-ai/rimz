@@ -31,7 +31,7 @@ Progress for a long wait goes to stderr in both human and `--json` modes, so std
 
 ## A bare word never silently launches
 
-A scene's positional launch (`rimz agents <SPEC>`, `rimz teams <TEAM>`) is a shortcut for `launch`, and a word that could mean something else refuses with exit 2 and both readings. A word naming a live agent points at `show` and at the explicit launch; a team-scene word that is neither a command nor a configured team lists both sets (`crates/rimz/src/cli/teams/mod.rs::guard_launch`). The explicit `launch` verb is the escape that sends any prompt literally.
+A scene's positional launch (`rimz agents <SPEC>`, `rimz teams <TEAM>`) is a shortcut for `launch`, and a word that could mean something else refuses with exit 2 and both readings. A word naming a live agent points at `show` and at the explicit launch. An unresolved agents-scene word refuses with exit 2 and nearby verbs or launch names, or the compact launch catalog when none is close (`crates/rimz/src/cli/agents_cmd/mod.rs::run`). A team-scene word that is neither a command nor a configured team lists both sets (`crates/rimz/src/cli/teams/mod.rs::guard_launch`). Explicit `launch` excludes verbs from suggestions, keeps exit 1 for an unknown target, and is the escape that sends any prompt literally.
 
 ## One vocabulary
 

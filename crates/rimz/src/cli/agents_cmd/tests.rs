@@ -1333,6 +1333,33 @@ fn refresh_targets_honor_channel_filter() {
 
 mod launch_options {
     use super::*;
+    #[test]
+    fn unknown_launch_errors_use_the_scene_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        for bare in [true, false] {
+            let args = parse_agents(&["rimz", "never-defined-agent"]);
+            let error =
+                resolve_and_validate(&args, &MachineConfig::default(), dir.path()).unwrap_err();
+            let error = crate::cli::render::launch_suggestions::agents_error(error, bare);
+            assert_eq!(
+                error.downcast_ref::<UsageError>().is_some(),
+                bare,
+                "{error:#}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("no team, profile, or command named `never-defined-agent`"),
+                "{error:#}"
+            );
+        }
+        let error = crate::cli::render::launch_suggestions::agents_error(
+            anyhow::anyhow!("room unavailable"),
+            true,
+        );
+        assert!(error.downcast_ref::<UsageError>().is_none());
+        assert_eq!(error.to_string(), "room unavailable");
+    }
 
     #[test]
     fn tier_override_changes_the_interactive_launch_runtime() {
