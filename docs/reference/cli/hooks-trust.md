@@ -31,12 +31,12 @@ The summary after the agent name says what install found:
 | Summary | Meaning |
 | --- | --- |
 | `installed N hooks` | The agent had no RimZ hooks. |
-| `refreshed N hooks` | A managed integration file needed an upgrade, or Codex's routine-command rules needed adding, updating, or removing. |
+| `refreshed N hooks` | A managed integration file or Codex hook definition needed an upgrade, or Codex's routine-command rules needed adding, updating, or removing. |
 | `hooks up to date (N)` | RimZ hooks were already installed. The row carries no file annotation. |
 
 The annotation is `(new file)` when install created the file, `(updated existing config)` when it edited one, and `(removed)` when it deleted one. An agent with two files prints the second as an indented `config → PATH` line.
 
-Codex runs a new hook only after you trust it inside Codex. When its installed hooks are still untrusted, install and `rimz start` print `codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks`, and the `HOOKS` row of `rimz doctor` names the same fix.
+Codex runs a new or changed hook only after you trust it inside Codex. When its installed hooks are untrusted, including outdated trust, install and `rimz start` print `codex hooks are installed but untrusted (…) — codex silently skips them; run /hooks inside codex and trust the RimZ hooks`, and the `HOOKS` row of `rimz doctor` names the same fix.
 
 ### What install writes
 

@@ -128,6 +128,151 @@ const EXPECTED_EVENTS: &[&str] = &[
     "PostCompact",
 ];
 
+const FROZEN_HOOK_HASHES: &[&str] = &[
+    "sha256:136902fdc7264293007ba1d82c03e76d4aeafda72250472ee4b1a0ddd59d2ab8",
+    "sha256:5506e35cb842950b869180523bb7beb3710969701d0431aaa6ab24f8757fdd14",
+    "sha256:d0dc93c2c64a6bda6be6486b1739a6d4c56211c53e3e29ed1cbd0e4efdd52b60",
+    "sha256:e67579f2ed175a0230b40cdcb397c175145e564fde991f875166037951b08a39",
+    "sha256:46ad95d6057c0f5c3f37a0b376043f9a5e320471eb67d1389e17820136e7553f",
+    "sha256:3428ea05c68b651e3f34ec3b12ac87c530977953c8a5da154adae216cb340fa1",
+    "sha256:5f93720ac0cbd07d42103901781552585da00c9ced9c98bd4b53a6202927324a",
+    "sha256:8cbcc396ac99089eb6eae1600892809dbc4eaf8291a6029750606d8b9502d9cd",
+    "sha256:162b42f5b07acdda94457b41a84a13e51a74df7b950ee83273019f44e660a75a",
+    "sha256:7c992cccab58806f8da76a52065815b044b8f0a79598c04c4415a053986785e7",
+    "sha256:b069cce46d1ee5b09dceea884af478cb1871cf677425ad2cd7af632ba925387c",
+];
+
+#[test]
+fn installed_hook_hashes_are_frozen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    install_into(&path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let root: toml::Table = text.parse().unwrap();
+    assert_eq!(EXPECTED_EVENTS.len(), FROZEN_HOOK_HASHES.len());
+    for (event, expected) in EXPECTED_EVENTS.iter().zip(FROZEN_HOOK_HASHES) {
+        let group = &root["hooks"][*event][0];
+        assert_eq!(
+            super::super::install::hook_hash(event, group, &group["hooks"][0]).as_deref(),
+            Some(*expected),
+            "{event}: changing this entry re-prompts every Codex user for hook trust and stalls unattended launches until they re-trust"
+        );
+    }
+    install_into(&path).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+}
+
+#[test]
+fn untrusted_hook_hashes_match_the_on_disk_definition() {
+    let old_hash = "sha256:c845eca30c0bc24033e916df310b0e57a9d6bea2807d9c5541ee78ad737d847b";
+    let frozen_hash = FROZEN_HOOK_HASHES[4];
+    for (label, old_definition, stored_hash, additional_context, untrusted) in [
+        (
+            "matching frozen entry",
+            false,
+            frozen_hash.into(),
+            false,
+            false,
+        ),
+        (
+            "frozen trust over old entry",
+            true,
+            frozen_hash.into(),
+            false,
+            true,
+        ),
+        (
+            "old trust over frozen entry",
+            false,
+            old_hash.into(),
+            false,
+            true,
+        ),
+        ("matching old entry", true, old_hash.into(), false, false),
+        (
+            "unsupported context limit",
+            false,
+            frozen_hash.into(),
+            true,
+            true,
+        ),
+        (
+            "non-string trust",
+            false,
+            toml::Value::Boolean(true),
+            false,
+            true,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        install_into(&path).unwrap();
+        trust_event(&path, "stop");
+        let mut root: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        let mut handler = toml::Table::from_iter([
+            ("type".into(), "command".into()),
+            ("command".into(), RIMZ_HOOK_COMMAND.into()),
+            ("timeout".into(), if old_definition { 10 } else { 2 }.into()),
+        ]);
+        if old_definition {
+            handler.insert("statusMessage".into(), "Routing Stop through RimZ".into());
+        }
+        if additional_context {
+            handler.insert("additionalContextLimit".into(), 100.into());
+        }
+        root["hooks"]["Stop"][0]["hooks"][0] = toml::Value::Table(handler);
+        let key = format!("{}:stop:0:0", path.display());
+        root["hooks"]["state"][key.as_str()]["trusted_hash"] = stored_hash;
+        std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
+        assert_eq!(
+            untrusted_hook_events_at(&path)
+                .iter()
+                .any(|event| event == "Stop"),
+            untrusted,
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn hook_definition_drift_is_an_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let env = BTreeMap::from([("CODEX_HOME".into(), dir.path().display().to_string())]);
+    let integration = CodexAdapter.managed_integration().unwrap();
+    let options = crate::agents::HookInstallOptions {
+        allow_routine_rimz: false,
+    };
+    install_into(&path).unwrap();
+    assert!(!integration.upgrade_available(&env, options));
+    for (field, value) in [
+        ("timeout", 10.into()),
+        ("statusMessage", "Routing Stop through RimZ".into()),
+        ("additionalContextLimit", 100.into()),
+        ("async", "invalid".into()),
+    ] {
+        let mut root: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        root["hooks"]["Stop"][0]["hooks"][0]
+            .as_table_mut()
+            .unwrap()
+            .insert(field.into(), value);
+        std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
+        assert!(
+            integration.upgrade_available(&env, options),
+            "{field} drift must be offered as an upgrade"
+        );
+        install_into(&path).unwrap();
+        assert!(!integration.upgrade_available(&env, options));
+    }
+    let mut root: toml::Table = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    let user: toml::Value =
+        toml::from_str("hooks = [{type = 'command', command = 'echo user', timeout = 10}]")
+            .unwrap();
+    root["hooks"]["Stop"].as_array_mut().unwrap().push(user);
+    std::fs::write(&path, toml::to_string(&root).unwrap()).unwrap();
+    assert!(!integration.upgrade_available(&env, options));
+}
+
 #[test]
 fn install_includes_shared_routine_rules_golden() {
     let dir = tempfile::tempdir().unwrap();
@@ -327,8 +472,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.Interrupt.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing Interrupt through RimZ"
-        timeout = 1
+        timeout = 2
         type = "command"
 
         [[hooks.PermissionRequest]]
@@ -336,7 +480,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.PermissionRequest.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing PermissionRequest through RimZ"
         timeout = 2
         type = "command"
 
@@ -345,7 +488,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.PostCompact.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing PostCompact through RimZ"
         timeout = 2
         type = "command"
 
@@ -354,7 +496,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.PostToolUse.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing PostToolUse through RimZ"
         timeout = 2
         type = "command"
 
@@ -363,7 +504,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.PreCompact.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing PreCompact through RimZ"
         timeout = 2
         type = "command"
 
@@ -372,7 +512,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.PreToolUse.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing PreToolUse through RimZ"
         timeout = 2
         type = "command"
 
@@ -381,7 +520,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.SessionStart.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing SessionStart through RimZ"
         timeout = 2
         type = "command"
 
@@ -389,7 +527,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.Stop.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing Stop through RimZ"
         timeout = 2
         type = "command"
 
@@ -398,7 +535,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.SubagentStart.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing SubagentStart through RimZ"
         timeout = 2
         type = "command"
 
@@ -407,7 +543,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.SubagentStop.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing SubagentStop through RimZ"
         timeout = 2
         type = "command"
 
@@ -415,7 +550,6 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
 
         [[hooks.UserPromptSubmit.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
-        statusMessage = "Routing UserPromptSubmit through RimZ"
         timeout = 2
         type = "command"
         "###);
@@ -625,16 +759,14 @@ command = "echo user"
     assert!(hooks_installed_at(&path));
 }
 
-/// Append a `[hooks.state]` trust entry for `token`, key-shaped exactly as
-/// Codex writes it: `"<config-path>:<event_token>:<i>:<j>"`.
+/// Trust only the event named by Codex's state-key token.
 fn trust_event(path: &std::path::Path, token: &str) {
-    let entry = format!(
-        "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-        path.display(),
-    );
-    let mut text = std::fs::read_to_string(path).unwrap();
-    text.push_str(&entry);
-    std::fs::write(path, text).unwrap();
+    let excluded = EXPECTED_EVENTS
+        .iter()
+        .copied()
+        .filter(|event| snake_event_token(event) != token)
+        .collect::<Vec<_>>();
+    crate::agents::trust_hook_config_for_test(path, &excluded).unwrap();
 }
 
 #[test]

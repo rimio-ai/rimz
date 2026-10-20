@@ -1674,27 +1674,8 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
             adapter.install_hooks(&ambient, Default::default()).unwrap();
         }
         if matches!(hooks, Hooks::Wired) && kind == "codex" {
-            // Codex keys a trusted hook by config path and lower_snake event.
             let config = home.path().join("config.toml");
-            let mut text = std::fs::read_to_string(&config).unwrap();
-            for event in adapter
-                .managed_integration()
-                .unwrap()
-                .untrusted_preflight_hooks(&ambient)
-            {
-                let token = event.chars().fold(String::new(), |mut token, c| {
-                    if c.is_ascii_uppercase() && !token.is_empty() {
-                        token.push('_');
-                    }
-                    token.push(c.to_ascii_lowercase());
-                    token
-                });
-                text.push_str(&format!(
-                    "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-                    config.display()
-                ));
-            }
-            std::fs::write(&config, text).unwrap();
+            crate::agents::trust_hook_config_for_test(&config, &["Interrupt"]).unwrap();
         }
         effective.runtime_env = flag;
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked(kind), Vec::new());

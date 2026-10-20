@@ -4185,25 +4185,10 @@ fn trust_codex_hooks(env: &Env) {
         "\n[projects.{}]\ntrust_level = \"trusted\"\n",
         toml::Value::String(env.project_root.display().to_string()),
     ));
-    // Leave forward-compatible Interrupt advisory to exercise preflight.
-    for token in [
-        "session_start",
-        "user_prompt_submit",
-        "subagent_start",
-        "subagent_stop",
-        "stop",
-        "permission_request",
-        "pre_tool_use",
-        "post_tool_use",
-        "pre_compact",
-        "post_compact",
-    ] {
-        text.push_str(&format!(
-            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-            config.display(),
-        ));
-    }
     std::fs::write(&config, text).expect("write trust state");
+    // Leave forward-compatible Interrupt advisory to exercise preflight.
+    rimz::agents::trust_hook_config_for_test(&config, &["Interrupt"])
+        .expect("trust installed preflight hooks");
 }
 
 fn trust_agent_path(env: &Env, agent: &'static str, path: &OsStr) {

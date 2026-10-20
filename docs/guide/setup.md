@@ -74,7 +74,7 @@ rimz hooks uninstall            # remove every RimZ-managed hook and restore any
 
 With no agent named, install covers the eighteen built-in adapters whose binaries RimZ finds here, skipping any whose install preconditions fail; naming one attempts that kind and reports any refusal. Muse needs a readable version of at least 1.4.9 even for an explicit install. Rerunning is safe either way: RimZ reclaims its own entries and writes the current set again, so a hook block you disturbed by hand comes back. Which files each agent takes, and what uninstall restores, is [what install writes](../reference/cli/hooks-trust.md#what-install-writes).
 
-Some agents gate a newly installed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them.
+Some agents gate a new or changed hook behind their own trust prompt, Codex among them. RimZ cannot grant that on your behalf, so when it sees installed-but-untrusted hooks, including outdated trust, it prints the exact fix, and the `HOOKS` row of `rimz doctor` repeats it until you run `/hooks` inside Codex and trust them. The upgrade to RimZ's frozen Codex hooks needs one final **Trust all** per account; subsequent RimZ updates keep that definition unchanged.
 
 ## Truecolor and Nerd Font icons
 

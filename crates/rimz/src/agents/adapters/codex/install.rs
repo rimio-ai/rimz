@@ -130,6 +130,9 @@ impl ManagedIntegration for CodexManagedIntegration {
         login_env: &BTreeMap<String, String>,
         options: crate::agents::HookInstallOptions,
     ) -> bool {
+        if codex_config_path(login_env).is_ok_and(|path| hook_definition_drift_at(&path)) {
+            return true;
+        }
         let Ok(path) = codex_rules_path(login_env) else {
             return false;
         };
@@ -269,14 +272,9 @@ pub(super) fn managed_artifacts_at(path: &Path) -> bool {
     })
 }
 
-/// RimZ-installed hook events Codex has not yet trusted. Codex records trust
-/// per hook-definition hash under `[hooks.state]`
-/// (`"<config-path>:<event_token>:<i>:<j>"` keys) and **silently skips** an
-/// untrusted hook, so an installed-but-untrusted event is a dead channel only
-/// the user can open (`/hooks` inside Codex). Trust requires an exact raw
-/// group/handler slot for a current RimZ command, with `trusted_hash` present
-/// and `enabled` not false. A hash mismatch is Codex's to re-flag; mirroring
-/// its hash algorithm would couple RimZ to an upstream internal.
+/// RimZ-installed hook events Codex has not trusted for their current definition. Codex records trust per hook-definition hash under `[hooks.state]` (`"<config-path>:<event_token>:<i>:<j>"` keys) and silently skips an untrusted hook, so only the user can open that channel (`/hooks` inside Codex).
+///
+/// Trust requires an exact raw group/handler slot for a current RimZ command, with a string `trusted_hash` matching the on-disk handler's normalized hash and `enabled` not false. Unsupported handler fields yield no hash and therefore no trust.
 pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
     untrusted_hook_events(path, |_| true)
 }
@@ -304,26 +302,32 @@ fn untrusted_hook_events(path: &Path, include: impl Fn(&HookEventSpec) -> bool) 
         .filter(|hook| {
             let slots = rimz_hook_slots(&root, hook.event);
             let token = snake_event_token(hook.event);
-            let is_trusted = |group, handler| {
+            let is_trusted = |slot: &HookSlot<'_>| {
+                let Some(hash) = hook_hash(hook.event, slot.group, slot.handler) else {
+                    return false;
+                };
                 [Some(path), canonical.as_deref()]
                     .into_iter()
                     .flatten()
                     .any(|prefix| {
-                        let key = format!("{}:{token}:{group}:{handler}", prefix.display());
+                        let key = format!(
+                            "{}:{token}:{}:{}",
+                            prefix.display(),
+                            slot.group_index,
+                            slot.handler_index
+                        );
                         state
                             .and_then(|state| state.get(&key))
                             .and_then(toml::Value::as_table)
                             .is_some_and(|entry| {
-                                entry.contains_key("trusted_hash")
+                                entry.get("trusted_hash").and_then(toml::Value::as_str)
+                                    == Some(hash.as_str())
                                     && entry.get("enabled").and_then(toml::Value::as_bool)
                                         != Some(false)
                             })
                     })
             };
-            !slots.is_empty()
-                && !slots
-                    .iter()
-                    .any(|&(group, handler)| is_trusted(group, handler))
+            !slots.is_empty() && !slots.iter().any(is_trusted)
         })
         .map(|hook| hook.event.to_owned())
         .collect()
@@ -347,13 +351,6 @@ pub(super) fn snake_event_token(event: &str) -> String {
 }
 
 /// Codex 0.163.0's command-handler hash, conservatively rejecting unsupported fields.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Trust checks adopt the independently pinned mirror next."
-    )
-)]
 pub(super) fn hook_hash(event: &str, group: &toml::Value, handler: &toml::Value) -> Option<String> {
     let handler = handler.as_table()?;
     if handler.get("type")?.as_str()? != "command" || handler.contains_key("additionalContextLimit")
@@ -402,6 +399,69 @@ pub(super) fn hook_hash(event: &str, group: &toml::Value, handler: &toml::Value)
     }
     let json = serde_json::to_vec(&identity).ok()?;
     Some(format!("sha256:{}", hex::encode(Sha256::digest(json))))
+}
+
+fn hook_definition_drift_at(path: &Path) -> bool {
+    let Ok(root) = read_existing_table(path) else {
+        return false;
+    };
+    CODEX_HOOKS.iter().any(|hook| {
+        let frozen = frozen_hook_group(hook);
+        let expected = hook_hash(hook.event, &frozen, &frozen["hooks"][0]);
+        rimz_hook_slots(&root, hook.event).iter().any(|slot| {
+            hook_hash(hook.event, slot.group, slot.handler)
+                .is_none_or(|hash| Some(hash) != expected)
+        })
+    })
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub(in crate::agents) fn trust_hook_config_for_test(
+    path: &Path,
+    excluded_events: &[&str],
+) -> Result<()> {
+    let mut root = read_existing_table(path)?;
+    let mut entries = toml::Table::new();
+    for hook in CODEX_HOOKS
+        .iter()
+        .filter(|hook| !excluded_events.contains(&hook.event))
+    {
+        for slot in rimz_hook_slots(&root, hook.event) {
+            let hash = hook_hash(hook.event, slot.group, slot.handler).ok_or_else(|| {
+                AgentErr::Install {
+                    agent: "codex",
+                    reason: format!("test hook {} cannot be hashed", hook.event),
+                }
+            })?;
+            let key = format!(
+                "{}:{}:{}:{}",
+                path.display(),
+                snake_event_token(hook.event),
+                slot.group_index,
+                slot.handler_index
+            );
+            entries.insert(
+                key,
+                toml::Value::Table(toml::Table::from_iter([(
+                    "trusted_hash".into(),
+                    hash.into(),
+                )])),
+            );
+        }
+    }
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let state = root
+        .get_mut(HOOKS_TABLE)
+        .and_then(toml::Value::as_table_mut)
+        .expect("entries came from an installed hooks table")
+        .entry("state")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .expect("test trust state must be a table");
+    state.extend(entries);
+    write_table(path, &root)
 }
 
 pub(super) fn read_existing_table(path: &Path) -> Result<toml::Table> {
@@ -498,6 +558,10 @@ fn insert_rimz_hook_group(root: &mut toml::Table, hook: &HookEventSpec) {
         }
     };
 
+    groups_array.push(frozen_hook_group(hook));
+}
+
+fn frozen_hook_group(hook: &HookEventSpec) -> toml::Value {
     let mut handler = toml::Table::new();
     handler.insert("type".to_owned(), toml::Value::String("command".to_owned()));
     handler.insert(
@@ -506,11 +570,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, hook: &HookEventSpec) {
     );
     handler.insert(
         "timeout".to_owned(),
-        toml::Value::Integer(hook.timeout_secs.unwrap_or(CODEX_HOOK_TIMEOUT_SECS)),
-    );
-    handler.insert(
-        "statusMessage".to_owned(),
-        toml::Value::String(format!("Routing {event} through RimZ")),
+        toml::Value::Integer(CODEX_HOOK_TIMEOUT_SECS),
     );
 
     let mut group = toml::Table::new();
@@ -524,7 +584,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, hook: &HookEventSpec) {
         "hooks".to_owned(),
         toml::Value::Array(vec![toml::Value::Table(handler)]),
     );
-    groups_array.push(toml::Value::Table(group));
+    toml::Value::Table(group)
 }
 
 fn strip_rimz_hook_commands(root: &mut toml::Table) -> Vec<String> {
@@ -583,9 +643,16 @@ pub(super) fn has_rimz_hook_command(root: &toml::Table, event: &str) -> bool {
     !rimz_hook_slots(root, event).is_empty()
 }
 
-/// Raw zero-based `(group, handler)` positions of current RimZ handlers under
+struct HookSlot<'a> {
+    group_index: usize,
+    handler_index: usize,
+    group: &'a toml::Value,
+    handler: &'a toml::Value,
+}
+
+/// Raw zero-based positions and definitions of current RimZ handlers under
 /// `hooks.<event>`, counted over every array element as Codex keys trust state.
-fn rimz_hook_slots(root: &toml::Table, event: &str) -> Vec<(usize, usize)> {
+fn rimz_hook_slots<'a>(root: &'a toml::Table, event: &str) -> Vec<HookSlot<'a>> {
     let Some(groups) = root
         .get(HOOKS_TABLE)
         .and_then(toml::Value::as_table)
@@ -597,16 +664,21 @@ fn rimz_hook_slots(root: &toml::Table, event: &str) -> Vec<(usize, usize)> {
     groups
         .iter()
         .enumerate()
-        .filter_map(|(group, value)| {
+        .filter_map(|(group_index, value)| {
             let handlers = value.as_table()?.get("hooks")?.as_array()?;
-            Some((group, handlers))
+            Some((group_index, value, handlers))
         })
-        .flat_map(|(group, handlers)| {
+        .flat_map(|(group_index, group, handlers)| {
             handlers
                 .iter()
                 .enumerate()
                 .filter(|(_, handler)| is_current_rimz_hook_handler(handler))
-                .map(move |(handler, _)| (group, handler))
+                .map(move |(handler_index, handler)| HookSlot {
+                    group_index,
+                    handler_index,
+                    group,
+                    handler,
+                })
         })
         .collect()
 }
