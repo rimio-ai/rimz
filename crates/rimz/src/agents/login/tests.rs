@@ -275,6 +275,114 @@ fn session_login_resolves_the_stamp_without_a_room_default() {
     ));
 }
 
+fn assert_default_login_env(login: &ProviderLogin, key: &str) {
+    for (exported, expected) in [
+        ("/srv/work", None),
+        ("/srv/elsewhere", Some("/srv/elsewhere")),
+    ] {
+        let ambient = BTreeMap::from([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            (key.to_owned(), exported.to_owned()),
+            ("PATH".to_owned(), "/usr/bin".to_owned()),
+        ]);
+        let mut native = ambient.clone();
+        if expected.is_none() {
+            native.remove(key);
+        }
+        assert_eq!(login.env(&ambient), native, "{}: {exported}", login.key());
+    }
+}
+
+#[test]
+fn session_defaults_drop_exported_declared_homes() {
+    for (provider, key) in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")] {
+        let accounts = accounts(&format!("[{provider}.work]\nhome = '/srv/work'\n"));
+        for stamp in [None, Some(name("default"))] {
+            let login = session_login(&kind(provider), stamp.as_ref(), &accounts).unwrap();
+            assert_default_login_env(&login, key);
+        }
+    }
+}
+
+#[test]
+fn catalog_defaults_drop_exported_declared_homes() {
+    for (provider, key) in [("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")] {
+        let catalog = LoginCatalog::from_config_under(
+            &accounts(&format!("[{provider}.work]\nhome = '/srv/work'\n")),
+            Some(Path::new("/home/u")),
+        )
+        .unwrap();
+        assert_default_login_env(
+            &catalog.select(&kind(provider), &name("default")).unwrap(),
+            key,
+        );
+        assert_default_login_env(
+            catalog
+                .all()
+                .find(|login| login.kind() == &kind(provider) && login.is_default())
+                .unwrap(),
+            key,
+        );
+        let (other, other_key) = if provider == "claude" {
+            ("codex", "CODEX_HOME")
+        } else {
+            ("claude", "CLAUDE_CONFIG_DIR")
+        };
+        let ambient = BTreeMap::from([(other_key.to_owned(), "/srv/work".to_owned())]);
+        assert_eq!(
+            catalog
+                .select(&kind(other), &name("default"))
+                .unwrap()
+                .env(&ambient),
+            ambient
+        );
+    }
+}
+
+#[test]
+fn room_defaults_drop_exported_declared_homes() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\nhome = '/srv/work'\n"),
+        Some(Path::new("/home/u")),
+    )
+    .unwrap();
+    let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), BTreeMap::new());
+    assert_default_login_env(&set.default_login("claude").unwrap(), "CLAUDE_CONFIG_DIR");
+}
+
+#[test]
+fn live_default_stamps_drop_exported_declared_homes() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\nhome = '/srv/work'\n"),
+        Some(Path::new("/home/u")),
+    )
+    .unwrap();
+    let mut set = RoomLoginSet::new(
+        Some(RoomLogins::from([(kind("claude"), name("work"))]).into()),
+        Some(catalog),
+        BTreeMap::new(),
+    );
+    set.live_logins
+        .insert(LoginKey::default_for(kind("claude")));
+    let login = set
+        .in_use("claude")
+        .into_iter()
+        .find(ProviderLogin::is_default)
+        .unwrap();
+    assert_default_login_env(&login, "CLAUDE_CONFIG_DIR");
+}
+
+#[test]
+fn broken_declarations_leave_a_bare_session_default() {
+    let accounts = accounts("[claude.work]\nhome = 'relative'\n");
+    let ambient = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned())]);
+    for stamp in [None, Some(name("default"))] {
+        let login = session_login(&kind("claude"), stamp.as_ref(), &accounts).unwrap();
+        assert!(login.is_default());
+        assert_eq!(login.env(&ambient), ambient);
+    }
+}
+
 #[test]
 fn room_login_set_includes_only_defaults_and_live_root_stamps() {
     let catalog = LoginCatalog::from_config_under(

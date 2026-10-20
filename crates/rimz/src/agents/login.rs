@@ -97,6 +97,9 @@ fn render_names(names: &[LoginName]) -> String {
 pub struct ProviderLogin {
     kind: AgentKind,
     name: LoginName,
+    /// Every declared home of the kind: an exported home override naming one
+    /// is a pane's account, never the provider's own home.
+    declared: Arc<[PathBuf]>,
     home: Option<NamedHome>,
 }
 
@@ -107,9 +110,6 @@ struct NamedHome {
     /// The account keeps only its credentials and reads everything else from
     /// the provider's own home.
     shared: bool,
-    /// Every declared home of the kind, this one included: an exported home
-    /// override naming one is a pane's account, never the provider's own home.
-    declared: Arc<[PathBuf]>,
 }
 
 impl ProviderLogin {
@@ -118,6 +118,7 @@ impl ProviderLogin {
         Self {
             kind,
             name: LoginName::default_login(),
+            declared: Arc::default(),
             home: None,
         }
     }
@@ -129,8 +130,8 @@ impl ProviderLogin {
         Ok(Self {
             kind,
             name,
+            declared: [home.clone()].into(),
             home: Some(NamedHome {
-                declared: [home.clone()].into(),
                 path: home,
                 env_key,
                 shared: false,
@@ -204,11 +205,15 @@ impl ProviderLogin {
         found
     }
 
-    /// `ambient`, with this login's overrides applied. The default login
-    /// leaves the ambient environment exactly as it is, so today's resolution
-    /// policies — comma lists, XDG order, test overrides — keep running.
+    /// `ambient`, with this login's overrides applied. A catalog-backed
+    /// default drops an exported home naming a declared account; undeclared
+    /// exports and the provider's other resolution policies keep running.
     pub fn env(&self, ambient: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-        let mut env = ambient.clone();
+        let mut env = if self.is_default() {
+            self.native_ambient(ambient)
+        } else {
+            ambient.clone()
+        };
         env.extend(self.overrides(ambient));
         env
     }
@@ -240,13 +245,13 @@ impl ProviderLogin {
     /// account.
     fn native_ambient(&self, ambient: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         let mut native = ambient.clone();
-        if let Some(home) = &self.home
-            && home
+        if let Some(env_key) = config_home_env_key(&self.kind)
+            && self
                 .declared
                 .iter()
-                .any(|declared| exports_home(&self.kind, home.env_key, declared, ambient))
+                .any(|declared| exports_home(&self.kind, env_key, declared, ambient))
         {
-            native.remove(home.env_key);
+            native.remove(env_key);
         }
         native
     }
@@ -450,12 +455,8 @@ impl LoginCatalog {
                 logins.insert(login.key(), login);
             }
             let declared: Arc<[PathBuf]> = claimed.into_keys().collect();
-            for home in logins
-                .values_mut()
-                .filter(|login| login.kind == kind)
-                .filter_map(|login| login.home.as_mut())
-            {
-                home.declared = Arc::clone(&declared);
+            for login in logins.values_mut().filter(|login| login.kind == kind) {
+                login.declared = Arc::clone(&declared);
             }
         }
         Ok(Self {
@@ -808,7 +809,10 @@ pub fn session_login(
     accounts: &AccountsConfig,
 ) -> Result<ProviderLogin, RoomLoginErr> {
     let Some(name) = login.filter(|name| !name.is_default()) else {
-        return Ok(ProviderLogin::default_for(kind.clone()));
+        return Ok(LoginCatalog::for_kind(accounts, kind)
+            .ok()
+            .and_then(|catalog| catalog.select(kind, &LoginName::default_login()).ok())
+            .unwrap_or_else(|| ProviderLogin::default_for(kind.clone())));
     };
     Ok(LoginCatalog::for_kind(accounts, kind)?.select(kind, name)?)
 }
@@ -1196,7 +1200,12 @@ impl RoomLoginSet {
             .filter(|key| key.kind.as_str() == kind)
         {
             let login = if key.name.is_default() {
-                Some(ProviderLogin::default_for(key.kind.clone()))
+                Some(
+                    self.catalog
+                        .as_ref()
+                        .and_then(|catalog| catalog.select(&key.kind, &key.name).ok())
+                        .unwrap_or_else(|| ProviderLogin::default_for(key.kind.clone())),
+                )
             } else {
                 self.catalog
                     .as_ref()
@@ -1297,7 +1306,12 @@ impl RoomLoginSet {
         let kind = AgentKind::new_unchecked(kind);
         let name = self.selection.as_ref()?.name(&kind).ok()?;
         if name.is_default() {
-            return Some(ProviderLogin::default_for(kind));
+            return Some(
+                self.catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.select(&kind, &name).ok())
+                    .unwrap_or_else(|| ProviderLogin::default_for(kind)),
+            );
         }
         self.catalog.as_ref()?.select(&kind, &name).ok()
     }
