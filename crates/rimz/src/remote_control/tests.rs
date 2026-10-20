@@ -1,6 +1,67 @@
 use super::*;
 use crate::ids::RoomLogins;
 
+fn named_pane_child(test: &str) -> bool {
+    if std::env::var_os("RIMZ_TEST_NATIVE_LOGIN").is_some() {
+        return false;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("remote_control::tests::{test}"),
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("HOME", root.path())
+        .env("CLAUDE_CONFIG_DIR", "/srv/claude-work")
+        .env("CODEX_HOME", "/srv/codex-work")
+        .env("RIMZ_TEST_NATIVE_LOGIN", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
+#[test]
+fn default_host_envs_ignore_exported_declared_homes() {
+    if named_pane_child("default_host_envs_ignore_exported_declared_homes") {
+        return;
+    }
+    let accounts = toml::from_str(
+        "[claude.work]\nhome = '/srv/claude-work'\n[codex.work]\nhome = '/srv/codex-work'\n",
+    )
+    .unwrap();
+    let envs = HostLoginEnvs::from_logins(&accounts, &crate::agents::RoomAccounts::default());
+    for (host, key) in [
+        (RemoteControlHost::Claude, "CLAUDE_CONFIG_DIR"),
+        (RemoteControlHost::Codex, "CODEX_HOME"),
+    ] {
+        assert_eq!(envs.for_host(host).unwrap().get(key), None);
+    }
+}
+
+#[test]
+fn default_codex_daemon_seed_ignores_an_exported_declared_home() {
+    if named_pane_child("default_codex_daemon_seed_ignores_an_exported_declared_home") {
+        return;
+    }
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str("[codex.work]\nhome = '/srv/codex-work'\n").unwrap(),
+        ..Default::default()
+    };
+    for enabled in [true, false] {
+        let envs = codex_daemon_envs(&machine, &[], enabled);
+        assert_eq!(envs[0].get("CODEX_HOME"), None);
+        assert_eq!(envs.len(), if enabled { 1 } else { 2 });
+    }
+}
+
 #[test]
 fn host_login_envs_select_each_provider_account() {
     let accounts: AccountsConfig = toml::from_str("[claude.work]\nhome = \"/srv/work\"\n").unwrap();

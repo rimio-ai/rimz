@@ -618,7 +618,15 @@ fn host_argv_preserves_login_and_host_identity() {
     assert!(crate::pane::command_is_host(&argv.join(" ")));
     assert_eq!(
         host_argv_with_login(host_argv(), &BTreeMap::new()),
-        host_argv()
+        [
+            vec![
+                "env".to_owned(),
+                "-u".to_owned(),
+                "CLAUDE_CONFIG_DIR".to_owned()
+            ],
+            host_argv()
+        ]
+        .concat()
     );
 }
 
