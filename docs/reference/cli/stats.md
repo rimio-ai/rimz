@@ -145,6 +145,6 @@ With no records, the command prints `no assists recorded`. Use `--assists --json
 ## See also
 
 - [Token Insight guide](../../guide/insight.md): what each figure means, the sidebar's live view of the same data, and how tokens are priced.
-- [Providers CLI](./providers.md): per-account plan limits and balances.
+- [Accounts CLI](./accounts.md): per-account plan limits and balances.
 - [Budget CLI](./budget.md): caps that park agents when spend crosses a line.
 - [Stats internals](../../internals/stats.md): load paths, heatmap shading, and terminal fitting.

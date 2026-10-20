@@ -4,7 +4,7 @@ The memory between passes of the [refactor program](./refactor-program.md): wher
 
 ## Status
 
-- **Survey:** base `1986a3caa`, pass 32a: 4828 scoped commits (pace window 1207), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32a and left open: the pending restamp of the pass 32b `harness/launch_plan` row (`survey --restamp` writes it), and one open shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts.rs::write_accounts`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
+- **Survey:** base `1986a3caa`, pass 32a: 4828 scoped commits (pace window 1207), 24 admission intents, 239 holds; no parse failures, ledger problems, or stale or ambiguous verdict keys. Outside pass 32a and left open: the pending restamp of the pass 32b `harness/launch_plan` row (`survey --restamp` writes it), and one open shape family, the `cli` table renderers (`crates/rimz/src/cli/accounts/report.rs::write_comparison`, `crates/rimz/src/cli/agents_cmd/explain.rs::render_explain` and 13 siblings).
 - **Seam queue:** none queued; a seam a survey surfaces is added here as `queued` and picked before module passes; a landed seam leaves the list, its direction living in `refactor-target.toml` and the module's `AGENTS.md`.
 - **Reopened:** none.
 - **Never reviewed:** none. Binary modules and test-only rows carry no hold.
