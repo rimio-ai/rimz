@@ -203,6 +203,48 @@ impl TraceRig {
 }
 
 #[test]
+fn dispatch_records_click_lead_and_the_landing_paint_instead_of_receipt_time() {
+    for offset in [-17_i64, 23] {
+        for verdict in [PushVerdict::Painted, PushVerdict::Displaced] {
+            let rig = TraceRig::new();
+            let destination = serve_config(&workspace());
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let _subscription = rig.plane.subscribe(&destination, tx);
+            let sent = Instant::now();
+            let clicked = sent - Duration::from_millis(42);
+            let painted = if offset < 0 {
+                sent - Duration::from_millis(offset.unsigned_abs())
+            } else {
+                sent + Duration::from_millis(offset as u64)
+            };
+            let mut received = false;
+            rig.peers.dispatch_with(
+                rig.anchor(),
+                clicked,
+                || assert!(rig.records().is_empty()),
+                || sent,
+                |ack, _| {
+                    if std::mem::replace(&mut received, true) {
+                        return Err(RecvTimeoutError::Disconnected);
+                    }
+                    let Wakeup::FocusPush(mut push) = rx.try_recv().unwrap() else {
+                        panic!("expected push")
+                    };
+                    push.peer.received_ms = Some(30);
+                    push.finish_painted(verdict, painted);
+                    ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected)
+                },
+            );
+            let rows = rig.records();
+            let event = &rows[0]["event"];
+            assert_eq!(event["lead_ms"], 42);
+            assert_eq!(event["peers"][0]["painted_ms"], offset);
+            assert_eq!(event["peers"][0]["received_ms"], 30);
+        }
+    }
+}
+
+#[test]
 fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
     for with_peers in [false, true] {
         let rig = TraceRig::new();
@@ -219,7 +261,7 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
         });
         let anchor = rig.anchor();
         assert_eq!(
-            rig.peers.dispatch(anchor.clone(), || {
+            rig.peers.dispatch(anchor.clone(), Instant::now(), || {
                 assert!(rig.records().is_empty(), "recording must follow the jump");
                 17
             }),
@@ -273,8 +315,9 @@ fn dispatch_records_a_successful_paint_after_the_jump() {
         push.peer.received_ms = Some(push.elapsed_ms());
         push.finish(PushVerdict::Painted);
     });
-    rig.peers
-        .dispatch(rig.anchor(), || assert!(rig.records().is_empty()));
+    rig.peers.dispatch(rig.anchor(), Instant::now(), || {
+        assert!(rig.records().is_empty())
+    });
     destination_thread.join().unwrap();
     let rows = rig.records();
     assert_eq!(rows.len(), 1, "successful handshakes are recorded too");
@@ -295,8 +338,9 @@ fn dispatch_records_a_displaced_paint_after_the_jump() {
         };
         push.finish(PushVerdict::Displaced);
     });
-    rig.peers
-        .dispatch(rig.anchor(), || assert!(rig.records().is_empty()));
+    rig.peers.dispatch(rig.anchor(), Instant::now(), || {
+        assert!(rig.records().is_empty())
+    });
     destination_thread.join().unwrap();
     let rows = rig.records();
     assert_eq!(rows.len(), 1);
@@ -317,7 +361,9 @@ fn dispatch_records_the_fitted_push_budget() {
             },
         )]))
     })));
-    peers.dispatch(rig.anchor(), || assert!(rig.records().is_empty()));
+    peers.dispatch(rig.anchor(), Instant::now(), || {
+        assert!(rig.records().is_empty())
+    });
     assert_eq!(rig.records()[0]["event"]["budget_ms"], 300);
     assert!(
         rig.records()[0]["event"]["fit_ms"]
@@ -342,7 +388,7 @@ fn dispatch_collects_reports_sent_after_the_budget_but_before_the_horizon() {
         go_rx.recv().unwrap();
         push.finish(PushVerdict::Expired);
     });
-    rig.peers.dispatch(rig.anchor(), || {
+    rig.peers.dispatch(rig.anchor(), Instant::now(), || {
         assert!(rig.records().is_empty());
         go_tx.send(()).unwrap();
     });
@@ -381,7 +427,7 @@ fn dispatch_keeps_timely_buffered_reports_after_a_slow_jump() {
             push.finish(PushVerdict::Expired);
             done_tx.send(()).unwrap();
         });
-        rig.peers.dispatch(rig.anchor(), || {
+        rig.peers.dispatch(rig.anchor(), Instant::now(), || {
             go_tx.send(()).unwrap();
             done_rx.recv().unwrap();
             if within_horizon {

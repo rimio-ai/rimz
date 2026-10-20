@@ -94,7 +94,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
             }
         });
         let started = Instant::now();
-        peers.dispatch(anchor, || {
+        peers.dispatch(anchor, started, || {
             assert!(
                 painted_rx.try_recv().is_ok(),
                 "dispatch must follow destination paint, release, or cap"

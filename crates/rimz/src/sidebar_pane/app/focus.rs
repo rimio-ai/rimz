@@ -6,7 +6,7 @@ use crate::ids::{FocusNonce, PaneId};
 use crate::mux::focus_anchor::FocusActionError;
 use crate::sidebar::timing::FOCUS_REPAIR_RETRY_STEP;
 use std::sync::mpsc::SyncSender;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::debug;
 
 pub(super) struct FocusRepairDispatch {
@@ -84,6 +84,7 @@ pub(super) fn request_focus_until(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_pane_focus(
     clock: &super::clock::LoopClock,
+    clicked: Instant,
     pane_id: PaneId,
     session_name: &str,
     runtime: crate::disk::paths::RuntimePaths,
@@ -144,7 +145,7 @@ pub(super) fn spawn_pane_focus(
                     && let Some(anchor) =
                         crate::mux::focus_anchor::load(&runtime).filter(|anchor| anchor.nonce == nonce)
                 {
-                    peers.dispatch(anchor, dispatch)
+                    peers.dispatch(anchor, clicked, dispatch)
                 } else {
                     dispatch()
                 }

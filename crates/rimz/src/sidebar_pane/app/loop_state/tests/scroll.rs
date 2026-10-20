@@ -1411,14 +1411,28 @@ fn fitted_push_after_resize_releases_only_the_exact_size_hold() {
 fn displaced_placement_reports_the_landing_in_both_ack_paths() {
     for cached in [false, true] {
         let (mut rig, _, mut anchor) = hidden_destination();
+        rig.state.clock = LoopClock::play(jiff::Timestamp::now());
         anchor.placement.as_mut().unwrap().viewport_row = 1_000;
         if cached {
-            rig.state.fold_focus_intent(anchor.clone(), Instant::now());
             rig.state
-                .paint_now(&mut rig.terminal, Instant::now())
+                .fold_focus_intent(anchor.clone(), rig.state.clock.now());
+            rig.state
+                .paint_now(&mut rig.terminal, rig.state.clock.now())
                 .unwrap();
+            rig.state.clock.advance(Duration::from_millis(17));
         }
-        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+        let (tx, ack) = std::sync::mpsc::channel();
+        let sent = rig.state.clock.now();
+        let push = Wakeup::FocusPush(Box::new(super::super::super::focus_push::FocusPush::new(
+            anchor.clone(),
+            super::super::super::focus_push::PushAck::new(tx),
+            rig.state.config.instance_id.clone(),
+            sent,
+            sent + Duration::from_secs(10),
+        )));
+        if !cached {
+            rig.state.clock.advance(Duration::from_millis(23));
+        }
         rig.state
             .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
             .unwrap();
@@ -1427,6 +1441,10 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
         assert!(rig.state.ui.focus_placement.is_none());
         assert!(rig.state.ui.anchor_clamped);
         let report = assert_push_report(&ack, &rig, PushVerdict::Displaced, !cached);
+        assert_eq!(
+            serde_json::to_value(&report).unwrap()["painted_ms"],
+            if cached { -17 } else { 23 }
+        );
         assert_eq!(report.misplaced_paints, 0);
         assert_eq!(report.unmatched_paints, 0);
     }

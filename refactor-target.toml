@@ -1358,6 +1358,11 @@ reason = "The host injects a fresh stale-destination fit; unit and host tests ex
 
 [[verdict]]
 kind = "item"
+key = "sidebar_pane::app::focus_push::FocusPush::finish_painted"
+reason = "The attachment traces the acknowledged frame's signed send-relative time for cached and parked landings."
+
+[[verdict]]
+kind = "item"
 key = "sidebar_pane::app::loop_state::ViewportPublication"
 reason = "The host's memory cell carries the last watched viewport to unviewed attachments."
 

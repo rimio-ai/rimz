@@ -70,6 +70,8 @@ pub(crate) struct PushPeer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) folded_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) painted_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) finished_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) verdict: Option<PushVerdict>,
@@ -93,6 +95,7 @@ impl PushPeer {
             received_ms: None,
             snapshot_ms: None,
             folded_ms: None,
+            painted_ms: None,
             finished_ms: None,
             verdict: None,
             blocked_by: None,
@@ -110,6 +113,8 @@ pub(crate) enum FocusTraceEvent {
         target: PaneId,
         outcome: PushOutcome,
         budget_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lead_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fit_ms: Option<u64>,
         decided_ms: u64,
@@ -401,6 +406,17 @@ mod tests {
             "instance_id": "sb_019e8c565bbd708097fce9514f79da04", "delivery": "inbox_full"
         });
         [full, minimal]
+    }
+
+    #[test]
+    fn handshake_round_trips_click_lead_and_signed_paint_offsets() {
+        for painted_ms in [-17, 0, 23] {
+            let mut expected = handshake_rows()[0].clone();
+            expected["lead_ms"] = 42.into();
+            expected["peers"][0]["painted_ms"] = painted_ms.into();
+            let event: FocusTraceEvent = serde_json::from_value(expected.clone()).unwrap();
+            assert_eq!(serde_json::to_value(event).unwrap(), expected);
+        }
     }
 
     #[test]
