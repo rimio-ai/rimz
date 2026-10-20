@@ -15,13 +15,15 @@ use crate::wakeup::events::SidebarEvent;
 /// Move an unmodified pull straight into presentation when no realtime state
 /// overlays it. The returned baseline exists only while an overlay or focus
 /// fence can outlive this pull; the renderer uses it for later synthetic folds.
+/// The owned event cut keeps snapshot cloning and fusion outside the shared
+/// event-store lock.
 pub fn fuse_owned(
     pulled: SidebarSnapshot,
-    events: &EventStore,
+    events: EventStore,
     intent: Option<&FocusPresentation>,
     now_ms: u64,
 ) -> (SidebarSnapshot, Option<SidebarSnapshot>, Option<u64>) {
-    let active = active_events(&pulled, events, now_ms);
+    let active = active_events(&pulled, &events, now_ms);
     if active.is_empty() && intent.is_none() {
         return (pulled, None, None);
     }
@@ -289,7 +291,7 @@ mod tests {
     fn owned_pull_retains_a_baseline_only_while_fusion_is_active() {
         let snapshot = pulled(vec![pane("terminal_1", "zsh")], 10);
         let empty = EventStore::default();
-        let (moved, baseline, focus_event_sent_at_ms) = fuse_owned(snapshot, &empty, None, 11);
+        let (moved, baseline, focus_event_sent_at_ms) = fuse_owned(snapshot, empty, None, 11);
         assert!(baseline.is_none());
         assert_eq!(focus_event_sent_at_ms, None);
         assert_eq!(row_ids(&moved).len(), 1);
@@ -303,7 +305,7 @@ mod tests {
                 command: "claude".to_owned(),
             },
         );
-        let (fused, baseline, focus_event_sent_at_ms) = fuse_owned(moved, &events, None, 12);
+        let (fused, baseline, focus_event_sent_at_ms) = fuse_owned(moved, events, None, 12);
         assert_eq!(
             fused.worktree_groups[0].rows[0]
                 .pane
@@ -327,7 +329,7 @@ mod tests {
             SidebarEvent::PaneClosed { pane_id: focused },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 11);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 11);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.focused_pane, None);
     }
@@ -345,7 +347,7 @@ mod tests {
         );
 
         assert_eq!(
-            row_ids(&fuse_owned(snapshot, &store, None, 20).0),
+            row_ids(&fuse_owned(snapshot, store, None, 20).0),
             vec!["zellij:terminal_1"]
         );
     }
@@ -370,7 +372,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 21);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 21);
         assert_eq!(fused.focused_pane, Some(active));
     }
 
@@ -392,7 +394,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 20);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 20);
         assert!(row_ids(&fused).is_empty());
         assert_eq!(fused.truth_degraded, None);
     }
@@ -410,7 +412,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 11);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 11);
         let row = &fused.worktree_groups[0].rows[0];
         assert_eq!(row.id, "zellij:terminal_1");
         assert_eq!(row.name, "cargo");
@@ -430,7 +432,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 11);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 11);
         assert!(row_ids(&fused).is_empty());
     }
 
@@ -461,7 +463,7 @@ mod tests {
             },
         );
 
-        let (fused, _, focus_event_sent_at_ms) = fuse_owned(snapshot, &store, None, 12);
+        let (fused, _, focus_event_sent_at_ms) = fuse_owned(snapshot, store, None, 12);
         assert_eq!(fused.focused_pane, Some(active.clone()));
         assert!(fused.viewed_panes.contains(&active));
         assert_eq!(focus_event_sent_at_ms, Some(12));
@@ -491,7 +493,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, None, 11);
+        let (fused, _, _) = fuse_owned(snapshot, store, None, 11);
         assert_eq!(fused.focused_pane, Some(first));
         assert!(!fused.viewed_panes.contains(&second));
         assert!(!fused.viewed_panes.contains(&foreign));
@@ -511,7 +513,7 @@ mod tests {
 
         let (fused, _, _) = fuse_owned(
             snapshot,
-            &EventStore::default(),
+            EventStore::default(),
             Some(&intent(target.clone(), 11)),
             12,
         );
@@ -538,7 +540,7 @@ mod tests {
             },
         );
 
-        let (fused, _, _) = fuse_owned(snapshot, &store, Some(&intent(target.clone(), 11)), 12);
+        let (fused, _, _) = fuse_owned(snapshot, store, Some(&intent(target.clone(), 11)), 12);
 
         assert_eq!(fused.focused_pane, Some(target));
     }
@@ -552,7 +554,7 @@ mod tests {
 
         let (fused, _, _) = fuse_owned(
             snapshot,
-            &EventStore::default(),
+            EventStore::default(),
             Some(&intent(missing, 11)),
             11,
         );
@@ -578,7 +580,7 @@ mod tests {
         );
         let (fused, _, _) = fuse_owned(
             snapshot,
-            &EventStore::default(),
+            EventStore::default(),
             Some(&intent(target.clone(), 11)),
             11,
         );

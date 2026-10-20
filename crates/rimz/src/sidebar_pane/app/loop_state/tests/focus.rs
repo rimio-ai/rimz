@@ -1135,7 +1135,7 @@ fn focus_stranded_ignores_a_fresh_automatic_repair_overlay() {
     anchor.pre_action = evidence.clone();
     let (snapshot, _, _) = crate::sidebar::fuse::fuse_owned(
         snapshot,
-        &crate::sidebar::event_store::EventStore::default(),
+        crate::sidebar::event_store::EventStore::default(),
         Some(&crate::mux::focus_anchor::FocusPresentation::Target(
             Box::new(anchor),
         )),
