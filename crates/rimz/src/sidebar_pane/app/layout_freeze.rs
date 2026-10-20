@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, LayoutFreeze, UiState};
-use crate::store::snapshot::{SidebarSnapshot, SidebarWorktreeKind};
+use crate::store::snapshot::{
+    SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 
 /// The focused row leaving the attention class or entering `Running` is the
 /// user acting on that agent in its own pane -- answering its ask or submitting
@@ -126,7 +128,7 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
         .map(|(index, row)| (row.id.as_str(), index))
         .collect();
 
-    std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(|group| {
+    let group_key = |group: &SidebarWorktreeGroup| {
         (
             group.kind == SidebarWorktreeKind::External,
             group.finished,
@@ -135,14 +137,26 @@ fn reorder_to_frozen(current: &mut SidebarSnapshot, frozen: &FrozenOrder) {
                 .copied()
                 .unwrap_or(usize::MAX),
         )
-    });
-    for group in std::sync::Arc::make_mut(&mut current.worktree_groups) {
-        std::sync::Arc::make_mut(&mut group.rows).sort_by_key(|row| {
-            (
-                row.is_process(),
-                row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX),
-            )
-        });
+    };
+    if !current.worktree_groups.iter().is_sorted_by_key(group_key) {
+        std::sync::Arc::make_mut(&mut current.worktree_groups).sort_by_key(group_key);
+    }
+    let row_key = |row: &SidebarRow| {
+        (
+            row.is_process(),
+            row_pos.get(row.id.as_str()).copied().unwrap_or(usize::MAX),
+        )
+    };
+    for index in 0..current.worktree_groups.len() {
+        if current.worktree_groups[index]
+            .rows
+            .iter()
+            .is_sorted_by_key(row_key)
+        {
+            continue;
+        }
+        let group = &mut std::sync::Arc::make_mut(&mut current.worktree_groups)[index];
+        std::sync::Arc::make_mut(&mut group.rows).sort_by_key(row_key);
     }
 }
 

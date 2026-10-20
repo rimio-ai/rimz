@@ -169,6 +169,128 @@ fn frozen_row_ids(order: &FrozenOrder) -> Vec<&str> {
 }
 
 #[test]
+fn already_frozen_order_keeps_groups_and_rows_shared() {
+    let original = snapshot_with_groups(vec![
+        group("a", vec![row("a1", "terminal_1"), row("a2", "terminal_2")]),
+        group("b", vec![row("b1", "terminal_3")]),
+    ]);
+    let frozen = capture_order(&original, &UiState::default());
+    let mut current = original.clone();
+    reorder_to_frozen(&mut current, &frozen);
+    assert!(std::sync::Arc::ptr_eq(
+        &current.worktree_groups,
+        &original.worktree_groups
+    ));
+    for (current, original) in current
+        .worktree_groups
+        .iter()
+        .zip(original.worktree_groups.iter())
+    {
+        assert!(std::sync::Arc::ptr_eq(&current.rows, &original.rows));
+    }
+}
+
+#[test]
+fn frozen_reorder_detaches_only_changed_rows() {
+    let original = snapshot_with_groups(vec![
+        group("a", vec![row("a2", "terminal_2"), row("a1", "terminal_1")]),
+        group("b", vec![row("b1", "terminal_3")]),
+    ]);
+    let mut frozen = capture_order(&original, &UiState::default());
+    frozen.rows.swap(0, 1);
+    let mut current = original.clone();
+    reorder_to_frozen(&mut current, &frozen);
+    assert_eq!(row_ids(&current, "a"), ["a1", "a2"]);
+    assert!(!std::sync::Arc::ptr_eq(
+        &current.worktree_groups,
+        &original.worktree_groups
+    ));
+    assert!(!std::sync::Arc::ptr_eq(
+        &current.worktree_groups[0].rows,
+        &original.worktree_groups[0].rows
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &current.worktree_groups[1].rows,
+        &original.worktree_groups[1].rows
+    ));
+}
+
+#[test]
+fn frozen_reorder_matches_stable_sort_across_partitions_and_arrivals() {
+    for reverse_groups in [false, true] {
+        for reverse_rows in [false, true] {
+            let mut groups = Vec::new();
+            for (key, finished, external) in [
+                ("live", false, false),
+                ("finished", true, false),
+                ("external", false, true),
+                ("external-finished", true, true),
+                ("arrival-1", false, false),
+                ("arrival-2", false, false),
+            ] {
+                let mut rows = vec![
+                    agent_row("known-agent", "terminal_1", AgentStatus::Running),
+                    agent_row("arrival-a", "terminal_2", AgentStatus::Running),
+                    agent_row("arrival-b", "terminal_3", AgentStatus::Running),
+                    row("known-process", "terminal_4"),
+                    row("arrival-c", "terminal_5"),
+                    row("arrival-d", "terminal_6"),
+                ];
+                if reverse_rows {
+                    rows.reverse();
+                }
+                let mut group = group(key, rows);
+                group.finished = finished;
+                if external {
+                    group.kind = SidebarWorktreeKind::External;
+                }
+                groups.push(group);
+            }
+            if reverse_groups {
+                groups.reverse();
+            }
+            let mut current = snapshot_with_groups(groups);
+            let frozen = FrozenOrder {
+                groups: ["external-finished", "external", "finished", "live"]
+                    .map(str::to_owned)
+                    .into(),
+                rows: vec![
+                    frozen_paneless_row("known-process"),
+                    frozen_paneless_row("known-agent"),
+                ],
+                ..FrozenOrder::default()
+            };
+            let mut expected = current.clone();
+            std::sync::Arc::make_mut(&mut expected.worktree_groups).sort_by_key(|group| {
+                (
+                    group.kind == SidebarWorktreeKind::External,
+                    group.finished,
+                    frozen
+                        .groups
+                        .iter()
+                        .position(|key| key == &group.key)
+                        .unwrap_or(usize::MAX),
+                )
+            });
+            for group in std::sync::Arc::make_mut(&mut expected.worktree_groups) {
+                std::sync::Arc::make_mut(&mut group.rows).sort_by_key(|row| {
+                    (
+                        row.is_process(),
+                        frozen
+                            .rows
+                            .iter()
+                            .position(|known| known.id == row.id)
+                            .unwrap_or(usize::MAX),
+                    )
+                });
+            }
+            reorder_to_frozen(&mut current, &frozen);
+            assert_eq!(current.worktree_groups, expected.worktree_groups);
+        }
+    }
+}
+
+#[test]
 fn focused_waiting_row_becoming_running_is_an_interaction() {
     let selected = pane("terminal_1", "tab_0", false).pane_id;
     let prev = snapshot_with_groups(vec![group(
