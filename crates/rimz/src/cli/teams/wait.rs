@@ -228,13 +228,13 @@ fn resolve_targets(
     worktree: Option<String>,
     globals: &GlobalFlags,
 ) -> Result<Vec<Target>> {
-    let teams = super::list::effective_teams(globals)?;
+    let (teams, profiles) = super::list::effective_catalog(globals)?;
     let snapshot = ctx.alive_snapshot()?;
     references
         .into_iter()
         .map(|reference| {
             let (team, lane) = super::team_lane(reference, worktree.clone())?;
-            super::validate_team_name(&team, &teams)?;
+            super::validate_team_name(&team, &teams, &profiles)?;
             let cohort =
                 super::cohort::select(&team, lane.as_deref(), ctx.channel(), &snapshot.agents)?;
             let mut worktrees = cohort.members.iter().map(|agent| {

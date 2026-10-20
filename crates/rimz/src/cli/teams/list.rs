@@ -259,12 +259,13 @@ pub(super) fn load_catalog(
     ))
 }
 
-pub(super) fn effective_teams(globals: &GlobalFlags) -> Result<TeamsConfig> {
+pub(super) fn effective_catalog(globals: &GlobalFlags) -> Result<(TeamsConfig, ProfilesConfig)> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine = rimz::config::MachineConfig::load().context("loading machine config")?;
     report_unknown_config_keys(&machine)?;
-    Ok(rimz::config::effective::load(&machine, &workspace.project_root)?.teams)
+    let catalog = rimz::config::effective::load(&machine, &workspace.project_root)?;
+    Ok((catalog.teams, catalog.profiles))
 }
 
 fn build_catalog(

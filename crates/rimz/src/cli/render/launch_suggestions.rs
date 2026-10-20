@@ -2,8 +2,9 @@
 
 use std::path::Path;
 
+use rimz::config::{ProfilesConfig, TeamsConfig};
 use rimz::harness::plan::ResolveLaunchError;
-use rimz::harness::spec::{LayoutErr, SpecKind, UnknownSpec};
+use rimz::harness::spec::{LayoutErr, SpecKind, UnknownSpec, team_summary};
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli::usage::{UsageError, scene_verbs, shell_command};
@@ -19,6 +20,26 @@ pub(in crate::cli) fn agents_error(error: anyhow::Error, bare: bool) -> anyhow::
     } else {
         anyhow::anyhow!(message)
     }
+}
+
+pub(in crate::cli) fn teams_suggestions(
+    word: &str,
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    include_verbs: bool,
+) -> Option<String> {
+    let mut candidates = verb_suggestions("teams", include_verbs);
+    candidates.extend(teams.0.iter().map(|(name, team)| Suggestion {
+        name: name.clone(),
+        label: "team",
+        summary: team_summary(team, profiles),
+    }));
+    let closest = closest(word, &candidates);
+    if closest.is_empty() {
+        return None;
+    }
+    let argv = super::invocation_args();
+    Some(suggestion_block("teams", word, &closest, &argv, true))
 }
 
 fn unknown_spec(error: &anyhow::Error) -> Option<&UnknownSpec> {

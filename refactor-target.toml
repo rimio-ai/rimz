@@ -3767,6 +3767,11 @@ reason = "Shares scene discovery and presentation without duplicating resolver f
 
 [[verdict]]
 kind = "item"
+key = "cli::render::launch_suggestions::teams_suggestions"
+reason = "Uses the same closest-tier presentation for bare team words and explicit team refusals."
+
+[[verdict]]
+kind = "item"
 key = "cli::teams::list::instance_state"
 reason = "Catalog and wait diagnostics fold the same typed attention statuses."
 
