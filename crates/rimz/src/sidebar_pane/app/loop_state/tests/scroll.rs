@@ -225,6 +225,65 @@ fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
 }
 
 #[test]
+fn zellij_own_scroll_before_observed_reveal_refuses_viewport_adoption() {
+    assert_own_scroll_before_observed_reveal(MuxName::Zellij);
+}
+
+#[test]
+fn tmux_own_scroll_before_observed_reveal_refuses_viewport_adoption() {
+    assert_own_scroll_before_observed_reveal(MuxName::Tmux);
+}
+
+fn assert_own_scroll_before_observed_reveal(mux: MuxName) {
+    let (mut source, mut destination, _) = viewport_pair(mux);
+    let clock = LoopClock::play(Timestamp::now());
+    destination.state.clock = clock.clone();
+    publish_scrolled(&mut source, 12);
+    destination
+        .state
+        .on_resize(&mut destination.fetch, &mut destination.terminal, None)
+        .unwrap();
+    destination
+        .state
+        .on_input(
+            Wakeup::Scroll { down: true },
+            &mut destination.terminal,
+            &mut destination.fetch,
+        )
+        .unwrap();
+    assert!(destination.state.watched());
+    assert!(
+        !destination
+            .state
+            .watches_snapshot(&destination.state.current)
+    );
+    let offset = destination.state.ui.scroll_offset;
+    assert!(offset > 12);
+    let hold = destination.state.ui.freeze.clone().unwrap();
+
+    source.state.ui.freeze = None;
+    publish_scrolled(&mut source, 3);
+    destination
+        .state
+        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+    assert_eq!(
+        destination.state.ui.scroll_offset, offset,
+        "{mux:?}: a stale hidden snapshot must not overwrite the user's scroll"
+    );
+    let retained = destination.state.ui.freeze.as_ref().unwrap();
+    assert_eq!(retained.armed_ms, hold.armed_ms);
+    assert_eq!(retained.frozen.rows, hold.frozen.rows);
+
+    // A new observed fold supersedes the input evidence, even if still hidden.
+    destination.fold(destination.state.current.clone(), SnapshotSource::Produced);
+    destination
+        .state
+        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+    assert_eq!(destination.state.ui.scroll_offset, 3);
+    assert!(destination.state.ui.freeze.is_none());
+}
+
+#[test]
 fn hidden_resize_does_not_replace_the_watched_viewport() {
     for mux in [MuxName::Zellij, MuxName::Tmux] {
         let (source, mut destination, _) = viewport_pair(mux);

@@ -191,6 +191,7 @@ pub(super) struct LoopState {
     filter_observed_at: Option<Instant>,
     last_pulled_rows: usize,
     optimistic_watch_until: Option<Instant>,
+    own_input_since_fold: bool,
     /// Deadline for the tab-view read sweep: armed when the own tab comes on
     /// screen, disarmed when it leaves. The sweep fires on the first fold at or
     /// past it while the tab is still viewed, so a pass-through never clears
@@ -416,6 +417,7 @@ impl LoopState {
             overlay_baseline: None,
             current,
             optimistic_watch_until: None,
+            own_input_since_fold: false,
             tab_read_dwell_until: None,
             events: Arc::default(),
             pending_focus_repair: None,
@@ -851,6 +853,7 @@ impl LoopState {
             click_guard: _,
             hold_expired_since_paint: _,
             optimistic_watch_until: _,
+            own_input_since_fold: _,
             // Maintenance stamps and reminders, read against `current`.
             fetched_at: _,
             last_content_fold: _,
@@ -971,6 +974,7 @@ impl LoopState {
             self.observation = Some(observation);
         }
         if let FetchUpdate::Unchanged { clock, .. } = update {
+            self.own_input_since_fold = false;
             clock.apply(&mut self.current);
             self.last_focus_observation.panes_observed_at_ms = self.current.panes_observed_at_ms;
             self.fetched_at = self.clock.now();
@@ -990,6 +994,7 @@ impl LoopState {
                 phase,
                 source,
             } => {
+                self.own_input_since_fold = false;
                 self.last_content_fold = self.clock.now();
                 #[cfg(test)]
                 {
@@ -1805,6 +1810,7 @@ impl LoopState {
             && (outcome.redraw || !outcome.effects.is_empty())
             && !outcome.effects.contains(&InputEffect::Reload)
         {
+            self.own_input_since_fold = true;
             layout_freeze::arm_freeze(&mut self.ui, self.clock.timestamp_at(now).as_millisecond());
         }
         if outcome.redraw {
@@ -2974,7 +2980,9 @@ impl LoopState {
     }
 
     fn adoptable_viewport(&self) -> Option<ViewportPublication> {
-        if self.ui.drawn_scroll_max.is_some() && self.watches_snapshot(&self.current) {
+        if self.ui.drawn_scroll_max.is_some()
+            && (self.watches_snapshot(&self.current) || self.own_input_since_fold)
+        {
             return None;
         }
         self.viewport
