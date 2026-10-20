@@ -20,7 +20,7 @@ The same planner caps a subagent's permission mode against the caller's stored `
 
 ## Preflight
 
-Every entry point that can start a scoped agent probes bubblewrap first and refuses with the fix; none falls back to host mode. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change. Room judgment converts these to recorded warnings with fixes and opens the room; scoped launches still refuse. Recovery skips unavailable candidates and leaves them resumable. Cause fixes stay print-only, and the host-isolation command carries the security marker.
+Every entry point that can start a scoped agent probes bubblewrap first and refuses with the fix; none falls back to host mode. Off Linux the config loader changes configured `scoped` settings to `host` with a notice before launch resolution; an explicit `--isolation scoped` still refuses. `sandbox::preflight` runs `bwrap --bind / / --dev-bind /dev /dev --die-with-parent -- /usr/bin/true` from the `bwrap` found on `PATH` and returns its absolute path. The errors are the `SandboxErr` variants `UnsupportedOs`, `MissingBwrap`, and `ProbeFailed`, each ending with what to change. Room judgment converts these to recorded warnings with fixes and opens the room; scoped launches still refuse. Recovery skips unavailable candidates and leaves them resumable. Cause fixes stay print-only, and the host-isolation command carries the security marker.
 
 | Entry point | When it probes |
 | --- | --- |

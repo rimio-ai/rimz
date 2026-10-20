@@ -2265,7 +2265,7 @@ fn isolation_values_round_trip() {
     assert!(!Isolation::Host.is_scoped());
 }
 #[test]
-fn sandbox_settings_fall_back_to_host_with_notices() {
+fn scoped_settings_fall_back_to_host_with_notices() {
     use super::Isolation::{Host, Scoped};
     let mut config = MachineConfig::default();
     config.agents.isolation = Scoped;
@@ -2286,9 +2286,9 @@ fn sandbox_settings_fall_back_to_host_with_notices() {
     assert_eq!(config.subagents.profiles.0["child"].isolation, Some(Host));
     insta::assert_debug_snapshot!(notices.host_isolation_fallback, @r#"
     [
-        "warning: agents.isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
-        "warning: profile `boxed` isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
-        "warning: profile `child` isolation = \"sandbox\" needs Linux bubblewrap; running agents on the host instead",
+        "warning: agents.isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
+        "warning: profile `boxed` isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
+        "warning: profile `child` isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
     ]
     "#);
 }
