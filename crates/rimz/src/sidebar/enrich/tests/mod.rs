@@ -80,7 +80,7 @@ fn provider_labels_include_only_non_default_logins() {
             ..Default::default()
         },
     );
-    // `rimz providers` folds once per account, each under a selection naming it.
+    // `rimz accounts` folds once per account, each under a selection naming it.
     for (login, logins, expected) in [
         (
             crate::ids::LoginKey::default_for(key.kind.clone()),

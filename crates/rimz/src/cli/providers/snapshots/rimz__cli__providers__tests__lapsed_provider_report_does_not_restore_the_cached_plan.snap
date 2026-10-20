@@ -1,7 +1,0 @@
----
-source: crates/rimz/src/cli/providers/tests.rs
-expression: text
----
-Claude · v1.2.3
-  ACCOUNT         PLAN    READING
-  claude@default  lapsed  never read

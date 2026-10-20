@@ -873,6 +873,73 @@ fn pace_text_rounds_tenths_and_caps_at_ten() {
 }
 
 #[test]
+fn marker_legend_explains_launch_position_and_only_visible_markers() {
+    use rimz::ids::AgentKind;
+    use rimz::room::Deciding;
+    let sources = std::collections::BTreeMap::from([
+        (AgentKind::new_unchecked("claude"), Deciding::Room),
+        (AgentKind::new_unchecked("codex"), Deciding::Machine),
+        (AgentKind::new_unchecked("pi"), Deciding::Project),
+    ]);
+    let render = |displayed, circle| {
+        account_marker_legend(&displayed, &sources, circle)
+            .map(|text| strip(|w| write!(w, "{text}")))
+    };
+    assert_eq!(
+        render(["claude"].into(), false).as_deref(),
+        Some("● next launch from here (this room)")
+    );
+    assert_eq!(
+        render(["claude", "codex", "pi"].into(), true).as_deref(),
+        Some(
+            "● next launch from here: claude pinned by this room, pi pinned by this project, codex by machine default   ○ new rooms"
+        )
+    );
+    assert_eq!(render([].into(), false), None);
+    assert_eq!(render([].into(), true).as_deref(), Some("○ new rooms"));
+}
+
+#[test]
+fn window_column_aligns_percent_countdown_and_pace_independently() {
+    use jiff::SignedDuration;
+    use rimz::agents::RateLimitWindow;
+    let now = Timestamp::UNIX_EPOCH;
+    let windows: Vec<_> = [
+        (2, Some(3_780)),
+        (0, Some(18_000)),
+        (96, Some(17_101)),
+        (20, None),
+    ]
+    .into_iter()
+    .map(|(used, reset)| RateLimitWindow {
+        used_percentage: Some(used),
+        duration_mins: reset.map(|_| 300),
+        resets_at: reset.map(|secs| now + SignedDuration::from_secs(secs)),
+        ..Default::default()
+    })
+    .chain([RateLimitWindow {
+        lifted: true,
+        ..Default::default()
+    }])
+    .collect();
+    let cells = window_cells(windows.iter().map(Some), now);
+    let text: Vec<_> = cells
+        .into_iter()
+        .map(|cell| strip(|w| cell.unwrap().write_styled(w)))
+        .collect();
+    assert_eq!(
+        text,
+        [
+            " 98% · 1h03m · 0.0x",
+            "100% · ready",
+            "  4% · 4h45m · –",
+            " 80%",
+            "no limit"
+        ]
+    );
+}
+
+#[test]
 fn window_cell_gates_pace_at_the_floor_and_omits_blank_states() {
     use jiff::SignedDuration;
     use rimz::agents::RateLimitWindow;
@@ -1021,4 +1088,9 @@ fn blocker_and_already_reported_errors_need_no_start_hint() {
 
     let declined: anyhow::Error = AlreadyReported.into();
     assert_eq!(strip(|out| write_report_with_args(out, &declined, &[])), "");
+}
+fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp) -> Option<Cell> {
+    window_cells(std::iter::once(Some(window)), now)
+        .pop()
+        .flatten()
 }

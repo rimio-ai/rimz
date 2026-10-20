@@ -1,5 +1,9 @@
+use super::super::*;
 use super::*;
 use clap::Parser;
+
+#[path = "report_tests.rs"]
+mod reports;
 
 #[derive(Debug, Parser)]
 struct AccountsHarness {
@@ -15,6 +19,155 @@ fn bare_accounts_lists_and_help_orders_the_workflow() {
     let positions = ["list", "use", "add", "redeem", "remove"]
         .map(|verb| help.find(&format!("  {verb} ")).unwrap());
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{help}");
+}
+
+#[test]
+fn unified_account_surface_accepts_overview_and_detail_options() {
+    for argv in [
+        vec!["accounts", "--json", "--refresh", "--all"],
+        vec!["accounts", "list", "--json", "--refresh", "--all"],
+        vec!["accounts", "show", "claude@work", "--json", "--refresh"],
+        vec!["accounts", "show", "grok"],
+    ] {
+        assert!(AccountsHarness::try_parse_from(&argv).is_ok(), "{argv:?}");
+    }
+    use clap::CommandFactory;
+    let mut command = AccountsHarness::command();
+    assert!(
+        command
+            .render_long_help()
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(PACE_HELP)
+    );
+    assert!(
+        command
+            .find_subcommand_mut("list")
+            .unwrap()
+            .render_long_help()
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(PACE_HELP)
+    );
+}
+
+#[test]
+fn unified_overview_uses_provider_tables_and_no_pace_or_home_columns() {
+    let (_, output) = listed(ACCOUNTS, None, &BTreeMap::new());
+    assert!(output.contains("Claude\n"), "{output}");
+    assert!(output.contains("Codex\n"), "{output}");
+    for removed in ["KIND", "STATUS", "HISTORY", "HOME", "pace:"] {
+        assert!(!output.contains(removed), "{output}");
+    }
+    assert!(
+        output.contains("● next launch from here (machine default)"),
+        "{output}"
+    );
+    assert!(!output.contains("○ new rooms"), "{output}");
+}
+
+#[test]
+fn undeclared_selection_keeps_its_own_pool_and_no_spend() {
+    let (mut rows, _) = listed("[use]\ncodex = 'gone'\n", None, &BTreeMap::new());
+    let default = rows
+        .iter_mut()
+        .find(|row| row.account == key("codex", "default"))
+        .unwrap();
+    default.spending = Some(ProviderSpend {
+        today: None,
+        headline: Default::default(),
+        window: MachineConfig::default().sidebar.spend_window,
+        week: SpendWindow {
+            usd: 12.0,
+            ..Default::default()
+        },
+        month: Default::default(),
+        year: Default::default(),
+    });
+    let gone = rows
+        .iter()
+        .find(|row| row.account == key("codex", "gone"))
+        .unwrap();
+    assert_eq!(serde_json::to_value(gone).unwrap()["pool"], "codex@gone");
+    let output = text(&rows, &[], None);
+    assert!(
+        output.contains("shared pool $12.00 spent in 7d"),
+        "{output}"
+    );
+    assert!(!output.contains("shared by"), "{output}");
+    assert!(output.contains("SPEND 7d"), "{output}");
+    let line = output
+        .lines()
+        .find(|line| line.contains("gone") && !line.contains("account `"))
+        .unwrap();
+    let spend_column = output
+        .lines()
+        .find_map(|line| line.find("SPEND 7d"))
+        .unwrap();
+    assert_eq!(
+        line.chars()
+            .skip(spend_column)
+            .take(8)
+            .collect::<String>()
+            .trim(),
+        "-",
+        "{output}"
+    );
+}
+
+#[test]
+fn merged_json_retains_launch_health_and_adds_provider_facts() {
+    let (rows, _) = listed(ACCOUNTS, None, &BTreeMap::new());
+    let json = serde_json::to_value([&rows[0], &rows[2]]).unwrap();
+    for row in json.as_array().unwrap() {
+        for key in [
+            "pool",
+            "product_name",
+            "probed_at",
+            "plan",
+            "plan_label",
+            "account_id",
+            "sub_provider",
+            "account_scope",
+            "version",
+            "spending",
+            "day_budget",
+        ] {
+            assert!(row.get(key).is_some(), "missing {key}: {row}");
+        }
+        assert_eq!(row["status"], "home_missing");
+    }
+    insta::assert_json_snapshot!(json);
+}
+
+#[test]
+fn plan_prefers_setup_problems_to_lapsed_entitlement_and_problems_are_last() {
+    let (mut rows, _) = listed(ACCOUNTS, None, &BTreeMap::new());
+    rows[1].status = AccountStatus::HooksUntrusted;
+    rows[1].entitlement = Entitlement::Lapsed { since_ms: 100 };
+    rows[1].problem = Some("trust the hooks first".to_owned());
+    let text = text(
+        &rows,
+        &[("claude", Deciding::Room), ("codex", Deciding::Machine)],
+        None,
+    );
+    let alpha = text
+        .lines()
+        .find(|line| line.contains("alpha") && !line.contains("account `"))
+        .unwrap();
+    assert!(alpha.contains("hooks untrusted"), "{text}");
+    assert!(!alpha.contains("lapsed"), "{text}");
+    assert!(
+        text.lines()
+            .rev()
+            .take_while(|line| !line.is_empty())
+            .any(|line| line == "trust the hooks first"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -51,31 +204,22 @@ fn healthy_setup_requires_a_confident_login_to_say_ready() {
         assert_eq!(json["account"], "claude@alpha");
         assert!(json.get("name").is_none());
         if status == "login_unknown" {
-            assert!(text(&[row], &[], None).contains("login unknown"));
+            assert!(text(&[row], &[], None).contains("not probed"));
         }
     }
 }
 
 #[test]
-fn pace_legend_appears_only_with_a_visible_multiplier() {
-    for (windows, expected) in [
-        (Vec::new(), false),
-        (vec![window(FIVE_HOURS, Some(10), Some(7200))], true),
-        (vec![window(FIVE_HOURS, Some(100), Some(7200))], false),
-    ] {
+fn overview_never_prints_the_pace_definition() {
+    for windows in [Vec::new(), vec![window(FIVE_HOURS, Some(10), Some(7200))]] {
         let (_, output) = listed(
             ACCOUNTS,
             None,
             &BTreeMap::from([(key("claude", "alpha"), logged_in(windows))]),
         );
-        assert_eq!(
-            output.contains("pace: used share ÷ elapsed share; 1.0x lasts exactly to reset"),
-            expected,
-            "{output}"
-        );
+        assert!(!output.contains("pace:"), "{output}");
     }
 }
-
 #[test]
 fn use_reset_takes_only_a_kind() {
     let parsed = AccountsHarness::try_parse_from(["accounts", "use", "--reset", "codex"]);
@@ -153,50 +297,36 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
     let credits = ResetCredits {
         count: 2,
         soonest_expiry: Some(now() + Duration::from_secs(3600)),
-        expiries: vec![now() + Duration::from_secs(3600)],
-        effect: rimz::agents::RedeemEffect::RestartsWindow,
+        expiries: vec![],
+        effect: RedeemEffect::RestartsWindow,
     };
-    let mut spare = logged_in(Vec::new());
-    spare.reset_credits = Some(credits.clone());
-    let mut zero = logged_in(Vec::new());
-    zero.reset_credits = Some(ResetCredits {
-        count: 0,
-        ..credits.clone()
-    });
-    let readings = BTreeMap::from([
-        (key("codex", "team"), spare),
-        (key("codex", "default"), zero),
-    ]);
-    let (rows, text) = listed(ACCOUNTS, None, &readings);
-    let header: Vec<_> = text.lines().next().unwrap().split_whitespace().collect();
-    assert!(
-        header
-            .windows(4)
-            .any(|cols| cols == ["LEFT", "EXTRA", "CREDITS", "AGENTS"]),
-        "{text}"
+    let (rows, text) = listed(
+        ACCOUNTS,
+        None,
+        &BTreeMap::from([
+            (
+                key("codex", "team"),
+                LoginReading {
+                    reset_credits: Some(credits.clone()),
+                    ..logged_in(Vec::new())
+                },
+            ),
+            (
+                key("codex", "default"),
+                LoginReading {
+                    reset_credits: Some(ResetCredits {
+                        count: 0,
+                        ..credits.clone()
+                    }),
+                    ..logged_in(Vec::new())
+                },
+            ),
+        ]),
     );
-    let credit_cell = |kind: &str, name: &str| {
-        let line = text
-            .lines()
-            .find(|line| line.contains(kind) && line.contains(name))
-            .unwrap();
-        let header = text.lines().next().unwrap();
-        line.chars()
-            .skip(header.find("CREDITS").unwrap())
-            .take(7)
-            .collect::<String>()
-            .trim()
-            .to_owned()
-    };
-    assert_eq!(credit_cell("codex", "team"), "2");
-    assert_eq!(credit_cell("codex", "default"), "-");
-    assert_eq!(credit_cell("claude", "default"), "–");
-    let team = rows
-        .iter()
-        .find(|row| row.kind.as_str() == "codex" && row.account.name.as_str() == "team")
-        .unwrap();
+    assert!(text.contains("RESET CREDITS"), "{text}");
+    assert!(text.contains("2 · exp 1h00m"), "{text}");
     assert_eq!(
-        serde_json::to_value(team).unwrap()["reset_credits"],
+        serde_json::to_value(&rows[3]).unwrap()["reset_credits"],
         serde_json::to_value(credits).unwrap()
     );
     assert!(
@@ -206,7 +336,6 @@ fn list_credits_show_banked_zero_and_unknown_and_serialize_the_provider_shape() 
             .is_none()
     );
 }
-
 #[test]
 fn use_targets_the_room_unless_global() {
     for (argv, room) in [
@@ -273,22 +402,36 @@ fn rows_at(
         readings,
         &BTreeMap::new(),
     )
+    .into_iter()
+    .filter(|row| matches!(row.kind.as_str(), "claude" | "codex"))
+    .map(|mut row| {
+        row.installed = true;
+        row.expanded = true;
+        row
+    })
+    .collect()
 }
 
 fn now() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
 }
 
-fn text(rows: &[AccountRow], deciding: &[(&str, Deciding)], width: Option<usize>) -> String {
+fn text(rows: &[AccountRow], deciding: &[(&str, Deciding)], _width: Option<usize>) -> String {
     let deciding = deciding
         .iter()
-        .map(|(kind, deciding)| (AgentKind::new_unchecked(*kind), *deciding))
+        .map(|(kind, source)| (AgentKind::new_unchecked(*kind), *source))
         .collect();
     let mut stream = anstream::StripStream::new(Vec::new());
-    write_accounts(&mut stream, rows, &deciding, now(), width).unwrap();
+    write_overview(
+        &mut stream,
+        rows,
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+        &jiff::tz::TimeZone::UTC,
+        &deciding,
+    )
+    .unwrap();
     String::from_utf8(stream.into_inner()).unwrap()
 }
-
 /// The list at a position with no room and no project: the machine layer
 /// decides every kind.
 fn listed(
@@ -339,15 +482,54 @@ fn logged_in(windows: Vec<RateLimitWindow>) -> LoginReading {
 }
 
 #[test]
+fn lapsed_entitlement_preserves_setup_repairs() {
+    let mut reading = logged_in(Vec::new());
+    reading.entitlement = Entitlement::Lapsed { since_ms: 100 };
+    for status in [AccountStatus::HomeMissing, AccountStatus::HooksUntrusted] {
+        let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
+        row.status = status;
+        row.problem = Some("fix the account setup first".to_owned());
+        row.read(Some(&reading), || unreachable!("not a logout"));
+        assert_eq!(row.status, status);
+        assert_eq!(row.problem.as_deref(), Some("fix the account setup first"));
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(
+            json["entitlement"],
+            serde_json::json!({"lapsed": {"since_ms": 100}})
+        );
+        let output = text(&[row], &[], None);
+        assert!(output.contains(status.as_str()), "{output}");
+        assert!(
+            output.trim_end().ends_with("fix the account setup first"),
+            "{output}"
+        );
+    }
+    let mut unread = reading;
+    unread.status = ProviderStatus::Unavailable;
+    let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
+    (row.status, row.problem) = (AccountStatus::Ready, None);
+    row.read(Some(&unread), || unreachable!("not a logout"));
+    assert_eq!(row.status, AccountStatus::LoginUnknown);
+    assert!(
+        row.problem
+            .as_deref()
+            .is_some_and(|problem| problem.starts_with("plan lapsed: no ")),
+        "{:?}",
+        row.problem
+    );
+}
+
+#[test]
 fn lapsed_account_reports_subscription_access_instead_of_login_or_setup() {
     let mut reading = logged_in(Vec::new());
     reading.entitlement = rimz::agents::Entitlement::Lapsed { since_ms: 100 };
-    let readings = BTreeMap::from([(key("claude", "alpha"), reading)]);
-    let (rows, text) = listed(ACCOUNTS, None, &readings);
+    let mut rows = listed(ACCOUNTS, None, &BTreeMap::new()).0;
     let row = rows
-        .iter()
+        .iter_mut()
         .find(|row| row.kind.as_str() == "claude" && row.account.name.as_str() == "alpha")
         .unwrap();
+    (row.status, row.problem) = (AccountStatus::Ready, None);
+    row.read(Some(&reading), String::new);
     assert_eq!(
         row.problem.as_deref(),
         Some("plan lapsed: no Claude access")
@@ -356,9 +538,14 @@ fn lapsed_account_reports_subscription_access_instead_of_login_or_setup() {
         serde_json::to_value(row).unwrap()["entitlement"],
         serde_json::json!({"lapsed":{"since_ms":100}})
     );
+    let text = text(
+        &rows,
+        &[("claude", Deciding::Machine), ("codex", Deciding::Machine)],
+        None,
+    );
     let line = text
         .lines()
-        .find(|line| line.contains("claude") && line.contains("alpha"))
+        .find(|line| line.contains("alpha") && !line.contains("account `"))
         .unwrap();
     assert!(line.contains("lapsed"), "{text}");
     insta::assert_snapshot!(text);
@@ -374,191 +561,96 @@ fn lapsed_account_problem_names_the_delegated_product() {
     ] {
         let mut row = listed(ACCOUNTS, None, &BTreeMap::new()).0.remove(1);
         row.kind = AgentKind::new_unchecked(kind);
+        (row.status, row.problem) = (AccountStatus::Ready, None);
         row.read(Some(&reading), String::new);
         assert_eq!(row.problem.as_deref(), Some(expected));
     }
 }
 
-/// The table's lines: everything above the legend and problems.
-fn table(text: &str) -> Vec<&str> {
-    text.lines()
-        .take_while(|line| {
-            line.is_empty() || line.starts_with("   ") || line.starts_with(['●', '○'])
-        })
-        .filter(|line| !line.starts_with("●  this") && !line.starts_with("●  machine"))
-        .filter(|line| !line.starts_with("○  new rooms"))
-        .collect()
-}
-
 const ACCOUNTS: &str = "[claude.alpha]\nhome = \"/srv/alpha\"\n[codex.team]\nhome = \"/srv/team\"\nhistory = \"standalone\"\n[use]\ncodex = \"team\"\n";
 
 #[test]
-fn list_is_one_table_with_default_first_and_one_marker_per_kind() {
-    let counts = BTreeMap::from([(key("codex", "team"), 2)]);
-    let (rows, text) = listed(ACCOUNTS, Some(&counts), &BTreeMap::new());
-    let lines: Vec<&str> = text.lines().collect();
+fn list_has_provider_tables_with_bare_names_and_agent_counts() {
+    let (rows, text) = listed(
+        ACCOUNTS,
+        Some(&BTreeMap::from([(key("codex", "team"), 2)])),
+        &BTreeMap::new(),
+    );
     assert_eq!(
-        lines.iter().filter(|line| line.contains("KIND")).count(),
-        1,
+        text.lines()
+            .filter(|line| line.contains("NAME")
+                && line.contains("PLAN")
+                && line.contains("AGENTS"))
+            .count(),
+        2,
         "{text}"
     );
+    assert!(!text.contains('○'), "{text}");
     assert!(
-        lines[0].starts_with(
-            "   KIND    NAME     STATUS        5h LEFT  7d LEFT  EXTRA  CREDITS  AGENTS  "
-        ),
+        text.contains("● next launch from here (machine default)"),
         "{text}"
-    );
-    assert!(lines[1].starts_with("●  claude  default"), "{text}");
-    assert!(lines[2].starts_with("   claude  alpha"), "{text}");
-    assert_eq!(lines[3], "", "{text}");
-    assert!(lines[4].starts_with("   codex   default"), "{text}");
-    assert!(lines[5].starts_with("●  codex   team"), "{text}");
-    assert_eq!(lines.iter().filter(|line| line.is_empty()).count(), 1);
-    assert!(
-        !text.contains('○'),
-        "each kind's ● is its machine default: {text}"
-    );
-    assert_eq!(lines[6], "●  machine default", "{text}");
-    assert!(
-        lines.iter().all(|line| line.trim_end() == *line),
-        "{text:?}"
-    );
-    assert!(lines[5].contains("  2  "), "{text}");
-    assert!(lines[1].contains("  -  "), "{text}");
-    assert!(lines[0].ends_with("  AGENTS  HISTORY     HOME"), "{text}");
-    assert!(lines[1].contains("  -           /nonexistent"), "{text}");
-    assert!(lines[2].contains("  shared      /srv/alpha"), "{text}");
-    assert!(lines[5].contains("  standalone  /srv/team"), "{text}");
-    assert_eq!(
-        serde_json::to_value(&rows[0]).unwrap()["history"],
-        serde_json::Value::Null
     );
     assert_eq!(serde_json::to_value(&rows[1]).unwrap()["history"], "shared");
     let team = serde_json::to_value(&rows[3]).unwrap();
     assert_eq!(team["history"], "standalone");
     assert_eq!(team["active"], true);
-    assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
     assert_eq!(team["agents"], 2);
+    assert_eq!(team["default_for"], serde_json::json!(["new_rooms"]));
 }
-
 #[test]
-fn extra_column_reads_like_providers_and_marks_paid_credit() {
-    let paying = ExtraCredits::known(None, Some(2_413.92), None);
-    let readings = BTreeMap::from([
-        (
-            key("codex", "default"),
-            LoginReading {
-                extra_credits: Some(paying.clone()),
-                spend_step: SpendStep::PaidCredit,
-                ..logged_in(vec![window(SEVEN_DAYS, Some(100), Some(86_400))])
-            },
-        ),
-        (
-            key("codex", "team"),
-            LoginReading {
-                extra_credits: Some(ExtraCredits::Disabled),
-                spend_step: SpendStep::Spent,
-                ..logged_in(Vec::new())
-            },
-        ),
-        (
-            key("claude", "alpha"),
-            LoginReading {
-                extra_credits: Some(ExtraCredits::known(None, Some(0.0), None)),
-                ..logged_in(Vec::new())
-            },
-        ),
-    ]);
-    let (rows, text) = listed(ACCOUNTS, None, &readings);
-    let header: Vec<&str> = text
-        .lines()
-        .next()
-        .unwrap()
-        .split("  ")
-        .map(str::trim)
-        .filter(|cell| !cell.is_empty())
-        .collect();
-    assert_eq!(header[4..7], ["7d LEFT", "EXTRA", "CREDITS"], "{text}");
-    let line = |kind: &str, name: &str| {
-        table(&text)
-            .into_iter()
-            .find(|line| line.contains(&format!("{kind}  ")) && line.contains(name))
-            .unwrap_or_else(|| panic!("no {kind} {name} row in {text}"))
-    };
+fn extra_column_marks_paid_credit_and_does_not_invent_unknown_credit() {
+    let (rows, text) = listed(
+        ACCOUNTS,
+        None,
+        &BTreeMap::from([
+            (
+                key("codex", "default"),
+                LoginReading {
+                    extra_credits: Some(ExtraCredits::known(None, Some(2413.92), None)),
+                    spend_step: SpendStep::PaidCredit,
+                    ..logged_in(Vec::new())
+                },
+            ),
+            (
+                key("codex", "team"),
+                LoginReading {
+                    extra_credits: Some(ExtraCredits::Disabled),
+                    ..logged_in(Vec::new())
+                },
+            ),
+        ]),
+    );
+    assert!(text.contains("EXTRA LEFT"), "{text}");
+    assert!(text.contains("$2,413.92 · paying"), "{text}");
+    assert!(text.contains("off"), "{text}");
     assert!(
-        line("codex", "default").contains("  $2,413.92 · paying  "),
-        "{text}"
+        serde_json::to_value(&rows[0])
+            .unwrap()
+            .get("extra_credits")
+            .is_none()
     );
-    assert!(line("codex", "team").contains("  off  "), "{text}");
-    assert!(line("claude", "alpha").contains("  $0.00  "), "{text}");
-    assert_eq!(text.matches("paying").count(), 1, "{text}");
-
-    let json = |account: &str| {
-        let row = rows
-            .iter()
-            .find(|row| row.account.to_string() == account)
-            .unwrap();
-        serde_json::to_value(row).unwrap()
-    };
-    let codex = json("codex@default");
-    assert_eq!(codex["spend_step"], "paid_credit");
-    assert_eq!(
-        codex["extra_credits"],
-        serde_json::to_value(&paying).unwrap()
-    );
-    assert_eq!(json("codex@team")["spend_step"], "spent");
-    let unread = json("claude@default");
-    assert!(unread.get("extra_credits").is_none(), "{unread}");
-    assert_eq!(unread["spend_step"], serde_json::Value::Null);
 }
-
 #[test]
 fn list_marks_unknown_agent_counts_and_undeclared_selections() {
-    let (rows, text) = listed("[use]\ncodex = \"gone\"\n", None, &BTreeMap::new());
+    let (rows, text) = listed("[use]\ncodex = 'gone'\n", None, &BTreeMap::new());
     let gone = rows
         .iter()
         .find(|row| row.account.name.as_str() == "gone")
-        .expect("an undeclared selection keeps a row");
+        .unwrap();
     assert_eq!(gone.status, AccountStatus::Unavailable);
-    assert!(!gone.active, "an undeclared selection is unavailable");
-    assert_eq!(gone.default_for.label(), "new rooms");
-    assert!(text.contains("unavailable"), "{text}");
-    assert!(
-        !text
-            .lines()
-            .any(|line| line.starts_with('●') && line.contains("codex")),
-        "{text}"
-    );
-    assert!(
-        text.lines()
-            .any(|line| line.starts_with("○  codex   gone     unavailable   –        –   ")),
-        "the new-rooms default keeps its mark and reads no window: {text}"
-    );
-    assert!(
-        table(&text)
-            .iter()
-            .filter(|line| line.contains("codex   "))
-            .all(|line| line.contains("  –  ")),
-        "{text}"
-    );
-    assert!(
-        text.contains("\n●  machine default   ○  new rooms\n"),
-        "claude follows the machine layer, and codex shows its unmarked default: {text}"
-    );
-    let gone = serde_json::to_value(gone).unwrap();
-    assert_eq!(gone["agents"], serde_json::Value::Null);
-    assert_eq!(gone["status"], "unavailable");
-    assert_eq!(gone["active"], false);
-    assert_eq!(gone["windows"], serde_json::json!([]));
-    assert_eq!(gone["metered"], serde_json::Value::Null);
+    assert!(!gone.active);
+    assert!(gone.default_for.contains(Scope::NewRooms));
+    assert!(text.contains("○  gone"), "{text}");
+    assert!(text.contains("○ new rooms"), "{text}");
+    let json = serde_json::to_value(gone).unwrap();
+    assert_eq!(json["agents"], serde_json::Value::Null);
+    assert_eq!(json["windows"], serde_json::json!([]));
 }
-
 #[test]
 fn markers_and_legend_name_the_layer_that_decides() {
-    let machine = machine("[claude.alpha]\nhome = \"/srv/alpha\"\n[use]\nclaude = \"alpha\"\n");
+    let machine = machine("[claude.alpha]\nhome = '/srv/alpha'\n[use]\nclaude = 'alpha'\n");
     let standing = AccountStanding::machine_only(&machine);
     let mut rows = rows_at(&machine, &standing, None, &BTreeMap::new());
-    // A room at the position that launches claude on `default`.
     for row in &mut rows {
         row.active = row.account.name.is_default();
     }
@@ -567,35 +659,28 @@ fn markers_and_legend_name_the_layer_that_decides() {
         &[("claude", Deciding::Room), ("codex", Deciding::Room)],
         None,
     );
-    let lines = table(&room);
-    assert!(lines[1].starts_with("●  claude  default"), "{room}");
-    assert!(lines[2].starts_with("○  claude  alpha"), "{room}");
-    assert!(lines[4].starts_with("●  codex   default"), "{room}");
-    assert!(room.contains("\n●  this room   ○  new rooms\n"), "{room}");
-
+    assert!(
+        room.contains("● next launch from here (this room)   ○ new rooms"),
+        "{room}"
+    );
     let project = text(
         &rows,
         &[("claude", Deciding::Project), ("codex", Deciding::Machine)],
         None,
     );
     assert!(
-        project
-            .contains("\n●  this project (claude)   ●  machine default (codex)   ○  new rooms\n"),
+        project.contains("claude pinned by this project, codex by machine default   ○ new rooms"),
         "{project}"
     );
     for row in &mut rows {
         row.active = row.machine_default;
     }
-    let project = text(&rows, &[("claude", Deciding::Project)], None);
-    assert!(
-        !table(&project).iter().any(|line| line.starts_with('○')),
-        "{project}"
+    let project = text(
+        &rows,
+        &[("claude", Deciding::Project), ("codex", Deciding::Machine)],
+        None,
     );
-    assert!(
-        project.contains("\n●  this project   ○  new rooms\n"),
-        "the ○ half stays under a project: {project}"
-    );
-
+    assert!(!project.contains('○'), "{project}");
     let unread = rows_at(
         &machine,
         &AccountStanding::unread(&machine),
@@ -603,125 +688,41 @@ fn markers_and_legend_name_the_layer_that_decides() {
         &BTreeMap::new(),
     );
     let unread = text(&unread, &[], None);
-    let lines = table(&unread);
     assert!(!unread.contains('●'), "{unread}");
-    assert!(lines[1].starts_with("   claude  default"), "{unread}");
-    assert!(lines[2].starts_with("○  claude  alpha"), "{unread}");
-    assert!(lines[4].starts_with("○  codex   default"), "{unread}");
-    assert!(unread.contains("\n○  new rooms\n"), "{unread}");
+    assert!(unread.contains("○ new rooms"), "{unread}");
 }
-
 #[test]
-fn window_cells_read_what_is_left_and_when_it_resets() {
-    let accounts = "[claude.alpha]\nhome = \"/srv/alpha\"\n[claude.beta]\nhome = \"/srv/beta\"\n[claude.gamma]\nhome = \"/srv/gamma\"\n[codex.team]\nhome = \"/srv/team\"\n";
-    let lifted = RateLimitWindow {
-        lifted: true,
-        ..window(FIVE_HOURS, Some(40), None)
-    };
+fn window_cells_hide_logged_out_and_lapsed_quotas() {
     let readings = BTreeMap::from([
         (
             key("claude", "default"),
-            logged_in(vec![
-                window(FIVE_HOURS, Some(2), Some(3 * 3_600 + 32 * 60)),
-                window(SEVEN_DAYS, Some(69), None),
-            ]),
+            logged_in(vec![window(FIVE_HOURS, Some(2), Some(3780))]),
         ),
         (
             key("claude", "alpha"),
             LoginReading {
                 status: ProviderStatus::LoggedOut,
-                entitlement: Default::default(),
-                extra_credits: None,
-                reset_credits: None,
-                spend_step: SpendStep::Subscription,
-                metered: Some(true),
-                windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
-            },
-        ),
-        (
-            key("claude", "beta"),
-            logged_in(vec![window(FIVE_HOURS, None, Some(3_600))]),
-        ),
-        (
-            key("claude", "gamma"),
-            LoginReading {
-                status: ProviderStatus::Unavailable,
-                entitlement: Default::default(),
-                extra_credits: None,
-                reset_credits: None,
-                spend_step: SpendStep::Subscription,
-                metered: None,
-                windows: vec![window(SEVEN_DAYS, Some(50), Some(3_600))],
-            },
-        ),
-        (
-            key("codex", "default"),
-            LoginReading {
-                status: ProviderStatus::LoggedIn,
-                entitlement: Default::default(),
-                extra_credits: None,
-                reset_credits: None,
-                spend_step: SpendStep::Subscription,
-                metered: Some(false),
-                windows: vec![window(FIVE_HOURS, Some(10), Some(60))],
+                ..logged_in(vec![window(FIVE_HOURS, Some(96), Some(3780))])
             },
         ),
         (
             key("codex", "team"),
-            logged_in(vec![lifted, window(SEVEN_DAYS, Some(0), Some(7 * 86_400))]),
+            LoginReading {
+                entitlement: Entitlement::Lapsed { since_ms: 1 },
+                ..logged_in(vec![window(FIVE_HOURS, Some(96), Some(3780))])
+            },
         ),
     ]);
-    let (rows, text) = listed(accounts, None, &readings);
-    let cells = |name: &str, kind: &str| -> String {
-        let line = table(&text)
-            .into_iter()
-            .find(|line| line.contains(&format!("{kind}  ")) && line.contains(name))
-            .unwrap_or_else(|| panic!("no {kind} {name} row in {text}"));
-        let from = text.lines().next().unwrap().find("5h LEFT").unwrap();
-        let to = text.lines().next().unwrap().find("EXTRA").unwrap();
-        line.chars()
-            .skip(from)
-            .take(to - from)
-            .collect::<String>()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    // A reset-less window with a known span is the pre-start placeholder,
-    // which reads as untouched here as in `rimz providers`.
+    let (rows, text) = listed(ACCOUNTS, None, &readings);
+    assert!(text.contains("98% · 1h03m · 0.0x"), "{text}");
+    assert!(!text.contains("4%"), "{text}");
     assert_eq!(
-        cells("default", "claude"),
-        "98% · 3h32m · 0.1x 100%",
-        "{text}"
+        serde_json::to_value(&rows[0]).unwrap()["windows"][0]["used_percentage"],
+        2
     );
-    assert_eq!(cells("alpha", "claude"), "– –", "logged out: {text}");
-    assert_eq!(cells("beta", "claude"), "– –", "no percentage, no window");
-    assert_eq!(
-        cells("gamma", "claude"),
-        "– 50% · 1h00m · 0.5x",
-        "failed probe"
-    );
-    assert_eq!(
-        cells("default", "codex"),
-        "no limit no limit",
-        "unmetered: {text}"
-    );
-    assert_eq!(
-        cells("team", "codex"),
-        "no limit 100% · ready",
-        "lifted: {text}"
-    );
-
-    let default = serde_json::to_value(&rows[0]).unwrap();
-    assert_eq!(default["metered"], true);
-    assert_eq!(default["windows"][0]["used_percentage"], 2);
-    assert!(default["windows"][0]["resets_at"].is_string(), "{default}");
-    assert_eq!(default["windows"][1]["used_percentage"], 69);
-    assert_eq!(default["login"], "logged_in", "{default}");
 }
-
 #[test]
-fn the_list_keeps_only_the_unscoped_5h_and_7d_windows() {
+fn list_keeps_every_reported_window() {
     let scoped = RateLimitWindow {
         scope: Some(rimz::agents::RateLimitWindowScope {
             id: "model:fable".to_owned(),
@@ -729,21 +730,19 @@ fn the_list_keeps_only_the_unscoped_5h_and_7d_windows() {
         }),
         ..window(SEVEN_DAYS, Some(95), None)
     };
-    let kept = list_windows(&[
+    let windows = vec![
         scoped,
-        window(SEVEN_DAYS, Some(30), None),
         window(60, Some(99), None),
         window(FIVE_HOURS, Some(10), None),
-    ]);
-    assert_eq!(
-        kept,
-        [
-            window(FIVE_HOURS, Some(10), None),
-            window(SEVEN_DAYS, Some(30), None)
-        ]
+    ];
+    let (rows, text) = listed(
+        ACCOUNTS,
+        None,
+        &BTreeMap::from([(key("claude", "alpha"), logged_in(windows.clone()))]),
     );
+    assert_eq!(rows[1].windows, windows);
+    assert!(text.contains("Fable LEFT"), "{text}");
 }
-
 #[test]
 fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
     let machine = machine("[claude.alpha]\nhome = \"/srv/my alpha\"\n");
@@ -822,31 +821,18 @@ fn a_logged_out_account_reads_logged_out_unless_its_setup_is_broken() {
 }
 
 #[test]
-fn only_home_clips_at_a_terminal_bound() {
-    let machine = machine("[claude.alpha]\nhome = \"/srv/a/rather/long/account/home/alpha\"\n");
-    let standing = AccountStanding::machine_only(&machine);
-    let rows = rows_at(&machine, &standing, None, &BTreeMap::new());
-    let deciding = [("claude", Deciding::Machine), ("codex", Deciding::Machine)];
-    let full = text(&rows, &deciding, None);
-    let alpha = |text: &str| -> String {
-        table(text)
-            .into_iter()
-            .find(|line| line.contains("alpha"))
-            .unwrap()
-            .to_owned()
-    };
-    assert!(
-        alpha(&full).ends_with("  /srv/a/rather/long/account/home/alpha"),
-        "{full}"
+fn overview_has_no_home_column_or_terminal_clipping() {
+    let (rows, full) = listed(ACCOUNTS, None, &BTreeMap::new());
+    assert!(!full.contains("HOME"), "{full}");
+    assert_eq!(
+        text(
+            &rows,
+            &[("claude", Deciding::Machine), ("codex", Deciding::Machine)],
+            Some(20)
+        ),
+        full
     );
-    let bound = alpha(&full).chars().count() - 10;
-    let clipped = text(&rows, &deciding, Some(bound));
-    assert_eq!(alpha(&clipped).chars().count(), bound, "{clipped}");
-    let home = alpha(&full).find("/srv").unwrap();
-    assert_eq!(alpha(&clipped)[..home], alpha(&full)[..home], "{clipped}");
-    assert!(alpha(&clipped).ends_with('…'), "{clipped}");
 }
-
 #[test]
 fn removed_notice_without_live_rooms_matches_reference() {
     assert_eq!(

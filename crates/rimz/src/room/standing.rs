@@ -1,6 +1,6 @@
 //! Account standing: which account a launch at one project root uses for each
 //! provider kind, and which layers make each account a default. `rimz accounts
-//! list`, `rimz providers`, and `rimz doctor` all read it, so they say the same.
+//! list` and `rimz doctor` both read it, so they say the same.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

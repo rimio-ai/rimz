@@ -763,40 +763,44 @@ pub(crate) fn account_marker_legend(
             (!kinds.is_empty()).then_some((layer, kinds))
         })
         .collect();
-    let active = layers.iter().map(|(layer, kinds)| {
-        let words = match layer {
-            Deciding::Room => "this room",
-            Deciding::Project => "this project",
-            Deciding::Machine => "machine default",
-        };
-        let kinds = if layers.len() > 1 {
-            format!(
-                " ({})",
-                kinds.iter().copied().collect::<Vec<_>>().join(", ")
-            )
-        } else {
-            String::new()
-        };
-        format!("{}  {words}{kinds}", paint(palette::accent(), "●"))
-    });
-    let new_rooms = machine_marker.then(|| format!("{}  new rooms", paint(palette::muted(), "○")));
-    let halves: Vec<_> = active.chain(new_rooms).collect();
+    let active = match layers.as_slice() {
+        [] => None,
+        [(layer, _)] => {
+            let words = match layer {
+                Deciding::Room => "this room",
+                Deciding::Project => "this project",
+                Deciding::Machine => "machine default",
+            };
+            Some(format!(
+                "{} next launch from here ({words})",
+                paint(palette::accent(), "●")
+            ))
+        }
+        _ => {
+            let groups = layers
+                .iter()
+                .map(|(layer, kinds)| {
+                    let words = match layer {
+                        Deciding::Room => "pinned by this room",
+                        Deciding::Project => "pinned by this project",
+                        Deciding::Machine => "by machine default",
+                    };
+                    format!(
+                        "{} {words}",
+                        kinds.iter().copied().collect::<Vec<_>>().join(", ")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!(
+                "{} next launch from here: {groups}",
+                paint(palette::accent(), "●")
+            ))
+        }
+    };
+    let new_rooms = machine_marker.then(|| format!("{} new rooms", paint(palette::muted(), "○")));
+    let halves: Vec<_> = active.into_iter().chain(new_rooms).collect();
     (!halves.is_empty()).then(|| halves.join("   "))
-}
-
-/// Explain the multiplier only when a displayed window has one.
-pub(crate) fn pace_legend<'a>(
-    mut windows: impl Iterator<Item = &'a rimz::agents::RateLimitWindow>,
-    now: Timestamp,
-) -> Option<&'static str> {
-    windows
-        .any(|window| {
-            !window.lifted
-                && !window.not_started(now)
-                && !window.is_spent()
-                && window.pace(now).is_some_and(|pace| pace.past_floor())
-        })
-        .then_some("pace: used share ÷ elapsed share; 1.0x lasts exactly to reset")
 }
 
 fn pace_text(ratio: f64) -> String {
@@ -857,28 +861,67 @@ pub(crate) fn extra_credits_cell(extra: Option<&rimz::agents::ExtraCredits>, pay
     }
 }
 
-/// A rate-limit window's table cell in what is left: `no limit` when lifted,
-/// `N% · ready` before its clock starts, else the percentage with its reset
-/// countdown and pace when known. `None` without a reading.
-pub(crate) fn window_cell(window: &rimz::agents::RateLimitWindow, now: Timestamp) -> Option<Cell> {
-    if window.lifted {
-        return Some(cell("no limit"));
-    }
-    let percent = percent_left_cell(window.remaining_percentage(now)?);
-    if window.not_started(now) {
-        return Some(percent.suffix("· ready", palette::body()));
-    }
-    let mut percent = match window.resets_at {
-        Some(deadline) => percent.suffix(
-            format!("· {}", rimz::theme::fmt::reset_countdown(deadline, now)),
-            palette::body(),
-        ),
-        None => percent,
-    };
-    if let Some((text, style)) = window_pace(window, now) {
-        percent = percent.suffix("·", palette::body()).suffix(text, style);
-    }
-    Some(percent)
+/// Align each window's percentage and countdown within one table column.
+pub(crate) fn window_cells<'a>(
+    windows: impl Iterator<Item = Option<&'a rimz::agents::RateLimitWindow>>,
+    now: Timestamp,
+) -> Vec<Option<Cell>> {
+    let windows: Vec<_> = windows.collect();
+    let parts: Vec<_> = windows
+        .iter()
+        .map(|window| {
+            let window = (*window)?;
+            if window.lifted {
+                return None;
+            }
+            let left = window.remaining_percentage(now)?;
+            let countdown = if window.not_started(now) {
+                Some("ready".to_owned())
+            } else {
+                window
+                    .resets_at
+                    .map(|deadline| rimz::theme::fmt::reset_countdown(deadline, now))
+            };
+            Some((left, countdown))
+        })
+        .collect();
+    let percent_width = parts
+        .iter()
+        .flatten()
+        .map(|(left, _)| format!("{left}%").len())
+        .max()
+        .unwrap_or(0);
+    let countdown_width = parts
+        .iter()
+        .flatten()
+        .filter_map(|(_, countdown)| countdown.as_ref())
+        .map(String::len)
+        .max()
+        .unwrap_or(0);
+    windows
+        .into_iter()
+        .zip(parts)
+        .map(|(window, parts)| {
+            let window = window?;
+            if window.lifted {
+                return Some(cell("no limit"));
+            }
+            let (left, countdown) = parts?;
+            let mut percent =
+                cell(format!("{:>percent_width$}", format!("{left}%"))).fg(palette::budget(left));
+            let pace = window_pace(window, now);
+            if let Some(countdown) = countdown {
+                percent =
+                    percent.suffix(format!("· {countdown:>countdown_width$}"), palette::body());
+            } else if pace.is_some() {
+                percent = percent.suffix(format!("· {:countdown_width$}", ""), palette::body());
+            }
+            if let Some((text, style)) = pace {
+                percent = percent.suffix("·", palette::body()).suffix(text, style);
+            }
+            Some(percent)
+        })
+        .collect()
 }
 
 pub(crate) fn terminal_columns(fallback: usize) -> usize {
@@ -1043,14 +1086,13 @@ enum Body {
         detail: Option<Cell>,
     },
     Section(Vec<Cell>),
-    Blank,
 }
 
 impl Body {
     fn row_cells(&self) -> Option<&[Cell]> {
         match self {
             Self::Row(cells) | Self::Card { cells, .. } => Some(cells),
-            Self::Section(_) | Self::Blank => None,
+            Self::Section(_) => None,
         }
     }
 
@@ -1142,11 +1184,6 @@ impl Table {
         self.section_cells(vec![cell(label).fg(palette::header())]);
     }
 
-    /// Separate groups of rows with an empty line; the columns stay shared.
-    pub(crate) fn blank(&mut self) {
-        self.rows.push(Body::Blank);
-    }
-
     /// Open a group with styled spans joined by one space.
     pub(crate) fn section_cells(&mut self, cells: Vec<Cell>) {
         self.rows.push(Body::Section(cells));
@@ -1216,7 +1253,6 @@ impl Table {
                 Ok(())
             }
             Body::Section(cells) => self.write_section(w, cells),
-            Body::Blank => writeln!(w),
         }
     }
 

@@ -1,0 +1,7 @@
+---
+source: crates/rimz/src/cli/accounts/report_tests.rs
+expression: text
+---
+Claude · v1.2.3
+  NAME     PLAN    AGENTS  READING
+  default  lapsed  –       never read

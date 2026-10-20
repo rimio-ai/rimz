@@ -16,10 +16,45 @@ fn accounts(env: &Env, args: &[&str]) -> Output {
 }
 
 #[test]
+fn unsupported_login_check_does_not_claim_logout() {
+    let env = Env::new();
+    crate::common::write_path_shim(&provider_bin(&env), "kiro-cli", "echo 2.31.0");
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["hooks", "install", "kiro"])
+            .output()
+            .unwrap(),
+    );
+    let rows: Value =
+        serde_json::from_str(&succeeded(&accounts(&env, &["show", "kiro", "--json"]))).unwrap();
+    let row = &rows[0];
+    assert_eq!(row["login"], "logged_out", "retain the raw probe record");
+    assert_eq!(row["status"], "ready", "{row}");
+    assert_eq!(row.get("problem"), None, "{row}");
+    for args in [&["--all"][..], &["show", "kiro"][..]] {
+        let text = succeeded(&accounts(&env, args));
+        assert!(text.contains("no login check"), "{text}");
+        assert!(
+            !text.contains("logged out") && !text.contains("log in once"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn bare_accounts_runs_list() {
     let env = Env::new();
     let bare = succeeded(&accounts(&env, &[]));
-    assert!(bare.contains("KIND") && bare.contains("STATUS"), "{bare}");
+    assert!(bare.contains("Also:"), "{bare}");
+    assert!(!bare.contains("KIND") && !bare.contains("STATUS"), "{bare}");
+    assert_eq!(bare, succeeded(&accounts(&env, &["list"])));
+    let alias = hermetic(&env, &mut env.rimz())
+        .arg("providers")
+        .output()
+        .unwrap();
+    assert_eq!(bare, succeeded(&alias));
+    assert_eq!(String::from_utf8_lossy(&alias.stderr).lines().count(), 1);
+    assert!(String::from_utf8_lossy(&alias.stderr).contains("is deprecated"));
 }
 
 #[test]
@@ -301,6 +336,7 @@ fn doctor_invalid_kind_keeps_its_error_and_default_beside_healthy_accounts() {
 
 fn invalid_kind_report(doctor: bool) {
     let env = Env::new();
+    crate::common::write_path_shim(&provider_bin(&env), "codex", "echo 0.0.0");
     succeeded(&accounts(&env, &["add", "claude", "work"]));
     let config = env.rimz_home().join("config.toml");
     let mut machine = std::fs::read_to_string(&config).unwrap();
@@ -373,12 +409,15 @@ fn invalid_kind_report(doctor: bool) {
     );
     if !doctor {
         assert_eq!(default["active"], false);
-        let human = succeeded(&accounts(&env, &["list"]));
+        let human = succeeded(&accounts(&env, &["list", "--all"]));
+        assert!(human.contains("Codex"), "{human}");
+        assert!(
+            human.contains("give each account its own directory"),
+            "{human}"
+        );
         let default_row = human
             .lines()
-            .find(|row| {
-                row.contains("codex") && row.contains("default") && row.contains("unavailable")
-            })
+            .find(|row| row.contains("default") && row.contains("unavailable"))
             .expect("failed kind retains its unavailable default row in the table");
         assert_eq!(default["default_for"], json!([]), "{human}");
         assert_eq!(default["machine_default"], false, "{human}");
@@ -748,8 +787,37 @@ fn accounts_add_creates_a_hooked_home_and_remove_forgets_only_the_entry() {
             "agents": 0,
             "windows": [],
             "metered": null,
-            "spend_step": "subscription"
+            "spend_step": "subscription",
+            "pool": "claude@default",
+            "product_name": "Claude · work",
+            "probed_at": work["probed_at"],
+            "probe_error": work["probe_error"],
+            "plan": null,
+            "plan_label": null,
+            "account_id": null,
+            "sub_provider": null,
+            "account_scope": null,
+            "version": null,
+            "spending": null,
+            "day_budget": null
         })
+    );
+
+    let detail: Value = serde_json::from_str(&succeeded(&accounts(
+        &env,
+        &["show", "claude@work", "--json"],
+    )))
+    .unwrap();
+    assert_eq!(detail.as_array().unwrap().len(), 1);
+    assert_eq!(detail[0]["account"], "claude@work");
+    assert_eq!(detail[0]["home"], home_arg);
+    let kind: Value =
+        serde_json::from_str(&succeeded(&accounts(&env, &["show", "claude", "--json"]))).unwrap();
+    assert_eq!(kind.as_array().unwrap().len(), 2);
+    let missing = failed(&accounts(&env, &["show", "claude@missing"]));
+    assert!(
+        missing.contains("no claude account `missing`; configured: default, work"),
+        "{missing}"
     );
 
     let removed = succeeded(&accounts(&env, &["remove", "claude", "work"]));
@@ -1015,6 +1083,18 @@ fn accounts_remove_warns_only_for_rooms_pinning_the_account() {
 #[test]
 fn machine_account_switch_and_removal_preserve_declared_accounts() {
     let env = Env::new();
+    crate::common::write_path_shim(&provider_bin(&env), "grok", "echo 0.0.0");
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["hooks", "install", "grok"])
+            .output()
+            .unwrap(),
+    );
+    std::fs::write(
+        env.home_root.join(".grok/auth.json"),
+        r#"{"test":{"auth_mode":"api_key","key":"fixture"}}"#,
+    )
+    .unwrap();
     let missing = failed(&accounts(&env, &["use", "--global", "codex", "missing"]));
     assert!(
         missing.contains("rimz accounts add codex missing"),
@@ -1065,17 +1145,25 @@ fn machine_account_switch_and_removal_preserve_declared_accounts() {
         .output()
         .expect("run rimz config set");
     succeeded(&set);
+    let human = succeeded(&accounts(&env, &["show", "grok"]));
+    assert!(
+        human
+            .lines()
+            .any(|line| line.contains("grok@work") && line.contains("unavailable")),
+        "undeclared selections keep the installed kind's setup state: {human}"
+    );
     succeeded(&accounts(&env, &["use", "--global", "grok", "default"]));
     let listed: Value =
         serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();
-    assert!(
-        listed
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["kind"] != "grok"),
-        "{listed}"
-    );
+    let grok: Vec<_> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["kind"] == "grok")
+        .collect();
+    assert_eq!(grok.len(), 1, "{listed}");
+    assert_eq!(grok[0]["account"], "grok@default");
+    assert!(grok[0].get("problem").is_none(), "{listed}");
 }
 
 #[test]
@@ -1094,7 +1182,19 @@ fn a_broken_project_config_warns_and_marks_no_account() {
             .expect("run rimz");
         let rows: Value = serde_json::from_str(&succeeded(&output)).expect("json rows");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(stderr.matches("warning").count(), 1, "{args:?}: {stderr}");
+        assert_eq!(
+            stderr
+                .lines()
+                .filter(|line| line.contains("warning") && line.contains("config.toml"))
+                .count(),
+            1,
+            "{args:?}: {stderr}"
+        );
+        assert_eq!(
+            stderr.contains("is deprecated"),
+            args[0] == "providers",
+            "{stderr}"
+        );
         assert!(stderr.contains("config.toml"), "{args:?}: {stderr}");
         let rows = rows.as_array().unwrap();
         assert!(
@@ -1181,6 +1281,30 @@ fn list_probes_a_logged_out_account_again_on_every_run() {
     assert_eq!(work()["status"], "logged_out");
     assert_eq!(probes(), cold + 2, "each cached logout is probed once more");
 
+    let legacy = |refresh| -> Value {
+        let mut command = env.rimz();
+        hermetic(&env, &mut command).args(["providers", "claude", "--json"]);
+        if refresh {
+            command.arg("--refresh");
+        }
+        serde_json::from_str(&succeeded(&command.output().unwrap())).unwrap()
+    };
+    let cached = probes();
+    let first = legacy(false);
+    assert_eq!(probes(), cached, "the alias reuses cached logouts");
+    assert_eq!(
+        legacy(false),
+        first,
+        "the legacy projection keeps its timestamps"
+    );
+    assert_eq!(probes(), cached, "a second alias read also keeps the TTL");
+    legacy(true);
+    assert_eq!(
+        probes(),
+        cached + 2,
+        "explicit refresh probes each login once"
+    );
+
     std::fs::write(&answer, LOGGED_IN).unwrap();
     let row = work();
     assert_eq!(row["status"], "ready", "a login made since shows at once");
@@ -1241,6 +1365,18 @@ fn list_reads_the_recorded_login_and_probes_an_ambiguous_record_again() {
         .to_string(),
     )
     .unwrap();
+
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .args(["providers", "claude", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let probed = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        probed.is_empty(),
+        "the alias keeps cached logout and ambiguous records within the TTL: {probed}"
+    );
 
     let rows: Value =
         serde_json::from_str(&succeeded(&accounts(&env, &["list", "--json"]))).unwrap();

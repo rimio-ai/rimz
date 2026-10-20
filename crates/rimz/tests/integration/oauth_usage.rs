@@ -187,9 +187,9 @@ fn claude_old_workspace_session_cannot_repaint_switched_account_limits() {
 
     let output = env
         .rimz()
-        .args(["providers", "claude", "--json"])
+        .args(["accounts", "show", "claude", "--json"])
         .bounded_output()
-        .expect("rimz providers claude");
+        .expect("rimz accounts show claude");
     assert!(
         output.status.success(),
         "providers stderr: {}",
