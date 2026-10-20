@@ -2,6 +2,33 @@ use super::*;
 use crate::agents::testkit::{hook_lifecycle, hook_output};
 
 #[test]
+fn transcript_tail_without_its_last_usage_reports_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let usage = json!({
+        "type": "assistant",
+        "message": { "usage": { "input_tokens": 100_000, "output_tokens": 500 } },
+    });
+    let tool = json!({ "type": "user", "message": { "content": "x".repeat(1024) } });
+    std::fs::write(
+        &path,
+        format!("{usage}\n{}", format!("{tool}\n").repeat(70)),
+    )
+    .unwrap();
+
+    let obs = hook_lifecycle(
+        &ClaudeAdapter,
+        "Stop",
+        &json!({ "session_id": "sess-1", "transcript_path": path }),
+    );
+    assert_eq!(obs.usage.total_tokens, None);
+    assert_eq!(obs.usage.fresh_input_tokens, None);
+    assert_eq!(obs.usage.cache_read_input_tokens, None);
+    assert_eq!(obs.usage.cache_write_input_tokens, None);
+    assert_eq!(obs.usage.output_tokens, None);
+}
+
+#[test]
 fn transcript_tail_drives_context_window_and_tokens() {
     // Claude reports token usage only in the transcript JSONL; the Stop hook
     // reads its tail for the gauge numerator. A bare model id carries no `[1m]`

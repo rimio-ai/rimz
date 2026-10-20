@@ -169,6 +169,8 @@ pub(super) fn read_transcript_tail(path: &Path) -> Option<String> {
 pub(super) struct TranscriptTail {
     pub(crate) text: String,
     pub(crate) torn_suffix: bool,
+    /// Whether the read began at byte zero of the file as sized at read time.
+    pub(crate) whole_file: bool,
 }
 
 /// Length of the consumable JSONL prefix plus whether the unconsumed suffix
@@ -191,15 +193,17 @@ fn complete_jsonl_prefix(bytes: &[u8]) -> (usize, bool) {
 }
 
 /// The bounded transcript tail plus whether an incomplete final record was
-/// excluded. Cursor uses the extra bit to prove its transcript is resting at
-/// a terminal row; other adapters retain the string-only wrapper above.
+/// excluded and whether the read began at byte zero. Cursor uses the
+/// torn-suffix bit to prove its transcript is resting at a terminal row;
+/// usage scans use the whole-file fact to distinguish zero from unknown.
 pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<TranscriptTail> {
     use std::io::{Read, Seek, SeekFrom};
 
     const TAIL_BYTES: u64 = 64 * 1024;
     let mut file = fs::File::open(path).ok()?;
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let len = file.metadata().ok()?.len();
     let normal_start = len.saturating_sub(TAIL_BYTES);
+    let mut whole_file = normal_start == 0;
     file.seek(SeekFrom::Start(normal_start)).ok()?;
     let mut buf = Vec::with_capacity(usize::try_from(len - normal_start).unwrap_or(0));
     file.by_ref()
@@ -248,6 +252,7 @@ pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
             buf.clear();
             file.seek(SeekFrom::Start(record_start)).ok()?;
             file.take(len - record_start).read_to_end(&mut buf).ok()?;
+            whole_file = record_start == 0;
         }
     }
 
@@ -256,6 +261,7 @@ pub(super) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
     Some(TranscriptTail {
         text: String::from_utf8_lossy(&buf).into_owned(),
         torn_suffix,
+        whole_file,
     })
 }
 
@@ -440,6 +446,31 @@ mod tests {
 
         // Nothing new past the cursor.
         assert!(read_transcript_lines(&path, next).is_none());
+    }
+
+    #[test]
+    fn transcript_tail_reports_whether_it_starts_at_byte_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let oversized = format!(
+            "{}\n",
+            serde_json::json!({ "content": "x".repeat(70 * 1024) })
+        );
+        let ordinary = "{\"tool\":true}\n".repeat(6 * 1024);
+        let actual: Vec<_> = [
+            String::new(),
+            "{\"new\":true}\n".to_owned(),
+            ordinary,
+            oversized.clone(),
+            format!("{{\"old\":true}}\n{oversized}"),
+        ]
+        .into_iter()
+        .map(|content| {
+            fs::write(&path, content).unwrap();
+            read_transcript_tail_with_status(&path).unwrap().whole_file
+        })
+        .collect();
+        assert_eq!(actual, [true, true, false, true, false]);
     }
 
     #[test]

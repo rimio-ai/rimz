@@ -10,6 +10,38 @@ use crate::agents::{
 };
 
 #[test]
+fn rollout_tail_without_its_last_usage_keeps_model_but_reports_unknown_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let usage = json!({
+        "type": "event_msg",
+        "payload": { "type": "token_count", "info": {
+            "last_token_usage": { "input_tokens": 100_000, "output_tokens": 500, "total_tokens": 100_500 },
+            "model_context_window": 258_400,
+        } },
+    });
+    let tool = json!({ "type": "response_item", "payload": { "type": "function_call_output", "output": "x".repeat(1024) } });
+    let model =
+        json!({ "type": "turn_context", "payload": { "model": "gpt-5.5", "effort": "high" } });
+    std::fs::write(
+        &path,
+        format!("{usage}\n{}{model}\n", format!("{tool}\n").repeat(70)),
+    )
+    .unwrap();
+
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.total_tokens, None);
+    assert_eq!(usage.last_input_tokens, None);
+    assert_eq!(usage.last_cached_input_tokens, None);
+    assert_eq!(usage.last_cache_write_tokens, None);
+    assert_eq!(usage.last_output_tokens, None);
+    assert_eq!(usage.context_window, None);
+    assert_eq!(usage.reported_context_window(), None);
+    assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(usage.effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     let dir = tempfile::tempdir().unwrap();
 
@@ -97,7 +129,7 @@ fn shared_scan_keeps_latest_usage_and_same_turn_plan_past_older_recovery() {
     );
 
     let (usage, outcome, raw_error) =
-        scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts();
+        scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts(true);
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(usage.effort.as_deref(), Some("high"));
     assert_eq!(usage.last_input_tokens, Some(120));

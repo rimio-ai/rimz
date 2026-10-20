@@ -24,7 +24,8 @@ use crate::agents::context::{
 use crate::agents::pricing;
 use crate::agents::{
     FieldPatch, LocalContextPatch, LocalContextRefresh, LocalSpendFold, LocalTokenPatch,
-    ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string, read_transcript_tail,
+    ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string,
+    read_transcript_tail_with_status,
 };
 use crate::ids::AgentSessionId;
 
@@ -58,10 +59,13 @@ pub fn refresh_transcript_context(
 
     let prices = pricing::cached_book(pricing_cache_path);
     let spend_fold = resume_live_fold(&path, prior_spend_fold, stat.len, &prices);
-    let tail = read_transcript_tail(&path);
+    let tail = read_transcript_tail_with_status(&path);
     let (usage, outcome, _) = tail
-        .as_deref()
-        .map(|tail| scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts())
+        .as_ref()
+        .map(|tail| {
+            scan_transcript_tail(&tail.text, TranscriptScanNeed::UsageAndOutcome)
+                .into_parts(tail.whole_file)
+        })
         .unwrap_or_default();
     let (settle, turn_error) = match outcome {
         Some(RestingTurnOutcome::Complete(at)) => {
@@ -310,11 +314,10 @@ pub(super) fn configured_reasoning_effort_at(path: &Path) -> Option<String> {
 }
 
 impl TranscriptUsage {
-    /// A rollout that opened cleanly but carries no `token_count` event yet —
-    /// a brand-new session. Report an explicit zero so the gauge draws an
-    /// empty bar at 0% instead of vanishing until the first turn completes. A
-    /// rollout that cannot be read stays `default()` (all `None`): unknown,
-    /// not zero. Mirrors the Claude adapter's `fresh()` semantics.
+    /// A whole-file read with no `token_count` event: report explicit zeroes
+    /// and the default window for a fresh session. An unreadable rollout or a
+    /// bounded tail without usage supplies no token or window reading,
+    /// preserving prior values.
     fn fresh() -> Self {
         Self {
             context_window: Some(DEFAULT_CONTEXT_WINDOW),
@@ -460,10 +463,10 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 /// refresh path reads the tail once for usage and turn-completion together.
 #[cfg(test)]
 pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
-    let Some(text) = read_transcript_tail(path) else {
+    let Some(tail) = read_transcript_tail_with_status(path) else {
         return TranscriptUsage::default();
     };
-    scan_transcript_tail(&text, TranscriptScanNeed::UsageOnly).into_usage()
+    scan_transcript_tail(&tail.text, TranscriptScanNeed::UsageOnly).into_usage(tail.whole_file)
 }
 
 const MESSAGELESS_TASK_COMPLETE_LABEL: &str = "turn ended with no final message";
@@ -823,13 +826,17 @@ impl TranscriptScan {
                     && matches!(self.raw_error, RawErrorScan::Resolved(_)))
     }
 
-    pub(super) fn into_usage(self) -> TranscriptUsage {
+    pub(super) fn into_usage(self, whole_file: bool) -> TranscriptUsage {
         match self.latest_usage {
             Some(last) => usage_from_last_record(last, self.latest_model, self.latest_effort),
             None => TranscriptUsage {
                 model: self.latest_model,
                 effort: self.latest_effort,
-                ..TranscriptUsage::fresh()
+                ..if whole_file {
+                    TranscriptUsage::fresh()
+                } else {
+                    TranscriptUsage::default()
+                }
             },
         }
     }
@@ -853,6 +860,7 @@ impl TranscriptScan {
 
     pub(super) fn into_parts(
         mut self,
+        whole_file: bool,
     ) -> (
         TranscriptUsage,
         Option<RestingTurnOutcome>,
@@ -867,7 +875,7 @@ impl TranscriptScan {
             RawErrorScan::Resolved(error) => error,
             RawErrorScan::Searching => None,
         };
-        (self.into_usage(), outcome, raw_error)
+        (self.into_usage(whole_file), outcome, raw_error)
     }
 }
 

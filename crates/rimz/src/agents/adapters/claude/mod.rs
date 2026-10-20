@@ -67,7 +67,8 @@ use super::{
     BackgroundShellReport, HookOutput, HookRouting, Result, RootIdentity, SanitizedPrompt,
     SessionOrigin, SpawnedSubagent, SubagentIdentity, SubagentObservation, SubagentSpawnInput,
     TranscriptMessage, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    read_transcript_tail_with_status, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::payload::finished_task_notification_ids;
 use crate::agents::version::{CliVersion, probe_cli_version};
@@ -1822,15 +1823,13 @@ struct TranscriptUsage {
 }
 
 impl TranscriptUsage {
-    /// A transcript that opened cleanly but carries no assistant usage yet — a
-    /// brand-new session. Report an explicit zero so the gauge draws an empty
-    /// bar at 0% instead of vanishing until the first turn completes. A
-    /// transcript that cannot be read stays `default()` (all `None`): unknown,
-    /// not zero.
+    /// A whole-file read with no assistant usage or compaction boundary:
+    /// report an explicit zero for a fresh session. An unreadable transcript
+    /// or a bounded tail without usage stays `default()` (all `None`),
+    /// preserving the prior reading.
     ///
-    /// Only the total is zeroed. The breakdown stays `None` so a tail that
-    /// simply outran its last usage record reports "unknown" for the split
-    /// rather than asserting four confident zeroes.
+    /// Only the total is zeroed. The breakdown stays `None` until a usage
+    /// record supplies it.
     fn fresh() -> Self {
         Self {
             total_tokens: Some(0),
@@ -1870,13 +1869,17 @@ fn context_window_for(model: &str, prices: &PriceBook) -> Option<u64> {
 /// Best-effort: any IO or parse failure yields empty fields (enrichment, never
 /// correctness).
 fn usage_from_transcript(path: &Path) -> TranscriptUsage {
-    let Some(text) = read_transcript_tail(path) else {
+    let Some(tail) = read_transcript_tail_with_status(path) else {
         return TranscriptUsage::default();
     };
-    usage_from_transcript_tail(&text, None)
+    usage_from_transcript_tail(&tail.text, None, tail.whole_file)
 }
 
-fn usage_from_transcript_tail(text: &str, agent_id: Option<&str>) -> TranscriptUsage {
+fn usage_from_transcript_tail(
+    text: &str,
+    agent_id: Option<&str>,
+    whole_file: bool,
+) -> TranscriptUsage {
     // Newest-first: the last assistant usage record wins. A truncated leading
     // line from the tail seek simply fails to parse and is skipped.
     for line in text.lines().rev() {
@@ -1932,7 +1935,11 @@ fn usage_from_transcript_tail(text: &str, agent_id: Option<&str>) -> TranscriptU
             model,
         };
     }
-    TranscriptUsage::fresh()
+    if whole_file {
+        TranscriptUsage::fresh()
+    } else {
+        TranscriptUsage::default()
+    }
 }
 
 #[cfg(test)]
