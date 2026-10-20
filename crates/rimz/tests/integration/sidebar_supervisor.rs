@@ -125,25 +125,19 @@ impl<'a> Pane<'a> {
         let _ = self.output.read_to_end(&mut self.bytes);
     }
 
-    fn notice(&mut self, expected: &str) {
+    /// Waits for the whole notice frame: the supervisor may write it in more than one piece.
+    fn notice(&mut self, failure: &str, retry_secs: u64) {
+        let frame = format!("\x1b[2J\x1b[1;1H{failure}\r\nretrying in {retry_secs}s\r\n");
         let deadline = Instant::now() + WAIT;
         loop {
             self.drain();
             let text = String::from_utf8_lossy(&self.bytes);
-            if text.contains(expected) {
-                assert!(
-                    text.contains("\x1b[2J\x1b[1;1Hsidebar: "),
-                    "clear and home before notice: {text:?}"
-                );
-                assert!(
-                    text.contains("\r\nretrying in 1s\r\n"),
-                    "raw-mode lines: {text:?}"
-                );
+            if text.contains(&frame) {
                 return;
             }
             assert!(
                 Instant::now() < deadline,
-                "notice {expected:?} not painted: {text:?}"
+                "notice frame {frame:?} not painted in raw mode: {text:?}"
             );
             thread::sleep(Duration::from_millis(5));
         }
@@ -310,7 +304,7 @@ fn rejected_host_paints_notice_records_reason_and_retries_after_backoff() {
     )
     .unwrap();
     drop(stream);
-    pane.notice("sidebar: host rejected this pane: capacity");
+    pane.notice("sidebar: host rejected this pane: capacity", 1);
     let event = pane.event("sidebar_host_unavailable");
     assert_eq!(event["cause"], "rejected");
     assert_eq!(event["reason"], "capacity");
@@ -340,23 +334,22 @@ fn rejected_host_paints_notice_records_reason_and_retries_after_backoff() {
 fn lost_host_paints_notice_and_record_update_cuts_backoff_short() {
     let env = Env::new();
     let mut pane = Pane::new(&env);
-    pane.start(|_| {});
+    // A backoff far above WAIT: a hello within WAIT can only come from the record change
+    // cutting the wait short, whatever the host's load.
+    pane.start(|command| {
+        command.env("RIMZ_TEST_SIDEBAR_SUPERVISOR_RESPAWN_BACKOFF_MS", "60000");
+    });
     let (stream, _) = pane.accept(None);
     thread::sleep(Duration::from_millis(30));
     drop(stream);
-    pane.notice("sidebar: host went away");
+    pane.notice("sidebar: host went away", 60);
     let event = pane.event("sidebar_host_unavailable");
     assert_eq!(event["cause"], "lost");
     assert!(event["attached_ms"].as_u64().is_some());
-    assert_eq!(event["retry_ms"], 1000);
+    assert_eq!(event["retry_ms"], 60000);
     let proxy = proxy_rimz(&env);
-    let changed = Instant::now();
     record_target(&env, &proxy);
     let (_stream, _) = pane.accept(None);
-    assert!(
-        changed.elapsed() < Duration::from_millis(500),
-        "record change must interrupt the one-second wait"
-    );
 }
 
 #[test]
