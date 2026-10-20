@@ -242,7 +242,7 @@ pub(in crate::cli) fn note_isolation_clamp(
     use std::io::Write as _;
     writeln!(
         std::io::stderr(),
-        "rimz: {profile} runs sandboxed: {source}, and a subagent never runs looser than its parent"
+        "rimz: {profile} runs scoped: {source}, and a subagent never runs looser than its parent"
     )?;
     Ok(())
 }
@@ -266,7 +266,7 @@ fn note_yolo_sandbox(profile: &str) -> Result<()> {
     use std::io::Write as _;
     writeln!(
         std::io::stderr(),
-        "rimz: {profile} runs yolo inside the sandbox; sudo and setuid binaries do not work there; use --isolation host"
+        "rimz: {profile} runs yolo under scoped isolation; sudo and setuid binaries do not work there; use --isolation host"
     )?;
     Ok(())
 }

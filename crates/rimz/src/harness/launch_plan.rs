@@ -33,6 +33,7 @@ pub struct LaunchPlanInputs<'a> {
     pub effective: Option<&'a LaunchAgents>,
     pub commands: &'a CommandsConfig,
     pub accounts: &'a AccountsConfig,
+    pub isolation: Isolation,
     pub bwrap: Option<&'a Path>,
     /// The room's agent rows, where a launched child finds its parent's
     /// handle, or why they could not be read.
@@ -361,6 +362,7 @@ pub fn prepare_exec(
             effective,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation,
             bwrap: bwrap.as_deref(),
             agents: agents.as_deref().map_err(String::as_str),
             ambient_env: &ambient_env,
@@ -552,7 +554,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         Ok(servers) => reminders.lsp_servers = servers,
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
-    reminders.sandbox = inputs.bwrap.is_some();
+    reminders.sandbox = inputs.isolation.is_scoped();
     reminders.env = inputs
         .effective
         .is_none_or(|effective| effective.env_reminder);
@@ -586,11 +588,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             checkout.clone(),
         );
     }
-    let isolation = if inputs.bwrap.is_some() {
-        crate::config::Isolation::Sandbox
-    } else {
-        crate::config::Isolation::Host
-    };
+    let isolation = inputs.isolation;
     extra_env.insert(Isolation::ENV.to_owned(), isolation.to_string());
     let params = &request.identity.params;
     let parent = params.parent_agent_id.as_ref().map(|id| {
@@ -1127,6 +1125,7 @@ pub mod testkit {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),

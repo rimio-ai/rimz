@@ -581,7 +581,7 @@ impl MachineConfig {
         .map(|(config, _)| config)
     }
 
-    /// `env` resolves provider skill roots for the sandbox skill check.
+    /// `env` resolves provider skill roots for the scoped skill check.
     fn load_from_with_agent_spec_sources(
         config_path: &Path,
         agents_home: &Path,
@@ -768,7 +768,7 @@ impl MachineConfig {
             self.fall_back_to_host_isolation(notices);
         }
         let library = agents_home.join("skills");
-        let check = if Isolation::ambient(env) != Some(Isolation::Sandbox) {
+        let check = if !Isolation::ambient(env).is_some_and(Isolation::is_scoped) {
             definitions::SkillCheck::Check {
                 env,
                 library: &library,
@@ -817,7 +817,7 @@ impl MachineConfig {
                 "warning: {setting} = \"sandbox\" needs Linux bubblewrap; running agents on the host instead"
             ));
         };
-        if self.agents.isolation == Isolation::Sandbox {
+        if self.agents.isolation.is_scoped() {
             self.agents.isolation = Isolation::Host;
             warn("agents.isolation");
         }
@@ -828,7 +828,7 @@ impl MachineConfig {
             .iter_mut()
             .chain(self.subagents.profiles.0.iter_mut());
         for (name, profile) in profiles {
-            if profile.isolation == Some(Isolation::Sandbox) {
+            if profile.isolation == Some(Isolation::Scoped) {
                 profile.isolation = Some(Isolation::Host);
                 warn(&format!("profile `{name}` isolation"));
             }
@@ -1081,7 +1081,7 @@ fn legacy_roots_without_core(config_path: &Path) -> Vec<PathBuf> {
     paths::legacy_config_roots()
 }
 
-/// The skill files a sandboxed load reads for `skills:` checks, plus the
+/// The skill files a scoped load reads for `skills:` checks, plus the
 /// directories whose listing changes when a skill is added or removed.
 fn skill_library_paths(skills: &Path) -> Vec<PathBuf> {
     let mut paths = vec![skills.to_path_buf()];

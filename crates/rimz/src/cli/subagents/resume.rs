@@ -143,7 +143,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         .ok_or_else(|| anyhow::anyhow!("no supervised run recorded"))?;
     let mut request = resume_request(child, run, &posture, action, login);
     request.identity.params.isolation = capped.isolation;
-    if isolation == rimz::config::Isolation::Host {
+    if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
             &request,

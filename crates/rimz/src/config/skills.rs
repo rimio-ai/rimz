@@ -142,8 +142,8 @@ mod tests {
         let default: crate::config::agents::AgentsConfig = toml::from_str("").unwrap();
         assert_eq!(default.isolation, crate::config::Isolation::Host);
         let sandbox: crate::config::agents::AgentsConfig =
-            toml::from_str("isolation = 'sandbox'").unwrap();
-        assert_eq!(sandbox.isolation.to_string(), "sandbox");
+            toml::from_str("isolation = 'scoped'").unwrap();
+        assert_eq!(sandbox.isolation.to_string(), "scoped");
         assert_eq!(
             toml::from_str::<crate::config::agents::AgentsConfig>(
                 &toml::to_string(&sandbox).unwrap()

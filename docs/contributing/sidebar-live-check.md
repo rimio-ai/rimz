@@ -670,7 +670,7 @@ Set a short schedule in `$ROOT/home/.rimz/config.toml` (`[agents.hibernate]` wit
 
 ## Check against a real provider login
 
-A held sandbox room replaces `HOME`, so a check that needs a real Claude or Codex turn runs in a host room started from the branch binary. Every `rimz` that room spawns has to be the branch build: the sender's shell, the provider hooks (`rimz hooks feed` resolves from the agent's inherited `PATH`), and the sidebar host (which reads `RIMZ_BIN`). Start it from a host shell; `rimz start` refuses inside a RimZ sandbox, so an agent cannot start this room for you.
+A held sandbox room replaces `HOME`, so a check that needs a real Claude or Codex turn runs in a host room started from the branch binary. Every `rimz` that room spawns has to be the branch build: the sender's shell, the provider hooks (`rimz hooks feed` resolves from the agent's inherited `PATH`), and the sidebar host (which reads `RIMZ_BIN`). Start it from a host shell; `rimz start` refuses inside a RimZ scoped view, so an agent cannot start this room for you.
 
 ```sh
 cargo build -p rimz --bin rimz
@@ -729,7 +729,7 @@ Create `$RIMZ_HOME/config.toml` with these contents, substituting the absolute `
 
 ```text
 [agents]
-isolation = "sandbox"
+isolation = "scoped"
 shell = "/tmp/REPLACE/agent-shell"
 
 [agents.hibernate]
@@ -792,7 +792,7 @@ Start from a detached tmux driver so the room host can outlive the sending tool 
 set -eu
 export RIMZ_HOME="$LIVE_ROOT/home" XDG_RUNTIME_DIR="$LIVE_ROOT/r"
 export RIMZ_BIN="$LIVE_ROOT/bin/rimz" PATH="$LIVE_ROOT/bin:$PATH"
-export RIMZ_ISOLATION="${1:-sandbox}"
+export RIMZ_ISOLATION="${1:-scoped}"
 unset CODEX_HOME
 unset RIMZ_AGENT_ID RIMZ_AGENT_KIND RIMZ_AGENT_NAME RIMZ_AGENT_PROFILE
 unset RIMZ_AGENT_MODEL RIMZ_AGENT_EFFORT RIMZ_CHANNEL RIMZ_RUN_ID RIMZ_LOOP_TASK
@@ -810,7 +810,7 @@ env -u TMUX -u TMUX_PANE tmux -S "$LIVE_ROOT/driver.sock" -f /dev/null \
 
 Before launch, use the same isolated environment with the parent agent's room identity removed to run `rimz trust grant --agents claude` from the clone. Grant only that clone path, not the provider home. An implicit Codex folder-trust prompt can still appear; decline it. No Codex account or workflow node is needed.
 
-Capture startup stdout, stderr, and exit status outside the disposable root. From inside a RimZ sandbox, start refuses with `this pane runs inside a RimZ sandbox; start the room from a host shell`. With permission to use host execution, change the isolated config's `agents.isolation` to `"host"` and respawn the driver with `sh '$LIVE_ROOT/start.sh' host`. Both the machine setting and ambient `RIMZ_ISOLATION=host` matter; `rimz start` has no isolation flag. If host birth also refuses, retain the refusal rather than fabricating room state.
+Capture startup stdout, stderr, and exit status outside the disposable root. From inside a RimZ scoped view, start refuses with `this pane runs inside a RimZ scoped view; start the room from a host shell`. With permission to use host execution, change the isolated config's `agents.isolation` to `"host"` and respawn the driver with `sh '$LIVE_ROOT/start.sh' host`. Both the machine setting and ambient `RIMZ_ISOLATION=host` matter; `rimz start` has no isolation flag. If host birth also refuses, retain the refusal rather than fabricating room state.
 
 Run subsequent commands through a wrapper with the same isolated environment, `RIMZ_ISOLATION=host`, and parent identity variables unset, changing directory to the clone first. Preserve both human and JSON `workflow show` output:
 

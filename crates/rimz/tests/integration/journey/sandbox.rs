@@ -34,7 +34,7 @@ fn tmux_sandbox_subagent_skills_are_judged_from_host_truth() {
         crate::common::skip("tmux not on PATH");
         return;
     }
-    if let Err(err) = rimz::sandbox::preflight(Isolation::Sandbox) {
+    if let Err(err) = rimz::sandbox::preflight(Isolation::Scoped) {
         crate::common::skip(&format!("bubblewrap unusable: {err}"));
         return;
     }
@@ -104,7 +104,7 @@ while IFS= read -r line; do :; done
         std::fs::create_dir_all(env.rimz_home()).expect("machine config directory");
         std::fs::write(
             env.rimz_home().join("config.toml"),
-            "[agents]\nisolation = \"sandbox\"\n",
+            "[agents]\nisolation = \"scoped\"\n",
         )
         .expect("sandbox config");
         crate::common::write_definition(
@@ -205,7 +205,7 @@ fn tmux_sandbox_team_consumes_message_and_subagent_shared_tmp() {
         crate::common::skip("tmux not on PATH");
         return;
     }
-    if let Err(err) = rimz::sandbox::preflight(Isolation::Sandbox) {
+    if let Err(err) = rimz::sandbox::preflight(Isolation::Scoped) {
         crate::common::skip(&format!("bubblewrap unusable: {err}"));
         return;
     }
@@ -334,7 +334,7 @@ while IFS= read -r line; do :; done
     std::fs::create_dir_all(&config_dir).expect("create machine config directory");
     std::fs::write(
         config_dir.join("config.toml"),
-        "[agents]\nisolation = \"sandbox\"\n",
+        "[agents]\nisolation = \"scoped\"\n",
     )
     .expect("write sandbox team config");
     crate::common::write_definition(

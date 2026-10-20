@@ -55,14 +55,14 @@ fn config_worktree_hooks_round_trip() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn config_set_sandbox_probes_bwrap_before_writing() {
+fn config_set_scoped_probes_bwrap_before_writing() {
     let env = Env::new();
     let path = machine_config_path(&env);
     let seed = "[agents]\nisolation = \"host\"\n";
     write_machine_file(&path, seed);
     let empty_bin = env.home_root.join("empty-bin");
     std::fs::create_dir(&empty_bin).expect("mkdir empty PATH");
-    for value in ["sandbox", "\"sandbox\"", "'sandbox'", "\"sand\\u0062ox\""] {
+    for value in ["scoped", "\"scoped\"", "'scoped'", "\"sco\\u0070ed\""] {
         env.rimz()
             .args(["config", "set", "agents.isolation", value])
             .env("PATH", &empty_bin)
@@ -82,14 +82,14 @@ fn config_set_sandbox_probes_bwrap_before_writing() {
     std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755))
         .expect("chmod bwrap shim");
     env.rimz()
-        .args(["config", "set", "agents.isolation", "sandbox"])
+        .args(["config", "set", "agents.isolation", "scoped"])
         .env("PATH", &empty_bin)
         .env("RIMZ_TEST_BWRAP_PROBE", &marker)
         .assert()
         .success();
-    assert!(marker.exists(), "sandbox must execute the preflight probe");
+    assert!(marker.exists(), "scoped must execute the preflight probe");
     let config: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(config["agents"]["isolation"].as_str(), Some("sandbox"));
+    assert_eq!(config["agents"]["isolation"].as_str(), Some("scoped"));
     assert!(
         !legacy_agents_config_path(&env).exists(),
         "isolation belongs in config.toml"
@@ -100,7 +100,7 @@ fn config_set_sandbox_probes_bwrap_before_writing() {
 fn config_set_host_never_probes_bwrap() {
     let env = Env::new();
     let path = machine_config_path(&env);
-    write_machine_file(&path, "[agents]\nisolation = \"sandbox\"\n");
+    write_machine_file(&path, "[agents]\nisolation = \"scoped\"\n");
     let bin = env.home_root.join("sandbox-bin");
     std::fs::create_dir(&bin).expect("mkdir bwrap PATH");
     let bwrap = bin.join("bwrap");
@@ -124,10 +124,10 @@ fn config_set_host_never_probes_bwrap() {
         assert!(!marker.exists(), "host must not execute bwrap");
     }
     for value in [
-        "\" sandbox\"",
-        "\"sandbox \"",
-        "\"sandbox\" trailing",
-        "[\"sandbox\"]",
+        "\" scoped\"",
+        "\"scoped \"",
+        "\"scoped\" trailing",
+        "[\"scoped\"]",
     ] {
         let before = std::fs::read(&path).unwrap();
         env.rimz()

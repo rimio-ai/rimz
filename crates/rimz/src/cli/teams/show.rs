@@ -916,7 +916,7 @@ mod tests {
 
     #[test]
     fn human_show_names_the_room_shared_dir_in_both_isolations() {
-        for isolation in [Isolation::Sandbox, Isolation::Host] {
+        for isolation in [Isolation::Scoped, Isolation::Host] {
             let mut instance = live_instance();
             instance.isolation = isolation;
             let output = rendered(&report(vec![instance]), Some("feat-x"));

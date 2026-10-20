@@ -197,9 +197,9 @@ These are the gaps you will notice, per agent, beyond what the matrix and `rimz 
 
 ## Config homes and skills
 
-Each built-in agent resolves a config home. RimZ reads provider settings from it, installs hooks into it, and binds it into the [sandbox](../guide/configuration.md#agent-isolation). Session stores can live elsewhere, as Muse's does.
+Each built-in agent resolves a config home. RimZ reads provider settings from it, installs hooks into it, and binds it into the [scoped view](../guide/configuration.md#agent-isolation). Session stores can live elsewhere, as Muse's does.
 
-| Agent | Config home | Override | Skill root | Sandbox `skills` list | Host switch |
+| Agent | Config home | Override | Skill root | Scoped `skills` list | Host switch |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude` | first `CLAUDE_CONFIG_DIR` entry | `<home>/skills` | accepted | `--settings skillOverrides` |
 | Codex | `~/.codex` | `CODEX_HOME` | `~/.agents/skills` | accepted | `-c skills.config` |
@@ -225,7 +225,7 @@ Host launches link [RimZ library skills](../guide/configuration.md#skills) into 
 
 A named provider account sets the adapter's home override to a separate directory when a room launches it. MiniMax uses `MINIMAX_DATA_DIR`, relocating configuration, credentials, sessions, and plugins together; an explicit data-directory variable also disables MiniMax's Git auto-configuration. See [provider accounts](../guide/accounts.md).
 
-Under `agents.isolation = "sandbox"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The sandbox does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host Claude makes unlisted skills user-only; host Codex hides them, including explicit invocation. Other host providers warn and run unrestricted. Duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
+Under `agents.isolation = "scoped"` (Linux), RimZ binds each agent's config home from the launch environment and merges the RimZ skill library into the agent's skill root. The scoped view does not hide the rest of the host or move credentials. Project skills and Codex's `$CODEX_HOME/skills` stay outside the merged view. A profile `skills` list keeps the listed skills model-callable and makes the rest user-only; agents marked refused in the table fail the launch when a list is set. Host Claude makes unlisted skills user-only; host Codex hides them, including explicit invocation. Other host providers warn and run unrestricted. Duplicate or invalid names are parse errors under both. The profile rules are in [configuration: skills](../guide/configuration.md#skills), and mount order and markers in [sandbox internals](../internals/sandbox.md#profile-skill-views).
 
 ## Launch flags
 
@@ -306,7 +306,7 @@ Markdown definitions can also supply [`allowed-tools`](definitions.md#tools-to-p
 
 Codex's managed `rules/rimz.rules` carries a first-line marker and is rewritten by `rimz hooks install`. Existing installs get a rules-file preview at the next `rimz start` consent. Matching commands run unsandboxed, without Guardian or a permission hook; shell redirects do not match the inner prefix. Explicit prompt/forbidden rules and managed policy still apply ([upstream rule contract](../externals/agent-adapter/codex-reference.md#execution-policy-rules)). Set `allow-routine-rimz = false` to remove the managed file at the next hook install or start consent; an unmarked user file is left alone even during an explicit install, and your own rules still apply. The `rules` directory is shared across named accounts, including standalone accounts and Codex's own `default.rules` amendments. With the switch off, commands outside the three granted room roots need escalation, including `rimz teams install` and `rimz wait --in`. The latter can insert its durable wait before failing on the home-wide loops lock, without rolling the insert back.
 
-Under `agents.isolation = "sandbox"` a Codex launch removes all `default_permissions` overrides and replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox. Approval flags and `approvals_reviewer` stay as listed, so Auto retains Guardian review; an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
+Under `agents.isolation = "scoped"` a Codex launch removes all `default_permissions` overrides and replaces any `--sandbox` choice with `--sandbox danger-full-access`, because the RimZ view is its sandbox. Approval flags and `approvals_reviewer` stay as listed, so Auto retains Guardian review; an `on-request` policy then prompts only for commands Codex judges dangerous ([sandbox internals](../internals/sandbox.md#provider-command-sandboxes)).
 
 Grok Plan adds no arguments because Grok's `/plan` is an interactive command, and a session launched with `--permission-mode plan` does not start in plan mode.
 

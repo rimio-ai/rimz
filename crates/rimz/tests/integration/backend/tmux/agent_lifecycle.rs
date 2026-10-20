@@ -353,9 +353,9 @@ fn trust_claude_shim_path(env: &Env, agent_bin: &Path) {
 #[test]
 fn in_place_profile_launch_names_the_tab_instead_of_the_wrapper() {
     require_tmux!();
-    for isolation in ["host", "sandbox"] {
-        if isolation == "sandbox"
-            && let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)
+    for isolation in ["host", "scoped"] {
+        if isolation == "scoped"
+            && let Err(err) = rimz::sandbox::preflight(rimz::config::Isolation::Scoped)
         {
             crate::common::skip(&format!("bubblewrap unusable: {err}"));
             continue;
@@ -1679,7 +1679,7 @@ fn restart_unsupported_profile_skills_retains_old_pane_and_state() {
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
         config_dir.join("config.toml"),
-        "[agents]\nisolation = \"sandbox\"\n",
+        "[agents]\nisolation = \"scoped\"\n",
     )
     .expect("configure unsupported skills after launch");
     crate::common::write_definition(

@@ -632,7 +632,7 @@ pub(super) fn render_identity_section(
     if let Some(tmp_dir) = tmp_dir {
         kv.push(
             "tmp",
-            render::cell(format!("{} (/tmp in a sandboxed pane)", tmp_dir.display())),
+            render::cell(format!("{} (/tmp in a scoped pane)", tmp_dir.display())),
         );
     }
     if !agent.launch_warnings.is_empty() {

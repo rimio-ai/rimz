@@ -166,7 +166,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
             effective_isolation: None,
             agent_id: AgentSessionId::from("predecessor"),
             launch_id: Some(AgentSessionId::from("launch_coder")),
-            isolation: Some(crate::config::Isolation::Sandbox),
+            isolation: Some(crate::config::Isolation::Scoped),
             pane_id: PaneId::parse(pane_id).expect("pane id"),
             pane_pid: Some(owner_pid),
             runtime_owner: RuntimeOwner::new(
@@ -185,7 +185,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
             .find(|agent| agent.agent_id == "predecessor")
             .unwrap()
             .isolation,
-        Some(crate::config::Isolation::Sandbox),
+        Some(crate::config::Isolation::Scoped),
     );
     let mut events = events;
     events.push(lifecycle_for_agent(
@@ -219,11 +219,11 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
     assert_eq!(continuation_state.checkout.as_deref(), Some("/repo"));
     assert_eq!(
         predecessor_state.isolation,
-        Some(crate::config::Isolation::Sandbox)
+        Some(crate::config::Isolation::Scoped)
     );
     assert_eq!(
         continuation_state.isolation,
-        Some(crate::config::Isolation::Sandbox)
+        Some(crate::config::Isolation::Scoped)
     );
 
     events.push(continued_turn);
@@ -235,7 +235,7 @@ fn linked_compaction_end_seeds_and_carries_the_continuation() {
     assert_eq!(continuation_state.checkout.as_deref(), Some("/repo"));
     assert_eq!(
         continuation_state.isolation,
-        Some(crate::config::Isolation::Sandbox)
+        Some(crate::config::Isolation::Scoped)
     );
     assert_eq!(
         continuation_state.compacted_from.as_deref(),

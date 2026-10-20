@@ -1199,7 +1199,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     let cell = rimz::harness::spec::AgentCell {
         empty_dir: None,
         resume_model_override: false,
-        isolation_default: Some(rimz::config::Isolation::Sandbox),
+        isolation_default: Some(rimz::config::Isolation::Scoped),
         kind: rimz::agents::definition_by_kind("codex")
             .unwrap()
             .spec()
@@ -1258,7 +1258,7 @@ fn subagent_run_closes_its_pane_after_terminal_completion() {
     assert_eq!(
         request,
         rimz::harness::launch::ExecRequest {
-            isolation_default: Some(rimz::config::Isolation::Sandbox),
+            isolation_default: Some(rimz::config::Isolation::Scoped),
             kind: rimz::agents::definition_by_kind("codex")
                 .unwrap()
                 .spec()

@@ -456,7 +456,7 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
         }),
         skills: Some(vec!["merge".parse().unwrap()]),
         allowed_tools: Some(vec!["Bash(git *)".parse().unwrap()]),
-        isolation_default: Some(crate::config::Isolation::Sandbox),
+        isolation_default: Some(crate::config::Isolation::Scoped),
         mode: Some(PermissionMode::Auto),
         model: Some("opus".to_owned()),
         ..Default::default()
@@ -489,14 +489,14 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
 
 #[test]
 fn child_isolation_cap_respects_parent_and_request_source() {
-    use crate::config::Isolation::{Host, Sandbox};
-    for parent in [None, Some(Host), Some(Sandbox)] {
-        for child_override in [None, Some(Host), Some(Sandbox)] {
-            for child_default in [None, Some(Host), Some(Sandbox)] {
-                for machine in [Host, Sandbox] {
+    use crate::config::Isolation::{Host, Scoped};
+    for parent in [None, Some(Host), Some(Scoped)] {
+        for child_override in [None, Some(Host), Some(Scoped)] {
+            for child_default in [None, Some(Host), Some(Scoped)] {
+                for machine in [Host, Scoped] {
                     let result =
                         cap_child_isolation(parent, child_override, child_default, machine);
-                    if parent == Some(Sandbox) && child_override == Some(Host) {
+                    if parent == Some(Scoped) && child_override == Some(Host) {
                         assert!(
                             result
                                 .unwrap_err()
@@ -505,7 +505,7 @@ fn child_isolation_cap_respects_parent_and_request_source() {
                         );
                         continue;
                     }
-                    let expected_source = if parent == Some(Sandbox) && child_override.is_none() {
+                    let expected_source = if parent == Some(Scoped) && child_override.is_none() {
                         match (child_default, machine) {
                             (Some(Host), _) => Some(ClampSource::ProfileDefault),
                             (None, Host) => Some(ClampSource::MachinePolicy),
@@ -518,7 +518,7 @@ fn child_isolation_cap_respects_parent_and_request_source() {
                         result.unwrap(),
                         ChildIsolation {
                             isolation: if expected_source.is_some() {
-                                Some(Sandbox)
+                                Some(Scoped)
                             } else {
                                 child_override
                             },
@@ -1763,7 +1763,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         LaunchFinalizeOptions {
             agent_base: None,
             permission_mode: Some(PermissionModeChoice::Default(PermissionMode::Yolo)),
-            isolation: Some(crate::config::Isolation::Sandbox),
+            isolation: Some(crate::config::Isolation::Scoped),
             preset: &preset,
             passthrough: &[],
             budget: None,
@@ -1776,7 +1776,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         .agent_cells()
         .map(|cell| (cell.launch.mode, cell.launch.isolation))
         .collect::<Vec<_>>();
-    let sandbox = Some(crate::config::Isolation::Sandbox);
+    let sandbox = Some(crate::config::Isolation::Scoped);
     assert_eq!(
         launches,
         [
@@ -2701,7 +2701,7 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
 
 #[test]
 fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
-    use crate::config::Isolation::{Host, Sandbox};
+    use crate::config::Isolation::{Host, Scoped};
 
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(
@@ -2710,10 +2710,10 @@ fn matched_resume_isolation_overrides_without_stamping_one_shot_values() {
     )
     .unwrap();
     let mut machine = MachineConfig::default();
-    machine.agents.isolation = Sandbox;
+    machine.agents.isolation = Scoped;
     for (stored, flag, expected) in [
         (Some(Host), None, Some(Host)),
-        (Some(Host), Some(Sandbox), Some(Sandbox)),
+        (Some(Host), Some(Scoped), Some(Scoped)),
         (None, None, None),
     ] {
         let mut agent = crate::testkit::agent_state("codex", "resumed", Timestamp::now());
@@ -2872,7 +2872,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
         cell.launch.profile = Some(profile.to_owned());
     }
     layout.agent_cells_mut().nth(1).unwrap().launch.isolation =
-        Some(crate::config::Isolation::Sandbox);
+        Some(crate::config::Isolation::Scoped);
     let mut resumed = crate::testkit::agent_state("claude", "sess-resume", Timestamp::now());
     resumed.name = Some("steady-beacon".to_owned());
     resumed.channel = None;
@@ -2884,7 +2884,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
         name_explicit: false,
         launch: crate::agents::LaunchParams {
             channel: Some("fallback".to_owned()),
-            isolation: Some(crate::config::Isolation::Sandbox),
+            isolation: Some(crate::config::Isolation::Scoped),
             ..Default::default()
         },
         run_id: None,
@@ -2920,7 +2920,7 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     assert_eq!(exec_request(&panes[0].argv).identity.params.isolation, None);
     assert_eq!(
         exec_request(&panes[2].argv).identity.params.isolation,
-        Some(crate::config::Isolation::Sandbox)
+        Some(crate::config::Isolation::Scoped)
     );
 
     let err = compile_layout_panes(
@@ -3535,7 +3535,7 @@ fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
         request: &request,
         caller: Some(&caller),
         lane: None,
-        parent_isolation: Some(crate::config::Isolation::Sandbox),
+        parent_isolation: Some(crate::config::Isolation::Scoped),
         machine: &machine,
     }
     .run(dir.path());
@@ -3543,7 +3543,7 @@ fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
     assert_eq!(launch.clamped, Some(ClampSource::ProfileDefault));
     assert_eq!(
         planned_cell(&launch).launch.isolation,
-        Some(crate::config::Isolation::Sandbox)
+        Some(crate::config::Isolation::Scoped)
     );
 }
 
@@ -3687,10 +3687,10 @@ fn supervised_permission_cap_keeps_passthrough_permission_vectors_opaque() {
 
 #[test]
 fn supervised_yolo_sandbox_note_only_offers_a_possible_host_override() {
-    use crate::config::Isolation::{Host, Sandbox};
+    use crate::config::Isolation::{Host, Scoped};
     let dir = tempfile::tempdir().unwrap();
     let mut machine = MachineConfig::default();
-    machine.agents.isolation = Sandbox;
+    machine.agents.isolation = Scoped;
     let mut request = supervised_request("codex", "work");
     request.subagent = true;
     request.permission_mode = Some(PermissionMode::Yolo);
@@ -3699,7 +3699,7 @@ fn supervised_yolo_sandbox_note_only_offers_a_possible_host_override() {
     for (parent_isolation, child_isolation, expected) in [
         (Some(Host), None, true),
         (None, None, true),
-        (Some(Sandbox), None, false),
+        (Some(Scoped), None, false),
         (Some(Host), Some(Host), false),
     ] {
         request.isolation = child_isolation;

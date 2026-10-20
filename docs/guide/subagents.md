@@ -80,7 +80,7 @@ A child is an agent in your room, so the [sidebar](./sidebar.md#the-agent-card) 
 
 A child that stops on a permission prompt or a question flips to `? waiting` and reaches you the way any agent does: the cockpit counts it and your [notification handler](./notifications.md) fires. Answer in the child's pane. Its permission mode starts with its profile's `mode:`, a permission-mode cell, or auto, but never runs looser than the parent's recorded mode. An ask or plan parent therefore gives its children that same ceiling; an unrecorded parent counts as auto. RimZ prints a note when it lowers a higher default.
 
-When an unattended child needs the same bypass of permission prompts as its parent, the parent can pass `rimz subagents codex "finish the task" --yolo`. This works only when the parent was itself launched with `--yolo` or a `mode: yolo` definition; changing modes inside the provider does not change the recorded grant. Otherwise the launch refuses with that fix. A follow-up that would resume an ended child above the parent's current ceiling also refuses and asks for a new child. The [reference](../reference/cli/subagents.md#launch-one-child) lists the flags and the sandbox note.
+When an unattended child needs the same bypass of permission prompts as its parent, the parent can pass `rimz subagents codex "finish the task" --yolo`. This works only when the parent was itself launched with `--yolo` or a `mode: yolo` definition; changing modes inside the provider does not change the recorded grant. Otherwise the launch refuses with that fix. A follow-up that would resume an ended child above the parent's current ceiling also refuses and asks for a new child. The [reference](../reference/cli/subagents.md#launch-one-child) lists the flags and the scoped-isolation note.
 
 From your own shell:
 
@@ -111,7 +111,7 @@ All 3 subagents settled, responses total ~5.1k tokens, 96 lines:
 - @slow-reviewer: timed out after 33m; provider did not stop, task: "review correctness", partial response: /home/me/.rimz/ws/myrepo-f89e/out/planner/slow-reviewer.output (<1k tokens, 12 lines)
 ```
 
-The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path is the host path under every isolation; a sandboxed parent reaches it too. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
+The report carries status and a file path per answer, never the answers themselves, so the parent decides how much of each to read into its window. Follow-up answers get their own rows and elapsed times; an earlier answer is not lost when a child answers again before its siblings finish. A parent that needs an answer sooner joins with `rimz subagents wait <petname>`: only the answer it prints drops out of the report, while stopping a child dismisses all its answers. The path is the host path under every isolation; a scoped parent reaches it too. Every field of the report is in the [reference](../reference/cli/subagents.md#the-fleet-report).
 
 While the parent rests waiting for that report, RimZ [keeps its prompt cache warm](./loops.md#wake-a-running-agent) with facts-only pings.
 

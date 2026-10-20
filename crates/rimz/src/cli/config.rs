@@ -124,16 +124,17 @@ fn get(args: GetArgs) -> Result<()> {
 
 fn set(args: SetArgs) -> Result<()> {
     if args.key == "agents.isolation"
-        && (args.value == "sandbox"
-            || args
-                .value
-                .parse::<toml_edit::Value>()
-                .ok()
-                .as_ref()
-                .and_then(toml_edit::Value::as_str)
-                == Some("sandbox"))
+        && args
+            .value
+            .parse::<toml_edit::Value>()
+            .ok()
+            .as_ref()
+            .and_then(toml_edit::Value::as_str)
+            .unwrap_or(&args.value)
+            .parse::<rimz::config::Isolation>()
+            .is_ok_and(rimz::config::Isolation::is_scoped)
     {
-        rimz::sandbox::preflight(rimz::config::Isolation::Sandbox)?;
+        rimz::sandbox::preflight(rimz::config::Isolation::Scoped)?;
     }
     if args.key == "agents.shell" {
         let shell = args

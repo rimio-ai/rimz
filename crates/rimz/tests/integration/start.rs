@@ -76,7 +76,7 @@ fn start_warns_and_records_an_unavailable_sandbox_without_overwriting_config() {
     let config_dir = env.rimz_home();
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     let agents_path = config_dir.join("config.toml");
-    let seed = "[agents]\nisolation = \"sandbox\"\n";
+    let seed = "[agents]\nisolation = \"scoped\"\n";
     std::fs::write(&agents_path, seed).expect("write sandbox config");
     let output = start_with_accounts(
         &env,
@@ -98,7 +98,7 @@ fn start_warns_and_records_an_unavailable_sandbox_without_overwriting_config() {
     assert_eq!(std::fs::read_to_string(&agents_path).unwrap(), seed);
     assert_skipped(&env, &stderr, "agents.isolation", "bubblewrap");
 
-    let broken = "[agents\nisolation = \"sandbox\"\n";
+    let broken = "[agents\nisolation = \"scoped\"\n";
     std::fs::write(&agents_path, broken).unwrap();
     let output = start_with_accounts(
         &env,

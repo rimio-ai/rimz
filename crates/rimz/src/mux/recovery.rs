@@ -4,7 +4,7 @@
 //! inherited environment domain — and it runs where the process backend can
 //! enumerate the current user's process table.
 //!
-//! A hard reset also ends the processes still inside the room's sandbox views
+//! A hard reset also ends the processes still inside the room's scoped views
 //! (`temp_unit_holders`). That match is exact, the temp unit directory's own
 //! identity at the process's `/tmp`, so it carries the uid and ancestor scopes
 //! and no session-name or environment-domain guard.
@@ -212,12 +212,12 @@ fn select_temp_unit_holders(
         .collect()
 }
 
-/// This user's processes still inside one of the room's sandbox views: those
+/// This user's processes still inside one of the room's scoped views: those
 /// whose `/tmp` is one of the temp unit directories `units`, excluding the
 /// caller and its ancestors. The match is the unit directory's own identity,
 /// which a bind mount keeps across the reset's rename, so it needs no
 /// environment-domain guard. A process whose root cannot be read is logged and
-/// spared. Empty off Linux, where no sandbox view exists.
+/// spared. Empty off Linux, where no scoped view exists.
 pub(crate) fn temp_unit_holders(units: &[std::path::PathBuf]) -> Vec<ProcInfo> {
     let me = std::process::id();
     let tmp = std::path::Path::new("/tmp");
@@ -236,7 +236,7 @@ pub(crate) fn temp_unit_holders(units: &[std::path::PathBuf]) -> Vec<ProcInfo> {
         if identity.is_none() {
             tracing::debug!(
                 pid,
-                "cannot read the process root; not a sandbox view holder"
+                "cannot read the process root; not a scoped view holder"
             );
         }
         identity

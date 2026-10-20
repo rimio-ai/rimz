@@ -5745,7 +5745,7 @@ fn wait_single_run_json_prints_keyed_entry() {
 
 #[test]
 fn subagent_report_publishes_response_files_in_host_and_sandbox_views() {
-    for isolation in ["host", "sandbox"] {
+    for isolation in ["host", "scoped"] {
         for message in [Some("first\n\nlast"), Some("answer\n"), Some(""), None] {
             let env = Env::new();
             env.record(&env.project_root);

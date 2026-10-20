@@ -4,7 +4,7 @@ Diagnosing a room by hand means `ps`, `tmux ls`, a provider log, and a guess abo
 
 ## Start with `rimz doctor`
 
-`rimz doctor` probes the machine, the room, and RimZ's own state: the multiplexer and whether its version clears the floor, per-machine config parsing, sandbox support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. A normal run changes no RimZ state and starts, stops, or moves no room agents. It may briefly start configured language servers to check startup, then terminate those probes; a server may write its own files. Only `--clear` writes a history watermark and `--output` writes the report to the named file.
+`rimz doctor` probes the machine, the room, and RimZ's own state: the multiplexer and whether its version clears the floor, per-machine config parsing, scoped-view support, per-agent hook status, provider accounts, scheduled loop tasks, project trust, terminal color depth, workspace and store health, the live agents, messages that failed to land, and recent incidents. A normal run changes no RimZ state and starts, stops, or moves no room agents. It may briefly start configured language servers to check startup, then terminate those probes; a server may write its own files. Only `--clear` writes a history watermark and `--output` writes the report to the named file.
 
 ```sh
 rimz doctor
@@ -187,9 +187,9 @@ tmux -S "${XDG_RUNTIME_DIR:-/tmp/rimz-$(id -u)}/rimz/tmux/server" ls
 
 A provider following defaults or pinned to a named account refuses to launch when the machine `config.toml` is unreadable, rather than falling back to the wrong account. Correct the file; `rimz config get` shows the strict error. A provider pinned to `default` needs neither project nor machine configuration. An invalid deciding `[accounts.use]` selection names its source and the commands to declare or clear it. Each launch refusal affects that provider only; start warns about them all. See [account selection](./accounts.md#start-a-room-on-an-account).
 
-### Sandbox isolation is unavailable
+### Scoped isolation is unavailable
 
-The `SANDBOX` section reports the configured mode, the bubblewrap path and version, the probe result, and the fix. Sandbox mode needs Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe usually means unprivileged user namespaces are disabled (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or an AppArmor or LSM policy blocks them.
+The `SANDBOX` section reports the configured mode, the bubblewrap path and version, the probe result, and the fix. Scoped mode needs Linux and the `bubblewrap` package (`bwrap` on `PATH`). A failed probe usually means unprivileged user namespaces are disabled (`kernel.unprivileged_userns_clone` or `user.max_user_namespaces`) or an AppArmor or LSM policy blocks them.
 
 Follow the probe's error for your host, or switch to host isolation, which needs no bubblewrap:
 
@@ -197,11 +197,11 @@ Follow the probe's error for your host, or switch to host isolation, which needs
 rimz config set agents.isolation host
 ```
 
-The switch affects new launches, not existing panes. Profile `skills` lists can stay: host mode ignores them. [Sandbox isolation](./security.md#sandbox-isolation) covers the limits of each mode.
+The switch affects new launches, not existing panes. Profile `skills` lists can stay: host Claude and Codex enforce them through provider switches; other providers warn and run unrestricted. [Scoped isolation](./security.md#scoped-isolation) covers the limits of each mode.
 
-### A Rust build in a sandboxed pane fails through sccache
+### A Rust build in a scoped pane fails through sccache
 
-A Cargo build that uses sccache as its `rustc-wrapper` fails in a sandboxed pane with `error writing dependencies ... No such file or directory` or `exit status: 254`. The sccache server is shared by every pane and normally compiles in the view of whichever process started it, where the sandboxed pane's `/tmp` paths do not exist. RimZ sets `SCCACHE_CLIENT_SIDE=1` in sandboxed panes so each build compiles in its own pane and still shares one cache, but sccache only honors it from version 0.17, and ignores it while `SCCACHE_LOG` is set or distributed compilation is configured. Unset `SCCACHE_LOG` before you rebuild, even when debugging this failure.
+A Cargo build that uses sccache as its `rustc-wrapper` fails in a scoped pane with `error writing dependencies ... No such file or directory` or `exit status: 254`. The sccache server is shared by every pane and normally compiles in the view of whichever process started it, where the scoped pane's `/tmp` paths do not exist. RimZ sets `SCCACHE_CLIENT_SIDE=1` in scoped panes so each build compiles in its own pane and still shares one cache, but sccache only honors it from version 0.17, and ignores it while `SCCACHE_LOG` is set or distributed compilation is configured. Unset `SCCACHE_LOG` before you rebuild, even when debugging this failure.
 
 Upgrade sccache, then stop the old server so the next build starts a new one:
 
@@ -210,7 +210,7 @@ cargo install sccache --locked
 sccache --stop-server
 ```
 
-To keep host shells from compiling inside a server that a sandboxed pane started, also set `client_side_mode = true` in your sccache config file. [Sandbox isolation](./security.md#sandbox-isolation) covers what a sandboxed pane sees.
+To keep host shells from compiling inside a server that a scoped pane started, also set `client_side_mode = true` in your sccache config file. [Scoped isolation](./security.md#scoped-isolation) covers what a scoped pane sees.
 
 ### Zellij is live but not responding
 
@@ -224,7 +224,7 @@ Reset is destructive and asks before replacing the wedged room; [rebuild a wedge
 
 ### An agent pane says "starting without skill …"
 
-The agent is starting, but RimZ left one skill out of this launch because it could not prepare that skill's user-only copy for the profile's `skills` list in sandbox mode. The warning names the skill, its source path, and whether RimZ could not read it or could not rewrite its metadata. Nothing in the installed skill changed, and every other skill is still available.
+The agent is starting, but RimZ left one skill out of this launch because it could not prepare that skill's user-only copy for the profile's `skills` list in scoped mode. The warning names the skill, its source path, and whether RimZ could not read it or could not rewrite its metadata. Nothing in the installed skill changed, and every other skill is still available.
 
 Fix the source the warning names: make the file readable, or bring its frontmatter into the YAML shape RimZ's rewriter accepts ([skills](./configuration.md#skills)). The alternative is to add the skill's bare name to that profile's `skills` list, which binds it exactly as installed with no rewriting, and makes it model-callable where its author's restrictions allow.
 
@@ -466,7 +466,7 @@ rimz reset --no-start   # tear down only, then print the rerun hint
 rimz reset --hard       # also forget history, runs, and scratch
 ```
 
-The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps prior-agent history, transcripts, messages, run records, scratch and skill copies. `--hard` also deletes those transcripts, message history, runs, scratch, room temporary files, and prior-agent carryover. In a sandboxed room it first ends any background process an agent left running inside its sandbox view, since that process still uses the temporary files being deleted; if one will not stop, the reset names it and asks you to stop it and run `rimz reset --hard` again. Rotated event archives and provider-owned session files remain. Standing fleet budget choices survive either reset.
+The rebuilt room comes up with no agents in it, whichever flags you pass. A plain reset keeps prior-agent history, transcripts, messages, run records, scratch and skill copies. `--hard` also deletes those transcripts, message history, runs, scratch, room temporary files, and prior-agent carryover. In a scoped room it first ends any background process an agent left running inside its scoped view, since that process still uses the temporary files being deleted; if one will not stop, the reset names it and asks you to stop it and run `rimz reset --hard` again. Rotated event archives and provider-owned session files remain. Standing fleet budget choices survive either reset.
 
 ### Sweep stale state with `rimz gc`
 
@@ -507,6 +507,6 @@ The report carries the backend, versions, per-agent hook status, trust state, an
 ## See also
 
 - [Set up your machine](./setup.md): the first-pass configuration these fixes assume.
-- [Security and trust](./security.md): the trust model, the sandbox limits, and the presence grant behind three of the fixes above.
+- [Security and trust](./security.md): the trust model, the scoped-view limits, and the presence grant behind three of the fixes above.
 - [Multiplexer](./multiplexer.md): what a room asserts on Zellij and tmux, and how to change it.
 - [CLI reference: maintenance](../reference/cli/maintenance.md): every flag on `reset`, `gc`, `reload`, `sidebar repair`, and `uninstall`.

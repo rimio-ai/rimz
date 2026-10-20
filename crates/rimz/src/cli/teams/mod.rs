@@ -34,7 +34,7 @@ pub struct TeamsArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|sandbox", requires = "name")]
+    #[arg(long, value_name = "host|scoped", requires = "name")]
     isolation: Option<rimz::config::Isolation>,
     /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
     #[arg(long, hide = true)]
@@ -117,7 +117,7 @@ struct TeamLaunchArgs {
     #[command(flatten)]
     launch: agents_cmd::CohortLaunchArgs,
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|sandbox")]
+    #[arg(long, value_name = "host|scoped")]
     isolation: Option<rimz::config::Isolation>,
 }
 
@@ -170,7 +170,7 @@ struct ResumeArgs {
     #[arg(long)]
     bg: bool,
     /// Replace the resumed members' recorded isolation.
-    #[arg(long, value_name = "host|sandbox")]
+    #[arg(long, value_name = "host|scoped")]
     isolation: Option<rimz::config::Isolation>,
 }
 

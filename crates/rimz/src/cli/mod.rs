@@ -1254,7 +1254,7 @@ fn resolve_launch_cwd(
         .with_context(|| format!("resolving --cwd `{}`", path.display()))
 }
 
-/// The host path behind an absolute path a calling agent names. A sandboxed
+/// The host path behind an absolute path a calling agent names. A scoped
 /// caller names its temp unit as `/tmp`, while the launch reads the path
 /// outside that view; `paths` defaults to the room the caller is pinned to.
 pub(crate) fn caller_host_path(
@@ -1262,7 +1262,7 @@ pub(crate) fn caller_host_path(
     paths: Option<&rimz::StatePaths>,
 ) -> Result<std::path::PathBuf> {
     use rimz::config::Isolation;
-    if Isolation::ambient(&rimz::agents::ambient_env()) != Some(Isolation::Sandbox) {
+    if !Isolation::ambient(&rimz::agents::ambient_env()).is_some_and(Isolation::is_scoped) {
         return Ok(absolute.to_path_buf());
     }
     let pinned;
@@ -1285,7 +1285,7 @@ pub(crate) fn caller_host_path(
     };
     let caller = rimz::harness::ancestry::CallerIdentity::from_env();
     let view = rimz::sandbox::TmpView::current(
-        Isolation::Sandbox,
+        Isolation::Scoped,
         caller.as_ref().and_then(|caller| caller.name.as_deref()),
         paths,
     );

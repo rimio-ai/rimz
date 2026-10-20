@@ -1295,7 +1295,7 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
         StatePaths::under(WorkspaceId::from_project_root(root.path()), root.path()).unwrap();
     let runtime = RuntimePaths::under(state.workspace_id.clone(), root.path()).unwrap();
     let machine = MachineConfig::default();
-    for isolation in [Isolation::Host, Isolation::Sandbox] {
+    for isolation in [Isolation::Host, Isolation::Scoped] {
         let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("codex"), vec![]);
         request.action = ExecAction::Launch {
             prompt: Some("question".into()),
@@ -1328,7 +1328,8 @@ fn headless_compile_maps_artifacts_and_clears_agent_identity_in_both_isolations(
             effective: None,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
-            bwrap: (isolation == Isolation::Sandbox).then_some(Path::new("/bin/bwrap")),
+            isolation,
+            bwrap: (isolation.is_scoped()).then_some(Path::new("/bin/bwrap")),
             agents: Err("no room"),
             ambient_env: &ambient,
             agent_shell: None,

@@ -128,7 +128,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             login: None,
             tier: None,
             mode: Some(crate::agents::PermissionMode::Yolo),
-            isolation: Some(crate::config::Isolation::Sandbox),
+            isolation: Some(crate::config::Isolation::Scoped),
             role: Some("coder".to_owned()),
             model: Some("gpt-5.6-sol".to_owned()),
             effort: Some("xhigh".to_owned()),
@@ -299,8 +299,8 @@ fn attach_agent_pane_records_process_owned_placement() {
             "rimz-test",
             &pane_id,
             owner.clone(),
-            Some(crate::config::Isolation::Sandbox),
-            Some(crate::config::Isolation::Sandbox),
+            Some(crate::config::Isolation::Scoped),
+            Some(crate::config::Isolation::Scoped),
             None,
         )
         .expect("attach resumed agent");
@@ -326,7 +326,7 @@ fn attach_agent_pane_records_process_owned_placement() {
     assert_eq!(payload.pane_id, pane_id);
     assert_eq!(payload.pane_pid, Some(std::process::id()));
     assert_eq!(payload.runtime_owner, owner);
-    assert_eq!(payload.isolation, Some(crate::config::Isolation::Sandbox));
+    assert_eq!(payload.isolation, Some(crate::config::Isolation::Scoped));
     assert_eq!(payload.login, Some("personal".parse().expect("login name")));
 
     // What a budget park and the hook preflight read off the row.

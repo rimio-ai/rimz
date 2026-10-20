@@ -2036,9 +2036,9 @@ fn definition_skill_checks_follow_resolved_isolation_and_host_support() {
         ("host", "pi", "", false),
         ("host", "claude", "", true),
         ("host", "codex", "", true),
-        ("host", "pi", "isolation: sandbox", true),
-        ("sandbox", "pi", "isolation: host", false),
-        ("sandbox", "pi", "", true),
+        ("host", "pi", "isolation: scoped", true),
+        ("scoped", "pi", "isolation: host", false),
+        ("scoped", "pi", "", true),
     ] {
         let dir = tempdir().unwrap();
         let tools = if kind == "pi" { "" } else { "tools: [Skill]" };
@@ -2094,7 +2094,7 @@ fn definition_skill_checks_follow_resolved_isolation_and_host_support() {
 }
 
 #[test]
-fn sandbox_config_enables_definition_skill_library_checks() {
+fn scoped_config_enables_definition_skill_library_checks() {
     let dir = tempdir().unwrap();
     write_definition(
         dir.path(),
@@ -2104,7 +2104,7 @@ fn sandbox_config_enables_definition_skill_library_checks() {
     );
     let path = write(&dir, "[agents]\nisolation = 'host'\n");
     MachineConfig::load_from(&path, dir.path()).unwrap();
-    write(&dir, "[agents]\nisolation = 'sandbox'\n");
+    write(&dir, "[agents]\nisolation = 'scoped'\n");
     let home = BTreeMap::from([("HOME".to_owned(), dir.path().display().to_string())]);
     let (config, _) =
         MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &home).unwrap();
@@ -2133,7 +2133,7 @@ fn sandbox_config_enables_definition_skill_library_checks() {
 }
 
 #[test]
-fn sandbox_ambient_skips_definition_skill_library_checks() {
+fn scoped_ambient_skips_definition_skill_library_checks() {
     let dir = tempdir().unwrap();
     write_definition(
         dir.path(),
@@ -2141,10 +2141,10 @@ fn sandbox_ambient_skips_definition_skill_library_checks() {
         "description: Worker\nagent: codex\ntools: [Skill]\nskills: [missing]",
         "",
     );
-    let path = write(&dir, "[agents]\nisolation = 'sandbox'\n");
+    let path = write(&dir, "[agents]\nisolation = 'scoped'\n");
     let mut env = BTreeMap::from([
         ("HOME".to_owned(), dir.path().display().to_string()),
-        (Isolation::ENV.to_owned(), "sandbox".to_owned()),
+        (Isolation::ENV.to_owned(), "scoped".to_owned()),
     ]);
     let (config, _) =
         MachineConfig::load_from_with_agent_spec_sources(&path, dir.path(), &env).unwrap();
@@ -2226,33 +2226,57 @@ fn lenient_definitions_collect_all_errors_and_post_load_validation_failure() {
 }
 #[test]
 fn isolation_resolution_precedence() {
-    use super::Isolation::{self, Host, Sandbox};
+    use super::Isolation::{self, Host, Scoped};
     for (flag, profile, machine, expected) in [
         (None, None, Host, Host),
-        (None, None, Sandbox, Sandbox),
-        (None, Some(Host), Sandbox, Host),
-        (None, Some(Sandbox), Host, Sandbox),
-        (Some(Host), Some(Sandbox), Sandbox, Host),
-        (Some(Sandbox), Some(Host), Host, Sandbox),
-        (Some(Host), None, Sandbox, Host),
-        (Some(Sandbox), None, Host, Sandbox),
+        (None, None, Scoped, Scoped),
+        (None, Some(Host), Scoped, Host),
+        (None, Some(Scoped), Host, Scoped),
+        (Some(Host), Some(Scoped), Scoped, Host),
+        (Some(Scoped), Some(Host), Host, Scoped),
+        (Some(Host), None, Scoped, Host),
+        (Some(Scoped), None, Host, Scoped),
     ] {
         assert_eq!(Isolation::resolve(flag, profile, machine), expected);
     }
 }
+
+#[test]
+fn isolation_values_round_trip() {
+    for (word, isolation) in [("host", Isolation::Host), ("scoped", Isolation::Scoped)] {
+        assert_eq!(word.parse::<Isolation>().unwrap(), isolation);
+        assert_eq!(isolation.to_string(), word);
+        let serialized = serde_json::to_string(&isolation).unwrap();
+        assert_eq!(serialized, format!("{word:?}"));
+        assert_eq!(
+            serde_json::from_str::<Isolation>(&serialized).unwrap(),
+            isolation
+        );
+        assert_eq!(
+            Isolation::ambient(&[(Isolation::ENV.to_owned(), word.to_owned())].into()),
+            Some(isolation)
+        );
+    }
+    assert_eq!(
+        "other".parse::<Isolation>().unwrap_err().to_string(),
+        "isolation must be `host` or `scoped`"
+    );
+    assert!(Isolation::Scoped.is_scoped());
+    assert!(!Isolation::Host.is_scoped());
+}
 #[test]
 fn sandbox_settings_fall_back_to_host_with_notices() {
-    use super::Isolation::{Host, Sandbox};
+    use super::Isolation::{Host, Scoped};
     let mut config = MachineConfig::default();
-    config.agents.isolation = Sandbox;
+    config.agents.isolation = Scoped;
     let profile = |isolation| Profile {
         isolation,
         ..toml::from_str("agent = 'claude'").unwrap()
     };
-    let agents = [("boxed", Some(Sandbox)), ("open", Some(Host))];
+    let agents = [("boxed", Some(Scoped)), ("open", Some(Host))];
     let agents = agents.map(|(name, isolation)| (name.to_owned(), profile(isolation)));
     config.agents.profiles.0.extend(agents);
-    let child = ("child".to_owned(), profile(Some(Sandbox)));
+    let child = ("child".to_owned(), profile(Some(Scoped)));
     config.subagents.profiles.0.extend([child]);
     let mut notices = ConfigNotices::default();
     config.fall_back_to_host_isolation(&mut notices);

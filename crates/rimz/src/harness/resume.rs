@@ -303,7 +303,7 @@ impl ResumeSkipReason {
             Self::PromptUnsupported => "no prompt replacement",
             Self::LoginMismatch => "different account",
             Self::AccountUnavailable => "account unavailable",
-            Self::SandboxUnavailable => "sandbox unavailable",
+            Self::SandboxUnavailable => "scoped view unavailable",
             Self::ConfigurationUnavailable => "configuration unavailable",
             Self::FreshRelaunch(spec) => {
                 return format!("no saved team to restore; relaunch with {spec}").into();

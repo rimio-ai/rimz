@@ -12,7 +12,7 @@ pub(super) fn run(json: bool) -> Result<()> {
     let machine = crate::cli::machine_config();
     let env = rimz::agents::ambient_env();
     let library = home.join("skills");
-    let in_sandbox = Isolation::ambient(&env) == Some(Isolation::Sandbox);
+    let in_sandbox = Isolation::ambient(&env).is_some_and(Isolation::is_scoped);
     let check = if !in_sandbox {
         SkillCheck::Check {
             env: &env,
@@ -25,7 +25,7 @@ pub(super) fn run(json: bool) -> Result<()> {
     if in_sandbox {
         writeln!(
             render::err(),
-            "rimz: skill listings were not checked because this shell runs inside a sandbox view; run `rimz agents validate` from a host shell"
+            "rimz: skill listings were not checked because this shell runs inside a scoped view; run `rimz agents validate` from a host shell"
         )?;
     }
     let loaded = load(&home, check, &machine);
@@ -158,7 +158,7 @@ fn warnings(
             continue;
         };
         if profile.skills.is_some()
-            && Isolation::resolve(None, profile.isolation, machine) == Isolation::Host
+            && !Isolation::resolve(None, profile.isolation, machine).is_scoped()
             && matches!(
                 adapter.spec().host_skills,
                 rimz::agents::skills::HostSkills::Unsupported
@@ -585,7 +585,7 @@ mod tests {
         .unwrap();
         for (name, isolation, skills) in [
             ("host", "host", "[not-installed]"),
-            ("boxed", "sandbox", "[]"),
+            ("boxed", "scoped", "[]"),
         ] {
             std::fs::write(
                 root.path().join(format!("agents/{name}.md")),
@@ -604,12 +604,12 @@ mod tests {
             SkillCheck::Check {
                 env: &env,
                 library: &root.path().join("skills"),
-                machine_isolation: Isolation::Sandbox,
+                machine_isolation: Isolation::Scoped,
             },
             &Default::default(),
         );
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
-        let warnings = warnings(&loaded, Isolation::Sandbox, &Default::default());
+        let warnings = warnings(&loaded, Isolation::Scoped, &Default::default());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].path.ends_with("host.md"));
         let json = serde_json::to_value(&warnings).unwrap();

@@ -596,7 +596,7 @@ fn prepare_supervised(
         &launch_invocation,
         &launch.cwd,
         &request.managed_launch,
-        (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
+        (!isolation.is_scoped()).then_some(store.runtime_paths()),
     )?;
     // Judge the agent's hooks in the account home it will run under before
     // probing the program or touching the multiplexer.

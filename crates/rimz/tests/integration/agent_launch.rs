@@ -3942,7 +3942,7 @@ fn profile_default_exec_stamps_effective_isolation_not_an_override() {
     std::fs::create_dir_all(env.rimz_home()).unwrap();
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = \"sandbox\"\n",
+        "[agents]\nisolation = \"scoped\"\n",
     )
     .unwrap();
     let shim_dir = write_env_dump_shim(&env, "codex");
@@ -5483,7 +5483,7 @@ fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
         std::fs::create_dir_all(&config_dir).expect("mkdir config");
         std::fs::write(
             config_dir.join("config.toml"),
-            "[agents]\nisolation = \"sandbox\"\n",
+            "[agents]\nisolation = \"scoped\"\n",
         )
         .expect("write unsupported skills profile");
         crate::common::write_definition(
@@ -5713,7 +5713,7 @@ async fn exec_failed_definition_persists_detail_before_releasing_run_waiter() {
     std::fs::create_dir_all(env.rimz_home()).expect("config directory");
     std::fs::write(
         env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = \"sandbox\"\n",
+        "[agents]\nisolation = \"scoped\"\n",
     )
     .expect("sandbox config");
     crate::common::write_definition(
@@ -6711,7 +6711,7 @@ fn profile_isolation_is_preflighted_before_launch() {
     .unwrap();
     std::fs::write(
         env.rimz_home().join("agents/boxed.md"),
-        "---\ndescription: Boxed.\nagent: codex\nisolation: sandbox\ntools: [Bash]\n---\n",
+        "---\ndescription: Boxed.\nagent: codex\nisolation: scoped\ntools: [Bash]\n---\n",
     )
     .unwrap();
     let shim_dir = write_env_dump_shim(&env, "codex");
@@ -6766,9 +6766,9 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
     use rimz::config::Isolation;
 
     for (stored, flag, needs_bwrap) in [
-        (Some(Isolation::Sandbox), None, true),
+        (Some(Isolation::Scoped), None, true),
         (Some(Isolation::Host), None, false),
-        (Some(Isolation::Sandbox), Some("host"), false),
+        (Some(Isolation::Scoped), Some("host"), false),
     ] {
         let env = Env::new();
         env.record(&env.project_root);
@@ -6777,7 +6777,7 @@ fn cohort_resume_preflights_a_matched_session_on_its_effective_isolation() {
         std::fs::create_dir_all(env.rimz_home()).expect("config directory");
         std::fs::write(
             env.rimz_home().join("config.toml"),
-            "[agents]\nisolation = \"sandbox\"\n",
+            "[agents]\nisolation = \"scoped\"\n",
         )
         .expect("sandbox machine config");
         let shim_dir = write_env_dump_shim(&env, "codex");

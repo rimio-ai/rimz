@@ -1025,7 +1025,7 @@ fn set_agents_isolation_keeps_gc_template_comments_under_gc() {
     ));
 
     editor
-        .set("agents.isolation", "sandbox")
+        .set("agents.isolation", "scoped")
         .expect("set isolation");
 
     let rendered = std::fs::read_to_string(path).expect("read config");
@@ -1039,7 +1039,7 @@ fn set_agents_isolation_keeps_gc_template_comments_under_gc() {
     assert!(gc_body.contains("# auto = true"), "{rendered}");
     assert!(gc_body.contains("# older_than = \"7d\""), "{rendered}");
     let parsed: toml::Value = toml::from_str(&rendered).expect("valid config");
-    assert_eq!(parsed["agents"]["isolation"].as_str(), Some("sandbox"));
+    assert_eq!(parsed["agents"]["isolation"].as_str(), Some("scoped"));
 }
 
 #[test]
