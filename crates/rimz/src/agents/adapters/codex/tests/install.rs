@@ -759,6 +759,17 @@ command = "echo user"
     assert!(hooks_installed_at(&path));
 }
 
+#[test]
+fn test_trust_seam_refuses_missing_slots_and_unknown_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    assert!(crate::agents::trust_hook_config_for_test(&path, &[]).is_err());
+    install_into(&path).unwrap();
+    assert!(crate::agents::trust_hook_config_for_test(&path, &["Interupt"]).is_err());
+    crate::agents::trust_hook_config_for_test(&path, &["Interrupt"]).unwrap();
+    assert_eq!(untrusted_hook_events_at(&path), ["Interrupt"]);
+}
+
 /// Trust only the event named by Codex's state-key token.
 fn trust_event(path: &std::path::Path, token: &str) {
     let excluded = EXPECTED_EVENTS

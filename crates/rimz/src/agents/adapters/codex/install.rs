@@ -420,19 +420,34 @@ pub(in crate::agents) fn trust_hook_config_for_test(
     path: &Path,
     excluded_events: &[&str],
 ) -> Result<()> {
+    let fixture_err = |reason: String| AgentErr::Install {
+        agent: "codex",
+        reason,
+    };
+    if let Some(unknown) = excluded_events
+        .iter()
+        .find(|event| !CODEX_HOOKS.iter().any(|hook| hook.event == **event))
+    {
+        return Err(fixture_err(format!(
+            "excluded event {unknown} is not a Codex hook"
+        )));
+    }
     let mut root = read_existing_table(path)?;
     let mut entries = toml::Table::new();
     for hook in CODEX_HOOKS
         .iter()
         .filter(|hook| !excluded_events.contains(&hook.event))
     {
-        for slot in rimz_hook_slots(&root, hook.event) {
-            let hash = hook_hash(hook.event, slot.group, slot.handler).ok_or_else(|| {
-                AgentErr::Install {
-                    agent: "codex",
-                    reason: format!("test hook {} cannot be hashed", hook.event),
-                }
-            })?;
+        let slots = rimz_hook_slots(&root, hook.event);
+        if slots.is_empty() {
+            return Err(fixture_err(format!(
+                "test hook {} is not installed; install before trusting",
+                hook.event
+            )));
+        }
+        for slot in slots {
+            let hash = hook_hash(hook.event, slot.group, slot.handler)
+                .ok_or_else(|| fixture_err(format!("test hook {} cannot be hashed", hook.event)))?;
             let key = format!(
                 "{}:{}:{}:{}",
                 path.display(),
