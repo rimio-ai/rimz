@@ -214,6 +214,7 @@ pub enum Mount {
     RoBind { source: PathBuf, target: PathBuf },
     Tmpfs { target: PathBuf },
     Symlink { target: PathBuf, path: PathBuf },
+    RemountRo { target: PathBuf },
 }
 
 pub struct MountPlan {
@@ -411,6 +412,30 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             target: path.clone(),
         });
     }
+    let mut read_only_overlays = BTreeSet::new();
+    for path in protected_paths(inputs)
+        .into_iter()
+        .filter(|path| path.exists())
+    {
+        validate_path(&path)?;
+        if let Some(view) = views.dir.as_ref().filter(|view| {
+            view.root
+                .starts_with(path.canonicalize().unwrap_or_else(|_| path.clone()))
+        }) {
+            // Build the skill overlay before making its parent read-only; a late
+            // parent bind would hide the overlay and restore native discovery.
+            mounts.push(Mount::Bind {
+                source: path.clone(),
+                target: path.clone(),
+            });
+            read_only_overlays.extend([path, view.root.clone()]);
+        } else {
+            mounts.push(Mount::RoBind {
+                source: path.clone(),
+                target: path,
+            });
+        }
+    }
     if let Some(view) = views.dir {
         mounts.push(Mount::Tmpfs {
             target: view.root.clone(),
@@ -429,6 +454,11 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
             mounts.push(Mount::RoBind { source, target });
         }
     }
+    mounts.extend(
+        read_only_overlays
+            .into_iter()
+            .map(|target| Mount::RemountRo { target }),
+    );
     let plan = MountPlan { mounts };
     pins.insert(
         HOOK_HOST_PATHS_ENV.into(),
@@ -445,6 +475,49 @@ pub fn plan(inputs: &SandboxInputs<'_>) -> Result<SandboxPlan, SandboxErr> {
         copies: views.copies,
         tmp_dir: inputs.tmp_dir.to_path_buf(),
     })
+}
+
+fn protected_paths(inputs: &SandboxInputs<'_>) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    if let Some(home) = inputs.env.get("HOME").filter(|home| !home.is_empty()) {
+        paths.extend(
+            [
+                ".profile",
+                ".bashrc",
+                ".bash_profile",
+                ".bash_login",
+                ".bash_logout",
+                ".zshenv",
+                ".zprofile",
+                ".zshrc",
+                ".zlogin",
+                ".zlogout",
+                ".config/fish",
+                ".gitconfig",
+                ".ssh",
+                ".config/systemd/user",
+            ]
+            .map(|entry| Path::new(home).join(entry)),
+        );
+    }
+    let checkout = inputs
+        .cwd
+        .ancestors()
+        .find(|path| path.join(".git").exists())
+        .unwrap_or(inputs.cwd);
+    let git = crate::worktree::git_admin_dir_from_checkout_metadata(checkout)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| checkout.join(".git"));
+    let git = std::fs::read_to_string(git.join("commondir")).map_or_else(
+        |_| git.clone(),
+        |common| crate::utils::path::normalize_path_lexical(&git.join(common.trim())),
+    );
+    paths.extend([git.join("hooks"), git.join("config")]);
+    for root in [checkout, inputs.project_root] {
+        paths.extend([".claude", ".codex", ".agents", ".mcp.json"].map(|entry| root.join(entry)));
+    }
+    paths
 }
 
 fn validate_path(path: &Path) -> Result<(), SandboxErr> {
@@ -491,6 +564,10 @@ pub fn bwrap_argv(bwrap: &Path, plan: &MountPlan, cwd: &Path, inner: &[String]) 
                 argv.push("--symlink".to_owned());
                 argv.push(target.display().to_string());
                 argv.push(path.display().to_string());
+            }
+            Mount::RemountRo { target } => {
+                argv.push("--remount-ro".to_owned());
+                argv.push(target.display().to_string());
             }
         }
     }

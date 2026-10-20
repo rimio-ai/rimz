@@ -571,19 +571,29 @@ pub trait LaunchCapability: CoreCapability {
         Ok(())
     }
 
-    /// Switch off the provider's native command sandbox for a launch inside
-    /// RimZ scoped isolation, where the RimZ view is the agent's one sandbox;
-    /// approval flags stay as the mode set them. The default leaves argv
-    /// unchanged for providers without a verified native switch.
+    /// Switch off a provider sandbox that cannot nest under scoped isolation.
+    /// Approval flags stay as the mode set them; other providers keep their sandbox.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}
 
-    /// Grant a host launch access to the room's state, runtime, and shared runtime roots.
+    /// Grant a launch access to the room's state, runtime, and shared runtime roots.
     fn configure_room_permissions(
         &self,
         _extra_args: &mut Vec<String>,
         _login_env: &BTreeMap<String, String>,
         _roots: &[PathBuf; 3],
     ) {
+    }
+
+    /// Merge provider command-sandbox settings into the launch's one settings document.
+    fn configure_sandbox_settings(
+        &self,
+        _paths: (&Path, &Path),
+        _roots: &[PathBuf; 3],
+        _isolation: crate::config::Isolation,
+        _extra_args: &mut Vec<String>,
+        _artifact: &mut Option<super::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), super::skills::LaunchSettingsErr> {
+        Ok(())
     }
 
     /// Disable private language servers when RimZ owns the checkout's servers.

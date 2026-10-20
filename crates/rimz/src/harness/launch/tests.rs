@@ -929,7 +929,7 @@ fn process_compiler_locks_down_only_subagent_launches() {
 }
 
 #[test]
-fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
+fn scoped_launch_keeps_codex_sandbox_and_grants_room_roots() {
     let project = tempfile::tempdir().expect("project");
     for (kind, args) in [
         (
@@ -954,6 +954,7 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             .expect("host process");
         let reminders = LaunchReminders {
             sandbox: true,
+            permission_roots: Some(["/state".into(), "/runtime".into(), "/shared-runtime".into()]),
             ..LaunchReminders::default()
         };
         let sandboxed = compile_agent_process_with_extra_env(
@@ -973,7 +974,17 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             .map(|pair| pair[1].as_str())
             .collect();
         if kind == "codex" {
-            assert_eq!(sandbox_values, ["danger-full-access"]);
+            assert!(sandbox_values.is_empty());
+            assert!(
+                sandboxed.provider_argv.iter().any(|arg| {
+                    arg.starts_with("sandbox_workspace_write.writable_roots=")
+                        && arg.contains("/state")
+                        && arg.contains("/runtime")
+                        && arg.contains("/shared-runtime")
+                }),
+                "{:?}",
+                sandboxed.provider_argv
+            );
             assert!(!host.provider_argv.contains(&"--sandbox".to_owned()));
             assert!(
                 !host
@@ -1008,15 +1019,164 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             }
         } else {
             assert!(sandbox_values.is_empty());
-            assert_eq!(sandboxed.provider_argv.len(), host.provider_argv.len());
             assert!(
-                host.provider_argv
-                    .iter()
-                    .zip(&sandboxed.provider_argv)
-                    .all(|(host_arg, sandboxed_arg)| host_arg == sandboxed_arg
-                        || (host_arg == &host.reminder && sandboxed_arg == &sandboxed.reminder)),
-                "only the reminder differs from the host argv"
+                sandboxed
+                    .provider_argv
+                    .windows(2)
+                    .any(|pair| pair == ["--permission-mode", "auto"]),
+                "scoped settings must preserve Claude's approval mode"
             );
+        }
+    }
+}
+
+#[test]
+fn scoped_codex_preserves_each_permission_selection() {
+    let project = tempfile::tempdir().unwrap();
+    for (selection, grant) in [
+        (vec![], Some("sandbox_workspace_write.writable_roots=")),
+        (
+            vec!["--sandbox", "workspace-write"],
+            Some("sandbox_workspace_write.writable_roots="),
+        ),
+        (
+            vec!["--approve-for-me"],
+            Some("sandbox_workspace_write.writable_roots="),
+        ),
+        (
+            vec!["--not-so-yolo"],
+            Some("sandbox_workspace_write.writable_roots="),
+        ),
+        (vec!["--sandbox", "read-only"], None),
+        (vec!["--sandbox", "danger-full-access"], None),
+        (vec!["-c", "default_permissions=':read-only'"], None),
+        (
+            vec!["-c", "default_permissions=':danger-full-access'"],
+            None,
+        ),
+        (
+            vec!["-c", "default_permissions=':workspace'"],
+            Some("--add-dir"),
+        ),
+        (
+            vec!["-c", "default_permissions='dev'"],
+            Some("permissions.dev.workspace_roots="),
+        ),
+        (vec!["--dangerously-bypass-approvals-and-sandbox"], None),
+    ] {
+        let invocation = request(
+            "codex",
+            ExecAction::Launch {
+                prompt: None,
+                extra_args: selection.iter().map(|arg| (*arg).to_owned()).collect(),
+            },
+        );
+        let process = compile_agent_process_with_extra_env(
+            None,
+            project.path(),
+            &invocation,
+            project.path(),
+            &BTreeMap::from([("CODEX_HOME".into(), project.path().display().to_string())]),
+            &LaunchReminders {
+                sandbox: true,
+                permission_roots: Some([
+                    "/state".into(),
+                    "/runtime".into(),
+                    "/shared-runtime".into(),
+                ]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let argv = &process.provider_argv;
+        let start = 1 + crate::agents::definition_by_kind("codex")
+            .unwrap()
+            .spec()
+            .launch
+            .fixed_args
+            .len();
+        assert_eq!(&argv[start..start + selection.len()], selection, "{argv:?}");
+        let grants: Vec<_> = argv
+            .iter()
+            .filter(|arg| {
+                arg.starts_with("sandbox_workspace_write.writable_roots=")
+                    || arg.starts_with("permissions.dev.workspace_roots=")
+                    || *arg == "--add-dir"
+            })
+            .collect();
+        if let Some(grant) = grant {
+            assert!(grants.iter().any(|arg| arg.starts_with(grant)), "{argv:?}");
+            for root in ["/state", "/runtime", "/shared-runtime"] {
+                assert!(argv.iter().any(|arg| arg.contains(root)), "{argv:?}");
+            }
+        } else {
+            assert!(grants.is_empty(), "{argv:?}");
+        }
+    }
+}
+
+#[test]
+fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissions() {
+    let project = tempfile::tempdir().unwrap();
+    for scoped in [false, true] {
+        for routine in [false, true] {
+            let invocation = request("claude", ExecAction::Launch {
+                prompt: None,
+                extra_args: vec!["--settings".into(), r#"{"sandbox":{"excludedCommands":["custom *"],"filesystem":{"allowWrite":["/user"]},"network":{"allowedDomains":["example.com"]}}}"#.into()],
+            });
+            let roots = ["/state".into(), "/runtime".into(), "/shared-runtime".into()];
+            let process = compile_agent_process_with_extra_env(
+                None,
+                project.path(),
+                &invocation,
+                project.path(),
+                &BTreeMap::from([(
+                    "CLAUDE_CONFIG_DIR".into(),
+                    project.path().display().to_string(),
+                )]),
+                &LaunchReminders {
+                    sandbox: scoped,
+                    permission_roots: Some(roots.clone()),
+                    settings: Some((project.path().to_path_buf(), BTreeMap::new())),
+                    routine_rimz: routine.then(|| {
+                        (
+                            project.path().to_path_buf(),
+                            ["/tmp".into(), "/shared".into()],
+                        )
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let args = crate::agents::PresetArgMatcher::Flag(vec!["--settings".into()])
+                .occurrences(&process.provider_argv);
+            assert_eq!(args.len(), 1);
+            let settings: serde_json::Value = serde_json::from_str(&args[0].value).unwrap();
+            let sandbox = &settings["sandbox"];
+            let writes = sandbox["filesystem"]["allowWrite"].as_array().unwrap();
+            for root in &roots {
+                assert!(writes.contains(&serde_json::json!(root)), "{settings}");
+            }
+            assert!(writes.contains(&serde_json::json!("/user")));
+            assert_eq!(
+                sandbox["network"]["allowedDomains"],
+                serde_json::json!(["example.com"])
+            );
+            assert_eq!(
+                sandbox.get("enableWeakerNestedSandbox"),
+                scoped.then_some(&serde_json::Value::Bool(true))
+            );
+            assert!(sandbox.get("enabled").is_none());
+            assert!(sandbox.get("failIfUnavailable").is_none());
+            let excluded = sandbox["excludedCommands"].as_array().unwrap();
+            assert!(excluded.contains(&serde_json::json!("custom *")));
+            for prefix in ["rimz message", "rimz agents", "rimz subagents"] {
+                assert_eq!(
+                    excluded.contains(&serde_json::json!(format!("{prefix} *"))),
+                    routine,
+                    "{settings}"
+                );
+            }
         }
     }
 }

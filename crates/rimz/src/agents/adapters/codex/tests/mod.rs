@@ -767,7 +767,7 @@ fn subagent_lockdown_replaces_codex_multi_agent_overrides() {
 }
 
 #[test]
-fn sandbox_isolation_replaces_codex_sandbox_overrides() {
+fn scoped_isolation_preserves_codex_sandbox_overrides() {
     let mut args = [
         "--sandbox",
         "workspace-write",
@@ -790,23 +790,9 @@ fn sandbox_isolation_replaces_codex_sandbox_overrides() {
     .map(ToOwned::to_owned)
     .to_vec();
 
+    let original = args.clone();
     CodexAdapter.disable_native_sandbox_args(&mut args);
-    let once = args.clone();
-    CodexAdapter.disable_native_sandbox_args(&mut args);
-
-    assert_eq!(
-        args,
-        [
-            "-c",
-            r#"approvals_reviewer="auto_review""#,
-            "--ask-for-approval",
-            "on-request",
-            "--sandbox",
-            "danger-full-access"
-        ]
-        .map(ToOwned::to_owned)
-    );
-    assert_eq!(args, once);
+    assert_eq!(args, original);
 
     let mut ask = CodexAdapter
         .spec()
@@ -820,24 +806,12 @@ fn sandbox_isolation_replaces_codex_sandbox_overrides() {
             "on-request",
             "-c",
             r#"approvals_reviewer="user""#,
-            "--sandbox",
-            "danger-full-access",
         ]
     );
 
     let mut approve_for_me = vec!["--not-so-yolo".to_owned(), "--approve-for-me".to_owned()];
     CodexAdapter.disable_native_sandbox_args(&mut approve_for_me);
-    assert_eq!(
-        approve_for_me,
-        [
-            "-c",
-            r#"approvals_reviewer="auto_review""#,
-            "-c",
-            r#"approval_policy="on-request""#,
-            "--sandbox",
-            "danger-full-access",
-        ]
-    );
+    assert_eq!(approve_for_me, ["--not-so-yolo", "--approve-for-me"]);
 
     let mut yolo = vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()];
     CodexAdapter.disable_native_sandbox_args(&mut yolo);
