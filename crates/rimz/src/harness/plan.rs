@@ -550,7 +550,7 @@ fn resolve_single_agent_spec(
         &launch.teams,
     ) {
         Ok(layout) => layout,
-        Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
+        Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
             launch.block_untrusted_reference(
                 crate::config::effective::ProfileScope::Agents,
@@ -615,7 +615,7 @@ pub fn resolve_launch(
         agent_override,
     ) {
         Ok(layout) => layout,
-        Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
+        Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
         | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
             launch.block_untrusted_reference(scope, spec, commands)?;
             launch.block_failed_reference(spec, agent_override)?;

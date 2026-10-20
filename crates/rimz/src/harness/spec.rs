@@ -21,7 +21,7 @@ use crate::harness::team_prompt::TeamPrompt;
 use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";
-const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
+const PERMISSION_MODE_NAMES: &[&str] = &["plan", "ask", "auto", "yolo"];
 const MAX_PROFILE_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +278,114 @@ impl ResolvedProfile {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownSpec {
+    pub word: String,
+    pub candidates: Vec<SpecCandidate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecCandidate {
+    pub name: String,
+    pub kind: SpecKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpecKind {
+    Profile(Box<Profile>),
+    Command,
+    Team(Option<String>),
+    Kind,
+    Cell,
+    Role,
+}
+
+impl UnknownSpec {
+    fn closest(&self) -> Vec<&SpecCandidate> {
+        crate::utils::suggest::nearest_names(
+            &self.word,
+            self.candidates
+                .iter()
+                .map(|candidate| candidate.name.as_str()),
+        )
+        .into_iter()
+        .filter_map(|name| {
+            self.candidates
+                .iter()
+                .find(|candidate| candidate.name == name)
+        })
+        .collect()
+    }
+
+    pub fn choices(&self) -> String {
+        type KindPredicate = fn(&SpecKind) -> bool;
+
+        let mut lines = Vec::new();
+        let groups: [(&str, KindPredicate); 3] = [
+            ("teams:", |kind| matches!(kind, SpecKind::Team(_))),
+            ("profiles:", |kind| {
+                matches!(kind, SpecKind::Profile(_) | SpecKind::Command)
+            }),
+            ("kinds:", |kind| matches!(kind, SpecKind::Kind)),
+        ];
+        for (label, predicate) in groups {
+            let names = self
+                .candidates
+                .iter()
+                .filter(|candidate| predicate(&candidate.kind));
+            lines.push(wrap_choices(
+                label,
+                names.map(|candidate| candidate.name.as_str()),
+            ));
+        }
+        let modes = PERMISSION_MODE_NAMES
+            .iter()
+            .map(|mode| format!("-{mode}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "              (each also as <kind>{modes}, -fast where supported)"
+        ));
+        lines.join("\n")
+    }
+}
+
+impl std::fmt::Display for UnknownSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "no team, profile, or command named `{}`", self.word)?;
+        let closest = self.closest();
+        if closest.is_empty() {
+            return f.write_str(&self.choices());
+        }
+        write!(
+            f,
+            "did you mean: {}",
+            closest
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+pub fn team_summary(team: &Team, profiles: &ProfilesConfig) -> Option<String> {
+    if let Some(layout) = &team.layout {
+        return Some(layout.clone());
+    }
+    let mut kinds = Vec::new();
+    for binding in &team.roles {
+        let kind = resolve_profile(&binding.profile, profiles)
+            .ok()?
+            .kind
+            .to_string();
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    (!kinds.is_empty()).then(|| kinds.join(","))
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum LayoutErr {
     #[error("{definition} keep-warm while `{clause}`: {reason}")]
@@ -302,14 +410,8 @@ pub enum LayoutErr {
         "unknown layout cell `{cell}`; define it in <agents_home>/agents/{cell}.md, a project [profiles] table, or [agents.commands], install it on PATH, or use one of: {valid}"
     )]
     UnknownCell { cell: String, valid: String },
-    #[error(
-        "unknown team `{team}`\ndefine it in <agents_home>/teams/{team}.md or pass an inline profile/command spec\nvalid teams:\n  {valid_teams}\nvalid cells:\n  {valid_cells}"
-    )]
-    UnknownTeam {
-        team: String,
-        valid_teams: String,
-        valid_cells: String,
-    },
+    #[error("{0}")]
+    UnknownSpec(Box<UnknownSpec>),
     #[error(
         "profile `{name}` is defined under [{defined_in}.profiles], but {command} resolves [{expected_in}.profiles]; move or copy the profile to the expected section"
     )]
@@ -319,11 +421,12 @@ pub enum LayoutErr {
         command: &'static str,
         expected_in: &'static str,
     },
-    #[error("team `{team}` has no role `{role}`; declared roles: {valid_roles}")]
+    #[error("team `{team}` has no role `{role}`; declared roles: {valid_roles}{suggestion}")]
     UnknownRoleInTeam {
         team: String,
         role: String,
         valid_roles: String,
+        suggestion: Box<str>,
     },
     #[error(
         "team `{team}` leader `{leader}` is not a declared role; declared roles: {valid_roles}"
@@ -800,11 +903,10 @@ pub(super) fn resolve_spec_with_agent_override(
             role: role.to_owned(),
         });
     }
-    Err(LayoutErr::UnknownTeam {
-        team: raw.to_owned(),
-        valid_teams: wrap_valid_list(&valid_teams(teams)),
-        valid_cells: wrap_valid_list(&valid_cells(profiles, commands)),
-    })
+    Err(LayoutErr::UnknownSpec(Box::new(UnknownSpec {
+        word: raw.to_owned(),
+        candidates: spec_candidates(profiles, team_profiles, commands, teams),
+    })))
 }
 
 pub fn resolve_team(
@@ -917,6 +1019,14 @@ fn resolve_team_role(
             team: team_name.to_owned(),
             role: role_name.to_owned(),
             valid_roles: valid_team_roles(team),
+            suggestion: crate::utils::suggest::nearest_name(
+                role_name,
+                team.roles.iter().map(|binding| binding.role.as_str()),
+            )
+            .map_or_else(String::new, |role| {
+                format!("\ndid you mean: {team_name}.{role}")
+            })
+            .into_boxed_str(),
         });
     };
     Ok(LayoutSpec::single(Cell::Agent(cell.clone())))
@@ -2211,6 +2321,13 @@ fn invalid_role_name(name: &str) -> bool {
 }
 
 fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
+    cell_names(profiles, commands)
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn cell_names(profiles: &ProfilesConfig, commands: &CommandsConfig) -> BTreeSet<String> {
     let mut values = BTreeSet::new();
     values.insert("term".to_owned());
     for kind in crate::agents::known_kinds() {
@@ -2224,7 +2341,7 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
     }
     values.extend(commands.0.keys().cloned());
     values.extend(profiles.0.keys().cloned());
-    values.into_iter().collect::<Vec<_>>().join(", ")
+    values
 }
 
 fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
@@ -2235,30 +2352,91 @@ fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 
-fn valid_teams(teams: &TeamsConfig) -> String {
-    let mut values = BTreeSet::from(["peer".to_owned()]);
-    values.extend(teams.0.keys().cloned());
-    values.into_iter().collect::<Vec<_>>().join(", ")
+fn spec_candidates(
+    profiles: &ProfilesConfig,
+    team_profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+) -> Vec<SpecCandidate> {
+    let mut candidates = BTreeMap::new();
+    for name in commands.0.keys() {
+        candidates.insert(name.clone(), SpecKind::Command);
+    }
+    for (name, profile) in &profiles.0 {
+        if teams.role_spec(name).is_none() && crate::agents::find_definition(name).is_none() {
+            candidates
+                .entry(name.clone())
+                .or_insert_with(|| SpecKind::Profile(Box::new(profile.clone())));
+        }
+    }
+    for (name, team) in &teams.0 {
+        candidates
+            .entry(name.clone())
+            .or_insert_with(|| SpecKind::Team(team_summary(team, team_profiles)));
+        for binding in &team.roles {
+            candidates.insert(format!("{name}.{}", binding.role), SpecKind::Role);
+        }
+    }
+    candidates
+        .entry("peer".into())
+        .or_insert_with(|| SpecKind::Team(Some(BUILTIN_PEER.into())));
+    let mut cells = cell_names(profiles, commands);
+    for base in cells.clone() {
+        let fast = format!("{base}-fast");
+        if fast_suffix_cell(&fast, profiles, None)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            cells.insert(fast);
+        }
+    }
+    for name in cells {
+        if teams.role_spec(&name).is_some() {
+            continue;
+        }
+        let kind = if name == "term" || crate::agents::find_definition(&name).is_some() {
+            SpecKind::Kind
+        } else {
+            SpecKind::Cell
+        };
+        candidates.entry(name).or_insert(kind);
+    }
+    let mut candidates = candidates
+        .into_iter()
+        .map(|(name, kind)| SpecCandidate { name, kind })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| {
+        (
+            match candidate.kind {
+                SpecKind::Profile(_) | SpecKind::Command => 0,
+                SpecKind::Team(_) => 1,
+                SpecKind::Kind | SpecKind::Cell => 2,
+                SpecKind::Role => 3,
+            },
+            candidate.name.clone(),
+        )
+    });
+    candidates
 }
 
-fn wrap_valid_list(values: &str) -> String {
-    const LINE_WIDTH: usize = 85;
+fn wrap_choices<'a>(label: &str, names: impl IntoIterator<Item = &'a str>) -> String {
+    use unicode_width::UnicodeWidthStr;
 
-    let mut wrapped = String::new();
-    let mut line_width = 0;
-    for value in values.split(", ") {
-        let separator_width = usize::from(line_width > 0) * 2;
-        if line_width > 0 && line_width + separator_width + value.len() > LINE_WIDTH {
-            wrapped.push_str(",\n  ");
-            wrapped.push_str(value);
-            line_width = value.len();
-        } else {
-            if line_width > 0 {
+    let mut wrapped = format!("{label:<14}");
+    let mut width = 14;
+    for name in names {
+        if width > 14 {
+            if width + 2 + name.width() > 85 {
+                wrapped.push_str(",\n              ");
+                width = 14;
+            } else {
                 wrapped.push_str(", ");
+                width += 2;
             }
-            wrapped.push_str(value);
-            line_width += separator_width + value.len();
         }
+        wrapped.push_str(name);
+        width += name.width();
     }
     wrapped
 }

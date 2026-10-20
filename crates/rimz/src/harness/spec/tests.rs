@@ -4,6 +4,89 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[test]
+fn unknown_spec_catalog_keeps_kinds_and_only_resolvable_names() {
+    let profiles = profiles([
+        ("perf", profile("claude")),
+        ("assistant", profile("perf")),
+        ("forge.coder", profile("codex")),
+        ("claude", profile("claude")),
+    ]);
+    let commands = commands([("build", "printf ready")]);
+    let teams = TeamsConfig(BTreeMap::from([
+        ("forge".into(), team(vec![role("coder", "assistant")])),
+        (
+            "review".into(),
+            Team {
+                layout: Some("claude,build".into()),
+                ..Default::default()
+            },
+        ),
+    ]));
+    let LayoutErr::UnknownSpec(error) =
+        resolve_spec(Some("per"), &profiles, &commands, &teams).unwrap_err()
+    else {
+        panic!("unknown spec")
+    };
+    let closest = error.closest();
+    assert_eq!(
+        closest
+            .iter()
+            .map(|candidate| candidate.name.as_str())
+            .collect::<Vec<_>>(),
+        ["perf", "peer"]
+    );
+    assert!(matches!(closest[0].kind, SpecKind::Profile(_)));
+    assert!(matches!(&closest[1].kind, SpecKind::Team(Some(summary)) if summary == "claude,codex"));
+    assert!(
+        error
+            .candidates
+            .iter()
+            .any(|candidate| candidate.name == "claude-fast")
+    );
+    for candidate in &error.candidates {
+        assert!(
+            resolve_spec(Some(&candidate.name), &profiles, &commands, &teams).is_ok(),
+            "{} must resolve",
+            candidate.name
+        );
+    }
+    let text = error.choices();
+    assert!(
+        text.contains("profiles:     assistant, build, perf\n"),
+        "{text}"
+    );
+    assert!(
+        text.lines().all(|line| line.chars().count() + 2 <= 88),
+        "{text}"
+    );
+}
+
+#[test]
+fn team_summaries_follow_layout_or_distinct_role_kinds() {
+    let profiles = profiles([
+        ("worker", profile("claude")),
+        ("reviewer", profile("codex")),
+        ("alias", profile("worker")),
+    ]);
+    let mut configured = team(vec![
+        role("plan", "alias"),
+        role("code", "codex"),
+        role("review", "reviewer"),
+    ]);
+    assert_eq!(
+        team_summary(&configured, &profiles).as_deref(),
+        Some("claude,codex")
+    );
+    configured.layout = Some("claude+term,codex".into());
+    assert_eq!(
+        team_summary(&configured, &profiles).as_deref(),
+        Some("claude+term,codex")
+    );
+    configured.layout = None;
+    configured.roles.push(role("missing", "not-defined"));
+    assert_eq!(team_summary(&configured, &profiles), None);
+}
+#[test]
 fn keep_warm_while_is_admitted_only_for_staged_team_readings() {
     for value in [
         "ci=passed",
@@ -701,12 +784,12 @@ fn resolve_spec_dispatches_default_inline_peer_and_team() {
     teams.0.remove("rimz");
     assert!(matches!(
         resolve_spec(Some("missing"), &profiles, &no_commands(), &teams),
-        Err(LayoutErr::UnknownTeam { team, .. }) if team == "missing"
+        Err(LayoutErr::UnknownSpec(error)) if error.word == "missing"
     ));
 }
 
 #[test]
-fn unknown_team_error_groups_and_wraps_valid_choices() {
+fn unknown_spec_error_groups_and_wraps_valid_choices() {
     let error = resolve_spec(
         Some("missing"),
         &no_profiles(),
@@ -717,14 +800,63 @@ fn unknown_team_error_groups_and_wraps_valid_choices() {
     let rendered = error.to_string();
 
     assert!(rendered.starts_with(
-        "unknown team `missing`\n\
-         define it in <agents_home>/teams/missing.md or pass an inline profile/command spec\n\
-         valid teams:\n  peer\n\
-         valid cells:\n  "
+        "no team, profile, or command named `missing`\nteams:        peer\nprofiles:     \nkinds:        "
     ));
     assert!(
         rendered.lines().all(|line| line.len() <= 88),
         "error contains an overlong line:\n{rendered}"
+    );
+}
+
+#[test]
+fn unknown_spec_suggests_only_the_nearest_tier() {
+    let profiles = profiles([
+        ("perf", profile("claude")),
+        ("forge.coder", profile("codex")),
+        ("claude", profile("claude")),
+    ]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".into(),
+        team(vec![role("coder", "codex")]),
+    )]));
+    let error = resolve_spec(Some("per"), &profiles, &no_commands(), &teams).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "no team, profile, or command named `per`\ndid you mean: perf, peer"
+    );
+    let error = resolve_spec(Some("forg.coder"), &profiles, &no_commands(), &teams).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "no team, profile, or command named `forg.coder`\ndid you mean: forge.coder"
+    );
+    let error = resolve_spec(Some("xyz"), &profiles, &no_commands(), &teams).unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.contains("teams:        forge, peer\nprofiles:     perf\nkinds:"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("forge.coder") && !text.contains("claude-plan"),
+        "{text}"
+    );
+    assert!(
+        text.contains("term") && !text.contains("rimz agents") && !text.contains("<agents_home>"),
+        "{text}"
+    );
+}
+
+#[test]
+fn unknown_role_suggests_a_declared_role() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".into(),
+        team(vec![role("coder", "codex")]),
+    )]));
+    let error =
+        resolve_spec(Some("forge.coderr"), &no_profiles(), &no_commands(), &teams).unwrap_err();
+    assert!(matches!(error, LayoutErr::UnknownRoleInTeam { .. }));
+    assert_eq!(
+        error.to_string(),
+        "team `forge` has no role `coderr`; declared roles: coder\ndid you mean: forge.coder"
     );
 }
 
@@ -1841,7 +1973,7 @@ fn team_role_specs_preserve_identity_and_disambiguate_dots() {
     );
     assert!(matches!(
         resolve_spec(Some("forge.bogus"), &profiles, &no_commands(), &teams),
-        Err(LayoutErr::UnknownRoleInTeam { team, role, valid_roles })
+        Err(LayoutErr::UnknownRoleInTeam { team, role, valid_roles, .. })
             if team == "forge"
                 && role == "bogus"
                 && valid_roles == "planner, sub.planner"
