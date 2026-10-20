@@ -11,6 +11,12 @@
 //! touches the durable event log: this is display-only latency, not truth
 //! ("Durability first", `docs/internals/store.md`).
 //!
+//! A sidecar ends with its session: a session-ending hook (Claude's
+//! `SessionEnd` fires on `/clear` and an in-process `/resume` too) removes it in
+//! the CLI's lifecycle hook, and the same provider process then writes a fresh
+//! sidecar under the new session id. A first reading therefore cannot carry
+//! anything from its predecessor; see [`write()`]'s `owner_started_at`.
+//!
 //! Ownership: every renderer's fetch worker reads this module through the
 //! shared enrichment fold; writes stay producer-side (CLI paths and the
 //! elder's triggers above) and are cache-class — rename atomicity, no fsync,
