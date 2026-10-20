@@ -400,11 +400,14 @@ mod tests {
                 refusal: None,
                 lifetime_peak_kb: 0,
                 dormant_ms: None,
+                watch_due: None,
             }),
             changed: Condvar::new(),
             started: std::time::Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             requests: Default::default(),
+            #[cfg(feature = "testkit")]
+            ticks: Mutex::new(None),
         });
         let running = std::thread::spawn({
             let shared = shared.clone();

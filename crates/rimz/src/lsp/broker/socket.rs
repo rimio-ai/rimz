@@ -155,7 +155,10 @@ impl Drop for Owed<'_> {
 pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
     std::thread::spawn(move || {
         loop {
-            match listener.accept() {
+            let accepted = listener.accept();
+            #[cfg(feature = "testkit")]
+            shared.tick(b'A');
+            match accepted {
                 Ok((stream, _)) => {
                     let shared = shared.clone();
                     std::thread::spawn(move || {
@@ -163,9 +166,6 @@ pub(super) fn listen(listener: UnixListener, shared: Arc<Shared>) {
                             tracing::debug!(%error, "LSP socket request failed");
                         }
                     });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(20))
                 }
                 Err(error)
                     if matches!(
@@ -495,11 +495,14 @@ mod tests {
                 refusal: None,
                 lifetime_peak_kb: 0,
                 dormant_ms: None,
+                watch_due: None,
             }),
             changed: Condvar::new(),
             started: Instant::now(),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
             requests: Requests::default(),
+            #[cfg(feature = "testkit")]
+            ticks: Mutex::new(None),
         };
         let response = query(&shared, "workspace/symbol", json!({"query": "symbol"}), 1).unwrap();
         assert!(response.get("indexing").is_some());

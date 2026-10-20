@@ -60,6 +60,17 @@ pub(super) struct Readiness {
 }
 
 impl Readiness {
+    pub(super) fn deadline(&self, now: u64) -> Option<u64> {
+        if self.state(now) != State::Indexing || !self.open.is_empty() {
+            return None;
+        }
+        match self.last_progress_at {
+            None => self.initialized_at?.checked_add(10_000),
+            Some(last) if self.ended => last.checked_add(2_000),
+            Some(_) => None,
+        }
+    }
+
     pub(super) fn initialized(&mut self, now: u64) {
         self.initialized_at = Some(now);
     }
@@ -95,6 +106,32 @@ impl Readiness {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn readiness_deadline_is_the_next_time_only_transition() {
+        let mut state = Readiness::default();
+        assert_eq!(state.deadline(0), None);
+        state.initialized(100);
+        assert_eq!(state.deadline(100), Some(10_100));
+        assert_eq!(state.state(10_099), State::Indexing);
+        assert_eq!(state.state(10_100), State::Ready);
+        assert_eq!(state.deadline(10_100), None);
+        state.progress(&json!({"token":"a", "value":{"kind":"begin"}}), 200);
+        assert_eq!(state.deadline(200), None);
+        state.progress(&json!({"token":"a", "value":{"kind":"report"}}), 300);
+        assert_eq!(state.deadline(300), None);
+        state.progress(&json!({"token":"a", "value":{"kind":"end"}}), 400);
+        assert_eq!(state.deadline(400), Some(2_400));
+        assert_eq!(state.state(2_399), State::Indexing);
+        assert_eq!(state.state(2_400), State::Ready);
+        assert_eq!(state.deadline(2_400), None);
+        state.progress(&json!({"token":"b", "value":{"kind":"begin"}}), 500);
+        assert_eq!(state.deadline(500), None);
+        let mut report_only = Readiness::default();
+        report_only.initialized(100);
+        report_only.progress(&json!({"token":"a", "value":{"kind":"report"}}), 200);
+        assert_eq!(report_only.deadline(200), None);
+    }
 
     #[test]
     fn idle_expiry_waits_for_readiness_and_in_flight_queries() {
