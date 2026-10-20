@@ -13,6 +13,54 @@ pub(super) const RIMZ_TITLE_OPTION: &str = "@rimz_title";
 pub(super) const RIMZ_TAB_BASE_OPTION: &str = "@rimz_tab_base";
 pub(super) const RIMZ_TAB_FOUNDERS_OPTION: &str = "@rimz_tab_founders";
 
+pub(super) fn stack_hook_commands() -> Vec<Vec<String>> {
+    // The inner pane loop reads the active pane's stack in the same window,
+    // so moving focus in one stack never clears another stack's open flag.
+    let same_stack = "#{==:#{@rimz_stack},#{P:#{?pane_active,#{@rimz_stack},}}}";
+    let focus = format!(
+        "if-shell -F '#{{&&:#{{@rimz_stack}},#{{!=:#{{pane_floating_flag}},1}}}}' {{ \
+         run-shell -C '#{{P:#{{?#{{&&:#{{@rimz_stack}},{same_stack}}},set-option -pu -t #{{pane_id}} @rimz_stack_open ; ,}}}}\
+         set-option -p -t #{{pane_id}} @rimz_stack_open 1 ; \
+         #{{?#{{&&:#{{!=:#{{window_zoomed_flag}},1}},#{{!=:#{{P:#{{?#{{&&:{same_stack},#{{!=:#{{pane_active}},1}}}},1,}}}},}}}},resize-pane -t #{{pane_id}} -y #{{window_height}},}}' }}"
+    );
+    let restore = concat!(
+        "if-shell -F '#{&&:#{!=:#{window_zoomed_flag},1},#{!=:#{P:#{?#{&&:#{@rimz_stack},#{!=:#{@rimz_stack_open},1}},1,}},}}' { ",
+        "run-shell -C '#{P:#{?#{&&:#{@rimz_stack},#{&&:#{==:#{@rimz_stack_open},1},#{!=:#{pane_floating_flag},1}}},resize-pane -t #{pane_id} -y #{window_height} ; ,}}' } ; ",
+        "if-shell -F '#{&&:#{@rimz_stack_borders_owned},#{==:#{P:#{?#{@rimz_stack},1,}},}}' { ",
+        "set-window-option -u pane-border-status ; set-window-option -u pane-border-format ; ",
+        "set-window-option -u @rimz_stack_borders_owned }",
+    );
+    [
+        ("window-pane-changed[240]", focus),
+        ("window-layout-changed[240]", restore.to_owned()),
+    ]
+    .into_iter()
+    .map(|(event, body)| vec!["set-hook".into(), "-g".into(), event.into(), body])
+    .collect()
+}
+
+pub(super) fn stack_window_options(
+    config: &TmuxConfig,
+    has_members: bool,
+) -> Vec<(&'static str, Option<String>)> {
+    let mut options = tmux_window_options(config);
+    let owns_borders = config.pane_border_status.is_none() && has_members;
+    if owns_borders {
+        for (key, value) in &mut options {
+            match *key {
+                "pane-border-status" => *value = Some("top".into()),
+                "pane-border-format" => *value = Some("#{?#{@rimz_stack}, #{?#{@rimz_title},#{@rimz_title},#{pane_current_command}} ,#{p999: }}".into()),
+                _ => {}
+            }
+        }
+    }
+    options.push((
+        "@rimz_stack_borders_owned",
+        owns_borders.then(|| "1".into()),
+    ));
+    options
+}
+
 pub(super) fn spawn_command_is_sidebar_serve(spawn: &str) -> bool {
     // tmux quotes a single shell-command argument as a whole. Decode that
     // layer so a hook-born sidebar is chrome before it publishes its title.
@@ -345,6 +393,55 @@ mod tests {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::SidebarPaneOptions;
+
+    #[test]
+    fn stack_hooks_are_indexed_global_and_guard_zoom_and_floats() {
+        let hooks = stack_hook_commands();
+        assert_eq!(hooks.len(), 2);
+        for (hook, event) in hooks
+            .iter()
+            .zip(["window-pane-changed[240]", "window-layout-changed[240]"])
+        {
+            assert_eq!(&hook[..3], ["set-hook", "-g", event]);
+            assert!(hook[3].contains("@rimz_stack"));
+            assert!(hook[3].contains("window_zoomed_flag"));
+            assert!(hook[3].contains("pane_floating_flag"));
+        }
+    }
+
+    #[test]
+    fn stack_border_chooser_respects_explicit_config_and_membership() {
+        let mut config = TmuxConfig::default();
+        let owned = stack_window_options(&config, true);
+        assert!(owned.contains(&("pane-border-status", Some("top".into()))));
+        let format = owned
+            .iter()
+            .find(|(key, _)| *key == "pane-border-format")
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap();
+        assert!(
+            format.contains("@rimz_stack")
+                && format.contains("@rimz_title")
+                && format.contains("#{p999: }")
+        );
+        assert!(stack_window_options(&config, false).contains(&("pane-border-status", None)));
+        for status in [
+            crate::config::TmuxPaneBorderStatus::Off,
+            crate::config::TmuxPaneBorderStatus::Bottom,
+        ] {
+            config.pane_border_status = Some(status);
+            let options = stack_window_options(&config, true);
+            assert!(options.contains(&("pane-border-status", Some(status.as_str().into()))));
+            assert!(!options.iter().any(|(key, value)| {
+                *key == "pane-border-format"
+                    && value
+                        .as_ref()
+                        .is_some_and(|format| format.contains("@rimz_stack"))
+            }));
+        }
+    }
 
     #[test]
     fn spawn_command_recognizes_sidebar_serve_before_title() {

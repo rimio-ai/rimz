@@ -279,16 +279,16 @@ impl TmuxBackend {
         ensure_pane_backend(anchor, MuxName::Tmux)?;
         let output = self.cmd().args([
             "list-panes", "-t", anchor.raw(), "-F",
-            "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{pane_start_command}",
+            "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}|#{window_zoomed_flag}|#{pane_floating_flag}|#{==:#{pane_title},rimz-sidebar}|#{pane_current_command}|#{@rimz_stack}|#{pane_start_command}",
         ]).run_with_timeout(std::time::Duration::from_secs(2))?;
         let mut work = Vec::new();
         let mut chrome = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let fields = line.splitn(6, '|').collect::<Vec<_>>();
-            let [cell, zoomed, floating, sidebar, command, spawn] = fields.as_slice() else {
+            let fields = line.splitn(7, '|').collect::<Vec<_>>();
+            let [cell, zoomed, floating, sidebar, command, stack, spawn] = fields.as_slice() else {
                 return Ok(None);
             };
-            if *zoomed == "1" || *floating == "1" {
+            if *zoomed == "1" || *floating == "1" || !stack.is_empty() {
                 return Ok(None);
             }
             let Some(cell) = parse_tmux_pane_cell(cell) else {
@@ -1289,64 +1289,6 @@ impl TmuxBackend {
                 raw.trim()
             ),
         })
-    }
-
-    /// Resize every pane sharing the target's column to an even height.
-    /// Selecting by both left edge and width leaves sidebars and other columns
-    /// untouched while shrinking earlier rows as new ones join.
-    pub(super) fn even_column(&self, pane: &str) -> Result<()> {
-        let output = self
-            .cmd()
-            .args([
-                "list-panes",
-                "-t",
-                pane,
-                "-F",
-                "#{pane_id} #{pane_left} #{pane_width} #{pane_top} #{pane_height}",
-            ])
-            .run()?;
-        let cells = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(parse_tmux_pane_cell)
-            .collect::<Vec<_>>();
-        let target = cells
-            .iter()
-            .find(|cell| cell.pane_id == pane)
-            .ok_or_else(|| MuxErr::Output {
-                program: "tmux".to_owned(),
-                reason: "list-panes did not include the target pane".to_owned(),
-            })?;
-        let mut column = cells
-            .iter()
-            .filter(|cell| cell.left == target.left && cell.width == target.width)
-            .collect::<Vec<_>>();
-        column.sort_by_key(|cell| cell.top);
-        let total_height = column.iter().map(|cell| cell.height).sum::<u64>()
-            + column.len().saturating_sub(1) as u64;
-        let heights = even_column_heights(total_height, column.len());
-        for (cell, height) in column.into_iter().zip(heights) {
-            self.cmd()
-                .args([
-                    "resize-pane".to_owned(),
-                    "-t".to_owned(),
-                    cell.pane_id.clone(),
-                    "-y".to_owned(),
-                    height.to_string(),
-                ])
-                .run()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn even_column_best_effort(&self, pane: &str, operation: &'static str) {
-        if let Err(err) = self.even_column(pane) {
-            tracing::warn!(
-                pane,
-                tags.operation = operation,
-                error = &err as &dyn std::error::Error,
-                "could not tile the stacked pane zone evenly",
-            );
-        }
     }
 
     pub(super) fn append_equal_host_rows<'a>(

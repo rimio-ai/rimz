@@ -135,7 +135,7 @@ Host isolation enforces the list through Claude's or Codex's per-launch switch; 
 | --- | --- |
 | `name` | Optional name, default filename stem; `[A-Za-z0-9_-]+`, unique among teams. |
 | `description` | Optional string, accepted as metadata. |
-| `layout` | Optional layout using role names and roleless cells; comma columns, plus tiled rows, slash stacked rows (tiled on tmux). |
+| `layout` | Optional layout using role names and roleless cells; comma columns, plus tiled rows, slash stacked rows (one expanded member on both backends). |
 | `leader` | Required declared role handle; receives the initial task and retains `AskUserQuestion`. |
 | `stages` | Required nonempty ordered list of unique, nonblank stage names. |
 | `traits` | Traits added to every seat's leaf craft. |

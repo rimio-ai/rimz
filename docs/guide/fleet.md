@@ -50,7 +50,7 @@ Every verb on this page takes one. Routing text to a handle, parking at the turn
 
 ## Compose a layout
 
-Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line. A comma splits columns, a plus tiles rows, a slash stacks rows (a Zellij stack; tmux tiles them):
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line. A comma splits columns, a plus tiles rows, a slash stacks rows with one expanded member. Focus a collapsed member to open it, on either backend:
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side

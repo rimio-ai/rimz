@@ -312,7 +312,7 @@ Children open in a shared zone instead of splitting the caller's view each time.
 | --- | --- |
 | The channel already has a `#<channel> subagents` companion tab with room | That companion tab; when every one is full, the next numbered one (`#<channel> subagents 2`, `3`, ...) |
 | The caller is a team member | A new companion tab right after the caller's tab |
-| The caller is solo and already has a child beside its pane | Stacked with that child (a native stack on Zellij, equal-height rows on tmux) |
+| The caller is solo and already has a child beside its pane | Stacked with that child; focus opens a member on either backend |
 | The caller is solo | A column split to the right of the caller's pane; a companion tab when the split fails |
 
 A companion tab starts with two side-by-side columns and adds rows, keeping pane areas roughly equal, up to eight children (four rows per column, not counting the sidebar). A small terminal or rearranged panes can overflow to the next companion tab sooner. When RimZ cannot resolve placement, the child still opens in a `#<channel> subagents` tab. On the main channel the companion base is `<view> subagents`, or `subagents` when the caller's view is unavailable. An interactive child's pane normally closes after the parent's receiving turn ends; one-shot providers close on exit, and `--keep` holds either pane. A companion tab closes with its last child pane. The full placement rules are in [pane zones](../../internals/harness/subagents.md#pane-zones).
