@@ -1348,7 +1348,7 @@ reason = "The sidebar frame CLI prints matching physical rows from the library's
 
 [[module]]
 path = "crates/rimz/src/sidebar_pane/app"
-# FocusPeers::with_fit lets the host inject its tmux repair and tests drive both paint budgets (+1).
+# FocusPeers::with_fit lets the host inject its tmux repair and tests exercise fitting within the shared click budget (+1).
 surface-budget = 14
 
 [[verdict]]

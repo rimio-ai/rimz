@@ -76,8 +76,9 @@ pub(super) fn request_focus_until(
 /// Errors return to the attachment for selection rollback and a recovered
 /// health notice. A superseded dispatch stays diagnostic only.
 /// A cross-tab user request pushes the stored anchor to host peers
-/// and waits up to 100 ms for the destination's frame (300 ms after fitting a stale tmux view) before mux dispatch;
-/// the dispatch nonce check still fences superseded requests. The durable
+/// and waits for the destination's frame until click + 500 ms before mux dispatch;
+/// request work and any stale tmux fit spend that same budget, without resetting it.
+/// The dispatch nonce check still fences superseded requests. The durable
 /// request also wakes renderers outside the push path;
 /// command acceptance applies it, and later native observations confirm or
 /// supersede it.

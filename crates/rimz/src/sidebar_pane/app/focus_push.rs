@@ -15,8 +15,7 @@ use super::fetch::Subscribers;
 use super::input::Wakeup;
 use super::timing::duration_millis;
 
-const PAINT_WAIT: Duration = Duration::from_millis(100);
-const STALE_PAINT_WAIT: Duration = Duration::from_millis(300);
+const PAINT_WAIT: Duration = Duration::from_millis(500);
 const REPORT_HORIZON: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
@@ -132,7 +131,7 @@ impl FocusPeers {
         mut now: impl FnMut() -> Instant,
         mut receive: impl FnMut(&Receiver<PushPeer>, Duration) -> Result<PushPeer, RecvTimeoutError>,
     ) -> T {
-        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, &mut now);
+        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, clicked, &mut now);
         let mut reports = Vec::new();
         let outcome = wait_for_paint(
             until,
@@ -167,7 +166,7 @@ impl FocusPeers {
                 nonce: anchor.nonce,
                 target: anchor.pane_id,
                 outcome,
-                budget_ms: duration_millis(until.duration_since(sent)),
+                budget_ms: duration_millis(until.saturating_duration_since(sent)),
                 lead_ms: Some(duration_millis(sent.duration_since(clicked))),
                 fit_ms,
                 decided_ms: duration_millis(decided.duration_since(sent)),
@@ -182,6 +181,7 @@ impl FocusPeers {
     fn push(
         &self,
         anchor: &FocusAnchor,
+        clicked: Instant,
         mut now: impl FnMut() -> Instant,
     ) -> (
         Instant,
@@ -192,11 +192,6 @@ impl FocusPeers {
     ) {
         let started = now();
         let expected_panes = self.fit.as_ref().and_then(|fit| fit(anchor)).map(Arc::new);
-        let budget = if expected_panes.is_some() {
-            STALE_PAINT_WAIT
-        } else {
-            PAINT_WAIT
-        };
         let peers: Vec<_> = self
             .subscribers
             .lock()
@@ -209,7 +204,7 @@ impl FocusPeers {
         let ack = PushAck::new(tx);
         let mut traces = Vec::with_capacity(peers.len());
         let sent = now();
-        let until = sent + budget;
+        let until = clicked + PAINT_WAIT;
         for (instance_id, peer) in peers {
             let mut push = FocusPush::new(anchor.clone(), ack.clone(), instance_id, sent, until);
             push.expected_panes = expected_panes.clone();
