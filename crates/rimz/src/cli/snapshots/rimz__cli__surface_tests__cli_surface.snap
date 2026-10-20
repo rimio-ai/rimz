@@ -2939,6 +2939,7 @@ rimz subagents
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
     --warn <OFFSETS>  [action=set takes=1..=1]
+    --yolo  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents fanout
@@ -3000,6 +3001,7 @@ rimz subagents launch
     --tmux  [action=set-true takes=0..=0 global]
     --wait <DURATION>  [action=set takes=0..=1]
     --warn <OFFSETS>  [action=set takes=1..=1]
+    --yolo  [action=set-true takes=0..=0]
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz subagents list (aliases: ls)

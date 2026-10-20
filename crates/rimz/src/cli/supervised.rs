@@ -247,6 +247,30 @@ pub(in crate::cli) fn note_isolation_clamp(
     Ok(())
 }
 
+fn note_permission_clamp(
+    profile: &str,
+    clamp: &rimz::harness::plan::PermissionClamp,
+) -> Result<()> {
+    use std::io::Write as _;
+    writeln!(
+        std::io::stderr(),
+        "rimz: {profile} runs in {} mode: {} asks for {}, and a subagent never runs looser than its parent",
+        clamp.mode,
+        clamp.source,
+        clamp.requested,
+    )?;
+    Ok(())
+}
+
+fn note_yolo_sandbox(profile: &str) -> Result<()> {
+    use std::io::Write as _;
+    writeln!(
+        std::io::stderr(),
+        "rimz: {profile} runs yolo inside the sandbox; sudo and setuid binaries do not work there; use --isolation host"
+    )?;
+    Ok(())
+}
+
 fn install_run_interrupt_flag() -> Result<RunCancellation> {
     let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(RunCancellation::new)

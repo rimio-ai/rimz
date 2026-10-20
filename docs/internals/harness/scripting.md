@@ -24,7 +24,7 @@ The rule that resolves this: **the durable run record is the run; the pane, the 
 | [`harness/park_notice.rs`](../../../crates/rimz/src/harness/park_notice.rs) | Producer-side detection of a subagent run parked on a provider limit, the notice text, and spawning the detached notice helper. |
 | [`harness/stall_notice.rs`](../../../crates/rimz/src/harness/stall_notice.rs) | Read-only silent-child detection, notice text, and detached helper spawning ([backstops](./subagents.md#backstops)). |
 | [`harness/deadline.rs`](../../../crates/rimz/src/harness/deadline.rs) | Pure warning, stop-channel, and grace-bound kill policy. |
-| [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, finalize, the single-cell refusals, and the child isolation cap, returning finalize warnings as values. |
+| [`harness/plan.rs`](../../../crates/rimz/src/harness/plan.rs) | `plan_supervised_launch`: lane qualification, isolation inheritance, route, resolve, single-cell refusals and the child permission cap before finalize, then the isolation cap; warnings and child-mode notes return as values. |
 | [`harness/prompt_compose.rs`](../../../crates/rimz/src/harness/prompt_compose.rs) | `retry_prompt` and `verify_reprompt`, beside the system-prompt composition [fleet.md](./fleet.md#system-prompt-composition) owns. |
 | [`cli/supervised.rs`](../../../crates/rimz/src/cli/supervised.rs) | Command-neutral effects: agent and program preflight, the pane's exec argv (`run_pane_cmd` over an `ExecRequest`), stop and cancel, the SIGINT cancellation flag, `--timeout` parsing, and the stream-json prompt reader. |
 | [`cli/supervised/run.rs`](../../../crates/rimz/src/cli/supervised/run.rs) | The driver `run_supervised` that both `agents -p` and loop fires call: preparation around the launch plan, room birth, placement, the attempt loop, the verify loop, and the retry loop. |
@@ -195,7 +195,7 @@ Streaming reads the provider's transcript at `record.transcript_path`. Both `--o
 
 A run launches through the same layout resolution and finalization as an interactive launch, so model, effort, profile `auto-compact`, system-prompt files, and the adapter's refusal of a setting it cannot render all behave as [fleet.md § From spec to panes](./fleet.md#from-spec-to-panes) describes. Four things are specific to `-p`:
 
-- The permission posture is `auto` unless `--ask` or `--yolo` is given; the two flags conflict. A virtual cell's mode overrides the flag, so `rimz agents claude-plan ... -p` runs in plan mode although `-p` has no `--plan` flag.
+- An unset permission mode defaults to `auto`; a profile or virtual cell keeps its declared mode. Explicit `--ask` or `--yolo` replaces either declaration; the two flags conflict. For a subagent with a caller, the planner caps this choice against the caller's recorded mode before finalization (unrecorded is auto), refusing an explicit higher mode and lowering a higher default. Peers, loops, workflows, and caller-less launches are not capped. `rimz subagents` exposes only `--yolo`, not `--ask`.
 - `--max-turns` renders through the adapter's turn-limit argv, and an adapter without one refuses it at finalization.
 - The layout must resolve to exactly one agent cell and no other cells.
 - `--fresh` and `--json` are refused; JSON output is `--output-format json`.

@@ -229,12 +229,18 @@ upward-dependencies = ["address"]
 # payload::is_task_notification_turn shares raw-notice recognition with human turn classification (+1).
 # ChildStall shares the child predicate's mid-turn / never-started verdict (+1).
 # AgentDefinition::context_owner_start shares verified statusline-owner provenance with the CLI (+1).
-surface-budget = 1100
+# PermissionMode::rank shares the grant order with the supervised child cap (+1).
+surface-budget = 1101
 
 [[verdict]]
 kind = "item"
 key = "agents::definition::AgentDefinition::context_owner_start"
 reason = "Statusline persistence needs the checked owner's start without exposing private process-start readers or reading process state in store code."
+
+[[verdict]]
+kind = "item"
+key = "agents::definition::PermissionMode::rank"
+reason = "The harness compares launch and resume grants in one order, independent of the enum's declaration or serialization order."
 
 [[verdict]]
 kind = "item"
@@ -846,7 +852,9 @@ path = "crates/rimz/src/harness"
 # launch_plan::AgentTempOwners and its constructor/lookup share indexed ownership with GC (+3).
 # TaskKind, lifecycle inspection, condition progress and unread-forge reasons (+8).
 # WhenTerm::reads_forge lets condition presentation classify a leaf without reparsing it (+1).
-surface-budget = 928
+# plan::{PermissionClamp, PermissionClampSource, ChildPermissionErr, check_child_permission_mode}
+# carry child-mode notes and the parent-message resume guard across the library/CLI seam (+4).
+surface-budget = 932
 
 [[verdict]]
 kind = "item"
@@ -1879,7 +1887,8 @@ allowed-dependencies = [
 # The supervised run's one-cell launch plan and its result leave `cli/supervised`, reading `harness::run`'s request (+2).
 # `validate_launch_preset` shares launch capability refusal with loop admission (+1).
 # `ResolvedSingleAgentLaunch::for_booking` keeps loop account admission independent of live routing (+1).
-surface-budget = 44
+# PermissionClamp, PermissionClampSource, ChildPermissionErr, and check_child_permission_mode share child-mode notes and resume refusal (+4).
+surface-budget = 48
 
 [[module]]
 path = "crates/rimz/src/harness/resume.rs"
@@ -4514,6 +4523,26 @@ reason = "Nine positional arguments with one-caller team/prompt flags: a request
 kind = "item"
 key = "harness::plan::ResumeLaunchPosture"
 reason = "Public field of resume::ResumePosture, read by restart and fork in the binary; plan must not import resume, so the shared DTO lives here (pass 19a)."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::PermissionClamp"
+reason = "The read-only planner returns the capped grant and its source for the separate CLI target to print."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::PermissionClampSource"
+reason = "Public source carried by PermissionClamp; the CLI prints its planner-owned label."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::ChildPermissionErr"
+reason = "Typed launch and resume refusals cross the library/CLI seam without printing from the planner."
+
+[[verdict]]
+kind = "item"
+key = "harness::plan::check_child_permission_mode"
+reason = "Parent-message child resume rechecks the replayed grant through the harness's shared ceiling rule instead of ranking modes in the CLI."
 
 [[verdict]]
 kind = "item"

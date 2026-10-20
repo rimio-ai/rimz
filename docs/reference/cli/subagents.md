@@ -49,10 +49,13 @@ rimz subagents wait "$first" "$second"
 | `--keep` | off | Disable automatic completion cleanup and cleanup on parent exit; hold the pane after provider exit. Explicit stop and the run timeout still apply. |
 | `--detach` | off | Launch without a report: the child stays out of the [fleet report](#the-fleet-report), never holds the parent's turn or run open, and outlives the parent's exit. Its pane closes when it finishes; `subagents wait <name>` still reads the answer. Refused with `--wait`. |
 | `--isolation host\|sandbox` | the parent's recorded override, else the child's profile default, else `agents.isolation` | A sandboxed parent refuses a host override; host defaults clamp to sandbox with a note. |
+| `--yolo` | off | Run the child in yolo mode, up to the parent's own recorded mode. A parent with no recorded mode is treated as auto, so the flag refuses there. Launch the parent with `--yolo` or a `mode: yolo` definition to allow it. |
 | `--description <TEXT>` | none | Seed the child card's description; the fleet report uses it as the task label. |
 | `--model`, `--tier`, `--agent`, `--effort`, `--fast` or `--no-fast`, `--max-turns`, `-- <ARGS>` | from the profile | Override the concrete model or tier (mutually exclusive), prefer another family or re-base onto another profile or kind, set reasoning effort, turn the provider's [fast mode](../agent-support.md#fast-mode) on or off, cap agentic turns, or append provider argv. |
 
 Run `rimz subagents launch --help` for the exact spellings. The global flags are on the [CLI page](../cli.md#global-flags).
+
+A child's permission mode comes from `--yolo`, its definition or `<kind>-<mode>` cell, otherwise auto. The parent's recorded mode caps it in the order plan < ask < auto < yolo; an unrecorded parent counts as auto. An explicit `--yolo` above that ceiling refuses before any launch is recorded. A higher default instead lowers to the ceiling with a stderr note naming its source. In-session permission switches do not change the recorded ceiling. A yolo child that resolves to sandbox isolation prints a note that sudo and setuid binaries do not work there and names `--isolation host`, unless the parent is itself sandboxed.
 
 `--tier` and the fanout JSON `tier` field select a [model tier with the same resolution and effort precedence as agents](./agents.md#shared-launch-params). `--model` and JSON `model` accept only concrete models; tier names there are refused. Each task may set `tier` or `model`, not both.
 
@@ -76,7 +79,7 @@ A launch refuses before it writes a run record or opens a pane when:
 | `125` | A room or account cap, or a Qwen quota window, refused the launch. With `--wait`, the child's run ended `budget_exceeded`. |
 | `123`, `124`, `130` | With `--wait` only: the run's status, or `124` when the `--wait` deadline expired ([exit codes](./agents.md#supervised-runs--p)). |
 
-`rimz subagents` has no `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
+`rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 
 ## Fan out a task list
 
@@ -109,7 +112,7 @@ JSON
 | `fast` | no | `true` as `--fast`, `false` as `--no-fast` |
 | `max_turns` | no | Maximum agentic turns |
 
-For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` and `--detach` apply to every child. Tasks have no isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--isolation` flag: every child inherits the parent's recorded override, otherwise follows its own definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
+For each of `timeout`, `warn`, and `grace`, the task value wins over the fanout flag, which wins over `[agents.subagents]`. `--keep` and `--detach` apply to every child. Tasks have no permission-mode, isolation, wait, pane-retention, or provider-argv fields, and `fanout` has no `--yolo` or `--isolation` flag. Every child's permission default is capped by the parent's recorded mode. Isolation inherits the parent's recorded override, otherwise follows the child's definition then machine policy, capped by the parent's effective isolation. Child definitions carry tool and model settings. Use separate single launches when children need different lifecycle controls.
 
 | Mode | stdout |
 | --- | --- |
@@ -272,7 +275,7 @@ A provider that registers before its first turn, such as Claude, initially repor
 
 A message still queued when its child ends is archived rather than left waiting for a vanished pane, and `rimz message show` reports `receiver ended; rimz message @<handle> resumes it`. The parent resends with `rimz message @<handle>`, which resumes the child.
 
-Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory (recreated when an empty-dir child's directory is missing), conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
+Only the parent can resume a child by message; a user shell, peer or sibling gets a receiver miss. A child stopped explicitly, failed or timed out can still resume. Resume requires its recorded directory (recreated when an empty-dir child's directory is missing), conversation, login, profile and provider resume support to remain usable, and its account to pass the [account check](./agents.md#the-account-check-at-launch); otherwise the miss names the reason. A replayed permission mode above the parent's current recorded ceiling (unrecorded is auto) refuses with both modes and asks for a new child, rather than lowering the resumed session's grant. It never silently launches a fresh session. There are no `subagents restart` or `subagents resume` verbs; launch the profile and prompt again when a fresh child is needed.
 
 Room recovery also leaves children closed; [rebirth recovery](../../guide/configuration.md#resume) reports interrupted child runs to the parent instead.
 

@@ -481,6 +481,8 @@ fn prepare_supervised(
         team_name,
         inferred_lane,
         clamped,
+        permission_clamp,
+        yolo_sandbox,
     } = planned?;
     printed?;
     // The plan guarantees exactly one cell, an agent cell.
@@ -488,15 +490,19 @@ fn prepare_supervised(
         .agent_cells()
         .next()
         .expect("a supervised launch plan holds exactly one agent cell");
+    let profile = agent_cell
+        .launch
+        .profile
+        .as_deref()
+        .unwrap_or(&agent_cell.kind);
     if let Some(source) = &clamped {
-        supervised::note_isolation_clamp(
-            agent_cell
-                .launch
-                .profile
-                .as_deref()
-                .unwrap_or(&agent_cell.kind),
-            source,
-        )?;
+        supervised::note_isolation_clamp(profile, source)?;
+    }
+    if let Some(clamp) = &permission_clamp {
+        supervised::note_permission_clamp(profile, clamp)?;
+    }
+    if yolo_sandbox {
+        supervised::note_yolo_sandbox(profile)?;
     }
     let adapter = rimz::agents::find_definition(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;

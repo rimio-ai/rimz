@@ -105,6 +105,17 @@ pub enum PermissionMode {
     Plan,
 }
 
+impl PermissionMode {
+    pub(crate) const fn rank(self) -> u8 {
+        match self {
+            Self::Plan => 0,
+            Self::Ask => 1,
+            Self::Auto => 2,
+            Self::Yolo => 3,
+        }
+    }
+}
+
 impl std::str::FromStr for PermissionMode {
     type Err = String;
 
