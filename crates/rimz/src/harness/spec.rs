@@ -317,6 +317,21 @@ impl UnknownSpec {
         .collect()
     }
 
+    fn suggestions(&self) -> String {
+        let closest = self.closest();
+        if closest.is_empty() {
+            return self.choices();
+        }
+        format!(
+            "did you mean: {}",
+            closest
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
     pub fn choices(&self) -> String {
         type KindPredicate = fn(&SpecKind) -> bool;
 
@@ -329,14 +344,16 @@ impl UnknownSpec {
             ("kinds:", |kind| matches!(kind, SpecKind::Kind)),
         ];
         for (label, predicate) in groups {
-            let names = self
+            let mut names = self
                 .candidates
                 .iter()
-                .filter(|candidate| predicate(&candidate.kind));
-            lines.push(wrap_choices(
-                label,
-                names.map(|candidate| candidate.name.as_str()),
-            ));
+                .filter(|candidate| predicate(&candidate.kind))
+                .map(|candidate| candidate.name.as_str())
+                .peekable();
+            if names.peek().is_none() {
+                continue;
+            }
+            lines.push(wrap_choices(label, names));
         }
         let modes = PERMISSION_MODE_NAMES
             .iter()
@@ -352,19 +369,11 @@ impl UnknownSpec {
 
 impl std::fmt::Display for UnknownSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "no team, profile, or command named `{}`", self.word)?;
-        let closest = self.closest();
-        if closest.is_empty() {
-            return f.write_str(&self.choices());
-        }
         write!(
             f,
-            "did you mean: {}",
-            closest
-                .iter()
-                .map(|candidate| candidate.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "no team, profile, or command named `{}`\n{}",
+            self.word,
+            self.suggestions()
         )
     }
 }
@@ -406,10 +415,8 @@ pub enum LayoutErr {
     EmptyCell(String),
     #[error("a layout column uses `+` (tile) or `/` (stack), not both: `{column}`")]
     MixedRowOperators { column: String },
-    #[error(
-        "unknown layout cell `{cell}`; define it in <agents_home>/agents/{cell}.md, a project [profiles] table, or [agents.commands], install it on PATH, or use one of: {valid}"
-    )]
-    UnknownCell { cell: String, valid: String },
+    #[error("unknown layout cell `{}`\n{}", .0.word, .0.suggestions())]
+    UnknownCell(Box<UnknownSpec>),
     #[error("{0}")]
     UnknownSpec(Box<UnknownSpec>),
     #[error(
@@ -1146,7 +1153,7 @@ fn compile_team_layout(
             return Ok(Cell::Agent(cell.clone()));
         }
         parse_cell(cell_name, profiles, commands, base_override).map_err(|err| match err {
-            LayoutErr::UnknownCell { .. } => LayoutErr::UnknownRoleInLayout {
+            LayoutErr::UnknownCell(_) => LayoutErr::UnknownRoleInLayout {
                 team: team_name.to_owned(),
                 role: cell_name.to_owned(),
             },
@@ -1559,10 +1566,10 @@ fn parse_cell(
     if let Some(cell) = path_command_cell(raw) {
         return Ok(cell);
     }
-    Err(LayoutErr::UnknownCell {
-        cell: raw.to_owned(),
-        valid: valid_cells(profiles, commands),
-    })
+    Err(LayoutErr::UnknownCell(Box::new(UnknownSpec {
+        word: raw.to_owned(),
+        candidates: cell_candidates(profiles, commands),
+    })))
 }
 
 /// Last-resort cell resolution: a bare word that is executable on PATH
@@ -2352,34 +2359,18 @@ fn valid_agent_overrides(profiles: &ProfilesConfig) -> String {
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 
-fn spec_candidates(
-    profiles: &ProfilesConfig,
-    team_profiles: &ProfilesConfig,
-    commands: &CommandsConfig,
-    teams: &TeamsConfig,
-) -> Vec<SpecCandidate> {
+fn cell_candidates(profiles: &ProfilesConfig, commands: &CommandsConfig) -> Vec<SpecCandidate> {
     let mut candidates = BTreeMap::new();
     for name in commands.0.keys() {
         candidates.insert(name.clone(), SpecKind::Command);
     }
     for (name, profile) in &profiles.0 {
-        if teams.role_spec(name).is_none() && crate::agents::find_definition(name).is_none() {
+        if crate::agents::find_definition(name).is_none() {
             candidates
                 .entry(name.clone())
                 .or_insert_with(|| SpecKind::Profile(Box::new(profile.clone())));
         }
     }
-    for (name, team) in &teams.0 {
-        candidates
-            .entry(name.clone())
-            .or_insert_with(|| SpecKind::Team(team_summary(team, team_profiles)));
-        for binding in &team.roles {
-            candidates.insert(format!("{name}.{}", binding.role), SpecKind::Role);
-        }
-    }
-    candidates
-        .entry("peer".into())
-        .or_insert_with(|| SpecKind::Team(Some(BUILTIN_PEER.into())));
     let mut cells = cell_names(profiles, commands);
     for base in cells.clone() {
         let fast = format!("{base}-fast");
@@ -2392,9 +2383,6 @@ fn spec_candidates(
         }
     }
     for name in cells {
-        if teams.role_spec(&name).is_some() {
-            continue;
-        }
         let kind = if name == "term" || crate::agents::find_definition(&name).is_some() {
             SpecKind::Kind
         } else {
@@ -2402,6 +2390,46 @@ fn spec_candidates(
         };
         candidates.entry(name).or_insert(kind);
     }
+    ordered_candidates(candidates)
+}
+
+fn spec_candidates(
+    profiles: &ProfilesConfig,
+    team_profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    teams: &TeamsConfig,
+) -> Vec<SpecCandidate> {
+    let cells = cell_candidates(profiles, commands);
+    let mut candidates = cells
+        .iter()
+        .filter(|candidate| {
+            matches!(candidate.kind, SpecKind::Command)
+                || (matches!(candidate.kind, SpecKind::Profile(_))
+                    && teams.role_spec(&candidate.name).is_none())
+        })
+        .map(|candidate| (candidate.name.clone(), candidate.kind.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for (name, team) in &teams.0 {
+        candidates
+            .entry(name.clone())
+            .or_insert_with(|| SpecKind::Team(team_summary(team, team_profiles)));
+        for binding in &team.roles {
+            candidates.insert(format!("{name}.{}", binding.role), SpecKind::Role);
+        }
+    }
+    candidates
+        .entry("peer".into())
+        .or_insert_with(|| SpecKind::Team(Some(BUILTIN_PEER.into())));
+    for SpecCandidate { name, kind } in cells {
+        if teams.role_spec(&name).is_some() {
+            continue;
+        }
+        candidates.entry(name).or_insert(kind);
+    }
+    ordered_candidates(candidates)
+}
+
+fn ordered_candidates(candidates: BTreeMap<String, SpecKind>) -> Vec<SpecCandidate> {
     let mut candidates = candidates
         .into_iter()
         .map(|(name, kind)| SpecCandidate { name, kind })
