@@ -39,7 +39,6 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
     let config = rimz::config::MachineConfig::load_lenient();
-    let defaults = agents::room_accounts(&store.paths().workspace_record, None, &config).ok();
     let snapshot = store.snapshot_cached()?;
     let Some(agent) = snapshot
         .agents
@@ -54,8 +53,9 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     };
     let logins = agents::RoomLoginSet::resolve(&store.paths().workspace_record, None, &config);
     let login_env = logins.env(&login);
-    let broker_socket = defaults
-        .filter(|defaults| defaults.name(&request.kind).ok().as_ref() == Some(login.name()))
+    let broker_socket = logins
+        .default_login(kind)
+        .filter(|default| default.name() == login.name())
         .map(|_| runtime.codex_app_server_socket_path());
     let Some(refresh) = definition.refresh_session_context(&agents::SessionContextInput {
         login_env: &login_env,
