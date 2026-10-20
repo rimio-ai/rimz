@@ -489,6 +489,210 @@ fn skill_bind_source(argv: &[String], target: &Path) -> PathBuf {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn scoped_protects_startup_git_and_project_configuration_in_linked_checkouts() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let checkout = env.home_root.join("linked");
+    for args in [
+        vec!["init"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        vec![
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            checkout.to_str().unwrap(),
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .env("HOME", &env.home_root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .arg("-C")
+            .arg(&env.project_root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let mut protected = Vec::new();
+    for entry in [
+        ".profile",
+        ".bashrc",
+        ".bash_profile",
+        ".bash_login",
+        ".bash_logout",
+        ".zshenv",
+        ".zprofile",
+        ".zshrc",
+        ".zlogin",
+        ".zlogout",
+        ".gitconfig",
+        ".config/fish/config.fish",
+        ".ssh/config",
+        ".config/systemd/user/test.service",
+    ] {
+        let path = env.home_root.join(entry);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "original").unwrap();
+        protected.push(path);
+    }
+    for root in [&checkout, &env.project_root] {
+        for entry in [
+            ".claude/settings.local.json",
+            ".codex/config.toml",
+            ".agents/agent.md",
+            ".mcp.json",
+        ] {
+            let path = root.join(entry);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "original").unwrap();
+            protected.push(path);
+        }
+    }
+    protected.extend([
+        env.project_root.join(".git/config"),
+        env.project_root.join(".git/hooks/x"),
+    ]);
+    let skills = checkout.join(".agents/skills");
+    std::fs::create_dir_all(&skills).unwrap();
+    let library = env.rimz_home().join("skills/library");
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::write(library.join("SKILL.md"), "library body").unwrap();
+    protected.push(skills.join("added"));
+    let cwd = checkout.join("nested");
+    std::fs::create_dir(&cwd).unwrap();
+    let vars = environment(&env);
+    let state = env.store();
+    let inputs = SandboxInputs {
+        read_only: Vec::new(),
+        env: &vars,
+        cwd: &cwd,
+        project_root: &env.project_root,
+        worktree: Some(&checkout),
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: None,
+        skills: SkillInputs {
+            kind: "codex",
+            home: Some(skills.clone()),
+            manual: ManualSkill::OpenAiPolicy,
+            callable: None,
+        },
+    };
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, &cwd, &[]);
+    let common_hooks = env.project_root.join(".git/hooks").display().to_string();
+    assert!(argv.contains(&common_hooks), "{argv:?}");
+    assert!(!argv.iter().any(|arg| arg.contains("/../")), "{argv:?}");
+    let output = std::process::Command::new(&argv[0]).args(&argv[1..])
+        .args(["sh", "-c", "test -f ../.agents/skills/library/SKILL.md || exit 2; for path do if (printf changed >> \"$path\") 2>/dev/null; then printf 'wrote %s\\n' \"$path\"; exit 1; fi; done; printf ok > writable", "protected"])
+        .args(&protected).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(cwd.join("writable")).unwrap(), "ok");
+
+    // Absent entries are not created, and cannot prevent launching the view.
+    for root in [&checkout, &env.project_root] {
+        std::fs::remove_file(root.join(".mcp.json")).unwrap();
+    }
+    std::fs::remove_dir_all(env.home_root.join(".ssh")).unwrap();
+    let plan = rimz::sandbox::plan(&inputs).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(Path::new("/usr/bin/bwrap"), &plan.plan, &cwd, &[]);
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .args(["true"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!checkout.join(".mcp.json").exists());
+    assert!(!env.home_root.join(".ssh").exists());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn scoped_protects_separate_git_directory() {
+    if !available() {
+        return;
+    }
+    let env = Env::new();
+    let git = env.home_root.join("git-admin");
+    let output = std::process::Command::new("git")
+        .env("HOME", &env.home_root)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .arg("-C")
+        .arg(&env.project_root)
+        .args(["init", "--separate-git-dir"])
+        .arg(&git)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let hook = git.join("hooks/test-hook");
+    std::fs::write(&hook, "original").unwrap();
+    let vars = environment(&env);
+    let state = env.store();
+    let plan = rimz::sandbox::plan(&SandboxInputs {
+        read_only: Vec::new(),
+        env: &vars,
+        cwd: &env.project_root,
+        project_root: &env.project_root,
+        worktree: None,
+        tmp_dir: &state.paths().temp_unit_dir(None),
+        skills_dir: &state.paths().skills_dir,
+        provider_home: None,
+        provider_home_env_keys: &[],
+        default_home: None,
+        skills: SkillInputs {
+            kind: "codex",
+            home: None,
+            manual: ManualSkill::Unsupported,
+            callable: None,
+        },
+    })
+    .unwrap();
+    rimz::sandbox::apply(&plan).unwrap();
+    let argv = rimz::sandbox::bwrap_argv(
+        Path::new("/usr/bin/bwrap"),
+        &plan.plan,
+        &env.project_root,
+        &[],
+    );
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .args(["sh", "-c", "for path do if (printf changed >> \"$path\") 2>/dev/null; then printf 'wrote %s\\n' \"$path\"; exit 1; fi; done", "protected"])
+        .args([git.join("config"), hook])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+#[test]
 fn sandbox_unconfigured_skills_without_library_add_no_mounts() {
     let env = Env::new();
     let root = env.home_root.join(".agents/skills");
@@ -1974,6 +2178,24 @@ fn sandbox_skills_under_host_use_provider_switches() {
                 );
                 assert!(!allow.contains(&serde_json::json!("Skill(unlisted-dir)")));
                 assert!(routine.remove("autoMode").is_some(), "{routine:?}");
+                assert!(
+                    routine.contains_key("sandbox"),
+                    "every launch needs sandbox room grants: {routine:?}"
+                );
+                let sandbox = routine.remove("sandbox").unwrap();
+                assert!(
+                    sandbox["filesystem"]["allowWrite"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!(env.store().paths().root))
+                );
+                assert!(
+                    sandbox["excludedCommands"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&serde_json::json!("rimz message *"))
+                );
+                assert!(sandbox.get("enableWeakerNestedSandbox").is_none());
                 let mut overrides = serde_json::json!({"kept":"enabled", "unlisted-dir":"user-invocable-only", "rimz-probe":"user-invocable-only"});
                 if !commit_listed {
                     overrides["commit"] = serde_json::json!("user-invocable-only");

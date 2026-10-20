@@ -903,6 +903,14 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
                 union_settings_array(object, "permissions", "allow", allow)?;
                 union_settings_array(
                     object,
+                    "sandbox",
+                    "excludedCommands",
+                    ROUTINE_RIMZ_PREFIXES
+                        .iter()
+                        .map(|prefix| format!("{prefix} *")),
+                )?;
+                union_settings_array(
+                    object,
                     "permissions",
                     "additionalDirectories",
                     [tmp.clone(), shared.clone()],
@@ -922,6 +930,41 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
             },
             error => error,
         })?;
+        Ok(())
+    }
+
+    fn configure_sandbox_settings(
+        &self,
+        (cwd, artifact_dir): (&Path, &Path),
+        roots: &[PathBuf; 3],
+        isolation: crate::config::Isolation,
+        extra_args: &mut Vec<String>,
+        artifact: &mut Option<crate::agents::skills::LaunchSettingsArtifact>,
+    ) -> std::result::Result<(), crate::agents::skills::LaunchSettingsErr> {
+        *artifact = merge_settings(
+            cwd,
+            artifact_dir,
+            extra_args,
+            artifact.as_ref(),
+            false,
+            |object| {
+                let sandbox = object
+                    .entry("sandbox")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+                    .ok_or_else(|| "sandbox must be an object".to_owned())?;
+                union_settings_array(
+                    sandbox,
+                    "filesystem",
+                    "allowWrite",
+                    roots.iter().map(|root| root.display().to_string()),
+                )?;
+                if isolation.is_scoped() {
+                    sandbox.insert("enableWeakerNestedSandbox".into(), true.into());
+                }
+                Ok(())
+            },
+        )?;
         Ok(())
     }
 

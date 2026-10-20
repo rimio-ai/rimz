@@ -843,10 +843,9 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         .provider_argv
                         .windows(2)
                         .find(|pair| pair[0] == "--settings");
-                    assert_eq!(
+                    assert!(
                         settings.is_some(),
-                        enabled || listed || rules,
-                        "{action} sandbox={sandboxed} child={subagent}"
+                        "sandbox room grants require settings: {action} sandbox={sandboxed} child={subagent}"
                     );
                     if let Some(settings) = settings {
                         let value: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
@@ -2037,7 +2036,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
 }
 
 #[test]
-fn the_sandbox_binds_and_pins_the_stamped_account_home() {
+fn the_scoped_view_binds_and_pins_the_stamped_account_home() {
     let project = tempfile::tempdir().expect("project");
     let home = project.path().join("codex-personal");
     std::fs::create_dir_all(&home).expect("account home");
@@ -2123,7 +2122,8 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
     .expect("compile");
 
     assert!(
-        plan.process()
+        !plan
+            .process()
             .argv
             .windows(2)
             .any(|pair| pair == ["--sandbox", "danger-full-access"])

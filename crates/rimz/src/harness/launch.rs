@@ -970,7 +970,8 @@ fn compile_agent_process_with_extra_env(
     }
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
-    } else if let Some(roots) = &reminders.permission_roots {
+    }
+    if let Some(roots) = &reminders.permission_roots {
         adapter.configure_room_permissions(action.extra_args_mut(), &login_env, roots);
     }
     // A settings-member fast switch rides outside the settings document until
@@ -1037,6 +1038,19 @@ fn compile_agent_process_with_extra_env(
         .settings
         .as_ref()
         .map_or(cwd, |(dir, _)| dir.as_path());
+    if let Some(roots) = &reminders.permission_roots {
+        adapter.configure_sandbox_settings(
+            (cwd, artifact_dir),
+            roots,
+            if reminders.sandbox {
+                crate::config::Isolation::Scoped
+            } else {
+                crate::config::Isolation::Host
+            },
+            action.extra_args_mut(),
+            &mut settings_artifact,
+        )?;
+    }
     if fast_settings {
         adapter.merge_fast_settings(
             (cwd, artifact_dir),

@@ -28,14 +28,13 @@ pub(super) struct LaunchReminders {
     /// dir, then the temp unit and shared dir as the agent sees them. `None` for
     /// preflight compiles and when `allow-routine-rimz` is off.
     pub routine_rimz: Option<(std::path::PathBuf, [std::path::PathBuf; 2])>,
-    /// Host room-root write grants; absent in preflight compiles.
+    /// Room-root write grants; absent in preflight compiles.
     pub permission_roots: Option<[PathBuf; 3]>,
     /// The launch's temp unit and the room's shared dir; every compiled launch has them.
     pub files: Option<TempFiles>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
-    /// The launch runs inside the RimZ scoped view: switches off the
-    /// provider's native command sandbox.
+    /// The launch runs inside the RimZ scoped view.
     pub sandbox: bool,
     pub lsp_configured: bool,
     pub lsp_servers: Vec<String>,

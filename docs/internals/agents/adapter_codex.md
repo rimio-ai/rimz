@@ -91,7 +91,7 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
 
-`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every host launch with roots, including Plan and mode-less launches. Preflight and managed process compiles without roots append nothing. The adapter never selects a sandbox or changes network policy. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
+`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every host or scoped launch with roots, including Plan and mode-less launches. Preflight and managed process compiles without roots append nothing. The adapter never selects a sandbox or changes network policy. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
 
 Selection follows this order, using `PresetArgMatcher` for valued arguments. Repeated flags or config keys use their last occurrence; config values parse as TOML with a bare-string fallback:
 
@@ -127,14 +127,14 @@ RimZ does not inspect system or project config layers or managed requirements. L
 | Permission `auto` | `--ask-for-approval on-request -c approvals_reviewer="auto_review"` |
 | Permission `plan` | no flags |
 | Permission `yolo` | `--dangerously-bypass-approvals-and-sandbox` |
-| Host with room paths, every mode | the selection-dependent grant above; no sandbox selector or network override |
+| Host or scoped with room paths, every mode | the selection-dependent grant above; no sandbox selector or network override |
 | Model | `--model <model>` |
 | Effort | `-c model_reasoning_effort=<effort>` |
 | Profile `auto-compact` | `-c model_auto_compact_token_limit=<tokens>`; Codex caps it at 90% of the context window ([upstream](../../externals/agent-adapter/codex-reference.md#cli-config-overrides)) |
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
 | Supervised child lockdown | drops every `features.multi_agent` override, then appends `-c features.multi_agent=false` |
-| Scoped isolation | drops every `default_permissions` override, `--sandbox`/`-s` flag and `sandbox_mode` override, replaces `--approve-for-me`/`--not-so-yolo` (which clap refuses beside `--sandbox`) with `-c approvals_reviewer="auto_review" -c approval_policy="on-request"`, then appends `--sandbox danger-full-access`; approval flags and Guardian review stay. Yolo only drops `default_permissions`, since its bypass flag already disables the sandbox ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
+| Scoped isolation | keeps the user's sandbox, network, and approval choices and adds the same room-root grants as host isolation ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 

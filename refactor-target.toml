@@ -231,7 +231,13 @@ upward-dependencies = ["address"]
 # AgentDefinition::context_owner_start shares verified statusline-owner provenance with the CLI (+1).
 # PermissionMode::rank shares the grant order with the supervised child cap (+1).
 # Test fixtures share the native hook trust writer through trust_hook_config_for_test (+1).
-surface-budget = 1102
+# LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
+surface-budget = 1103
+
+[[verdict]]
+kind = "item"
+key = "agents::capabilities::LaunchCapability::configure_sandbox_settings"
+reason = "The process compiler delegates provider-native sandbox settings through the existing private settings-artifact merge."
 
 [[verdict]]
 kind = "item"
@@ -1141,7 +1147,8 @@ reason = "The shared domain toggle persists machine intent for config and attend
 
 [[module]]
 path = "crates/rimz/src/sandbox"
-allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", "ids", "mux", "utils"]
+allowed-dependencies = ["agents", "blocker", "child_process", "config", "disk", "ids", "mux", "utils", "worktree"]
+# Protected Git configuration resolves the linked checkout's common directory.
 # Launch passes adapter-declared skill inputs separately from provider-home binds.
 # Static profile preflight shares typed provider identity across CLI entry points.
 # The launch compile site maps the owner's temp unit to what the agent sees.
