@@ -160,7 +160,7 @@ rimz agents planner         # your profile: model, effort, system prompt
 rimz agents claude,codex -w feat-a             # two agents, side by side
 rimz agents planner,coder+reviewer -w feat-b   # profiles compose like kinds
 rimz agents 'vim,codex+term' -w feat-c         # editor | agent tiled over a shell
-rimz agents 'claude/codex/term' -w feat-d      # one stack of three rows (a Zellij stack; tmux tiles them)
+rimz agents 'claude/codex/term' -w feat-d      # one stack; focus opens a member
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 

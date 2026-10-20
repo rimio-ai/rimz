@@ -88,7 +88,7 @@ A fan-out message is prefixed with the addressed handle (`@all,`, `@claude,`) so
 ```sh
 rimz agents peer                                    # built-in team: claude,codex side by side
 rimz agents claude,codex+term                       # Claude | Codex, tiled over a shell
-rimz agents claude/codex/term                       # one Zellij stack; tmux tiles the rows
+rimz agents claude/codex/term                       # one stack; focus opens a member
 rimz agents claude:planner,codex:coder -w feat-x    # ad-hoc role handles in a worktree
 rimz agents claude,codex --channel=design "Draft the API shape."   # prompt goes to Claude
 rimz agents 'vim,codex+term' "Review the CLI docs."  # a raw command cell beside an agent
@@ -103,7 +103,7 @@ A spec is one of three things:
 | --- | --- |
 | A team name | The [team](../../guide/configuration.md#agent-profiles-commands-and-teams)'s layout. [`rimz teams`](./teams.md#launch-a-team) is the doorway for configured cohorts. The built-in `peer` team is the roleless `claude,codex`. |
 | `<team>.<role>` | One declared role of a running or stopped team, with the same role handle and team lane. Inside that team's lane the bare role is enough: `rimz agents planner` in `#forge` means `rimz agents forge.planner`. A bare role that also names a profile or command resolving to a different agent is ambiguous and refused. |
-| An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group; Zellij stacks, tmux tiles). |
+| An inline layout | Cells joined by `,` (columns), `+` (tiled rows), or `/` (a stacked row group with one expanded member). |
 
 Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a [fast cell](#fast-cells) such as `claude-fast`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 

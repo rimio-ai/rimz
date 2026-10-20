@@ -8,7 +8,8 @@ use super::super::mount_proof::{prove_sidebar_mount, sidebar_build_identity};
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, birth_shell_cleanup_hook_set_cmd, birth_split_commands,
-    sidebar_serve_command, sidebar_width_option_set_cmd,
+    sidebar_serve_command, sidebar_width_option_set_cmd, stack_hook_commands, stack_window_options,
+    window_option_argv,
 };
 use super::parse::{parse_client_view, parse_floating_pane_ids, parse_pane_line};
 use super::window::{SplitAxis, TmuxPaneGeometry, companion_tmux_layout, sanitize_window_name};
@@ -409,8 +410,77 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<Option<PaneId>> {
-        // tmux has no native analogue for Zellij's stacked panes; it tiles the
-        // requested zone evenly instead.
+        let target = match &opts.target {
+            SplitTarget::Ambient => None,
+            SplitTarget::Pane(pane) | SplitTarget::SessionPane { pane_id: pane, .. } => {
+                ensure_pane_backend(pane, MuxName::Tmux)?;
+                Some(pane.raw())
+            }
+            SplitTarget::Session(session) => Some(session.as_str()),
+        };
+        let mut snapshot = self.cmd().args(["display-message", "-p"]);
+        if let Some(target) = target {
+            snapshot = snapshot.args(["-t", target]);
+        }
+        let snapshot = snapshot.arg("#{pane_id}|#{@rimz_stack}").run()?;
+        let snapshot = String::from_utf8_lossy(&snapshot.stdout);
+        let (target, mark) = snapshot
+            .trim()
+            .split_once('|')
+            .unwrap_or((snapshot.trim(), ""));
+        let stack = if !mark.is_empty() {
+            Some(mark.to_owned())
+        } else {
+            (opts.placement == SplitPlacement::Stacked).then(|| target.to_owned())
+        };
+        let mut members = Vec::new();
+        if let Some(stack) = &stack {
+            if mark.is_empty() {
+                members.push(target.to_owned());
+            } else {
+                let output = self
+                    .cmd()
+                    .args([
+                        "list-panes",
+                        "-t",
+                        target,
+                        "-F",
+                        "#{pane_id}|#{@rimz_stack}",
+                    ])
+                    .run()?;
+                members.extend(String::from_utf8_lossy(&output.stdout).lines().filter_map(
+                    |line| {
+                        let (id, mark) = line.split_once('|')?;
+                        (mark == stack).then(|| id.to_owned())
+                    },
+                ));
+            }
+            // Neutralize restore before making room: the split's layout hook
+            // must not squeeze the unmarked newcomer before its open decision.
+            let mut commands = members
+                .iter()
+                .map(|pane| {
+                    vec![
+                        "set-option".into(),
+                        "-pu".into(),
+                        "-t".into(),
+                        pane.clone(),
+                        "@rimz_stack_open".into(),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            // Unmarked targets and lone survivors may have a foreign vertical ancestor.
+            if members.len() > 1 {
+                commands.push(vec![
+                    "resize-pane".into(),
+                    "-t".into(),
+                    target.into(),
+                    "-y".into(),
+                    "100%".into(),
+                ]);
+            }
+            self.batch(&commands)?;
+        }
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
         let flag = match opts.placement {
@@ -418,24 +488,14 @@ impl MuxBackend for TmuxBackend {
             SplitPlacement::Directional(SplitDirection::Down) | SplitPlacement::Stacked => "-v",
         };
         let title = opts.title;
-        let mut spec = self
-            .cmd()
-            .args(["split-window", flag, "-P", "-F", "#{pane_id}"]);
+        let mut spec =
+            self.cmd()
+                .args(["split-window", flag, "-P", "-F", "#{pane_id}", "-t", target]);
         if !opts.focus {
             spec = spec.arg("-d");
         }
         for (key, value) in &opts.env {
             spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
-        }
-        match opts.target {
-            SplitTarget::Ambient => {}
-            SplitTarget::Pane(pane_id) | SplitTarget::SessionPane { pane_id, .. } => {
-                ensure_pane_backend(&pane_id, MuxName::Tmux)?;
-                spec = spec.args(["-t".to_owned(), pane_id.raw().to_owned()]);
-            }
-            SplitTarget::Session(session_name) => {
-                spec = spec.args(["-t".to_owned(), session_name]);
-            }
         }
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["-c".to_owned(), cwd]);
@@ -454,8 +514,19 @@ impl MuxBackend for TmuxBackend {
         if let Some(title) = title {
             self.set_pane_rimz_title(&pane_id, &title);
         }
-        if opts.placement == SplitPlacement::Stacked {
-            self.even_column_best_effort(&pane_id, "tmux.split_pane.even_column");
+        if let Some(stack) = stack {
+            let resize_open = members.len() > 1 || flag == "-v";
+            members.push(pane_id.clone());
+            // The pane already runs its command: an Err here would send the
+            // caller to a fallback placement and orphan it.
+            if let Err(err) = self.mark_stack(&members, &stack, &pane_id, true, resize_open) {
+                tracing::warn!(
+                    pane = %pane_id,
+                    tags.operation = "tmux.split_pane.mark_stack",
+                    error = &err as &dyn std::error::Error,
+                    "could not mark the stacked pane",
+                );
+            }
         }
         Ok(Some(PaneId::from_parts(MuxName::Tmux, pane_id)))
     }
@@ -1238,8 +1309,8 @@ impl TmuxBackend {
     /// sized `-h` run while each target is still full height, then each
     /// column's rows as a sized `-v` run inside it. Splitting rows first would
     /// leave the next column nested inside column 0's top row, inheriting its
-    /// height; sizing both runs in cells leaves every rectangle even at
-    /// creation, so no resize pass follows.
+    /// height; sizing both runs in cells leaves tiled rectangles even at
+    /// creation. Stacked columns then collapse around their open member.
     pub(super) fn split_layout_columns(
         &self,
         first_pane: &str,
@@ -1268,11 +1339,20 @@ impl TmuxBackend {
             env,
         )?);
         let mut layout_order = Vec::new();
-        for (anchor, rows) in anchors.iter().zip(column_rows) {
-            // tmux has no native stack, so stacked columns use tiled rows.
+        for ((anchor, rows), column) in anchors.iter().zip(column_rows).zip(&panes.columns) {
             let rows = rows.iter().collect::<Vec<_>>();
+            let start = layout_order.len();
             layout_order.push(anchor.clone());
             layout_order.extend(self.split_even_run(SplitAxis::Rows, anchor, cwd, &rows, env)?);
+            if column.stacked {
+                let members = &layout_order[start..];
+                let open = panes
+                    .focus_position()
+                    .checked_sub(start)
+                    .and_then(|index| members.get(index))
+                    .unwrap_or(anchor);
+                self.mark_stack(members, anchor, open, false, true)?;
+            }
         }
         // Every split ran with `-d`, so the leading pane is already active.
         let focus_position = panes.focus_position();
@@ -1282,6 +1362,91 @@ impl TmuxBackend {
                 .run()?;
         }
         Ok(layout_order)
+    }
+
+    fn mark_stack(
+        &self,
+        members: &[String],
+        stack: &str,
+        open: &str,
+        keep_focus: bool,
+        resize_open: bool,
+    ) -> Result<()> {
+        let mut commands = stack_hook_commands();
+        for pane in members {
+            commands.push(vec![
+                "set-option".into(),
+                "-p".into(),
+                "-t".into(),
+                pane.clone(),
+                "@rimz_stack".into(),
+                stack.into(),
+            ]);
+            commands.push(vec![
+                "set-option".into(),
+                "-pu".into(),
+                "-t".into(),
+                pane.clone(),
+                "@rimz_stack_open".into(),
+            ]);
+        }
+        let open = if keep_focus {
+            let focused = members
+                .iter()
+                .map(|pane| {
+                    [
+                        "#{?#{&&:#{pane_active},#{==:#{pane_id},",
+                        pane,
+                        "}},#{pane_id},}",
+                    ]
+                    .concat()
+                })
+                .collect::<String>();
+            let focused = format!("#{{P:{focused}}}");
+            format!("#{{?{focused},{focused},{open}}}")
+        } else {
+            open.to_owned()
+        };
+        let mut open_command = format!("set-option -p -t {open} @rimz_stack_open 1");
+        if resize_open {
+            open_command.push_str(&format!(
+                " ; if-shell -F '#{{!=:#{{window_zoomed_flag}},1}}' {{ resize-pane -t {open} -y #{{window_height}} }}"
+            ));
+        }
+        let borders = stack_window_options(&Default::default(), true)
+            .into_iter()
+            .filter(|(key, _)| {
+                matches!(
+                    *key,
+                    "pane-border-status" | "pane-border-format" | "@rimz_stack_borders_owned"
+                )
+            })
+            .map(|(key, value)| {
+                window_option_argv(key, value.as_deref(), Some(&members[0]))
+                    .into_iter()
+                    .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+            .join(" ; ");
+        // Apply borders before expansion: tmux <3.8 can subtract a status row from a one-row cell.
+        commands.push(vec![
+            "if-shell".into(),
+            "-F".into(),
+            "-t".into(),
+            members[0].clone(),
+            "#{@rimz_stack_borders}".into(),
+            borders,
+        ]);
+        commands.push(vec![
+            "run-shell".into(),
+            "-C".into(),
+            "-t".into(),
+            members[0].clone(),
+            open_command,
+        ]);
+        self.batch(&commands)
     }
 
     fn sole_current_window_pane(&self, session: &str) -> Result<Option<String>> {

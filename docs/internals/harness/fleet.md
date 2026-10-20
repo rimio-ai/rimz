@@ -128,11 +128,11 @@ Two decision trees behave like state machines without an enum: the [deliberate-e
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline spec, and both compile to the same backend-neutral panes. In the inline grammar, commas split columns, plus signs tile rows within a column, and slashes stack rows within a column on Zellij.
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline spec, and both compile to the same backend-neutral panes. In the inline grammar, commas split columns, plus signs tile rows within a column, and slashes stack rows within a column.
 
 ```text
 claude,codex+term          → Claude left; Codex tiled over a shell right
-claude/codex/term          → two agents plus a shell in one Zellij stack; tmux tiles them
+claude/codex/term          → two agents plus a shell in one stack
 vim,htop+zsh               → raw command panes
 claude-auto,codex-yolo     → agent cells with adapter-owned permission posture
 claude:planner,codex:coder → agent cells with ad-hoc `@planner` and `@coder` handles
@@ -142,7 +142,7 @@ Each cell is one of: the built-in `term`, a registered agent kind, a virtual `<k
 
 A named team is an ordered role list. It opens as one column per role unless it declares its own `layout`, which uses the same row and column grammar and resolves declared role names before roleless cells. A team layout may name only the team's declared roles and takes no `:role` suffix. `<team>.<role>` launches one declared role with its team identity, placed like any single-agent launch.
 
-Stacks are presentation only. Zellij renders a native stack with one expanded pane; tmux has no native stack, so the same cells become tiled rows.
+Stacks are presentation only. Both backends keep one member expanded and open a member when it receives focus. Zellij stacks natively; tmux uses pane marks and server hooks ([multiplexers.md](../multiplexers.md#collapsed-stacks)).
 
 ### From spec to panes
 

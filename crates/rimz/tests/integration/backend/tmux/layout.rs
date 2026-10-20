@@ -754,7 +754,7 @@ fn open_tab_builds_multi_column_layout() {
 }
 
 #[test]
-fn stacked_splits_tile_the_column_evenly() {
+fn stacked_splits_collapse_the_column() {
     require_tmux!();
     let server = TmuxServer::new();
     let cwd = TempDir::new().expect("cwd tempdir");
@@ -828,6 +828,8 @@ fn stacked_splits_tile_the_column_evenly() {
         .map(|pane| pane.id.clone())
         .collect::<std::collections::BTreeSet<_>>();
 
+    server.tmux(&["select-pane", "-t", &initial[0].id]);
+
     for _ in 0..2 {
         server
             .backend
@@ -871,12 +873,406 @@ fn stacked_splits_tile_the_column_evenly() {
         work.iter().all(|pane| pane.width == work_width),
         "stacked splits must preserve the target column width: {panes:?}",
     );
-    let min_height = work.iter().map(|pane| pane.height).min().unwrap();
-    let max_height = work.iter().map(|pane| pane.height).max().unwrap();
-    assert!(
-        max_height - min_height <= 1,
-        "stacked pane heights should differ by at most one row: {panes:?}",
+    assert_stack(
+        &server,
+        &work.iter().map(|pane| pane.id.clone()).collect::<Vec<_>>(),
+        target.raw(),
     );
+}
+
+fn stack_split(server: &TmuxServer, target: &str, placement: SplitPlacement) -> PaneId {
+    server
+        .backend
+        .split_pane(SplitPaneOptions {
+            target: SplitTarget::Pane(PaneId::from_parts(MuxName::Tmux, target)),
+            cwd: Some(std::env::temp_dir().display().to_string()),
+            command: Some(vec!["sleep".into(), "600".into()]),
+            title: Some("stack member".into()),
+            close_on_exit: true,
+            env: Default::default(),
+            placement,
+            focus: false,
+        })
+        .unwrap()
+        .unwrap()
+}
+
+fn stack_fixture(server: &TmuxServer) -> (String, Vec<String>) {
+    ensure_rimz_session(server, "stacks", Some((160, 60)));
+    let caller = server.display("stacks", "#{pane_id}");
+    let first = stack_split(
+        server,
+        &caller,
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    let second = stack_split(server, first.raw(), SplitPlacement::Stacked);
+    let third = stack_split(server, second.raw(), SplitPlacement::Stacked);
+    (
+        caller,
+        vec![first.raw().into(), second.raw().into(), third.raw().into()],
+    )
+}
+
+fn assert_stack(server: &TmuxServer, members: &[String], open: &str) {
+    let marks = members
+        .iter()
+        .map(|pane| server.display(pane, "#{@rimz_stack}"))
+        .collect::<Vec<_>>();
+    assert!(!marks[0].is_empty(), "members must be marked: {marks:?}");
+    assert!(
+        marks.iter().all(|mark| *mark == marks[0]),
+        "one stack id: {marks:?}"
+    );
+    for pane in members {
+        assert_eq!(
+            server.display(pane, "#{@rimz_stack_open}"),
+            if pane == open { "1" } else { "" },
+            "open flag on {pane}; {}",
+            server.stdout(&[
+                "list-panes",
+                "-t",
+                pane,
+                "-F",
+                "#{pane_id}|#{@rimz_stack}|#{@rimz_stack_open}|#{pane_height}|#{pane_active}"
+            ])
+        );
+        let height: u64 = server.display(pane, "#{pane_height}").parse().unwrap();
+        assert!(
+            if pane == open {
+                height > 1
+            } else {
+                height == 1
+            },
+            "{pane} height {height}, open {open}"
+        );
+    }
+}
+
+#[test]
+fn stack_focus_resize_close_and_zoom_restore_the_open_member() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, mut members) = stack_fixture(&server);
+    server.tmux(&["select-pane", "-t", &members[0]]);
+    assert_stack(&server, &members, &members[0]);
+    server.tmux(&["select-pane", "-D"]);
+    assert_stack(&server, &members, &members[1]);
+    server.tmux(&["select-pane", "-U"]);
+    assert_stack(&server, &members, &members[0]);
+    server.tmux(&["select-pane", "-t", &caller]);
+    server.tmux(&["resize-window", "-t", &caller, "-y", "80"]);
+    assert_stack(&server, &members, &members[0]);
+    server.tmux(&["kill-pane", "-t", &members.pop().unwrap()]);
+    assert_stack(&server, &members, &members[0]);
+    server.tmux(&["select-pane", "-t", &members[0]]);
+    server.tmux(&["resize-pane", "-Z", "-t", &members[0]]);
+    server.tmux(&["select-pane", "-Z", "-t", &members[1]]);
+    server.tmux(&["resize-window", "-t", &members[1], "-y", "90"]);
+    assert_eq!(server.display(&members[1], "#{window_zoomed_flag}"), "1");
+    server.tmux(&["resize-pane", "-Z", "-t", &members[1]]);
+    assert_stack(&server, &members, &members[1]);
+    server.tmux(&["kill-pane", "-t", &members.pop().unwrap()]);
+    assert_stack(&server, &members, &members[0]);
+}
+
+#[test]
+fn collapsed_member_can_split_and_restart_without_losing_membership() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (_, mut members) = stack_fixture(&server);
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "after-split-window",
+        "set-option -p -F @stack_birth_height '#{pane_height}'",
+    ]);
+    let new = stack_split(&server, &members[0], SplitPlacement::Stacked);
+    assert!(
+        server
+            .display(new.raw(), "#{@stack_birth_height}")
+            .parse::<u64>()
+            .unwrap()
+            > 1,
+        "new pane must not be collapsed before its open decision"
+    );
+    members.push(new.raw().into());
+    assert_stack(&server, &members, new.raw());
+    server.tmux(&["select-pane", "-t", &members[1]]);
+    let replacement = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    members.push(replacement.raw().into());
+    let old = members.remove(0);
+    server.tmux(&["kill-pane", "-t", &old]);
+    assert_stack(&server, &members, &members[0]);
+}
+
+#[test]
+fn stacked_splits_preserve_panes_above_the_caller() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, "stacks", Some((160, 60)));
+    let above = server.display("stacks", "#{pane_id}");
+    server.tmux(&[
+        "set-window-option",
+        "-t",
+        &above,
+        "pane-border-status",
+        "top",
+    ]);
+    let caller = stack_split(
+        &server,
+        &above,
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Down),
+    );
+    let first = stack_split(
+        &server,
+        caller.raw(),
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    let height = server.display(&above, "#{pane_height}");
+    let second = stack_split(&server, first.raw(), SplitPlacement::Stacked);
+    assert_eq!(server.display(&above, "#{pane_height}"), height);
+    let third = stack_split(&server, first.raw(), SplitPlacement::Stacked);
+    assert_eq!(server.display(&above, "#{pane_height}"), height);
+    assert_stack(
+        &server,
+        &[first.raw().into(), second.raw().into(), third.raw().into()],
+        third.raw(),
+    );
+}
+
+#[test]
+fn lone_stack_member_restart_preserves_panes_above_the_caller() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    for pane in &members[1..] {
+        server.tmux(&["kill-pane", "-t", pane]);
+    }
+    let above = server.stdout(&[
+        "split-window",
+        "-v",
+        "-f",
+        "-b",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        &caller,
+        "sleep 600",
+    ]);
+    let height = server.display(&above, "#{pane_height}");
+    let replacement = stack_split(
+        &server,
+        &members[0],
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    assert_eq!(server.display(&above, "#{pane_height}"), height);
+    assert_eq!(
+        server.display(replacement.raw(), "#{@rimz_stack}"),
+        server.display(&members[0], "#{@rimz_stack}")
+    );
+    server.tmux(&["kill-pane", "-t", &members[0]]);
+    assert_eq!(server.display(&above, "#{pane_height}"), height);
+    assert_stack(&server, &[replacement.raw().into()], replacement.raw());
+}
+
+#[test]
+fn stack_borders_target_the_background_window() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, "stacks", Some((160, 60)));
+    let current = server.display("stacks", "#{pane_id}");
+    let background = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        "stacks",
+        "sleep 600",
+    ]);
+    let new = stack_split(&server, &background, SplitPlacement::Stacked);
+    assert_stack(
+        &server,
+        &[background.clone(), new.raw().into()],
+        &background,
+    );
+    assert_eq!(server.display(&background, "#{pane-border-status}"), "top");
+    assert_eq!(
+        server.display(&background, "#{@rimz_stack_borders_owned}"),
+        "1"
+    );
+    assert!(
+        server
+            .display(&background, "#{pane-border-format}")
+            .contains("@rimz_stack")
+    );
+    let local = server.stdout(&["show-options", "-w", "-t", &current]);
+    assert!(
+        !local.contains("pane-border-status")
+            && !local.contains("pane-border-format")
+            && !local.contains("@rimz_stack_borders_owned"),
+        "{local}"
+    );
+    assert_eq!(server.display("stacks", "#{pane_id}"), current);
+}
+
+#[test]
+fn stack_borders_reapply_and_hand_back_without_touching_other_windows() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, members) = stack_fixture(&server);
+    assert_eq!(server.display(&caller, "#{pane-border-status}"), "top");
+    let border = server.display(&caller, "#{pane-border-format}");
+    assert!(
+        border.contains("@rimz_stack") && border.contains("@rimz_title"),
+        "{border}"
+    );
+    let other = server.stdout(&[
+        "new-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        "stacks",
+        "sleep 600",
+    ]);
+    ensure_rimz_session(&server, "stacks", Some((160, 60)));
+    assert_eq!(server.display(&caller, "#{pane-border-status}"), "top");
+    assert_eq!(server.display(&other, "#{pane-border-status}"), "off");
+    for pane in &members {
+        server.tmux(&["kill-pane", "-t", pane]);
+    }
+    let local = server.stdout(&["show-options", "-w", "-t", &caller]);
+    assert!(
+        !local.contains("pane-border-status") && !local.contains("pane-border-format"),
+        "{local}"
+    );
+}
+
+#[test]
+fn explicit_border_off_wins_over_stack_defaults() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().unwrap();
+    let mut opts = session_opts(
+        "stacks",
+        WorkspaceId::from_project_root(cwd.path()),
+        cwd.path(),
+        cwd.path(),
+        Some((160, 60)),
+    );
+    opts.config.tmux = toml::from_str("pane_border_status = 'off'\n").unwrap();
+    server.backend.ensure_session(&opts).unwrap();
+    let caller = server.display("stacks", "#{pane_id}");
+    let first = stack_split(
+        &server,
+        &caller,
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    let second = stack_split(&server, first.raw(), SplitPlacement::Stacked);
+    assert_stack(
+        &server,
+        &[first.raw().into(), second.raw().into()],
+        second.raw(),
+    );
+    assert_eq!(server.display(&caller, "#{pane-border-status}"), "off");
+    assert!(
+        !server
+            .stdout(&["show-options", "-w", "-t", &caller])
+            .contains("pane-border-format")
+    );
+}
+
+#[test]
+fn stack_hooks_preserve_user_global_hooks_and_companion_grid_refuses_stacks() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("stacks");
+    server.tmux(&[
+        "set-hook",
+        "-g",
+        "window-pane-changed",
+        "set-option -g @probe 1",
+    ]);
+    let (_, members) = stack_fixture(&server);
+    server.tmux(&["select-pane", "-t", &members[0]]);
+    assert_stack(&server, &members, &members[0]);
+    assert_eq!(server.stdout(&["show-options", "-gv", "@probe"]), "1");
+    let result = server
+        .backend
+        .append_companion_pane(SplitPaneOptions {
+            target: SplitTarget::SessionPane {
+                session_name: "stacks".into(),
+                pane_id: PaneId::from_parts(MuxName::Tmux, &members[0]),
+            },
+            cwd: None,
+            command: Some(vec!["sleep".into(), "600".into()]),
+            title: None,
+            close_on_exit: true,
+            env: Default::default(),
+            placement: SplitPlacement::Stacked,
+            focus: false,
+        })
+        .unwrap();
+    assert_eq!(result, rimz::mux::CompanionPaneAppend::Full);
+}
+
+#[test]
+fn stacked_layout_birth_opens_focus_or_top_in_each_column() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    ensure_rimz_session(&server, "stacks", Some((240, 70)));
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts(server._tempdir.path(), "stacks", stub, Some(240));
+    server.backend.open_sidebar(&sidebar, None).unwrap();
+    let columns = (0..2)
+        .map(|_| LayoutColumn {
+            stacked: true,
+            panes: (0..3)
+                .map(|_| PaneCmd {
+                    argv: vec!["sleep".into(), "600".into()],
+                    name: None,
+                })
+                .collect(),
+        })
+        .collect();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            env: Default::default(),
+            title: "birth".into(),
+            panes: LayoutPanes {
+                columns,
+                focused_pane: 4,
+            },
+            focus: true,
+            dock_sidebar: true,
+            after: None,
+            sidebar,
+        })
+        .unwrap();
+    let panes = server.wait_for_panes("stacks:birth", 7);
+    let mut columns = BTreeMap::<u64, Vec<PaneGeom>>::new();
+    for pane in panes.into_iter().filter(|pane| pane.left > 0) {
+        columns.entry(pane.left).or_default().push(pane);
+    }
+    assert_eq!(columns.len(), 2);
+    for (index, column) in columns.values_mut().enumerate() {
+        column.sort_by_key(|pane| pane.top);
+        let ids = column
+            .iter()
+            .map(|pane| pane.id.clone())
+            .collect::<Vec<_>>();
+        assert_stack(&server, &ids, &ids[usize::from(index == 1)]);
+    }
 }
 
 #[test]

@@ -50,12 +50,12 @@ pane_frames = true              # unset, your config.kdl decides
 
 [tmux]
 history_limit = 200000
-pane_border_status = "top"      # unset, your ~/.tmux.conf decides
+pane_border_status = "top"      # unset: inherit, except stack-window titles
 ```
 
 The backends differ in what an unset key means. `[tmux]` carries a RimZ value for every key but the two pane-border ones, so leaving a key out means RimZ's default rather than yours. `[zellij]` asserts the optional keys you set alongside four always-resolved keys: `mouse_click_through` and `focus_follows_mouse` behind single-click jumps, `session_serialization`, and `disable_session_metadata`. Session settings apply at room birth and through live reconfiguration; client settings apply when you attach. Every key with its default is in [configuration → multiplexer room options](./configuration.md#multiplexer-room-options).
 
-A changed `[tmux]` value reaches every open window the next time RimZ opens or reattaches the session, and windows opened later get the same settings. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next open or reattach, including RimZ's border format when you remove `pane_border_status`.
+A changed `[tmux]` value reaches every open window the next time RimZ opens or reattaches the session, and windows opened later get the same settings. Removing a pane-border key restores inheritance from `~/.tmux.conf` on that next open or reattach, except that a window holding a stack gets top borders naming its members and blanking all other panes. Closing its last member restores inheritance. An explicit `pane_border_status`, including `"off"`, wins over this stack default.
 
 A `[zellij]` session value overrides `config.kdl` absolutely. Most changes reach an open room on the next `rimz start` or reattach. `session_serialization`, `disable_session_metadata`, `scroll_buffer_size`, `on_force_close`, `osc8_hyperlinks`, `show_startup_tips`, and `show_release_notes` take effect at the next room birth. `mouse_mode` and `support_kitty_keyboard_protocol` apply per attaching client.
 
@@ -307,7 +307,7 @@ set -g window-status-separator ""
 
 `pane-border-status top` labels each pane's border, so a grid of agents stays legible at a glance. The module's own `pane-border-format` puts the pane index and running command on that row and colors it by focus; it is one long line, so read it in [theme-tokyonight.conf](../../examples/tmux/theme-tokyonight.conf) rather than here. tmux does not draw a pane's outer window edge, so panes are not fully boxed the way Zellij frames are.
 
-A RimZ room inherits these borders while [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) is unset. Set that override to `top` or `bottom` and RimZ owns `pane-border-format` too: it titles work panes and blanks the sidebar's border row, so the sidebar reads frameless.
+A RimZ room inherits these borders while [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) is unset, except in windows holding stacks: those get top borders naming stack members and blanking every other pane's border row. Set that override to `top` or `bottom` and RimZ owns `pane-border-format` too: it titles work panes and blanks the sidebar's border row, so the sidebar reads frameless. An explicit `off` disables borders even in stack windows.
 
 Swap the hex values for your own scheme's palette. `rimz list-themes` names every scheme RimZ bundles, if you want the sidebar and the status bar to match.
 

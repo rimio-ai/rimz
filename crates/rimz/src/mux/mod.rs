@@ -756,7 +756,7 @@ impl SplitTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitPlacement {
     Directional(SplitDirection),
-    /// Zellij native stack; tmux uses its vertical split fallback.
+    /// One expanded member: a native Zellij stack or tmux pane marks and hooks.
     Stacked,
 }
 
@@ -854,8 +854,7 @@ pub struct PaneCmd {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutColumn {
     pub panes: Vec<PaneCmd>,
-    /// Zellij renders this column as a native stack; tmux has no native stack
-    /// and tiles the panes vertically.
+    /// Keep one member expanded, opening a collapsed member on focus.
     pub stacked: bool,
 }
 

@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use options::{
-    tmux_extended_key_bindings, tmux_server_options, tmux_session_options,
-    tmux_terminal_features_commands, tmux_window_options, window_option_argv,
+    stack_hook_commands, stack_window_options, tmux_extended_key_bindings, tmux_server_options,
+    tmux_session_options, tmux_terminal_features_commands, window_option_argv,
 };
 use parse::parse_terminal_features;
 
@@ -416,6 +416,19 @@ impl TmuxBackend {
             ]);
         }
         commands.extend(tmux_extended_key_bindings(config));
+        commands.extend(stack_hook_commands());
+        commands.push(vec![
+            "set-option".into(),
+            "-t".into(),
+            session.into(),
+            "@rimz_stack_borders".into(),
+            if config.pane_border_status.is_none() {
+                "1"
+            } else {
+                "0"
+            }
+            .into(),
+        ]);
         self.batch(&commands)?;
         self.apply_window_options(session, config)
     }
@@ -433,14 +446,20 @@ impl TmuxBackend {
     fn apply_window_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
         let windows = self
             .cmd()
-            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .args([
+                "list-windows",
+                "-t",
+                session,
+                "-F",
+                "#{window_id}|#{P:#{?#{@rimz_stack},1,}}",
+            ])
             .run()?;
         let windows = String::from_utf8_lossy(&windows.stdout);
-        let window_options = tmux_window_options(config);
         let mut last_failure = None;
         let mut applied = 0usize;
-        for window_id in windows.lines() {
-            let commands: Vec<Vec<String>> = window_options
+        for window in windows.lines() {
+            let (window_id, members) = window.split_once('|').unwrap_or((window, ""));
+            let commands: Vec<Vec<String>> = stack_window_options(config, !members.is_empty())
                 .iter()
                 .map(|(key, value)| window_option_argv(key, value.as_deref(), Some(window_id)))
                 .collect();
