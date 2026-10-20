@@ -482,7 +482,7 @@ fn steady_state_fusion_and_gate_preserve_shared_fields() {
     let own = PaneId::from_parts(MuxName::Zellij, "sidebar_absent");
     let projected = project_local(WorkspaceSnapshot(shared.clone()), Some(&frame), Some(&own));
     let (fused, baseline, _) =
-        crate::sidebar::fuse::fuse_owned(projected, &Default::default(), None, 1);
+        crate::sidebar::fuse::fuse_owned(projected, Default::default(), None, 1);
     assert!(baseline.is_none());
     assert_shared_fields(&fused, &shared);
     let (state, _, rejected, escaped, _) = gate::apply_gate(

@@ -636,7 +636,7 @@ fn fuse_owned_no_overlay(bencher: Bencher) {
         .bench_local_values(|fixture| {
             divan::black_box(rimz::sidebar::fuse::fuse_owned(
                 fixture.snapshot,
-                &fixture.events,
+                fixture.events,
                 None,
                 fixture.now_ms,
             ));

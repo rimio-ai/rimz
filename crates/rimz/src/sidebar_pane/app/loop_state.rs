@@ -966,15 +966,15 @@ impl LoopState {
                     self.content_applications += 1;
                 }
                 let now_ms = self.clock.now_ms();
-                self.events().prune(now_ms);
                 let pulled = *snapshot;
                 self.last_focus_observation = FocusObservation::from_snapshot(&pulled);
                 if self.observation.is_some() {
                     self.last_pulled_rows = pulled.rows().count();
                 }
                 let intent = self.pending_focus_intent(now_ms, self.clock.now());
+                let events = self.events().clone();
                 let (snapshot, baseline, focus_event_sent_at_ms) =
-                    fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
+                    fuse_owned(pulled, events, intent.as_ref(), now_ms);
                 fused_event_sent_at_ms = focus_event_sent_at_ms;
                 self.overlay_baseline = baseline;
                 FetchUpdate::Snapshot {
@@ -1027,8 +1027,9 @@ impl LoopState {
             .take()
             .unwrap_or_else(|| self.current.clone());
         let intent = self.pending_focus_intent(now_ms, self.clock.now());
+        let events = self.events().clone();
         let (fused, baseline, focus_event_sent_at_ms) =
-            fuse_owned(pulled, &self.events(), intent.as_ref(), now_ms);
+            fuse_owned(pulled, events, intent.as_ref(), now_ms);
         self.overlay_baseline = baseline;
         (fused, focus_event_sent_at_ms)
     }
