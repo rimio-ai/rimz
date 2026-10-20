@@ -125,7 +125,7 @@ fn muse_managed_hook_passthrough_covers_host_and_sandbox_launch_environment() {
     let machine = crate::config::MachineConfig::default();
     for isolation in [
         crate::config::Isolation::Host,
-        crate::config::Isolation::Sandbox,
+        crate::config::Isolation::Scoped,
     ] {
         let plan =
             crate::harness::launch_plan::compile(crate::harness::launch_plan::LaunchPlanInputs {
@@ -138,8 +138,8 @@ fn muse_managed_hook_passthrough_covers_host_and_sandbox_launch_environment() {
                 effective: None,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
-                bwrap: (isolation == crate::config::Isolation::Sandbox)
-                    .then_some(Path::new("/bin/bwrap")),
+                isolation,
+                bwrap: (isolation.is_scoped()).then_some(Path::new("/bin/bwrap")),
                 agents: Ok(&[]),
                 ambient_env: &inherited,
                 agent_shell: None,
@@ -157,10 +157,7 @@ fn muse_managed_hook_passthrough_covers_host_and_sandbox_launch_environment() {
             composed[crate::config::Isolation::ENV],
             isolation.to_string()
         );
-        assert_eq!(
-            plan.sandbox.is_some(),
-            isolation == crate::config::Isolation::Sandbox
-        );
+        assert_eq!(plan.sandbox.is_some(), isolation.is_scoped());
         for key in composed.keys().filter(|key| {
             key.starts_with("RIMZ_")
                 || crate::harness::hook_drain::HOOK_ENV_NAMES.contains(&key.as_str())

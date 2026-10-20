@@ -429,7 +429,7 @@ pub trait LaunchCapability: CoreCapability {
         None
     }
 
-    /// Where the provider discovers user-level skills. Sandbox overlays this root; `None` means RimZ knows no skill discovery for the provider.
+    /// Where the provider discovers user-level skills. The scoped view overlays this root; `None` means RimZ knows no skill discovery for the provider.
     fn skills_home(&self, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         env.get("HOME")
             .filter(|home| !home.is_empty())
@@ -441,7 +441,7 @@ pub trait LaunchCapability: CoreCapability {
         ManualSkill::Unsupported
     }
 
-    /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the sandbox.
+    /// Provider-specific environment overrides consulted by `config_home`; HOME and XDG roots are owned and pinned by the scoped view.
     fn config_home_env_keys(&self) -> &'static [&'static str] {
         &[]
     }
@@ -572,7 +572,7 @@ pub trait LaunchCapability: CoreCapability {
     }
 
     /// Switch off the provider's native command sandbox for a launch inside
-    /// RimZ sandbox isolation, where the RimZ view is the agent's one sandbox;
+    /// RimZ scoped isolation, where the RimZ view is the agent's one sandbox;
     /// approval flags stay as the mode set them. The default leaves argv
     /// unchanged for providers without a verified native switch.
     fn disable_native_sandbox_args(&self, _extra_args: &mut Vec<String>) {}

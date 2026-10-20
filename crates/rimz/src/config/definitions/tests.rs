@@ -74,7 +74,7 @@ fn skill_inventory_is_per_family_and_expires_with_the_load() {
     let check = SkillCheck::Check {
         env: &env,
         library: &library,
-        machine_isolation: super::super::Isolation::Sandbox,
+        machine_isolation: super::super::Isolation::Scoped,
     };
     let catalog = SkillCatalog::new(check);
     assert!(
@@ -626,11 +626,11 @@ fn isolation_defaults_inherit_but_roles_cannot_set_them() {
     definition(
         root.path(),
         "agents/boxed.md",
-        "agent: admin\nisolation: sandbox",
+        "agent: admin\nisolation: scoped",
         "Boxed.",
     );
     let loaded = clean(root.path());
-    for (name, expected) in [("admin", "host"), ("child", "host"), ("boxed", "sandbox")] {
+    for (name, expected) in [("admin", "host"), ("child", "host"), ("boxed", "scoped")] {
         let value = serde_json::to_value(&loaded.agent_profiles.0[name]).unwrap();
         assert_eq!(value["isolation"], expected);
     }
@@ -1670,7 +1670,7 @@ fn load_checked(root: &Path) -> LoadedDefinitions {
         SkillCheck::Check {
             env: &env,
             library: &root.join("skills"),
-            machine_isolation: crate::config::Isolation::Sandbox,
+            machine_isolation: crate::config::Isolation::Scoped,
         },
         &CommandsConfig::default(),
         &crate::config::tiers::TierConfig::default(),

@@ -1156,7 +1156,7 @@ fn preflight_cell(
         &workspace.project_root,
         &request,
         cwd,
-        (isolation == rimz::config::Isolation::Host).then_some(runtime),
+        (!isolation.is_scoped()).then_some(runtime),
     )?;
     login.health(
         &rimz::agents::machine_login_catalog()

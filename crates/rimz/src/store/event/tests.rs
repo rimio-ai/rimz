@@ -448,7 +448,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
         mode: None,
         effective_isolation: None,
         agent_id: AgentSessionId::from("sess-1"),
-        isolation: Some(crate::config::Isolation::Sandbox),
+        isolation: Some(crate::config::Isolation::Scoped),
         launch_id: Some(AgentSessionId::from("launch-1")),
         pane_id: pane_id.clone(),
         pane_pid: Some(84),
@@ -474,7 +474,7 @@ fn attach_event_uses_typed_compact_wire_shape() {
         json!({
             "agent_id": "sess-1",
             "launch_id": "launch-1",
-            "isolation": "sandbox",
+            "isolation": "scoped",
             "pane_id": "tmux:%4",
             "pane_pid": 84,
             "runtime_owner": {

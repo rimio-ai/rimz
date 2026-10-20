@@ -94,7 +94,7 @@ pub enum RoomBirth {
 pub struct RoomResetReport {
     pub teardown: crate::room::teardown::TeardownReport,
     /// Processes a hard reset ended because they still ran inside one of the
-    /// room's sandbox views.
+    /// room's scoped views.
     pub view_processes_ended: Vec<u32>,
     pub records: crate::store::writer::ResetRecordsOutcome,
 }
@@ -234,8 +234,8 @@ impl RoomContext {
             self.pin_room_logins(logins)?;
         }
         if !pre_existed {
-            if Isolation::ambient(&crate::agents::ambient_env()) == Some(Isolation::Sandbox) {
-                bail!("this pane runs inside a RimZ sandbox; start the room from a host shell");
+            if Isolation::ambient(&crate::agents::ambient_env()).is_some_and(Isolation::is_scoped) {
+                bail!("this pane runs inside a RimZ scoped view; start the room from a host shell");
             }
             crate::sidebar::purge_rebirth_heartbeats(&self.runtime);
             if let Err(err) = crate::mux::width_target::clear(&self.runtime) {
@@ -569,7 +569,7 @@ impl RoomContext {
     }
 
     /// Tear down mux runtime and reset durable room records. A hard reset
-    /// first ends the processes still inside the room's sandbox views, and
+    /// first ends the processes still inside the room's scoped views, and
     /// refuses before any store write when one survives.
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
         self.reset_with(hard, |store| store.reset_records(hard))
@@ -619,7 +619,7 @@ impl RoomContext {
     }
 }
 
-/// End the processes `holders` reports inside the room's sandbox views, then
+/// End the processes `holders` reports inside the room's scoped views, then
 /// run `reset_records`. `kill` only warns about survivors, so a second look
 /// decides: a process that is still a holder refuses the reset before
 /// `reset_records` runs, leaving the store untouched for a rerun.
@@ -639,7 +639,7 @@ fn end_view_holders_then<T>(
                 .collect();
             let one = survivors.len() == 1;
             bail!(
-                "The session is gone, but {} process{} still run{} inside the room's sandbox view \
+                "The session is gone, but {} process{} still run{} inside the room's scoped view \
                  and keep{} its /tmp in use:{listed}\n\
                  Stop {}, then run `rimz reset --hard` again.",
                 survivors.len(),
@@ -705,7 +705,7 @@ mod tests {
         assert!(!records_reset.get(), "refusal must precede the store");
         assert_eq!(
             err.to_string(),
-            "The session is gone, but 1 process still runs inside the room's sandbox view and \
+            "The session is gone, but 1 process still runs inside the room's scoped view and \
              keeps its /tmp in use:\n  pid 42: writer-42\n\
              Stop it, then run `rimz reset --hard` again."
         );

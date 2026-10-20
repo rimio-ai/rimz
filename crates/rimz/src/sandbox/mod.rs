@@ -16,10 +16,10 @@ mod skills;
 pub use rewrite::PlannedCopy;
 
 const SANDBOX_TMP: &str = "/tmp";
-/// Where a sandboxed agent sees its temp unit: both host temp roots.
+/// Where a scoped agent sees its temp unit: both host temp roots.
 const TMP_MOUNTS: [&str; 2] = [SANDBOX_TMP, "/var/tmp"];
 
-/// Where an agent sees its temp unit: at both temp roots in a sandbox, at its
+/// Where an agent sees its temp unit: at both temp roots in a scoped view, at its
 /// host path otherwise.
 pub struct TmpView {
     unit_dir: PathBuf,
@@ -30,7 +30,7 @@ impl TmpView {
     pub fn current(isolation: Isolation, owner: Option<&str>, paths: &StatePaths) -> Self {
         Self {
             unit_dir: paths.temp_unit_dir(owner),
-            sandboxed: isolation == Isolation::Sandbox,
+            sandboxed: isolation.is_scoped(),
         }
     }
 
@@ -60,17 +60,17 @@ impl TmpView {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxErr {
-    #[error("sandbox isolation requires Linux; set agents.isolation = \"host\"")]
+    #[error("scoped isolation requires Linux; set agents.isolation = \"host\"")]
     UnsupportedOs,
     #[error(
-        "sandbox isolation needs bwrap on PATH; install bubblewrap or set agents.isolation = \"host\""
+        "scoped isolation needs bwrap on PATH; install bubblewrap or set agents.isolation = \"host\""
     )]
     MissingBwrap,
     #[error(
         "bubblewrap probe failed ({status}): {stderr}; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy, or set agents.isolation = \"host\""
     )]
     ProbeFailed { status: String, stderr: String },
-    #[error("sandbox cannot access {path}: {source}; fix the path before launching")]
+    #[error("scoped view cannot access {path}: {source}; fix the path before launching")]
     Io {
         path: PathBuf,
         #[source]
@@ -78,10 +78,10 @@ pub enum SandboxErr {
     },
     #[error(transparent)]
     Path(#[from] crate::disk::paths::PathErr),
-    #[error("sandbox requires an absolute UTF-8 path, got {0:?}; use an absolute UTF-8 path")]
+    #[error("scoped view requires an absolute UTF-8 path, got {0:?}; use an absolute UTF-8 path")]
     InvalidPath(PathBuf),
     #[error(
-        "sandbox tmp would hide required path {}; move the working directory or configured root below {}, or set agents.isolation = \"host\"",
+        "scoped tmp would hide required path {}; move the working directory or configured root below {}, or set agents.isolation = \"host\"",
         .path.display(),
         .path.display()
     )]
@@ -251,7 +251,7 @@ pub fn preflight_launch(
     skills_configured: bool,
     manual: ManualSkill,
 ) -> Result<Option<PathBuf>, SandboxErr> {
-    if isolation != Isolation::Host && skills_configured && manual == ManualSkill::Unsupported {
+    if isolation.is_scoped() && skills_configured && manual == ManualSkill::Unsupported {
         return Err(SandboxErr::ManualSkillsUnsupported {
             kind: kind.to_string(),
         });
@@ -260,7 +260,7 @@ pub fn preflight_launch(
 }
 
 pub fn preflight(isolation: Isolation) -> Result<Option<PathBuf>, SandboxErr> {
-    if isolation == Isolation::Host {
+    if !isolation.is_scoped() {
         return Ok(None);
     }
     #[cfg(target_os = "linux")]
@@ -273,8 +273,8 @@ impl From<SandboxErr> for crate::blocker::Blocker {
     fn from(error: SandboxErr) -> Self {
         use crate::blocker::Surface;
         let blocker = match error {
-            SandboxErr::UnsupportedOs => Self::new("sandbox isolation requires Linux"),
-            SandboxErr::MissingBwrap => Self::new("sandbox isolation needs bwrap on PATH")
+            SandboxErr::UnsupportedOs => Self::new("scoped isolation requires Linux"),
+            SandboxErr::MissingBwrap => Self::new("scoped isolation needs bwrap on PATH")
                 .with_fix("Install bubblewrap", None, Surface::Plain),
             SandboxErr::ProbeFailed { status, stderr } => {
                 Self::new(format!("bubblewrap probe failed ({status}): {stderr}")).with_fix(
@@ -525,7 +525,7 @@ mod tests {
     fn launch_preflight_rejects_unsupported_skills_before_probing() {
         assert!(matches!(
             preflight_launch(
-                Isolation::Sandbox,
+                Isolation::Scoped,
                 &AgentKind::new_unchecked("codex"),
                 true,
                 ManualSkill::Unsupported,
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn launch_preflight_without_skills_preserves_the_probe_result() {
-        for isolation in [Isolation::Host, Isolation::Sandbox] {
+        for isolation in [Isolation::Host, Isolation::Scoped] {
             assert_eq!(
                 preflight_launch(
                     isolation,
@@ -722,7 +722,7 @@ mod tests {
         let paths = state();
         let unit = paths.temp_unit_dir(Some("otter"));
         let other = paths.temp_unit_dir(Some("fox")).join("f");
-        let sandbox = TmpView::current(Isolation::Sandbox, Some("otter"), &paths);
+        let sandbox = TmpView::current(Isolation::Scoped, Some("otter"), &paths);
         for (host, agent) in [
             (unit.join("f"), "/tmp/f"),
             (unit.clone(), "/tmp"),
@@ -739,7 +739,7 @@ mod tests {
             Path::new("/home/x")
         );
         assert_eq!(
-            TmpView::current(Isolation::Sandbox, None, &paths)
+            TmpView::current(Isolation::Scoped, None, &paths)
                 .agent_path(&paths.temp_unit_dir(None).join("f")),
             Path::new("/tmp/f")
         );
@@ -758,8 +758,8 @@ mod tests {
             SandboxErr::ProbeFailed { status: "exit status: 1".into(), stderr: "namespace denied".into() }.to_string(),
         ], @r###"
         [
-            "sandbox isolation requires Linux; set agents.isolation = \"host\"",
-            "sandbox isolation needs bwrap on PATH; install bubblewrap or set agents.isolation = \"host\"",
+            "scoped isolation requires Linux; set agents.isolation = \"host\"",
+            "scoped isolation needs bwrap on PATH; install bubblewrap or set agents.isolation = \"host\"",
             "bubblewrap probe failed (exit status: 1): namespace denied; check kernel.unprivileged_userns_clone, user.max_user_namespaces and AppArmor/LSM policy, or set agents.isolation = \"host\"",
         ]
         "###);

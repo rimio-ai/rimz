@@ -311,7 +311,7 @@ fn profile_skills_inherit_replace_and_clear() {
 
 #[test]
 fn profile_isolation_inherits_without_becoming_a_launch_override() {
-    for (child, expected) in [("", "host"), ("isolation = 'sandbox'", "sandbox")] {
+    for (child, expected) in [("", "host"), ("isolation = 'scoped'", "scoped")] {
         let profiles = ProfilesConfig(BTreeMap::from([
             (
                 "parent".to_owned(),
@@ -347,13 +347,13 @@ fn rebased_profile_skills_preserve_explicit_empty() {
 
 #[test]
 fn rebased_profile_isolation_keeps_the_job_default() {
-    use crate::config::Isolation::{Host, Sandbox};
+    use crate::config::Isolation::{Host, Scoped};
     let mut base = ResolvedProfile::bare("codex");
-    base.isolation_default = Some(Sandbox);
+    base.isolation_default = Some(Scoped);
     let mut original = ResolvedProfile::bare("claude");
     assert_eq!(
         rebase_onto(original.clone(), Some(&base)).isolation_default,
-        Some(Sandbox)
+        Some(Scoped)
     );
     original.isolation_default = Some(Host);
     assert_eq!(

@@ -1,4 +1,4 @@
-//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), sandbox view, subagent policy, and shared language servers.
+//! One system reminder carrying team context, model identity, the loop fire that launched the agent, launch environment (cwd, worktree provenance, shell), scoped view, subagent policy, and shared language servers.
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +34,7 @@ pub(super) struct LaunchReminders {
     pub files: Option<TempFiles>,
     /// The launched profile's `model-reminder`; on when unset or when the launch has no profile.
     pub model: bool,
-    /// The launch runs inside the RimZ sandbox view: switches off the
+    /// The launch runs inside the RimZ scoped view: switches off the
     /// provider's native command sandbox.
     pub sandbox: bool,
     pub lsp_configured: bool,
@@ -45,7 +45,7 @@ pub(super) struct LaunchReminders {
 
 /// The two Environment bullets naming where an agent writes files.
 pub(super) struct TempFiles {
-    /// The temp unit as the agent sees it: `/tmp` in a sandbox, its host path otherwise.
+    /// The temp unit as the agent sees it: `/tmp` in a scoped view, its host path otherwise.
     pub tmp: PathBuf,
     pub shared: PathBuf,
     /// The unit belongs to the launch's caller.

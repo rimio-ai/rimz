@@ -378,10 +378,14 @@ pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 pub enum Isolation {
     #[default]
     Host,
-    Sandbox,
+    Scoped,
 }
 
 impl Isolation {
+    pub fn is_scoped(self) -> bool {
+        matches!(self, Self::Scoped)
+    }
+
     pub fn resolve(override_: Option<Self>, profile_default: Option<Self>, machine: Self) -> Self {
         override_.or(profile_default).unwrap_or(machine)
     }
@@ -398,13 +402,13 @@ impl std::fmt::Display for Isolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Host => "host",
-            Self::Sandbox => "sandbox",
+            Self::Scoped => "scoped",
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("isolation must be `host` or `sandbox`")]
+#[error("isolation must be `host` or `scoped`")]
 pub struct IsolationParseError;
 
 impl std::str::FromStr for Isolation {
@@ -413,7 +417,7 @@ impl std::str::FromStr for Isolation {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw {
             "host" => Ok(Self::Host),
-            "sandbox" => Ok(Self::Sandbox),
+            "scoped" => Ok(Self::Scoped),
             _ => Err(IsolationParseError),
         }
     }

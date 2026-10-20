@@ -2887,7 +2887,7 @@ fn sandbox_hook_without_a_host_drainer_applies_inline_without_ingress() {
     env.record(&env.project_root);
     let mut command = env.hook_command("claude");
     command
-        .env("RIMZ_ISOLATION", "sandbox")
+        .env("RIMZ_ISOLATION", "scoped")
         .env("TMPDIR", "/tmp");
     let output = env
         .spawn_payload(
@@ -2929,7 +2929,7 @@ fn sandbox_hook_without_the_mount_pin_applies_inline_with_a_live_drainer() {
     let ingress_before = std::fs::read(&store.paths().hook_ingress_log).ok();
     let mut command = env.hook_command("claude");
     command
-        .env("RIMZ_ISOLATION", "sandbox")
+        .env("RIMZ_ISOLATION", "scoped")
         .env_remove(rimz::sandbox::HOOK_HOST_PATHS_ENV)
         .env("TMPDIR", "/tmp");
     let output = env
@@ -2964,7 +2964,7 @@ fn sandbox_frame_without_the_mount_pin_is_diagnosed_not_applied() {
     let env = Env::new();
     env.record(&env.project_root);
     let mut frame = stop_frame(&env);
-    frame.env.insert("RIMZ_ISOLATION".into(), "sandbox".into());
+    frame.env.insert("RIMZ_ISOLATION".into(), "scoped".into());
     frame.env.remove(rimz::sandbox::HOOK_HOST_PATHS_ENV);
     let (frame, _) = append_frame(&env, frame);
     once(&env);
@@ -2996,7 +2996,7 @@ fn sandbox_apply_preserves_the_mount_plans_tmp_checkout_and_provider_home() {
     frame.source = AgentKind::new_unchecked("codex");
     frame.cwd = checkout.path().into();
     frame.payload = json!({"session_id": "bound-session"}).to_string();
-    frame.env.insert("RIMZ_ISOLATION".into(), "sandbox".into());
+    frame.env.insert("RIMZ_ISOLATION".into(), "scoped".into());
     frame.env.insert("RIMZ_AGENT_NAME".into(), "scout".into());
     frame
         .env
@@ -3137,7 +3137,7 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
     );
     let mut command = env.hook_command("codex");
     command
-        .env("RIMZ_ISOLATION", "sandbox")
+        .env("RIMZ_ISOLATION", "scoped")
         .env("RIMZ_AGENT_NAME", "scout")
         .env("TMPDIR", "/tmp")
         .env("CODEX_HOME", "/tmp/account")
@@ -3210,7 +3210,7 @@ fn sandbox_hook_nudges_the_host_and_maps_provider_paths_once() {
             values.get("CODEX_HOME").copied(),
             unit.join("account").to_str()
         );
-        assert_eq!(values.get("RIMZ_ISOLATION").copied(), Some("sandbox"));
+        assert_eq!(values.get("RIMZ_ISOLATION").copied(), Some("scoped"));
         assert!(
             !values.contains_key("UNDECLARED_TOKEN"),
             "the child environment must be cleared before captured values are installed"

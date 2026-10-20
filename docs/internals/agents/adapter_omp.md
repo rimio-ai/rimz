@@ -40,7 +40,7 @@ The editing set is `edit`, `write`, `ast_edit`. The broader mutating set also in
 
 Launch uses `omp -- <prompt>`. Native pickers use `omp --resume`; recorded sessions resume with `omp --resume <id>` and fork with `omp --fork <id>`. Importing an unrecorded session by id is unsupported. Ask and Plan both use `--approval-mode always-ask`, Auto uses `write`, and Yolo uses `yolo`. Plan is conservative approval, not native plan mode: OMP's `--plan` selects a model role, not a permission mode. An unmodified OMP launch defaults to yolo.
 
-Model and effort render through `--model` and `--thinking`. System-prompt replacement passes text with `--system-prompt`; launch reminders instead use `RIMZ_LAUNCH_REMINDERS`, claimed once in the shared JS realm and appended only for the main agent. Using `--append-system-prompt` for reminders would displace the user's discovered `APPEND_SYSTEM.md`. The skill root is `<config_home>/skills`, with frontmatter manual skills; sandbox profile skill lists are refused and there is no host restriction switch. Manual compaction is `/compact [instructions]`.
+Model and effort render through `--model` and `--thinking`. System-prompt replacement passes text with `--system-prompt`; launch reminders instead use `RIMZ_LAUNCH_REMINDERS`, claimed once in the shared JS realm and appended only for the main agent. Using `--append-system-prompt` for reminders would displace the user's discovered `APPEND_SYSTEM.md`. The skill root is `<config_home>/skills`, with frontmatter manual skills; scoped profile skill lists are refused and there is no host restriction switch. Manual compaction is `/compact [instructions]`.
 
 ## Context and transcript
 

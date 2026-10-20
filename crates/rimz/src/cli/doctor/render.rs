@@ -234,14 +234,14 @@ fn render_sandbox(
     let error = sandbox.error.as_deref().unwrap_or("passed");
     kv.push(
         "probe",
-        match (sandbox.mode, &sandbox.error) {
-            (rimz::config::Isolation::Sandbox, Some(_)) => counted_verdict(
+        match (sandbox.mode.is_scoped(), &sandbox.error) {
+            (true, Some(_)) => counted_verdict(
                 tally,
                 Severity::Problem,
                 error,
                 "install bubblewrap, or set agents.isolation to host",
             ),
-            (rimz::config::Isolation::Host, _) => verdict(Health::Info, error),
+            (false, _) => verdict(Health::Info, error),
             (_, None) => verdict(Health::Ok, "passed"),
         },
     );

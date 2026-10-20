@@ -134,7 +134,7 @@ fn launch_implies_supervised_background_defaults() {
         "high",
         "--fast",
         "--isolation",
-        "sandbox",
+        "scoped",
     ]);
     let launch = args
         .launch
@@ -149,7 +149,7 @@ fn launch_implies_supervised_background_defaults() {
         "high",
         "--fast",
         "--isolation",
-        "sandbox",
+        "scoped",
         "-p",
         "--bg",
         "--timeout",

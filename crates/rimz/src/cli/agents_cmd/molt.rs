@@ -114,7 +114,7 @@ pub(super) fn run_molt(args: MoltArgs, globals: &GlobalFlags) -> Result<()> {
         prompt: Some(note.clone()),
         extra_args: Vec::new(),
     };
-    if isolation == rimz::config::Isolation::Host {
+    if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
             &restart::relaunch_request(&agent, &posture, action.clone(), login.clone(), None),
@@ -359,7 +359,7 @@ mod tests {
         agent.team = Some("forge".into());
         agent.role = Some("coder".into());
         agent.mode = Some(PermissionMode::Ask);
-        agent.isolation = Some(rimz::config::Isolation::Sandbox);
+        agent.isolation = Some(rimz::config::Isolation::Scoped);
         agent.record = Some(Box::new(rimz::agents::LaunchRecord {
             model: Some("old-record".into()),
             effort: Some("xhigh".into()),

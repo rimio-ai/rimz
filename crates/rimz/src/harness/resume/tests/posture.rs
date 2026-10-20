@@ -500,13 +500,13 @@ fn resume_replays_the_profile_declared_posture() {
 
 #[test]
 fn relaunch_rereads_profile_isolation_without_replaying_the_effective_stamp() {
-    use crate::config::Isolation::{Host, Sandbox};
+    use crate::config::Isolation::{Host, Scoped};
     let agent = AgentState {
         profile: Some("planner".to_owned()),
         effective_isolation: Some(Host),
         ..agent("claude", "a1", "/code/qe", 1)
     };
-    for isolation in [Host, Sandbox] {
+    for isolation in [Host, Scoped] {
         let profiles = profiles(
             "planner",
             Profile {

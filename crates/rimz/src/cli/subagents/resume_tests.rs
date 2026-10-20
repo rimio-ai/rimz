@@ -65,7 +65,7 @@ fn resumed_child_reuses_newest_run_and_preserves_keep_and_lineage() {
     });
     posture.launch.skills = Some(vec!["merge".parse().unwrap()]);
     posture.launch.allowed_tools = Some(vec!["Bash(git *)".parse().unwrap()]);
-    posture.launch.isolation_default = Some(rimz::config::Isolation::Sandbox);
+    posture.launch.isolation_default = Some(rimz::config::Isolation::Scoped);
     let mut older = RunRecord::new(
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/project")),
         child.kind.clone(),

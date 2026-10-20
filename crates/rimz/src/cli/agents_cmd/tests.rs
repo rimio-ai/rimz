@@ -1224,7 +1224,7 @@ mod parse {
             (&["rimz", "--model", "opus"], "rimz agents list"),
             (&["rimz", "--tier", "senior"], "rimz agents list"),
             (&["rimz", "--fresh"], "rimz agents list"),
-            (&["rimz", "--isolation", "sandbox"], "rimz agents list"),
+            (&["rimz", "--isolation", "scoped"], "rimz agents list"),
             (&["rimz", "-p", "--max-turns", "3"], "rimz agents list"),
             (&["rimz", "--detach"], "rimz agents list"),
         ] {

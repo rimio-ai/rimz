@@ -13,7 +13,7 @@ MiniMax Code (`minimax`, alias `mcode`) is a hooks-only integration. Root sessio
 
 ## Home and installation
 
-The data directory is the first trimmed, nonempty `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, then `$HOME/.minimax`. Named RimZ account homes use `MINIMAX_DATA_DIR`, relocating credentials, sessions, configuration, and plugins together. Setting an explicit data-directory variable also disables mcode's Git auto-configuration. Native profile directories such as `~/.minimax-<profile>` are outside the verified launch surface. No skill root or host skill switch is declared; sandbox profile skill lists are refused, and host lists warn and run unrestricted.
+The data directory is the first trimmed, nonempty `MINIMAX_DATA_DIR`, then `MAVIS_DATA_DIR`, then `$HOME/.minimax`. Named RimZ account homes use `MINIMAX_DATA_DIR`, relocating credentials, sessions, configuration, and plugins together. Setting an explicit data-directory variable also disables mcode's Git auto-configuration. Native profile directories such as `~/.minimax-<profile>` are outside the verified launch surface. No skill root or host skill switch is declared; scoped profile skill lists are refused, and host lists warn and run unrestricted.
 
 `rimz hooks install minimax` owns `<dataDir>/plugins/rimz` with three real files:
 

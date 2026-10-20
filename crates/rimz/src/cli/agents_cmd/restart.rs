@@ -107,7 +107,7 @@ pub(in crate::cli) fn restart_resolved(
         ),
         unattended,
     )?;
-    if isolation == rimz::config::Isolation::Host {
+    if !isolation.is_scoped() {
         rimz::harness::launch::preflight_agent_process(
             &workspace.project_root,
             &relaunch_request(agent, &posture, action.clone(), login.clone(), None),
@@ -696,7 +696,7 @@ mod tests {
                 }),
                 skills: Some(vec!["merge".parse().unwrap()]),
                 allowed_tools: Some(vec!["Read".parse().unwrap()]),
-                isolation_default: Some(rimz::config::Isolation::Sandbox),
+                isolation_default: Some(rimz::config::Isolation::Scoped),
                 model: Some("opus".to_owned()),
                 ..Default::default()
             },
@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(
             request,
             ExecRequest {
-                isolation_default: Some(rimz::config::Isolation::Sandbox),
+                isolation_default: Some(rimz::config::Isolation::Scoped),
                 kind: agent.kind.clone(),
                 action: ExecAction::Resume {
                     session_id: "a1".to_owned(),

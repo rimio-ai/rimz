@@ -1240,7 +1240,8 @@ pub(super) fn compile_agent_process_stage_with_extra_env(
     }
 
     let process = compile_agent_process_with_extra_env(
-        (crate::config::Isolation::ambient(extra_env) == Some(crate::config::Isolation::Host))
+        crate::config::Isolation::ambient(extra_env)
+            .is_some_and(|isolation| !isolation.is_scoped())
             .then_some(runtime),
         project_root,
         request,

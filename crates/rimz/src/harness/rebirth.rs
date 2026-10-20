@@ -1018,7 +1018,7 @@ fn plan_recovery(
         if let Some(error) = error {
             return Some((ResumeSkipReason::AccountUnavailable, error.clone()));
         }
-        if isolation != crate::config::Isolation::Sandbox {
+        if !isolation.is_scoped() {
             return None;
         }
         sandbox

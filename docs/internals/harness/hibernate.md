@@ -22,7 +22,7 @@ Helpers spawned from an agent scope use a separate `rimz-helper-<nonce>.scope`; 
 
 `crates/rimz/src/child_process.rs::spawn_detached_reaped` owns command construction. Callers supply the program and a repeatable configuration callback so both scoped and fallback launches retain arguments, environment, working directory and log descriptors. This avoids trying to reconstruct opaque stdio from an already configured `Command`. The parent retains the child while confirming its helper-scope membership for at most two seconds. A successful early exit needs no retry; a failed exit or unconfirmed move stops and reaps the wrapper before retrying plainly. Only then does a live helper pass to the shared reaper.
 
-The sandbox starts with a host-root bind and preserves `XDG_RUNTIME_DIR`; it does not hide the normal `/run/user/<uid>/bus`. No additional bus bind is needed. A reachable user manager is a hibernation capability, not something the mount view supplies.
+The scoped view starts with a host-root bind and preserves `XDG_RUNTIME_DIR`; it does not hide the normal `/run/user/<uid>/bus`. No additional bus bind is needed. A reachable user manager is a hibernation capability, not something the mount view supplies.
 
 ## Cgroup operations
 

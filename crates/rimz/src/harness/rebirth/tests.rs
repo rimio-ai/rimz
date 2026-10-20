@@ -131,12 +131,12 @@ fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
     let fixture = Fixture::new(&[("lost", &root.path().join("work"), true)]);
     fixture.conversation("lost");
     let mut machine = MachineConfig::default();
-    machine.agents.isolation = Isolation::Sandbox;
+    machine.agents.isolation = Isolation::Scoped;
     let plan = fixture.inspect_with(&machine, false);
     assert_eq!(
         plan.preview().pane_count(),
         0,
-        "an unavailable sandbox must not be resumed"
+        "an unavailable scoped view must not be resumed"
     );
     assert_eq!(
         plan.preview().unresumable[0]
@@ -144,7 +144,7 @@ fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
             .as_ref()
             .unwrap()
             .label(),
-        "sandbox unavailable"
+        "scoped view unavailable"
     );
     park_roster(&fixture.paths).unwrap();
     plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
@@ -1895,8 +1895,8 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
                 u32::MAX,
                 None,
             ),
-            Some(Isolation::Sandbox),
-            Some(Isolation::Sandbox),
+            Some(Isolation::Scoped),
+            Some(Isolation::Scoped),
             None,
         )
         .unwrap();
@@ -1907,7 +1907,7 @@ fn resume_attach_isolation_reaches_launch_caller_and_rebirth() {
         resolve_launch_caller(&projection.agents, &caller)
             .unwrap()
             .isolation,
-        Some(Isolation::Sandbox)
+        Some(Isolation::Scoped)
     );
 }
 

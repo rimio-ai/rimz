@@ -14,14 +14,14 @@ pub(super) fn drainer_lease(
     workspace: &rimz::ResolvedWorkspace,
     isolation: rimz::config::Isolation,
 ) -> Result<Option<rimz::harness::hook_drain::DrainerLease>> {
-    if isolation != rimz::config::Isolation::Sandbox {
+    if !isolation.is_scoped() {
         return Ok(None);
     }
     let store = crate::cli::open_existing_store(workspace)?
         .context("sandbox hook drainer requires an existing room")?;
     Ok(Some(
         rimz::harness::hook_drain::DrainerLease::acquire(&store, HOOK_DRAIN_WAIT)
-            .context("starting host hook drainer for sandboxed provider")?,
+            .context("starting host hook drainer for scoped provider")?,
     ))
 }
 

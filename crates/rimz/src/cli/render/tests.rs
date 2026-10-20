@@ -1066,7 +1066,7 @@ fn sandbox_launch_refusal_prints_fixes_without_offering_a_run_only_choice() {
         rimz::blocker::Blocker::from(rimz::sandbox::SandboxErr::MissingBwrap).into();
     let output = strip(|out| write_report_with_args(out, &error, &[]));
     insta::assert_snapshot!(output, @"
-    error: sandbox isolation needs bwrap on PATH
+    error: scoped isolation needs bwrap on PATH
       - Install bubblewrap
       - Use host isolation [security; RimZ won't change this]
           rimz config set agents.isolation host

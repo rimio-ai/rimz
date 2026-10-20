@@ -64,7 +64,7 @@ The CLI and hook subprocesses are the only writers of product truth. The sidebar
 
 ### State ownership
 
-With machine `agents.isolation = "sandbox"`, the agent exec wrapper launches its ready process through Linux bubblewrap. Each agent pane gets a host-visible mount view with a shared per-room `/tmp` and optional profile skill overlays; this is not process or network containment. The mux stays on the host, and subagent panes build their own views ([sandbox.md](./docs/internals/sandbox.md)).
+With machine `agents.isolation = "scoped"`, the agent exec wrapper launches its ready process through Linux bubblewrap. Each agent pane gets a host-visible mount view with a shared per-room `/tmp` and optional profile skill overlays; this is not process or network containment. The mux stays on the host, and subagent panes build their own views ([sandbox.md](./docs/internals/sandbox.md)).
 
 | Owner | Owns | Does not own |
 | --- | --- | --- |

@@ -411,7 +411,7 @@ fn sandbox_path_mapping_preserves_rebound_roots_and_maps_native_path_lists() {
         cwd: home.clone(),
         hook_pid: std::process::id(),
         env: std::collections::BTreeMap::from([
-            ("RIMZ_ISOLATION".into(), "sandbox".into()),
+            ("RIMZ_ISOLATION".into(), "scoped".into()),
             ("RIMZ_AGENT_NAME".into(), "scout".into()),
             ("HOME".into(), home.display().to_string()),
             ("TMPDIR".into(), "/tmp".into()),

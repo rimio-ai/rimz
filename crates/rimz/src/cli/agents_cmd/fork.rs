@@ -27,7 +27,7 @@ pub(super) struct ForkArgs {
     #[arg(long)]
     pub(super) bg: bool,
     /// Run the fork under this isolation instead of the source agent's.
-    #[arg(long, value_name = "host|sandbox")]
+    #[arg(long, value_name = "host|scoped")]
     pub(super) isolation: Option<rimz::config::Isolation>,
 }
 
@@ -137,7 +137,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.project_root,
         &preflight,
         &seed.cwd,
-        (isolation == rimz::config::Isolation::Host).then_some(store.runtime_paths()),
+        (!isolation.is_scoped()).then_some(store.runtime_paths()),
     )?;
     let login =
         rimz::agents::session_login(&seed.kind, seed.launch.login.as_ref(), &config.accounts)?;

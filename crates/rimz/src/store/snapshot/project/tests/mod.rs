@@ -636,7 +636,7 @@ fn attach_effective_isolation_roundtrips_without_stamping_an_override() {
     assert_eq!(value["effective_isolation"], "host");
     let state: AgentState = serde_json::from_value(value).unwrap();
     assert_eq!(
-        state.runs_in(crate::config::Isolation::Sandbox),
+        state.runs_in(crate::config::Isolation::Scoped),
         crate::config::Isolation::Host
     );
     assert_eq!(

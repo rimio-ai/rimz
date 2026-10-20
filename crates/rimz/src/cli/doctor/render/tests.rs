@@ -326,7 +326,7 @@ fn shared_language_servers_read_like_lsp_list() {
 fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
     for mode in [
         rimz::config::Isolation::Host,
-        rimz::config::Isolation::Sandbox,
+        rimz::config::Isolation::Scoped,
     ] {
         let sandbox = super::super::model::Sandbox {
             mode,
@@ -355,7 +355,7 @@ fn sandbox_probe_failure_only_counts_when_sandbox_is_enabled() {
         let closing = strip(|w| render_tally(w, &tally));
         assert_eq!(
             closing.contains("fix: install bubblewrap, or set agents.isolation to host"),
-            mode == rimz::config::Isolation::Sandbox,
+            mode == rimz::config::Isolation::Scoped,
             "{closing}"
         );
     }
@@ -2248,7 +2248,7 @@ fn legacy_shortfall_ignores_committed_bytes() {
 fn semicolons_in_probe_errors_are_not_remedies() {
     let error = "transport unavailable; retry budget was 3";
     let sandbox = super::super::model::Sandbox {
-        mode: rimz::config::Isolation::Sandbox,
+        mode: rimz::config::Isolation::Scoped,
         path: None,
         version: None,
         error: Some(error.into()),

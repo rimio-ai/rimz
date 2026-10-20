@@ -505,8 +505,7 @@ impl Resolver<'_> {
             SkillCheck::Check {
                 machine_isolation, ..
             } if (!cfg!(target_os = "linux")
-                || Isolation::resolve(None, fm.isolation, machine_isolation)
-                    == Isolation::Host)
+                || !Isolation::resolve(None, fm.isolation, machine_isolation).is_scoped())
                 && !agents::find_definition(kind).is_some_and(|definition| {
                     matches!(
                         definition.spec().host_skills,
@@ -633,7 +632,7 @@ pub(super) fn auto_compact(path: &Path, value: &str) -> Result<String, Definitio
     Ok(text.to_owned())
 }
 
-/// Under [`SkillCheck::Check`], each listed skill resolves as the sandbox view finds it: the kind's provider skill root, then the library. The first root holding `SKILL.md` wins and carries the marker check; only an absent file falls through, so an unreadable copy fails rather than letting a shadowed library copy speak for it.
+/// Under [`SkillCheck::Check`], each listed skill resolves as the scoped view finds it: the kind's provider skill root, then the library. The first root holding `SKILL.md` wins and carries the marker check; only an absent file falls through, so an unreadable copy fails rather than letting a shadowed library copy speak for it.
 pub(super) fn skill_policy(
     path: &Path,
     kind: &str,

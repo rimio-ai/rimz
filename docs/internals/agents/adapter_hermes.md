@@ -75,7 +75,7 @@ Not installed either: `pre_tool_call` (blocking-capable, and `post_tool_call` ca
 
 Hermes reports tokens but no billed dollars, and its usage can be subscription-included or of unknown cost status. Pricing tokens through the price book would invent bills, so realtime cost, spend, and `rimz stats` dollars are unsupported. History and account are unsupported because the reference has no validated read-only query over Hermes's `state.db`.
 
-Named logins are refused. `HERMES_HOME` is declared as the config-home key so the sandbox pins it, but `supports_named_logins` is false: Hermes falls back to the global root's credentials, so a separate home does not isolate an account.
+Named logins are refused. `HERMES_HOME` is declared as the config-home key so the scoped pins it, but `supports_named_logins` is false: Hermes falls back to the global root's credentials, so a separate home does not isolate an account.
 
 ## Known gaps
 
@@ -86,7 +86,7 @@ Run `rimz coverage` for the current matrix. The gaps worth a reason:
 - **Rotating compression.** With the non-default `compression.in_place: false`, compression changes `session_id` with no event. The card follows the newest payload's `session_id`.
 - **Subagent timing.** `subagent_stop` fires when Hermes processes the child's result, not at the child's last token.
 - **Consent prompts.** The first interactive launch after install asks ten y/N questions, one per installed event.
-- **Skills.** `--skills` preloads rather than restricts, so a profile `skills` list refuses under the sandbox and warns on the host.
+- **Skills.** `--skills` preloads rather than restricts, so a profile `skills` list refuses under scoped isolation and warns on the host.
 
 ## Live check
 

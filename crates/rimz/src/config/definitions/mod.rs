@@ -16,8 +16,8 @@ use std::rc::Rc;
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
-/// Whether enforced skill lists must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the sandbox skill view merges them. Enforcement uses the inherited definition isolation, then `machine_isolation`; off Linux every definition runs on the host.
-/// The check reads the host's skill roots and is meaningless through a sandbox view; callers inside a view must skip it.
+/// Whether enforced skill lists must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the scoped skill view merges them. Enforcement uses the inherited definition isolation, then `machine_isolation`; off Linux every definition runs on the host.
+/// The check reads the host's skill roots and is meaningless through a scoped view; callers inside a view must skip it.
 #[derive(Clone, Copy, Debug)]
 pub enum SkillCheck<'a> {
     Skip,

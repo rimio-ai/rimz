@@ -443,7 +443,7 @@ mod tests {
                 rimz::config::definitions::SkillCheck::Check {
                     env: &env,
                     library: &root.path().join("skills"),
-                    machine_isolation: rimz::config::Isolation::Sandbox,
+                    machine_isolation: rimz::config::Isolation::Scoped,
                 },
                 &rimz::config::CommandsConfig::default(),
                 &rimz::config::tiers::TierConfig::default(),

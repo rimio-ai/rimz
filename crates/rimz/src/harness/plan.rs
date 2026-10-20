@@ -342,7 +342,7 @@ impl std::fmt::Display for ClampSource {
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "a subagent never runs looser than its parent: --isolation host is unavailable under a sandboxed parent; launch it from a host agent or a host shell"
+    "a subagent never runs looser than its parent: --isolation host is unavailable under a scoped parent; launch it from a host agent or a host shell"
 )]
 pub struct ChildIsolationErr;
 
@@ -353,8 +353,8 @@ pub fn cap_child_isolation(
     machine: crate::config::Isolation,
 ) -> Result<ChildIsolation, ChildIsolationErr> {
     use crate::config::Isolation;
-    if parent != Some(Isolation::Sandbox)
-        || Isolation::resolve(child_override, child_default, machine) == Isolation::Sandbox
+    if !parent.is_some_and(Isolation::is_scoped)
+        || Isolation::resolve(child_override, child_default, machine).is_scoped()
     {
         return Ok(ChildIsolation {
             isolation: child_override,
@@ -365,7 +365,7 @@ pub fn cap_child_isolation(
         return Err(ChildIsolationErr);
     }
     Ok(ChildIsolation {
-        isolation: Some(Isolation::Sandbox),
+        isolation: Some(Isolation::Scoped),
         clamped: Some(if child_default.is_some() {
             ClampSource::ProfileDefault
         } else {
@@ -777,11 +777,11 @@ pub struct SupervisedLaunch {
     /// The lane a bare team role was qualified in; set only when qualification
     /// rewrote the spec.
     pub inferred_lane: Option<String>,
-    /// Why a subagent's isolation was capped at its sandboxed parent's.
+    /// Why a subagent's isolation was capped at its scoped parent's.
     pub clamped: Option<ClampSource>,
     /// A higher default permission grant lowered to the caller's recorded mode.
     pub permission_clamp: Option<PermissionClamp>,
-    /// A yolo child needs the sandbox's sudo/setuid note, with a usable host override.
+    /// A yolo child needs the scoped view's sudo/setuid note, with a usable host override.
     pub yolo_sandbox: bool,
 }
 
@@ -943,12 +943,13 @@ pub fn plan_supervised_launch(
     }
     let yolo_sandbox = request.subagent
         && cell.launch.mode == Some(PermissionMode::Yolo)
-        && parent_isolation != Some(crate::config::Isolation::Sandbox)
+        && !parent_isolation.is_some_and(crate::config::Isolation::is_scoped)
         && crate::config::Isolation::resolve(
             cell.launch.isolation,
             cell.isolation_default,
             machine_config.agents.isolation,
-        ) == crate::config::Isolation::Sandbox;
+        )
+        .is_scoped();
     Ok(SupervisedLaunch {
         layout,
         team_name: resolved.team_name,

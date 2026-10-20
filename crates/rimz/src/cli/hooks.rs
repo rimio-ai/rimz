@@ -278,11 +278,12 @@ fn test_duration(name: &str, default: std::time::Duration) -> std::time::Duratio
 }
 
 fn map_sandbox_paths(store: &Store, frame: &mut HookIngress) -> Result<()> {
-    if frame.env.get("RIMZ_ISOLATION").map(String::as_str) != Some("sandbox") {
+    if !rimz::config::Isolation::ambient(&frame.env).is_some_and(rimz::config::Isolation::is_scoped)
+    {
         return Ok(());
     }
     let view = rimz::sandbox::TmpView::current(
-        rimz::config::Isolation::Sandbox,
+        rimz::config::Isolation::Scoped,
         frame.env.get("RIMZ_AGENT_NAME").map(String::as_str),
         store.paths(),
     );
@@ -660,8 +661,8 @@ fn run_feed_inner(source: String, event: Option<String>, globals: &GlobalFlags) 
         hook_pid: std::process::id(),
         env,
     };
-    let sandbox_connection = if frame.env.get("RIMZ_ISOLATION").map(String::as_str)
-        == Some("sandbox")
+    let sandbox_connection = if rimz::config::Isolation::ambient(&frame.env)
+        .is_some_and(rimz::config::Isolation::is_scoped)
     {
         match frame
             .env

@@ -222,8 +222,8 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         adapter.manual_skill(),
     )?;
     let ambient_env = rimz::agents::ambient_env();
-    if Isolation::ambient(&ambient_env) == Some(Isolation::Sandbox) {
-        warnings.push("the rendered skill view is planned from this pane's sandbox view and can differ from the host's".to_owned());
+    if Isolation::ambient(&ambient_env).is_some_and(Isolation::is_scoped) {
+        warnings.push("the rendered skill view is planned from this pane's scoped view and can differ from the host's".to_owned());
     }
     let plan = launch_plan::compile(LaunchPlanInputs {
         recorded_system_prompt_digest: system_prompt_digest.as_deref(),
@@ -236,6 +236,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
         effective: Some(&effective),
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation,
         bwrap: bwrap.as_deref(),
         agents: Ok(snapshot.as_ref().map_or(&[], |snapshot| &snapshot.agents)),
         ambient_env: &ambient_env,
@@ -496,11 +497,8 @@ impl<'a> ExplainReport<'a> {
             warnings.extend(links.shadowed_report(links.shadowed()));
         }
         Ok(Self {
-            isolation: if bwrap.is_some() {
-                Isolation::Sandbox
-            } else {
-                Isolation::Host
-            },
+            // Compilation stamps every launch, including login-shell reentry.
+            isolation: Isolation::ambient(&process.env).expect("compiled launch stamps isolation"),
             isolation_source: if params.isolation.is_some() && args.target.starts_with('@') {
                 "recorded --isolation".to_owned()
             } else if params.isolation.is_some() {
@@ -816,7 +814,7 @@ fn render_explain(report: &ExplainReport<'_>) -> Result<()> {
     )?;
     use rimz::agents::skills::HostSkillPlan;
     if report.skills.applied {
-        writeln!(output, "  profile view: sandbox view applied")?;
+        writeln!(output, "  profile view: scoped view applied")?;
     } else {
         match report.skills.host {
             Some(HostSkillPlan::Applied {

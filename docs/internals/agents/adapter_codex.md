@@ -134,7 +134,7 @@ RimZ does not inspect system or project config layers or managed requirements. L
 | System prompt replacement | `-c model_instructions_file=<path>`: the resolved base file, or a content-addressed composed file when fragments exist |
 | Appended text, such as the subagent no-delegation reminder | `-c developer_instructions=<text>`, a developer-role message that leaves the user prompt unchanged |
 | Supervised child lockdown | drops every `features.multi_agent` override, then appends `-c features.multi_agent=false` |
-| Sandbox isolation | drops every `default_permissions` override, `--sandbox`/`-s` flag and `sandbox_mode` override, replaces `--approve-for-me`/`--not-so-yolo` (which clap refuses beside `--sandbox`) with `-c approvals_reviewer="auto_review" -c approval_policy="on-request"`, then appends `--sandbox danger-full-access`; approval flags and Guardian review stay. Yolo only drops `default_permissions`, since its bypass flag already disables the sandbox ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
+| Scoped isolation | drops every `default_permissions` override, `--sandbox`/`-s` flag and `sandbox_mode` override, replaces `--approve-for-me`/`--not-so-yolo` (which clap refuses beside `--sandbox`) with `-c approvals_reviewer="auto_review" -c approval_policy="on-request"`, then appends `--sandbox danger-full-access`; approval flags and Guardian review stay. Yolo only drops `default_permissions`, since its bypass flag already disables the sandbox ([sandbox.md](../sandbox.md#provider-command-sandboxes)) |
 | Max turns | unsupported |
 | Compaction | bare `/compact`; Codex accepts no summary brief, so the configured brief is never sent |
 

@@ -15,7 +15,7 @@ use crate::common::{
 };
 
 fn available() -> bool {
-    match rimz::sandbox::preflight(Isolation::Sandbox) {
+    match rimz::sandbox::preflight(Isolation::Scoped) {
         Ok(_) => true,
         Err(err) => {
             crate::common::skip(&format!("bubblewrap unusable: {err}"));
@@ -27,7 +27,7 @@ fn available() -> bool {
 fn enable(env: &Env) {
     let path = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, "[agents]\nisolation = \"sandbox\"\n").unwrap();
+    std::fs::write(path, "[agents]\nisolation = \"scoped\"\n").unwrap();
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn child_cap_launch(explicit_host: bool) {
         command.args(["--cwd", "/tmp/clean"]);
     }
     command
-        .env("RIMZ_ISOLATION", "sandbox")
+        .env("RIMZ_ISOLATION", "scoped")
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
         .env(rimz::harness::launch::ENV_AGENT_NAME, "parent")
@@ -212,7 +212,7 @@ fn child_cap_launch(explicit_host: bool) {
     let output = std::thread::scope(|scope| {
         scope.spawn(|| {
             if explicit_host {
-                return; // A sandboxed parent cannot launch a host child.
+                return; // A scoped parent cannot launch a host child.
             }
             crate::common::room::bind_child_panes(
                 &store,
@@ -237,7 +237,7 @@ fn child_cap_launch(explicit_host: bool) {
     } else {
         assert!(output.status.success(), "{stderr}");
         assert!(
-            stderr.contains("sysadmin runs sandboxed: its definition asks for host isolation"),
+            stderr.contains("sysadmin runs scoped: its definition asks for host isolation"),
             "{stderr}"
         );
         assert!(stderr.contains("sysadmin runs in auto mode: its definition asks for yolo, and a subagent never runs looser than its parent"), "{stderr}");
@@ -246,7 +246,7 @@ fn child_cap_launch(explicit_host: bool) {
             .iter()
             .find(|agent| agent.profile.as_deref() == Some("sysadmin"))
             .unwrap();
-        assert_eq!(child.isolation, Some(Isolation::Sandbox));
+        assert_eq!(child.isolation, Some(Isolation::Scoped));
         assert_eq!(child.mode, Some(rimz::agents::PermissionMode::Auto));
         let runs = rimz::harness::run::list(store.paths()).unwrap();
         assert_eq!(runs.len(), 1);
@@ -261,12 +261,12 @@ fn child_cap_launch(explicit_host: bool) {
 }
 
 #[test]
-fn sandboxed_parent_refuses_explicit_host_subagent_without_launch_event() {
+fn scoped_parent_refuses_explicit_host_subagent_without_launch_event() {
     child_cap_launch(true);
 }
 
 #[test]
-fn sandboxed_parent_clamps_host_profile_subagent_and_records_override() {
+fn scoped_parent_clamps_host_profile_subagent_and_records_override() {
     child_cap_launch(false);
 }
 
@@ -1702,8 +1702,8 @@ fn sandboxed_exec_uses_probed_bwrap_with_trusted_path() {
 
 #[test]
 fn a_shared_account_writes_its_history_into_the_default_home_under_both_isolations() {
-    for isolation in ["host", "sandbox"] {
-        if isolation == "sandbox" && !available() {
+    for isolation in ["host", "scoped"] {
+        if isolation == "scoped" && !available() {
             continue;
         }
         let env = Env::new();
@@ -1792,7 +1792,7 @@ fn a_sandboxed_named_account_reaches_a_default_home_under_tmp_outside_home() {
         std::fs::write(
             config,
             format!(
-                "[agents]\nisolation = \"sandbox\"\n[accounts.codex.work]\nhome = {:?}\nhistory = {history:?}\n",
+                "[agents]\nisolation = \"scoped\"\n[accounts.codex.work]\nhome = {:?}\nhistory = {history:?}\n",
                 work.to_str().unwrap()
             ),
         )
@@ -2519,7 +2519,7 @@ fn sandbox_skill_root_symlink_keeps_its_manual_view() {
     .unwrap();
     rimz::sandbox::apply(&plan).unwrap();
     let argv = rimz::sandbox::bwrap_argv(
-        &rimz::sandbox::preflight(Isolation::Sandbox)
+        &rimz::sandbox::preflight(Isolation::Scoped)
             .unwrap()
             .unwrap(),
         &plan.plan,
@@ -2754,7 +2754,7 @@ impl ViewWriter {
         let output = self.reset(true);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "hard reset failed: {stderr}");
-        assert!(stderr.contains("Sandbox views: ended "), "{stderr}");
+        assert!(stderr.contains("Scoped views: ended "), "{stderr}");
         assert!(!self.is_live(), "writer survived the hard reset");
         let tmp = &self.env.state_path_for(&self.env.project_root).tmp_dir;
         assert!(!tmp.exists(), "tmp/ survived the hard reset");
@@ -2804,7 +2804,7 @@ fn soft_reset_spares_a_detached_writer_inside_a_sandbox_view() {
     let output = writer.reset(false);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "soft reset failed: {stderr}");
-    assert!(!stderr.contains("Sandbox views"), "{stderr}");
+    assert!(!stderr.contains("Scoped views"), "{stderr}");
     assert!(writer.is_live(), "soft reset ended the writer");
     assert!(writer.unit.join("writer-pid").is_file());
 }
@@ -2834,7 +2834,7 @@ fn sandboxed_caller_prompt_file_under_tmp_resolves_to_its_temp_unit() {
             &env.workspace_id,
             &env.project_root,
         ))
-        .env("RIMZ_ISOLATION", "sandbox")
+        .env("RIMZ_ISOLATION", "scoped")
         .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
         .env(rimz::harness::launch::ENV_AGENT_NAME, "scout")
         .bounded_output()

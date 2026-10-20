@@ -567,7 +567,7 @@ fn catalog_merges_definition_and_live_instance() {
     agent.team = Some("forge".to_owned());
     agent.role = Some("planner".to_owned());
     agent.channel = Some("feat-x".to_owned());
-    agent.isolation = Some(Isolation::Sandbox);
+    agent.isolation = Some(Isolation::Scoped);
     agent.last_activity = jiff::Timestamp::UNIX_EPOCH;
     let mut reviewer = agent.clone();
     reviewer.agent_id = "sess-reviewer".into();
@@ -620,7 +620,7 @@ fn catalog_merges_definition_and_live_instance() {
         Some(jiff::Timestamp::from_second(90).unwrap())
     );
     assert_eq!(reports[0].instances[0].state, CohortState::Working);
-    assert_eq!(reports[0].instances[0].isolation, Isolation::Sandbox);
+    assert_eq!(reports[0].instances[0].isolation, Isolation::Scoped);
     assert_eq!(
         reports[0].instances[0].shared_dir,
         Path::new("/state/room/shared")

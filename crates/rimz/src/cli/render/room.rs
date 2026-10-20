@@ -96,7 +96,7 @@ pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result
     if ended > 0 {
         writeln!(
             stderr,
-            "Sandbox views: ended {ended} process{} still inside the room's sandbox views.",
+            "Scoped views: ended {ended} process{} still inside the room's scoped views.",
             if ended == 1 { "" } else { "es" },
         )?;
     }

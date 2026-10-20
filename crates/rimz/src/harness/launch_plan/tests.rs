@@ -22,6 +22,7 @@ fn compile_prompt_request(
         effective: None,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Host,
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
@@ -128,6 +129,11 @@ fn workflow_env_pins_survive_both_isolations() {
             effective: None,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: if sandboxed {
+                Isolation::Scoped
+            } else {
+                Isolation::Host
+            },
             bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
@@ -136,6 +142,14 @@ fn workflow_env_pins_survive_both_isolations() {
             recorded_system_prompt_digest: None,
         })
         .unwrap();
+        assert_eq!(
+            Isolation::ambient(&plan.process().env),
+            Some(if sandboxed {
+                Isolation::Scoped
+            } else {
+                Isolation::Host
+            })
+        );
         assert_eq!(
             plan.process().env.get("RIMZ_WORKFLOW_RUN"),
             Some(&workflow.run.to_string())
@@ -389,7 +403,8 @@ fn hibernation_scopes_ready_providers_outside_bwrap() {
     let state = StatePaths::under(id, project.path()).unwrap();
     let machine = crate::config::MachineConfig::default();
     let request = request("claude", action_with_args("launch", vec![]));
-    for bwrap in [None, Some(Path::new("/usr/bin/bwrap"))] {
+    for isolation in [Isolation::Host, Isolation::Scoped] {
+        let bwrap = isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap"));
         for enabled in [false, true] {
             let plan = compile(LaunchPlanInputs {
                 recorded_system_prompt_digest: None,
@@ -402,6 +417,7 @@ fn hibernation_scopes_ready_providers_outside_bwrap() {
                 effective: None,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
+                isolation,
                 bwrap,
                 agents: Ok(&[]),
                 ambient_env: &BTreeMap::new(),
@@ -493,6 +509,7 @@ fn hibernation_leaves_qwen_reentry_outside_the_final_provider_scope() {
                 effective: None,
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
+                isolation: Isolation::Host,
                 bwrap: None,
                 agents: Ok(&[]),
                 ambient_env: &env,
@@ -662,6 +679,7 @@ fn model_alias_resolution_at_the_process_boundary() {
             effective: None,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -808,6 +826,11 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         effective: Some(&effective),
                         commands: &machine.agents.commands,
                         accounts: &machine.accounts,
+                        isolation: if sandboxed {
+                            Isolation::Scoped
+                        } else {
+                            Isolation::Host
+                        },
                         bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
                         agents: Ok(&[]),
                         ambient_env: &ambient,
@@ -903,6 +926,7 @@ fn sandbox_settings_artifact_is_written_only_on_apply() {
         effective: None,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Scoped,
         bwrap: Some(Path::new("/bin/bwrap")),
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
@@ -945,6 +969,7 @@ fn allowed_tools_warn_on_unsupported_kind_without_changing_argv() {
             effective: None,
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -1015,6 +1040,7 @@ fn host_settings_are_private_artifacts_written_only_on_apply() {
         effective: None,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Host,
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
@@ -1424,6 +1450,7 @@ fn prompt_environment_reaches_qwen_without_entering_argv() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
@@ -1553,6 +1580,7 @@ fn env_reminder_compile_resolves_worktree_from_launch_cwd() {
                 effective: Some(&effective),
                 commands: &machine.agents.commands,
                 accounts: &machine.accounts,
+                isolation: Isolation::Host,
                 bwrap: None,
                 agents: Ok(&[]),
                 ambient_env: &BTreeMap::new(),
@@ -1604,6 +1632,7 @@ fn env_reminder_compile_uses_launch_cwd_and_effective_switch_for_children_too() 
                     effective: Some(&effective),
                     commands: &machine.agents.commands,
                     accounts: &machine.accounts,
+                    isolation: Isolation::Host,
                     bwrap: None,
                     agents: Ok(&[]),
                     ambient_env: &BTreeMap::new(),
@@ -1692,6 +1721,7 @@ fn runtime_env_compile_stamps_the_switch_and_moves_the_listing_out_of_the_remind
             effective: configured.then_some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -1783,6 +1813,7 @@ fn the_stamped_account_sets_the_provider_home_after_the_room_switches() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
@@ -1827,6 +1858,7 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &BTreeMap::new(),
@@ -1873,6 +1905,7 @@ fn default_launch_unsets_only_an_exported_declared_home() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -1941,6 +1974,7 @@ fn default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one() {
         effective: Some(&effective),
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Host,
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &ambient,
@@ -1984,6 +2018,7 @@ fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
         effective: Some(&effective),
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Host,
         bwrap: None,
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
@@ -2040,6 +2075,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Scoped,
             bwrap: Some(Path::new("/usr/bin/bwrap")),
             agents: Ok(&[]),
             ambient_env: &BTreeMap::from([(
@@ -2070,6 +2106,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
         effective: Some(&effective),
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
+        isolation: Isolation::Scoped,
         bwrap: Some(Path::new("/usr/bin/bwrap")),
         agents: Ok(&[]),
         ambient_env: &BTreeMap::from([
@@ -2093,7 +2130,7 @@ fn the_sandbox_binds_and_pins_the_stamped_account_home() {
     );
     assert_eq!(
         plan.process().env.get(Isolation::ENV).map(String::as_str),
-        Some("sandbox")
+        Some("scoped")
     );
     assert_eq!(
         plan.process().env.get("TMPDIR").map(String::as_str),
@@ -2171,6 +2208,7 @@ fn a_launch_saves_the_user_tmpdir_it_replaces() {
             accounts: &machine.accounts,
             agent_shell: None,
             hibernate: false,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -2245,6 +2283,7 @@ fn a_provider_temp_root_follows_tmpdir() {
             accounts: &machine.accounts,
             agent_shell: None,
             hibernate: false,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
@@ -2310,6 +2349,7 @@ fn a_launched_child_shares_its_parent_unit_across_restart() {
             accounts: &machine.accounts,
             agent_shell: None,
             hibernate: false,
+            isolation: Isolation::Host,
             bwrap: None,
             agents,
             ambient_env: &ambient,
@@ -2518,6 +2558,7 @@ fn a_shared_codex_account_points_its_databases_at_the_default_home_without_touch
             effective: Some(&effective),
             commands: &machine.agents.commands,
             accounts: &machine.accounts,
+            isolation: Isolation::Host,
             bwrap: None,
             agents: Ok(&[]),
             ambient_env: &ambient,
