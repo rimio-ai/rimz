@@ -1866,6 +1866,48 @@ fn the_default_account_leaves_the_provider_home_to_the_provider() {
 }
 
 #[test]
+fn default_launch_unsets_only_an_exported_declared_home() {
+    let project = tempfile::tempdir().unwrap();
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str("[claude.work]\nhome = '/srv/work'\n").unwrap(),
+        ..Default::default()
+    };
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(workspace_id, project.path()).unwrap();
+    for (exported, unset) in [("/srv/work", true), ("/srv/elsewhere", false)] {
+        let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+        let ambient = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), exported.to_owned())]);
+        let plan = compile(LaunchPlanInputs {
+            recorded_system_prompt_digest: None,
+            request: &request,
+            cwd: project.path(),
+            project_root: project.path(),
+            rimz_bin: Path::new("/bin/rimz"),
+            runtime: &runtime,
+            state: &state,
+            effective: Some(&effective),
+            commands: &machine.agents.commands,
+            accounts: &machine.accounts,
+            bwrap: None,
+            agents: Ok(&[]),
+            ambient_env: &ambient,
+            agent_shell: None,
+            hibernate: false,
+        })
+        .unwrap();
+        assert_eq!(
+            plan.process().unset.contains("CLAUDE_CONFIG_DIR"),
+            unset,
+            "{exported}"
+        );
+    }
+}
+
+#[test]
 fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
     let project = tempfile::tempdir().expect("project");
     let (machine, state) = room_with_accounts(project.path(), "", &[("claude", "work")]);

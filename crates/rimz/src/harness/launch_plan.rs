@@ -553,7 +553,6 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         Err(error) => tracing::debug!(%error, "language-server launch reminder unavailable"),
     }
     reminders.sandbox = inputs.bwrap.is_some();
-    reminders.settings = Some((inputs.runtime.prompt_dir(), inputs.ambient_env.clone()));
     reminders.env = inputs
         .effective
         .is_none_or(|effective| effective.env_reminder);
@@ -564,6 +563,8 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         request.identity.params.login.as_ref(),
         inputs.accounts,
     )?;
+    let login_env = login.env(inputs.ambient_env);
+    reminders.settings = Some((inputs.runtime.prompt_dir(), login_env.clone()));
     // The block rides the provider's prompt hook: without wired hooks the
     // launch keeps its listing, as a provider without the capability does.
     reminders.runtime_env = request.headless.is_none()
@@ -573,7 +574,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
             .is_none_or(|effective| effective.runtime_env)
         && crate::agents::preflight_hooks(
             adapter,
-            &login.env(inputs.ambient_env),
+            &login_env,
             crate::agents::TurnLifecycleNeed::None,
         )
         .is_ok();
@@ -703,6 +704,13 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         .filter(|key| !process.env.contains_key(key))
         .map(|key| (key, sandbox::EnvPin::Unset))
         .collect();
+    unset.extend(
+        inputs
+            .ambient_env
+            .keys()
+            .filter(|key| !login_env.contains_key(*key))
+            .map(|key| (key.clone(), sandbox::EnvPin::Unset)),
+    );
     if request.headless.is_some() {
         unset.extend(
             inputs
@@ -780,7 +788,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         }
     }
     let process = &*process;
-    let mut env = inputs.ambient_env.clone();
+    let mut env = login_env;
     if process.host_skills == Some(crate::agents::skills::HostSkillPlan::Unenforced) {
         warnings.push(LaunchPlanWarning::HostSkillsUnenforced {
             kind: request.kind.clone(),

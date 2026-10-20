@@ -530,7 +530,7 @@ fn add(
             } = error
             {
                 bail!(
-                    "`{env_key}` is exported as `{}`, the home of {kind} account `{exported_name}`; unset `{env_key}` so `default` resolves to {kind}'s own home, e.g. `env -u {env_key} rimz accounts add {kind} {name}`",
+                    "`{env_key}` is exported as `{}`, the home of {kind} account `{exported_name}`; unset `{env_key}` before adding or updating accounts, e.g. `env -u {env_key} rimz accounts add {kind} {name}`",
                     home.display()
                 );
             }

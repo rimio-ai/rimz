@@ -696,9 +696,7 @@ fn accounts_add_rejects_exported_named_homes_before_writing() {
                 }
                 let error = failed(&command.output().unwrap());
                 assert!(
-                    error.contains(&format!(
-                        "unset `{key}` so `default` resolves to {kind}'s own home"
-                    )),
+                    error.contains(&format!("unset `{key}` before adding or updating accounts")),
                     "{error}"
                 );
                 assert!(error.contains("account `work`"), "{error}");

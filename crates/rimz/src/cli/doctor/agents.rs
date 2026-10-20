@@ -178,7 +178,7 @@ impl From<&rimz::agents::LoginConfigErr> for super::model::AccountProblem {
                 home,
             } => (
                 format!(
-                    "`{env_key}` is exported as `{}`, the home of {kind} account `{name}`, so the `default` account launches into it too",
+                    "`{env_key}` is exported as `{}`, the home of {kind} account `{name}`; select named accounts through RimZ instead of exporting their homes",
                     home.display()
                 ),
                 format!(

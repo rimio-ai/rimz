@@ -74,7 +74,7 @@ pub enum LoginConfigErr {
         home: PathBuf,
     },
     #[error(
-        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`, so the `default` account launches into it too; unset `{env_key}` and run `rimz accounts use --global {kind} {name}` for new rooms and rooms following the machine default"
+        "`{env_key}` is exported as `{home}`, the home of {kind} account `{name}`; select named accounts through RimZ instead of exporting their homes; unset `{env_key}` and run `rimz accounts use --global {kind} {name}` for new rooms and rooms following the machine default"
     )]
     ExportedHome {
         kind: AgentKind,
@@ -268,8 +268,8 @@ impl ProviderLogin {
     }
 
     /// Refuses a named account whose home the exported provider variable
-    /// (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) already names: `default` resolves to
-    /// that home too, so two logins would share one provider home. The catalog
+    /// (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) already names: select named accounts
+    /// through RimZ instead of exporting their homes globally. The catalog
     /// cannot check this at load, since a room pane on this account exports its
     /// home by design; `rimz accounts add` and `rimz doctor` ask instead.
     pub fn check_exported_home(

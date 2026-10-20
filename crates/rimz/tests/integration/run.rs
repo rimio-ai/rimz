@@ -118,6 +118,60 @@ fn run_record_json_shape_is_pinned() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn default_print_run_ignores_a_named_account_panes_exported_home() {
+    use crate::common::{hermetic_providers as hermetic, provider_bin, write_path_shim};
+
+    let Ok(tmux) = which::which("tmux") else {
+        crate::common::skip("tmux not on PATH");
+        return;
+    };
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let shell = write_fake_login_shell(&env, "native-login-sh", &[]);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        format!("[agents]\nisolation = 'host'\nshell = {:?}\n", shell),
+    )
+    .unwrap();
+    let home = env.home_root.join("work home");
+    let added = hermetic(&env, &mut env.rimz())
+        .args(["accounts", "add", "claude", "work", "--home"])
+        .arg(&home)
+        .output()
+        .unwrap();
+    assert!(
+        added.status.success(),
+        "{}",
+        String::from_utf8_lossy(&added.stderr)
+    );
+    crate::common::trust_claude_project(&env, &env.project_root);
+    std::fs::copy(
+        env.home_root.join(".claude.json"),
+        home.join(".claude.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(tmux, provider_bin(&env).join("tmux")).unwrap();
+    let log = env.home_root.join("launch-home");
+    write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        &format!(
+            "case \"$*\" in\n  *--version*) echo '2.1.296 (Claude Code)';;\n  'auth status') echo '{{\"loggedIn\": true}}';;\n  *) printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-unset}}\" > '{}';;\nesac",
+            log.display()
+        ),
+    );
+    let output = hermetic(&env, &mut env.rimz())
+        .env("CLAUDE_CONFIG_DIR", &home)
+        .args(["--mux", "tmux", "agents", "claude", "hello", "-p"])
+        .bounded_output()
+        .unwrap();
+    let launched_home = std::fs::read_to_string(log)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(launched_home.trim(), "unset");
+}
+
 #[test]
 fn wakeup_frame_json_shape_is_pinned() {
     let frame = WakeupFrame::RunCompleted {
