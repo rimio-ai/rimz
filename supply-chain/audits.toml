@@ -433,6 +433,12 @@ user-id = 1139 # Manish Goregaokar (Manishearth)
 start = "2021-01-14"
 end = "2027-06-13"
 
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2027-10-20"
+
 [[trusted.url]]
 criteria = "safe-to-deploy"
 user-id = 1139 # Manish Goregaokar (Manishearth)
