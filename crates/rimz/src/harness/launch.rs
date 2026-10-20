@@ -902,11 +902,8 @@ fn compile_agent_process_with_extra_env(
     reminders: &LaunchReminders,
 ) -> AgentProcessResult<CompiledAgentProcess> {
     let kind = request.kind.as_str();
-    if crate::config::MachineConfig::load_lenient()
-        .accounts
-        .budget(kind)
-        .is_some()
-    {
+    let machine = crate::config::MachineConfig::load_lenient();
+    if machine.accounts.budget(kind).is_some() {
         crate::config::AccountsConfig::validate_budget_kind(kind)?;
     }
     let adapter = crate::agents::find_definition(kind).ok_or_else(|| {
@@ -928,7 +925,15 @@ fn compile_agent_process_with_extra_env(
     let mut launch_env = extra_env.clone();
     launch_env.extend(shell_env);
     let mut env = compose_agent_env(trusted_env, adapter, request, &launch_env)?;
-    let mut login_env = crate::agents::ambient_env();
+    let mut login_env = match &reminders.settings {
+        Some((_, env)) => env.clone(),
+        None => crate::agents::session_login(
+            &request.kind,
+            request.identity.params.login.as_ref(),
+            &machine.accounts,
+        )?
+        .env(&crate::agents::ambient_env()),
+    };
     login_env.extend(env.clone());
     let ask = adapter
         .spec()
@@ -983,12 +988,7 @@ fn compile_agent_process_with_extra_env(
             cwd,
         )?;
     }
-    let mut skill_env = reminders
-        .settings
-        .as_ref()
-        .map(|(_, env)| env.clone())
-        .unwrap_or_else(crate::agents::ambient_env);
-    skill_env.extend(env.clone());
+    let skill_env = login_env;
     let (host_skills, mut settings_artifact) =
         if let (Some(runtime), Some(listed)) = (host_runtime, &request.skills) {
             let artifact_dir = runtime.prompt_dir();

@@ -19,7 +19,7 @@ pub(super) struct LaunchReminders {
     /// The configured `[agents] shell`, which the launch runs under in place
     /// of the user's own shell.
     pub agent_shell: Option<std::path::PathBuf>,
-    /// Launch artifact directory and ambient environment; absent in preflight.
+    /// Launch artifact directory and provider login environment; absent in preflight.
     pub settings: Option<(
         std::path::PathBuf,
         std::collections::BTreeMap<String, String>,

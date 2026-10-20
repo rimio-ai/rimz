@@ -108,7 +108,7 @@ Rerunning `add` leaves the config entry alone unless `--history` rewrites that f
 | `NAME` breaks the name rules | `` invalid account name `<name>`; expected 1-32 characters of ... `` |
 | `--home` differs from the existing account's home | `` <kind> account `<name>` already lives at `<home>`; rerun without --home, or remove the account first `` |
 | The home breaks a [home rule](#kinds-names-and-homes) | `` `accounts.<kind>.<name>.home` is `<home>`, ... `` with the rule it breaks |
-| The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` so `default` resolves to codex's own home, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
+| The shell exports `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing at any declared named account of that kind (also checked on reruns) | `` `CODEX_HOME` is exported as `<home>`, the home of codex account `<exported-name>`; unset `CODEX_HOME` before adding or updating accounts, e.g. `env -u CODEX_HOME rimz accounts add codex <name>` `` |
 
 The daemon check runs once no agent is counted, and refuses while the daemon runs under the account's home, whether or not it has a session open.
 
