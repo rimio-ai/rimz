@@ -42,6 +42,9 @@ mod session_index;
 mod spend;
 mod transcript;
 
+#[cfg(any(test, feature = "testkit"))]
+pub(in crate::agents) use install::trust_hook_config_for_test;
+
 pub(crate) use crate::agents::capabilities::*;
 
 use std::collections::BTreeMap;
@@ -94,11 +97,9 @@ use crate::transcript::{AskOption, AskQuestion};
 /// Per-hook timeout written into the Codex config (seconds). Hooks append
 /// ingress and nudge the elected drainer; reply-bearing hooks wait within
 /// this budget.
+///
+/// This timeout and the installed handler fields are frozen by the hook-hash golden.
 const CODEX_HOOK_TIMEOUT_SECS: i64 = 2;
-/// Codex awaits `Interrupt` inline and defaults it to one second (with a
-/// three-second ceiling), so keep Ctrl-C responsive and let an overrun fall
-/// back to the flushed rollout's `turn_aborted` record.
-const CODEX_INTERRUPT_HOOK_TIMEOUT_SECS: i64 = 1;
 
 /// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
 /// which the Codex backend rejects a prompt, listed by litellm and models.dev
@@ -424,7 +425,6 @@ const CODEX_HOOKS: &[HookEventSpec] = &[
     HookEventSpec::lifecycle("Stop", r#"{"session_id":"sess-1"}"#).progress(),
     HookEventSpec::lifecycle("Interrupt", r#"{"session_id":"sess-1","turn_id":"turn-1"}"#)
         .progress()
-        .with_timeout(CODEX_INTERRUPT_HOOK_TIMEOUT_SECS)
         .optional_for_preflight(),
     HookEventSpec::blocking(
         "PermissionRequest",

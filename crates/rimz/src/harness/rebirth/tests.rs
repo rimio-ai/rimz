@@ -382,38 +382,7 @@ impl Fixture {
                 .unwrap();
         }
         let config_path = dir.path().join(".codex/config.toml");
-        let mut config: toml::Table = std::fs::read_to_string(&config_path)
-            .unwrap()
-            .parse()
-            .unwrap();
-        let state = crate::agents::find_definition("codex")
-            .unwrap()
-            .managed_integration()
-            .unwrap()
-            .untrusted_preflight_hooks(&ambient)
-            .into_iter()
-            .map(|event| {
-                let token = event.chars().fold(String::new(), |mut token, c| {
-                    if c.is_ascii_uppercase() && !token.is_empty() {
-                        token.push('_');
-                    }
-                    token.push(c.to_ascii_lowercase());
-                    token
-                });
-                (
-                    format!("{}:{token}:0:0", config_path.display()),
-                    toml::Value::Table(toml::Table::from_iter([(
-                        "trusted_hash".into(),
-                        toml::Value::String("sha256:deadbeef".into()),
-                    )])),
-                )
-            })
-            .collect();
-        config["hooks"]
-            .as_table_mut()
-            .unwrap()
-            .insert("state".into(), toml::Value::Table(state));
-        std::fs::write(&config_path, toml::to_string(&config).unwrap()).unwrap();
+        crate::agents::trust_hook_config_for_test(&config_path, &["Interrupt"]).unwrap();
         for kind in ["claude", "codex"] {
             crate::agents::ProviderLogin::default_for(AgentKind::new_unchecked(kind))
                 .health(&ambient)

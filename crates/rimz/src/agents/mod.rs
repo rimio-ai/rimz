@@ -216,6 +216,13 @@ pub enum AgentErr {
 
 pub type Result<T> = std::result::Result<T, AgentErr>;
 
+/// Simulate Codex's Trust all for fixtures, excluding any named catalog events.
+#[cfg(any(test, feature = "testkit"))]
+#[doc(hidden)]
+pub fn trust_hook_config_for_test(path: &Path, excluded_events: &[&str]) -> Result<()> {
+    adapters::codex::trust_hook_config_for_test(path, excluded_events)
+}
+
 /// Machine policy for provider-managed hook installation.
 #[derive(Clone, Copy, Debug)]
 pub struct HookInstallOptions {

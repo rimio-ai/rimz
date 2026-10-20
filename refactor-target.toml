@@ -230,7 +230,8 @@ upward-dependencies = ["address"]
 # ChildStall shares the child predicate's mid-turn / never-started verdict (+1).
 # AgentDefinition::context_owner_start shares verified statusline-owner provenance with the CLI (+1).
 # PermissionMode::rank shares the grant order with the supervised child cap (+1).
-surface-budget = 1101
+# Test fixtures share the native hook trust writer through trust_hook_config_for_test (+1).
+surface-budget = 1102
 
 [[verdict]]
 kind = "item"
@@ -324,7 +325,8 @@ surface-budget = 1
 [[module]]
 path = "crates/rimz/src/agents/adapters/codex"
 # 9: `broker::installed_bin` hands the `RIMZ_CODEX_BIN`-aware resolver to the neutral broker entry.
-surface-budget = 9
+# The neutral test-only trust seam delegates to the adapter's native hash writer (+1).
+surface-budget = 10
 
 [[module]]
 path = "crates/rimz/src/agents/adapters/claude"
@@ -2594,6 +2596,16 @@ reason = "The mutable strip_rimz_hook_commands walk keeps the same table shape, 
 kind = "item"
 key = "agents::adapters::codex::install::hook_hash"
 reason = "The adapter's trust and drift checks share Codex's normalized hash with independent real-Codex fixture tests."
+
+[[verdict]]
+kind = "item"
+key = "agents::adapters::codex::install::trust_hook_config_for_test"
+reason = "The provider-neutral test seam writes native slot hashes without exposing the adapter to harness or integration fixtures."
+
+[[verdict]]
+kind = "item"
+key = "agents::trust_hook_config_for_test"
+reason = "Testkit-only Trust all seam keeps launch, recovery, and integration fixtures on real hashes behind the private-adapter boundary."
 
 [[verdict]]
 kind = "item"

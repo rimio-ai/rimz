@@ -6,46 +6,17 @@ use std::path::Path;
 
 use super::Env;
 
-/// Every Codex hook event RimZ installs, as the token Codex keys trust by.
-const CODEX_HOOK_EVENTS: [&str; 11] = [
-    "session_start",
-    "user_prompt_submit",
-    "subagent_start",
-    "subagent_stop",
-    "stop",
-    "interrupt",
-    "permission_request",
-    "pre_tool_use",
-    "post_tool_use",
-    "pre_compact",
-    "post_compact",
-];
-
-/// Append `[hooks.state]` trust entries for every RimZ-installed Codex event,
-/// key-shaped exactly as Codex writes them after the user trusts via /hooks.
+/// Write native trust hashes for every RimZ-installed Codex event.
 pub fn trust_codex_hooks(env: &Env) {
-    trust_codex_hooks_except(env, None);
+    rimz::agents::trust_hook_config_for_test(&env.agent_config_path("codex"), &[])
+        .expect("trust installed hooks");
 }
 
 /// Trust every hook but the forward-compatible Interrupt event, so preflight
 /// sees the advisory it reports for an untrusted Interrupt hook.
 pub fn trust_codex_preflight_hooks(env: &Env) {
-    trust_codex_hooks_except(env, Some("interrupt"));
-}
-
-fn trust_codex_hooks_except(env: &Env, excluded: Option<&str>) {
-    let config = env.agent_config_path("codex");
-    let mut text = std::fs::read_to_string(&config).expect("read codex config");
-    for token in CODEX_HOOK_EVENTS {
-        if Some(token) == excluded {
-            continue;
-        }
-        text.push_str(&format!(
-            "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",
-            config.display(),
-        ));
-    }
-    std::fs::write(&config, text).expect("write trust state");
+    rimz::agents::trust_hook_config_for_test(&env.agent_config_path("codex"), &["Interrupt"])
+        .expect("trust installed preflight hooks");
 }
 
 /// Record `project` as trusted in the Codex config, replacing any
