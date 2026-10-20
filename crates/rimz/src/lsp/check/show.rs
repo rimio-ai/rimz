@@ -26,7 +26,8 @@ pub fn show(
     let mut sources = BTreeMap::new();
     let mut blocks = Vec::new();
     for (argument, (anchor, position)) in arguments.iter().zip(anchors) {
-        let needs_outline = anchor.symbol.is_some() || position.is_some();
+        let line_target = is_line_target(&anchor);
+        let needs_outline = anchor.symbol.is_some() || position.is_some() || line_target;
         let (anchor, path, _) = match context.resolve(anchor) {
             Ok(resolved) => resolved,
             Err(verdict) => {
@@ -39,9 +40,10 @@ pub fn show(
                 continue;
             }
         };
-        let (nodes, dirty) = if needs_outline {
+        let outline = if needs_outline {
             match context.outline(&path) {
-                Ok(Some(file)) => (file.nodes.as_slice(), file.dirty),
+                Ok(Some(file)) => Some(file),
+                Ok(None) | Err(_) if line_target => None,
                 Ok(None) => {
                     blocks.push(failure(argument, "unchecked", &unchecked_detail(&path), 3));
                     continue;
@@ -56,6 +58,11 @@ pub fn show(
                     continue;
                 }
             }
+        } else {
+            None
+        };
+        let (nodes, dirty) = if let Some(file) = outline {
+            (file.nodes.as_slice(), file.dirty)
         } else {
             match context.is_dirty(&path) {
                 Ok(dirty) => (&[][..], dirty),
@@ -109,8 +116,18 @@ fn parse_argument(argument: &str) -> super::super::Result<(Anchor, Option<Positi
         return Ok((anchors.remove(0), None));
     }
     Err(LspErr::Protocol(format!(
-        "invalid anchor {argument}; use path::Symbol, path:line:col, or path:start-end"
+        "invalid anchor {argument}; use path::Symbol, path:line, path:line:col, or path:start-end"
     )))
+}
+
+fn is_line_target(anchor: &Anchor) -> bool {
+    anchor.symbol.is_none()
+        && anchor.text.rsplit_once(':').is_some_and(|(path, line)| {
+            let line = line.strip_prefix('~').unwrap_or(line);
+            path.ends_with(&anchor.path)
+                && !line.is_empty()
+                && line.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 fn failure(argument: &str, status: &str, detail: &str, code: i32) -> (String, i32) {
@@ -166,6 +183,21 @@ fn render_item(
             exit = exit.max(code);
         }
         return (text, exit);
+    } else if is_line_target(anchor) {
+        anchor
+            .hint
+            .and_then(|[line, _]| line.checked_sub(1))
+            .filter(|line| (*line as usize) < source.lines().count())
+            .and_then(|line| {
+                nodes
+                    .iter()
+                    .filter(|node| {
+                        node.extent.start.line <= line
+                            && (line < node.extent.end.line
+                                || (line == node.extent.end.line && node.extent.end.character > 0))
+                    })
+                    .min_by_key(|node| (std::cmp::Reverse(node.extent.start), node.extent.end))
+            })
     } else {
         None
     };
@@ -286,6 +318,8 @@ mod tests {
             "src/lib.rs:5:1",
             "src/lib.rs:4:4 (3-5)",
             "src/lib.rs:3-5",
+            "src/lib.rs:4",
+            "src/lib.rs:~4",
         ] {
             assert_eq!(
                 read(argument, false, false),
@@ -302,6 +336,12 @@ mod tests {
     #[test]
     fn show_zoom_uses_child_selection_and_full_never_truncates() {
         assert_eq!(read("src/lib.rs::Parent", true, false), ("src/lib.rs:1-205  (unsaved in editor)  (outline: 205 lines; --full prints the body)\n     4\tline 4 (3-5)\n".into(), 0));
+        for full in [false, true] {
+            assert_eq!(
+                read("src/lib.rs:2", true, full),
+                read("src/lib.rs::Parent", true, full)
+            );
+        }
         let body = read("src/lib.rs::Parent", false, true);
         assert_eq!(body.1, 0);
         assert_eq!(body.0.lines().count(), 206);
@@ -320,6 +360,84 @@ mod tests {
             ),
             body
         );
+    }
+
+    #[test]
+    fn show_lines_cover_indented_starts_but_not_exclusive_ends() {
+        let mut nodes = nodes();
+        nodes[1].extent.start.character = 4;
+        nodes[1].extent.end = Position {
+            line: 4,
+            character: 0,
+        };
+        for (argument, expected) in [
+            ("src/lib.rs:3", "src/lib.rs::Parent::child"),
+            ("src/lib.rs:~3", "src/lib.rs::Parent::child"),
+            ("src/lib.rs:5", "src/lib.rs::Parent"),
+        ] {
+            let (anchor, position) = parse_argument(argument).unwrap();
+            assert_eq!(
+                render_item(
+                    &anchor,
+                    position,
+                    Path::new("src/lib.rs"),
+                    &nodes,
+                    &source(),
+                    false,
+                    false
+                ),
+                read(expected, false, false),
+                "{argument}"
+            );
+        }
+    }
+
+    #[test]
+    fn show_uncovered_lines_and_explicit_ranges_read_only_the_line() {
+        for argument in ["src/lib.rs:206", "src/lib.rs:~206"] {
+            assert_eq!(
+                read(argument, false, false),
+                ("src/lib.rs:206-206\n   206\t  line 206\n".into(), 0)
+            );
+        }
+        for argument in ["src/lib.rs:4-4", "src/lib.rs:~4:1", "src/lib.rs:4:0"] {
+            assert_eq!(
+                read(argument, false, false),
+                ("src/lib.rs:4-4\n     4\t  line 4\n".into(), 0)
+            );
+        }
+    }
+
+    #[test]
+    fn show_unavailable_outline_falls_back_only_for_bare_lines() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(root.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.path().join("lib.rs"), "first\nsecond\n").unwrap();
+        let servers = BTreeMap::from([(
+            "rust".into(),
+            serde_json::from_value(json!({
+                "command": ["stub"], "extensions": ["rs"], "root-markers": []
+            }))
+            .unwrap(),
+        )]);
+        let blocks = show(
+            &["lib.rs:2".into(), "lib.rs:~2".into(), "lib.rs:2:1".into()],
+            false,
+            root.path(),
+            &[],
+            &servers,
+        )
+        .unwrap();
+        assert_eq!(blocks[0], ("lib.rs:2-2\n     2\tsecond\n".into(), 0));
+        assert_eq!(blocks[1], blocks[0]);
+        assert_eq!(blocks[2].1, 3);
     }
 
     #[test]
@@ -343,7 +461,12 @@ mod tests {
     fn show_clamps_symbol_and_position_ranges_from_unsaved_outlines() {
         let mut nodes = nodes();
         nodes[2].range[1] = 215;
-        for argument in ["src/lib.rs::child ~208", "src/lib.rs:208:4"] {
+        nodes[2].extent.end.line = 214;
+        for argument in [
+            "src/lib.rs::child ~208",
+            "src/lib.rs:208:4",
+            "src/lib.rs:208",
+        ] {
             let (anchor, position) = parse_argument(argument).unwrap();
             for dirty in [false, true] {
                 let marker = if dirty { "  (unsaved in editor)" } else { "" };
@@ -366,6 +489,22 @@ mod tests {
                 );
             }
         }
+        let (anchor, position) = parse_argument("src/lib.rs:211").unwrap();
+        assert_eq!(
+            render_item(
+                &anchor,
+                position,
+                Path::new("src/lib.rs"),
+                &nodes,
+                &source(),
+                false,
+                false
+            ),
+            (
+                "src/lib.rs:211  line-outside  file has 210 lines\n".into(),
+                5
+            )
+        );
     }
 
     #[test]
@@ -405,6 +544,8 @@ mod tests {
             "src/lib.rs:210:50",
             "src/lib.rs:211-212",
             "src/lib.rs:0-2",
+            "src/lib.rs:0",
+            "src/lib.rs:211",
         ] {
             assert_eq!(read(argument, false, false).1, 5, "{argument}");
         }

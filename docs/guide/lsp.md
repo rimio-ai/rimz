@@ -89,7 +89,7 @@ Broad queries can return hundreds of locations. Lists show the first 50, with th
 
 For files no attached editor holds, the server answers from disk, kept current by watching saved files. Attaching your editor lets agents query your unsaved buffers too.
 
-Reading a definition with a fixed line window can miss half the body or include unrelated code. Use `rimz lsp show` with a file's symbol anchor to read the item's current source, or pass several anchors to read them together. It resolves each anchor against the server outline, then prints numbered lines from disk. Large items show their children's signatures first; add `--full` to read the whole body. An unsaved-editor marker means the outline may be ahead of the disk text. The [source-reading reference](../reference/cli/lsp.md#read-source-by-anchor) lists position and line-range forms too.
+Reading a definition with a fixed line window can miss half the body or include unrelated code. Use `rimz lsp show` with a file's symbol anchor to read the item's current source, or pass several anchors to read them together. A `path:line` from grep output prints the item around that line. For item reads, it uses the server outline, then prints numbered lines from disk. Large items show their children's signatures first; add `--full` to read the whole body. An unsaved-editor marker means the outline may be ahead of the disk text. The [source-reading reference](../reference/cli/lsp.md#read-source-by-anchor) lists position and line-range forms too.
 
 ```sh
 rimz lsp show crates/rimz/src/lsp/check.rs::run crates/rimz/src/lsp/query.rs::render_with_source
