@@ -991,7 +991,7 @@ fn lsp_show_batches_source_and_failures() {
     )
     .unwrap();
     std::fs::write(env.project_root.join("notes.py"), "pass\n").unwrap();
-    let (mut broker, _, _) = start_stub_broker(&env, env.project_root.clone());
+    let (mut broker, directory, _) = start_stub_broker(&env, env.project_root.clone());
     env.rimz()
         .args([
             "lsp",
@@ -999,6 +999,8 @@ fn lsp_show_batches_source_and_failures() {
             "show.rs::Parent::child",
             "show.rs:208:4",
             "show.rs:2:4 (1-2)",
+            "show.rs:4",
+            "notes.py:1",
         ])
         .assert()
         .success()
@@ -1007,6 +1009,8 @@ fn lsp_show_batches_source_and_failures() {
                 "show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
                 "show.rs:208-209\n   208\t  line 208\n   209\t  line 209\n",
                 "show.rs:1-2\n     1\t  line 1\n     2\t  line 2\n",
+                "show.rs:3-5\n     3\t  line 3\n     4\t  line 4\n     5\t  line 5\n",
+                "notes.py:1-1\n     1\tpass\n",
             ]
             .join("\n"),
         );
@@ -1055,6 +1059,20 @@ fn lsp_show_batches_source_and_failures() {
         .assert()
         .code(2)
         .stdout("");
+    env.rimz()
+        .args(["lsp", "show", "show.rs:4-4"])
+        .assert()
+        .success()
+        .stdout("show.rs:4-4\n     4\t  line 4\n");
+    assert_eq!(
+        editor_query(&directory, "requests")["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|request| request["method"] == "textDocument/documentSymbol")
+            .count(),
+        5
+    );
     broker.kill().unwrap();
     broker.wait().unwrap();
 }
