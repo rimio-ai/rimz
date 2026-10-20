@@ -17,6 +17,10 @@ pub(super) struct Transport {
 }
 
 impl Transport {
+    pub(super) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     pub(super) fn start(
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,

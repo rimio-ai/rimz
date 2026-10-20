@@ -67,6 +67,109 @@ fn editor_query(directory: &Path, name: &str) -> Value {
 }
 
 #[test]
+fn lsp_idle_broker_blocks_when_dormant_and_ready() {
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+
+    let env = Env::new();
+    let counter = env.runtime_root.join("broker-ticks.sock");
+    let listener = UnixListener::bind(&counter).unwrap();
+    let request = rimz::lsp::admission::ServeRequest {
+        root: env.project_root.canonicalize().unwrap(),
+        project: env.project_root.clone(),
+        server: "rust".into(),
+        settings_hash: "idle-waits".into(),
+        config: serde_json::from_value(json!({
+            "command": [crate::common::cargo_bin("lsp-server-stub", env!("CARGO_BIN_EXE_lsp-server-stub"))],
+            "extensions": ["rs"], "root-markers": ["Cargo.toml"], "memory-estimate": "1M"
+        })).unwrap(),
+        policy: rimz::config::LspConfig {
+            reserve_percent: 0, reserve_min: "0".into(), ..Default::default()
+        },
+        eager: false,
+    };
+    let directory = env
+        .runtime_root
+        .join("rimz/lsp")
+        .join(rimz::lsp::registry::key(&request.root, "rust").unwrap());
+    let mut broker = env
+        .rimz()
+        .args([
+            "lsp",
+            "serve",
+            "--request",
+            &serde_json::to_string(&request).unwrap(),
+        ])
+        .env("RIMZ_TEST_LSP_BROKER_TICKS", &counter)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let (mut ticks, _) = listener.accept().unwrap();
+    assert!(
+        editor_rpc(&directory, json!({"op":"status"}))["state"]
+            .get("dormant")
+            .is_some()
+    );
+    let mut quiet_counts = || {
+        ticks.set_nonblocking(true).unwrap();
+        while ticks.read(&mut [0; 1024]).is_ok_and(|count| count > 0) {}
+        ticks.set_nonblocking(false).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(350);
+        let (mut accepts, mut wakes) = (0, 0);
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            ticks.set_read_timeout(Some(remaining)).unwrap();
+            let mut bytes = [0; 1024];
+            match ticks.read(&mut bytes) {
+                Ok(0) => panic!("broker counter closed"),
+                Ok(count) => {
+                    accepts += bytes[..count].iter().filter(|&&b| b == b'A').count();
+                    wakes += bytes[..count].iter().filter(|&&b| b == b'W').count();
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("broker counter: {error}"),
+            }
+        }
+        (accepts, wakes)
+    };
+    let dormant = quiet_counts();
+    let started = Instant::now();
+    let result = editor_query(&directory, "symbol");
+    let ready_in = started.elapsed();
+    let ready = quiet_counts();
+    assert!(broker.try_wait().unwrap().is_none());
+    assert_eq!(
+        editor_rpc(
+            &directory,
+            json!({"op":"stop", "reason":"checkout removed"})
+        )["ok"],
+        true
+    );
+    assert!(broker.wait().unwrap().success());
+    assert_eq!(result, json!([]));
+    assert!(
+        ready_in < Duration::from_secs(4),
+        "readiness took {ready_in:?}"
+    );
+    assert!(
+        dormant.0 == 0 && dormant.1 <= 1,
+        "dormant broker polled: {dormant:?}"
+    );
+    assert!(
+        ready.0 == 0 && ready.1 <= 1,
+        "ready broker polled: {ready:?}"
+    );
+}
+
+#[test]
 fn lsp_status_and_stop_select_one_lazy_server() {
     let env = Env::new();
     let root = env.project_root.canonicalize().unwrap();
@@ -1804,7 +1907,7 @@ fn lsp_broker_starts_lazily_watches_saves_and_restarts() {
         "800"
     );
     std::fs::write(env.project_root.join("lib.rs"), "fn saved() {}\n").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let response = query("changes");
         if response["result"]["changes"]

@@ -90,6 +90,8 @@ struct Shared {
     started: Instant,
     in_flight: std::sync::atomic::AtomicUsize,
     requests: socket::Requests,
+    #[cfg(feature = "testkit")]
+    ticks: Mutex<Option<std::os::unix::net::UnixStream>>,
 }
 
 struct Model {
@@ -104,6 +106,7 @@ struct Model {
     refusal: Option<super::admission::Shortfall>,
     lifetime_peak_kb: u64,
     dormant_ms: Option<u64>,
+    watch_due: Option<Instant>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -113,6 +116,19 @@ enum RequestPhase {
 }
 
 impl Shared {
+    #[cfg(feature = "testkit")]
+    fn tick(&self, event: u8) {
+        use std::io::Write;
+        if let Some(ticks) = self
+            .ticks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            let _ = ticks.write_all(&[event]);
+        }
+    }
+
     fn elapsed(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
     }
@@ -283,7 +299,6 @@ fn serve_inner(
     let listener = UnixListener::bind(&path)?;
     let _socket = crate::sock::SocketGuard::new(path.clone());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
     let (router_tx, router_rx) = mpsc::channel();
     let shared = Arc::new(Shared {
         settings: Arc::new(Mutex::new(Settings {
@@ -304,11 +319,18 @@ fn serve_inner(
             refusal: None,
             lifetime_peak_kb: 0,
             dormant_ms: None,
+            watch_due: None,
         }),
         changed: Condvar::new(),
         started: Instant::now(),
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         requests: socket::Requests::default(),
+        #[cfg(feature = "testkit")]
+        ticks: Mutex::new(
+            std::env::var_os("RIMZ_TEST_LSP_BROKER_TICKS")
+                .map(std::os::unix::net::UnixStream::connect)
+                .transpose()?,
+        ),
     });
     *exit_shared = Some(shared.clone());
     let routing = shared.clone();
@@ -336,8 +358,19 @@ fn serve_inner(
                 break reason;
             }
             if !eager && !model.start_requested {
-                drop(model);
-                std::thread::sleep(Duration::from_millis(50));
+                let remaining = (last_housekeeping + Duration::from_secs(5))
+                    .saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    continue;
+                }
+                drop(
+                    shared
+                        .changed
+                        .wait_timeout(model, remaining)
+                        .unwrap_or_else(|e| e.into_inner()),
+                );
+                #[cfg(feature = "testkit")]
+                shared.tick(b'W');
                 continue;
             }
             model.start_requested = false;
@@ -443,13 +476,14 @@ fn prepare_start(shared: &Shared, request: &ServeRequest, eager: bool) -> Result
     model.entry.estimate_bytes = estimate;
     model.lifetime_peak_kb = 0;
     model.readiness = Readiness::default();
+    model.watch_due = None;
     registry::publish(&model.entry)?;
     shared.changed.notify_all();
     Ok(true)
 }
 
 /// `Ok(false)`: a stop landed before the spawn, so no lifetime ran.
-fn lifetime(shared: &Shared, request: &ServeRequest, epoch: u64) -> Result<bool> {
+fn lifetime(shared: &Arc<Shared>, request: &ServeRequest, epoch: u64) -> Result<bool> {
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     if model.entry.state != State::Starting {
         return Ok(false);
@@ -496,7 +530,7 @@ fn initialize_params(
 }
 
 fn initialize_and_run(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     request: &ServeRequest,
     epoch: u64,
     server: &mut Server,
@@ -505,6 +539,7 @@ fn initialize_and_run(
     let mut params = initialize_params(&request.root, &request.config)?;
     let (messages_tx, messages) = mpsc::channel();
     let sender = shared.router.clone();
+    let ended = shared.clone();
     std::thread::spawn(move || {
         for frame in messages {
             if sender
@@ -514,6 +549,9 @@ fn initialize_and_run(
                 break;
             }
         }
+        // Pair transport closure with the supervisor's pre-wait model lock.
+        let _model = ended.model.lock().unwrap_or_else(|e| e.into_inner());
+        ended.changed.notify_all();
     });
     // Piped handles were requested on this child and have not yet been taken.
     let transport = Transport::start(
@@ -536,8 +574,13 @@ fn initialize_and_run(
         .unwrap_or_else(|e| e.into_inner())
         .transport = Some(transport.clone());
     let (watch_tx, events) = mpsc::channel();
+    let watching = shared.clone();
     let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = watch_tx.send(event);
+        let mut model = watching.model.lock().unwrap_or_else(|e| e.into_inner());
+        if watch_tx.send(event).is_ok() && model.watch_due.is_none() {
+            model.watch_due = Some(Instant::now() + Duration::from_millis(50));
+            watching.changed.notify_all();
+        }
     })
     .map_err(|error| LspErr::Protocol(error.to_string()))?;
     watch::register(&mut watcher, &request.root, &|path, error| {
@@ -630,9 +673,18 @@ fn run(
             }
         }
         if initialized.is_none() {
+            let batch: Vec<_> = {
+                let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+                if model.watch_due.is_some_and(|due| Instant::now() >= due) {
+                    model.watch_due = None;
+                    events.try_iter().collect()
+                } else {
+                    Vec::new()
+                }
+            };
             let report = |path: &std::path::Path, error: &str| watch_error(request, path, error);
-            let batch = events
-                .try_iter()
+            let batch = batch
+                .into_iter()
                 .filter_map(|event| match event {
                     Ok(event) => Some(event),
                     Err(error) => {
@@ -660,7 +712,7 @@ fn run(
                 transport.notify("workspace/didChangeWatchedFiles", changes)?;
             }
         }
-        if server.child.try_wait()?.is_some() {
+        if server.child.try_wait()?.is_some() || transport.is_closed() {
             shared.stop(StopReason::Crashed);
             break;
         }
@@ -668,7 +720,41 @@ fn run(
             housekeeping(shared, request)?;
             last_housekeeping = Instant::now();
         }
-        std::thread::sleep(Duration::from_millis(50));
+        let model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let elapsed = shared.elapsed();
+        if matches!(
+            model.entry.state,
+            State::Stopped { .. } | State::Dormant { .. }
+        ) || transport.is_closed()
+            || model.readiness.state(elapsed) != model.entry.state
+        {
+            continue;
+        }
+        let mut remaining =
+            (last_housekeeping + Duration::from_secs(5)).saturating_duration_since(now);
+        if let Some(due) = model.readiness.deadline(elapsed) {
+            remaining = remaining.min(Duration::from_millis(due - elapsed));
+        }
+        if initialized.is_none()
+            && let Some(due) = model.watch_due
+        {
+            remaining = remaining.min(due.saturating_duration_since(now));
+        }
+        if initialized.is_some() || replaying.is_some() {
+            remaining = remaining.min(Duration::from_millis(50));
+        }
+        if remaining.is_zero() {
+            continue;
+        }
+        drop(
+            shared
+                .changed
+                .wait_timeout(model, remaining)
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        #[cfg(feature = "testkit")]
+        shared.tick(b'W');
     }
     let transport = transport.clone();
     let (finished, shutdown) = mpsc::channel();
@@ -818,6 +904,7 @@ mod tests {
             refusal: None,
             lifetime_peak_kb: 0,
             dormant_ms: None,
+            watch_due: None,
         }
     }
 
