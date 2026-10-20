@@ -3910,7 +3910,10 @@ fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
     let launch = env.rimz().args(["teams", "forge"]).output().unwrap();
     let error = String::from_utf8_lossy(&launch.stderr);
     assert!(!error.contains("root checkout"), "{error}");
-    assert!(!error.contains("unknown team"), "{error}");
+    assert!(
+        !error.contains("no team, profile, or command named"),
+        "{error}"
+    );
     seed_team_signal_member(&env, &env.project_root, "sess-any", None);
     team_signal_hook(&env, &env.project_root, "sess-any", "SessionStart");
     let armed = read_loop_instances(&env);

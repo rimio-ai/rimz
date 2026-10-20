@@ -55,6 +55,17 @@ impl UsageError {
     }
 }
 
+pub(super) fn scene_verbs(scene: &str) -> Vec<String> {
+    super::Cli::command()
+        .find_subcommand(scene)
+        .into_iter()
+        .flat_map(clap::Command::get_subcommands)
+        .filter(|verb| !verb.is_hide_set())
+        .flat_map(|verb| std::iter::once(verb.get_name()).chain(verb.get_all_aliases()))
+        .map(str::to_owned)
+        .collect()
+}
+
 fn missing_verb_line(scene: &str, target: &str, list_flags: &[&str]) -> String {
     let list = shell_command(
         ["rimz", scene, "list"]

@@ -9,6 +9,7 @@
 //! the `print_stdout` lint still guards the protocol surface.
 
 pub(crate) mod diff;
+pub(super) mod launch_suggestions;
 pub(crate) mod palette;
 pub(crate) mod prose;
 pub(crate) mod room;
@@ -123,11 +124,14 @@ pub(crate) fn report(error: &anyhow::Error) {
 }
 
 fn write_report(w: &mut impl Write, error: &anyhow::Error) -> std::io::Result<()> {
-    let argv = std::env::args_os()
+    write_report_with_args(w, error, &invocation_args())
+}
+
+fn invocation_args() -> Vec<String> {
+    std::env::args_os()
         .map(|arg| arg.into_string())
         .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
-    write_report_with_args(w, error, &argv)
+        .unwrap_or_default()
 }
 
 fn write_report_with_args(

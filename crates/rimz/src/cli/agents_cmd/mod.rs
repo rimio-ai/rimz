@@ -798,7 +798,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 }
                 TopLevelSpecRoute::Launch => {}
             }
-            return dispatch_launch(*launch, false, globals);
+            return dispatch_launch(*launch, false, globals, false);
         }
         Some(AgentsSubcmd::Explain(args)) => return explain::run(args, globals),
         Some(AgentsSubcmd::Check(args)) => return run_check(args),
@@ -962,10 +962,15 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     {
         return Err(refusal.into());
     }
-    dispatch_launch(launch, json, globals)
+    dispatch_launch(launch, json, globals, true)
 }
 
-fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -> Result<()> {
+fn dispatch_launch(
+    launch: AgentLaunchArgs,
+    json: bool,
+    globals: &GlobalFlags,
+    bare: bool,
+) -> Result<()> {
     let args = AgentsArgs {
         command: None,
         launch,
@@ -992,6 +997,7 @@ fn dispatch_launch(launch: AgentLaunchArgs, json: bool, globals: &GlobalFlags) -
         );
     }
     launch_layout(args, globals, true)
+        .map_err(|error| crate::cli::render::launch_suggestions::agents_error(error, bare))
 }
 
 /// `--detach` drops the report a launch task owes; refuse it where no such report exists.

@@ -107,6 +107,16 @@ A spec is one of three things:
 
 Each inline cell is `term` (a plain shell), an agent kind, a [permission-mode cell](#permission-mode-cells) such as `claude-plan`, a [fast cell](#fast-cells) such as `claude-fast`, a configured profile, a configured command, or any executable on your `PATH`. Add `:<role>` to an agent cell for an ad-hoc role handle. Quote a spec that contains `+`, a space, or anything else your shell expands. The full grammar and how cells compile to panes are in [fleet.md → The layout IR](../../internals/harness/fleet.md#the-layout-ir).
 
+An unresolved bare word (`rimz agents <word>`) exits 2. The refusal suggests up to three names at the closest distance within two edits (an adjacent transposition counts as one), with verbs before launch names. Without a close match it lists teams, standalone profiles and commands, and agent kinds, followed by discovery commands and the resolved definition paths. Explicit `rimz agents launch <word>` prints the same refusal with exit 1 and excludes verbs from suggestions. A misspelled role in `<team>.<role>` suggests a nearby declared role.
+
+```console
+$ rimz agents per
+error: no team, profile, or command named `per`
+  did you mean:
+    rimz agents perf     profile · claude · opus (senior) · xhigh
+    rimz agents peer     team · claude,codex
+```
+
 The optional `PROMPT` goes to exactly one leader: the team's configured `leader` role, else its first declared role, else the first agent cell. When the first cell repeats (`claude,claude`), give it a role so the target is unambiguous. To send every agent the same text, launch without a prompt and use `rimz message @all`. A second positional that is itself a cell (`rimz agents claude codex`) is refused with a `rimz agents a,b` hint, and a scope such as `rimz agents '#auth'` in the SPEC slot is refused with exit 2 and the `rimz agents list '#auth'` command, prompt or not. A lone word with no prompt and no launch flag that is also the role, explicit name, or pet name of a live agent in your current lane, or anywhere when you stand outside every lane, is refused with exit 2, since you more likely meant that agent: the refusal prints a runnable `rimz agents show` for the most recently active match and the `rimz agents launch <word>` that launches anyway. A kind such as `claude` or `codex` and a configured profile are exempt, because any number of live agents share one: `rimz agents coder` launches another `coder` however many are running. A prompt, any launch flag, or `rimz agents launch` launches as before. That includes a bare role inside its team lane while that role is live (`rimz agents planner` in `#forge` with `@planner` running); once its seat is closed, the bare role re-adds it.
 
 Kiro launch prompts cannot begin with `-`: its CLI reads that text as an option and drops it. RimZ refuses before launching, including team and loop launches. Start the prompt with a word, or launch without it and send the text with `rimz message` once the agent is up.

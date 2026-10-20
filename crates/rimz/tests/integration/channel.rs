@@ -96,6 +96,67 @@ fn message_routes_to_named_channel_targets() {
 }
 
 #[test]
+fn unknown_launch_word_suggests_profiles_and_teams_with_scene_exit_codes() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::write_definition(
+        &env,
+        "agents",
+        "perf",
+        "description: Performance reviewer\nagent: claude\nmodel: opus\ntools: []",
+        "",
+    );
+    for (args, code) in [
+        (vec!["agents", "per"], 2),
+        (vec!["agents", "launch", "per"], 1),
+    ] {
+        let output = env
+            .rimz()
+            .args(&args)
+            .output()
+            .expect("unknown launch word");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{stderr}");
+        let binary = env.rimz_bin();
+        let command =
+            shlex::try_join(std::iter::once(binary.to_str().unwrap()).chain(args.iter().copied()))
+                .unwrap();
+        let expected = format!(
+            "error: no team, profile, or command named `per`\n  did you mean:\n    {command}f     profile · claude · opus\n"
+        );
+        // The built-in peer follows the profile at the same distance.
+        assert!(
+            stderr.starts_with(expected.trim_end_matches('\n')),
+            "{stderr}"
+        );
+        assert!(stderr.contains("team · claude,codex"), "{stderr}");
+    }
+}
+
+#[test]
+fn unknown_launch_word_uses_the_configured_agents_home() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let agents_home = env.home_root.join("definitions");
+    std::fs::create_dir(&agents_home).unwrap();
+    let output = env
+        .rimz()
+        .args(["agents", "xyz"])
+        .env("RIMZ_AGENTS_HOME", &agents_home)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("new team:     ~/definitions/teams/xyz.md"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("new profile:  ~/definitions/agents/xyz.md"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn bare_role_spawn_resolves_against_the_lane_team() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -111,7 +172,7 @@ fn bare_role_spawn_resolves_against_the_lane_team() {
         .expect("spawn agents");
     let stderr = String::from_utf8_lossy(&outside.stderr).into_owned();
     assert!(
-        stderr.contains("unknown team `planner`"),
+        stderr.contains("no team, profile, or command named `planner`"),
         "bare role outside a lane stays unknown: {stderr}"
     );
 
@@ -125,7 +186,8 @@ fn bare_role_spawn_resolves_against_the_lane_team() {
         .expect("spawn agents");
     let stderr = String::from_utf8_lossy(&inside.stderr).into_owned();
     assert!(
-        !stderr.contains("unknown team") && stderr.contains("no live RimZ room"),
+        !stderr.contains("no team, profile, or command named")
+            && stderr.contains("no live RimZ room"),
         "bare role in its team lane resolves and reaches the room check: {stderr}"
     );
 }

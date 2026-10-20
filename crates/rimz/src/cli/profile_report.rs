@@ -201,6 +201,24 @@ fn apply_path_visibility(reports: &mut [AgentProfileReport], show_path: bool) {
     }
 }
 
+pub(super) fn profile_summary(
+    agent: &str,
+    model: Option<&str>,
+    tier: Option<rimz::config::tiers::ModelTier>,
+    fallback: Option<bool>,
+    effort: Option<&str>,
+    fast: bool,
+) -> String {
+    let model = model.map(|model| model_label(model, tier, fallback));
+    let mut segments = vec![agent];
+    segments.extend(model.as_deref());
+    segments.extend(effort);
+    if fast {
+        segments.push("fast");
+    }
+    segments.join(" · ")
+}
+
 fn profile_cards(
     reports: &[AgentProfileReport],
     listing: ProfileListing,
@@ -238,28 +256,28 @@ fn profile_cards(
             writeln!(out)?;
         }
 
-        let model = report
-            .model
-            .as_deref()
-            .map(|model| model_label(model, report.tier, report.tier_fallback));
-        let (name_style, segments) = match &report.agent {
+        let (name_style, summary) = match &report.agent {
             Some(agent) => {
-                let mut segments = vec![agent.as_str()];
-                segments.extend(model.as_deref());
-                segments.extend(report.effort.as_deref());
-                if report.fast {
-                    segments.push("fast");
-                }
                 let brand_kind = report.brand_kind.as_deref().unwrap_or(agent);
-                (render::palette::identity(brand_kind).bold(), segments)
+                (
+                    render::palette::identity(brand_kind).bold(),
+                    profile_summary(
+                        agent,
+                        report.model.as_deref(),
+                        report.tier,
+                        report.tier_fallback,
+                        report.effort.as_deref(),
+                        report.fast,
+                    ),
+                )
             }
-            None => (render::palette::muted(), vec!["command"]),
+            None => (render::palette::muted(), "command".to_owned()),
         };
         writeln!(
             out,
             "{} — {}",
             render::paint(name_style, &report.name),
-            segments.join(" · ")
+            summary
         )?;
         if let Some(description) = &report.description {
             writeln!(out, "  {description}")?;
