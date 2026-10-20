@@ -704,6 +704,42 @@ fn room_login_set_answers_the_room_account_and_nothing_it_cannot_resolve() {
 }
 
 #[test]
+fn room_login_set_reads_default_under_the_native_home() {
+    let catalog = LoginCatalog::from_config_under(
+        &accounts("[claude.work]\nhome = \"/srv/work\"\n"),
+        Some(Path::new("/home/u")),
+    )
+    .expect("catalog");
+    let default = ProviderLogin::default_for(kind("claude"));
+    let work = catalog.select(&kind("claude"), &name("work")).unwrap();
+    for (exported, with_catalog, expected) in [
+        ("/srv/work", true, None),
+        ("/srv/elsewhere", true, Some("/srv/elsewhere")),
+        ("/srv/work", false, Some("/srv/work")),
+    ] {
+        let ambient = BTreeMap::from([
+            ("HOME".to_owned(), "/home/u".to_owned()),
+            ("CLAUDE_CONFIG_DIR".to_owned(), exported.to_owned()),
+        ]);
+        let set = RoomLoginSet::new(
+            Some(Default::default()),
+            with_catalog.then(|| catalog.clone()),
+            ambient,
+        );
+        let env = set.env(&default);
+        assert_eq!(env.get("CLAUDE_CONFIG_DIR").map(String::as_str), expected);
+        assert_eq!(
+            default.home_dir(&env),
+            Some(PathBuf::from(expected.unwrap_or("/home/u/.claude")))
+        );
+        assert_eq!(
+            set.env(&work).get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some("/srv/work")
+        );
+    }
+}
+
+#[test]
 fn exported_provider_home_naming_an_account_is_refused() {
     let catalog = LoginCatalog::from_config_under(
         &accounts("[codex.rimio]\nhome = \"/srv/rimio\"\n[claude.work]\nhome = \"/srv/work\""),

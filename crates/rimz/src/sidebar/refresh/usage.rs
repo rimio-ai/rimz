@@ -317,21 +317,29 @@ fn trace_usage_helper(
 pub fn complete_realtime_account_usage(
     runtime: &RuntimePaths,
     login: &ProviderLogin,
+    logins: &RoomLoginSet,
     realtime: AccountUsageSnapshot,
 ) -> bool {
     complete_realtime_account_usage_with(runtime, &login.key(), realtime, |runtime, _| {
-        merge_account_usage_if_due(runtime, login)
+        merge_account_usage_if_due(runtime, login, logins)
     })
 }
 
 /// Refresh one provider's account usage for `rimz accounts`, forcing a read
 /// when requested or otherwise following its durable cadence.
 /// Cache publication remains nonce-guarded by the normal claim path.
-pub fn refresh_provider_usage(runtime: &RuntimePaths, login: &ProviderLogin, force: bool) -> bool {
+pub fn refresh_provider_usage(
+    runtime: &RuntimePaths,
+    login: &ProviderLogin,
+    logins: &RoomLoginSet,
+    force: bool,
+) -> bool {
     if crate::agents::credits::oauth_usage_offline() {
         return false;
     }
-    refresh_provider_usage_with(runtime, login, force, merge_account_usage_if_due)
+    refresh_provider_usage_with(runtime, login, force, |runtime, login| {
+        merge_account_usage_if_due(runtime, login, logins)
+    })
 }
 
 fn refresh_provider_usage_with(
@@ -374,8 +382,12 @@ fn complete_realtime_account_usage_with(
 
 /// Claim and execute a direct read in-process. Codex synchronous refresh paths
 /// use this instead of maintaining a separate cadence.
-fn merge_account_usage_if_due(runtime: &RuntimePaths, login: &ProviderLogin) -> bool {
-    let login_env = login.env(&crate::agents::ambient_env());
+fn merge_account_usage_if_due(
+    runtime: &RuntimePaths,
+    login: &ProviderLogin,
+    logins: &RoomLoginSet,
+) -> bool {
+    let login_env = logins.env(login);
     let Some(adapter) = crate::agents::find_definition(login.kind().as_str()) else {
         return false;
     };

@@ -891,7 +891,7 @@ const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
 /// Give a Codex child the account it runs for: its home, and for a shared
 /// account the home its databases live in.
 fn forward_login_env(command: &mut std::process::Command, login_env: &BTreeMap<String, String>) {
-    command.envs(
+    command.env_remove("CODEX_HOME").envs(
         login_env
             .iter()
             .filter(|(key, _)| ["CODEX_HOME", SQLITE_HOME_ENV].contains(&key.as_str())),

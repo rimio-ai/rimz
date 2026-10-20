@@ -1236,6 +1236,37 @@ fn write_fake_claude(env: &Env) -> (std::path::PathBuf, std::path::PathBuf) {
 
 #[cfg(unix)]
 #[test]
+fn list_probes_default_under_the_native_home_from_a_named_account_pane() {
+    let env = Env::new();
+    let home = env.home_root.join("work home");
+    succeeded(&accounts(
+        &env,
+        &["add", "claude", "work", "--home", home.to_str().unwrap()],
+    ));
+    let log = env.home_root.join("claude-probe-homes");
+    crate::common::write_path_shim(
+        &provider_bin(&env),
+        "claude",
+        &format!(
+            "case \"$*\" in\n  \"auth status\") printf '%s\\n' \"${{CLAUDE_CONFIG_DIR:-unset}}\" >> '{}'; echo '{{\"loggedIn\": true, \"authMethod\": \"claude.ai\", \"subscriptionType\": \"max\"}}';;\n  *) echo 0.0.0;;\nesac",
+            log.display()
+        ),
+    );
+    succeeded(
+        &hermetic(&env, &mut env.rimz())
+            .env("CLAUDE_CONFIG_DIR", &home)
+            .args(["accounts", "list", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let probes = std::fs::read_to_string(log).unwrap();
+    let mut homes: Vec<_> = probes.lines().collect();
+    homes.sort_unstable();
+    assert_eq!(homes, [home.to_str().unwrap(), "unset"]);
+}
+
+#[cfg(unix)]
+#[test]
 fn list_probes_a_logged_out_account_again_on_every_run() {
     const LOGGED_OUT: &str = "/bin/echo '{\"loggedIn\": false, \"authMethod\": \"none\"}'; exit 1";
     const LOGGED_IN: &str = "/bin/echo '{\"loggedIn\": true, \"authMethod\": \"claude.ai\", \"subscriptionType\": \"max\"}'";

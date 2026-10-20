@@ -67,6 +67,7 @@ pub(crate) fn model_sub_cap_window(
 pub(crate) fn probe(login_env: &BTreeMap<String, String>) -> AccountProbe {
     let mut command = Command::new("claude");
     command.args(["auth", "status"]).stdin(Stdio::null());
+    command.env_remove("CLAUDE_CONFIG_DIR");
     if let Some(home) = login_env.get("CLAUDE_CONFIG_DIR") {
         command.env("CLAUDE_CONFIG_DIR", home);
     }
