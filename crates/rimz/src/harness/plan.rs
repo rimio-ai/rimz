@@ -551,7 +551,7 @@ fn resolve_single_agent_spec(
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
-        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
+        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell(_)) => {
             launch.block_untrusted_reference(
                 crate::config::effective::ProfileScope::Agents,
                 Some(spec),
@@ -591,7 +591,7 @@ pub struct ProfilePromptFileError {
 /// The one cell of a multi-cell spec that failed to resolve, so a failed definition refuses by name.
 fn unknown_cell(err: &crate::harness::spec::LayoutErr) -> Option<&str> {
     match err {
-        crate::harness::spec::LayoutErr::UnknownCell { cell, .. } => Some(cell),
+        crate::harness::spec::LayoutErr::UnknownCell(unknown) => Some(&unknown.word),
         _ => None,
     }
 }
@@ -616,7 +616,7 @@ pub fn resolve_launch(
     ) {
         Ok(layout) => layout,
         Err(err @ crate::harness::spec::LayoutErr::UnknownSpec(_))
-        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
+        | Err(err @ crate::harness::spec::LayoutErr::UnknownCell(_)) => {
             launch.block_untrusted_reference(scope, spec, commands)?;
             launch.block_failed_reference(spec, agent_override)?;
             launch.block_failed_reference(unknown_cell(&err), None)?;

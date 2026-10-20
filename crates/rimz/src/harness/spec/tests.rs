@@ -586,8 +586,8 @@ fn path_executables_are_last_resort_layout_cells() {
             &no_profiles(),
             &no_commands()
         ),
-        Err(LayoutErr::UnknownCell { cell, .. })
-            if cell == "definitely-not-a-binary-xyz"
+        Err(LayoutErr::UnknownCell(unknown))
+            if unknown.word == "definitely-not-a-binary-xyz"
     ));
 }
 
@@ -800,12 +800,132 @@ fn unknown_spec_error_groups_and_wraps_valid_choices() {
     let rendered = error.to_string();
 
     assert!(rendered.starts_with(
-        "no team, profile, or command named `missing`\nteams:        peer\nprofiles:     \nkinds:        "
+        "no team, profile, or command named `missing`\nteams:        peer\nkinds:        "
     ));
+    assert!(!rendered.contains("profiles:"), "{rendered}");
     assert!(
         rendered.lines().all(|line| line.len() <= 88),
         "error contains an overlong line:\n{rendered}"
     );
+}
+
+#[test]
+fn unknown_cell_suggests_nearby_cells_but_not_teams() {
+    let profiles = profiles([("reviewer", profile("claude"))]);
+    let commands = commands([("build", "printf ready")]);
+    let teams = TeamsConfig(BTreeMap::from([
+        ("review".into(), team(vec![role("coder", "codex")])),
+        (
+            "rimz-cell-test-team".into(),
+            team(vec![role("coder", "codex")]),
+        ),
+    ]));
+    for (word, suggestion) in [("cdx", "codex"), ("reviewe", "reviewer"), ("buid", "build")] {
+        let error = resolve_spec(
+            Some(&format!("claude,{word}")),
+            &profiles,
+            &commands,
+            &teams,
+        )
+        .unwrap_err();
+        assert!(matches!(error, LayoutErr::UnknownCell(_)));
+        assert_eq!(
+            error.to_string(),
+            format!("unknown layout cell `{word}`\ndid you mean: {suggestion}")
+        );
+    }
+    let error = resolve_spec(
+        Some("claude,rimz-cell-test-tem"),
+        &profiles,
+        &commands,
+        &teams,
+    )
+    .unwrap_err();
+    let LayoutErr::UnknownCell(unknown) = error else {
+        panic!("unknown cell")
+    };
+    assert!(
+        !unknown
+            .candidates
+            .iter()
+            .any(|candidate| matches!(candidate.kind, SpecKind::Team(_) | SpecKind::Role))
+    );
+    assert!(unknown.closest().is_empty());
+}
+
+#[test]
+fn unknown_cell_fallback_groups_and_wraps_cell_choices() {
+    let profiles = profiles([("reviewer", profile("claude"))]);
+    let commands = commands([("build", "printf ready")]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".into(),
+        team(vec![role("coder", "codex")]),
+    )]));
+    let error = resolve_spec(Some("claude,zzzzzz"), &profiles, &commands, &teams).unwrap_err();
+    let text = error.to_string();
+    assert!(
+        text.starts_with("unknown layout cell `zzzzzz`\nprofiles:     build, reviewer\nkinds:"),
+        "{text}"
+    );
+    assert!(
+        text.contains("term") && text.contains("(each also as <kind>"),
+        "{text}"
+    );
+    for excluded in [
+        "teams:",
+        "forge.coder",
+        "claude-plan",
+        "<agents_home>",
+        "rimz agents",
+    ] {
+        assert!(!text.contains(excluded), "{text}");
+    }
+    assert!(
+        text.lines().all(|line| line.chars().count() + 2 <= 88),
+        "{text}"
+    );
+}
+
+#[test]
+fn unknown_cell_candidates_resolve_as_cells() {
+    let profiles = profiles([
+        ("reviewer", profile("claude")),
+        ("forge.coder", profile("codex")),
+        ("claude", profile("claude")),
+    ]);
+    let commands = commands([("build", "printf ready")]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".into(),
+        team(vec![role("coder", "codex")]),
+    )]));
+    let LayoutErr::UnknownCell(unknown) =
+        resolve_spec(Some("claude,zzzzzz"), &profiles, &commands, &teams).unwrap_err()
+    else {
+        panic!("unknown cell")
+    };
+    for name in [
+        "reviewer",
+        "build",
+        "forge.coder",
+        "claude",
+        "claude-plan",
+        "claude-fast",
+    ] {
+        assert!(
+            unknown
+                .candidates
+                .iter()
+                .any(|candidate| candidate.name == name),
+            "missing {name}"
+        );
+    }
+    for candidate in &unknown.candidates {
+        assert!(
+            parse_layout_spec(&candidate.name, &profiles, &commands).is_ok(),
+            "{} must resolve as a cell",
+            candidate.name
+        );
+    }
 }
 
 #[test]
@@ -1644,8 +1764,9 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
 
     assert!(matches!(
         parse_layout_spec("pi-yolo", &profiles, &no_commands()),
-        Err(LayoutErr::UnknownCell { cell, valid })
-            if cell == "pi-yolo" && !valid.contains("pi-yolo")
+        Err(LayoutErr::UnknownCell(unknown))
+            if unknown.word == "pi-yolo"
+                && !unknown.candidates.iter().any(|candidate| candidate.name == "pi-yolo")
     ));
 }
 
@@ -1729,7 +1850,7 @@ fn fast_suffix_cells_stamp_fast_on_their_base() {
     );
     assert!(matches!(
         parse_layout_spec("nosuch-fast", &no_profiles(), &no_commands()),
-        Err(LayoutErr::UnknownCell { cell, .. }) if cell == "nosuch-fast"
+        Err(LayoutErr::UnknownCell(unknown)) if unknown.word == "nosuch-fast"
     ));
 
     for raw in [
