@@ -34,6 +34,24 @@ fn compile_prompt_request(
 
 #[test]
 fn codex_host_profile_grants_room_roots_and_covers_temp_files() {
+    if std::env::var_os("RIMZ_TEST_CODEX_ROOM_GRANTS").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join("config.toml");
+        std::fs::write(&config, "").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::launch_plan::tests::codex_host_profile_grants_room_roots_and_covers_temp_files", "--nocapture"])
+            .env("RIMZ_CODEX_CONFIG", &config)
+            .env("RIMZ_TEST_CODEX_ROOM_GRANTS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let project = tempfile::tempdir().unwrap();
     let state = StatePaths::under(
         crate::WorkspaceId::from_project_root(project.path()),
@@ -41,29 +59,27 @@ fn codex_host_profile_grants_room_roots_and_covers_temp_files() {
     )
     .unwrap();
     let runtime = RuntimePaths::under(state.workspace_id.clone(), project.path()).unwrap();
-    let invocation = request(
-        "codex",
-        action_with_args(
-            "launch",
-            vec!["-c".into(), r#"default_permissions="rimz""#.into()],
-        ),
-    );
+    let invocation = request("codex", action_with_args("launch", vec![]));
     let plan = compile_prompt_request(project.path(), &invocation, None, None);
-    let profiles: Vec<_> = plan
+    let grants: Vec<_> = plan
         .process()
         .provider_argv
         .iter()
-        .filter_map(|arg| arg.strip_prefix("permissions.rimz="))
+        .filter_map(|arg| arg.strip_prefix("sandbox_workspace_write.writable_roots="))
         .collect();
-    assert_eq!(profiles.len(), 1);
-    let table = format!("profile={}", profiles[0])
+    assert_eq!(grants.len(), 1);
+    let table = format!("roots={}", grants[0])
         .parse::<toml::Table>()
         .unwrap();
-    let filesystem = table["profile"]["filesystem"].as_table().unwrap();
-    assert_eq!(filesystem.len(), 3);
-    for path in [&state.root, &runtime.root, &runtime.shared_root] {
-        assert_eq!(filesystem[path.to_str().unwrap()].as_str(), Some("write"));
-    }
+    assert_eq!(
+        table["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [&state.root, &runtime.root, &runtime.shared_root].map(|path| path.to_str().unwrap())
+    );
     assert!(Path::new(&plan.process().env["TMPDIR"]).starts_with(&state.root));
     assert!(Path::new(&plan.process().env["RIMZ_SHARED"]).starts_with(&state.root));
 }

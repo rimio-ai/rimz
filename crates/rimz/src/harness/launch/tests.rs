@@ -942,8 +942,6 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
                 "on-request",
                 "-c",
                 r#"approvals_reviewer="auto_review""#,
-                "-c",
-                r#"default_permissions="rimz""#,
             ],
         ),
         ("claude", vec!["--permission-mode", "auto"]),
@@ -981,8 +979,10 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
             assert_eq!(sandbox_values, ["danger-full-access"]);
             assert!(!host.provider_argv.contains(&"--sandbox".to_owned()));
             assert!(
-                host.provider_argv
-                    .contains(&r#"default_permissions="rimz""#.to_owned())
+                !host
+                    .provider_argv
+                    .iter()
+                    .any(|arg| arg.starts_with("default_permissions="))
             );
             assert!(
                 !sandboxed
@@ -1006,7 +1006,7 @@ fn sandboxed_launch_switches_off_only_the_codex_native_sandbox() {
                     !process
                         .provider_argv
                         .iter()
-                        .any(|arg| arg.starts_with("permissions.rimz="))
+                        .any(|arg| arg.starts_with("permissions."))
                 );
             }
         } else {

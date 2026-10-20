@@ -89,21 +89,43 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
 
-`LaunchReminders.permission_roots` carries the three classed room roots from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` only for host launches with roots. Codex fills the profile only when `PresetArgMatcher::ConfigKey` finds `default_permissions="rimz"`. It reads the parent from `codex_config_path(login_env)`, like the configured model, and renders the inline table through `toml_edit`. This read consults only the base config, not the `default_permissions` of a Codex `--profile`/`-p` selection. Legacy `sandbox_mode` and `[sandbox_workspace_write]` settings are ignored by Codex when the profile is selected; their network setting cannot widen this profile. Codex validates invalid parents and cycles at startup. A user-defined `[permissions.rimz]` table can merge underneath the CLI value, so the name is reserved by convention rather than enforced by RimZ.
+`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every host launch with roots, including Plan and mode-less launches. Preflight and managed process compiles without roots append nothing. The adapter never selects a sandbox or changes network policy. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
+
+Selection follows this order, using `PresetArgMatcher` for valued arguments. Repeated flags or config keys use their last occurrence; config values parse as TOML with a bare-string fallback:
+
+1. `--dangerously-bypass-approvals-and-sandbox`: full access.
+2. `--sandbox`/`-s`: legacy syntax with that mode.
+3. `-c`/`--config default_permissions=V`: profile `V`.
+4. `-c`/`--config sandbox_mode=M`: legacy `M`; otherwise `--approve-for-me`/`--not-so-yolo`: legacy `workspace-write`.
+5. `--profile`/`-p`: unknown, since RimZ does not read that file layer.
+6. Base config: `default_permissions` selects a profile, otherwise `sandbox_mode` selects legacy syntax.
+7. No selection: legacy syntax with Codex's implicit mode.
+
+The grant follows that selection, appended after the user's args:
+
+| Selection | Grant |
+| --- | --- |
+| Legacy, implicit or `workspace-write` | `-c sandbox_workspace_write.writable_roots=[<user roots>, <three room roots>]`; user roots come from the last argument override, otherwise the base config array, otherwise empty |
+| Legacy `read-only` or `danger-full-access`; full access; unknown | none |
+| Profile `:workspace` | `--add-dir <root>` for each room root, in order |
+| Profile `:read-only`, `:danger-full-access`, any other `:` name, or a name that is not a bare TOML key | none |
+| User-defined profile `N` | `-c permissions.N.workspace_roots={"<root>"=true, ...}`; the profile's own workspace-root rules and network choice remain |
+
+RimZ does not inspect system or project config layers or managed requirements. Legacy grants replace roots in those lower layers, preserving only the base config or argument array. An explicit `:workspace` combined with a managed read-only fallback can still fail Codex's `--add-dir` startup check. Names that are not bare TOML keys (`[A-Za-z0-9_-]+`) are skipped: Codex splits a `-c` key on `.` without unquoting, so neither a dotted nor a quoted key reaches them. User-authored obsolete selectors remain user input; RimZ does not migrate them. Resume and fork receive the same grants, which Codex treats as explicit overrides of saved thread permissions. These are argv-level guarantees; Codex validates the resulting permissions at startup.
 
 | Intent | Codex argv |
 | --- | --- |
-| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0 for permission profiles and Guardian review, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; headless loop and workflow judges also check the resolved binary before spawning; unreadable versions pass |
+| Every launch, resume and fork | `--no-daemon`, so the session runs embedded in the pane; requires Codex ≥ 0.163.0 for embedded sessions and Guardian review, checked before opening the pane where the launch PATH is known, otherwise in the exec wrapper; headless loop and workflow judges also check the resolved binary before spawning; unreadable versions pass |
 | Question editor Escape | `-c tui.question_esc_back=false` follows `--no-daemon` on launch, resume, pick and fork; Escape interrupts instead of collapsing the expanded editor; later user overrides win; headless exec does not inherit these TUI args |
 | Resume a session | `codex resume <id> --no-daemon -c tui.question_esc_back=false` |
 | Pick a session | `codex resume --no-daemon -c tui.question_esc_back=false`; binding waits for the first prompt's resume hooks |
 | Fork a session | `codex fork <id> --no-daemon -c tui.question_esc_back=false` |
 | Remote app-server | `--remote X` and `--remote=X` are refused at compile time; remove the flag because managed panes run embedded |
-| Permission `ask` | `--ask-for-approval on-request -c approvals_reviewer="user" -c default_permissions="rimz"` |
-| Permission `auto` | `--ask-for-approval on-request -c approvals_reviewer="auto_review" -c default_permissions="rimz"` |
+| Permission `ask` | `--ask-for-approval on-request -c approvals_reviewer="user"` |
+| Permission `auto` | `--ask-for-approval on-request -c approvals_reviewer="auto_review"` |
 | Permission `plan` | no flags |
 | Permission `yolo` | `--dangerously-bypass-approvals-and-sandbox` |
-| Host Ask/Auto with room paths | `-c permissions.rimz=<inline table>` extends the user's `default_permissions` (or `:workspace` when unset or `rimz`), grants writes to `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root`, and sets `network.enabled=false`; preflight compiles have no roots and omit it |
+| Host with room paths, every mode | the selection-dependent grant above; no sandbox selector or network override |
 | Model | `--model <model>` |
 | Effort | `-c model_reasoning_effort=<effort>` |
 | Profile `auto-compact` | `-c model_auto_compact_token_limit=<tokens>`; Codex caps it at 90% of the context window ([upstream](../../externals/agent-adapter/codex-reference.md#cli-config-overrides)) |

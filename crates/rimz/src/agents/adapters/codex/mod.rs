@@ -227,16 +227,12 @@ static CODEX_DESCRIPTOR: AgentSpec = AgentSpec {
                 "on-request",
                 "-c",
                 r#"approvals_reviewer="user""#,
-                "-c",
-                r#"default_permissions="rimz""#,
             ],
             auto: &[
                 "--ask-for-approval",
                 "on-request",
                 "-c",
                 r#"approvals_reviewer="auto_review""#,
-                "-c",
-                r#"default_permissions="rimz""#,
             ],
             yolo: &["--dangerously-bypass-approvals-and-sandbox"],
             plan: &[],
@@ -1030,34 +1026,125 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         login_env: &BTreeMap<String, String>,
         roots: &[PathBuf; 3],
     ) {
-        let selected = crate::agents::PresetArgMatcher::ConfigKey {
-            flags: vec!["-c".to_owned(), "--config".to_owned()],
-            key: "default_permissions".to_owned(),
-        };
-        if !selected
-            .occurrences(extra_args)
+        enum Selection {
+            Legacy(Option<toml::Value>),
+            Profile(toml::Value),
+        }
+
+        if extra_args
             .iter()
-            .any(|entry| entry.value == r#""rimz""#)
+            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
         {
             return;
         }
-        let parent = install::codex_config_path(login_env)
+        let flag_value = |flags: &[&str]| {
+            crate::agents::PresetArgMatcher::Flag(
+                flags.iter().map(|flag| (*flag).to_owned()).collect(),
+            )
+            .occurrences(extra_args)
+            .last()
+            .map(|entry| entry.value.clone())
+        };
+        let config_value = |key: &str| {
+            crate::agents::PresetArgMatcher::ConfigKey {
+                flags: vec!["-c".to_owned(), "--config".to_owned()],
+                key: key.to_owned(),
+            }
+            .occurrences(extra_args)
+            .last()
+            .map(|entry| {
+                entry
+                    .value
+                    .parse::<toml::Value>()
+                    .unwrap_or_else(|_| toml::Value::String(entry.value.clone()))
+            })
+        };
+        let base = install::codex_config_path(login_env)
             .ok()
             .and_then(|path| install::read_existing_table(&path).ok())
-            .and_then(|root| root.get("default_permissions")?.as_str().map(str::to_owned))
-            .filter(|parent| parent != "rimz")
-            .unwrap_or_else(|| ":workspace".to_owned());
-        let mut filesystem = toml_edit::InlineTable::new();
-        for root in roots {
-            filesystem.insert(root.to_string_lossy().into_owned(), "write".into());
+            .unwrap_or_default();
+        let selection = if let Some(mode) = flag_value(&["--sandbox", "-s"]) {
+            Selection::Legacy(Some(toml::Value::String(mode)))
+        } else if let Some(profile) = config_value("default_permissions") {
+            Selection::Profile(profile)
+        } else if let Some(mode) = config_value("sandbox_mode") {
+            Selection::Legacy(Some(mode))
+        } else if extra_args
+            .iter()
+            .any(|arg| arg == "--approve-for-me" || arg == "--not-so-yolo")
+        {
+            Selection::Legacy(Some(toml::Value::String("workspace-write".to_owned())))
+        } else if flag_value(&["--profile", "-p"]).is_some() {
+            return;
+        } else if let Some(profile) = base.get("default_permissions") {
+            Selection::Profile(profile.clone())
+        } else {
+            Selection::Legacy(base.get("sandbox_mode").cloned())
+        };
+        match selection {
+            Selection::Legacy(mode) => {
+                if mode
+                    .as_ref()
+                    .is_some_and(|mode| mode.as_str() != Some("workspace-write"))
+                {
+                    return;
+                }
+                let user_roots =
+                    config_value("sandbox_workspace_write.writable_roots").or_else(|| {
+                        base.get("sandbox_workspace_write")?
+                            .get("writable_roots")
+                            .cloned()
+                    });
+                let mut writable_roots = toml_edit::Array::new();
+                if let Some(user_roots) = user_roots {
+                    let Some(user_roots) = user_roots.as_array() else {
+                        return;
+                    };
+                    for root in user_roots {
+                        let Some(root) = root.as_str() else {
+                            return;
+                        };
+                        writable_roots.push(root);
+                    }
+                }
+                for root in roots {
+                    writable_roots.push(root.to_string_lossy().into_owned());
+                }
+                extra_args.extend([
+                    "-c".to_owned(),
+                    format!("sandbox_workspace_write.writable_roots={writable_roots}"),
+                ]);
+            }
+            Selection::Profile(profile) => {
+                let Some(profile) = profile.as_str() else {
+                    return;
+                };
+                if profile == ":workspace" {
+                    for root in roots {
+                        extra_args
+                            .extend(["--add-dir".to_owned(), root.to_string_lossy().into_owned()]);
+                    }
+                    return;
+                }
+                // Codex splits a `-c` key on `.` without unquoting, so only a
+                // bare TOML key addresses the user's profile; built-ins (`:`) are not bare.
+                let bare_key = !profile.is_empty()
+                    && profile
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                if !bare_key {
+                    return;
+                }
+                let mut workspace_roots = toml_edit::InlineTable::new();
+                for root in roots {
+                    workspace_roots.insert(root.to_string_lossy().into_owned(), true.into());
+                }
+                extra_args.extend([
+                    "-c".to_owned(),
+                    format!("permissions.{profile}.workspace_roots={workspace_roots}"),
+                ]);
+            }
         }
-        let mut network = toml_edit::InlineTable::new();
-        network.insert("enabled", false.into());
-        let mut profile = toml_edit::InlineTable::new();
-        profile.insert("extends", parent.into());
-        profile.insert("filesystem", filesystem.into());
-        profile.insert("network", network.into());
-        extra_args.extend(["-c".to_owned(), format!("permissions.rimz={profile}")]);
     }
 
     /// Yolo's bypass flag already runs commands unsandboxed, so it needs no
