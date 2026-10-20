@@ -6476,6 +6476,11 @@ reason = "The separate integration crate's output-size probe calls it (tests/int
 
 [[verdict]]
 kind = "item"
+key = "utils::suggest::nearest_names"
+reason = "Launch refusals share a closest tier in resolver order, while nearest_name keeps alphabetical tie-breaking."
+
+[[verdict]]
+kind = "item"
 key = "update::Result"
 reason = "Return alias of the pub download and install entry points the CLI drives (update.rs:230) (pass 24c)."
 
