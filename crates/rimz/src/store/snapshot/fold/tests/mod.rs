@@ -119,6 +119,7 @@ fn message_event(workspace: &WorkspaceId, fixture: MessageEventFixture<'_>) -> E
 
 mod cache;
 mod compact;
+mod generation;
 mod integrity;
 mod merge;
 mod resume;

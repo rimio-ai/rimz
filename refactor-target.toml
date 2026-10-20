@@ -3587,6 +3587,11 @@ reason = "The exec startup seed reads the generation header before taking its pa
 
 [[verdict]]
 kind = "item"
+key = "store::snapshot::fold::lifecycle_log_generation_constant_memory"
+reason = "The parked watchdog's launch tail reads the generation without a file-sized allocation."
+
+[[verdict]]
+kind = "item"
 key = "store::event_log::testkit::bytes_read"
 reason = "Always-on byte counter the performance tier and the message reply tests read from outside the library crate (ac096bc) (pass 23a)."
 

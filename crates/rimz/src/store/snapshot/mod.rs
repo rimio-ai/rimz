@@ -30,6 +30,7 @@ pub use assemble::{build_with_cursor, read_fresh_latest};
 pub(super) use fold::AgentRollup;
 pub(super) use fold::lifecycle_follow_seed;
 pub use fold::lifecycle_log_generation;
+pub(crate) use fold::lifecycle_log_generation_constant_memory;
 #[cfg(feature = "testkit")]
 pub(crate) use fold::testkit as fold_testkit;
 pub use fold::{ResumeOutcome, RollupCursor};

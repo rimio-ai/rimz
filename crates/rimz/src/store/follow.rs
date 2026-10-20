@@ -37,7 +37,7 @@ impl LaunchTail {
         &mut self,
         mut visit: impl FnMut(crate::store::event::EventEnvelope),
     ) -> Result<Vec<String>, EventFollowErr> {
-        let generation = snapshot::lifecycle_log_generation(&self.paths);
+        let generation = snapshot::lifecycle_log_generation_constant_memory(&self.paths);
         let mut warnings = Vec::new();
         if generation > self.cursor.generation {
             let needed = usize::try_from(generation - self.cursor.generation).unwrap_or(usize::MAX);
