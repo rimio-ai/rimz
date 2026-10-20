@@ -3,6 +3,48 @@ use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
 use crate::pane::{RuntimeOwner, RuntimeOwnerKind};
 
 #[test]
+fn lifecycle_keeps_prior_tokens_when_transcript_tail_outruns_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let usage = json!({
+        "type": "assistant",
+        "message": { "usage": { "input_tokens": 100_000, "output_tokens": 500 } },
+    });
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    let payload = json!({ "session_id": "sess-1", "transcript_path": path });
+    std::fs::write(&path, format!("{usage}\n")).unwrap();
+    let first = adapter.decode_hook("Stop", &payload).unwrap();
+    let first = EventEnvelope::agent_lifecycle(
+        workspace(),
+        "session",
+        "claude",
+        "Stop",
+        first.lifecycle().unwrap(),
+    );
+    let prior = reduce_agent_states(std::slice::from_ref(&first));
+    assert_eq!(prior[0].usage.total_tokens, Some(100_500));
+    assert!(prior[0].usage.context_pct.is_some());
+
+    let tool = json!({ "type": "user", "message": { "content": "x".repeat(1024) } });
+    std::fs::write(
+        &path,
+        format!("{usage}\n{}", format!("{tool}\n").repeat(70)),
+    )
+    .unwrap();
+    let next = adapter.decode_hook("Stop", &payload).unwrap();
+    let next = EventEnvelope::agent_lifecycle(
+        workspace(),
+        "session",
+        "claude",
+        "Stop",
+        next.lifecycle().unwrap(),
+    );
+    let agents = reduce_agent_states(&[first, next]);
+    assert_eq!(agents[0].usage.total_tokens, Some(100_500));
+    assert_eq!(agents[0].usage.context_pct, prior[0].usage.context_pct);
+}
+
+#[test]
 fn worktree_branches_accumulate_and_scalar_follows_latest() {
     let mut launch = launch_event("codex", launch_payload("sess-1", "lucid-atlas"));
     launch.timestamp = epoch();

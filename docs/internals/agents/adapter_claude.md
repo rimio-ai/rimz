@@ -187,7 +187,7 @@ Claude names the session log in every hook payload's `transcript_path`. For the 
 | `output_tokens` | `output_tokens` |
 | `message.model` | `model`, the bare id |
 
-The four components travel with their total so the card can show where the window went: a warm session is mostly cache reads, and 250k tokens of cache reuse reads very differently from 250k of fresh input. A readable transcript with no assistant usage yet reports `total_tokens = 0` and leaves the split `None`.
+The four components travel with their total so the card can show where the window went: a warm session is mostly cache reads, and 250k tokens of cache reuse reads very differently from 250k of fresh input. When the whole file was read and holds no assistant usage or compaction boundary, the adapter reports `total_tokens = 0` and leaves the split `None`. A bounded tail without either supplies no reading, preserving the prior total under the shared [reading rules](./adapter.md#reading-rules).
 
 A finished compaction writes a `{"type":"system","subtype":"compact_boundary","compactMetadata":{…}}` record, and no usage-bearing record follows it until the next API call. This shape is observed in transcripts on disk, not documented upstream. Every usage record older than the boundary was measured before the compaction, so a boundary met first in the newest-first walk ends it: the reading is `total_tokens = compactMetadata.postTokens` with no split, or no reading at all when `postTokens` is absent. A usage record newer than the boundary wins as before. A hook that fires before the boundary is written still re-reads the old record, which the rollup [withholds by value](./model.md#the-compaction-bracket).
 

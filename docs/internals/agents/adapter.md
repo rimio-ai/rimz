@@ -234,7 +234,7 @@ The tail reader is provider-agnostic ([`read_transcript_tail`](../../../crates/r
 - Whole records only. The reader drops a partial leading line cut by the seek and a torn final record still being written, so parsers see only complete JSONL lines.
 - Newest first. Scan lines in reverse, take the most recent usage record, and stop as soon as the needed records are in hand.
 - Forgiving. Decode as lossy UTF-8; any IO or parse failure yields empty fields.
-- Zero is not unknown. A transcript that opens cleanly but carries no usage yet is a fresh session: report an explicit `0%` so the bar draws empty. A transcript that cannot be read stays `None`, meaning the agent did not report it.
+- Zero is not unknown. Report an explicit zero for a fresh session only when the whole file was read and holds no usage. A bounded tail with no usage, or a transcript that cannot be read, stays `None`: no reading, so the fold carries the last known value rather than resetting it.
 
 ## Declared coverage
 

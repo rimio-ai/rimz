@@ -86,8 +86,8 @@ use super::{
     AskReply, FieldPatch, HookOutput, HookRouting, LifecycleRefreshCtx, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshSpawn, RefreshTrigger, Result, RootIdentity, SanitizedPrompt,
     SessionContextInput, SessionContextRefresh, SubagentIdentity, TranscriptMessage,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail_with_status,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::transcript::{AskOption, AskQuestion};
 
@@ -1719,15 +1719,15 @@ fn codex_transcript_observation(
         let header = validated_header.or_else(|| path.as_deref().and_then(read_rollout_header))?;
         (header.session_id.as_deref() == Some(child_id)).then_some(header)
     });
-    let tail = path.as_deref().and_then(read_transcript_tail);
+    let tail = path.as_deref().and_then(read_transcript_tail_with_status);
     let need = if detect_turn_death {
         TranscriptScanNeed::UsageAndOutcome
     } else {
         TranscriptScanNeed::UsageOnly
     };
     let (usage, outcome, turn_error) = tail
-        .as_deref()
-        .map(|tail| scan_transcript_tail(tail, need).into_parts())
+        .as_ref()
+        .map(|tail| scan_transcript_tail(&tail.text, need).into_parts(tail.whole_file))
         .unwrap_or_default();
     let plan_proposed = match outcome {
         Some(RestingTurnOutcome::PlanProposed(plan)) => Some(plan),

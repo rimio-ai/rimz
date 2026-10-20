@@ -201,7 +201,7 @@ Codex writes one rollout per session at `sessions/YYYY/MM/DD/rollout-<timestamp>
 | Rollout record | Field | Internal |
 | --- | --- | --- |
 | `token_count` | `info.last_token_usage.input_tokens` | current context tokens |
-| `token_count` | `info.model_context_window` | context window; 272,000 (`DEFAULT_CONTEXT_WINDOW`) until the first reading |
+| `token_count` | `info.model_context_window` | context window; 272,000 (`DEFAULT_CONTEXT_WINDOW`) for a whole-file read with no usage yet |
 | `token_count` | `info.last_token_usage.total_tokens` | `total_tokens` for a child |
 | `token_count` | `info.last_token_usage.cached_input_tokens` | `cache_read_input_tokens` (the card's `◌`) |
 | `token_count` | `info.last_token_usage.cache_write_input_tokens` | `cache_write_input_tokens` (the card's `◍`) |
@@ -211,7 +211,7 @@ Codex writes one rollout per session at `sessions/YYYY/MM/DD/rollout-<timestamp>
 | `turn_context` | `model`, `effort` | model and live reasoning effort |
 | `event_msg` `thread_settings_applied` | `thread_settings.service_tier` | fast pricing for following token events ([cost](#cost)) |
 
-The adapter emits raw tokens and the window; the snapshot fold derives the gauge percentage. A rollout with no `token_count` yet reports zeros against the fallback window. For a child, `total_token_usage` includes the copied parent history, so it never becomes child lifetime usage or spend. The model falls back from the rollout to `model` in `config.toml`.
+The adapter emits raw tokens and the window; the snapshot fold derives the gauge percentage. A whole-file read with no `token_count` yet reports zeros against the fallback window. A bounded tail without a `token_count` supplies no token or window reading, preserving prior values under the shared [reading rules](./adapter.md#reading-rules). For a child, `total_token_usage` includes the copied parent history, so it never becomes child lifetime usage or spend. The model falls back from the rollout to `model` in `config.toml`.
 
 `parse_transcript_messages` is the one conversation parser: it keeps `user_message` and `agent_message` events and completed user and agent message items, with their timestamps.
 
