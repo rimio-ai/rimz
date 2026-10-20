@@ -72,7 +72,9 @@ pub(super) fn produce_accounts(
         snapshot,
         runtime,
         logins,
-        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, &selected, due, cache),
+        |snapshot, runtime, due, cache| {
+            probe_accounts(snapshot, runtime, &selected, logins, due, cache)
+        },
     )
 }
 
@@ -104,6 +106,7 @@ fn produce_accounts_with(
 pub fn query_provider_accounts(
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
+    set: &RoomLoginSet,
     force: bool,
 ) -> AccountsCache {
     let snapshot = SidebarSnapshot::build_with_agents(
@@ -116,7 +119,7 @@ pub fn query_provider_accounts(
         runtime,
         logins,
         force,
-        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, logins, due, cache),
+        |snapshot, runtime, due, cache| probe_accounts(snapshot, runtime, logins, set, due, cache),
     )
 }
 
@@ -273,6 +276,7 @@ fn probe_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
     logins: &[ProviderLogin],
+    set: &RoomLoginSet,
     due_keys: &BTreeSet<LoginKey>,
     previous: &AccountsCache,
 ) -> AccountsCache {
@@ -283,7 +287,9 @@ fn probe_accounts(
         .filter(|login| due_keys.contains(&login.key()))
         .cloned()
         .collect();
-    let batch = execute_account_probes(&due, &active_version_kinds, probe_one_account);
+    let batch = execute_account_probes(&due, &active_version_kinds, |login, active| {
+        probe_one_account(login, set, active)
+    });
     let success_count = batch
         .results
         .iter()
@@ -316,8 +322,12 @@ fn probe_accounts(
     merge_probe_results(previous, &active_version_kinds, probed_at_ms, batch.results)
 }
 
-fn probe_one_account(login: &ProviderLogin, active: bool) -> Option<ProviderProbeResult> {
-    let login_env = login.env(&crate::agents::ambient_env());
+fn probe_one_account(
+    login: &ProviderLogin,
+    set: &RoomLoginSet,
+    active: bool,
+) -> Option<ProviderProbeResult> {
+    let login_env = set.env(login);
     let kind = login.kind().as_str();
     let started = Instant::now();
     let adapter = crate::agents::find_definition(kind)?;

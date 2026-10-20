@@ -102,7 +102,7 @@ fn empty_dir_grant_kind_filter_does_not_write_claude() {
 }
 
 #[test]
-fn empty_dir_grant_writes_shared_account_file_once() {
+fn empty_dir_grant_from_a_named_account_pane_trusts_each_account_file() {
     let env = Env::new();
     env.rimz()
         .args(["accounts", "add", "claude", "work"])
@@ -128,12 +128,16 @@ fn empty_dir_grant_writes_shared_account_file_once() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr)
-            .matches("trusted →")
-            .count(),
-        1
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let work_file = env.rimz_home().join("accounts/claude/work/.claude.json");
+    let mut trusted: Vec<_> = stderr
+        .lines()
+        .filter_map(|line| line.split_once("trusted → ").map(|(_, path)| path))
+        .collect();
+    trusted.sort_unstable();
+    trusted.dedup();
+    assert_eq!(trusted.len(), 2, "{stderr}");
+    assert!(trusted.contains(&work_file.to_str().unwrap()), "{stderr}");
     let output = command().args(["trust", "--json"]).output().unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let rows = report["empty_dir"].as_array().unwrap();

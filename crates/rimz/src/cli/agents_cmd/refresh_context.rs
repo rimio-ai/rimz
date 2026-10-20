@@ -38,12 +38,8 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     let kind = request.kind.as_str();
     let session_id = request.session_id.as_str();
     let prior = rimz::store::agent_context::read_one(&runtime, kind, session_id);
-    let defaults = agents::room_accounts(
-        &store.paths().workspace_record,
-        None,
-        &rimz::config::MachineConfig::load_lenient(),
-    )
-    .ok();
+    let config = rimz::config::MachineConfig::load_lenient();
+    let defaults = agents::room_accounts(&store.paths().workspace_record, None, &config).ok();
     let snapshot = store.snapshot_cached()?;
     let Some(agent) = snapshot
         .agents
@@ -52,14 +48,12 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     else {
         return Ok(());
     };
-    let Ok(login) = agents::session_login(
-        &request.kind,
-        agent.login.as_ref(),
-        &rimz::config::MachineConfig::load_lenient().accounts,
-    ) else {
+    let Ok(login) = agents::session_login(&request.kind, agent.login.as_ref(), &config.accounts)
+    else {
         return Ok(());
     };
-    let login_env = login.env(&agents::ambient_env());
+    let logins = agents::RoomLoginSet::resolve(&store.paths().workspace_record, None, &config);
+    let login_env = logins.env(&login);
     let broker_socket = defaults
         .filter(|defaults| defaults.name(&request.kind).ok().as_ref() == Some(login.name()))
         .map(|_| runtime.codex_app_server_socket_path());
@@ -97,8 +91,9 @@ pub(super) fn run(request: LifecycleRefreshRequest) -> Result<()> {
     }
 
     if let Some(realtime) = refresh.realtime_usage {
-        wrote |=
-            rimz::sidebar::refresh::complete_realtime_account_usage(&runtime, &login, realtime);
+        wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(
+            &runtime, &login, &logins, realtime,
+        );
     }
 
     if let Some(observed) = refresh.observed {

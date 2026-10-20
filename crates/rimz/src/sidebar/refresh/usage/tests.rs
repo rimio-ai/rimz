@@ -285,6 +285,47 @@ fn claimed_usage_keeps_refreshing_a_live_agents_old_login() {
 }
 
 #[test]
+fn claimed_usage_probes_default_under_the_native_home() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let accounts = toml::from_str("[codex.spare]\nhome = '/srv/spare'\n").unwrap();
+    let catalog = crate::agents::LoginCatalog::from_config(&accounts).unwrap();
+    let ambient = BTreeMap::from([
+        ("HOME".to_owned(), "/home/u".to_owned()),
+        ("CODEX_HOME".to_owned(), "/srv/spare".to_owned()),
+    ]);
+    let set = RoomLoginSet::new(Some(Default::default()), Some(catalog), ambient);
+    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
+    let mut realtime_env = None;
+    let mut direct_env = None;
+    assert!(refresh_claimed_account_usage_with(
+        &runtime,
+        &key,
+        claim,
+        &set,
+        |_, _, env| {
+            realtime_env = Some(env.clone());
+            None
+        },
+        |_, env| {
+            direct_env = Some(env.clone());
+            crate::agents::AccountUsageProbe::Found {
+                identity: Default::default(),
+                snapshot: AccountUsageSnapshot {
+                    rate_limits: Some(usage_windows(12)),
+                    ..Default::default()
+                },
+            }
+        },
+    ));
+    for env in [realtime_env, direct_env] {
+        let env = env.expect("each usage leg probes once");
+        assert!(!env.contains_key("CODEX_HOME"), "{env:?}");
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/u"));
+    }
+}
+
+#[test]
 fn forced_account_usage_refresh_invalidates_throttle_before_direct_claim() {
     let (_dir, runtime) = account_usage_runtime();
     super::super::credits::write_credits_cache(
@@ -773,7 +814,8 @@ fn fresh_cached_account_usage_gates_helper_and_synchronous_refresh() {
     assert_eq!(spawn_attempts, 0);
     assert!(!merge_account_usage_if_due(
         &runtime,
-        &ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked("claude"))
+        &ProviderLogin::default_for(crate::ids::AgentKind::new_unchecked("claude")),
+        &RoomLoginSet::native(),
     ));
     assert_eq!(
         super::super::credits::read_credits_cache(&runtime.shared_credits_path()).logins

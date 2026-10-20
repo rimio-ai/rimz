@@ -310,6 +310,17 @@ mod tests {
     }
 
     #[test]
+    fn the_native_login_status_probe_does_not_inherit_an_exported_home() {
+        let command = login_status_command(Path::new("codex"), &BTreeMap::new());
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "CODEX_HOME" && value.is_none()),
+            "the native child must remove the caller's CODEX_HOME"
+        );
+    }
+
+    #[test]
     fn parses_codex_auth_metering_and_logged_out_states() {
         let json = br#"{ "OPENAI_API_KEY": "sk-abc", "tokens": null }"#;
         let account = found(parse_codex_auth(json), "api-key login");

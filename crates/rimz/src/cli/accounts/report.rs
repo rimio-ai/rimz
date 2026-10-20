@@ -101,7 +101,8 @@ pub(super) fn list(
         bail!("no {kind} account `{name}`; configured: {configured}");
     }
     let started_ms = rimz::utils::time::unix_now_ms();
-    let mut accounts = query_provider_accounts(&runtime, &logins, args.refresh);
+    let probe_logins = RoomLoginSet::new(None, Some(catalog.clone()), rimz::agents::ambient_env());
+    let mut accounts = query_provider_accounts(&runtime, &logins, &probe_logins, args.refresh);
     let stale: Vec<_> = logins
         .iter()
         .filter(|login| {
@@ -116,7 +117,7 @@ pub(super) fn list(
         .cloned()
         .collect();
     if !legacy && !stale.is_empty() && !args.refresh {
-        accounts = query_provider_accounts(&runtime, &stale, true);
+        accounts = query_provider_accounts(&runtime, &stale, &probe_logins, true);
     }
     if let Some(spinner) = &spinner {
         spinner.set("Refreshing provider usage");
@@ -130,7 +131,7 @@ pub(super) fn list(
         {
             continue;
         }
-        refresh_provider_usage(&runtime, login, args.refresh);
+        refresh_provider_usage(&runtime, login, &probe_logins, args.refresh);
     }
     drop(spinner);
 

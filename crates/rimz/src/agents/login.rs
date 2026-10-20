@@ -1314,8 +1314,16 @@ impl RoomLoginSet {
             .map_or_else(|| login.clone(), |catalog| catalog.pool(login))
     }
 
-    /// The environment `login`'s provider state is read under.
+    /// The environment `login`'s provider state is read under. With a catalog,
+    /// `default` reads it under [`LoginCatalog::native_ambient`], so an exported
+    /// declared account home never stands in for the native one; without a
+    /// catalog the ambient environment passes through unchanged.
     pub fn env(&self, login: &ProviderLogin) -> BTreeMap<String, String> {
+        if login.is_default()
+            && let Some(catalog) = &self.catalog
+        {
+            return login.env(&catalog.native_ambient(login.kind(), &self.ambient));
+        }
         login.env(&self.ambient)
     }
 }
