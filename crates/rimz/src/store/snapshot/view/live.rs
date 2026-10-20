@@ -652,7 +652,6 @@ fn merge_bound_local_session(
             apply_local_lifecycle(&mut state, observation, projection);
         }
     } else {
-        state.parent_agent_id = None;
         state.ping_turn = false;
         state.pinged_at = None;
         match &observation.projection {

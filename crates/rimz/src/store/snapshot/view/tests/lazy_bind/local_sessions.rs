@@ -1158,3 +1158,63 @@ fn prior_row_keeps_its_account_when_a_discovered_session_binds() {
     let provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
     assert_eq!(bound_login(provisional, "session-real"), Some(work.clone()));
 }
+
+/// Folds a live Claude parent in `%1` and a Codex record still on its
+/// provisional ID in `%2`, after provider-local discovery binds `real-child`
+/// to `%2` and before the child's first SessionStart.
+fn provisional_codex_adopted_by_discovery(launched_child: bool) -> (SidebarSnapshot, PaneRef) {
+    let mut parent = agent("claude", "real-parent", AgentStatus::Running, 1)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    parent.launch_id = Some(AgentSessionId::from("launch_parent"));
+    parent.registered_at = Some(ago(30));
+    let mut child = agent("codex", "launch_child", AgentStatus::Running, 1)
+        .active_ago(1)
+        .worktree("/repo/main")
+        .in_pane("%2");
+    child.launch_id = Some(AgentSessionId::from("launch_child"));
+    child.registered_at = Some(ago(30));
+    if launched_child {
+        child.parent_agent_id = Some(AgentSessionId::from("launch_parent"));
+        child.parent_agent_kind = Some(AgentKind::new_unchecked("claude"));
+        child.launch_depth = Some(2);
+    }
+    let mut panes = vec![
+        pane("%1", "claude", "/repo/main"),
+        pane("%2", "codex", "/repo/main"),
+    ];
+    for pane in &mut panes {
+        pane.pane_process_start = Some(ago(30));
+    }
+    panes[1].hosted_agent_kind = Some(AgentKind::new_unchecked("codex"));
+    let child_pane = panes[1].clone();
+    let snapshot = room(vec![parent, child])
+        .with_local_sessions(&panes, vec![identity_observation("codex", "real-child", 1)])
+        .with_live_panes(panes, None);
+    (snapshot, child_pane)
+}
+
+#[test]
+fn discovery_keeps_a_launched_child_nested_before_its_session_start() {
+    let (snapshot, child_pane) = provisional_codex_adopted_by_discovery(true);
+
+    assert!(rollup_agent(&snapshot, "real-child").is_launched_child());
+    assert_eq!(rows(&snapshot).len(), 1, "no standalone child row");
+    let nested = row(&snapshot, "real-parent").sub_agents();
+    assert_eq!(nested.len(), 1);
+    assert_eq!(nested[0].id, "real-child");
+    assert_eq!(nested[0].pane.as_ref(), Some(&child_pane.pane_id));
+}
+
+#[test]
+fn discovery_keeps_an_adopted_provisional_root_a_root_row() {
+    let (snapshot, child_pane) = provisional_codex_adopted_by_discovery(false);
+
+    assert!(!rollup_agent(&snapshot, "real-child").is_launched_child());
+    assert!(row(&snapshot, "real-parent").sub_agents().is_empty());
+    let root = row(&snapshot, "real-child");
+    assert_eq!(
+        root.pane.as_ref().map(|pane| &pane.pane_id),
+        Some(&child_pane.pane_id)
+    );
+}
