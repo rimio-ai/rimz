@@ -708,7 +708,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         inputs
             .ambient_env
             .keys()
-            .filter(|key| !login_env.contains_key(*key))
+            .filter(|key| !login_env.contains_key(*key) && !process.env.contains_key(*key))
             .map(|key| (key.clone(), sandbox::EnvPin::Unset)),
     );
     if request.headless.is_some() {

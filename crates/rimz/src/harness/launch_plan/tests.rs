@@ -1908,6 +1908,76 @@ fn default_launch_unsets_only_an_exported_declared_home() {
 }
 
 #[test]
+fn default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one() {
+    if std::env::var_os("RIMZ_TEST_PROJECT_HOME").is_none() {
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "harness::launch_plan::tests::default_launch_keeps_a_trusted_project_home_over_an_exported_declared_one",
+                "--nocapture",
+            ])
+            .env("RIMZ_HOME", home.path().join(".rimz"))
+            .env("RIMZ_TEST_PROJECT_HOME", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".rimz")).unwrap();
+    std::fs::write(
+        project.path().join(".rimz/config.toml"),
+        "[[agents]]\nname = \"claude\"\nenv = { CLAUDE_CONFIG_DIR = \"/srv/project\" }\n",
+    )
+    .unwrap();
+    crate::trust::grant_with_roots(project.path(), &crate::disk::paths::rimz_home()).unwrap();
+    let machine = crate::config::MachineConfig {
+        accounts: toml::from_str("[claude.work]\nhome = '/srv/work'\n").unwrap(),
+        ..Default::default()
+    };
+    let effective =
+        crate::config::effective::load_with_roots(&machine, project.path(), project.path())
+            .unwrap();
+    let workspace_id = crate::WorkspaceId::from_project_root(project.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), project.path()).unwrap();
+    let state = StatePaths::under(workspace_id, project.path()).unwrap();
+    let request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    let ambient = BTreeMap::from([("CLAUDE_CONFIG_DIR".to_owned(), "/srv/work".to_owned())]);
+    let plan = compile(LaunchPlanInputs {
+        recorded_system_prompt_digest: None,
+        request: &request,
+        cwd: project.path(),
+        project_root: project.path(),
+        rimz_bin: Path::new("/bin/rimz"),
+        runtime: &runtime,
+        state: &state,
+        effective: Some(&effective),
+        commands: &machine.agents.commands,
+        accounts: &machine.accounts,
+        bwrap: None,
+        agents: Ok(&[]),
+        ambient_env: &ambient,
+        agent_shell: None,
+        hibernate: false,
+    })
+    .unwrap();
+    assert!(!plan.process().unset.contains("CLAUDE_CONFIG_DIR"));
+    assert_eq!(
+        plan.process()
+            .env
+            .get("CLAUDE_CONFIG_DIR")
+            .map(String::as_str),
+        Some("/srv/project")
+    );
+}
+
+#[test]
 fn a_stamped_account_the_config_no_longer_declares_fails_the_launch() {
     let project = tempfile::tempdir().expect("project");
     let (machine, state) = room_with_accounts(project.path(), "", &[("claude", "work")]);
