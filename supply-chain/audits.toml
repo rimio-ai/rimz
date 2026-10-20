@@ -1,6 +1,18 @@
 
 # cargo-vet audits file
 
+[[audits.borsh]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-run"
+delta = "1.5.7 -> 1.8.1"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched with sha256sum. Reviewed the whole production source delta and both Cargo manifests (178 added/deleted production-diff lines, including comments and manifest changes), plus the unchanged build.rs. Changes: add optional UUID byte serialization/deserialization, move address serialization/deserialization to core::net for no_std, update address schema type paths, keep bytes no_std unless std is enabled, update the derive dependency and MSRV, add no_std Error::other and accessor annotations, and simplify collection sorting and schema recursion checks. No unsafe changes or autonomous filesystem, process, or network operations were introduced; address types are serialized values, not connections, and I/O remains through caller-provided readers/writers. The unchanged build script only declares a cfg alias through cfg_aliases. Tests, licenses, and ancillary documentation were only skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.borsh-derive]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-run"
+version = "1.8.1"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched with sha256sum. Reviewed all 2572 production src lines (including blank lines and comments), both Cargo manifests, all derive entry points, attribute parsing and validation, crate-name resolution, generic-parameter discovery, enum discriminants, and serialization/deserialization/schema token generation, including feature-gated schema code. Changes: this full version implements the three Borsh derives, custom crate and field function paths, skipped/default fields, bounds, initializer hooks, merged disjoint attributes with duplicate rejection, and schema helper types including Self replacement. No unsafe code or build script is present. The macro implementation performs token/AST processing, not direct filesystem, environment, network, or process operations. Default crate discovery delegates to proc-macro-crate, whose reviewed delta reads Cargo manifests and invokes Cargo locate-project; an explicit crate attribute bypasses that discovery. Generated code performs caller-selected serialization/schema operations and explicitly configured hooks, not hidden I/O. Union serialization/deserialization derive currently panics as unimplemented, a correctness limitation acceptable for safe-to-run. Tests, README, and licenses were only skimmed. Full source review of this version, not a dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.bstr]]
 who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
@@ -43,6 +55,12 @@ criteria = "safe-to-deploy"
 delta = "1.2.1 -> 1.3.0"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas in src/input.rs, src/input/str.rs and src/scanner.rs, scanner/input context and regression assertions. Scalar scanning and oldest-simple-key tracking retain UTF-8 boundaries, control-character validation, error propagation and existing scanner limits. Inspected key bookkeeping through initialization, expiry, save, clear and removal. No new production dependencies, build scripts, unsafe code or external side effects. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.granit-parser]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.3.0 -> 2.0.0"
+notes = "AI source review by a GPT 6.1 Sol subagent. Obtained both release archives with cargo vet diff --mode=local. Independently matched the 2.0.0 archive SHA-256 against the workspace lockfile and verified both versions' reviewed source and manifests byte-for-byte against their cargo-vet archives. Reviewed the entire src/ delta and Cargo.toml/Cargo.toml.orig delta: 1001 added and 347 removed lines, including embedded tests and rustdoc. Changes: default-enabled comments feature compiles out comment capture, events, buffering, and parser-stack continuation state when disabled while preserving syntax validation; adds optional strict indentation checks; separates SkipTabs policy from WhitespaceResult; makes Span non-exhaustive; extends options! with field attributes; fixes explicit-key tab separation, quoted scalar continuation indentation, block-scalar EOF chomping, physical EOF/error coordinates, and indentless sequence-end spans. No unsafe code introduced; crate-level forbid(unsafe_code) remains. No build script or procedural macro, no dependency changes, and no new network, process, environment, or filesystem access in production code. Include resolution remains caller-supplied, not automatic filesystem access. Tests, documentation, and CI changes outside src/ were skimmed; unchanged tool binaries and dependencies were not independently audited. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.insta]]
 who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-run"
@@ -72,6 +90,18 @@ who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "0.2.37 -> 0.2.38"
 notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from 0.2.37 to 0.2.38: version metadata only (Cargo.toml, Cargo.toml.orig, VCS info) and the bundled lockfile's resolution of `jiff-tzdb` to 0.1.9; no source, proc-macro, or dependency-requirement changes. No unsafe code, build script, I/O, network, process, or filesystem access was added. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.proc-macro-crate]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-run"
+delta = "1.2.1 -> 3.5.0"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched with sha256sum. Reviewed the whole production src/lib.rs delta and both Cargo manifests (354 added/deleted production-diff lines, including comments and manifest changes). Changes: replace toml/thiserror/once_cell with toml_edit and standard-library synchronization/manual error implementations, support inherited and renamed workspace dependencies and inline tables, preserve self-crate resolution, and invalidate cached mappings on package or workspace manifest timestamp changes. New process execution is limited to the Cargo executable supplied by the build environment's CARGO variable, invoked directly without a shell with locate-project --workspace --message-format=plain and the package manifest path. This is expected workspace metadata discovery, not a build, download, or arbitrary manifest command. Filesystem reads/stat calls are limited to the package Cargo.toml and discovered workspace manifest; no filesystem writes, network code, unsafe code, or build script was introduced. Tests, README, and development configuration were only skimmed; the added integration test invokes cargo build for its fixture. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.proptest]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-run"
+delta = "1.11.0 -> 1.12.0"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched with sha256sum. Reviewed the whole production source delta and both Cargo manifests (380 added/deleted production-diff lines, including comments and manifest changes). Changes: migrate to rand 0.10 and rand_xorshift 0.5, replace rand_chacha with chacha20 RNG and explicit state cloning, update bit-set/bit-vec, add core_detect, update optional proptest-macro, raise MSRV, fix maximum Duration generation and singleton inclusive float ranges, remove conflicting never-type impls, qualify float layout constants, terminate replay on persisted fork failure, and synchronize panic-hook publication with OnceLock. The changed hardware RNG unsafe calls now check RDRAND support and successful generation; panic-hook static-mut unsafe accesses are removed. No build script or new network, arbitrary filesystem, or command-execution path was introduced. Existing OS entropy, regression persistence, and configured test-fork behavior remain expected testing functionality; the replay change terminates the existing replay output rather than introducing a new process path. Tests and ancillary documentation were only skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.regex]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -145,6 +175,12 @@ criteria = "safe-to-deploy"
 delta = "1.2.0 -> 1.3.0"
 notes = "AI source review by a GPT 6 Astra subagent verified both published archive SHA-256 values against the baseline and updated workspace lockfiles. Reviewed all production and manifest deltas, including serialization beyond the workspace deserialize-only selection. Changes correct tagged scalar/null handling, integer duplicate-key identity, recursive alias buffering and serialization quoting/layout. Inspected surrounding budget enforcement, checked integer parsers, recursive capture/replay error handling, nonzero indentation validation and regression assertions. Production dependency change requires granit-parser 1.3, reviewed separately. No new build script, unsafe code or external side effect. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
+[[audits.serde-saphyr]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.3.0 -> 2.0.0"
+notes = "AI source review by a GPT 6.1 Sol subagent. Sources obtained with cargo vet diff --mode=local; both cached archive SHA-256 checksums independently matched the original and updated workspace lockfiles. Reviewed the entire production source delta across all feature configurations and both Cargo.toml manifests: 2394 added and 711 removed src lines, including rustdoc and excluding test-only hunks. Changes: granit-parser upgraded to 2.0.0 with explicit std/error_messages features and separately gated comments; borrowed multi-document collection APIs; per-node alias/merge provenance and structured alias errors; localized and sanitized diagnostics, validation path accessors, source-name and bounded line-offset rendering; ASCII-only scalar padding; explicit document-end handling and BOM-relative spans; strict-indentation forwarding; Docker Compose interpolation with existing work/depth limits and property-value redaction in error hints. Serialize-only paths, disabled in this workspace, were also reviewed: directive suppression, comment sanitization/gating, and nested collection/block-scalar indentation fixes. No unsafe code, build script, or procedural macro was added; unsafe remains forbidden and build=false. No new network, environment access, process spawning, or filesystem effects were found; existing caller-provided reader/writer I/O, opt-in file resolvers, and CLI file reads remain unchanged. No new production dependency was added; benchmark-only codspeed-divan-compat and the changed dev rstest range were noted, not dependency-audited. The workspace enables deserialize without default features, so serialize, comments, properties, include_fs, miette, and validation integrations are not enabled by its dependency declaration. Tests, benchmarks, documentation, and examples were only selectively skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
 [[audits.serde_core]]
 who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
@@ -156,6 +192,18 @@ who = "GPT 6 Astra <noreply@openai.com>"
 criteria = "safe-to-deploy"
 delta = "1.0.228 -> 1.0.229"
 notes = "AI source review verified published archive SHA-256 values against the lockfile revisions and compared extracted content. Reviewed every production-source delta and enclosing functions/callees in src/{bound.rs,de.rs,lib.rs,pretend.rs,ser.rs}, src/de/{enum_adjacently.rs,enum_externally.rs} and src/internals/{ast.rs,attr.rs,ctxt.rs,receiver.rs}, plus complete manifests and package metadata. Checked Syn 3.0.4 AST definitions for type-default removal, generic bounds, function-pointer and parenthesized-argument traversal, and receiver substitution. Iterator-to-loop rewrites preserve field/variant ordering and generated expressions; explicit Result matches preserve error types and missing-element handling. Attribute defaults, borrowing, diagnostics and remote/packed-field handling retain prior behavior. No introduced unsafe code or ambient capability was found. MSRV rises to 1.71; no build script is added. Delta review only, based on the imported 1.0.228 audit; Syn 3.0.4 remains covered separately by existing policy, not this review."
+
+[[audits.serde_json]]
+who = "Opus 5.5 <noreply@anthropic.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.151 -> 1.0.154"
+notes = "AI source review: a GPT 6.1 Sol subagent read the entire production delta (123 added/removed lines across Cargo.toml, Cargo.toml.orig and src/) with archive checksums matched against the workspace lockfile; Opus 5.5 adjudicated its one open concern. Changes: negative-zero parsing, finite f32 comparison and invalid-UTF-8 error-position fixes, equivalent arithmetic cleanup, and a new optional foldhash dependency. The unchanged build.rs only reads Cargo target cfg variables. No production unsafe change, network, process or filesystem access. Caveat: preserve_order no longer implies std; with preserve_order enabled and std disabled, src/map.rs selects foldhash::fast::RandomState, which its own docs say offers minimal HashDoS resistance. That is a documented opt-in for no_std builds, which lack a randomized std hasher; std builds keep the standard-library hasher, and this workspace builds serde_json with std and without preserve_order. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.sha2]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "0.11.0 -> 0.11.1"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched using SHA-256. Reviewed the entire production delta in Cargo.toml, Cargo.toml.orig, src/block_api.rs, src/consts.rs, src/sha256.rs, src/sha512.rs, and every changed or removed AArch64, x86, RISC-V, and wasm SIMD backend file (1127 added/removed lines including source documentation and both manifests), plus dispatch and unsafe-load caller context. Changes: MSRV becomes 1.88; array-chunk APIs replace manual serialization and block splitting; SIMD loads are localized to helpers with correctly sized source regions, fixing round-constant pointer provenance; x86 SHA-256 scheduling is refactored; RISC-V unaligned input-load assembly is replaced by safe byte decoding and no longer requires zbkb/zbb; bounds-checked round-constant assembly loads are relocated. Reviewed changed unsafe loads/stores, pointer extents, alignment requirements, assembly constraints, CPU-feature dispatch, and odd/even block handling; no unsoundness identified in the delta. No new dependencies, build script, procedural macros, or new network/process/environment/filesystem capabilities. README and changelog changes were only skimmed; no upstream test or benchmark delta was present. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[audits.signal-hook]]
 who = "Opus 5.5 <noreply@anthropic.com>"
@@ -240,6 +288,12 @@ who = "Opus 5.5 <noreply@anthropic.com>"
 criteria = "safe-to-deploy"
 delta = "1.26.1 -> 1.28.0"
 notes = "AI source review by an Opus 5.5 subagent. Archive checksums verified against the workspace lockfile by cargo. Reviewed the complete package delta from uuid 1.26.1 to 1.28.0: parser.rs and error.rs now accept the `urn:uuid:` prefix case-insensitively, behind length checks of 45 and at least 9 bytes; timestamp.rs changes the v7 ReseedingTimestamp::advance so that a timestamp from an earlier millisecond keeps the stored state and relies on the counter for monotonicity; serde_support.rs adds `option` serialize/deserialize helpers for each format and routes the existing byte encoding through a private wrapper; the rest is version strings, the bundled lockfile, and tests. No unsafe code, build script, proc-macro, filesystem, network, process, or environment access is added or changed. Delta review from the existing exempted baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
+
+[[audits.winnow]]
+who = "GPT 6.1 Sol <noreply@openai.com>"
+criteria = "safe-to-deploy"
+delta = "1.0.3 -> 1.0.4"
+notes = "AI source review by a GPT 6.1 Sol subagent. Archive checksums verified against the workspace lockfile by cargo and independently matched using SHA-256. Reviewed the entire production delta in Cargo.toml, Cargo.toml.orig, src/ascii/mod.rs, src/combinator/multi.rs, src/combinator/sequence.rs, src/lib.rs, src/macros/seq.rs, and src/token/mod.rs (78 added/removed lines including source documentation and both manifests). Changes: seq! supports 32 fields instead of 21; equivalent error propagation cleanup, generic parameter renaming, documentation clarification, and lint/version metadata. No changed unsafe code, new dependencies, build script, procedural macros, or new network/process/environment/filesystem capabilities. The src/macros/tests.rs regression-test delta was only skimmed. Delta review from the existing audited baseline, not a full baseline or dependency audit. No upstream test execution was performed for this source review."
 
 [[trusted.addr2line]]
 criteria = "safe-to-deploy"
