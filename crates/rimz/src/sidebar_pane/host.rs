@@ -20,6 +20,7 @@ use tracing::{debug, warn};
 mod reload;
 
 use crate::RuntimePaths;
+use crate::diag::focus_trace::{FocusTraceEvent, PushDelivery};
 use crate::sidebar_pane::app::{
     Attachment, AttachmentExit, CloseHandle, DataPlane, PaneBackend, ServeConfig, SidebarAppErr,
     Wakeup, decode_wakeup,
@@ -467,7 +468,10 @@ impl Host {
                 return;
             }
         };
-        read_input(&stream, live.close.clone());
+        let peers = self
+            .plane
+            .focus_peers(hello.instance_id.clone(), self.diag.clone());
+        read_input(&stream, live.close.clone(), move || peers.wake_input());
 
         // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
         let events = self.events.clone();
@@ -606,9 +610,40 @@ impl Host {
         else {
             return;
         };
-        if let Some(live) = lock(&self.attachments).get(instance) {
-            let _ = live.close.wake.try_send(Wakeup::MouseClick { column, row });
+        let Ok(instance_id) = crate::SidebarInstanceId::parse(instance) else {
+            return;
+        };
+        let delivery = {
+            let attachments = lock(&self.attachments);
+            let Some(live) = attachments.get(instance) else {
+                return;
+            };
+            match live
+                .close
+                .input
+                .try_send(Wakeup::MouseClick { column, row })
+            {
+                Ok(()) => {
+                    let _ = live.close.wake.try_send(Wakeup::Tick);
+                    PushDelivery::Sent
+                }
+                Err(std::sync::mpsc::TrySendError::Full(_)) => PushDelivery::InboxFull,
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => PushDelivery::InboxClosed,
+            }
+        };
+        if delivery == PushDelivery::Sent {
+            self.plane
+                .focus_peers(instance_id.clone(), self.diag.clone())
+                .wake_input();
         }
+        self.diag.for_renderer(instance_id).trace_focus(
+            FocusTraceEvent::ClickDelivery {
+                column,
+                row,
+                delivery,
+            },
+            std::collections::HashSet::new(),
+        );
     }
 
     fn release(&self, hello: &Hello) {
@@ -627,7 +662,7 @@ impl Host {
 }
 
 /// Input words share the attach stream; EOF still releases the pane.
-fn read_input(stream: &UnixStream, close: CloseHandle) {
+fn read_input(stream: &UnixStream, close: CloseHandle, wake_input: impl Fn() + Send + 'static) {
     let Ok(stream) = stream.try_clone() else {
         return;
     };
@@ -635,9 +670,14 @@ fn read_input(stream: &UnixStream, close: CloseHandle) {
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else { break };
             let wake = decode_wakeup(line.as_bytes());
-            if !matches!(wake, Wakeup::Tick | Wakeup::Event(_)) && close.wake.send(wake).is_err() {
+            if matches!(wake, Wakeup::Tick | Wakeup::Event(_)) {
+                continue;
+            }
+            if close.input.send(wake).is_err() {
                 break;
             }
+            let _ = close.wake.try_send(Wakeup::Tick);
+            wake_input();
         }
         close.close();
     });

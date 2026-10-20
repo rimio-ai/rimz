@@ -1,4 +1,4 @@
-//! FIFO in-host focus delivery, a bounded paint wait, and post-dispatch verdict tracing.
+//! Click-ordered host jumps, priority push delivery, and post-dispatch verdict tracing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -15,8 +15,20 @@ use super::fetch::Subscribers;
 use super::input::Wakeup;
 use super::timing::duration_millis;
 
+mod lease;
+pub(super) use lease::JumpHost;
+use lease::{JumpLease, LeaseStamp};
+
 const PAINT_WAIT: Duration = Duration::from_millis(500);
 const REPORT_HORIZON: Duration = Duration::from_secs(1);
+
+type PushReceipt = (
+    Instant,
+    Instant,
+    Option<u64>,
+    Receiver<PushPeer>,
+    Vec<PushPeer>,
+);
 
 #[derive(Clone, Debug)]
 pub(in crate::sidebar_pane) struct PushAck(Arc<Sender<PushPeer>>);
@@ -44,15 +56,21 @@ pub(in crate::sidebar_pane) struct FocusPush {
     sent: Instant,
     pub(super) until: Instant,
     pub(super) peer: PushPeer,
+    lease: LeaseStamp,
 }
 
 impl FocusPush {
-    pub(super) fn new(
+    pub(super) fn is_current(&self) -> bool {
+        self.lease.is_current()
+    }
+
+    fn new(
         anchor: FocusAnchor,
         ack: PushAck,
         instance_id: SidebarInstanceId,
         sent: Instant,
         until: Instant,
+        lease: LeaseStamp,
     ) -> Self {
         Self {
             anchor,
@@ -61,6 +79,7 @@ impl FocusPush {
             sent,
             until,
             peer: PushPeer::new(instance_id),
+            lease,
         }
     }
 
@@ -95,16 +114,112 @@ pub(in crate::sidebar_pane) struct FocusPeers {
     source: SidebarInstanceId,
     fit: Option<FitView>,
     diag: DiagSink,
+    jumps: Arc<JumpHost>,
+    lease: Option<Arc<JumpLease>>,
 }
 
 impl FocusPeers {
-    pub(super) fn new(subscribers: Subscribers, source: SidebarInstanceId, diag: DiagSink) -> Self {
+    pub(super) fn trace_stage(&self, stage: &str) {
+        let Some(lease) = &self.lease else {
+            return;
+        };
+        self.diag.trace_focus(
+            FocusTraceEvent::JumpProgress {
+                sequence: lease.stamp.sequence,
+                target: lease.target.clone(),
+                stage: stage.to_owned(),
+                elapsed_ms: duration_millis(lease.clicked.elapsed()),
+            },
+            HashSet::new(),
+        );
+    }
+
+    pub(super) fn active(&self, now: Instant) -> Option<(PaneId, Instant)> {
+        self.jumps.active(now)
+    }
+
+    pub(super) fn release(&self) {
+        if let Some(lease) = &self.lease {
+            lease.release();
+        }
+    }
+
+    pub(super) fn arm(&self, target: PaneId, clicked: Instant) -> Self {
+        let mut peers = self.clone();
+        peers.lease = Some(self.jumps.arm(
+            self.subscribers.clone(),
+            self.source.clone(),
+            target,
+            clicked,
+        ));
+        peers.trace_stage("armed");
+        peers
+    }
+
+    pub(super) fn supersede(&self) {
+        self.jumps.supersede(&self.subscribers, &self.diag);
+    }
+
+    pub(super) fn request<T>(&self, request: impl FnOnce() -> T) -> Option<T> {
+        match &self.lease {
+            Some(lease) => {
+                self.trace_stage("request_waiting");
+                let result = self
+                    .jumps
+                    .request(&lease.stamp, || {
+                        self.trace_stage("request_started");
+                        lease.stamp.is_current().then(request)
+                    })
+                    .flatten();
+                if result.is_none() {
+                    self.trace_stage("request_superseded");
+                }
+                result
+            }
+            None => Some(request()),
+        }
+    }
+
+    pub(super) fn new(
+        subscribers: Subscribers,
+        source: SidebarInstanceId,
+        diag: DiagSink,
+        jumps: Arc<JumpHost>,
+    ) -> Self {
         Self {
             subscribers,
             source,
             fit: None,
             diag,
+            jumps,
+            lease: None,
         }
+    }
+
+    pub(super) fn clicked(&self) -> Option<Instant> {
+        self.lease.as_ref().map(|lease| lease.clicked)
+    }
+
+    pub(super) fn is_current(&self) -> bool {
+        self.lease
+            .as_ref()
+            .is_none_or(|lease| lease.stamp.is_current())
+    }
+
+    pub(super) fn take_push(&self) -> Option<FocusPush> {
+        self.jumps.take(&self.source)
+    }
+
+    pub(in crate::sidebar_pane) fn wake_input(&self) {
+        self.jumps.wake();
+    }
+
+    pub(super) fn wait(&self, target: &PaneId, until: Instant, input_ready: impl FnMut() -> bool) {
+        self.jumps.wait(&self.source, target, until, input_ready);
+    }
+
+    pub(super) fn accepts(&self, nonce: Option<crate::ids::FocusNonce>, now: Instant) -> bool {
+        self.jumps.accepts(nonce, now)
     }
 
     pub(in crate::sidebar_pane) fn with_fit(mut self, fit: Option<FitView>) -> Self {
@@ -117,7 +232,7 @@ impl FocusPeers {
         anchor: FocusAnchor,
         clicked: Instant,
         dispatch: impl FnOnce() -> T,
-    ) -> T {
+    ) -> Option<T> {
         self.dispatch_with(anchor, clicked, dispatch, Instant::now, |rx, timeout| {
             rx.recv_timeout(timeout)
         })
@@ -130,18 +245,39 @@ impl FocusPeers {
         dispatch: impl FnOnce() -> T,
         mut now: impl FnMut() -> Instant,
         mut receive: impl FnMut(&Receiver<PushPeer>, Duration) -> Result<PushPeer, RecvTimeoutError>,
-    ) -> T {
-        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, clicked, &mut now);
+    ) -> Option<T> {
+        if !self.is_current() {
+            self.trace_stage("push_superseded");
+            return None;
+        }
+        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, clicked, &mut now)?;
+        if !self.is_current() && traces.is_empty() {
+            self.trace_stage("push_superseded");
+            return None;
+        }
         let mut reports = Vec::new();
-        let outcome = wait_for_paint(
+        let mut outcome = wait_for_paint(
             until,
             &mut now,
-            |timeout| receive(&rx, timeout),
+            |timeout| {
+                if !self.is_current() {
+                    return Err(RecvTimeoutError::Disconnected);
+                }
+                receive(&rx, timeout)
+            },
             &mut reports,
         );
         let decided = now();
-        let result = dispatch();
-        let dispatched = now();
+        let (result, dispatched) = if self.is_current() {
+            let result = dispatch();
+            let dispatched = now();
+            self.release();
+            (Some(result), Some(dispatched))
+        } else {
+            outcome = PushOutcome::Superseded;
+            self.release();
+            (None, None)
+        };
         let horizon = sent + REPORT_HORIZON;
         while let Ok(report) = receive(&rx, horizon.saturating_duration_since(now())) {
             reports.push(report);
@@ -170,7 +306,8 @@ impl FocusPeers {
                 lead_ms: Some(duration_millis(sent.duration_since(clicked))),
                 fit_ms,
                 decided_ms: duration_millis(decided.duration_since(sent)),
-                dispatched_ms: duration_millis(dispatched.duration_since(sent)),
+                dispatched_ms: dispatched
+                    .map(|dispatched| duration_millis(dispatched.duration_since(sent))),
                 peers: traces,
             },
             HashSet::new(),
@@ -178,51 +315,62 @@ impl FocusPeers {
         result
     }
 
-    fn push(
+    pub(super) fn push(
         &self,
         anchor: &FocusAnchor,
         clicked: Instant,
         mut now: impl FnMut() -> Instant,
-    ) -> (
-        Instant,
-        Instant,
-        Option<u64>,
-        Receiver<PushPeer>,
-        Vec<PushPeer>,
-    ) {
+    ) -> Option<PushReceipt> {
+        let lease = self.lease.as_ref()?;
         let started = now();
         let expected_panes = self.fit.as_ref().and_then(|fit| fit(anchor)).map(Arc::new);
-        let peers: Vec<_> = self
+        let peers = self
             .subscribers
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-            .filter(|subscriber| subscriber.instance_id != self.source)
-            .map(|subscriber| (subscriber.instance_id.clone(), subscriber.wake.clone()))
-            .collect();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (tx, rx) = channel();
         let ack = PushAck::new(tx);
         let mut traces = Vec::with_capacity(peers.len());
         let sent = now();
         let until = clicked + PAINT_WAIT;
-        for (instance_id, peer) in peers {
-            let mut push = FocusPush::new(anchor.clone(), ack.clone(), instance_id, sent, until);
+        self.jumps.register_wait(&lease.stamp, &ack, anchor.nonce);
+        for peer in peers
+            .values()
+            .filter(|peer| peer.instance_id != self.source)
+        {
+            if !self.is_current() {
+                break;
+            }
+            let mut push = FocusPush::new(
+                anchor.clone(),
+                ack.clone(),
+                peer.instance_id.clone(),
+                sent,
+                until,
+                lease.stamp.clone(),
+            );
             push.expected_panes = expected_panes.clone();
             let mut trace = push.peer.clone();
-            trace.delivery = match peer.try_send(Wakeup::FocusPush(Box::new(push))) {
-                Ok(()) => PushDelivery::Sent,
-                Err(TrySendError::Full(_)) => PushDelivery::InboxFull,
-                Err(TrySendError::Disconnected(_)) => PushDelivery::InboxClosed,
+            self.jumps.offer(push);
+            trace.delivery = match peer.wake.try_send(Wakeup::Tick) {
+                Ok(()) | Err(TrySendError::Full(_)) => PushDelivery::Sent,
+                Err(TrySendError::Disconnected(_)) => {
+                    self.jumps.forget(&peer.instance_id);
+                    PushDelivery::InboxClosed
+                }
             };
             traces.push(trace);
         }
+        drop(peers);
+        // One all-peer wake per fan-out, not per slot.
+        self.jumps.wake();
         drop(ack);
         let fit_ms = self
             .fit
             .as_ref()
             .map(|_| duration_millis(sent.duration_since(started)))
             .filter(|elapsed| *elapsed != 0);
-        (sent, until, fit_ms, rx, traces)
+        Some((sent, until, fit_ms, rx, traces))
     }
 }
 

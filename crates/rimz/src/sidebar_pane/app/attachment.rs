@@ -40,6 +40,7 @@ pub(in crate::sidebar_pane) enum AttachmentExit {
 pub(in crate::sidebar_pane) struct CloseHandle {
     requested: Arc<AtomicBool>,
     pub(in crate::sidebar_pane) wake: SyncSender<Wakeup>,
+    pub(in crate::sidebar_pane) input: SyncSender<Wakeup>,
 }
 
 impl CloseHandle {
@@ -56,6 +57,8 @@ pub(in crate::sidebar_pane) struct Attachment {
     diag: crate::diag::DiagSink,
     wake: SyncSender<Wakeup>,
     pub(in crate::sidebar_pane) inbox: Receiver<Wakeup>,
+    input_wake: SyncSender<Wakeup>,
+    pub(in crate::sidebar_pane) input: Receiver<Wakeup>,
     close_requested: Arc<AtomicBool>,
     // Dropped with the attachment, the heartbeat too: a lingering heartbeat
     // stays mtime-fresh for `SIDEBAR_HEARTBEAT_TTL`, during which `rimz`'s
@@ -65,13 +68,14 @@ pub(in crate::sidebar_pane) struct Attachment {
 }
 
 impl Attachment {
-    /// Open the pane's bounded inbox before the host wires its senders.
+    /// Open the pane's bounded room and input inboxes before the host wires its senders.
     pub(in crate::sidebar_pane) fn open(
         config: ServeConfig,
         runtime: &RuntimePaths,
         diag: crate::diag::DiagSink,
     ) -> Self {
         let (wake, inbox) = sync_channel(64);
+        let (input_wake, input) = sync_channel(64);
         Self {
             _heartbeat_cleanup: RuntimeFileGuard {
                 path: runtime.sidebar_heartbeat_path(&config.instance_id),
@@ -81,6 +85,8 @@ impl Attachment {
             diag,
             wake,
             inbox,
+            input_wake,
+            input,
             close_requested: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -89,6 +95,7 @@ impl Attachment {
         CloseHandle {
             requested: self.close_requested.clone(),
             wake: self.wake.clone(),
+            input: self.input_wake.clone(),
         }
     }
 
@@ -108,6 +115,8 @@ impl Attachment {
             diag,
             wake,
             inbox,
+            input_wake: _input_wake,
+            input,
             close_requested,
             _heartbeat_cleanup,
         } = self;
@@ -235,7 +244,7 @@ impl Attachment {
         // share-file read, no fork. Width commits and trailing capability
         // refreshes run once after their bursts settle; resize actuators run
         // off-thread.
-        let mut inbox = WakeupInbox::new(inbox);
+        let mut inbox = WakeupInbox::new(inbox).with_input(input);
         let loop_result: Result<()> = (|| {
             while !state.should_exit && !close_requested.load(Ordering::SeqCst) {
                 state.step(&mut inbox, &mut fetch, &mut terminal)?;

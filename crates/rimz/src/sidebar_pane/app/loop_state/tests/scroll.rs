@@ -507,6 +507,341 @@ fn tmux_switch_from_sidebar_cancels_optimistic_watching() {
 }
 
 #[test]
+fn held_source_handles_cross_tab_click_before_dispatch() {
+    held_source_click(true);
+}
+
+#[test]
+fn held_source_handles_same_tab_click_before_dispatch() {
+    held_source_click(false);
+}
+
+fn held_source_click(cross_tab: bool) {
+    let (mut source, _, _) = viewport_pair(MuxName::Zellij);
+    source.state.clock.skip_focus = true;
+    let peers = source.focus_plane.focus_peers(
+        source.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    );
+    source.state.focus_peers = Some(peers.clone());
+    let old_target = pane("terminal_19", "tab_1", false).pane_id;
+    let old = peers.arm(old_target.clone(), Instant::now());
+    assert!(source.state.jump_hold().is_some());
+    let index = usize::from(cross_tab);
+    let (row_id, row) = source.state.ui.painted_rows[index].clone();
+    let target = source
+        .state
+        .current
+        .rows()
+        .find(|row| row.id == row_id)
+        .unwrap()
+        .pane
+        .as_ref()
+        .unwrap()
+        .pane_id
+        .clone();
+    let (input_tx, input_rx) = std::sync::mpsc::sync_channel(64);
+    let mut inbox = queued([Wakeup::Snapshot]).with_input(input_rx);
+    input_tx
+        .send(Wakeup::MouseClick {
+            column: 2,
+            row: row as u16,
+        })
+        .unwrap();
+    source
+        .result_tx
+        .send(FetchUpdate::Snapshot {
+            snapshot: Box::new(source.state.current.clone()),
+            phase: FetchPhase::Final,
+            source: SnapshotSource::Produced,
+        })
+        .unwrap();
+    let projections = source.state.projections;
+    source
+        .state
+        .advance(&mut inbox, &mut source.fetch, &mut source.terminal)
+        .unwrap();
+    assert_eq!(
+        source.state.pending_input_focus,
+        Some(target),
+        "a held source must handle the new click before dispatch"
+    );
+    assert_eq!(
+        source
+            .state
+            .clock
+            .focus_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    let (_, _, mut anchor) = hidden_destination();
+    anchor.pane_id = old_target;
+    assert!(
+        old.dispatch(anchor, old.clicked().unwrap(), || panic!(
+            "older jump must not dispatch"
+        ))
+        .is_none()
+    );
+    assert_eq!(
+        source.state.projections, projections,
+        "room work stays held"
+    );
+}
+
+#[test]
+fn same_tab_focus_supersedes_pending_cross_tab_push() {
+    for keyboard in [false, true] {
+        let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
+        let diag = crate::diag::DiagSink::under(
+            source._dir.path().to_owned(),
+            source.ws.clone(),
+            &source.state.config.session_name,
+            Some(source.state.config.instance_id.clone()),
+        );
+        let peers = source
+            .focus_plane
+            .focus_peers(source.state.config.instance_id.clone(), diag);
+        source.state.focus_peers = Some(peers.clone());
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let _subscription = source.focus_plane.subscribe(&destination.state.config, tx);
+        let destination_peers = source.focus_plane.focus_peers(
+            destination.state.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        );
+        let (_, row) = source.state.ui.painted_rows[1].clone();
+        source
+            .state
+            .apply_input(
+                [Wakeup::MouseClick {
+                    column: 2,
+                    row: row as u16,
+                }],
+                &mut source.terminal,
+            )
+            .unwrap();
+        let first = source.state.input_jump.take().unwrap();
+        let (_, _, mut anchor) = hidden_destination();
+        anchor.pane_id = source.state.pending_input_focus.clone().unwrap();
+        let (_, _, _, ack, _) = first
+            .push(&anchor, first.clicked().unwrap(), Instant::now)
+            .unwrap();
+        rx.try_iter().for_each(drop);
+        assert!(source.state.jump_hold().is_some());
+        let (_, row) = source.state.ui.painted_rows[0].clone();
+        let input = if keyboard {
+            source.state.ui.selected_index = Some(0);
+            source.state.ui.selected_pane = Some(pane("terminal_0", "tab_0", false).pane_id);
+            Wakeup::Key(KeyAction::Enter)
+        } else {
+            Wakeup::MouseClick {
+                column: 2,
+                row: row as u16,
+            }
+        };
+        let applied = source
+            .state
+            .apply_input([input], &mut source.terminal)
+            .unwrap();
+        let target = pane("terminal_0", "tab_0", false).pane_id;
+        assert!(
+            applied
+                .effects
+                .contains(&InputEffect::Focus(target.clone()))
+        );
+        assert_eq!(source.state.pending_input_focus, Some(target));
+        assert!(
+            source.state.input_jump.is_none(),
+            "same-tab focus arms no push"
+        );
+        assert!(
+            !first.is_current(),
+            "same-tab focus must revoke the older lease"
+        );
+        assert!(
+            peers.active(Instant::now()).is_none(),
+            "same-tab focus arms no hold"
+        );
+        assert!(destination_peers.take_push().is_none());
+        let report = ack
+            .try_iter()
+            .find(|report| report.instance_id == destination.state.config.instance_id)
+            .unwrap();
+        assert_eq!(report.verdict, Some(PushVerdict::Superseded));
+        assert!(
+            matches!(rx.try_recv(), Ok(Wakeup::Tick)),
+            "release wakes held peers"
+        );
+        assert!(first.request(|| panic!("obsolete request")).is_none());
+        assert!(
+            first
+                .dispatch(anchor, first.clicked().unwrap(), || panic!(
+                    "obsolete dispatch"
+                ))
+                .is_none()
+        );
+        let log = std::fs::read_to_string(crate::diag::focus_trace::log_path(source._dir.path()))
+            .unwrap();
+        let records: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let stopped = records
+            .iter()
+            .find(|row| row["event"]["stage"] == "input_superseded")
+            .unwrap();
+        assert_eq!(stopped["event"]["sequence"], 1);
+        assert_eq!(
+            stopped["event"]["target"],
+            source.state.current.worktree_groups[0].rows[1]
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .to_string()
+        );
+        let _next = peers.arm(pane("terminal_19", "tab_1", false).pane_id, Instant::now());
+        let log = std::fs::read_to_string(crate::diag::focus_trace::log_path(source._dir.path()))
+            .unwrap();
+        let last: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(
+            last["event"]["sequence"], 3,
+            "same-tab focus advances click order"
+        );
+    }
+}
+
+#[test]
+fn jump_hold_retains_ordinary_work_until_release_or_virtual_deadline() {
+    for release in [false, true] {
+        let (mut source, mut rig, output) = viewport_pair(MuxName::Zellij);
+        let clock = LoopClock::play(Timestamp::now());
+        rig.state.clock = clock.clone();
+        rig.state.current.pane_session_name = Some("rimz-test".into());
+        let plane = super::super::super::plane::DataPlane::detached();
+        let peers = plane.focus_peers(
+            source.state.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        );
+        rig.state.focus_peers = Some(plane.focus_peers(
+            rig.state.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        ));
+        let target = pane("terminal_0", "tab_0", false).pane_id;
+        let lease = peers.arm(target.clone(), clock.now());
+        publish_scrolled(&mut source, 12);
+        let (_, _, mut anchor) = hidden_destination();
+        anchor.pane_id = target.clone();
+        anchor.placement = None;
+        anchor.order = None;
+        crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
+        let event = SidebarEventEnvelope::new(
+            rig.ws.clone(),
+            Some("rimz-test".into()),
+            crate::utils::time::unix_now_ms(),
+            SidebarEvent::FocusIntent {
+                pane_id: target,
+                nonce: anchor.nonce,
+            },
+        );
+        let mut inbox = queued([Wakeup::Event(event), Wakeup::Tick, Wakeup::Snapshot]);
+        rig.result_tx
+            .send(FetchUpdate::Snapshot {
+                snapshot: Box::new(rig.state.current.clone()),
+                phase: FetchPhase::Final,
+                source: SnapshotSource::Produced,
+            })
+            .unwrap();
+        let before = (
+            rig.state.content_applications,
+            rig.state.projections,
+            rig.state.viewport_seen,
+            rig.state.last_folded_focus_intent,
+        );
+        let paints_before = rig.state.paints;
+        rig.state.adopt_viewport(&mut rig.fetch, &mut rig.terminal);
+        for _ in 0..3 {
+            rig.state
+                .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
+                .unwrap();
+        }
+        assert_eq!(
+            (
+                rig.state.content_applications,
+                rig.state.projections,
+                rig.state.viewport_seen,
+                rig.state.last_folded_focus_intent
+            ),
+            before,
+            "held work must not reach its consumer"
+        );
+        assert_eq!(paints(&output), 0);
+        if release {
+            lease.release();
+        } else {
+            clock.advance(Duration::from_millis(500));
+        }
+        rig.state
+            .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
+            .unwrap();
+        assert_eq!(
+            rig.state.last_folded_focus_intent,
+            Some(anchor.nonce),
+            "the retained event replays first"
+        );
+        for _ in 0..3 {
+            rig.state
+                .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
+                .unwrap();
+        }
+        assert!(rig.state.viewport_seen > before.2);
+        assert!(
+            rig.state.paints - paints_before <= 1,
+            "catch-up coalesces to one hidden paint"
+        );
+    }
+}
+
+#[test]
+fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
+    let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
+    let plane = super::super::super::plane::DataPlane::detached();
+    let (source_tx, source_rx) = std::sync::mpsc::sync_channel(64);
+    let (dest_tx, dest_rx) = std::sync::mpsc::sync_channel(64);
+    let _source_subscription = plane.subscribe(&source.state.config, source_tx);
+    let _destination_subscription = plane.subscribe(&destination.state.config, dest_tx);
+    let peers = plane.focus_peers(
+        source.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    );
+    source.state.focus_peers = Some(peers.clone());
+    source.state.viewport_peers = Some(plane.subscribers.clone());
+    let (_, row) = source.state.ui.painted_rows[1].clone();
+    source
+        .state
+        .apply_input(
+            [Wakeup::MouseClick {
+                column: 2,
+                row: row as u16,
+            }],
+            &mut source.terminal,
+        )
+        .unwrap();
+    assert!(
+        peers.active(source.state.clock.now()).is_some(),
+        "lease must precede click publication"
+    );
+    assert!(
+        dest_rx.try_recv().is_err(),
+        "click publication must not wake peers"
+    );
+    drop(source.state.input_jump.take());
+    assert_eq!(source_rx.try_recv().unwrap(), Wakeup::Tick);
+    assert_eq!(dest_rx.try_recv().unwrap(), Wakeup::Tick);
+    assert!(source_rx.try_recv().is_err());
+    assert!(dest_rx.try_recv().is_err());
+}
+
+#[test]
 fn queued_publication_tick_does_not_paint_ahead_of_a_focus_push() {
     let (mut source, mut destination, output) = viewport_pair(MuxName::Tmux);
     publish_scrolled(&mut source, 12);
@@ -534,8 +869,36 @@ fn queued_publication_tick_does_not_paint_ahead_of_a_focus_push() {
         order: None,
     };
     crate::mux::focus_anchor::store(&destination.runtime, &anchor).unwrap();
-    let (push, ack) = focus_push(anchor, destination.state.config.instance_id.clone());
-    let mut inbox = queued([Wakeup::Tick, Wakeup::Tick, push]);
+    let event = crate::wakeup::events::SidebarEventEnvelope::new(
+        destination.ws.clone(),
+        Some("rimz-test".into()),
+        crate::utils::time::unix_now_ms(),
+        SidebarEvent::BodyFilterChanged,
+    );
+    let plane = super::super::super::plane::DataPlane::detached();
+    let (tx, rx) = std::sync::mpsc::sync_channel(3);
+    for wakeup in [Wakeup::Snapshot, Wakeup::Event(event), Wakeup::Tick] {
+        tx.send(wakeup).unwrap();
+    }
+    let _subscription = plane.subscribe(&destination.state.config, tx);
+    destination.state.focus_peers = Some(plane.focus_peers(
+        destination.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    ));
+    let clicked = Instant::now();
+    let lease = plane
+        .focus_peers(
+            source.state.config.instance_id.clone(),
+            crate::diag::DiagSink::disabled(),
+        )
+        .arm(anchor.pane_id.clone(), clicked);
+    let (_, _, _, ack, deliveries) = lease.push(&anchor, clicked, Instant::now).unwrap();
+    assert_eq!(
+        deliveries[0].delivery,
+        PushDelivery::Sent,
+        "a full ordinary inbox cannot lose the priority push"
+    );
+    let mut inbox = WakeupInbox::new(rx);
     destination.state.next_frame = Instant::now();
     destination
         .state
@@ -1147,10 +1510,10 @@ fn assert_shared_placement_from_history(previous: usize) {
     anchor.pane_id = target_pane.clone();
     anchor.placement = Some(placement);
     anchor.order = Some(source.state.ui.last_order.clone());
-    let (push, ack) = focus_push(anchor, destination.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut destination, anchor);
     destination
         .state
-        .on_wakeup(&mut destination.fetch, &mut destination.terminal, push)
+        .on_focus_push(push, &mut destination.fetch, &mut destination.terminal)
         .unwrap();
 
     assert_eq!(destination.state.ui.selected_pane, Some(target_pane));
@@ -1203,10 +1566,10 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     let (mut rig, output, anchor) = hidden_destination();
     let target = anchor.pane_id.clone();
     let placement = anchor.placement.clone().unwrap();
-    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor.clone());
     assert!(!rig.runtime.focus_anchor_path().exists());
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.state.ui.selected_pane, Some(target.clone()));
     assert!(
@@ -1216,7 +1579,7 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
     assert_eq!(
         paints(&output),
         1,
-        "the push paints inside on_wakeup, before maintenance"
+        "the push paints inside on_focus_push, before maintenance"
     );
     assert_push_report(&ack, &rig, PushVerdict::Painted, true);
     rig.paint(true);
@@ -1257,12 +1620,12 @@ fn pushed_hidden_destination_paints_placement_without_disk_and_keeps_it_after_sw
 fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
     for exit in [false, true] {
         let (mut rig, output, anchor) = hidden_destination();
-        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+        let (push, ack) = focus_push(&mut rig, anchor);
         rig.state
             .paint_hold
             .engage(Instant::now(), crate::utils::time::unix_now_ms());
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         rig.paint(true);
         assert_eq!(paints(&output), 0);
@@ -1289,16 +1652,16 @@ fn destination_ack_waits_through_a_paint_hold_and_releases_on_exit() {
 fn a_late_duplicate_push_uses_the_painted_frame_unless_the_destination_is_exiting() {
     for exit in [false, true] {
         let (mut rig, output, anchor) = hidden_destination();
-        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+        let (push, ack) = focus_push(&mut rig, anchor.clone());
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         rig.paint(true);
         assert_push_report(&ack, &rig, PushVerdict::Painted, true);
         rig.state.should_exit = exit;
-        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+        let (push, ack) = focus_push(&mut rig, anchor);
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         if exit {
             assert_push_report(&ack, &rig, PushVerdict::Exiting, false);
@@ -1340,10 +1703,7 @@ fn fitted_grow_hold(resize_first: bool) {
         rig.terminal = Terminal::new(PaneBackend::for_fd(pty.slave()).unwrap()).unwrap();
         rig.state.prev_width = Some(40);
         rig.state.self_close.seen_sibling = true;
-        let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
-        let Wakeup::FocusPush(ref mut push) = wake else {
-            unreachable!()
-        };
+        let (mut push, ack) = focus_push(&mut rig, anchor);
         let pane = if own_pane {
             rig.state.config.own_pane.clone().unwrap()
         } else {
@@ -1364,7 +1724,7 @@ fn fitted_grow_hold(resize_first: bool) {
             );
         }
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         let painted_before_resize = !resize_first && !own_pane;
         if painted_before_resize {
@@ -1421,20 +1781,12 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
                 .unwrap();
             rig.state.clock.advance(Duration::from_millis(17));
         }
-        let (tx, ack) = std::sync::mpsc::channel();
-        let sent = rig.state.clock.now();
-        let push = Wakeup::FocusPush(Box::new(super::super::super::focus_push::FocusPush::new(
-            anchor.clone(),
-            super::super::super::focus_push::PushAck::new(tx),
-            rig.state.config.instance_id.clone(),
-            sent,
-            sent + Duration::from_secs(10),
-        )));
+        let (push, ack) = focus_push(&mut rig, anchor.clone());
         if !cached {
             rig.state.clock.advance(Duration::from_millis(23));
         }
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
 
         assert_eq!(rig.state.ui.selected_pane, Some(anchor.pane_id));
@@ -1453,9 +1805,9 @@ fn displaced_placement_reports_the_landing_in_both_ack_paths() {
 #[test]
 fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport() {
     let (mut rig, _, anchor) = hidden_destination();
-    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor.clone());
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     rig.paint(true);
     assert_push_report(&ack, &rig, PushVerdict::Painted, true);
@@ -1466,10 +1818,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
         },
     )
     .unwrap();
-    let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
-    let Wakeup::FocusPush(ref mut push) = wake else {
-        unreachable!()
-    };
+    let (mut push, ack) = focus_push(&mut rig, anchor);
     push.expected_panes = Some(Arc::new(std::collections::HashMap::from([(
         rig.state.config.own_pane.clone().unwrap(),
         crate::mux::FittedPane {
@@ -1478,7 +1827,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
         },
     )])));
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(
         ack.try_recv(),
@@ -1495,10 +1844,7 @@ fn cached_focus_ack_requires_a_frame_at_the_fitted_rows_not_the_current_viewport
 fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
     for own_rows in [true, false] {
         let (mut rig, _, anchor) = hidden_destination();
-        let (mut wake, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
-        let Wakeup::FocusPush(ref mut push) = wake else {
-            unreachable!()
-        };
+        let (mut push, ack) = focus_push(&mut rig, anchor);
         let pane = if own_rows {
             rig.state.config.own_pane.clone().unwrap()
         } else {
@@ -1512,7 +1858,7 @@ fn parked_focus_ack_waits_for_resize_but_other_panes_rows_do_not_gate_it() {
             },
         )])));
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, wake)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         rig.paint(true);
         if own_rows {
@@ -1542,17 +1888,17 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
     rig.state
         .paint_hold
         .engage(Instant::now(), crate::utils::time::unix_now_ms());
-    let (first, first_ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+    let (first, first_ack) = focus_push(&mut rig, anchor.clone());
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, first)
+        .on_focus_push(first, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     rig.paint(true);
     let mut newer = anchor;
     newer.nonce = crate::ids::FocusNonce::new();
     newer.issued_at_ms += 1;
-    let (second, second_ack) = focus_push(newer, rig.state.config.instance_id.clone());
+    let (second, second_ack) = focus_push(&mut rig, newer);
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, second)
+        .on_focus_push(second, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     let first = assert_push_report(&first_ack, &rig, PushVerdict::Superseded, true);
     assert_eq!(first.blocked_by, Some(PushBlock::PaintHold));
@@ -1562,6 +1908,37 @@ fn parked_push_reports_first_block_expiry_and_supersession() {
     let second = assert_push_report(&second_ack, &rig, PushVerdict::Expired, true);
     assert_eq!(second.blocked_by, Some(PushBlock::PaintHold));
     assert_eq!(paints(&output), 0);
+
+    for nonowner_push in [false, true] {
+        let (mut rig, output, anchor) = hidden_destination();
+        rig.state
+            .paint_hold
+            .engage(Instant::now(), crate::utils::time::unix_now_ms());
+        let (push, ack) = focus_push(&mut rig, anchor.clone());
+        rig.state
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
+            .unwrap();
+        let mut newer = anchor;
+        newer.nonce = FocusNonce::new();
+        newer.pane_id = pane("terminal_0", "tab_0", false).pane_id;
+        let (push, newer_ack) = focus_push(&mut rig, newer);
+        if nonowner_push {
+            rig.state
+                .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
+                .unwrap();
+            assert_push_report(&newer_ack, &rig, PushVerdict::NotDestination, false);
+        } else {
+            drop(push);
+            rig.state.paint_hold.release();
+            rig.paint(true);
+        }
+        assert_push_report(&ack, &rig, PushVerdict::Superseded, true);
+        assert_eq!(
+            paints(&output),
+            0,
+            "obsolete parked placement must never paint"
+        );
+    }
 }
 
 #[test]
@@ -1571,9 +1948,9 @@ fn parked_push_counts_unmatched_and_misplaced_frames_at_the_paint_consumer() {
         .paint_hold
         .engage(Instant::now(), crate::utils::time::unix_now_ms());
     let row_id = anchor.placement.as_ref().unwrap().row_id.clone();
-    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor);
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     rig.state.ui.drawn_selection = None;
     rig.state.observe_paint(Instant::now());

@@ -15,7 +15,6 @@ pub(in crate::sidebar_pane) enum Wakeup {
     Event(SidebarEventEnvelope),
     /// The background fetch worker finished a snapshot; fold the waiting result.
     Snapshot,
-    FocusPush(Box<super::focus_push::FocusPush>),
     FocusFailed {
         pane: crate::ids::PaneId,
         error: String,

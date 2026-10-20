@@ -210,6 +210,7 @@ pub(super) struct LoopState {
     paint: FramePainter,
     pub(super) room_caps: Arc<Mutex<crate::sidebar_pane::pixel::probe::RoomCaps>>,
     pub(super) focus_peers: Option<FocusPeers>,
+    input_jump: Option<FocusPeers>,
     pub(super) viewport: Arc<Mutex<Option<ViewportPublication>>>,
     viewport_seen: u64,
     pub(super) viewport_peers: Option<super::fetch::Subscribers>,
@@ -316,8 +317,7 @@ pub(super) fn handle_wakeup(
         | Wakeup::Event(_)
         | Wakeup::Press { .. }
         | Wakeup::Snapshot
-        | Wakeup::FocusFailed { .. }
-        | Wakeup::FocusPush(_) => InputOutcome::default(),
+        | Wakeup::FocusFailed { .. } => InputOutcome::default(),
     }
 }
 
@@ -435,6 +435,7 @@ impl LoopState {
             paint: FramePainter::new(pet_render_caps, pixel_wrap, pixel_slot),
             room_caps: Arc::default(),
             focus_peers: None,
+            input_jump: None,
             viewport: Arc::default(),
             viewport_seen: 0,
             viewport_peers: None,
@@ -471,6 +472,12 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
+        if let Some((target, until)) = self.jump_hold() {
+            if let Some(peers) = &self.focus_peers {
+                peers.wait(&target, until, || inbox.has_input());
+            }
+            return self.advance(inbox, fetch, terminal).map(|_| ());
+        }
         self.report_baseline();
         let (_, mut timeout) = self.frame_timing();
         timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.clock.now());
@@ -486,8 +493,29 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<(bool, Instant)> {
         let paints = self.paints;
+        self.retire_superseded_push();
+        let pushed = if let Some(push) = self.focus_peers.as_ref().and_then(FocusPeers::take_push) {
+            self.on_focus_push(push, fetch, terminal)?;
+            true
+        } else {
+            false
+        };
+        if self.jump_hold().is_some() {
+            if !pushed {
+                inbox.dispatch_input(self, fetch, terminal)?;
+            }
+            let deadline = self
+                .jump_hold()
+                .map_or_else(|| self.clock.now(), |(_, until)| until);
+            return Ok((self.paints != paints, deadline));
+        }
         self.report_baseline();
-        inbox.dispatch_next(self, fetch, terminal, Duration::ZERO)?;
+        if !pushed {
+            inbox.dispatch_next(self, fetch, terminal, Duration::ZERO)?;
+        }
+        if let Some((_, until)) = self.jump_hold() {
+            return Ok((self.paints != paints, until));
+        }
         // A pane the mux had not laid out at attach gets its title
         // with its first size.
         if !self.titled {
@@ -833,6 +861,7 @@ impl LoopState {
             tab_emptied: _,
             last_reported_baseline: _,
             focus_peers: _,
+            input_jump: _,
             viewport: _,
             viewport_seen: _,
             viewport_peers: _,
@@ -871,7 +900,6 @@ impl LoopState {
         wakeup: Wakeup,
     ) -> Result<()> {
         match wakeup {
-            Wakeup::FocusPush(push) => self.on_focus_push(*push, fetch, terminal),
             Wakeup::FocusFailed { pane, error } => {
                 self.on_focus_failed(pane, error);
                 Ok(())
@@ -1079,20 +1107,22 @@ impl LoopState {
     ) -> Result<()> {
         let arrived = self.clock.now();
         push.peer.received_ms = Some(push.elapsed_ms());
-        if self.current.row_owning_pane(&push.anchor.pane_id).is_some()
-            && !self.owns_focus_target(&push.anchor.pane_id)
-            && self
-                .current
-                .own_view
-                .as_ref()
-                .is_some_and(|own_view| !self.result_rx.has_pending_own_view_change(own_view))
-        {
+        self.retire_superseded_push();
+        if !push.is_current() {
+            push.finish(PushVerdict::Superseded);
+            return Ok(());
+        }
+        if self.known_non_owner(&push.anchor.pane_id) {
             push.finish(PushVerdict::NotDestination);
             return Ok(());
         }
         if self.last_folded_focus_intent != Some(push.anchor.nonce) {
             self.prepare_action(fetch);
             push.peer.snapshot_ms = Some(push.elapsed_ms());
+            if !push.is_current() {
+                push.finish(PushVerdict::Superseded);
+                return Ok(());
+            }
             self.fold_focus_intent(push.anchor.clone(), arrived);
             push.peer.folded_ms = Some(push.elapsed_ms());
         }
@@ -1112,6 +1142,10 @@ impl LoopState {
         if self.focus_push_size_matches(&push, terminal) {
             self.paint_hold.release();
         }
+        if !push.is_current() {
+            push.finish(PushVerdict::Superseded);
+            return Ok(());
+        }
         if let Some(verdict) = self.painted_focus_verdict(&push.anchor, Some(&push)) {
             push.finish_painted(verdict, self.painted_at);
             return Ok(());
@@ -1120,6 +1154,35 @@ impl LoopState {
             pending.finish(PushVerdict::Superseded);
         }
         self.paint_frame_if_due(terminal, true)
+    }
+
+    fn known_non_owner(&self, target: &PaneId) -> bool {
+        self.current.row_owning_pane(target).is_some()
+            && !self.owns_focus_target(target)
+            && self
+                .current
+                .own_view
+                .as_ref()
+                .is_some_and(|own_view| !self.result_rx.has_pending_own_view_change(own_view))
+    }
+
+    fn jump_hold(&self) -> Option<(PaneId, Instant)> {
+        let active = self.focus_peers.as_ref()?.active(self.clock.now())?;
+        self.known_non_owner(&active.0).then_some(active)
+    }
+
+    fn retire_superseded_push(&mut self) -> bool {
+        if self
+            .pending_focus_push
+            .as_ref()
+            .is_some_and(|push| !push.is_current())
+        {
+            if let Some(push) = self.pending_focus_push.take() {
+                push.finish(PushVerdict::Superseded);
+            }
+            return true;
+        }
+        false
     }
 
     pub(super) fn on_event(
@@ -1186,6 +1249,13 @@ impl LoopState {
                 }
             }
             SidebarEvent::FocusIntent { nonce, .. } => {
+                if self
+                    .focus_peers
+                    .as_ref()
+                    .is_some_and(|peers| !peers.accepts(Some(nonce), self.clock.now()))
+                {
+                    return;
+                }
                 if self.last_folded_focus_intent == Some(nonce) {
                     return;
                 }
@@ -1417,9 +1487,11 @@ impl LoopState {
             self.caps_refresh_deadline = Some(self.clock.now() + RESIZE_CAPS_SETTLE);
         }
         self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
-        // A resize may reveal a hidden pane: paint the newest fold, not a deferred one.
-        self.drain_snapshot(fetch, false);
-        self.adopt_viewport(fetch, terminal);
+        // A resize may reveal a hidden pane: outside a jump hold, paint the newest fold.
+        if self.jump_hold().is_none() {
+            self.drain_snapshot(fetch, false);
+            self.adopt_viewport(fetch, terminal);
+        }
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width
@@ -1539,9 +1611,19 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
     ) -> Result<()> {
-        self.prepare_action(fetch);
-        self.adopt_viewport(fetch, terminal);
-        let applied = self.apply_input(wakeups, terminal)?;
+        if self.jump_hold().is_some() {
+            self.result_rx.invalidate();
+        } else {
+            self.prepare_action(fetch);
+            self.adopt_viewport(fetch, terminal);
+        }
+        let applied = match self.apply_input(wakeups, terminal) {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.input_jump = None;
+                return Err(error);
+            }
+        };
         if applied.redraw && self.watched() {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
@@ -1550,9 +1632,12 @@ impl LoopState {
         for effect in applied.effects {
             match effect {
                 InputEffect::Focus(pane) => {
-                    let clicked = self.clock.now();
+                    let peers = self.input_jump.take();
+                    let clicked = peers
+                        .as_ref()
+                        .and_then(FocusPeers::clicked)
+                        .unwrap_or_else(|| self.clock.now());
                     let placement = self.focus_placement(&pane);
-                    let peers = self.focus_peers_for(&pane);
                     spawn_pane_focus(
                         &self.clock,
                         clicked,
@@ -1677,6 +1762,18 @@ impl LoopState {
             }
             for effect in &applied.effects {
                 if let InputEffect::Focus(pane) = effect {
+                    self.input_jump = self
+                        .clock
+                        .effects_enabled()
+                        .then(|| self.focus_peers_for(pane))
+                        .flatten()
+                        .map(|peers| peers.arm(pane.clone(), self.clock.now()));
+                    if self.clock.effects_enabled()
+                        && self.input_jump.is_none()
+                        && let Some(peers) = &self.focus_peers
+                    {
+                        peers.supersede();
+                    }
                     self.pending_input_focus = Some(pane.clone());
                     let owner = self
                         .ui
@@ -1971,6 +2068,9 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         active: bool,
     ) -> Result<()> {
+        if self.retire_superseded_push() || self.jump_hold().is_some() {
+            return Ok(());
+        }
         let now = self.clock.now();
         let paint_blocked = self.prepare_paint(terminal, now);
         if let Some(push) = &mut self.pending_focus_push {
@@ -2000,6 +2100,13 @@ impl LoopState {
         // defers its paint until the sibling-count verdict releases the hold.
         if !self.should_exit && !self.self_close.confirming_empty() && !paint_blocked && foreground
         {
+            if self.retire_superseded_push()
+                || self.focus_peers.as_ref().is_some_and(|peers| {
+                    !peers.accepts(self.last_folded_focus_intent, self.clock.now())
+                })
+            {
+                return Ok(());
+            }
             self.paint_now(terminal, now)?;
         } else if !active && !self.dirty {
             // Idle re-arm only: with a fold pending, the armed boundary must
@@ -2056,6 +2163,14 @@ impl LoopState {
         if self.dirty || animating || self.focus_marker_due(now) {
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
+            if self.retire_superseded_push()
+                || self.jump_hold().is_some()
+                || self.focus_peers.as_ref().is_some_and(|peers| {
+                    !peers.accepts(self.last_folded_focus_intent, self.clock.now())
+                })
+            {
+                return Ok(());
+            }
             self.draw_frame(terminal, now, false)?;
             self.observe_paint(now);
             self.dirty = false;
@@ -2834,6 +2949,14 @@ impl LoopState {
             });
         }
         self.last_published_viewport = Some(view);
+        if self
+            .focus_peers
+            .as_ref()
+            .and_then(|peers| peers.active(self.clock.now()))
+            .is_some()
+        {
+            return;
+        }
         if let Some(peers) = &self.viewport_peers {
             for peer in peers
                 .lock()
@@ -2866,13 +2989,16 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) {
-        if self.adoptable_viewport().is_none() {
+        if self.jump_hold().is_some() || self.adoptable_viewport().is_none() {
             return;
         }
         self.drain_snapshot(fetch, false);
         let Some(publication) = self.adoptable_viewport() else {
             return;
         };
+        if self.jump_hold().is_some() {
+            return;
+        }
         let view = publication.view;
         self.ui.scroll_offset = view.scroll_offset;
         self.ui.held_expansions = view.held_expansions;
@@ -2958,6 +3084,7 @@ impl LoopState {
     }
 
     fn observe_paint(&mut self, now: Instant) {
+        self.retire_superseded_push();
         self.painted_focus_anchor_ms = self.ui.last_focus_anchor_ms;
         // This paint consumed the placement, so the landing is judged here or never.
         let landing = self.focus_landing.take().and_then(|(anchor, applied_at)| {

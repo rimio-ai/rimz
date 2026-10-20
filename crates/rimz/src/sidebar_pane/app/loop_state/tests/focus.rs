@@ -219,17 +219,38 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
     moved[0].pane_id = zellij("terminal_77");
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let target = zellij("terminal_9");
+    let plane = super::super::super::plane::DataPlane::detached();
+    let peers = plane.focus_peers(
+        rig.state.config.instance_id.clone(),
+        crate::diag::DiagSink::disabled(),
+    );
+    let lease = peers.arm(target.clone(), Instant::now());
     let requested = Some(fenced_request(&rig, &expected, moved));
-    finish_focus_request(&target, Some(&tx), requested, |_| {
+    finish_focus_request(&target, Some(&tx), requested, Some(&lease), |_| {
         panic!("failed request must not dispatch")
     });
     assert!(
         matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
     );
+    assert!(
+        peers.active(Instant::now()).is_none(),
+        "rollback consumer must see the lease released"
+    );
     for dispatched in [Err(FocusActionError::Superseded), Ok(false), Ok(true)] {
         let failed = dispatched.is_err();
         let requested = Some(fenced_request(&rig, &expected, expected.clone()));
-        finish_focus_request(&target, Some(&tx), requested, |_| dispatched);
+        let lease = peers.arm(target.clone(), Instant::now());
+        finish_focus_request(&target, Some(&tx), requested, Some(&lease), |_| {
+            assert!(
+                peers.active(Instant::now()).is_some(),
+                "hold lasts through dispatch"
+            );
+            dispatched
+        });
+        assert!(
+            peers.active(Instant::now()).is_none(),
+            "dispatch return releases the lease"
+        );
         if failed {
             assert!(
                 matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
@@ -241,6 +262,9 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
             );
         }
     }
+    let lease = peers.arm(target.clone(), Instant::now());
+    finish_focus_request(&target, None, None, Some(&lease), |_| unreachable!());
+    assert!(peers.active(Instant::now()).is_none());
 }
 
 fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
@@ -342,7 +366,7 @@ fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
         MuxName::Tmux => MuxName::Zellij,
     });
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    finish_focus_request(&picked, Some(&tx), Some(Ok(nonce)), |nonce| {
+    finish_focus_request(&picked, Some(&tx), Some(Ok(nonce)), None, |nonce| {
         dispatch_action(
             rejecting_backend.as_ref(),
             &rig.runtime,
@@ -1237,9 +1261,9 @@ fn focus_push_to_a_non_destination_leaves_projection_and_nonce_for_the_event() {
     rig.result_tx
         .send(rig.lazy_update(pending, SnapshotSource::Produced))
         .unwrap();
-    let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor.clone());
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(
         rig.state.projections, 0,
@@ -1282,9 +1306,9 @@ fn focus_push_drains_a_pending_own_view_before_rejecting_the_owner() {
         requested_focus_anchor(target.clone(), 2, crate::utils::time::unix_now_ms(), None);
     anchor.placement = None;
     crate::mux::focus_anchor::store(&rig.runtime, &anchor).unwrap();
-    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor);
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(
         ack.try_recv(),
@@ -1310,9 +1334,9 @@ fn focus_push_with_unknown_own_view_takes_the_drain_and_fold_path() {
     rig.fold(seed, SnapshotSource::Produced);
     let anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
     let nonce = anchor.nonce;
-    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor);
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.state.last_folded_focus_intent, Some(nonce));
     assert_push_report(&ack, &rig, PushVerdict::NotDestination, true);
@@ -1340,9 +1364,9 @@ fn focus_push_for_a_target_missing_from_current_still_prepares_and_folds() {
         None,
     );
     let nonce = anchor.nonce;
-    let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+    let (push, ack) = focus_push(&mut rig, anchor);
     rig.state
-        .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+        .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
         .unwrap();
     assert_eq!(rig.state.projections, 1);
     assert_eq!(rig.state.current.display_name, "new target");
@@ -1367,12 +1391,12 @@ fn focus_push_and_datagram_fold_each_nonce_once_in_either_order() {
             pane_id: target.clone(),
             nonce: anchor.nonce,
         };
-        let (push, ack) = focus_push(anchor.clone(), rig.state.config.instance_id.clone());
+        let (push, ack) = focus_push(&mut rig, anchor.clone());
         if !push_first {
             rig.event(event.clone());
         }
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         assert_push_report(&ack, &rig, PushVerdict::NotDestination, false);
         if push_first {
@@ -1409,6 +1433,15 @@ fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
         rig.state.focus_peers_for(&zellij("terminal_9")).is_none(),
         "same-tab jumps stay synchronous"
     );
+    assert!(
+        rig.state
+            .focus_peers
+            .as_ref()
+            .unwrap()
+            .active(rig.state.clock.now())
+            .is_none(),
+        "same-tab routing arms no lease"
+    );
     rig.state.current.own_view = None;
     assert!(
         rig.state.focus_peers_for(&zellij("terminal_9")).is_some(),
@@ -1431,9 +1464,9 @@ fn focus_push_paints_on_arrival_or_records_the_inline_hold() {
         }
         let mut anchor = requested_focus_anchor(target, 2, crate::utils::time::unix_now_ms(), None);
         anchor.placement = None;
-        let (push, ack) = focus_push(anchor, rig.state.config.instance_id.clone());
+        let (push, ack) = focus_push(&mut rig, anchor);
         rig.state
-            .on_wakeup(&mut rig.fetch, &mut rig.terminal, push)
+            .on_focus_push(push, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         if held {
             assert_eq!(ack.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));

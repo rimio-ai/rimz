@@ -323,6 +323,26 @@ pub(crate) fn dispatch_action(
     nonce: FocusNonce,
     retries: FocusDispatchRetries,
 ) -> Result<bool, FocusActionError> {
+    dispatch_action_if_current(
+        backend,
+        runtime,
+        session_name,
+        pane_id,
+        nonce,
+        retries,
+        || true,
+    )
+}
+
+pub(crate) fn dispatch_action_if_current(
+    backend: &dyn MuxBackend,
+    runtime: &RuntimePaths,
+    session_name: &str,
+    pane_id: &PaneId,
+    nonce: FocusNonce,
+    retries: FocusDispatchRetries,
+    still_current: impl Fn() -> bool,
+) -> Result<bool, FocusActionError> {
     let _guard = crate::disk::lock::WorkspaceLock::acquire(&runtime.focus_anchor_lock())?;
     let Some(mut anchor) = load(runtime).filter(|anchor| anchor.nonce == nonce) else {
         return Ok(false);
@@ -332,6 +352,9 @@ pub(crate) fn dispatch_action(
     for attempt in 0..retries.attempts.max(1) {
         if attempt > 0 {
             std::thread::sleep(retries.delay);
+        }
+        if !still_current() {
+            return Ok(false);
         }
         match backend.focus_pane(pane_id, Some(session_name)) {
             Ok(()) => accepted = true,
