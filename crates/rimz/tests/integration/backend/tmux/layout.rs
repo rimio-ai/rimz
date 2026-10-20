@@ -976,6 +976,64 @@ fn stack_focus_resize_close_and_zoom_restore_the_open_member() {
 }
 
 #[test]
+fn focus_changes_preserve_two_independent_stacks() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let (caller, first) = stack_fixture(&server);
+    let anchor = stack_split(
+        &server,
+        &caller,
+        SplitPlacement::Directional(rimz::mux::SplitDirection::Right),
+    );
+    let middle = stack_split(&server, anchor.raw(), SplitPlacement::Stacked);
+    let bottom = stack_split(&server, middle.raw(), SplitPlacement::Stacked);
+    let stacks = [
+        first,
+        vec![
+            anchor.raw().into(),
+            middle.raw().into(),
+            bottom.raw().into(),
+        ],
+    ];
+    assert_ne!(
+        server.display(&stacks[0][0], "#{@rimz_stack}"),
+        server.display(&stacks[1][0], "#{@rimz_stack}")
+    );
+    let shape = |members: &[String]| {
+        members
+            .iter()
+            .map(|pane| {
+                server.display(
+                    pane,
+                    "#{pane_id}|#{@rimz_stack}|#{@rimz_stack_open}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}",
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut open = [2, 2];
+    for (index, members) in stacks.iter().enumerate() {
+        assert_stack(&server, members, &members[open[index]]);
+    }
+    for index in [0, 1, 0, 1] {
+        let other = 1 - index;
+        let unchanged = shape(&stacks[other]);
+        for (args, expanded) in [
+            (vec!["select-pane", "-t", stacks[index][0].as_str()], 0),
+            (vec!["select-pane", "-D"], 1),
+            (vec!["select-pane", "-D"], 2),
+            (vec!["select-pane", "-U"], 1),
+        ] {
+            server.tmux(&args);
+            open[index] = expanded;
+            for (stack, members) in stacks.iter().enumerate() {
+                assert_stack(&server, members, &members[open[stack]]);
+            }
+            assert_eq!(shape(&stacks[other]), unchanged);
+        }
+    }
+}
+
+#[test]
 fn collapsed_member_can_split_and_restart_without_losing_membership() {
     require_tmux!();
     let server = TmuxServer::new();
