@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Serialization
 serde = { version = "1", features = ["derive", "rc"] }
-serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
+serde-saphyr = { version = "2.0", default-features = false, features = ["deserialize"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # Workflow schemas are derived from the same types as the TOML loader.
 schemars = "1"
@@ -71,7 +71,7 @@ prost = "0.14"
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = { version = "0.25", features = ["serde"] }
-winnow = "=1.0.3"
+winnow = "=1.0.4"
 # Zellij stores plugin permission grants as KDL (`permissions.kdl`). RimZ seeds
 # its own presence-plugin grant by parsing and merging that shared file instead
 # of string-splicing a format Zellij itself owns.
