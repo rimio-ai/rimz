@@ -381,7 +381,7 @@ fn doctor_account_standing_is_cache_only_and_empty_paid_credits_are_not_exhausti
         at: Timestamp::now(),
         label: Some("limit reached".into()),
     });
-    rimz::store::agent_context::write(&env.runtime_paths(), "codex", "limit-agent", &context)
+    rimz::store::agent_context::write(&env.runtime_paths(), "codex", "limit-agent", &context, None)
         .unwrap();
     let key = "codex@team".parse().unwrap();
     let mut cache = rimz::agents::account::RateLimitsCache::default();
@@ -986,6 +986,7 @@ fn doctor_json_folds_one_row_per_agent() {
         "claude",
         "claude-session-abc",
         &context,
+        None,
     )
     .unwrap();
 

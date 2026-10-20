@@ -54,9 +54,9 @@ fn window_mins(used: u8, resets_in_secs: i64, mins: u32) -> RateLimitWindow {
 
 #[test]
 fn fresh_windows_keep_most_drained_per_duration() {
-    // Two sessions each report a 5h and a 7d window at different drains. Within
-    // a live window usage only climbs, so the most-drained reading is the
-    // truest and the pick is stable against session order.
+    // Two unstamped sessions each report a 5h and a 7d at different drains.
+    // With no content stamps to rank recency, highest usage wins, independent
+    // of session order.
     let a = reading([window_mins(20, 3_600, 300), window_mins(40, 3_600, 10_080)]);
     let b = reading([window_mins(50, 1_800, 300), window_mins(10, 3_600, 10_080)]);
 
@@ -80,6 +80,52 @@ fn fresh_windows_keep_most_drained_per_duration() {
         reversed, stable,
         "the pick never flickers with session order"
     );
+}
+
+#[test]
+fn fresh_windows_rank_content_time_with_a_ten_second_drain_band() {
+    let stamped = |used, seconds| {
+        reading([RateLimitWindow {
+            observed_at: Some(epoch() + jiff::SignedDuration::from_secs(seconds)),
+            ..window_mins(used, 86_400, 10_080)
+        }])
+    };
+    let newest = stamped(5, 0);
+    let within_band = stamped(20, -10);
+    let outside_band = stamped(95, -11);
+    let readings = [&newest, &within_band, &outside_band];
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        assert_eq!(
+            fresh_windows(order.into_iter().map(|index| readings[index]), epoch()),
+            within_band.windows
+        );
+    }
+    for order in [[&newest, &outside_band], [&outside_band, &newest]] {
+        assert_eq!(fresh_windows(order.into_iter(), epoch()), newest.windows);
+    }
+    let tied = stamped(5, -1);
+    for order in [[&newest, &tied], [&tied, &newest]] {
+        assert_eq!(fresh_windows(order.into_iter(), epoch()), newest.windows);
+    }
+}
+
+#[test]
+fn fresh_windows_prefer_stamped_to_unstamped_content() {
+    let unstamped = reading([window_mins(95, 86_400, 10_080)]);
+    let stamped = reading([RateLimitWindow {
+        observed_at: Some(epoch()),
+        ..window_mins(5, 86_400, 10_080)
+    }]);
+    for order in [[&unstamped, &stamped], [&stamped, &unstamped]] {
+        assert_eq!(fresh_windows(order.into_iter(), epoch()), stamped.windows);
+    }
 }
 
 #[test]

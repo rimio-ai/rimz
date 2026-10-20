@@ -929,10 +929,10 @@ pub struct AgentRateLimits {
 }
 
 impl AgentRateLimits {
-    /// Stamp a capture timestamp onto every window that lacks one. Ingest
-    /// builders set the `source`; the boundary that knows when the reading was
-    /// taken — `into_context` for a live session, the merge for an out-of-band
-    /// refresh — fills `observed_at` so the fusion can rank freshness.
+    /// Stamp every window that lacks provenance at its ingest boundary.
+    /// Ingest builders set the `source`; statusline persistence carries the
+    /// prior stamp of unchanged best-effort content, while an authoritative
+    /// refresh keeps its query time so fusion can rank freshness.
     pub fn stamped_at(mut self, observed_at: Timestamp) -> Self {
         for window in &mut self.windows {
             window.observed_at.get_or_insert(observed_at);
@@ -943,10 +943,10 @@ impl AgentRateLimits {
     /// Whether this reading's content predates its shortest temporal window's
     /// reset, so the whole payload is stale even where a longer window remains
     /// current. A payload with no dated temporal window falls back to its
-    /// earliest dated named quota. An idle session re-emits a days-old payload
-    /// with a fresh capture stamp, so `observed_at` cannot judge a best-effort
-    /// reading's freshness. A reading with no dated window remains fresh as a
-    /// last-resort backstop.
+    /// earliest dated named quota. This reading-level gate complements the
+    /// per-window content stamps: a longer window can remain unchanged across
+    /// the shortest window's reset. A reading with no dated window remains
+    /// fresh as a last-resort backstop.
     pub fn content_stale_at(&self, now: Timestamp) -> bool {
         let duration_reset = self
             .windows
@@ -999,13 +999,15 @@ pub struct RateLimitWindow {
     /// refills while idle. Named quotas leave it absent; model sub-caps carry their parent's duration and fold onto its bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
-    /// When this reading was captured. Provenance for fusion, not display. For a
-    /// [`WindowSource::BestEffort`] statusline this is *capture* time, not
-    /// content time — an idle session re-emits a days-old payload with a fresh
-    /// stamp, so content freshness is judged by the shortest temporal reset or
-    /// the named-quota fallback, and this only breaks ties. For
-    /// [`WindowSource::Authoritative`] it is content time (the API was queried
-    /// then), so it ranks recency directly.
+    /// Content provenance for fusion. For a [`WindowSource::BestEffort`]
+    /// statusline, when this window's unchanged content was first captured,
+    /// a lower bound on when it was last true. A sidecar's first windows use
+    /// the earlier of capture and the verified owner process's start, so an
+    /// in-process session switch cannot freshen replayed content. An unknown
+    /// owner falls back to capture. Replayed content keeps its prior stamp;
+    /// new windows in an already populated sidecar take capture time.
+    /// For [`WindowSource::Authoritative`], the query time:
+    /// reconfirming an unchanged value is fresh information.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<Timestamp>,
     /// Where the reading came from, deciding how far the fusion trusts a drop.

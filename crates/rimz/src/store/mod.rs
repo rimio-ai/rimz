@@ -416,12 +416,13 @@ mod tests {
             }),
             ..AgentContext::new("claude", error_at)
         };
-        agent_context::write(&runtime, "claude", "agent-0", &context).unwrap();
+        agent_context::write(&runtime, "claude", "agent-0", &context, None).unwrap();
         agent_context::write(
             &runtime,
             "claude",
             "unrelated-agent",
             &AgentContext::new("claude", error_at),
+            None,
         )
         .unwrap();
 

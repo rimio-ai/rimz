@@ -1593,8 +1593,14 @@ fn lifecycle_spend_is_stamped_before_the_workflow_wake() {
         total_cost_usd: Some(1.25),
         ..Default::default()
     });
-    crate::store::agent_context::write(store.runtime_paths(), "claude", "priced-session", &context)
-        .unwrap();
+    crate::store::agent_context::write(
+        store.runtime_paths(),
+        "claude",
+        "priced-session",
+        &context,
+        None,
+    )
+    .unwrap();
     let costs = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(WakeCost {
         paths,

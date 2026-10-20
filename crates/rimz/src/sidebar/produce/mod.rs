@@ -648,7 +648,7 @@ mod tests {
             }),
             ..AgentContext::new("codex", error_at)
         };
-        crate::store::agent_context::write(&runtime, "codex", "dead-owner", &context)
+        crate::store::agent_context::write(&runtime, "codex", "dead-owner", &context, None)
             .expect("write rest certificate");
         let snapshot =
             SidebarSnapshot::build_with_agents(workspace, vec![dead_owner, successor], newer_at);

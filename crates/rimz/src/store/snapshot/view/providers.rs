@@ -108,18 +108,12 @@ impl SidebarSnapshot {
                 .and_then(|context| context.account.clone())
                 .or_else(|| probed_accounts.get(&key).cloned());
 
-            // The budget windows are account-scoped too, but the *freshest*
-            // session is not the truest reading: parallel sessions report the same
-            // window at slightly different instants, so "freshest wins" flips
-            // between ticks and the bar flickers. Instead, reject content-stale
-            // readings whole (an idle session re-emits a days-old payload with a
-            // fresh capture stamp; its shortest applicable reset gives it away),
-            // drop individual windows whose own reset has passed, then keep the
-            // most-drained survivor per stable identity — within a live window
-            // usage only climbs, so this is both stable and the truest. Same inputs
-            // always yield the same bars, regardless of which session reported
-            // last; the enrich layer fuses this live reading with the cached and
-            // authoritative truth.
+            // Budget windows are account-scoped too. Reject content-stale
+            // readings and expired windows, then prefer the newest content per
+            // identity, keeping highest usage within a 10-second render-lag band.
+            // Unchanged statusline windows keep their content stamps, so an idle
+            // pre-credit high cannot beat a fresh post-credit low. The enrich
+            // layer fuses this live candidate with cached and authoritative truth.
             let now = self.now;
             let account_key = sessions
                 .iter()
@@ -360,28 +354,28 @@ fn display_rank(kind: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
+/// How far behind the newest content stamp a window may sit and still tie on
+/// usage: parallel sessions' render and spawn lag, not a reset's spread.
+const LIVE_RENDER_LAG_BAND: jiff::SignedDuration = jiff::SignedDuration::from_secs(10);
+
 /// The content-fresh live budget windows across every session of a provider,
 /// one per duration or provider-defined scope, tagged with the
 /// reading's `observed_at`/`source` for the enrich layer to fuse with cached and
 /// authoritative truth.
 ///
 /// Each `reading` is one session's whole window set. A reading is rejected
-/// wholesale by [`AgentRateLimits::content_stale_at`] — an idle session
-/// re-emits a days-old payload with a fresh capture stamp, so its longer windows
-/// look current even though they are not; the shortest applicable reset gives
-/// the whole payload away. Among surviving readings, the most-drained value wins
-/// per stable identity: within one live window usage only climbs, so the highest
-/// reading is the most current and the pick is stable against parallel sessions
-/// reporting the same budget at different instants. A surviving reading can
-/// still carry a longer window from a previous epoch while its shortest window
-/// is mid-cycle, so each expired window is dropped before this comparison.
+/// wholesale by [`AgentRateLimits::content_stale_at`], and each expired window
+/// or window without usage is dropped. Per identity, highest usage wins among
+/// content stamps within 10 seconds of the newest. Unstamped windows count as
+/// oldest; when all are unstamped, highest usage wins. Equal usage prefers newer
+/// provenance, then deterministic metadata ties, independent of session order.
 /// Output keeps duration windows short→long, followed by scoped windows in
 /// stable scope-id order.
 pub(super) fn fresh_windows<'a>(
     readings: impl Iterator<Item = &'a AgentRateLimits>,
     now: Timestamp,
 ) -> Vec<RateLimitWindow> {
-    let mut by_window: BTreeMap<RateLimitWindowKey, RateLimitWindow> = BTreeMap::new();
+    let mut by_window: BTreeMap<RateLimitWindowKey, Vec<&RateLimitWindow>> = BTreeMap::new();
     for reading in readings {
         if reading.content_stale_at(now) {
             continue;
@@ -393,17 +387,36 @@ pub(super) fn fresh_windows<'a>(
             if window.resets_at.is_some_and(|reset| reset <= now) {
                 continue;
             }
-            by_window
-                .entry(window.key())
-                .and_modify(|best| {
-                    if window.used_percentage > best.used_percentage {
-                        *best = window.clone();
-                    }
-                })
-                .or_insert_with(|| window.clone());
+            by_window.entry(window.key()).or_default().push(window);
         }
     }
-    let mut windows: Vec<RateLimitWindow> = by_window.into_values().collect();
+    let mut windows: Vec<RateLimitWindow> = by_window
+        .into_values()
+        .filter_map(|windows| {
+            let newest = windows.iter().filter_map(|window| window.observed_at).max();
+            windows
+                .into_iter()
+                .filter(|window| {
+                    newest.is_none_or(|newest| {
+                        window
+                            .observed_at
+                            .is_some_and(|at| newest.duration_since(at) <= LIVE_RENDER_LAG_BAND)
+                    })
+                })
+                .max_by_key(|window| {
+                    (
+                        window.used_percentage,
+                        window.observed_at,
+                        window.source.is_authoritative(),
+                        window.resets_at,
+                        window.lifted,
+                        window.duration_mins,
+                        window.scope.as_ref().map(|scope| scope.label.as_str()),
+                    )
+                })
+                .cloned()
+        })
+        .collect();
     sort_windows(&mut windows);
     windows
 }

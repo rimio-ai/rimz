@@ -377,8 +377,14 @@ fn certificate_dead_replacement_bypasses_roster_and_replays_durably() {
         )),
         ..AgentContext::new("codex", interrupted_at)
     };
-    crate::store::agent_context::write(store.runtime_paths(), "codex", "interrupted", &context)
-        .expect("write interruption certificate");
+    crate::store::agent_context::write(
+        store.runtime_paths(),
+        "codex",
+        "interrupted",
+        &context,
+        None,
+    )
+    .expect("write interruption certificate");
 
     assert_eq!(
         store.reap_dead_sessions().expect("reap interrupted owner"),
@@ -441,8 +447,14 @@ fn provider_error_certificate_reaps_the_replaced_owner() {
         }),
         ..AgentContext::new("codex", error_at)
     };
-    crate::store::agent_context::write(store.runtime_paths(), "codex", "overloaded", &context)
-        .expect("write overload certificate");
+    crate::store::agent_context::write(
+        store.runtime_paths(),
+        "codex",
+        "overloaded",
+        &context,
+        None,
+    )
+    .expect("write overload certificate");
 
     assert_eq!(
         store.reap_dead_sessions().expect("reap overloaded owner"),
@@ -529,7 +541,7 @@ fn stale_provider_certificate_does_not_reap_the_owner() {
         }),
         ..AgentContext::new("codex", now - Duration::from_secs(3))
     };
-    crate::store::agent_context::write(store.runtime_paths(), "codex", "stale", &context)
+    crate::store::agent_context::write(store.runtime_paths(), "codex", "stale", &context, None)
         .expect("write stale certificate");
 
     assert_eq!(store.reap_dead_sessions().expect("keep active owner"), 0);

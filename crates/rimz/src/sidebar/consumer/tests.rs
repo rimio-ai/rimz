@@ -171,7 +171,8 @@ fn cached_alive_snapshot_attaches_rest_certificates_for_team_ownership() {
         }),
         ..AgentContext::new("codex", error_at)
     };
-    crate::store::agent_context::write(&runtime, "codex", "conversation-a", &context).unwrap();
+    crate::store::agent_context::write(&runtime, "codex", "conversation-a", &context, None)
+        .unwrap();
     let observation = crate::agents::LocalSessionObservation {
         login: None,
         kind: crate::ids::AgentKind::new_unchecked("codex"),
@@ -709,7 +710,7 @@ fn read_published_snapshot_carries_a_launched_child_parked_on_a_limit() {
         }),
         ..AgentContext::new("codex", error_at)
     };
-    crate::store::agent_context::write(&runtime, "codex", "child-1", &context).unwrap();
+    crate::store::agent_context::write(&runtime, "codex", "child-1", &context, None).unwrap();
     let mut run = crate::store::run::RunRecord::new(
         workspace.clone(),
         child.kind.clone(),

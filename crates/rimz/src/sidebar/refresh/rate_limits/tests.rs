@@ -1214,8 +1214,24 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
         };
         let session = RateLimitWindow {
             duration_mins: Some(10_080),
-            ..be(19, reset, older)
+            ..be(95, reset, older)
         };
+        let persist_session = |window: RateLimitWindow| {
+            let mut context =
+                crate::agents::AgentContext::new("claude", window.observed_at.unwrap());
+            context.rate_limits = Some(AgentRateLimits {
+                windows: vec![window],
+            });
+            crate::store::agent_context::write(&runtime, "claude", "session", &context, None)
+                .unwrap();
+            crate::store::agent_context::read_one(&runtime, "claude", "session")
+                .unwrap()
+                .context
+                .rate_limits
+                .unwrap()
+                .windows
+        };
+        persist_session(session.clone());
         super::merge_account_rate_limits(
             &runtime,
             &login_key("claude"),
@@ -1237,7 +1253,7 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
         let reading = AgentRateLimits {
             windows: vec![RateLimitWindow {
                 duration_mins: Some(10_080),
-                ..auth(4, reset + SignedDuration::from_secs(1), now)
+                ..auth(5, reset + SignedDuration::from_secs(1), now)
             }],
         };
         super::merge_account_rate_limits(
@@ -1262,10 +1278,24 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
         );
         apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
         assert_eq!(consumer.providers[0].windows, reading.windows);
-        for _ in 0..3 {
-            producer.providers[0].windows = vec![session.clone()];
+        for seconds in 0..3 {
+            let replay = RateLimitWindow {
+                observed_at: Some(now + SignedDuration::from_secs(seconds)),
+                ..session.clone()
+            };
+            let stored = persist_session(replay);
+            producer.providers[0].windows = stored.clone();
             refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
             assert_eq!(producer.providers[0].windows, reading.windows);
+            consumer.providers[0].windows = stored;
+            apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
+            assert_eq!(consumer.providers[0].windows, reading.windows);
+            assert_eq!(
+                read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+                    [&login_key("claude")]
+                    .limits,
+                reading
+            );
         }
         consumer.providers[0].windows = vec![session];
         apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
@@ -1273,9 +1303,9 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
 
         let overlay = RateLimitWindow {
             duration_mins: Some(10_080),
-            ..be(21, reset, now + SignedDuration::from_secs(1))
+            ..be(21, reset, now + SignedDuration::from_secs(3))
         };
-        producer.providers[0].windows = vec![overlay.clone()];
+        producer.providers[0].windows = persist_session(overlay.clone());
         refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
         assert_eq!(producer.providers[0].windows, vec![overlay.clone()]);
         let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
@@ -1288,6 +1318,71 @@ fn authoritative_read_supersedes_older_session_reading_and_holds() {
             identity.account_key.as_ref().map(|_| &reading)
         );
         assert!(cache.entries[&login_key("claude")].pending.is_empty());
+    }
+}
+
+#[test]
+fn post_clear_statusline_replay_cannot_displace_the_oauth_anchor() {
+    for account_key in [None, Some("claude-account".to_owned())] {
+        let (_dir, workspace, runtime) = runtime();
+        let now = Timestamp::now();
+        let owner = now - SignedDuration::from_secs(60);
+        let reset = now + SignedDuration::from_secs(172_800);
+        let anchor = RateLimitWindow {
+            duration_mins: Some(10_080),
+            ..auth(5, reset, now)
+        };
+        super::merge_account_rate_limits(
+            &runtime,
+            &login_key("claude"),
+            AccountUsageIdentity {
+                account_key,
+                ..Default::default()
+            },
+            AgentRateLimits {
+                windows: vec![anchor.clone()],
+            },
+        );
+        let mut producer =
+            snapshot_with_panels(workspace.clone(), vec![provider_panel("claude", vec![])]);
+        let mut consumer = snapshot_with_panels(workspace, vec![provider_panel("claude", vec![])]);
+        for seconds in 1..=3 {
+            let capture = now + SignedDuration::from_secs(seconds);
+            let mut context = crate::agents::AgentContext::new("claude", capture);
+            context.rate_limits = Some(AgentRateLimits {
+                windows: vec![RateLimitWindow {
+                    duration_mins: Some(10_080),
+                    ..be(95, reset, capture)
+                }],
+            });
+            crate::store::agent_context::write(
+                &runtime,
+                "claude",
+                "post-clear-session",
+                &context,
+                Some(owner),
+            )
+            .unwrap();
+            let stored =
+                crate::store::agent_context::read_one(&runtime, "claude", "post-clear-session")
+                    .unwrap()
+                    .context
+                    .rate_limits
+                    .unwrap();
+            producer.providers[0].windows = stored.windows.clone();
+            refresh_rate_limits(&mut producer, &runtime, &RoomLoginSet::native());
+            assert_eq!(producer.providers[0].windows, vec![anchor.clone()]);
+            consumer.providers[0].windows = stored.windows;
+            apply_cached_rate_limits(&mut consumer, &runtime, &RoomLoginSet::native());
+            assert_eq!(consumer.providers[0].windows, vec![anchor.clone()]);
+            assert_eq!(
+                read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries
+                    [&login_key("claude")]
+                    .limits
+                    .windows,
+                vec![anchor.clone()]
+            );
+        }
     }
 }
 

@@ -80,6 +80,22 @@ fn hook_owner_env_with(
     Ok(Some(env))
 }
 
+fn context_owner_start_with(
+    spec: &AgentSpec,
+    owner_pid: Option<&str>,
+    mut comm: impl FnMut(u32) -> Option<String>,
+    process_start: impl FnOnce(u32) -> Option<jiff::Timestamp>,
+) -> Option<jiff::Timestamp> {
+    let pid = owner_pid?.parse::<u32>().ok().filter(|pid| *pid > 1)?;
+    if !comm(pid).is_some_and(|name| spec.runs_as(&name)) {
+        return None;
+    }
+    let started_at = process_start(pid)?;
+    comm(pid)
+        .is_some_and(|name| spec.runs_as(&name))
+        .then_some(started_at)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
@@ -645,6 +661,18 @@ impl AgentDefinition {
 
     pub fn spec(&self) -> &'static AgentSpec {
         self.core.spec()
+    }
+
+    /// Start of the verified `RIMZ_AGENT_PID` owner, bounding the age of a
+    /// statusline's first windows after an in-process session switch.
+    /// Missing, mismatched or unreadable owners supply no floor.
+    pub fn context_owner_start(&self) -> Option<jiff::Timestamp> {
+        context_owner_start_with(
+            self.spec(),
+            std::env::var("RIMZ_AGENT_PID").ok().as_deref(),
+            crate::proc::comm,
+            crate::proc::process_start,
+        )
     }
 
     pub fn is_foreign_hook_payload(&self, payload: &Value) -> bool {
@@ -1401,6 +1429,80 @@ mod tests {
     use super::{CompactCommand, CompactInstruction, LaunchSpec, PromptStyle, program_names_kind};
     use crate::agents::AskKind;
     use crate::agents::registry::BUILTINS;
+
+    #[test]
+    fn context_owner_start_requires_a_verified_live_owner() {
+        let spec = crate::agents::spec_by_kind("claude").unwrap();
+        let started = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        for raw in [None, Some("bad"), Some("0"), Some("1"), Some("4294967296")] {
+            assert_eq!(
+                super::context_owner_start_with(
+                    spec,
+                    raw,
+                    |_| panic!("invalid pid reached comm"),
+                    |_| panic!("invalid pid reached start")
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            super::context_owner_start_with(
+                spec,
+                Some("42"),
+                |_| Some("zsh".to_owned()),
+                |_| panic!("wrong owner reached start")
+            ),
+            None
+        );
+        assert_eq!(
+            super::context_owner_start_with(
+                spec,
+                Some("42"),
+                |_| None,
+                |_| panic!("unknown owner reached start")
+            ),
+            None
+        );
+        assert_eq!(
+            super::context_owner_start_with(
+                spec,
+                Some("42"),
+                |_| Some("claude".to_owned()),
+                |_| None
+            ),
+            None
+        );
+        let mut reads = 0;
+        assert_eq!(
+            super::context_owner_start_with(
+                spec,
+                Some("42"),
+                |_| {
+                    reads += 1;
+                    Some(if reads == 1 { "claude" } else { "zsh" }.to_owned())
+                },
+                |_| Some(started)
+            ),
+            None
+        );
+        for name in ["claude", "claude-aarch64-unknown-linux-gnu"] {
+            assert_eq!(
+                super::context_owner_start_with(
+                    spec,
+                    Some("42"),
+                    |pid| {
+                        assert_eq!(pid, 42);
+                        Some(name.to_owned())
+                    },
+                    |pid| {
+                        assert_eq!(pid, 42);
+                        Some(started)
+                    }
+                ),
+                Some(started)
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[test]

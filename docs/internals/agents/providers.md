@@ -161,9 +161,9 @@ A window is account-scoped, so its displayed value fuses every reading of it: ac
 
 [`fresh_windows`](../../../crates/rimz/src/store/snapshot/view/providers.rs) reduces the admitted sessions' readings to one live candidate per window identity.
 
-1. A reading is rejected whole when it is content-stale (`AgentRateLimits::content_stale_at`): its shortest duration window's reset has passed, or, with no dated duration window, its earliest dated scoped reset has. An idle session re-runs its statusline and stamps a fresh `observed_at` over a days-old payload, so `observed_at` alone cannot tell live from stale.
+1. A reading is rejected whole when it is content-stale (`AgentRateLimits::content_stale_at`): its shortest duration window's reset has passed, or, with no dated duration window, its earliest dated scoped reset has. Statusline persistence carries each unchanged `BestEffort` window's prior `observed_at`, matched by identity, usage and reset. An idle replay keeps its content time even if another window changes or disappears. When the prior sidecar has no windows (missing, no rate limits, or an empty set), the first best-effort windows take the earlier of capture and the verified `RIMZ_AGENT_PID` process's start time. This keeps a pre-credit process's first replay after `/clear` or an in-process `/resume` older than the post-credit OAuth anchor. The owner pid must parse above 1 and its process name must match the agent; an unchecked owner or unknown start falls back to capture. A changed window, a new identity in an already populated sidecar or an unstamped prior takes the capture time; an `Authoritative` window always keeps its query time.
 2. Within a surviving reading, a window with no `used_percentage` or with a passed reset is dropped.
-3. Among the rest, the highest `used_percentage` wins per identity. Usage only climbs within a live window, so the most-drained reading is the most current, and the pick is stable against sessions reporting at slightly different instants.
+3. Per identity, find the newest `observed_at`, then keep the highest `used_percentage` among windows stamped no more than 10 seconds before it. This tolerates parallel render lag without letting an old pre-credit high reading beat a new post-credit low one. Unstamped windows count as oldest; if all are unstamped, highest usage wins. The pick is independent of session order, including ties.
 
 ### Across sources and time
 
@@ -184,7 +184,7 @@ A window is account-scoped, so its displayed value fuses every reading of it: ac
 
 An unstamped live reading cannot prove it is current; an unstamped prior yields to any stamped reading. Only the producer confirms a refill: a consumer holds the producer's persisted value.
 
-The confirm path exists for the mid-window free reset a provider sometimes grants, which refills usage without moving the reset timer. One garbled statusline sample cannot dip a bar, and a genuine refill still surfaces after two minutes. One disagreement stays unresolved: a live session that keeps reporting a fresh value contradicting the API alternates with each direct query, and the authoritative value is never more than one read cadence away.
+The confirm path exists for the mid-window free reset a provider sometimes grants, which refills usage without moving the reset timer. One garbled statusline sample cannot dip a bar, and a genuine refill still surfaces after two minutes. An unchanged idle replay cannot displace a newer authoritative reading. One disagreement stays unresolved: a live session whose value keeps changing in contradiction to the API can alternate with each direct query, and the authoritative value is never more than one read cadence away.
 
 `RIMZ_RATE_LIMIT_TRACE` (off by default; `1` writes `rate_limits_trace.jsonl` under the runtime shared root, any other value names the path) appends each frame's live candidate (`used_percentage`, `resets_at`, `observed_at`, `source`) and the fused result, for tuning the confirm window against real resets.
 
