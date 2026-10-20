@@ -684,7 +684,7 @@ fn new_group_appends_during_freeze_then_takes_its_rank_after_expiry() {
 }
 
 #[test]
-fn adopt_shared_hold_installs_reorders_and_recaptures() {
+fn adopt_shared_order_installs_hold_reorders_and_recaptures() {
     let mut ui = UiState::default();
     let mut current = snapshot_with_groups(vec![group(
         "a",
@@ -706,7 +706,7 @@ fn adopt_shared_hold_installs_reorders_and_recaptures() {
     });
     let stamp_ms = 2_000;
 
-    adopt_shared_hold(&mut ui, &mut current, order, stamp_ms);
+    adopt_shared_order(&mut ui, &mut current, order, Some(stamp_ms));
 
     assert_eq!(row_ids(&current, "a"), vec!["a2", "a1", "a-new"]);
     assert_eq!(

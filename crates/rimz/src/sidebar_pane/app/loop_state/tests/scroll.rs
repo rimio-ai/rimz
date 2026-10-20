@@ -94,6 +94,241 @@ fn publish_scrolled(source: &mut Rig, offset: usize) {
     paint_at(source, 0);
 }
 
+#[test]
+fn unfrozen_publication_clears_any_hold_and_restores_hidden_deferral() {
+    for prior in ["none", "own", "copied"] {
+        let (mut source, mut destination, _) = viewport_pair(MuxName::Zellij);
+        destination.state.ui.freeze = None;
+        if prior == "own" {
+            layout_freeze::arm_freeze(&mut destination.state.ui, 1);
+        } else if prior == "copied" {
+            layout_freeze::arm_freeze(
+                &mut source.state.ui,
+                source.state.clock.timestamp().as_millisecond(),
+            );
+            publish_scrolled(&mut source, 12);
+            destination
+                .state
+                .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+            assert!(destination.state.ui.freeze.is_some());
+        }
+        source.state.ui.freeze = None;
+        Arc::make_mut(&mut Arc::make_mut(&mut source.state.current.worktree_groups)[0].rows)
+            .swap(1, 2);
+        publish_scrolled(&mut source, 3);
+        let published = source.state.ui.last_order.clone();
+        let rows = Arc::make_mut(
+            &mut Arc::make_mut(&mut destination.state.current.worktree_groups)[0].rows,
+        );
+        let mut arrival = rows.last().unwrap().clone();
+        arrival.id = "arrival".into();
+        arrival.pane = Some(pane("terminal_20", "tab_0", false));
+        rows.push(arrival);
+        destination
+            .state
+            .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+        assert!(destination.state.ui.freeze.is_none(), "prior hold: {prior}");
+        let mut expected = published.rows;
+        expected.push(render::FrozenRow {
+            id: "arrival".into(),
+            pane: Some("zellij:terminal_20".into()),
+        });
+        assert_eq!(destination.state.ui.last_order.rows, expected);
+        assert_eq!(
+            layout_freeze::capture_order(&destination.state.current, &destination.state.ui).rows,
+            expected
+        );
+        assert!(destination.state.admits_clock_only(false));
+        let before = destination.state.projections;
+        let mut content = destination.state.current.clone();
+        content.display_name = "deferred after adoption".into();
+        destination.deliver(destination.lazy_update(content, SnapshotSource::Produced));
+        assert_eq!(
+            destination.state.projections, before,
+            "a settled hidden adoption must not project within the tick"
+        );
+        assert_ne!(
+            destination.state.current.display_name,
+            "deferred after adoption"
+        );
+    }
+}
+
+#[test]
+fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
+    for (mux, resized) in [
+        (MuxName::Zellij, false),
+        (MuxName::Tmux, false),
+        (MuxName::Zellij, true),
+        (MuxName::Tmux, true),
+    ] {
+        let (mut source, mut destination, _) = viewport_pair(mux);
+        let clock = LoopClock::play(Timestamp::now());
+        destination.state.clock = clock.clone();
+        if resized {
+            destination.state.ui.freeze = None;
+            destination
+                .state
+                .on_resize(&mut destination.fetch, &mut destination.terminal, None)
+                .unwrap();
+            assert!(destination.state.optimistic_watch_until.is_some());
+        }
+        Arc::make_mut(&mut Arc::make_mut(&mut source.state.current.worktree_groups)[0].rows)
+            .swap(7, 8);
+        source.state.ui.last_order =
+            layout_freeze::capture_order(&source.state.current, &source.state.ui);
+        layout_freeze::arm_freeze(
+            &mut source.state.ui,
+            source.state.clock.timestamp().as_millisecond(),
+        );
+        publish_scrolled(&mut source, 12);
+        let published = source.state.ui.last_order.clone();
+        destination
+            .state
+            .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+        assert!(
+            destination.state.ui.freeze.is_some(),
+            "{mux:?} resized={resized}: a hidden pane must adopt the frozen publication"
+        );
+        let hold = destination.state.ui.freeze.as_ref().unwrap();
+        assert_eq!(hold.armed_ms, clock.timestamp().as_millisecond());
+        assert_eq!(hold.frozen.rows, published.rows);
+        assert!(!destination.state.admits_clock_only(false));
+        destination.state.next_frame = clock.now();
+        destination.paint(true);
+        assert!(!destination.state.viewport_pending);
+        let painted = destination.state.ui.painted_rows.clone();
+        let painted_ids: Vec<_> = painted.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(
+            painted_ids
+                .windows(2)
+                .any(|rows| rows == ["agent-8", "agent-7"])
+        );
+        let target = destination
+            .state
+            .current
+            .own_view
+            .as_ref()
+            .unwrap()
+            .working_pane_ids[0]
+            .clone();
+        destination.event(SidebarEvent::FocusChanged {
+            focused: vec![target],
+            unfocused: vec![],
+        });
+        assert!(destination.state.watched());
+        destination.state.next_frame = clock.now();
+        destination.paint(true);
+        assert_eq!(destination.state.ui.last_order.rows, published.rows);
+        assert_eq!(destination.state.ui.painted_rows, painted);
+    }
+}
+
+#[test]
+fn hidden_resize_does_not_replace_the_watched_viewport() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let (source, mut destination, _) = viewport_pair(mux);
+        let sequence = source
+            .state
+            .viewport
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .sequence;
+        destination.state.ui.freeze = None;
+        destination
+            .state
+            .on_resize(&mut destination.fetch, &mut destination.terminal, None)
+            .unwrap();
+        let latest = source.state.viewport.lock().unwrap();
+        let latest = latest.as_ref().unwrap();
+        assert_eq!(latest.source, source.state.config.instance_id);
+        assert_eq!(latest.sequence, sequence);
+    }
+}
+
+#[test]
+fn freeze_start_and_expiry_each_publish_once_with_unchanged_view() {
+    let (mut source, _, _) = viewport_pair(MuxName::Zellij);
+    let clock = LoopClock::play(Timestamp::now());
+    source.state.clock = clock.clone();
+    source.state.ui.freeze = None;
+    source.state.tab_read_dwell_until = None;
+    source.state.dirty = true;
+    source.state.next_frame = clock.now();
+    source.paint(true);
+    let initial = source
+        .state
+        .viewport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    source
+        .state
+        .on_input(
+            Wakeup::Scroll { down: false },
+            &mut source.terminal,
+            &mut source.fetch,
+        )
+        .unwrap();
+    assert!(source.state.ui.freeze.is_some());
+    let armed = source
+        .state
+        .viewport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(armed.view.rows, initial.view.rows);
+    assert_eq!(armed.view.order, initial.view.order);
+    assert_eq!(
+        armed.sequence,
+        initial.sequence + 1,
+        "arming alone republishes"
+    );
+    clock.advance(crate::sidebar::timing::LAYOUT_FREEZE);
+    let mut snapshot = source.state.current.clone();
+    snapshot.now = clock.timestamp();
+    source.fold(snapshot, SnapshotSource::Produced);
+    assert!(source.state.ui.freeze.is_none());
+    source.state.next_frame = clock.now();
+    source.paint(true);
+    let expired = source
+        .state
+        .viewport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    assert_eq!(expired.view.rows, initial.view.rows);
+    assert_eq!(expired.view.order, initial.view.order);
+    assert_eq!(
+        expired.sequence,
+        armed.sequence + 1,
+        "expiry alone republishes"
+    );
+    source.state.dirty = true;
+    source.state.next_frame = clock.now();
+    source.paint(true);
+    assert_eq!(
+        source
+            .state
+            .viewport
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .sequence,
+        expired.sequence,
+        "identical paints deduplicate"
+    );
+}
+
 fn offscreen_focus_marker(mux: MuxName) -> (Rig, Instant) {
     let (mut rig, _) = scroll_rig();
     rig.state.config.mux = mux;

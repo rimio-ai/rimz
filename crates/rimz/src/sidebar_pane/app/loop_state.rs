@@ -139,6 +139,7 @@ struct ViewportState {
     held_expansions: BTreeSet<String>,
     drawn_selection: Option<String>,
     order: render::FrozenOrder,
+    frozen: bool,
     expanded_groups: BTreeSet<String>,
     landed_open: bool,
     delegation_overrides: BTreeMap<String, bool>,
@@ -690,6 +691,13 @@ impl LoopState {
     /// Unknown ownership or own-view state reads as watched so uncertainty never
     /// suppresses motion.
     fn watched(&self) -> bool {
+        // Resize optimism keeps painting, but does not grant viewport ownership.
+        if self
+            .optimistic_watch_until
+            .is_some_and(|until| self.clock.now() < until)
+        {
+            return true;
+        }
         self.watches_snapshot(&self.current)
     }
 
@@ -698,12 +706,6 @@ impl LoopState {
     }
 
     fn watches_view(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
-        if self
-            .optimistic_watch_until
-            .is_some_and(|until| self.clock.now() < until)
-        {
-            return true;
-        }
         let Some(own_pane) = self.config.own_pane.as_ref() else {
             return true;
         };
@@ -2794,11 +2796,11 @@ impl LoopState {
                 self.ui.scroll_ease.cancel();
             }
             if let Some(order) = anchor.order {
-                layout_freeze::adopt_shared_hold(
+                layout_freeze::adopt_shared_order(
                     &mut self.ui,
                     &mut self.current,
                     order,
-                    now_ms as i64,
+                    Some(now_ms as i64),
                 );
             }
             self.ui.last_focus_anchor_ms = anchor.issued_at_ms;
@@ -2916,7 +2918,7 @@ impl LoopState {
     }
 
     fn publish_viewport(&mut self) {
-        if !self.watched() {
+        if !self.watches_snapshot(&self.current) {
             return;
         }
         let view = ViewportState {
@@ -2930,6 +2932,7 @@ impl LoopState {
             held_expansions: self.ui.held_expansions.clone(),
             drawn_selection: self.ui.drawn_selection.clone(),
             order: self.ui.last_order.clone(),
+            frozen: self.ui.freeze.is_some(),
             expanded_groups: self.ui.expanded_groups.clone(),
             landed_open: self.ui.landed_open,
             delegation_overrides: self.ui.delegation_overrides.clone(),
@@ -2971,7 +2974,7 @@ impl LoopState {
     }
 
     fn adoptable_viewport(&self) -> Option<ViewportPublication> {
-        if self.ui.drawn_scroll_max.is_some() && self.watched() {
+        if self.ui.drawn_scroll_max.is_some() && self.watches_snapshot(&self.current) {
             return None;
         }
         self.viewport
@@ -3013,11 +3016,12 @@ impl LoopState {
         self.ui.own_input_reveal = false;
         self.ui.landed_reveal = false;
         self.ui.reveal_row = None;
-        layout_freeze::adopt_shared_hold(
+        layout_freeze::adopt_shared_order(
             &mut self.ui,
             &mut self.current,
             view.order,
-            self.clock.timestamp().as_millisecond(),
+            view.frozen
+                .then_some(self.clock.timestamp().as_millisecond()),
         );
         if self.ui.drawn_scroll_max.is_none() {
             let size = terminal.get_frame().area();
