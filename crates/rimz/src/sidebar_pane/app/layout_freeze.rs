@@ -97,18 +97,18 @@ pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOr
     }
 }
 
-pub(super) fn adopt_shared_hold(
+pub(super) fn adopt_shared_order(
     ui: &mut UiState,
     current: &mut SidebarSnapshot,
     mut order: FrozenOrder,
-    now_ms: i64,
+    armed_ms: Option<i64>,
 ) {
     migrate_frozen_order(current, &mut order);
     admit_new_items(current, &mut order);
     reorder_to_frozen(current, &order);
-    ui.freeze = Some(LayoutFreeze {
+    ui.freeze = armed_ms.map(|armed_ms| LayoutFreeze {
         frozen: order,
-        armed_ms: now_ms,
+        armed_ms,
     });
     super::selection::anchor_selection(ui, current);
     ui.last_order = capture_order(current, ui);
