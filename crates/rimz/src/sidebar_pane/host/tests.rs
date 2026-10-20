@@ -105,7 +105,7 @@ fn cross_tab_push_reaches_the_other_attachment_before_dispatch() {
                 "the source must not receive its own push"
             );
             if outcome == "capped" {
-                assert!(started.elapsed() >= Duration::from_millis(if stale { 300 } else { 100 }));
+                assert!(started.elapsed() >= Duration::from_millis(500));
                 dispatched_tx.send(()).unwrap();
             }
             if outcome == "superseded" {

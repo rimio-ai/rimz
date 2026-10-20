@@ -203,6 +203,45 @@ impl TraceRig {
 }
 
 #[test]
+fn dispatch_spends_one_click_budget_on_request_work_and_fit() {
+    for (lead_ms, fit_ms) in [(42, None), (42, Some(70)), (42, Some(458)), (42, Some(700))] {
+        let rig = TraceRig::new();
+        let clicked = Instant::now();
+        let clock = Arc::new(std::sync::Mutex::new(
+            clicked + Duration::from_millis(lead_ms),
+        ));
+        let fit_clock = clock.clone();
+        let peers = rig.peers.clone().with_fit(fit_ms.map(|fit_ms| {
+            Arc::new(move |_: &FocusAnchor| {
+                *fit_clock.lock().unwrap() += Duration::from_millis(fit_ms);
+                Some(HashMap::new())
+            }) as FitView
+        }));
+        peers.dispatch_with(
+            rig.anchor(),
+            clicked,
+            || (),
+            || *clock.lock().unwrap(),
+            |ack, _| ack.try_recv().map_err(|_| RecvTimeoutError::Disconnected),
+        );
+        let records = rig.records();
+        let event = &records[0]["event"];
+        let spent_ms = lead_ms + fit_ms.unwrap_or(0);
+        assert_eq!(event["budget_ms"], 500_u64.saturating_sub(spent_ms));
+        assert_eq!(event["lead_ms"], spent_ms);
+        assert_eq!(event["fit_ms"].as_u64(), fit_ms);
+        assert_eq!(
+            event["outcome"],
+            if spent_ms >= 500 {
+                "timed_out"
+            } else {
+                "released"
+            }
+        );
+    }
+}
+
+#[test]
 fn dispatch_records_click_lead_and_the_landing_paint_instead_of_receipt_time() {
     for offset in [-17_i64, 23] {
         for verdict in [PushVerdict::Painted, PushVerdict::Displaced] {
@@ -286,7 +325,11 @@ fn dispatch_records_empty_and_failed_deliveries_only_after_the_jump() {
         assert_eq!(event["nonce"], anchor.nonce.to_string());
         assert_eq!(event["target"], "tmux:%3");
         assert_eq!(event["outcome"], "released");
-        assert_eq!(event["budget_ms"], 100);
+        let remaining_ms = 500_u64.saturating_sub(event["lead_ms"].as_u64().unwrap());
+        assert!(
+            (remaining_ms.saturating_sub(1)..=remaining_ms)
+                .contains(&event["budget_ms"].as_u64().unwrap())
+        );
         assert!(event.get("fit_ms").is_none(), "no fit ran");
         assert!(event["dispatched_ms"].as_u64().unwrap() >= event["decided_ms"].as_u64().unwrap());
         let mut expected = if with_peers {
@@ -364,11 +407,15 @@ fn dispatch_records_the_fitted_push_budget() {
     peers.dispatch(rig.anchor(), Instant::now(), || {
         assert!(rig.records().is_empty())
     });
-    assert_eq!(rig.records()[0]["event"]["budget_ms"], 300);
+    let records = rig.records();
+    let event = &records[0]["event"];
+    let remaining_ms = 500_u64.saturating_sub(event["lead_ms"].as_u64().unwrap());
     assert!(
-        rig.records()[0]["event"]["fit_ms"]
-            .as_u64()
-            .is_some_and(|fit_ms| fit_ms >= 2),
+        (remaining_ms.saturating_sub(1)..=remaining_ms)
+            .contains(&event["budget_ms"].as_u64().unwrap())
+    );
+    assert!(
+        event["fit_ms"].as_u64().is_some_and(|fit_ms| fit_ms >= 2),
         "the fitted push must record the pre-send fit duration"
     );
 }
@@ -402,8 +449,9 @@ fn dispatch_collects_reports_sent_after_the_budget_but_before_the_horizon() {
         destination.instance_id.as_str()
     );
     assert_eq!(event["peers"][0]["verdict"], "expired");
-    assert!(event["decided_ms"].as_u64().unwrap() >= 100);
-    assert!(event["peers"][0]["finished_ms"].as_u64().unwrap() >= 100);
+    let budget_ms = event["budget_ms"].as_u64().unwrap();
+    assert!(event["decided_ms"].as_u64().unwrap() >= budget_ms);
+    assert!(event["peers"][0]["finished_ms"].as_u64().unwrap() >= budget_ms);
 }
 
 #[test]
@@ -452,7 +500,7 @@ fn dispatch_keeps_timely_buffered_reports_after_a_slow_jump() {
 }
 
 #[test]
-fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
+fn stale_push_carries_rows_and_spends_fit_time_from_the_click_deadline() {
     use crate::mux::focus_anchor::{FocusIntentState, FocusOrigin};
     use crate::sidebar_pane::app::fixtures::{serve_config, workspace};
     use crate::sidebar_pane::app::plane::DataPlane;
@@ -460,6 +508,8 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
 
     for (painted, fit_time) in [
         (true, Duration::ZERO),
+        (true, Duration::from_millis(200)),
+        (false, Duration::from_millis(200)),
         (true, Duration::from_secs(2)),
         (false, Duration::from_secs(2)),
     ] {
@@ -498,7 +548,7 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
             placement: None,
             order: None,
         };
-        let (sent, until, fit_ms, ack, _) = peers.push(&anchor, || *clock.lock().unwrap());
+        let (sent, until, fit_ms, ack, _) = peers.push(&anchor, start, || *clock.lock().unwrap());
         assert_eq!(
             fit_ms,
             (fit_time != Duration::ZERO).then_some(duration_millis(fit_time))
@@ -506,8 +556,8 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
         assert_eq!(sent, returned, "send timing starts only after the fit");
         assert_eq!(
             until,
-            returned + Duration::from_millis(300),
-            "fit time must not spend the stale paint budget"
+            start + Duration::from_millis(500),
+            "fit time spends the same click budget as request work and paint"
         );
         let Wakeup::FocusPush(push) = rx.try_recv().unwrap() else {
             panic!("destination must receive the focus push")
@@ -519,7 +569,7 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
             until,
             || *clock.lock().unwrap(),
             |timeout| {
-                assert_eq!(timeout, Duration::from_millis(300));
+                assert_eq!(timeout, Duration::from_millis(500).saturating_sub(fit_time));
                 if painted {
                     push.take().unwrap().finish(PushVerdict::Painted);
                     Ok(ack.try_recv().unwrap())
@@ -531,7 +581,7 @@ fn stale_push_carries_rows_and_waits_from_fit_return_until_first_ack_or_cap() {
         );
         assert_eq!(
             outcome,
-            if painted {
+            if painted && fit_time < Duration::from_millis(500) {
                 PushOutcome::Painted
             } else {
                 PushOutcome::TimedOut
