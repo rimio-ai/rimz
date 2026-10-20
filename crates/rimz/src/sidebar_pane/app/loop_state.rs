@@ -183,6 +183,7 @@ pub(super) struct LoopState {
     pending_input_focus: Option<PaneId>,
     focus_marker: Option<FocusMarker>,
     painted_focus_anchor_ms: u64,
+    painted_at: Instant,
     painted_height: u16,
     paints: u64,
     retired_anchor: Option<(Instant, u64)>,
@@ -405,6 +406,7 @@ impl LoopState {
             pending_input_focus: None,
             focus_marker: None,
             painted_focus_anchor_ms: 0,
+            painted_at: now,
             painted_height: 0,
             paints: 0,
             retired_anchor: None,
@@ -794,6 +796,7 @@ impl LoopState {
             focus_landing: _,
             focus_rollback: _,
             painted_focus_anchor_ms: _,
+            painted_at: _,
             painted_height: _,
             paints: _,
             retired_anchor: _,
@@ -1109,7 +1112,7 @@ impl LoopState {
             self.paint_hold.release();
         }
         if let Some(verdict) = self.painted_focus_verdict(&push.anchor, Some(&push)) {
-            push.finish(verdict);
+            push.finish_painted(verdict, self.painted_at);
             return Ok(());
         }
         if let Some(pending) = self.pending_focus_push.replace(push) {
@@ -1300,6 +1303,7 @@ impl LoopState {
         let placement = self.focus_placement(&target);
         spawn_pane_focus(
             &self.clock,
+            self.clock.now(),
             target,
             &self.config.session_name,
             self.runtime.clone(),
@@ -1545,10 +1549,12 @@ impl LoopState {
         for effect in applied.effects {
             match effect {
                 InputEffect::Focus(pane) => {
+                    let clicked = self.clock.now();
                     let placement = self.focus_placement(&pane);
                     let peers = self.focus_peers_for(&pane);
                     spawn_pane_focus(
                         &self.clock,
+                        clicked,
                         pane,
                         &self.config.session_name,
                         self.runtime.clone(),
@@ -2089,6 +2095,7 @@ impl LoopState {
             self.health.alert.as_ref(),
             &mut self.ui,
         )?;
+        self.painted_at = self.clock.now();
         self.paints += 1;
         self.painted_height = terminal.get_frame().area().height;
         let selected_visible = self
@@ -2989,7 +2996,7 @@ impl LoopState {
         if let Some(verdict) = verdict
             && let Some(push) = self.pending_focus_push.take()
         {
-            push.finish(verdict);
+            push.finish_painted(verdict, self.painted_at);
         }
         if let Some(push) = &mut self.pending_focus_push {
             push.peer.unmatched_paints = push.peer.unmatched_paints.saturating_add(1);

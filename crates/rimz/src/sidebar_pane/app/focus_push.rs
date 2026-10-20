@@ -74,6 +74,17 @@ impl FocusPush {
         self.peer.verdict = Some(verdict);
         let _ = self.ack.0.send(self.peer);
     }
+
+    pub(super) fn finish_painted(mut self, verdict: PushVerdict, painted: Instant) {
+        let (elapsed, sign) = if painted >= self.sent {
+            (painted.duration_since(self.sent), 1)
+        } else {
+            (self.sent.duration_since(painted), -1)
+        };
+        self.peer.painted_ms =
+            Some(sign * i64::try_from(duration_millis(elapsed)).unwrap_or(i64::MAX));
+        self.finish(verdict);
+    }
 }
 
 pub(super) type FitView =
@@ -105,21 +116,35 @@ impl FocusPeers {
     pub(in crate::sidebar_pane) fn dispatch<T>(
         &self,
         anchor: FocusAnchor,
+        clicked: Instant,
         dispatch: impl FnOnce() -> T,
     ) -> T {
-        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, Instant::now);
+        self.dispatch_with(anchor, clicked, dispatch, Instant::now, |rx, timeout| {
+            rx.recv_timeout(timeout)
+        })
+    }
+
+    fn dispatch_with<T>(
+        &self,
+        anchor: FocusAnchor,
+        clicked: Instant,
+        dispatch: impl FnOnce() -> T,
+        mut now: impl FnMut() -> Instant,
+        mut receive: impl FnMut(&Receiver<PushPeer>, Duration) -> Result<PushPeer, RecvTimeoutError>,
+    ) -> T {
+        let (sent, until, fit_ms, rx, mut traces) = self.push(&anchor, &mut now);
         let mut reports = Vec::new();
         let outcome = wait_for_paint(
             until,
-            Instant::now,
-            |timeout| rx.recv_timeout(timeout),
+            &mut now,
+            |timeout| receive(&rx, timeout),
             &mut reports,
         );
-        let decided = Instant::now();
+        let decided = now();
         let result = dispatch();
-        let dispatched = Instant::now();
+        let dispatched = now();
         let horizon = sent + REPORT_HORIZON;
-        while let Ok(report) = rx.recv_timeout(horizon.saturating_duration_since(Instant::now())) {
+        while let Ok(report) = receive(&rx, horizon.saturating_duration_since(now())) {
             reports.push(report);
         }
         for mut report in reports {
@@ -143,6 +168,7 @@ impl FocusPeers {
                 target: anchor.pane_id,
                 outcome,
                 budget_ms: duration_millis(until.duration_since(sent)),
+                lead_ms: Some(duration_millis(sent.duration_since(clicked))),
                 fit_ms,
                 decided_ms: duration_millis(decided.duration_since(sent)),
                 dispatched_ms: duration_millis(dispatched.duration_since(sent)),
