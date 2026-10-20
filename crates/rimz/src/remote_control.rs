@@ -419,10 +419,11 @@ fn codex_daemon_envs(
     let codex = AgentKind::new_unchecked("codex");
     let ambient = crate::agents::ambient_env();
     let mut envs = BTreeMap::from([(LoginKey::default_for(codex.clone()), ambient.clone())]);
-    if let Ok(catalog) = crate::agents::LoginCatalog::from_config(&machine.accounts)
-        && !enabled
-    {
-        for login in catalog.all().filter(|login| login.kind() == &codex) {
+    if let Ok(catalog) = crate::agents::LoginCatalog::from_config(&machine.accounts) {
+        for login in catalog
+            .all()
+            .filter(|login| login.kind() == &codex && (!enabled || login.is_default()))
+        {
             envs.insert(login.key(), login.env(&ambient));
         }
     }

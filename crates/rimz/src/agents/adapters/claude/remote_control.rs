@@ -575,6 +575,15 @@ fn host_argv_with_login(
             0..0,
             ["env".to_owned(), format!("CLAUDE_CONFIG_DIR={home}")],
         );
+    } else {
+        argv.splice(
+            0..0,
+            [
+                "env".to_owned(),
+                "-u".to_owned(),
+                "CLAUDE_CONFIG_DIR".to_owned(),
+            ],
+        );
     }
     argv
 }
