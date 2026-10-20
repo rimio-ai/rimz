@@ -1,6 +1,6 @@
 # Accounts CLI
 
-`rimz accounts` lists provider accounts; it is the same as `rimz accounts list` and exits 0. Its subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
+`rimz accounts` compares provider accounts, plans, usage left, and launch health; it is the same as `rimz accounts list` and exits 0. `show` expands account details. The other subcommands select, declare, redeem reset credits for, and remove named accounts. A named account is a separate provider home: RimZ launches Claude with `CLAUDE_CONFIG_DIR`, and Codex with `CODEX_HOME`, set to that home. Credentials stay apart; `add` and every launch link the rest of a `shared` account, or the settings of a `standalone` one, to the provider's own home. The `default` account is the provider's own home, resolved the way the provider CLI resolves it, and is never declared.
 
 The commands work inside or outside a room, except bare `use` and `use --reset`, which require running inside one. Bare `use` pins only the current room's account for that provider, leaving running agents and machine and project configuration unchanged. `--reset` removes that pin. An unpinned provider follows the trusted project's selection, then the machine's, then `default`, live on each launch ([Accounts at start](./getting-started.md#accounts)). `add`, `use --global`, and `remove` write the machine `config.toml`; `add` also writes into the account home. A machine selection reaches new rooms and existing rooms following that default, not pinned providers. Inside its own multiplexer session, `start --account` refuses and names `accounts use` instead. The workflow is in the [accounts guide](../../guide/accounts.md).
 
@@ -12,17 +12,18 @@ rimz accounts use --reset codex                      # unpin; follow project and
 rimz accounts use --global codex personal            # machine default for new and following rooms
 rimz accounts list                                   # every account, its usage left, and whether a room can use it
 rimz accounts list --json
+rimz accounts show codex                             # one provider's account details
 rimz accounts redeem codex personal --dry-run        # preview without spending
 rimz accounts remove claude work                     # forget the entry; the home stays on disk
 ```
 
 ## Kinds, names, and homes
 
-Named accounts exist for `claude` and `codex` only. Any other kind is refused with `<kind> has no named accounts; accounts are supported for claude, codex`.
+Named accounts exist for `claude` and `codex` only. `add`, `use`, and `remove` refuse kinds without named accounts with `<kind> has no named accounts; accounts are supported for claude, codex`; `list` and `show` report every known kind. `use --global <kind> default` can also clear a hand-set selection for any kind.
 
 An account name is 1 to 32 characters of `a-z`, `0-9`, `_`, and `-`, starting with a letter or digit. `default` is reserved for the provider's own home.
 
-Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Account verbs keep their separate `KIND NAME` arguments; `loop add --account` takes a bare name because the task supplies its provider.
+Single-token account selections use `KIND@NAME`. `start --account` and `reset --account` also accept `KIND=NAME` as a compatibility alias. Mutation verbs keep their separate `KIND NAME` arguments; `show` takes `KIND[@NAME]`. `loop add --account` takes a bare name because the task supplies its provider.
 
 Every named account has a home directory, and RimZ checks each home when it reads the machine config:
 
@@ -34,7 +35,7 @@ Every named account has a home directory, and RimZ checks each home when it read
 | One account per home | Two accounts of the same kind cannot share a home. |
 | No `,` and no trailing `projects` | Provider home lists split on commas, and Claude reads a directory named `projects` as its transcript folder. |
 
-A `config.toml` entry that breaks a rule, or that declares `default`, makes every `rimz accounts` command exit 1 with `invalid per-machine account at <path>: ...` and the fix.
+A `config.toml` entry that breaks a rule, or that declares `default`, makes mutations refuse with `invalid per-machine account at <path>: ...` and the fix. Listing and `show` warn, retain healthy kinds, and report the failed kind instead of failing the command.
 
 ## `add`
 
@@ -148,94 +149,150 @@ A global change can move an inheriting room outside a session's history pool; it
 ## `list`
 
 ```sh
-rimz accounts list [--json]
+rimz accounts [--json] [--refresh] [--all]
+rimz accounts list [--json] [--refresh] [--all]
 ```
 
-`list` prints one table with a row per account of each supported kind, `default` first within its kind and an empty line between kinds, then the legend for its two markers, and each problem on its own line with its fix:
+Both spellings print the same overview: one table per provider, with `default` first and named accounts by name. Providers with a logged-in account or named accounts get tables; other kinds fold into an `Also:` line with their version and login status. Spend history alone does not earn a table. `--all` expands folded kinds. Providers follow the dashboard's usage ranking; kinds without default-account facts follow in registry order.
 
-```console
-$ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              EXTRA  CREDITS  AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   –      -        -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  –      -        -       shared   ~/.rimz/accounts/claude/work
-
-●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   –      -        -       -        ~/.codex
-●  this room (claude)   ●  machine default (codex)   ○  new rooms
-pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
-RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
-```
-
-`list` reads from a position: the room the command runs in, or the project at the current directory, or the one `--root` names. `●` marks the account a launch from there uses for its kind: the room's pin at that root, running or stopped, else the trusted project's `[accounts]`, then the machine's `[accounts.use]`, then `default`, resolved live. A blocked or unreadable project selection, undeclared account, or unreadable machine core leaves the affected kind without `●` and prints a warning with the fix; healthy kinds keep their markers. A kind pinned to `default` needs neither project nor machine configuration. An unreadable room record leaves every kind without `●`; machine selections can still carry `○`. `list` still exits 0.
-
-`○` marks the machine's `[accounts.use]` selection or `default` when the machine selects nothing for the kind, on every kind where that is not the `●` account. This is the default for new rooms without a project selection or explicit pin, and for existing rooms following the machine default. When no account of a kind carries `●`, the machine-default account still carries `○`.
-
-The legend line under the table names every layer that decides `●` among the kinds shown, in the order `this room`, `this project`, `machine default`. With multiple deciding layers, each names its provider kinds:
-
-| Legend | `●` is decided by |
+| Flag | Effect |
 | --- | --- |
-| `●  this room   ○  new rooms` | Room pins decide all displayed `●` markers. An unpinned kind follows project and machine defaults live. |
-| `●  this project   ○  new rooms` | Trusted project selections decide all displayed `●` markers. |
-| `●  machine default` | Machine selections or provider defaults decide all displayed `●` markers. An account carries `○` only where a kind has no `●`, and `   ○  new rooms` follows the legend then. |
-| `●  this room (codex)   ●  machine default (claude)   ○  new rooms` | Codex is pinned; Claude follows the machine default or its own home. |
-| `○  new rooms` | Nothing: the position's selection is blocked or unreadable. |
+| `--all` | Expand every registered kind into a table. Does not change JSON rows. |
+| `--refresh` | Bypass account and usage TTLs ([freshness](#how-fresh-the-figures-are)). |
+| `--json` | Print the [merged account array](#json-output), including folded kinds. |
 
-`5h LEFT` and `7d LEFT` are the account's five-hour and seven-day usage windows, read as what is left, as [`rimz providers`](./providers.md) reads them: 100 minus the used percentage, or 100% before the window's clock starts, then the time until the window resets. A model-scoped window stays in [`rimz providers`](./providers.md). `EXTRA` is the account's paid usage beyond the subscription, the same text as the `EXTRA LEFT` cell of [`rimz providers`](./providers.md#provider-tables): the dollars left, else `$x used`, `off` when disabled, `∞` for unlimited credit, or `–` without a login or a reading. ` · paying` follows it when the account's subscription windows are spent and the provider reports usable paid credit, the step a launch on it draws from next (`$2,413.92 · paying`); with `resume.spend_order = "resets_first"`, an account that has a banked reset auto-redeem would spend reads without it. `CREDITS` is the banked reset-credit count: `-` at zero, or the faint unknown cell without a login or a reading.
+The heading names the provider and CLI version: the active account's version, else the default account's, else the first known. With spending recorded and every account in the default history pool, it adds `$X spent in 7d` and, for multiple members, `(shared by default, a, b)`. With any standalone account, it instead adds `shared pool $X spent in 7d`, without the member list.
 
-| Cell | Meaning |
+### Provider tables
+
+| Column | Shows |
+| --- | --- |
+| (marker) | `●` on the account a launch from here uses; `○` on the machine default when it is not the `●` row. |
+| `NAME` | Bare account name; `default` is muted. |
+| `PLAN` | Plan label or a faint `–` when unknown, overridden by the first applicable state below. |
+| One `<window> LEFT` column | Every window any row reports, including model sub-caps and named quotas such as Copilot's `AI credits`. Reads what's left, time to reset, then pace. Percentages and countdowns align within the column. |
+| `EXTRA LEFT` | Only when some row reports paid usage: `off` when disabled, `∞` for unlimited credit, dollars left when known, else `$X used`, else `–`. ` · paying` follows when paid credit is the next spend step. |
+| `RESET CREDITS` | Only when some row reports reset credits: count plus the nearest expiry (`2 · exp 9d14h`), `2 · due` after expiry, a bare count without an expiry, `-` at zero, or `–` when unknown. |
+| `AGENTS` | Live cross-room agent count, `-` for none, or `–` when rooms or a live room's agents could not be read. Remote-control daemons are not agents. |
+| `SPEND 7d` | Only when some account is standalone: its own trailing-week spend, `-` when unrecorded, or `shared` for default-pool members. |
+| `READING` | Only when some row lacks an expected usage reading: `never read` or `no reading since <date>`. |
+
+`PLAN` applies this precedence: `not installed`; a setup problem (`home missing`, `hooks missing`, `hooks untrusted`, `hooks disabled`, `unavailable`); `lapsed`; `no login check` for providers without a login check; `logged out`; `not probed` or `probe failed`; then the plan label. Setup problems use warning tones, lapses the failure tone, and login states their provider-status tones. A setup problem takes precedence over a lapse in both `PLAN` and its repair line.
+
+| Window cell | Meaning |
 | --- | --- |
 | `85% · 2h46m · 0.3x` | 85% left; resets in 2 hours 46 minutes; using budget at 0.3 times even pace. |
 | `100% · ready` | The window's clock has not started. |
-| `no limit` | The limit is lifted, or the account has no subscription windows. |
-| `–` | Unknown: no reading yet, or the account is logged out or not declared. |
+| `N%` | No reset time is known. |
+| `no limit` | The window is lifted, or the account has no subscription windows. |
+| `–` | Lapsed, logged out, no probe record, or no reading. Paid usage and reset credits also read unknown without a login. |
 
-Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
+Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker. The definition is also in `accounts --help` and `accounts list --help`; no pace legend prints beneath the tables. Tables are not clipped to the terminal width.
 
-To fill these columns `list` probes each account's login and runs the usage reads that are due, the same ones `rimz providers` runs, and re-probes an account its last probe found logged out. It also re-probes older cached records whose login state is ambiguous. A cold run therefore waits on the provider, with a spinner on a terminal; a read that fails leaves the last stored reading.
+### Position and footer
 
-On a terminal narrower than the table, `HOME` clips with `…` and every other column stays whole; piped output and `--json` are never clipped.
+The position is the room the command runs in, else the project at the current directory, or the one `--root` names. `●` marks the account a launch from that position uses, inside or outside a room: its room pin, else the trusted project's selection, else the machine's `[accounts.use]`, else `default`, resolved live. Pins decide per provider. A blocked or unreadable selection leaves affected kinds without `●` and warns with the fix; healthy kinds keep theirs. A pin to `default` needs neither project nor machine configuration. An unreadable room record leaves all kinds without `●`.
 
-`AGENTS` counts the agents on the account that the [live-agent checks of `add`](#add) count, across every live room, `-` for none. A remote-control daemon is not an agent and is not counted here. When the rooms cannot be listed, or one live room's agents cannot be read, the column reads `–` and a warning on stderr names the cause.
+`○` marks the machine's selection, or `default` when it selects nothing, only when that account is not active. It is the default for new rooms without a project selection or explicit pin, and existing rooms following the machine default.
 
-`HISTORY` is the account's `history` mode, `shared` or `standalone`, and `-` for `default` and for a selected account nothing declares.
+After the tables comes one blank line, the marker legend, the folded `Also:` line, then displayed accounts' problems with fixes. Rows reading `not installed` have no problem line. The legend uses displayed rows only:
 
-`HOME` for a `default` row is the directory the provider resolves from your environment, so a `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you have exported shows there, unless it names a declared account's home, as it does in a pane born on that account; then the row shows the provider's own home. `STATUS` is one of:
+- One deciding layer: `● next launch from here (this room)`, `(this project)`, or `(machine default)`.
+- Mixed layers: `● next launch from here: codex pinned by this room, claude pinned by this project, pi by machine default`. Only present groups appear, in room, project, machine order, with kinds joined by `, `.
+- `   ○ new rooms` follows only when a displayed row carries `○`. With no `●`, it stands alone as `○ new rooms`. With neither marker, no legend prints.
 
-| Status | Meaning | Fix the problem line names |
-| --- | --- | --- |
-| `ready` | Setup is healthy and the provider reports a logged-in account. | none |
-| `login unknown` | Setup is healthy but no confident login reading is available. | Check the provider login, then refresh its reading. |
-| `logged out` | The home and its hooks are in order, but the provider reports no login under it. A setup problem below wins over it. | The provider's login command under the home (`CLAUDE_CONFIG_DIR=<home> claude`, `CODEX_HOME=<home> codex`, or the bare command for `default`) |
-| `lapsed` | Subscription access was rejected, independently of login and setup status. The status and problem use the failure tone. | `plan lapsed: no <product> access` (`no Claude access` for Claude); restore access with the provider, then `rimz providers claude --refresh` |
-| `home missing` | The home is not a directory. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
-| `hooks missing` | The home lacks RimZ hooks. | `rimz accounts add <kind> <name>`, or `rimz hooks install <kind>` for `default` |
-| `hooks untrusted` | The hooks are installed but the provider has not trusted them. Codex gates new hooks behind its own trust step. | Start the provider under the home (`CODEX_HOME=<home> codex`, or plain `codex` for `default`), run `/hooks`, and trust the RimZ hooks |
-| `unavailable` | A room, project, or machine selection names an account that is not declared, or a kind without named accounts. | `rimz accounts add <kind> <name>`, or the command that clears the selection |
+Setup problems name their repair: create or re-add the home, install hooks for `default`, enable disabled hooks, or trust Codex hooks with `/hooks` under that account. Without a setup problem, a lapse names `plan lapsed: no <product> access`; restore access, then run `rimz accounts show <kind> --refresh`. Logged-out accounts name their login command. An undeclared selected account names the declaration or selection fix.
 
-`rimz start` warns about a configured account with a setup problem status and opens the room; an explicit `--account` request still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts. `list` itself exits 0 whatever the statuses are.
+`rimz start` warns about configured account problems and opens the room; an explicit `--account` still refuses ([Accounts at start](./getting-started.md#accounts)). Agent launches refuse an unhealthy account rather than switching accounts. Listing exits 0 despite account problems. `rimz doctor` additionally reports exported-home conflicts; a named account missing hooks is `hooks missing`, with `rimz accounts add <kind> <name>` as the repair.
 
-`--json` prints an array with one object per row.
+## `show`
 
-| Field | Value |
+```sh
+rimz accounts show <KIND>[@<NAME>] [--json] [--refresh]
+```
+
+`show codex` prints every Codex account as a block; `show claude@work` selects just that account. Any known provider kind is accepted, even without named accounts or cached facts. An unknown kind exits 1 with ``unknown provider kind `<kind>`; known kinds: …``; an undeclared name exits 1 with ``no <kind> account `<name>`; configured: default, …``.
+
+Blocks use the table's state precedence in their titles, alongside the plan and account's default layers. Markers, the footer legend, and problem lines follow the overview rules. A single selected named account retains its canonical `kind@name` in the title.
+
+| Row | Shows |
 | --- | --- |
-| `kind` | `claude` or `codex`. |
-| `account` | The full account key, such as `claude@default`. |
-| `login` | `logged_in`, `logged_out`, `unavailable`, or `null` when there is no probe record. |
-| `home` | Absolute path of the home, or `null` when the provider's home cannot be resolved. |
-| `history` | `shared` or `standalone`; `null` for `default` and for a selected account nothing declares. |
-| `machine_default` | Always present: `true` for the machine's selection for new rooms, or the `default` row when no selection is set. |
-| `problem` | The problem line with its fix. Present only when the account has a problem. |
-| `status` | Launch setup/login status in snake case: `ready`, `login_unknown`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, or `unavailable`. A lapse changes the displayed `STATUS`, not this launch-health value. |
-| `entitlement` | Always present: `"ok"`, or `{"lapsed":{"since_ms":N}}` with the first-seen Unix-millisecond timestamp. While lapsed, `problem` is `plan lapsed: no <product> access`, using the same product name as the sidebar, and quota readings are suppressed. |
-| `active` | `true` on the account marked `●`. |
-| `default_for` | Always present: every layer that selects the account, of `this_room` (a room pin only), `this_project`, and `new_rooms`, or `[]`. |
-| `agents` | The `AGENTS` count, `0` for none, or `null` when the rooms or one live room's agents could not be read. |
-| `windows` | Always present: the account's 5h and 7d windows in used terms, each with `duration_mins` (`300` or `10080`) and, when known, `used_percentage`, `resets_at`, and `lifted`, the fields [`rimz providers --json`](./providers.md) uses; `[]` when there is no reading. |
-| `extra_credits` | Present when read: `"disabled"`, or `{"known":{...}}` with `used_usd`, `remaining_usd`, and `limit_usd` when known, the same shape as [`rimz providers --json`](./providers.md). |
-| `reset_credits` | Present when read: `count`, `soonest_expiry`, `expiries`, and `effect`, the same shape as [`rimz providers --json`](./providers.md). |
-| `spend_step` | Where the account's spend ladder stands: `subscription` (a window has room, or capacity is unknown), `paid_credit` (a window is spent and usable paid credit is next), `reset_credit` (a window is spent and auto-redeem would spend a banked reset), or `spent` (neither). `null` without a reading. |
-| `metered` | `true` for a subscription account, `false` for one without usage windows, `null` when unknown. |
+| `probed` | Age of the last login probe, or `never`. |
+| `home` | Home as `~/…`, or `–`. For `default`, the provider's environment-resolved home, unless it names a declared account's home; then the native provider home. |
+| `version` | CLI version as `v…`, or `–`. Always printed. |
+| `account` | Non-secret provider account id, when known. |
+| `provider`, `scope` | Backing provider and scoped provider/variant, when applicable. |
+| One row per window | Percentage left, reset countdown, pace when available, and observation age when known; `no limit` for a lifted window. |
+| `usage` | `no limit` for an unmetered account, or its missing-reading reason when expected. |
+| `extra` | `off`, `unlimited`, or known dollars used, left, and limit; ` · paying` when paid credit is next. Without a reported limit, the ceiling is `[accounts.usage_limit_usd]`. |
+| `reset credits` | Positive banked count and up to three known expiries as `YYYY-MM-DD HH:MM:SS ±HH:MM` in machine timezone, then `in <interval>` or `due`. |
+| `spend` | History pool's trailing 7- and 30-day spend on default and standalone accounts; shared named members omit it. Default without published spend reads `–`. |
+| `budget` | `$spent of $cap/day`, with `· parked` when the cap has parked agents. |
+| `agents` | Cross-room count, `0` for none, or `–` when inventory is unavailable. |
 
-`rimz doctor` reports an exported-home conflict as the problem on that account's row and recommends unsetting the variable and selecting the account with `rimz accounts use --global`, unless it is the current launch account for that provider at the position. `rimz doctor` lists named accounts and the current room's selections in its ACCOUNTS section with a `DEFAULT FOR` column (`this room`, `this project`, `new rooms`); its JSON account rows always include `machine_default` too ([Diagnose with doctor](./getting-started.md#diagnose-with-doctor)).
+Windows, extra usage, and reset credits belong to the credential account; spend and daily caps belong to its history pool. To spend a banked reset, use [`redeem`](#redeem). Dollar amounts use the money tone; percentages and pace use the sidebar's budget and burn-rate tones.
+
+## How fresh the figures are
+
+Listing and `show` probe every catalog login and run due usage reads for logged-in accounts, publishing into the sidebar's caches. `show` limits usage reads to its provider kind, not its individual name; login probes still cover all kinds. They touch no agent or room. A cold run can wait on providers, with a spinner on a terminal.
+
+| Reading | Plain run | With `--refresh` |
+| --- | --- | --- |
+| Login, plan, account id, version | Probe after 10 minutes; a failed probe retries after 10 seconds and retains its last good facts. For kinds supporting named accounts (Claude and Codex), stored logged-out or ambiguous legacy records are probed again on every run. | Probe every catalog login, regardless of the selected kind or name. |
+| Windows, paid usage, reset credits | Read for logged-in accounts after 5 minutes, or 1 hour after missing/rejected credentials or subscription access. Providers without a usage API show agent-reported windows. | Read now for logged-in accounts of the selected kinds. Successful usage clears a recorded lapse. |
+| Spend | Last published `provider-spending.json`. | Same; this command does not compute spend. |
+
+Rooms and concurrent account queries share one probe and one usage read per account at a time. `RIMZ_OAUTH_USAGE_OFFLINE=1` skips usage API reads, even with `--refresh`; values `0`, `false`, and empty leave reads enabled. A changed credential account identity drops the former account's windows, paid usage, and reset credits before reading again ([internals](../../internals/agents/providers.md#the-credits-cache-and-usage-identity)). Before anything publishes spend, it is `–` in text and `null` in JSON; `rimz stats` or a room's sidebar publishes it.
+
+## JSON output
+
+`accounts --json`, `accounts list --json`, and `accounts show … --json` print the same top-level array contract. Listing includes every known kind, folded or not, plus undeclared selected accounts and failed configuration rows. `show` filters by kind and optional name. Rows follow the overview order. Credentials and account fingerprints never appear.
+
+Every key below is present, with `null` when unknown, except `problem`, `probe_error`, `extra_credits`, and `reset_credits`, which are omitted when absent.
+
+| Field | Meaning |
+| --- | --- |
+| `kind`, `account` | Provider kind and canonical `kind@name`. All registered kinds are included, not only Claude and Codex. |
+| `home`, `history` | Absolute home; `shared` or `standalone` history (`null` for default or undeclared accounts). |
+| `machine_default` | Whether this is the machine's selection, or `default` when none is set. |
+| `problem` | Problem and fix, only when present. |
+| `status` | Launch health: `ready`, `login_unknown`, `logged_out`, `home_missing`, `hooks_missing`, `hooks_untrusted`, `hooks_disabled`, or `unavailable`. A lapse changes displayed `PLAN`, not this value. |
+| `login` | Recorded auth state: `logged_in`, `logged_out`, `unavailable`, or `null` without a probe record. Providers without a login check also record `logged_out`; that is not a logout finding. |
+| `entitlement` | `"ok"`, or `{"lapsed":{"since_ms":N}}` with first-seen Unix milliseconds. Independent of launch health and login; suppresses quota readings. Adds a lapse problem only without a setup problem (`status` `ready` or `login_unknown`). |
+| `active` | A launch from this position uses the account, including outside a room. |
+| `default_for` | Array containing any of `this_room` (a pin only), `this_project`, `new_rooms`, or empty. |
+| `agents` | Cross-room count, `0` for none, `null` when inventory fails. |
+| `pool` | History pool as `kind@name`; deduplicate spend by this key. |
+| `product_name` | Display name, including a named account's suffix. |
+| `probed_at`, `probe_error` | Last probe's RFC 3339 timestamp; failure cause only after a failed probe. |
+| `plan`, `plan_label` | Raw plan tier and display label, both `null` while lapsed. |
+| `account_id`, `sub_provider` | Non-secret provider account id and backing provider name. |
+| `account_scope` | `{"kind":"kind_wide"}` or `{"kind":"sub_provider","provider":…,"variant":…}`. |
+| `version`, `metered` | CLI version; whether the account has subscription windows (`null` when unknown). |
+| `windows` | Every reported window, including named quotas and model sub-caps; `[]` without readings. Fields below. |
+| `extra_credits` | `"disabled"` or `{"known":{…}}` with known `used_usd`, `remaining_usd`, `limit_usd`, or `unlimited:true`. |
+| `reset_credits` | `{"count":N,"effect":…}`, plus `soonest_expiry` and sorted `expiries` when known. Effect is `restarts_window` for Codex or `keeps_schedule` for Claude. |
+| `spend_step` | `subscription` (capacity available or unknown), `paid_credit` (usable paid credit next), `reset_credit` (auto-redeem would spend a reset), or `spent` (neither). `null` without a reading. |
+| `spending` | History pool's spend projection, or `null` before publication. |
+| `day_budget` | `{"cap_usd":…,"spend_usd":…,"parked":…}`; spend since local midnight and daily cap state. |
+
+Window fields are omitted when unknown:
+
+| Window field | Meaning |
+| --- | --- |
+| `scope` | `{"id":…,"label":…}` for a named quota or model sub-cap; absent for a plain time window. |
+| `used_percentage` | Percent used, 0 to 100. |
+| `resets_at` | RFC 3339 reset time. |
+| `duration_mins` | Window duration, such as `300` (5h) or `10080` (7d). |
+| `observed_at` | Reading timestamp. |
+| `source` | `"authoritative"` for provider API readings; absent for agent-reported readings. |
+| `lifted` | `true` when the provider stopped enforcing this window; absent otherwise. |
+
+`spending.today` is spend since local midnight in the configured `timezone`, or `null` when publication was for another local day. `headline` follows the sidebar setting; sibling `window` names `session`, `24h`, or `today`. `week`, `month`, and `year` cover trailing 7, 30, and 365 days. Each holds `usd`, `tokens`, `input`, `output`, `cache_write`, `cache_read`, and `sessions`, plus `tool_calls` and a `tools` name-to-count map when recorded.
+
+Compared with the previous `accounts list --json`, rows now cover every kind, `windows` includes all scopes, and provider plan, identity, pool, freshness, spending, and daily-budget fields are added. `status` remains launch health and `login` remains auth state.
+
+The hidden, deprecated `rimz providers [KIND]` alias remains for one release and writes a warning to stderr. Its human stdout matches `accounts` or `accounts show KIND`; its `--json` preserves the [legacy report](./providers.md#json-output), including auth `status` and `active:false` outside a room.
 
 ## `redeem`
 

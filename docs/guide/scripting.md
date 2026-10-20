@@ -196,7 +196,7 @@ A wrapper sometimes has to read or nudge a pane itself, and the commands that do
 
 Because these are public CLI, a wrapper composes them freely: read a prompt with `pane capture`, decide with a bounded matcher, answer with `pane send`, and escalate anything it does not recognize by leaving the row `? waiting` for you.
 
-A few of these commands, `rimz message --wait` and `rimz providers` among them, animate a status line while they work. It only ever reaches an interactive stderr terminal, so a redirected or piped stderr never sees it; `RIMZ_NO_PROGRESS=1` turns it off everywhere.
+A few of these commands, `rimz message --wait` and `rimz accounts` among them, animate a status line while they work. It only ever reaches an interactive stderr terminal, so a redirected or piped stderr never sees it; `RIMZ_NO_PROGRESS=1` turns it off everywhere.
 
 ## Agents scripting agents
 

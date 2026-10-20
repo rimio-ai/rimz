@@ -58,25 +58,39 @@ Moving a directory out from under an agent that is writing into it would split i
 
 The account named `default` is the provider's own home and is never declared. It is whatever the provider CLI resolves for itself: `~/.claude` or `~/.codex`, unless you export `CLAUDE_CONFIG_DIR` or `CODEX_HOME` in the shell you start the room from. When that variable points at any declared named account's home, `add` refuses before writing anything, including on a rerun inside a room. Unset it for the command, for example `env -u CODEX_HOME rimz accounts add codex work`. Do not export one that points at a named account's home in your login shell: `default` would then launch into that account too. Select the account with `rimz accounts use` instead. `rimz accounts add` refuses to declare the provider's own home, including a `--home` symlink to it, and `rimz doctor` flags an exported-home conflict.
 
-`rimz accounts` (or `rimz accounts list`) answers whose quota a launch from here will burn, how much of it each account has left, and whether a room can use each account. `ready` means setup is healthy and the provider reports a logged-in account; `login unknown` means setup is healthy but no confident login reading is available:
+`rimz accounts` (or `rimz accounts list`) answers whose quota a launch from here will burn, how much each account has left, and whether it is set up to launch. It shows a table per provider; this is the Claude table from a run outside a room:
 
 ```console
-$ rimz accounts list
-   KIND    NAME     STATUS           5h LEFT              7d LEFT              EXTRA  CREDITS  AGENTS  HISTORY  HOME
-○  claude  default  ready            100% · 3h31m · 0.0x  89% · 4d03h · 0.3x   –      -        -       -        ~/.claude
-●  claude  work     ready            98% · 4h21m · 0.2x   31% · 13h51m · 0.8x  –      -        -       shared   ~/.rimz/accounts/claude/work
-
-●  codex   default  hooks untrusted  no limit             64% · 5d11h · 1.6x   –      -        -       -        ~/.codex
-●  this room (claude)   ●  machine default (codex)   ○  new rooms
-pace: used share ÷ elapsed share; 1.0x lasts exactly to reset
-RimZ hooks for codex account `default` at `/home/me/.codex` are untrusted (SessionStart, UserPromptSubmit, SubagentStart, SubagentStop, Stop, PermissionRequest, PreToolUse, PostToolUse, PreCompact, PostCompact); run /hooks inside codex and trust the RimZ hooks
+$ rimz accounts
+Claude · v2.1.304 · $2,861.64 spent in 7d (shared by default, hooloovoo, rimio)
+   NAME       PLAN        5h LEFT              7d LEFT             Fable LEFT           EXTRA LEFT  RESET CREDITS  AGENTS
+   default    Claude Max   92% · 2h03m · 0.1x  89% · 2d12h · 0.2x  100% · 2d12h · 0.0x  off         -              -
+●  hooloovoo  Claude Max   92% · 2h03m · 0.1x  89% · 2d12h · 0.2x  100% · 2d12h · 0.0x  off         -              -
+   rimio      Claude Max  100% · 4h13m · 0.0x  98% · 5d21h · 0.1x  100% · 5d21h · 0.0x  off         -              -
 ```
 
-`●` marks the account a launch from where you stand uses: a room's pin, else the trusted project's selection, else the machine's, else the provider's own home. `○` marks the machine default when that is a different account. The line under the table names every deciding layer (`this room`, `this project`, `machine default`), with provider kinds when they differ. `5h LEFT` and `7d LEFT` show how much of each usage window the account has left and how long until it resets. `EXTRA` is the paid usage the provider allows beyond the subscription; once the windows are spent and RimZ keeps launching on that paid credit, the cell reads `$2,413.92 · paying`, so you can see which account is now billing you. `AGENTS` counts the agents running on the account now across every live room. The [reference](../reference/cli/accounts.md#list) spells out the order the layers win in.
+`●` marks the account a launch from where you stand uses: a room's pin, else the trusted project's selection, else the machine's, else the provider's own home. It applies outside a room too. `○` marks the machine default when that is a different row. A footer names the deciding layer, such as `● next launch from here (machine default)`, and adds `○ new rooms` only when that marker appears.
 
-Pace is the used share divided by the elapsed share of the window: `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. It is rounded to one decimal, with `>10x` at a rounded pace of 10.0 or higher. A trailing `–` means less than 5% of the window has elapsed, too early to tell. Pace is absent for a lifted, unknown, not-started or exhausted window, or without a duration, reset time or positive elapsed time. Its color follows `[theme.display.budget_bar.burn_rate]`, the same bands as the sidebar reset marker.
+`PLAN` shows the plan when healthy, or the first applicable installation, setup, subscription, or login problem. A row might read `hooks untrusted` even while its quota is known; its problem line names the fix. Windows read what's left, time to reset, then pace. `1.0x` lasts exactly to reset; above it, the account runs dry early at that average rate. The [reference](../reference/cli/accounts.md#list) explains every cell and the precedence. Providers without a login or named accounts fold into `Also:`; `--all` expands them.
 
-An account reads `ready` once its home exists, holds trusted RimZ hooks, and has a logged-in reading. Healthy setup without a confident login reading prints `login unknown`. Setup and login problems print their own line under the table with the fix: `logged out` means the provider has no login under that home, and the line carries the login command; for a named account, `home missing` and `hooks missing` both mean `rimz accounts add` never finished, so rerun it; for `default`, run `rimz hooks install <kind>`. `hooks untrusted` is Codex asking you to approve new hooks inside Codex itself, so an account you just declared stays there until you start Codex once under its home and trust them with `/hooks`. `rimz start` still offers to install and refresh the hooks in the provider's own home ([install agent hooks](./setup.md#install-agent-hooks)), so a `default` problem never stops a room from starting.
+When you need the home, probe age, or a closer reading of one account, use `show`:
+
+```console
+$ rimz accounts show claude@hooloovoo
+● Claude · claude@hooloovoo — Claude Max · logged in · new rooms
+  probed:  2m ago
+  home:    ~/.rimz/accounts/claude/hooloovoo
+  version: v2.1.304
+  5h:      92% left · resets in 2h03m · pace 0.1x · read 26m ago
+  7d:      89% left · resets in 2d12h · pace 0.2x · read 28m ago
+  Fable:   100% left · resets in 2d12h · pace 0.0x · read 28m ago
+  extra:   off
+  agents:  0
+
+● next launch from here (machine default)
+```
+
+Without `@name`, `rimz accounts show claude` prints all Claude accounts. Queries probe login and refresh due usage into the sidebar's caches; they neither switch accounts nor touch running agents. `--refresh` bypasses the TTLs. Use `--json` on the overview or detail command for the same [account row contract](../reference/cli/accounts.md#json-output).
 
 ## Start a room on an account
 
@@ -112,9 +126,9 @@ RimZ sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME` on each provider process from that
 
 ## What the account changes
 
-The sidebar's provider dashboard shows one block per provider, for the account the room launches under: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Codex · team-1`. After pinning, unpinning, or changing a default the room follows, the block shows the new account from the next refresh on. Agents still running on the old account keep running and keep their own cards, but the dashboard does not show that account. Right after a switch to an account no room has read yet, the provider has no block until RimZ reads that account, and an account that was never logged in shows none. `rimz providers` lists every account, one table row each ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
+The sidebar's provider dashboard shows one block per provider, for the account the room launches under: the plan, the 5-hour and 7-day limit bars, and the credits all come from that account's home. A named account labels its block, as in `Codex · team-1`. After pinning, unpinning, or changing a default the room follows, the block shows the new account from the next refresh on. Agents still running on the old account keep running and keep their own cards, but the dashboard does not show that account. Right after a switch to an account no room has read yet, the provider has no block until RimZ reads that account, and an account that was never logged in shows none. `rimz accounts` compares accounts across providers, one table row each ([reading the numbers](./insight.md#per-account-the-provider-dashboard)).
 
-An account can stay logged in while its subscription no longer allows access. The [dashboard](./sidebar.md#the-provider-dashboard) and `rimz providers` show `lapsed`; `rimz accounts list` shows the same status with `plan lapsed: no Claude access` for Claude. The problem names the account's product, so a delegated Pi login reads `no Pi access`. This is separate from a logged-out account or missing hooks, and does not change launch setup checks.
+An account can stay logged in while its subscription no longer allows access. The [dashboard](./sidebar.md#the-provider-dashboard) and `rimz accounts` show a lapse. The overview's `PLAN` reads `lapsed` unless an installation or setup problem takes precedence. Without a setup problem, the problem line reads `plan lapsed: no Claude access` for Claude; otherwise it keeps the setup repair. The lapse problem names the account's product, so a delegated Pi login reads `no Pi access`. This is separate from a logged-out account or missing hooks, and does not change launch setup checks.
 
 A daily cap in the per-machine config's `[accounts.budget]` table follows the history: `default` and the shared accounts of a provider spend against one cap, and each standalone account has its own:
 
@@ -157,6 +171,6 @@ If a live room pins the account, `remove` warns and names it. Add the account ba
 
 ## See also
 
-- [Accounts CLI](../reference/cli/accounts.md): every flag of `add`, `list`, and `remove`, and the JSON shape.
+- [Accounts CLI](../reference/cli/accounts.md): overview columns, account details with `show`, mutation flags, and the JSON shape.
 - [Configuration](./configuration.md#accounts): the `[accounts]` tables in the per-machine and project config.
 - [Budgets](./budget.md): daily account caps and how a park lifts.

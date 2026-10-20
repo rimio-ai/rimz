@@ -67,7 +67,7 @@ The walk publishes machine-shared `provider-spending.json`, and every reader tak
 | Reader | Reads |
 | --- | --- |
 | provider panel headline | the kind's `SpendTally` headline: session count, token breakdown, and dollars ([providers.md](./providers.md#producer-aggregation)); serialized as `today` in the cache |
-| `rimz providers --json` | a CLI-local projection: `headline` and `window` name the configured headline; `today` reads the pool's `day_by_login` only when `day_cutoff_secs` matches the current local midnight in the configured timezone, otherwise null. `pool` identifies repeated tallies; consumers deduplicate by it. The cache and service wire retain their existing names. |
+| `rimz accounts --json` | a CLI-local projection: `headline` and `window` name the configured headline; `today` reads the pool's `day_by_login` only when `day_cutoff_secs` matches the current local midnight in the configured timezone, otherwise null. `pool` identifies repeated tallies; consumers deduplicate by it. The cache and service wire retain their existing names. |
 | fleet store `W:` and `M:` rows | the fleet-wide trailing-week and trailing-month totals; `$0.00` before any history exists ([interface](../../interface/sidebar.md#the-fleet-store)) |
 | cockpit `◎`, `¤`, and breakdown | a workspace-scoped tally limited to the room's project root and grouped worktrees, omitting unknown-origin files |
 | account daily caps | a local-calendar-day `SpendWindow` per kind (`day_by_provider`) and per history pool (`day_by_login`), computed for eligible kinds independently of the headline ([budget.md](../harness/budget.md)) |

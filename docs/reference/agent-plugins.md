@@ -360,7 +360,7 @@ The account probe gets empty stdin and prints one JSON object:
 | `rate_limit_windows` | Usage windows for the provider dashboard. |
 | `logged_out` | `true` reports the user logged out. A response with none of `plan`, `account_id`, and `rate_limit_windows` counts as logged out too. |
 
-Each window uses the fields listed in [`rimz providers` window fields](./cli/providers.md#json-output): `used_percentage` (an integer from 0 to 100), `resets_at`, and either `duration_mins` for a time window or `scope` for a named quota. A `scope` needs both `id` and `label`. Set `source` to `"authoritative"` when the reading comes from the provider's usage API; without it the reading counts as best-effort. A window of the wrong shape, such as a fractional `used_percentage`, invalidates the whole response. A `context` event from a live session may send the same windows in `rate_limits`.
+Each window uses the fields listed in [accounts window fields](./cli/accounts.md#json-output): `used_percentage` (an integer from 0 to 100), `resets_at`, and either `duration_mins` for a time window or `scope` for a named quota. A `scope` needs both `id` and `label`. Set `source` to `"authoritative"` when the reading comes from the provider's usage API; without it the reading counts as best-effort. A window of the wrong shape, such as a fractional `used_percentage`, invalidates the whole response. A `context` event from a live session may send the same windows in `rate_limits`.
 
 A named quota with no fixed length carries a `scope` with a stable `id` and a short `label` (three cells fit the dashboard slot) and no `duration_mins`:
 
