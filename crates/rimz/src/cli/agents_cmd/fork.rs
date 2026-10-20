@@ -27,7 +27,7 @@ pub(super) struct ForkArgs {
     #[arg(long)]
     pub(super) bg: bool,
     /// Run the fork under this isolation instead of the source agent's.
-    #[arg(long, value_name = "host|scoped")]
+    #[arg(long, value_name = "host|scoped|sandbox")]
     pub(super) isolation: Option<rimz::config::Isolation>,
 }
 

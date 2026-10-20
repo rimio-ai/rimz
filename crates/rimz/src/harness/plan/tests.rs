@@ -489,42 +489,50 @@ fn posture_exec_request_replaces_args_and_preserves_launch_defaults() {
 
 #[test]
 fn child_isolation_cap_respects_parent_and_request_source() {
-    use crate::config::Isolation::{Host, Scoped};
-    for parent in [None, Some(Host), Some(Scoped)] {
-        for child_override in [None, Some(Host), Some(Scoped)] {
-            for child_default in [None, Some(Host), Some(Scoped)] {
-                for machine in [Host, Scoped] {
+    use crate::config::Isolation::{Host, Sandbox, Scoped};
+    let levels = [Host, Scoped, Sandbox];
+    let choices = [None, Some(Host), Some(Scoped), Some(Sandbox)];
+    for parent in choices {
+        for child_override in choices {
+            for child_default in choices {
+                for machine in levels {
                     let result =
                         cap_child_isolation(parent, child_override, child_default, machine);
-                    if parent == Some(Scoped) && child_override == Some(Host) {
+                    let resolved = child_override.or(child_default).unwrap_or(machine);
+                    let rank = |level| levels.iter().position(|&value| value == level).unwrap();
+                    let looser = parent.is_some_and(|parent| rank(resolved) < rank(parent));
+                    if looser && child_override.is_some() {
+                        let error = result.unwrap_err().to_string();
                         assert!(
-                            result
-                                .unwrap_err()
-                                .to_string()
-                                .ends_with("launch it from a host agent or a host shell")
+                            error.contains(&format!("{} parent", parent.unwrap())),
+                            "{error}"
+                        );
+                        assert!(
+                            error.contains(&format!("--isolation {resolved}")),
+                            "{error}"
                         );
                         continue;
                     }
-                    let expected_source = if parent == Some(Scoped) && child_override.is_none() {
-                        match (child_default, machine) {
-                            (Some(Host), _) => Some(ClampSource::ProfileDefault),
-                            (None, Host) => Some(ClampSource::MachinePolicy),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
+                    let capped = result.unwrap();
                     assert_eq!(
-                        result.unwrap(),
-                        ChildIsolation {
-                            isolation: if expected_source.is_some() {
-                                Some(Scoped)
-                            } else {
-                                child_override
-                            },
-                            clamped: expected_source,
-                        }
+                        capped.isolation,
+                        if looser { parent } else { child_override },
+                        "parent={parent:?}, override={child_override:?}, default={child_default:?}, machine={machine:?}"
                     );
+                    assert_eq!(capped.clamped.is_some(), looser);
+                    if let Some(source) = capped.clamped {
+                        let notice = source.to_string();
+                        assert!(notice.contains(&parent.unwrap().to_string()), "{notice}");
+                        assert!(notice.contains(&resolved.to_string()), "{notice}");
+                        assert!(
+                            notice.contains(if child_default.is_some() {
+                                "definition"
+                            } else {
+                                "machine policy"
+                            }),
+                            "{notice}"
+                        );
+                    }
                 }
             }
         }
@@ -3540,7 +3548,13 @@ fn supervised_subagent_is_capped_at_its_sandboxed_parent() {
     }
     .run(dir.path());
     let launch = planned.expect("capped subagent");
-    assert_eq!(launch.clamped, Some(ClampSource::ProfileDefault));
+    assert_eq!(
+        launch.clamped,
+        Some(ClampSource::ProfileDefault {
+            requested: crate::config::Isolation::Host,
+            parent: crate::config::Isolation::Scoped
+        })
+    );
     assert_eq!(
         planned_cell(&launch).launch.isolation,
         Some(crate::config::Isolation::Scoped)

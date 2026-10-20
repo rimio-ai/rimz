@@ -182,7 +182,7 @@ struct SubagentLaunchArgs {
     #[arg(long)]
     no_fast: bool,
     /// Run the child under this isolation instead of inheriting the parent's.
-    #[arg(long, value_name = "host|scoped")]
+    #[arg(long, value_name = "host|scoped|sandbox")]
     isolation: Option<rimz::config::Isolation>,
     /// Run the child in yolo mode, up to the parent's own mode.
     #[arg(long)]

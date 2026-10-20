@@ -213,7 +213,7 @@ aggressive_resize = true
 ## memory-estimate = "8G"              # used until this server's peak has been measured
 
 # [agents]
-# isolation = "host"                  # "scoped": Linux bubblewrap mount view, per-room /tmp, and skill views
+# isolation = "host"                  # "scoped": Linux mount/skill view; "sandbox": Claude/Codex command sandbox
 # Definitions live in <agents_home>/{agents,subagents,teams,traits}/*.md.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
 # max-chain-length = 3                  # successive agent-to-agent launches allowed from a human-started root

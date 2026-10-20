@@ -971,8 +971,19 @@ fn compile_agent_process_with_extra_env(
     if reminders.sandbox {
         adapter.disable_native_sandbox_args(action.extra_args_mut());
     }
+    let isolation = crate::config::Isolation::ambient(extra_env).unwrap_or_default();
     if let Some(roots) = &reminders.permission_roots {
-        adapter.configure_room_permissions(action.extra_args_mut(), &login_env, roots);
+        let linked = crate::worktree::linked_worktree(cwd);
+        adapter.configure_room_permissions(
+            action.extra_args_mut(),
+            &login_env,
+            (
+                cwd,
+                linked.as_ref().map(|worktree| worktree.primary.as_path()),
+            ),
+            roots,
+            isolation,
+        );
     }
     // A settings-member fast switch rides outside the settings document until
     // every other settings mutation has run, then merges into the one result.
@@ -1042,11 +1053,7 @@ fn compile_agent_process_with_extra_env(
         adapter.configure_sandbox_settings(
             (cwd, artifact_dir),
             roots,
-            if reminders.sandbox {
-                crate::config::Isolation::Scoped
-            } else {
-                crate::config::Isolation::Host
-            },
+            isolation,
             action.extra_args_mut(),
             &mut settings_artifact,
         )?;

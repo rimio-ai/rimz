@@ -660,9 +660,9 @@ fn host_room_grants_follow_the_users_permission_selection() {
             vec!["--approve-for-me", "-c", "default_permissions=\"dev\""],
             profile_grant("dev"),
         ),
-        ("", vec!["--profile", "x"], vec![]),
-        ("", vec!["-p=x"], vec![]),
-        (dev, vec!["--profile=x"], vec![]),
+        ("", vec!["--profile", "x"], legacy_grant(&[])),
+        ("", vec!["-p=x"], legacy_grant(&[])),
+        (dev, vec!["--profile=x"], profile_grant("dev")),
         (
             "",
             vec!["--profile", "x", "-c", "sandbox_mode=workspace-write"],
@@ -724,7 +724,13 @@ fn host_room_grants_follow_the_users_permission_selection() {
             .iter()
             .map(|arg| (*arg).to_owned())
             .collect::<Vec<_>>();
-        CodexAdapter.configure_room_permissions(&mut args, &env, &roots);
+        CodexAdapter.configure_room_permissions(
+            &mut args,
+            &env,
+            (home.path(), None),
+            &roots,
+            crate::config::Isolation::Host,
+        );
         if args[..overrides.len()] != overrides || args[overrides.len()..] != expected {
             failures.push(format!(
                 "config={content:?}, args={overrides:?}: appended {:?}, expected {expected:?}",
@@ -733,6 +739,147 @@ fn host_room_grants_follow_the_users_permission_selection() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn provider_sandbox_enforces_only_unsandboxed_selections_and_reads_profile_layers() {
+    use crate::config::Isolation::{Host, Sandbox, Scoped};
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join("config.toml");
+    let env = BTreeMap::from([("CODEX_HOME".into(), home.path().display().to_string())]);
+    let roots = [
+        PathBuf::from("/room/state"),
+        PathBuf::from("/run/room"),
+        PathBuf::from("/run/shared"),
+    ];
+    let legacy = "sandbox_workspace_write.writable_roots=";
+    let profile = "permissions.dev.workspace_roots=";
+    for isolation in [Host, Scoped, Sandbox] {
+        for (content, flags, expected, forced) in [
+            ("", vec![], legacy, false),
+            (
+                "sandbox_mode = 'danger-full-access'",
+                vec![],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            (
+                "default_permissions = ':danger-full-access'",
+                vec![],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            (
+                "",
+                vec!["--sandbox=danger-full-access"],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            (
+                "",
+                vec!["-c", "sandbox_mode='danger-full-access'"],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            (
+                "",
+                vec!["--config=default_permissions=':danger-full-access'"],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            ("sandbox_mode = 'read-only'", vec![], "", false),
+            ("default_permissions = ':read-only'", vec![], "", false),
+            ("", vec!["-s", "read-only"], "", false),
+            ("", vec!["--approve-for-me"], legacy, false),
+            ("", vec!["--not-so-yolo"], legacy, false),
+            (
+                "default_permissions = ':workspace'",
+                vec![],
+                "--add-dir",
+                false,
+            ),
+            ("default_permissions = 'dev'", vec![], profile, false),
+            (
+                "sandbox_mode = 'danger-full-access'",
+                vec!["--dangerously-bypass-approvals-and-sandbox"],
+                "",
+                false,
+            ),
+            (
+                "sandbox_mode = 'danger-full-access'",
+                vec!["--profile", "safe"],
+                "",
+                false,
+            ),
+            (
+                "sandbox_mode = 'read-only'",
+                vec!["--profile=unsafe"],
+                if isolation == Sandbox { legacy } else { "" },
+                isolation == Sandbox,
+            ),
+            (
+                "sandbox_mode = 'danger-full-access'",
+                vec!["-p", "workspace"],
+                "--add-dir",
+                false,
+            ),
+            (
+                "sandbox_mode = 'danger-full-access'",
+                vec!["-p=custom"],
+                profile,
+                false,
+            ),
+        ] {
+            std::fs::write(&config, content).unwrap();
+            for (name, contents) in [
+                ("safe", "sandbox_mode = 'read-only'"),
+                ("unsafe", "default_permissions = ':danger-full-access'"),
+                ("workspace", "default_permissions = ':workspace'"),
+                ("custom", "default_permissions = 'dev'"),
+            ] {
+                std::fs::write(home.path().join(format!("{name}.config.toml")), contents).unwrap();
+            }
+            let mut args = flags
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect::<Vec<_>>();
+            CodexAdapter.configure_room_permissions(
+                &mut args,
+                &env,
+                (home.path(), None),
+                &roots,
+                isolation,
+            );
+            assert_eq!(
+                args.windows(2)
+                    .any(|pair| pair == ["--sandbox", "workspace-write"]),
+                forced,
+                "{isolation}, {content}, {flags:?}: {args:?}"
+            );
+            if forced {
+                assert!(
+                    !args.iter().any(|arg| arg.contains("danger-full-access")),
+                    "{args:?}"
+                );
+            } else {
+                assert_eq!(
+                    &args[..flags.len()],
+                    flags,
+                    "user flags must survive: {args:?}"
+                );
+            }
+            assert_eq!(
+                args.iter().any(|arg| arg.starts_with(legacy)
+                    || arg.starts_with(profile)
+                    || arg == "--add-dir"),
+                !expected.is_empty(),
+                "{isolation}, {content}, {flags:?}: {args:?}"
+            );
+            if !expected.is_empty() {
+                assert!(args.iter().any(|arg| arg.starts_with(expected)), "{args:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -764,6 +911,142 @@ fn subagent_lockdown_replaces_codex_multi_agent_overrides() {
         ]
         .map(ToOwned::to_owned)
     );
+}
+
+#[test]
+fn provider_sandbox_respects_trusted_project_permission_layers() {
+    use crate::config::Isolation;
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join("project");
+    let cwd = project.join("nested");
+    for path in [
+        project.join(".git"),
+        project.join(".codex"),
+        cwd.join(".codex"),
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(project.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let env = BTreeMap::from([("CODEX_HOME".into(), home.path().display().to_string())]);
+    let roots = [
+        PathBuf::from("/room/state"),
+        PathBuf::from("/run/room"),
+        PathBuf::from("/run/shared"),
+    ];
+    let root_key = project.display().to_string();
+    for (base_mode, project_mode, nested_mode, trust, flags, forced) in [
+        (
+            "sandbox_mode = 'read-only'",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "trusted",
+            vec![],
+            true,
+        ),
+        (
+            "sandbox_mode = 'read-only'",
+            "default_permissions = ':danger-full-access'",
+            "",
+            "trusted",
+            vec![],
+            true,
+        ),
+        (
+            "",
+            "sandbox_mode = 'danger-full-access'",
+            "sandbox_mode = 'read-only'",
+            "trusted",
+            vec![],
+            false,
+        ),
+        (
+            "",
+            "sandbox_mode = 'read-only'",
+            "sandbox_mode = 'danger-full-access'",
+            "trusted",
+            vec![],
+            true,
+        ),
+        (
+            "",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "untrusted",
+            vec![],
+            false,
+        ),
+        (
+            "",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "trusted",
+            vec!["--sandbox", "read-only"],
+            false,
+        ),
+        (
+            "",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "trusted",
+            vec!["-c", "default_permissions=':read-only'"],
+            false,
+        ),
+        (
+            "",
+            "sandbox_mode = 'danger-full-access'",
+            "",
+            "trusted",
+            vec!["--profile", "safe"],
+            true,
+        ),
+        (
+            "sandbox_mode = 'danger-full-access'",
+            "default_permissions = 'dev'",
+            "",
+            "trusted",
+            vec![],
+            false,
+        ),
+    ] {
+        let key = toml::Value::String(root_key.clone());
+        std::fs::write(
+            home.path().join("config.toml"),
+            format!("{base_mode}\n[projects.{key}]\ntrust_level = '{trust}'\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            home.path().join("safe.config.toml"),
+            "sandbox_mode = 'read-only'",
+        )
+        .unwrap();
+        std::fs::write(project.join(".codex/config.toml"), project_mode).unwrap();
+        std::fs::write(cwd.join(".codex/config.toml"), nested_mode).unwrap();
+        let mut args = flags
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .collect::<Vec<_>>();
+        CodexAdapter.configure_room_permissions(
+            &mut args,
+            &env,
+            (&cwd, None),
+            &roots,
+            Isolation::Sandbox,
+        );
+        assert_eq!(
+            args.windows(2)
+                .any(|pair| pair == ["--sandbox", "workspace-write"]),
+            forced,
+            "base={base_mode}, project={project_mode}, nested={nested_mode}, trust={trust}, flags={flags:?}: {args:?}"
+        );
+        assert_eq!(&args[..flags.len()], flags);
+        if project_mode == "default_permissions = 'dev'" {
+            assert!(
+                args.iter()
+                    .any(|arg| arg.starts_with("permissions.dev.workspace_roots=")),
+                "{args:?}"
+            );
+        }
+    }
 }
 
 #[test]

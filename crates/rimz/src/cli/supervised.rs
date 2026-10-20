@@ -242,7 +242,7 @@ pub(in crate::cli) fn note_isolation_clamp(
     use std::io::Write as _;
     writeln!(
         std::io::stderr(),
-        "rimz: {profile} runs scoped: {source}, and a subagent never runs looser than its parent"
+        "rimz: {profile} {source}, and a subagent never runs looser than its parent"
     )?;
     Ok(())
 }

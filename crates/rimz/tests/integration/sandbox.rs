@@ -31,6 +31,75 @@ fn enable(env: &Env) {
 }
 
 #[test]
+fn provider_sandbox_refuses_unsupported_providers_with_fixes() {
+    let blocker: rimz::blocker::Blocker = rimz::sandbox::preflight_launch(
+        Isolation::Sandbox,
+        &AgentKind::new_unchecked("pi"),
+        false,
+        ManualSkill::Unsupported,
+    )
+    .unwrap_err()
+    .into();
+    let text = blocker.to_string();
+    for expected in [
+        "pi",
+        "Claude Code",
+        "Codex",
+        "--isolation scoped",
+        "--isolation host",
+        "rimz config set agents.isolation",
+    ] {
+        assert!(text.contains(expected), "{text}");
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn provider_sandbox_claude_missing_prerequisites_refuse_before_launch() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let shims = env.home_root.join("native-sandbox-bin");
+    std::fs::create_dir(&shims).unwrap();
+    let mut request = ExecRequest::bare_launch(AgentKind::new_unchecked("claude"), Vec::new());
+    request.identity.params.isolation = Some(Isolation::Sandbox);
+    for missing in ["bwrap", "socat"] {
+        if missing == "socat" {
+            crate::common::write_path_shim(&shims, "bwrap", "exit 0");
+        }
+        let output = env
+            .rimz()
+            .args(exec_args(&env, &request))
+            .env("PATH", &shims)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let text = String::from_utf8_lossy(&output.stderr);
+        for expected in [missing, "--isolation scoped", "--isolation host", "Install"] {
+            assert!(text.contains(expected), "{text}");
+        }
+    }
+}
+
+#[test]
+fn provider_sandbox_config_set_does_not_probe() {
+    let env = Env::new();
+    let shims = env.home_root.join("no-sandbox-tools");
+    std::fs::create_dir(&shims).unwrap();
+    let output = env
+        .rimz()
+        .args(["config", "set", "agents.isolation", "sandbox"])
+        .env("PATH", &shims)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        std::fs::read_to_string(env.rimz_home().join("config.toml"))
+            .unwrap()
+            .contains("sandbox")
+    );
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn sandbox_wrapper_keeps_and_reconnects_the_host_drainer_until_provider_exit() {
     let env = Env::new();

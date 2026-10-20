@@ -290,7 +290,7 @@ pub(crate) struct LaunchOverrideArgs {
     #[arg(long)]
     pub(crate) no_fast: bool,
     /// Run the launched agents under this isolation instead of machine `agents.isolation`.
-    #[arg(long, value_name = "host|scoped")]
+    #[arg(long, value_name = "host|scoped|sandbox")]
     pub(crate) isolation: Option<rimz::config::Isolation>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
