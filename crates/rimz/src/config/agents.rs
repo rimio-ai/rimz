@@ -373,12 +373,13 @@ pub enum LaunchPlacement {
 #[serde(transparent)]
 pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum Isolation {
     #[default]
     Host,
     Scoped,
+    Sandbox,
 }
 
 impl Isolation {
@@ -403,12 +404,13 @@ impl std::fmt::Display for Isolation {
         f.write_str(match self {
             Self::Host => "host",
             Self::Scoped => "scoped",
+            Self::Sandbox => "sandbox",
         })
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("isolation must be `host` or `scoped`")]
+#[error("isolation must be `host`, `scoped`, or `sandbox`")]
 pub struct IsolationParseError;
 
 impl std::str::FromStr for Isolation {
@@ -418,6 +420,7 @@ impl std::str::FromStr for Isolation {
         match raw {
             "host" => Ok(Self::Host),
             "scoped" => Ok(Self::Scoped),
+            "sandbox" => Ok(Self::Sandbox),
             _ => Err(IsolationParseError),
         }
     }

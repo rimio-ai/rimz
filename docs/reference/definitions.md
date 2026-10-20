@@ -50,7 +50,7 @@ Follow the project's instructions and report what you verified.
 | `model` | Concrete model alias or provider model ID. Tier names are refused; use `tier:` instead. |
 | `tier` | [Model tier](../guide/configuration.md#model-tiers): `intern`, `junior`, `senior`, or `principal`. Mutually exclusive with `model`. |
 | `mode` | `ask`, `auto`, `plan`, or `yolo`. |
-| `isolation` | `host` or `scoped`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
+| `isolation` | `host`, `scoped`, or `sandbox`; overrides machine policy unless `--isolation` is recorded. Inherited through definitions, unavailable on team roles or repository profiles. |
 | `empty-dir` | Boolean opting a solo agent or subagent into its own empty working directory. Inherited through `agent:` chains; `false` clears it. Also accepted in repository TOML `[profiles]` and `[subagents.profiles]`; machine profiles remain Markdown definitions. Team roles refuse it, including through a selected definition or profile, because teams share the worktree. |
 | `effort` | Provider-specific absolute effort (YAML integer or string), or omit for the selected model's default. Relative `+N` / `-N` values are refused. |
 | `fast` | Boolean requesting the provider's [fast mode](./agent-support.md#fast-mode). Off by default; refused at load on a kind with no fast switch. |
@@ -62,8 +62,8 @@ Follow the project's instructions and report what you verified.
 | `traits` | Trait names substituted into this definition's body. |
 | `tools` | Tool-name list, translated to provider arguments below. |
 | `subagents` | Direct profiles only: allowed RimZ child profiles; `[]` permits none. |
-| `skills` | Bare skill-directory names allowed for model invocation. Claude also adds exact invocation permissions for listed names without `*`, in both isolations and independently of `allow-routine-rimz`. Scoped views and host Claude keep unlisted skills user-only; host Codex hides them. Other host providers warn and run unrestricted. `[]` lists none. |
-| `allowed-tools` | Permission rules such as `["Bash(git *)", Read]`. Claude pre-approves matching calls in both isolations, independently of `allow-routine-rimz`; other kinds warn and do not apply them. Available only in Markdown definitions, not repository TOML. `[]` or null clears inherited rules. |
+| `skills` | Bare skill-directory names allowed for model invocation. Claude also adds exact invocation permissions for listed names without `*`, in all isolation levels and independently of `allow-routine-rimz`. Scoped views and host Claude keep unlisted skills user-only; host Codex hides them. Other host providers warn and run unrestricted. `[]` lists none. |
+| `allowed-tools` | Permission rules such as `["Bash(git *)", Read]`. Claude pre-approves matching calls in all isolation levels, independently of `allow-routine-rimz`; other kinds warn and do not apply them. Available only in Markdown definitions, not repository TOML. `[]` or null clears inherited rules. |
 
 Names must match `[A-Za-z0-9_-]+` and be unique across both definition trees. Registered kinds are reserved for kind bases. `general` and model aliases are not reserved by the definition parser. The final namespace checks also reject command-verb and address collisions, such as `all`, kind ordinals, or a profile colliding with a team.
 

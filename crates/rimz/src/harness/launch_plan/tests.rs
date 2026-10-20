@@ -8,6 +8,16 @@ fn compile_prompt_request(
     baseline: Option<&str>,
     agent_shell: Option<&Path>,
 ) -> LaunchPlan {
+    compile_isolated_request(project, request, baseline, agent_shell, Isolation::Host)
+}
+
+fn compile_isolated_request(
+    project: &Path,
+    request: &ExecRequest,
+    baseline: Option<&str>,
+    agent_shell: Option<&Path>,
+    isolation: Isolation,
+) -> LaunchPlan {
     let id = crate::WorkspaceId::from_project_root(project);
     let runtime = RuntimePaths::under(id.clone(), project).unwrap();
     let state = StatePaths::under(id, project).unwrap();
@@ -22,8 +32,8 @@ fn compile_prompt_request(
         effective: None,
         commands: &machine.agents.commands,
         accounts: &machine.accounts,
-        isolation: Isolation::Host,
-        bwrap: None,
+        isolation,
+        bwrap: isolation.is_scoped().then_some(Path::new("/usr/bin/bwrap")),
         agents: Ok(&[]),
         ambient_env: &BTreeMap::new(),
         agent_shell,
@@ -31,6 +41,90 @@ fn compile_prompt_request(
         recorded_system_prompt_digest: baseline,
     })
     .unwrap()
+}
+
+#[test]
+fn provider_sandbox_settings_stamp_and_yolo_warning_follow_the_resolved_level() {
+    let project = tempfile::tempdir().unwrap();
+    for kind in ["claude", "codex"] {
+        for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+            for mode in [
+                crate::agents::PermissionMode::Auto,
+                crate::agents::PermissionMode::Yolo,
+            ] {
+                let flags = crate::agents::find_definition(kind)
+                    .unwrap()
+                    .spec()
+                    .launch
+                    .permission_args(mode);
+                let mut invocation = request(kind, action_with_args("launch", flags));
+                invocation.identity.params.mode = Some(mode);
+                let plan =
+                    compile_isolated_request(project.path(), &invocation, None, None, isolation);
+                assert_eq!(plan.process().env[Isolation::ENV], isolation.to_string());
+                assert_eq!(plan.sandbox.is_some(), isolation.is_scoped());
+                let warnings = plan
+                    .warnings
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let wall_warnings = warnings
+                    .iter()
+                    .filter(|warning| warning.contains("sandbox wall"))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    wall_warnings.len(),
+                    usize::from(
+                        isolation == Isolation::Sandbox
+                            && mode == crate::agents::PermissionMode::Yolo
+                    ),
+                    "{kind} {isolation} {mode:?}: {warnings:?}"
+                );
+                if let Some(warning) = wall_warnings.first() {
+                    assert!(warning.contains(kind), "{warning}");
+                    if kind == "claude" {
+                        assert!(
+                            warning.contains("sandbox.allowUnsandboxedCommands = false"),
+                            "{warning}"
+                        );
+                    }
+                }
+                if kind == "claude" {
+                    let settings = plan
+                        .process()
+                        .provider_argv
+                        .windows(2)
+                        .find(|pair| pair[0] == "--settings")
+                        .unwrap();
+                    let settings: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+                    assert_eq!(
+                        settings["sandbox"]["enabled"],
+                        if isolation == Isolation::Sandbox {
+                            true.into()
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    );
+                    assert_eq!(
+                        settings["sandbox"]["failIfUnavailable"],
+                        if isolation == Isolation::Sandbox {
+                            true.into()
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    );
+                    assert_eq!(
+                        settings["sandbox"]["enableWeakerNestedSandbox"],
+                        if isolation.is_scoped() {
+                            true.into()
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -808,7 +902,8 @@ fn routine_permissions_cover_actions_children_and_isolations() {
             crate::config::effective::load_with_roots(&machine, project.path(), config.path())
                 .unwrap();
         for action in ["launch", "resume", "fork"] {
-            for sandboxed in [false, true] {
+            for isolation in [Isolation::Host, Isolation::Scoped, Isolation::Sandbox] {
+                let sandboxed = isolation.is_scoped();
                 for subagent in [false, true] {
                     let mut request = request("claude", action_with_args(action, Vec::new()));
                     request.subagent = subagent;
@@ -826,11 +921,7 @@ fn routine_permissions_cover_actions_children_and_isolations() {
                         effective: Some(&effective),
                         commands: &machine.agents.commands,
                         accounts: &machine.accounts,
-                        isolation: if sandboxed {
-                            Isolation::Scoped
-                        } else {
-                            Isolation::Host
-                        },
+                        isolation,
                         bwrap: sandboxed.then_some(Path::new("/bin/bwrap")),
                         agents: Ok(&[]),
                         ambient_env: &ambient,

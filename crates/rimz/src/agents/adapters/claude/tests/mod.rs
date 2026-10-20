@@ -14,6 +14,31 @@ mod local_context;
 mod subagents;
 
 #[test]
+fn native_sandbox_warns_for_all_bypass_permission_flags() {
+    for flags in [
+        vec!["--dangerously-skip-permissions"],
+        vec!["--permission-mode", "bypassPermissions"],
+        vec!["--permission-mode=bypassPermissions"],
+    ] {
+        let args = flags
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            ClaudeAdapter.native_sandbox_warning(&args).is_some(),
+            "{flags:?}"
+        );
+    }
+    for mode in ["default", "auto", "acceptEdits", "plan"] {
+        assert!(
+            ClaudeAdapter
+                .native_sandbox_warning(&["--permission-mode".into(), mode.into()])
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn system_prompt_snapshot_requires_a_known_supported_version() {
     use crate::agents::version::CliVersion;
     for version in [None, Some(CliVersion::new(2, 1, 256))] {

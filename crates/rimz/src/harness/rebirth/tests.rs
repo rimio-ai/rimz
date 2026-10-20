@@ -144,12 +144,91 @@ fn rebirth_skips_an_unavailable_sandbox_and_keeps_it_pending() {
             .as_ref()
             .unwrap()
             .label(),
-        "scoped view unavailable"
+        "isolation unavailable"
     );
     park_roster(&fixture.paths).unwrap();
     plan.settle(RebirthDisposition::RecoverKeep, "rimz-test")
         .confirm(|_, _| Ok::<_, &str>(()));
     assert!(pending(&fixture).contains(&key("lost")));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind() {
+    if let Ok(level) = std::env::var("RIMZ_TEST_REBIRTH_PROBE_LEVEL") {
+        let fixture = Fixture::new(&[("lost", Path::new("/"), false)]);
+        fixture.conversation("lost");
+        let transcript = fixture.project.join("codex.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some("codex".into()), LifecycleSignal::Registered);
+        observation.worktree_path = Some(fixture.project.display().to_string());
+        observation.transcript_path = Some(transcript.display().to_string());
+        Store::open(fixture.paths.clone(), fixture.runtime.clone())
+            .unwrap()
+            .append_event(&crate::EventEnvelope::agent_lifecycle(
+                fixture.paths.workspace_id.clone(),
+                "rimz-test",
+                "codex",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+        live_roster::publish(
+            &fixture.paths.live_roster,
+            BTreeSet::from([
+                key("lost"),
+                (AgentKind::new_unchecked("codex"), "codex".into()),
+            ]),
+        )
+        .unwrap();
+        let mut machine = MachineConfig::default();
+        machine.agents.isolation = level.parse().unwrap();
+        let plan = fixture.inspect_with(&machine, false);
+        let expected = if machine.agents.isolation.is_scoped() {
+            2
+        } else {
+            1
+        };
+        assert_eq!(plan.preview().unresumable.len(), expected);
+        assert!(
+            plan.preview()
+                .unresumable
+                .iter()
+                .all(|agent| agent.reason == Some(ResumeSkipReason::SandboxUnavailable))
+        );
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    for binary in ["bwrap", "socat"] {
+        let path = root.path().join(binary);
+        std::fs::write(
+            &path,
+            if binary == "bwrap" {
+                "#!/bin/sh\nprintf 'probe\\n' >> \"$RIMZ_TEST_REBIRTH_PROBE_LOG\"\nexit 1\n"
+            } else {
+                "#!/bin/sh\nexit 0\n"
+            },
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    for level in ["scoped", "sandbox"] {
+        let log = root.path().join(level);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "harness::rebirth::tests::rebirth_shares_scoped_probe_but_checks_native_sandboxes_per_kind", "--nocapture"])
+            .env("PATH", root.path())
+            .env("RIMZ_TEST_REBIRTH_PROBE_LEVEL", level)
+            .env("RIMZ_TEST_REBIRTH_PROBE_LOG", &log)
+            .output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            std::fs::read_to_string(log).unwrap(),
+            "probe\n",
+            "{level} must probe bwrap once"
+        );
+    }
 }
 
 #[test]

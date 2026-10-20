@@ -2243,7 +2243,11 @@ fn isolation_resolution_precedence() {
 
 #[test]
 fn isolation_values_round_trip() {
-    for (word, isolation) in [("host", Isolation::Host), ("scoped", Isolation::Scoped)] {
+    for (word, isolation) in [
+        ("host", Isolation::Host),
+        ("scoped", Isolation::Scoped),
+        ("sandbox", Isolation::Sandbox),
+    ] {
         assert_eq!(word.parse::<Isolation>().unwrap(), isolation);
         assert_eq!(isolation.to_string(), word);
         let serialized = serde_json::to_string(&isolation).unwrap();
@@ -2259,10 +2263,11 @@ fn isolation_values_round_trip() {
     }
     assert_eq!(
         "other".parse::<Isolation>().unwrap_err().to_string(),
-        "isolation must be `host` or `scoped`"
+        "isolation must be `host`, `scoped`, or `sandbox`"
     );
     assert!(Isolation::Scoped.is_scoped());
     assert!(!Isolation::Host.is_scoped());
+    assert!(!Isolation::Sandbox.is_scoped());
 }
 #[test]
 fn scoped_settings_fall_back_to_host_with_notices() {
@@ -2291,6 +2296,16 @@ fn scoped_settings_fall_back_to_host_with_notices() {
         "warning: profile `child` isolation = \"scoped\" needs Linux bubblewrap; running agents on the host instead",
     ]
     "#);
+}
+
+#[test]
+fn provider_sandbox_never_falls_back_off_linux() {
+    let mut config = MachineConfig::default();
+    config.agents.isolation = Isolation::Sandbox;
+    let mut notices = ConfigNotices::default();
+    config.fall_back_to_host_isolation(&mut notices);
+    assert_eq!(config.agents.isolation, Isolation::Sandbox);
+    assert!(notices.host_isolation_fallback.is_empty());
 }
 
 #[test]

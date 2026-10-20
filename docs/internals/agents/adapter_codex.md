@@ -91,7 +91,7 @@ Codex gates each installed hook behind its own per-hash trust state and silently
 
 Host skill lists render `-c skills.config` entries with `enabled=false` for unlisted frontmatter names (directory fallback), hiding explicit invocation too. CLI skill overrides are replaced; Codex merges the user's file entries. The enumeration and limits are in [host mode](../sandbox.md#host-mode).
 
-`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every host or scoped launch with roots, including Plan and mode-less launches. Preflight and managed process compiles without roots append nothing. The adapter never selects a sandbox or changes network policy. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
+`LaunchReminders.permission_roots` carries `StatePaths.root`, `RuntimePaths.root`, and `RuntimePaths.shared_root` from `launch_plan::compile`; the process compiler calls `LaunchCapability::configure_room_permissions` for every launch with roots, including Plan and mode-less launches, passing cwd, a linked checkout's main Git root, and the resolved isolation. Preflight and managed process compiles without roots append nothing. At host and scoped levels the adapter never selects a sandbox or changes network policy; at sandbox level it replaces a full-access selection with workspace-write. It reads the base config through `codex_config_path(login_env)` and renders grants through `toml_edit`.
 
 Selection follows this order, using `PresetArgMatcher` for valued arguments. Repeated flags or config keys use their last occurrence; config values parse as TOML with a bare-string fallback:
 
@@ -99,21 +99,22 @@ Selection follows this order, using `PresetArgMatcher` for valued arguments. Rep
 2. `--sandbox`/`-s`: legacy syntax with that mode.
 3. `-c`/`--config default_permissions=V`: profile `V`.
 4. `-c`/`--config sandbox_mode=M`: legacy `M`; otherwise `--approve-for-me`/`--not-so-yolo`: legacy `workspace-write`.
-5. `--profile`/`-p`: unknown, since RimZ does not read that file layer.
-6. Base config: `default_permissions` selects a profile, otherwise `sandbox_mode` selects legacy syntax.
-7. No selection: legacy syntax with Codex's implicit mode.
+5. Config layers, in increasing precedence: base config, the selected `$CODEX_HOME/<name>.config.toml` from `--profile`/`-p`, then trusted `.codex/config.toml` layers from the nearest configured project-root marker through cwd, all through `read_existing_table`. Deeper project layers win; the provider home is excluded. Project trust checks the layer directory, discovered project root, then main Git root, with canonical keys before lexical ones. `default_permissions` selects a profile, otherwise `sandbox_mode` selects legacy syntax.
+6. No selection: legacy syntax with Codex's implicit mode.
 
 The grant follows that selection, appended after the user's args:
 
+Under sandbox isolation only, legacy `danger-full-access` or profile `:danger-full-access` first removes argv sandbox/default-permission selectors and appends `--sandbox workspace-write`, then receives the legacy grant. Yolo stays unchanged with a wall-removed launch warning. Bare permission profiles keep their rules without inspecting whether those rules provide confinement.
+
 | Selection | Grant |
 | --- | --- |
-| Legacy, implicit or `workspace-write` | `-c sandbox_workspace_write.writable_roots=[<user roots>, <three room roots>]`; user roots come from the last argument override, otherwise the base config array, otherwise empty |
+| Legacy, implicit or `workspace-write` | `-c sandbox_workspace_write.writable_roots=[<user roots>, <three room roots>]`; user roots come from the last argument override, otherwise the highest-precedence config layer with that array, otherwise empty |
 | Legacy `read-only` or `danger-full-access`; full access; unknown | none |
 | Profile `:workspace` | `--add-dir <root>` for each room root, in order |
 | Profile `:read-only`, `:danger-full-access`, any other `:` name, or a name that is not a bare TOML key | none |
 | User-defined profile `N` | `-c permissions.N.workspace_roots={"<root>"=true, ...}`; the profile's own workspace-root rules and network choice remain |
 
-RimZ does not inspect system or project config layers or managed requirements. Legacy grants replace roots in those lower layers, preserving only the base config or argument array. An explicit `:workspace` combined with a managed read-only fallback can still fail Codex's `--add-dir` startup check. Names that are not bare TOML keys (`[A-Za-z0-9_-]+`) are skipped: Codex splits a `-c` key on `.` without unquoting, so neither a dotted nor a quoted key reaches them. User-authored obsolete selectors remain user input; RimZ does not migrate them. Resume and fork receive the same grants, which Codex treats as explicit overrides of saved thread permissions. These are argv-level guarantees; Codex validates the resulting permissions at startup.
+RimZ does not inspect system config layers or managed requirements. Legacy grants replace roots from those layers, preserving only the project, profile, base config, or argument array selected above. An explicit `:workspace` combined with a managed read-only fallback can still fail Codex's `--add-dir` startup check. Names that are not bare TOML keys (`[A-Za-z0-9_-]+`) are skipped: Codex splits a `-c` key on `.` without unquoting, so neither a dotted nor a quoted key reaches them. User-authored obsolete selectors remain user input; RimZ does not migrate them. Resume and fork receive the same grants, which Codex treats as explicit overrides of saved thread permissions. These are argv-level guarantees; Codex validates the resulting permissions at startup.
 
 | Intent | Codex argv |
 | --- | --- |

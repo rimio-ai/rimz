@@ -1118,7 +1118,11 @@ fn scoped_codex_preserves_each_permission_selection() {
 #[test]
 fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissions() {
     let project = tempfile::tempdir().unwrap();
-    for scoped in [false, true] {
+    for isolation in [
+        crate::config::Isolation::Host,
+        crate::config::Isolation::Scoped,
+        crate::config::Isolation::Sandbox,
+    ] {
         for routine in [false, true] {
             let invocation = request("claude", ExecAction::Launch {
                 prompt: None,
@@ -1130,12 +1134,15 @@ fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissi
                 project.path(),
                 &invocation,
                 project.path(),
-                &BTreeMap::from([(
-                    "CLAUDE_CONFIG_DIR".into(),
-                    project.path().display().to_string(),
-                )]),
+                &BTreeMap::from([
+                    (
+                        "CLAUDE_CONFIG_DIR".into(),
+                        project.path().display().to_string(),
+                    ),
+                    (crate::config::Isolation::ENV.into(), isolation.to_string()),
+                ]),
                 &LaunchReminders {
-                    sandbox: scoped,
+                    sandbox: isolation.is_scoped(),
                     permission_roots: Some(roots.clone()),
                     settings: Some((project.path().to_path_buf(), BTreeMap::new())),
                     routine_rimz: routine.then(|| {
@@ -1164,10 +1171,17 @@ fn claude_sandbox_settings_merge_at_every_level_with_or_without_routine_permissi
             );
             assert_eq!(
                 sandbox.get("enableWeakerNestedSandbox"),
-                scoped.then_some(&serde_json::Value::Bool(true))
+                isolation
+                    .is_scoped()
+                    .then_some(&serde_json::Value::Bool(true))
             );
-            assert!(sandbox.get("enabled").is_none());
-            assert!(sandbox.get("failIfUnavailable").is_none());
+            for key in ["enabled", "failIfUnavailable"] {
+                assert_eq!(
+                    sandbox.get(key),
+                    (isolation == crate::config::Isolation::Sandbox)
+                        .then_some(&serde_json::Value::Bool(true))
+                );
+            }
             let excluded = sandbox["excludedCommands"].as_array().unwrap();
             assert!(excluded.contains(&serde_json::json!("custom *")));
             for prefix in ["rimz message", "rimz agents", "rimz subagents"] {

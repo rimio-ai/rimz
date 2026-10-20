@@ -327,24 +327,34 @@ pub struct ChildIsolation {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ClampSource {
-    ProfileDefault,
-    MachinePolicy,
+    ProfileDefault {
+        requested: crate::config::Isolation,
+        parent: crate::config::Isolation,
+    },
+    MachinePolicy {
+        requested: crate::config::Isolation,
+        parent: crate::config::Isolation,
+    },
 }
 
 impl std::fmt::Display for ClampSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::ProfileDefault => "its definition asks for host isolation",
-            Self::MachinePolicy => "machine policy asks for host isolation",
-        })
+        let (source, requested, parent) = match self {
+            Self::ProfileDefault { requested, parent } => ("its definition", requested, parent),
+            Self::MachinePolicy { requested, parent } => ("machine policy", requested, parent),
+        };
+        write!(f, "runs {parent}: {source} asks for {requested} isolation")
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "a subagent never runs looser than its parent: --isolation host is unavailable under a scoped parent; launch it from a host agent or a host shell"
+    "a subagent never runs looser than its parent: --isolation {requested} is unavailable under a {parent} parent; launch it from a {requested} agent or a host shell"
 )]
-pub struct ChildIsolationErr;
+pub struct ChildIsolationErr {
+    requested: crate::config::Isolation,
+    parent: crate::config::Isolation,
+}
 
 pub fn cap_child_isolation(
     parent: Option<crate::config::Isolation>,
@@ -353,23 +363,23 @@ pub fn cap_child_isolation(
     machine: crate::config::Isolation,
 ) -> Result<ChildIsolation, ChildIsolationErr> {
     use crate::config::Isolation;
-    if !parent.is_some_and(Isolation::is_scoped)
-        || Isolation::resolve(child_override, child_default, machine).is_scoped()
-    {
+    let parent = parent.unwrap_or_default();
+    let requested = Isolation::resolve(child_override, child_default, machine);
+    if requested >= parent {
         return Ok(ChildIsolation {
             isolation: child_override,
             clamped: None,
         });
     }
-    if child_override == Some(Isolation::Host) {
-        return Err(ChildIsolationErr);
+    if child_override.is_some() {
+        return Err(ChildIsolationErr { requested, parent });
     }
     Ok(ChildIsolation {
-        isolation: Some(Isolation::Scoped),
+        isolation: Some(parent),
         clamped: Some(if child_default.is_some() {
-            ClampSource::ProfileDefault
+            ClampSource::ProfileDefault { requested, parent }
         } else {
-            ClampSource::MachinePolicy
+            ClampSource::MachinePolicy { requested, parent }
         }),
     })
 }

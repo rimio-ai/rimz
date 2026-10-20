@@ -475,6 +475,79 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source codex";
 #[derive(Clone, Debug, Default)]
 pub(in crate::agents) struct CodexAdapter;
 
+fn project_permission_layers(
+    cwd: &Path,
+    main_root: Option<&Path>,
+    config_home: Option<&Path>,
+    base: &toml::Table,
+    profile: &toml::Table,
+    markers: Option<toml::Value>,
+) -> Vec<toml::Table> {
+    let default_markers = vec![toml::Value::String(".git".into())];
+    let markers = markers
+        .as_ref()
+        .and_then(toml::Value::as_array)
+        .unwrap_or(&default_markers);
+    let root = cwd
+        .ancestors()
+        .find(|dir| {
+            markers
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .any(|marker| {
+                    let path = dir.join(marker);
+                    path.exists()
+                        && (marker != ".git" || !path.is_dir() || path.join("HEAD").exists())
+                })
+        })
+        .unwrap_or(cwd);
+    let main_root = main_root.or_else(|| cwd.ancestors().find(|dir| dir.join(".git").exists()));
+    let mut dirs = cwd
+        .ancestors()
+        .take_while(|dir| dir.starts_with(root))
+        .collect::<Vec<_>>();
+    dirs.reverse();
+    let mut layers = Vec::new();
+    for dir in dirs {
+        let trust = [Some(dir), Some(root), main_root]
+            .into_iter()
+            .flatten()
+            .find_map(|candidate| {
+                let canonical = candidate.canonicalize().ok();
+                canonical
+                    .as_deref()
+                    .into_iter()
+                    .chain([candidate])
+                    .find_map(|key| {
+                        [profile, base].into_iter().find_map(|config| {
+                            config
+                                .get("projects")?
+                                .get(key.to_string_lossy().as_ref())?
+                                .get("trust_level")?
+                                .as_str()
+                        })
+                    })
+            });
+        let home = dir.join(".codex");
+        if trust != Some("trusted")
+            || config_home.is_some_and(|config_home| {
+                home == config_home
+                    || home
+                        .canonicalize()
+                        .ok()
+                        .zip(config_home.canonicalize().ok())
+                        .is_some_and(|(home, config_home)| home == config_home)
+            })
+        {
+            continue;
+        }
+        if let Ok(config) = install::read_existing_table(&home.join("config.toml")) {
+            layers.push(config);
+        }
+    }
+    layers
+}
+
 const DEFINITIONS: crate::agents::definition::DefinitionSpec =
     crate::agents::definition::DefinitionSpec {
         mode: None,
@@ -1020,11 +1093,24 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
         extra_args.extend(["-c".to_owned(), "features.multi_agent=false".to_owned()]);
     }
 
+    fn native_sandbox_prerequisites(&self) -> Option<&'static [&'static str]> {
+        Some(&[])
+    }
+
+    fn native_sandbox_warning(&self, extra_args: &[String]) -> Option<&'static str> {
+        extra_args
+            .iter()
+            .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
+            .then_some("Yolo bypasses approvals and the command sandbox")
+    }
+
     fn configure_room_permissions(
         &self,
         extra_args: &mut Vec<String>,
         login_env: &BTreeMap<String, String>,
+        (cwd, main_root): (&Path, Option<&Path>),
         roots: &[PathBuf; 3],
+        isolation: crate::config::Isolation,
     ) {
         enum Selection {
             Legacy(Option<toml::Value>),
@@ -1059,11 +1145,39 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                     .unwrap_or_else(|_| toml::Value::String(entry.value.clone()))
             })
         };
-        let base = install::codex_config_path(login_env)
-            .ok()
+        let config_path = install::codex_config_path(login_env).ok();
+        let base = config_path
+            .as_deref()
+            .and_then(|path| install::read_existing_table(path).ok())
+            .unwrap_or_default();
+        let profile = flag_value(&["--profile", "-p"])
+            .and_then(|name| {
+                Some(
+                    config_path
+                        .as_ref()?
+                        .parent()?
+                        .join(format!("{name}.config.toml")),
+                )
+            })
             .and_then(|path| install::read_existing_table(&path).ok())
             .unwrap_or_default();
-        let selection = if let Some(mode) = flag_value(&["--sandbox", "-s"]) {
+        let markers = config_value("project_root_markers").or_else(|| {
+            profile
+                .get("project_root_markers")
+                .or_else(|| base.get("project_root_markers"))
+                .cloned()
+        });
+        let projects = project_permission_layers(
+            cwd,
+            main_root,
+            config_path.as_deref().and_then(Path::parent),
+            &base,
+            &profile,
+            markers,
+        );
+        let layers = || projects.iter().rev().chain([&profile, &base]);
+        let setting = |key: &str| layers().find_map(|config| config.get(key));
+        let mut selection = if let Some(mode) = flag_value(&["--sandbox", "-s"]) {
             Selection::Legacy(Some(toml::Value::String(mode)))
         } else if let Some(profile) = config_value("default_permissions") {
             Selection::Profile(profile)
@@ -1074,13 +1188,35 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
             .any(|arg| arg == "--approve-for-me" || arg == "--not-so-yolo")
         {
             Selection::Legacy(Some(toml::Value::String("workspace-write".to_owned())))
-        } else if flag_value(&["--profile", "-p"]).is_some() {
-            return;
-        } else if let Some(profile) = base.get("default_permissions") {
+        } else if let Some(profile) = setting("default_permissions") {
             Selection::Profile(profile.clone())
         } else {
-            Selection::Legacy(base.get("sandbox_mode").cloned())
+            Selection::Legacy(setting("sandbox_mode").cloned())
         };
+        let user_roots = config_value("sandbox_workspace_write.writable_roots").or_else(|| {
+            layers()
+                .find_map(|config| config.get("sandbox_workspace_write")?.get("writable_roots"))
+                .cloned()
+        });
+        let full_access = match &selection {
+            Selection::Legacy(mode) => {
+                mode.as_ref().and_then(toml::Value::as_str) == Some("danger-full-access")
+            }
+            Selection::Profile(profile) => profile.as_str() == Some(":danger-full-access"),
+        };
+        if isolation == crate::config::Isolation::Sandbox && full_access {
+            crate::agents::PresetArgMatcher::Flag(vec!["--sandbox".into(), "-s".into()])
+                .remove_occurrences(extra_args);
+            for key in ["default_permissions", "sandbox_mode"] {
+                crate::agents::PresetArgMatcher::ConfigKey {
+                    flags: vec!["-c".into(), "--config".into()],
+                    key: key.into(),
+                }
+                .remove_occurrences(extra_args);
+            }
+            extra_args.extend(["--sandbox".into(), "workspace-write".into()]);
+            selection = Selection::Legacy(None);
+        }
         match selection {
             Selection::Legacy(mode) => {
                 if mode
@@ -1089,12 +1225,6 @@ impl crate::agents::capabilities::LaunchCapability for CodexAdapter {
                 {
                     return;
                 }
-                let user_roots =
-                    config_value("sandbox_workspace_write.writable_roots").or_else(|| {
-                        base.get("sandbox_workspace_write")?
-                            .get("writable_roots")
-                            .cloned()
-                    });
                 let mut writable_roots = toml_edit::Array::new();
                 if let Some(user_roots) = user_roots {
                     let Some(user_roots) = user_roots.as_array() else {

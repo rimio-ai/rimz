@@ -2882,6 +2882,30 @@ fn ingress_captures_only_the_declared_environment() {
 }
 
 #[test]
+fn provider_sandbox_hook_uses_host_paths_without_a_scoped_mount_pin() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let store = env.store();
+    let mut drainer = drain_command(&env).spawn().unwrap();
+    let lease = drainer_connection(&store, Some(&mut drainer));
+    let mut command = env.hook_command("claude");
+    let transcript = env.home_root.join("native-transcript.jsonl");
+    std::fs::write(&transcript, "").unwrap();
+    command
+        .env("RIMZ_ISOLATION", "sandbox")
+        .env_remove(rimz::sandbox::HOOK_HOST_PATHS_ENV);
+    let output = env.spawn_payload(command, &json!({"hook_event_name": "Stop", "session_id": "native-sandbox", "transcript_path": transcript}).to_string()).wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let (frames, _) = ingress::read_from_offset(store.paths(), 0).unwrap();
+    assert_eq!(frames.len(), 1, "provider hooks use normal host ingress");
+    let payload: serde_json::Value = serde_json::from_str(&frames[0].0.payload).unwrap();
+    assert_eq!(payload["transcript_path"], transcript.display().to_string());
+    drop(lease);
+    drainer.kill().unwrap();
+    drainer.wait().unwrap();
+}
+
+#[test]
 fn sandbox_hook_without_a_host_drainer_applies_inline_without_ingress() {
     let env = Env::new();
     env.record(&env.project_root);

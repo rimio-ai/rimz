@@ -20,7 +20,7 @@ use super::prompt_compose::{
     self, MaterializedSystemPrompt, SystemPromptPlan, SystemPromptSources,
 };
 
-/// The room's shared dir, at its host path in both isolations.
+/// The room's shared dir, at its host path in all isolation levels.
 const ENV_SHARED: &str = "RIMZ_SHARED";
 
 pub struct LaunchPlanInputs<'a> {
@@ -65,6 +65,11 @@ pub struct LaunchPlan {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchPlanWarning {
+    #[error("{kind} sandbox wall is not guaranteed: {reason}")]
+    NativeSandboxBypass {
+        kind: crate::ids::AgentKind,
+        reason: &'static str,
+    },
     #[error(
         "{kind} has no per-launch skill switch; profile skills are not enforced under host isolation"
     )]
@@ -697,6 +702,14 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
         AgentProcessStage::Ready(process)
         | AgentProcessStage::LoginShellReentry { process, .. } => process,
     };
+    if inputs.isolation == Isolation::Sandbox
+        && let Some(reason) = adapter.native_sandbox_warning(&process.provider_argv)
+    {
+        warnings.push(LaunchPlanWarning::NativeSandboxBypass {
+            kind: request.kind.clone(),
+            reason,
+        });
+    }
     let mut unset: BTreeMap<String, sandbox::EnvPin> = inherited_keys
         .into_iter()
         .filter(|key| !process.env.contains_key(key))

@@ -933,6 +933,21 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
         Ok(())
     }
 
+    fn native_sandbox_prerequisites(&self) -> Option<&'static [&'static str]> {
+        Some(&["bwrap", "socat"])
+    }
+
+    fn native_sandbox_warning(&self, extra_args: &[String]) -> Option<&'static str> {
+        (extra_args
+            .iter()
+            .any(|arg| arg == "--dangerously-skip-permissions")
+            || crate::agents::PresetArgMatcher::Flag(vec!["--permission-mode".into()])
+                .occurrences(extra_args)
+                .last()
+                .is_some_and(|entry| entry.value == "bypassPermissions"))
+            .then_some("Yolo permits an unsandboxed retry without prompting; set sandbox.allowUnsandboxedCommands = false in Claude settings to forbid retries")
+    }
+
     fn configure_sandbox_settings(
         &self,
         (cwd, artifact_dir): (&Path, &Path),
@@ -961,6 +976,10 @@ impl crate::agents::capabilities::LaunchCapability for ClaudeAdapter {
                 )?;
                 if isolation.is_scoped() {
                     sandbox.insert("enableWeakerNestedSandbox".into(), true.into());
+                }
+                if isolation == crate::config::Isolation::Sandbox {
+                    sandbox.insert("enabled".into(), true.into());
+                    sandbox.insert("failIfUnavailable".into(), true.into());
                 }
                 Ok(())
             },
