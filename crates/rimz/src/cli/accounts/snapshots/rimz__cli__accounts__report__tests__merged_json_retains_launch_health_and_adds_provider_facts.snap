@@ -1,0 +1,64 @@
+---
+source: crates/rimz/src/cli/accounts/tests.rs
+expression: json
+---
+[
+  {
+    "account": "claude@default",
+    "account_id": null,
+    "account_scope": null,
+    "active": true,
+    "agents": null,
+    "day_budget": null,
+    "default_for": [
+      "new_rooms"
+    ],
+    "entitlement": "ok",
+    "history": null,
+    "home": "/nonexistent/u/.claude",
+    "kind": "claude",
+    "login": null,
+    "machine_default": true,
+    "metered": null,
+    "plan": null,
+    "plan_label": null,
+    "pool": "claude@default",
+    "probed_at": null,
+    "problem": "claude account `default` home `/nonexistent/u/.claude` is not a directory; run `rimz hooks install claude`",
+    "product_name": "Claude",
+    "spend_step": null,
+    "spending": null,
+    "status": "home_missing",
+    "sub_provider": null,
+    "version": null,
+    "windows": []
+  },
+  {
+    "account": "codex@default",
+    "account_id": null,
+    "account_scope": null,
+    "active": false,
+    "agents": null,
+    "day_budget": null,
+    "default_for": [],
+    "entitlement": "ok",
+    "history": null,
+    "home": "/nonexistent/u/.codex",
+    "kind": "codex",
+    "login": null,
+    "machine_default": false,
+    "metered": null,
+    "plan": null,
+    "plan_label": null,
+    "pool": "codex@default",
+    "probed_at": null,
+    "problem": "codex account `default` home `/nonexistent/u/.codex` is not a directory; run `rimz hooks install codex`",
+    "product_name": "Codex",
+    "spend_step": null,
+    "spending": null,
+    "status": "home_missing",
+    "sub_provider": null,
+    "version": null,
+    "windows": []
+  }
+]

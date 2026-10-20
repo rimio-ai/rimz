@@ -208,7 +208,7 @@ impl Palette {
     /// the budget empties. Each zone names the exclusive upper bound of
     /// remaining budget where its tier is reached ([`BudgetBarConfig`]);
     /// checked worst-first, so a misordered user config degrades to the worse
-    /// tier. The sidebar's mana bar and the `rimz providers` percentages both
+    /// tier. The sidebar's mana bar and the `rimz accounts` percentages both
     /// read it.
     pub fn budget_tone(&self, remaining_pct: u8, zones: &BudgetBarConfig) -> Tone {
         let remaining = u64::from(remaining_pct.min(100));

@@ -1672,7 +1672,7 @@ fn window_triggers_refuse_at_add_in_order() {
     let refusal = at_add(Some("claude"), five, &native).unwrap_err();
     assert_eq!(
         refusal.to_string(),
-        "no current claude 5h window reading; open the room's sidebar or run `rimz providers --refresh`"
+        "no current claude 5h window reading; open the room's sidebar or run `rimz accounts --refresh`"
     );
     publish_windows(&runtime, "claude", vec![window(Some(30), -60, five)]);
     assert!(matches!(

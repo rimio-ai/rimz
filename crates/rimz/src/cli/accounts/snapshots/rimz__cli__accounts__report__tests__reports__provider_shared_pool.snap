@@ -1,0 +1,10 @@
+---
+source: crates/rimz/src/cli/accounts/report_tests.rs
+expression: text
+---
+Claude · v1.2.3 · shared pool $123.00 spent in 7d
+  NAME     PLAN        AGENTS  SPEND 7d  READING
+  default  Claude Max  –       shared    never read
+  a        Claude Max  –       shared    never read
+  b        Claude Max  –       shared    never read
+  solo     Claude Max  –       $17.00    never read

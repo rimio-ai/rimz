@@ -1,29 +1,30 @@
-//! `rimz providers` — account plans, auth state, limits, credits, and spend.
+//! Unified account readings, compatibility projection, and provider tables.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use clap::Args;
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use serde::Serialize;
 
-use super::GlobalFlags;
-use super::render::{self, KeyVals, cell};
-use super::spinner::Spinner;
+use super::super::GlobalFlags;
+use super::super::render::{self, KeyVals, cell};
+use super::super::spinner::Spinner;
+use super::{ListArgs, login_command};
 use rimz::RuntimePaths;
 use rimz::agents::account::{AccountsCache, ProviderRecord, ProviderStatus};
 use rimz::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
 use rimz::agents::{
-    Entitlement, ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendWindow,
-    SpendWindowMode,
+    AccountStatus, BirthLoginErr, Entitlement, ExtraCredits, ProviderAccountScope, RateLimitWindow,
+    ResetCredits, SpendWindow, SpendWindowMode,
 };
 use rimz::agents::{LoginCatalog, ProviderLogin, RoomLoginSet};
-use rimz::config::MachineConfig;
+use rimz::config::{AccountHistory, AccountsConfig, MachineConfig};
 use rimz::harness::spend_ladder::{SpendFacts, SpendStep};
-use rimz::ids::{AgentKind, LoginKey};
+use rimz::ids::{AgentKind, LoginKey, LoginName};
 use rimz::room::{AccountStanding, Deciding, Scope, Scopes};
 use rimz::sidebar::enrich::{provider_panel_for_login, provider_panels_from_caches};
 use rimz::sidebar::refresh::{query_provider_accounts, refresh_provider_usage};
@@ -31,30 +32,31 @@ use rimz::store::snapshot::{DailyBudgetView, SidebarProviderPanel};
 
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 
-#[derive(Debug, Args)]
-pub struct ProvidersArgs {
-    /// Show only one provider kind.
-    #[arg(value_name = "KIND")]
-    kind: Option<String>,
-    /// Emit the report as JSON instead of human-readable text.
-    #[arg(long)]
-    json: bool,
-    /// Bypass account and usage refresh TTLs.
-    #[arg(long)]
-    refresh: bool,
-    /// Expand logged-out and empty provider kinds into tables.
-    #[arg(long)]
-    all: bool,
-}
-
-pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
-    validate_kind(args.kind.as_deref())?;
+pub(super) fn list(
+    args: ListArgs,
+    target: Option<&str>,
+    legacy: bool,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    if legacy {
+        validate_kind(target)?;
+    }
+    let (filter, name) = match target {
+        Some(target) => {
+            let (kind, name) = target
+                .split_once('@')
+                .map_or((target, None), |(kind, name)| (kind, Some(name)));
+            validate_kind(Some(kind))?;
+            (Some(kind), name.map(str::parse::<LoginName>).transpose()?)
+        }
+        None => (None, None),
+    };
     let runtime = RuntimePaths::shared();
     runtime
         .ensure_shared_dirs()
         .context("preparing shared provider cache paths")?;
     let config = MachineConfig::load_lenient();
-    let (standing, in_room) = match super::position_standing(globals, &config) {
+    let (standing, in_room) = match super::super::position_standing(globals, &config) {
         Ok(standing) => standing,
         Err(error) => {
             writeln!(
@@ -69,22 +71,53 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let spinner = (!args.json && std::io::stdout().is_terminal())
         .then(|| Spinner::delayed("Querying provider accounts", SPINNER_MIN_AGE));
-    let catalog = Some(LoginCatalog::room_view(&config.accounts).0);
+    let (catalog, errors) = LoginCatalog::room_view(&config.accounts);
+    for error in errors.values() {
+        writeln!(std::io::stderr().lock(), "rimz: warning: {error}")?;
+    }
     let logins: Vec<_> = rimz::agents::known_kinds()
         .flat_map(|kind| {
             let mut logins = vec![ProviderLogin::default_for(AgentKind::new_unchecked(kind))];
-            if let Some(catalog) = &catalog {
-                logins.extend(
-                    catalog
-                        .all()
-                        .filter(|login| login.kind().as_str() == kind && !login.name().is_default())
-                        .cloned(),
-                );
-            }
+            logins.extend(
+                catalog
+                    .all()
+                    .filter(|login| login.kind().as_str() == kind && !login.name().is_default())
+                    .cloned(),
+            );
             logins
         })
         .collect();
-    let accounts = query_provider_accounts(&runtime, &logins, args.refresh);
+    if let (Some(kind), Some(name)) = (filter, name.as_ref())
+        && !logins
+            .iter()
+            .any(|login| login.kind().as_str() == kind && login.name() == name)
+    {
+        let configured = logins
+            .iter()
+            .filter(|login| login.kind().as_str() == kind)
+            .map(|login| login.name().as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!("no {kind} account `{name}`; configured: {configured}");
+    }
+    let started_ms = rimz::utils::time::unix_now_ms();
+    let mut accounts = query_provider_accounts(&runtime, &logins, args.refresh);
+    let stale: Vec<_> = logins
+        .iter()
+        .filter(|login| {
+            config.accounts.named(login.kind()).is_some()
+                && accounts.logins.get(&login.key()).is_some_and(|record| {
+                    record.probed_at_ms < started_ms
+                        && (record.login_is_ambiguous()
+                            || ProviderStatus::from_record(Some(record))
+                                == ProviderStatus::LoggedOut)
+                })
+        })
+        .cloned()
+        .collect();
+    if !legacy && !stale.is_empty() && !args.refresh {
+        accounts = query_provider_accounts(&runtime, &stale, true);
+    }
     if let Some(spinner) = &spinner {
         spinner.set("Refreshing provider usage");
     }
@@ -92,10 +125,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         let Some(record) = accounts.logins.get(&login.key()) else {
             continue;
         };
-        if args
-            .kind
-            .as_deref()
-            .is_some_and(|filter| filter != login.kind().as_str())
+        if filter.is_some_and(|filter| filter != login.kind().as_str())
             || ProviderStatus::from_record(Some(record)) != ProviderStatus::LoggedIn
         {
             continue;
@@ -150,7 +180,7 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         if let Some(panel) = provider_panel_for_login(
             &runtime,
             login,
-            catalog.as_ref(),
+            Some(&catalog),
             &config,
             account,
             &provider_spending,
@@ -159,7 +189,16 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     let now = Timestamp::now();
-    let agents = rimz::room::live_agents_by_login().ok();
+    let agents = match rimz::room::live_agents_by_login() {
+        Ok(agents) => Some(agents),
+        Err(error) => {
+            writeln!(
+                std::io::stderr().lock(),
+                "rimz: warning: cannot count live agents per account: {error}"
+            )?;
+            None
+        }
+    };
     let installed = rimz::agents::known_kinds()
         .filter(|kind| {
             rimz::agents::spec_by_kind(kind)
@@ -167,13 +206,13 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
         })
         .map(str::to_owned)
         .collect();
-    let mut reports = assemble_reports(
+    let reports = assemble_reports(
         &logins,
         &accounts,
         panels,
         &provider_spending,
-        args.kind.as_deref(),
-        args.all,
+        filter,
+        args.all || target.is_some(),
         &ReportContext {
             day_cutoff_secs: now
                 .to_zoned(config.time_zone())
@@ -186,32 +225,82 @@ pub fn run(args: ProvidersArgs, globals: &GlobalFlags) -> Result<()> {
             spend_step: &|key| SpendFacts::read(&runtime, key, now).step(&config.resume, None, now),
         },
     );
-    mark_standing(&mut reports, &standing);
-    if !in_room {
-        for report in &mut reports {
-            report.active = false;
-        }
-    }
-    if args.json {
-        return render::json_pretty(&reports);
-    }
-    let mut out = render::out();
-    let time_zone = config.time_zone();
-    let deciding = reports
+    let readings = reports
         .iter()
-        .filter_map(|report| {
-            let deciding = standing.deciding(&AgentKind::new_unchecked(&report.kind))?;
-            if !in_room && deciding == Deciding::Room {
-                return None;
-            }
-            Some((report.kind.clone(), deciding))
+        .filter(|report| accounts.logins.contains_key(&report.account))
+        .map(|report| {
+            (
+                report.account.clone(),
+                LoginReading {
+                    status: report.status,
+                    entitlement: report.entitlement,
+                    metered: report.metered,
+                    windows: report.windows.clone(),
+                    extra_credits: report.extra_credits.clone(),
+                    reset_credits: report.reset_credits.clone(),
+                    spend_step: report.spend_step,
+                },
+            )
         })
         .collect();
-    if args.kind.is_some() {
-        return render::finish(write_pretty(&mut out, &reports, now, &time_zone, &deciding));
+    let mut rows = account_rows(
+        &config.accounts,
+        &catalog,
+        &standing,
+        &rimz::agents::ambient_env(),
+        agents.as_ref(),
+        &readings,
+        &errors,
+    );
+    for row in &mut rows {
+        if let Some(report) = reports.iter().find(|report| report.account == row.account) {
+            row.apply(report);
+        } else {
+            row.installed = installed.contains(row.kind.as_str());
+            row.expanded = args.all || target.is_some();
+        }
+    }
+    rows.retain(|row| {
+        filter.is_none_or(|kind| row.kind.as_str() == kind)
+            && name.as_ref().is_none_or(|name| row.account.name == *name)
+    });
+    rows.sort_by_key(|row| {
+        logins
+            .iter()
+            .position(|login| login.kind() == &row.kind)
+            .unwrap_or(usize::MAX)
+    });
+    if args.json {
+        if legacy {
+            let reports: Vec<_> = rows
+                .iter()
+                .filter(|row| reports.iter().any(|report| report.account == row.account))
+                .map(|row| row.legacy(&standing, in_room))
+                .collect();
+            return render::json_pretty(&reports);
+        }
+        return render::json_pretty(&rows);
+    }
+    let deciding = rows
+        .iter()
+        .filter_map(|row| Some((row.kind.clone(), standing.deciding(&row.kind)?)))
+        .collect();
+    let mut out = render::out();
+    if target.is_some() {
+        return render::finish(write_pretty(
+            &mut out,
+            &rows,
+            now,
+            &config.time_zone(),
+            &deciding,
+        ));
     }
     render::finish(write_overview(
-        &mut out, &reports, now, &time_zone, &deciding, in_room,
+        &mut out,
+        &rows,
+        now,
+        &config.time_zone(),
+        &deciding,
     ))
 }
 
@@ -393,24 +482,303 @@ fn build_report(
     }
 }
 
-/// Mark each report with the account a launch at the position uses and the
-/// layers it is the default of.
-fn mark_standing(reports: &mut [ProviderReport], standing: &AccountStanding) {
-    for report in reports {
-        let kind = AgentKind::new_unchecked(&report.kind);
-        report.active = standing.active(&kind).as_ref() == Some(&report.account.name);
-        report.default_for = standing.scopes(&kind, &report.account.name);
+#[derive(Serialize)]
+struct AccountRow {
+    kind: AgentKind,
+    account: LoginKey,
+    home: Option<PathBuf>,
+    /// `None` for `default` and for a selected account nothing declares.
+    history: Option<AccountHistory>,
+    machine_default: bool,
+    /// A setup or subscription-access problem, with its fix when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<String>,
+    status: AccountStatus,
+    entitlement: Entitlement,
+    /// A launch from here uses this account for its kind.
+    active: bool,
+    default_for: Scopes,
+    /// Live agents on this account across every live room; `None` when the
+    /// rooms could not be inventoried.
+    agents: Option<usize>,
+    /// Every reported provider window, including model-scoped limits.
+    windows: Vec<RateLimitWindow>,
+    /// Paid usage beyond the subscription.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extra_credits: Option<ExtraCredits>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset_credits: Option<ResetCredits>,
+    /// Where the account's spend ladder stands; `None` without a reading.
+    spend_step: Option<SpendStep>,
+    /// `false` for an account without subscription windows.
+    metered: Option<bool>,
+    /// This run's probe outcome; `None` when no record is available.
+    login: Option<ProviderStatus>,
+    pool: LoginKey,
+    product_name: String,
+    probed_at: Option<Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    probe_error: Option<String>,
+    plan: Option<String>,
+    plan_label: Option<String>,
+    account_id: Option<String>,
+    sub_provider: Option<String>,
+    account_scope: Option<ProviderAccountScope>,
+    version: Option<String>,
+    spending: Option<ProviderSpend>,
+    day_budget: Option<DailyBudgetView>,
+    #[serde(skip)]
+    installed: bool,
+    #[serde(skip)]
+    expanded: bool,
+    #[serde(skip)]
+    legacy_spend_step: SpendStep,
+}
+
+impl AccountRow {
+    fn apply(&mut self, report: &ProviderReport) {
+        self.entitlement = report.entitlement;
+        self.metered = report.metered;
+        self.windows.clone_from(&report.windows);
+        self.extra_credits.clone_from(&report.extra_credits);
+        self.reset_credits.clone_from(&report.reset_credits);
+        self.pool = report.pool.clone();
+        self.product_name = report.product_name.clone();
+        self.probed_at = report.probed_at;
+        self.probe_error = report.probe_error.clone();
+        self.plan = report.plan.clone();
+        self.plan_label = report.plan_label.clone();
+        self.account_id = report.account_id.clone();
+        self.sub_provider = report.sub_provider.clone();
+        self.account_scope = report.account_scope.clone();
+        self.version = report.version.clone();
+        self.spending = report.spending.clone();
+        self.day_budget = report.day_budget;
+        self.installed = report.installed;
+        self.expanded = report.expanded;
+        self.legacy_spend_step = report.spend_step;
     }
+
+    fn legacy(&self, standing: &AccountStanding, in_room: bool) -> ProviderReport {
+        ProviderReport {
+            kind: self.kind.to_string(),
+            account: self.account.clone(),
+            status: self.login.unwrap_or(ProviderStatus::Unavailable),
+            entitlement: self.entitlement,
+            metered: self.metered,
+            windows: self.windows.clone(),
+            extra_credits: self.extra_credits.clone(),
+            reset_credits: self.reset_credits.clone(),
+            spend_step: self.legacy_spend_step,
+            agents: self.agents,
+            active: in_room && standing.active(&self.kind).as_ref() == Some(&self.account.name),
+            default_for: standing.scopes(&self.kind, &self.account.name),
+            pool: self.pool.clone(),
+            product_name: self.product_name.clone(),
+            probed_at: self.probed_at,
+            probe_error: self.probe_error.clone(),
+            plan: self.plan.clone(),
+            plan_label: self.plan_label.clone(),
+            account_id: self.account_id.clone(),
+            sub_provider: self.sub_provider.clone(),
+            account_scope: self.account_scope.clone(),
+            version: self.version.clone(),
+            spending: self.spending.clone(),
+            day_budget: self.day_budget,
+            installed: self.installed,
+            expanded: self.expanded,
+        }
+    }
+
+    /// Fold login knowledge into healthy setup; setup problems stand because
+    /// they must be fixed first. Only a confident login leaves it ready.
+    fn read(&mut self, reading: Option<&LoginReading>, login_command: impl FnOnce() -> String) {
+        self.login = reading.map(|reading| reading.status);
+        if self.status == AccountStatus::Ready
+            && !matches!(
+                self.login,
+                Some(ProviderStatus::LoggedIn | ProviderStatus::LoggedOut)
+            )
+        {
+            self.status = AccountStatus::LoginUnknown;
+        }
+        let Some(reading) = reading else {
+            return;
+        };
+        self.entitlement = reading.entitlement;
+        self.metered = reading.metered;
+        self.windows.clone_from(&reading.windows);
+        self.extra_credits.clone_from(&reading.extra_credits);
+        self.reset_credits.clone_from(&reading.reset_credits);
+        self.spend_step = Some(reading.spend_step);
+        if !setup_problem(self) && matches!(self.entitlement, Entitlement::Lapsed { .. }) {
+            self.problem = Some(format!(
+                "plan lapsed: no {} access",
+                render::palette::identity_name(self.kind.as_str())
+            ));
+            return;
+        }
+        if self.status == AccountStatus::Ready
+            && reading.status == ProviderStatus::LoggedOut
+            && rimz::agents::spec_by_kind(self.kind.as_str())
+                .is_some_and(|spec| !spec.user_coverage.account.is_unsupported())
+        {
+            self.status = AccountStatus::LoggedOut;
+            self.problem = Some(format!(
+                "{} account `{}` is logged out; log in once: {}",
+                self.kind,
+                self.account.name,
+                login_command()
+            ));
+        }
+    }
+
+    /// Whether this run's record says the account has no login, or the row
+    /// has no login at all: its windows are not its quota then.
+    fn without_login(&self) -> bool {
+        matches!(self.login, None | Some(ProviderStatus::LoggedOut))
+    }
+}
+
+/// What one run read about a login: its probe record and its panel.
+struct LoginReading {
+    status: ProviderStatus,
+    entitlement: Entitlement,
+    metered: Option<bool>,
+    windows: Vec<RateLimitWindow>,
+    extra_credits: Option<ExtraCredits>,
+    reset_credits: Option<ResetCredits>,
+    spend_step: SpendStep,
+}
+
+/// Every known provider account, `default` first,
+/// plus a row for each account some layer selects but nothing declares.
+fn account_rows(
+    accounts: &AccountsConfig,
+    catalog: &LoginCatalog,
+    standing: &AccountStanding,
+    ambient: &BTreeMap<String, String>,
+    agents: Option<&BTreeMap<LoginKey, usize>>,
+    readings: &BTreeMap<LoginKey, LoginReading>,
+    errors: &BTreeMap<AgentKind, rimz::agents::LoginConfigErr>,
+) -> Vec<AccountRow> {
+    let row =
+        |kind: &AgentKind, name: &LoginName, home, problem: Option<BirthLoginErr>| AccountRow {
+            kind: kind.clone(),
+            account: LoginKey {
+                kind: kind.clone(),
+                name: name.clone(),
+            },
+            home,
+            history: accounts
+                .named(kind)
+                .and_then(|declared| declared.get(name))
+                .map(|account| account.history),
+            machine_default: accounts.use_accounts.get(kind).cloned().unwrap_or_default() == *name,
+            status: AccountStatus::of(problem.as_ref()),
+            entitlement: Entitlement::Ok,
+            problem: problem.map(|err| err.to_string()),
+            active: standing.active(kind).as_ref() == Some(name),
+            default_for: standing.scopes(kind, name),
+            agents: agents.map(|agents| {
+                agents
+                    .get(&LoginKey {
+                        kind: kind.clone(),
+                        name: name.clone(),
+                    })
+                    .copied()
+                    .unwrap_or_default()
+            }),
+            windows: Vec::new(),
+            extra_credits: None,
+            reset_credits: None,
+            spend_step: None,
+            metered: None,
+            login: None,
+            pool: catalog.pool(&LoginKey {
+                kind: kind.clone(),
+                name: name.clone(),
+            }),
+            product_name: render::palette::identity_name(kind.as_str()),
+            probed_at: None,
+            probe_error: None,
+            plan: None,
+            plan_label: None,
+            account_id: None,
+            sub_provider: None,
+            account_scope: None,
+            version: None,
+            spending: None,
+            day_budget: None,
+            installed: false,
+            expanded: false,
+            legacy_spend_step: SpendStep::Subscription,
+        };
+    let mut rows: Vec<AccountRow> = catalog
+        .all()
+        .map(|login| {
+            let ambient = if login.is_default() {
+                catalog.native_ambient(login.kind(), ambient)
+            } else {
+                ambient.clone()
+            };
+            let mut row = row(
+                login.kind(),
+                login.name(),
+                login.home_dir(&ambient),
+                login.health(&ambient).err(),
+            );
+            row.read(readings.get(&login.key()), || {
+                login_command(login, &ambient)
+            });
+            row
+        })
+        .collect();
+    for key in standing.selected() {
+        let problem = if standing.machine_selects(&key.kind, &key.name) {
+            catalog.select_machine(&key.kind, &key.name).err()
+        } else {
+            catalog
+                .select(&key.kind, &key.name)
+                .err()
+                .map(BirthLoginErr::from)
+        };
+        if let Some(problem) = problem {
+            rows.push(row(&key.kind, &key.name, None, Some(problem)));
+        }
+    }
+    for (kind, error) in errors {
+        rows.retain(|row| row.kind != *kind || !row.account.name.is_default());
+        for row in rows.iter_mut().filter(|row| row.kind == *kind) {
+            row.active = false;
+        }
+        let login = ProviderLogin::default_for(kind.clone());
+        let mut failed = row(kind, login.name(), login.home_dir(ambient), None);
+        failed.active = false;
+        failed.machine_default = false;
+        failed.default_for = Scopes::default();
+        failed.status = AccountStatus::Unavailable;
+        failed.login = readings.get(&login.key()).map(|reading| reading.status);
+        failed.problem = Some(error.to_string());
+        rows.push(failed);
+    }
+    rows.sort_by(|a, b| {
+        (&a.kind, !a.account.name.is_default(), &a.account.name).cmp(&(
+            &b.kind,
+            !b.account.name.is_default(),
+            &b.account.name,
+        ))
+    });
+    rows
 }
 
 /// Account tables followed by the kinds with no login or named accounts.
 fn write_overview(
     out: &mut impl Write,
-    reports: &[ProviderReport],
+    reports: &[AccountRow],
     now: Timestamp,
     time_zone: &TimeZone,
-    deciding: &BTreeMap<String, Deciding>,
-    in_room: bool,
+    deciding: &BTreeMap<AgentKind, Deciding>,
 ) -> std::io::Result<()> {
     let mut folded = Vec::new();
     let mut displayed = Vec::new();
@@ -419,7 +787,7 @@ fn write_overview(
         if !group.iter().any(|report| {
             report.expanded
                 || !report.account.name.is_default()
-                || report.status == ProviderStatus::LoggedIn
+                || report.login == Some(ProviderStatus::LoggedIn)
         }) {
             let report = &group[0];
             let version = report.version.as_ref().map_or_else(String::new, |version| {
@@ -439,24 +807,37 @@ fn write_overview(
         displayed.extend(group);
         printed = true;
     }
-    let sources = deciding
-        .iter()
-        .filter(|(_, source)| in_room || **source != Deciding::Room)
-        .map(|(kind, source)| (AgentKind::new_unchecked(kind), *source))
-        .collect();
-    write_marker_legend(out, displayed.iter().copied(), &sources)?;
+    if printed {
+        writeln!(out)?;
+    }
+    write_marker_legend(out, displayed.iter().copied(), deciding)?;
     if !folded.is_empty() {
-        if printed {
-            writeln!(out)?;
-        }
         writeln!(out, "Also: {}", folded.join(" · "))?;
+    }
+    write_problems(out, displayed.iter().copied())
+}
+
+fn write_problems<'a>(
+    out: &mut impl Write,
+    rows: impl Iterator<Item = &'a AccountRow>,
+) -> std::io::Result<()> {
+    for row in rows.filter(|row| row.installed) {
+        let Some(problem) = &row.problem else {
+            continue;
+        };
+        let style = if matches!(row.entitlement, Entitlement::Lapsed { .. }) {
+            render::status::role(render::status::StateRole::Failed)
+        } else {
+            render::palette::warn()
+        };
+        writeln!(out, "{}", render::paint(style, problem))?;
     }
     Ok(())
 }
 
 fn write_marker_legend<'a>(
     out: &mut impl Write,
-    reports: impl Iterator<Item = &'a ProviderReport> + Clone,
+    reports: impl Iterator<Item = &'a AccountRow> + Clone,
     deciding: &BTreeMap<AgentKind, Deciding>,
 ) -> std::io::Result<()> {
     let mut deciding = deciding.clone();
@@ -492,7 +873,7 @@ fn window_key(window: &RateLimitWindow) -> WindowKey<'_> {
 
 fn write_comparison(
     out: &mut impl Write,
-    reports: &[ProviderReport],
+    reports: &[AccountRow],
     now: Timestamp,
     time_zone: &TimeZone,
 ) -> std::io::Result<()> {
@@ -519,6 +900,7 @@ fn write_comparison(
     if let Some(version) = version {
         write!(out, " · v{}", render::one_line(version))?;
     }
+    let standalone = reports.iter().any(|report| !report.pool.name.is_default());
     if let Some(spending) = reports
         .iter()
         .find(|report| report.account.name.is_default())
@@ -526,7 +908,8 @@ fn write_comparison(
     {
         write!(
             out,
-            " · {} spent in 7d",
+            " · {}{} spent in 7d",
+            if standalone { "shared pool " } else { "" },
             render::paint(
                 render::palette::money(),
                 &rimz::theme::fmt::dollars2(spending.week.usd)
@@ -538,7 +921,7 @@ fn write_comparison(
         .filter(|report| report.pool.name.is_default())
         .map(|report| report.account.name.as_str())
         .collect();
-    if members.len() > 1 {
+    if !standalone && reports.iter().any(|report| report.spending.is_some()) && members.len() > 1 {
         write!(out, " (shared by {})", members.join(", "))?;
     }
     writeln!(out)?;
@@ -551,17 +934,37 @@ fn write_comparison(
     }
     let extra = reports.iter().any(|report| report.extra_credits.is_some());
     let credits = reports.iter().any(|report| report.reset_credits.is_some());
-    let mut headers = vec!["".to_owned(), "ACCOUNT".to_owned(), "PLAN".to_owned()];
+    let mut headers = vec!["".to_owned(), "NAME".to_owned(), "PLAN".to_owned()];
     headers.extend(windows.iter().map(|(_, label)| label.clone()));
     headers.extend(extra.then(|| "EXTRA LEFT".to_owned()));
     headers.extend(credits.then(|| "RESET CREDITS".to_owned()));
-    let standalone = reports.iter().any(|report| !report.pool.name.is_default());
+    headers.push("AGENTS".to_owned());
     headers.extend(standalone.then(|| "SPEND 7d".to_owned()));
     let missing = reports
         .iter()
         .any(|report| missing_reading(report, now, time_zone).is_some());
     headers.extend(missing.then(|| "READING".to_owned()));
     let mut table = render::Table::new(headers);
+    let mut columns: Vec<_> = windows
+        .iter()
+        .map(|(key, _)| {
+            render::window_cells(
+                reports.iter().map(|report| {
+                    if report.without_login()
+                        || matches!(report.entitlement, Entitlement::Lapsed { .. })
+                    {
+                        return None;
+                    }
+                    report
+                        .windows
+                        .iter()
+                        .find(|window| window_key(window) == *key)
+                }),
+                now,
+            )
+            .into_iter()
+        })
+        .collect();
     for report in reports {
         let mut cells = vec![
             if report.active {
@@ -572,44 +975,47 @@ fn write_comparison(
                 cell("")
             },
             if report.account.name.is_default() {
-                cell(report.account.to_string()).fg(render::palette::muted())
+                cell(report.account.name.as_str()).fg(render::palette::muted())
             } else {
-                cell(report.account.to_string())
+                cell(report.account.name.as_str())
             },
-            if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
-                cell("lapsed").fg(render::status::role(render::status::StateRole::Failed))
-            } else if report.status == ProviderStatus::LoggedIn {
-                value_cell(report.plan_label.as_deref().map(render::one_line))
-            } else {
-                cell(status_label(report, true)).fg(render::status::provider(report.status))
-            },
+            plan_cell(report),
         ];
-        cells.extend(windows.iter().map(|(key, _)| {
-            if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
-                return unknown_cell();
+        cells.extend(columns.iter_mut().map(|column| {
+            let value = column.next().flatten();
+            if report.without_login() || matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+                unknown_cell()
+            } else if report.metered == Some(false) {
+                cell("no limit")
+            } else {
+                value.unwrap_or_else(unknown_cell)
             }
-            if report.metered == Some(false) {
-                return cell("no limit");
-            }
-            report
-                .windows
-                .iter()
-                .find(|window| window_key(window) == *key)
-                .and_then(|window| render::window_cell(window, now))
-                .unwrap_or_else(unknown_cell)
         }));
         if extra {
-            cells.push(render::extra_credits_cell(
-                report.extra_credits.as_ref(),
-                report.spend_step == SpendStep::PaidCredit,
-            ));
+            cells.push(if report.without_login() {
+                unknown_cell()
+            } else {
+                render::extra_credits_cell(
+                    report.extra_credits.as_ref(),
+                    report.spend_step == Some(SpendStep::PaidCredit),
+                )
+            });
         }
         if credits {
-            cells.push(credits_cell(report.reset_credits.as_ref(), now));
+            cells.push(if report.without_login() {
+                unknown_cell()
+            } else {
+                credits_cell(report.reset_credits.as_ref(), now)
+            });
         }
+        cells.push(match report.agents {
+            None => unknown_cell(),
+            Some(0) => cell("-").dash(),
+            Some(count) => cell(count.to_string()),
+        });
         if standalone {
             cells.push(if report.pool.name.is_default() {
-                cell("")
+                cell("shared")
             } else {
                 report.spending.as_ref().map_or_else(
                     || cell("-").dash(),
@@ -624,20 +1030,7 @@ fn write_comparison(
         }
         table.row(cells);
     }
-    table.render(out)?;
-    if let Some(legend) = render::pace_legend(
-        reports
-            .iter()
-            .filter(|report| {
-                !matches!(report.entitlement, Entitlement::Lapsed { .. })
-                    && report.metered != Some(false)
-            })
-            .flat_map(|report| &report.windows),
-        now,
-    ) {
-        writeln!(out, "{legend}")?;
-    }
-    Ok(())
+    table.render(out)
 }
 
 fn credits_cell(reset: Option<&ResetCredits>, now: Timestamp) -> render::Cell {
@@ -672,10 +1065,10 @@ fn timestamp_from_millis(millis: u64) -> Option<Timestamp> {
 
 fn write_pretty(
     out: &mut impl Write,
-    reports: &[ProviderReport],
+    reports: &[AccountRow],
     now: Timestamp,
     time_zone: &TimeZone,
-    deciding: &BTreeMap<String, Deciding>,
+    deciding: &BTreeMap<AgentKind, Deciding>,
 ) -> std::io::Result<()> {
     let named_kinds: BTreeSet<&str> = reports
         .iter()
@@ -687,7 +1080,7 @@ fn write_pretty(
             writeln!(out)?;
         }
         let named = named_kinds.contains(report.kind.as_str());
-        let mut name = render::palette::identity_name(&report.kind);
+        let mut name = render::palette::identity_name(report.kind.as_str());
         if report.active {
             write!(out, "{} ", render::paint(render::palette::accent(), "●"))?;
         } else if report.default_for.contains(Scope::NewRooms) {
@@ -701,9 +1094,15 @@ fn write_pretty(
         write!(
             out,
             "{} — ",
-            render::paint(render::palette::identity(&report.kind).bold(), &name)
+            render::paint(
+                render::palette::identity(report.kind.as_str()).bold(),
+                &name
+            )
         )?;
-        if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+        if report.installed
+            && !setup_problem(report)
+            && matches!(report.entitlement, Entitlement::Lapsed { .. })
+        {
             write!(
                 out,
                 "{}",
@@ -715,14 +1114,16 @@ fn write_pretty(
         } else {
             write_optional(out, report.plan_label.as_deref(), "")?;
         }
-        write!(
-            out,
-            " · {}",
-            render::paint(
-                render::status::provider(report.status),
-                &status_label(report, true)
-            )
-        )?;
+        if !report.installed
+            || !matches!(report.entitlement, Entitlement::Lapsed { .. })
+            || setup_problem(report)
+        {
+            write!(
+                out,
+                " · {}",
+                render::paint(plan_tone(report), &status_label(report, true))
+            )?;
+        }
         let scopes = report.default_for.label();
         if named && scopes != "-" {
             write!(out, " · {scopes}")?;
@@ -735,6 +1136,12 @@ fn write_pretty(
             report
                 .probed_at
                 .map_or_else(|| cell("never"), |stamp| cell(render::rel_age(stamp, now))),
+        );
+        rows.push(
+            "home",
+            report.home.as_ref().map_or_else(unknown_cell, |home| {
+                cell(render::home_relative(&home.display().to_string()))
+            }),
         );
         rows.push(
             "version",
@@ -771,7 +1178,7 @@ fn write_pretty(
         }
         if let Some(extra) = &report.extra_credits {
             let mut spans = extra_credit_spans(extra).unwrap_or_else(|| vec![unknown_cell()]);
-            if report.spend_step == SpendStep::PaidCredit {
+            if report.spend_step == Some(SpendStep::PaidCredit) {
                 spans.push(cell(" · paying"));
             }
             rows.push_spans("extra", spans);
@@ -816,49 +1223,82 @@ fn write_pretty(
         );
         rows.render(out)?;
     }
-    let sources = deciding
-        .iter()
-        .map(|(kind, source)| (AgentKind::new_unchecked(kind), *source))
-        .collect();
-    write_marker_legend(out, reports.iter(), &sources)?;
-    if let Some(legend) =
-        render::pace_legend(reports.iter().flat_map(|report| &report.windows), now)
-    {
-        writeln!(out, "{legend}")?;
+    if !reports.is_empty() {
+        writeln!(out)?;
     }
-    Ok(())
+    write_marker_legend(out, reports.iter(), deciding)?;
+    write_problems(out, reports.iter())
 }
 
-fn status_label(report: &ProviderReport, cause: bool) -> String {
+fn setup_problem(report: &AccountRow) -> bool {
+    !matches!(
+        report.status,
+        AccountStatus::Ready | AccountStatus::LoggedOut | AccountStatus::LoginUnknown
+    )
+}
+
+fn plan_tone(report: &AccountRow) -> anstyle::Style {
+    if !report.installed {
+        return render::status::provider(ProviderStatus::Unavailable);
+    }
+    if setup_problem(report) {
+        return render::status::account(report.status);
+    }
+    if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+        return render::status::role(render::status::StateRole::Failed);
+    }
+    render::status::provider(report.login.unwrap_or(ProviderStatus::Unavailable))
+}
+
+fn plan_cell(report: &AccountRow) -> render::Cell {
+    if report.installed
+        && !setup_problem(report)
+        && !matches!(report.entitlement, Entitlement::Lapsed { .. })
+        && report.login == Some(ProviderStatus::LoggedIn)
+        && report.probed_at.is_some()
+        && rimz::agents::spec_by_kind(report.kind.as_str())
+            .is_some_and(|spec| !spec.user_coverage.account.is_unsupported())
+    {
+        return value_cell(report.plan_label.as_deref().map(render::one_line));
+    }
+    cell(status_label(report, false)).fg(plan_tone(report))
+}
+
+fn status_label(report: &AccountRow, cause: bool) -> String {
     if !report.installed {
         return "not installed".to_owned();
     }
-    if rimz::agents::spec_by_kind(&report.kind)
+    if setup_problem(report) {
+        return report.status.as_str().to_owned();
+    }
+    if matches!(report.entitlement, Entitlement::Lapsed { .. }) {
+        return "lapsed".to_owned();
+    }
+    if rimz::agents::spec_by_kind(report.kind.as_str())
         .is_some_and(|spec| spec.user_coverage.account.is_unsupported())
     {
         return "no login check".to_owned();
     }
+    if report.login == Some(ProviderStatus::LoggedOut) {
+        return "logged out".to_owned();
+    }
     if report.probed_at.is_none() {
         return "not probed".to_owned();
     }
-    match report.status {
-        ProviderStatus::LoggedIn => "logged in".to_owned(),
-        ProviderStatus::LoggedOut => "logged out".to_owned(),
-        ProviderStatus::Unavailable => match report.probe_error.as_deref().filter(|_| cause) {
+    match report.login {
+        Some(ProviderStatus::LoggedIn) => "logged in".to_owned(),
+        Some(ProviderStatus::LoggedOut) => "logged out".to_owned(),
+        _ => match report.probe_error.as_deref().filter(|_| cause) {
             Some(error) => format!("probe failed: {error}"),
             None => "probe failed".to_owned(),
         },
     }
 }
 
-fn missing_reading(
-    report: &ProviderReport,
-    now: Timestamp,
-    time_zone: &TimeZone,
-) -> Option<String> {
+fn missing_reading(report: &AccountRow, now: Timestamp, time_zone: &TimeZone) -> Option<String> {
     if report.metered == Some(false)
         || (report.windows.is_empty()
-            && rimz::agents::spec_by_kind(&report.kind)
+            && rimz::agents::spec_by_kind(report.kind.as_str())
                 .is_none_or(|spec| spec.expected_windows.is_empty()))
         || report
             .windows
@@ -1013,4 +1453,5 @@ fn reset_credit_lines(
 }
 
 #[cfg(test)]
+#[path = "tests.rs"]
 mod tests;

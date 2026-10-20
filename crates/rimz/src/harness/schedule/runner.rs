@@ -1906,7 +1906,7 @@ pub enum WindowRefusal {
     #[error("cannot resolve the room's {kind} account; run `rimz accounts list`")]
     NoAccount { kind: String },
     #[error(
-        "no current {kind} {span} window reading; open the room's sidebar or run `rimz providers --refresh`"
+        "no current {kind} {span} window reading; open the room's sidebar or run `rimz accounts --refresh`"
     )]
     NoReading { kind: String, span: WindowSpan },
     #[error("{kind} has no {span} window")]

@@ -1,0 +1,15 @@
+---
+source: crates/rimz/src/cli/accounts/report_tests.rs
+expression: text
+---
+Claude · v1.2.3 · shared pool $2,742.90 spent in 7d
+   NAME     PLAN        5h LEFT             7d LEFT             Fable LEFT  EXTRA LEFT  RESET CREDITS  AGENTS  SPEND 7d  READING
+   default  Claude Max  38% · 1h23m · 0.9x  86% · 4d02h · 0.3x  –           $37.60      2 · exp 3d00h  –       shared
+   spare    logged out  –                   –                   –           –           –              –       -         never read
+●  work     Claude Max  –                   70% · 1d00h · 0.4x  69%         off         –              –       $12.00
+
+Pi · v1.2.3
+   NAME     PLAN          AGENTS
+●  default  Openai Oauth  –
+
+● next launch from here (this room)

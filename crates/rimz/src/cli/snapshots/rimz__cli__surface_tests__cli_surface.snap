@@ -17,9 +17,12 @@ rimz
     --zellij  [action=set-true takes=0..=0 global]
 
 rimz accounts
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --refresh  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
@@ -48,13 +51,17 @@ rimz accounts help redeem
 
 rimz accounts help remove
 
+rimz accounts help show
+
 rimz accounts help use
 
 rimz accounts list
+    --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
     --json  [action=set-true takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --refresh  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
@@ -77,6 +84,17 @@ rimz accounts remove
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
     -h, --help  [action=help takes=0..=0]
     --mux <MUX>  [action=set takes=1..=1 global]
+    --root <ROOT>  [action=set takes=1..=1 global]
+    --tmux  [action=set-true takes=0..=0 global]
+    --zellij  [action=set-true takes=0..=0 global]
+
+rimz accounts show
+    <account>  [action=set takes=1..=1 required]
+    --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]
+    -h, --help  [action=help takes=0..=0]
+    --json  [action=set-true takes=0..=0]
+    --mux <MUX>  [action=set takes=1..=1 global]
+    --refresh  [action=set-true takes=0..=0]
     --root <ROOT>  [action=set takes=1..=1 global]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
@@ -989,6 +1007,8 @@ rimz help accounts redeem
 
 rimz help accounts remove
 
+rimz help accounts show
+
 rimz help accounts use
 
 rimz help agents
@@ -1261,7 +1281,7 @@ rimz help ping
 
 rimz help pricing-refresh [hidden]
 
-rimz help providers
+rimz help providers [hidden]
 
 rimz help reload
 
@@ -2416,7 +2436,7 @@ rimz pricing-refresh [hidden]
     --tmux  [action=set-true takes=0..=0 global]
     --zellij  [action=set-true takes=0..=0 global]
 
-rimz providers
+rimz providers [hidden]
     <kind>  [action=set takes=1..=1]
     --all  [action=set-true takes=0..=0]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]

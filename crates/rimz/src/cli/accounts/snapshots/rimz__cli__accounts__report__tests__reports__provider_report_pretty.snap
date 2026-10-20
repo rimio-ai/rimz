@@ -1,9 +1,10 @@
 ---
-source: crates/rimz/src/cli/providers/tests.rs
+source: crates/rimz/src/cli/accounts/report_tests.rs
 expression: pretty
 ---
 Claude — Claude Max · logged in
   probed:        0s ago
+  home:          /home/u/.claude
   version:       v1.2.3
   account:       acct_123
   5h:            38% left · resets in 1h23m · pace 0.9x · read 0s ago
@@ -15,4 +16,3 @@ Claude — Claude Max · logged in
   spend:         7d $31.20 · 30d $118.75
   budget:        $8.10 of $25.00/day
   agents:        –
-pace: used share ÷ elapsed share; 1.0x lasts exactly to reset

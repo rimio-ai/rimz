@@ -1,0 +1,19 @@
+---
+source: crates/rimz/src/cli/accounts/tests.rs
+expression: text
+---
+Claude
+   NAME     PLAN          AGENTS  READING
+●  default  home missing  –       never read
+   alpha    lapsed        –       never read
+
+Codex
+   NAME     PLAN          AGENTS  SPEND 7d  READING
+   default  home missing  –       shared    never read
+●  team     home missing  –       -         never read
+
+● next launch from here (machine default)
+claude account `default` home `/nonexistent/u/.claude` is not a directory; run `rimz hooks install claude`
+plan lapsed: no Claude access
+codex account `default` home `/nonexistent/u/.codex` is not a directory; run `rimz hooks install codex`
+codex account `team` home `/srv/team` is not a directory; run `rimz accounts add codex team`
