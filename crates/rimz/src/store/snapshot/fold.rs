@@ -502,23 +502,46 @@ pub(crate) fn lifecycle_follow_seed(
     Ok((cache.extent, agents))
 }
 
+#[derive(Deserialize)]
+struct RollupGenerationHeader {
+    version: u32,
+    extent: event_log::LogExtent,
+}
+
+fn rollup_generation(header: Option<RollupGenerationHeader>) -> u64 {
+    header
+        .filter(|cache| cache.version == ROLLUP_CACHE_VERSION)
+        .map(|cache| cache.extent.generation)
+        .unwrap_or(0)
+}
+
 /// Read the active log generation without using the long-lived parse cache.
 ///
 /// A follower polls this across rotations, where a same-size cache rewrite must
 /// still become visible even on filesystems with coarse modification times.
+/// Read and validate the whole document from one buffer, avoiding the streaming
+/// reader's per-byte overhead even for ignored fields. Thin callers that never
+/// load the rollup must use `lifecycle_log_generation_constant_memory` instead.
 pub fn lifecycle_log_generation(paths: &StatePaths) -> u64 {
-    #[derive(Deserialize)]
-    struct Header {
-        version: u32,
-        extent: event_log::LogExtent,
-    }
+    rollup_generation(
+        fs::read(&paths.rollup_cache)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
+    )
+}
 
-    fs::File::open(&paths.rollup_cache)
-        .ok()
-        .and_then(|file| serde_json::from_reader::<_, Header>(io::BufReader::new(file)).ok())
-        .filter(|cache| cache.version == ROLLUP_CACHE_VERSION)
-        .map(|cache| cache.extent.generation)
-        .unwrap_or(0)
+/// Read the active log generation in constant memory for callers that never load
+/// the rollup, preserving the parked wrapper's private-memory budget.
+///
+/// Bypass the parse cache so same-size rewrites remain visible even with coarse
+/// modification times. This slower per-byte path streams and validates the whole
+/// document without retaining a file-sized buffer.
+pub(crate) fn lifecycle_log_generation_constant_memory(paths: &StatePaths) -> u64 {
+    rollup_generation(
+        fs::File::open(&paths.rollup_cache)
+            .ok()
+            .and_then(|file| serde_json::from_reader(io::BufReader::new(file)).ok()),
+    )
 }
 
 thread_local! {
