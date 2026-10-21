@@ -1358,6 +1358,33 @@ mod tests {
         assert_eq!(hook_trust_fix("codex"), codex.hook_trust_fix());
     }
 
+    #[test]
+    fn hook_trust_choice_requires_provider_opt_in() {
+        struct Unregistered;
+        impl capabilities::CoreCapability for Unregistered {
+            fn spec(&self) -> &'static AgentSpec {
+                unreachable!("the default choice does not need a provider spec")
+            }
+        }
+        impl capabilities::InstallationCapability for Unregistered {}
+        assert_eq!(
+            capabilities::InstallationCapability::hook_trust_choice(&Unregistered),
+            None
+        );
+        assert_eq!(
+            registry::definition_by_kind("hermes")
+                .unwrap()
+                .hook_trust_choice(),
+            Some("answer y to each RimZ hook prompt")
+        );
+        assert_eq!(
+            registry::definition_by_kind("codex")
+                .unwrap()
+                .hook_trust_choice(),
+            Some("choose \"Trust all and continue\"")
+        );
+    }
+
     fn local_context_refresh_ctx(
         prior_transcript_stat: Option<&TranscriptStat>,
     ) -> LocalContextRefreshCtx<'_> {

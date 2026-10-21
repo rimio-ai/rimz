@@ -992,7 +992,9 @@ fn plan_recovery(
             .err()
             .map(|error| error.to_string())
     });
-    let mut unavailable = |kind: &AgentKind, isolation: crate::config::Isolation| {
+    let mut unavailable = |kind: &AgentKind,
+                           isolation: crate::config::Isolation,
+                           hook_fix: &dyn Fn() -> String| {
         if let Some(error) = &shell_error {
             return Some((ResumeSkipReason::ConfigurationUnavailable, error.clone()));
         }
@@ -1007,16 +1009,30 @@ fn plan_recovery(
         let error = health.entry(kind.clone()).or_insert_with(|| {
             logins
                 .login(kind, &machine.accounts)
-                .map_err(|error| error.to_string())
                 .and_then(|login| {
                     login
                         .health(&catalog.native_ambient(kind, ambient))
-                        .map_err(|error| error.to_string())
+                        .map_err(|error| crate::agents::RoomLoginErr::Birth(Box::new(error)))
                 })
                 .err()
         });
         if let Some(error) = error {
-            return Some((ResumeSkipReason::AccountUnavailable, error.clone()));
+            let message = if let crate::agents::RoomLoginErr::Birth(birth) = error
+                && let crate::agents::BirthLoginErr::HooksUntrusted {
+                    kind,
+                    name,
+                    choice: Some(choice),
+                    ..
+                } = birth.as_ref()
+            {
+                let hook_fix = hook_fix();
+                format!(
+                    "{kind} account `{name}` has untrusted RimZ hooks, and only you can trust them; run `{hook_fix}` from your own shell and {choice}."
+                )
+            } else {
+                error.to_string()
+            };
+            return Some((ResumeSkipReason::AccountUnavailable, message));
         }
         if !isolation.is_scoped() {
             return None;
@@ -1058,6 +1074,22 @@ fn plan_recovery(
                         cell.isolation_default,
                         machine.agents.isolation,
                     ),
+                    &|| match seed {
+                        crate::harness::plan::CohortSeed::Resume(agent) => {
+                            crate::config::definitions::hook_trust_fix(
+                                &agent.kind,
+                                agent.profile.as_deref(),
+                                Some((agent, "resume")),
+                            )
+                        }
+                        crate::harness::plan::CohortSeed::Fresh => {
+                            crate::config::definitions::hook_trust_fix(
+                                &cell.kind,
+                                cell.launch.profile.as_deref(),
+                                None,
+                            )
+                        }
+                    },
                 )
             });
         let Some((reason, message)) = problem else {
@@ -1097,7 +1129,13 @@ fn plan_recovery(
             posture.launch.isolation_default,
             machine.agents.isolation,
         );
-        let Some((reason, message)) = unavailable(&agent.kind, isolation) else {
+        let Some((reason, message)) = unavailable(&agent.kind, isolation, &|| {
+            crate::config::definitions::hook_trust_fix(
+                &agent.kind,
+                agent.profile.as_deref(),
+                Some((agent, "resume")),
+            )
+        }) else {
             return true;
         };
         skipped.push((agent.clone(), reason, message));

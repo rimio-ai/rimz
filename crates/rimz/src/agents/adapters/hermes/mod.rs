@@ -359,6 +359,9 @@ impl InstallationCapability for HermesAdapter {
     fn hook_trust_fix(&self) -> String {
         "launch hermes in a terminal and answer y to each RimZ hook prompt".into()
     }
+    fn hook_trust_choice(&self) -> Option<&'static str> {
+        Some("answer y to each RimZ hook prompt")
+    }
 }
 impl LaunchCapability for HermesAdapter {
     fn min_version(&self) -> Option<crate::agents::version::CliVersion> {

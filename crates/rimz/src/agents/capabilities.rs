@@ -150,6 +150,11 @@ pub trait HookCapability: CoreCapability {
 
 #[doc(hidden)]
 pub trait InstallationCapability: CoreCapability {
+    /// The startup choice that trusts hooks before the first hook-dependent event, when offered in the pane.
+    fn hook_trust_choice(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Provider-native instructions for consenting to RimZ's installed hooks.
     fn hook_trust_fix(&self) -> String {
         format!(

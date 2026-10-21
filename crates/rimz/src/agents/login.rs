@@ -707,11 +707,12 @@ pub enum BirthLoginErr {
     HooksUntrusted {
         kind: AgentKind,
         name: LoginName,
-        home: PathBuf,
+        home: Box<PathBuf>,
         /// The home override a named account's provider is started with.
         env_key: Option<&'static str>,
         hooks: Box<str>,
         fix: Box<str>,
+        choice: Option<&'static str>,
     },
     #[error("{kind} account `{name}` cannot run RimZ hooks: {reason}; {fix}")]
     HooksDisabled {
@@ -776,10 +777,11 @@ impl ProviderLogin {
                 Err(BirthLoginErr::HooksUntrusted {
                     kind,
                     name,
-                    home: path,
+                    home: Box::new(path),
                     env_key: self.home.as_ref().map(|home| home.env_key),
                     hooks: hooks.into(),
                     fix: fix.into(),
+                    choice: adapter.hook_trust_choice(),
                 })
             }
             Err(crate::agents::HookPreflightErr::HooksDisabled { reason, fix }) => {

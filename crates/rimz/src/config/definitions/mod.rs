@@ -16,6 +16,43 @@ use std::rc::Rc;
 use super::{AgentSpecSources, CommandsConfig, Profile, ProfilesConfig, PromptSource, TeamsConfig};
 use frontmatter::{AgentFrontmatter, BaseFrontmatter};
 
+/// A user-shell launch that can reach a provider's hook-trust prompt.
+pub fn hook_trust_fix(
+    kind: &crate::ids::AgentKind,
+    profile: Option<&str>,
+    relaunch: Option<(&crate::agents::AgentState, &str)>,
+) -> String {
+    if let Some((agent, action)) = relaunch
+        && !(agent.team.is_some() && agent.role.is_some())
+        && !profile.is_some_and(|profile| profile.contains('.'))
+    {
+        return format!(
+            "rimz agents {action} @{}",
+            agent.name.as_deref().unwrap_or(agent.agent_id.as_str())
+        );
+    }
+    let profile = profile.and_then(standalone_profile);
+    format!(
+        "rimz agents {}",
+        profile.as_deref().unwrap_or(kind.as_str())
+    )
+}
+
+fn standalone_profile(profile: &str) -> Option<String> {
+    let Some((team, role)) = profile.split_once('.') else {
+        return Some(profile.to_owned());
+    };
+    let (_, sources) = super::MachineConfig::load_with_agent_spec_sources().ok()?;
+    let path = sources.team(team)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let (yaml, _) = frontmatter::split(path, &text).ok()?;
+    let team: frontmatter::TeamFrontmatter = frontmatter::parse(path, yaml).ok()?;
+    team.roles
+        .into_iter()
+        .find(|binding| binding.role.as_deref().unwrap_or(&binding.agent) == role)
+        .map(|binding| binding.agent)
+}
+
 /// Whether enforced skill lists must resolve, and where: the kind's provider skill root under `env`, then `library`, the order the scoped skill view merges them. Enforcement uses the inherited definition isolation, then `machine_isolation`; off Linux every definition runs on the host.
 /// The check reads the host's skill roots and is meaningless through a scoped view; callers inside a view must skip it.
 #[derive(Clone, Copy, Debug)]

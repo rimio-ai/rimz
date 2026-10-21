@@ -204,7 +204,7 @@ rimz-docker web
 
 This opens the current checkout's room and publishes `127.0.0.1:8200:8200`, reachable only from the host. RimZ binds to every interface inside the container so port forwarding works. The authenticated writable daemon stays online, and the entrypoint prints the room URL and the `rimz` password via `rimz web token show rimz`, also available in the container log. If you revoked `rimz` while keeping another token, it lists the remaining token names instead and stays running. Stop the run with Ctrl-C.
 
-Codex keeps per-hook trust behind its own UI, so the image leaves that consent to you: after the first Codex launch, run `/hooks` inside Codex and trust the RimZ hooks. A changed hook needs trust again too. The upgrade to RimZ's frozen Codex hooks needs one final **Trust all** per account; subsequent RimZ updates keep that definition unchanged. Until trusted, `rimz doctor` reports the hooks as installed but untrusted.
+Codex keeps per-hook trust behind its own UI, so the image leaves that consent to you: run `rimz agents codex` from your own shell and choose **Trust all and continue** in the new pane, or trust through `/hooks` inside Codex. Unattended starts refuse and name the command to ask you to run ([launch checks](../reference/cli/agents.md#the-account-check-at-launch)). A changed hook needs trust again too. The upgrade to RimZ's frozen Codex hooks needs one final **Trust all** per account; subsequent RimZ updates keep that definition unchanged. Until trusted, `rimz doctor` reports the hooks as installed but untrusted.
 
 For direct Docker control, a browser run without the wrapper uses same-path mounts and an explicit Git identity:
 

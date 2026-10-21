@@ -220,7 +220,8 @@ fn resume_selected(
     let machine = crate::cli::machine_config();
     let room =
         RoomContext::from_resolved(workspace, machine.clone(), mux, RoomSizing::OrdinaryTab)?;
-    let focus = LaunchFocus::resolve(args.cohort.bg, resolve_caller(&snapshot.agents).as_ref());
+    let caller = resolve_caller(&snapshot.agents);
+    let focus = LaunchFocus::resolve(args.cohort.bg, caller.as_ref());
     let lane_path = match source {
         ResumeSource::Recorded(agent) => agent.lane_path().map(Path::new).unwrap_or(cwd),
         ResumeSource::Provider(..) => cwd,
@@ -323,7 +324,26 @@ fn resume_selected(
     crate::cli::lsp_admission::admit(&tab.cwd, &machine)?;
     rimz::harness::launch::preflight_agent_kind(&workspace.project_root, kind.as_str(), &tab.cwd)?;
     let login = logins.login(kind, &machine.accounts)?;
-    login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+    crate::cli::folder_trust::preflight_hooks(
+        login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env())),
+        || {
+            caller
+                .as_ref()
+                .map(|_| crate::cli::folder_trust::Unattended::Agent)
+        },
+        || match source {
+            ResumeSource::Recorded(agent) => rimz::config::definitions::hook_trust_fix(
+                kind,
+                agent.profile.as_deref(),
+                Some((agent, "resume")),
+            ),
+            ResumeSource::Provider(_, profile) => {
+                rimz::config::definitions::hook_trust_fix(kind, profile, None)
+            }
+        },
+        &mut Default::default(),
+        &mut crate::cli::render::err(),
+    )?;
     let adapter = rimz::agents::find_definition(kind.as_str())
         .with_context(|| format!("unknown agent kind `{kind}`"))?;
     let repo_root = match source {
@@ -405,7 +425,8 @@ pub(super) fn resume_lane(
     let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
-    let focus = LaunchFocus::resolve(bg, resolve_caller(&projection.agents).as_ref());
+    let caller = resolve_caller(&projection.agents);
+    let focus = LaunchFocus::resolve(bg, caller.as_ref());
     let worktrees = local_worktrees(&workspace)?;
     let logins = rimz::agents::room_accounts(
         &store.paths().workspace_record,
@@ -467,6 +488,7 @@ pub(super) fn resume_lane(
         workspace.at_launch_dir(cwd)?.cwd_project_root
     };
     let mut admitted = std::collections::HashSet::new();
+    let mut noticed_hook_trust = std::collections::HashSet::new();
     let restored_agents = action.agents_needing_preflight(&projection.agents);
     for kind in action.agent_kinds_needing_preflight() {
         let empty_agents = restored_agents
@@ -490,6 +512,7 @@ pub(super) fn resume_lane(
                 path,
                 None,
                 rimz::agents::session_login(kind, agent.login.as_ref(), &machine_config.accounts)?,
+                Some(**agent),
             ));
         }
         if empty_agents.is_empty()
@@ -503,9 +526,10 @@ pub(super) fn resume_lane(
                 cwd,
                 repo_root.as_deref(),
                 logins.login(kind, &machine_config.accounts)?,
+                None,
             ));
         }
-        for (cwd, repo_root, login) in targets {
+        for (cwd, repo_root, login, agent) in targets {
             if admitted.insert(cwd) {
                 crate::cli::lsp_admission::admit(cwd, &machine_config)?;
             }
@@ -514,7 +538,33 @@ pub(super) fn resume_lane(
                 kind.as_str(),
                 cwd,
             )?;
-            login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env()))?;
+            crate::cli::folder_trust::preflight_hooks(
+                login.health(&catalog.native_ambient(kind, &rimz::agents::ambient_env())),
+                || {
+                    caller
+                        .as_ref()
+                        .map(|_| crate::cli::folder_trust::Unattended::Agent)
+                },
+                || {
+                    let agent = agent.or_else(|| {
+                        restored_agents
+                            .iter()
+                            .find(|agent| {
+                                &agent.kind == kind
+                                    && agent.checkout.is_none()
+                                    && agent.lane_path().map(Path::new) == Some(cwd)
+                            })
+                            .copied()
+                    });
+                    rimz::config::definitions::hook_trust_fix(
+                        kind,
+                        agent.and_then(|agent| agent.profile.as_deref()),
+                        agent.map(|agent| (agent, "resume")),
+                    )
+                },
+                &mut noticed_hook_trust,
+                &mut crate::cli::render::err(),
+            )?;
             let adapter = rimz::agents::find_definition(kind.as_str())
                 .with_context(|| format!("unknown agent kind `{kind}`"))?;
             crate::cli::folder_trust::preflight(

@@ -3985,68 +3985,206 @@ fn profile_default_exec_stamps_effective_isolation_not_an_override() {
 
 #[cfg(unix)]
 #[test]
-fn agent_fork_refuses_untrusted_hooks_before_any_launch() {
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    std::fs::create_dir_all(env.rimz_home()).unwrap();
-    std::fs::write(
-        env.rimz_home().join("config.toml"),
-        "[agents]\nisolation = 'host'\n",
-    )
-    .unwrap();
-    let shim = write_env_dump_shim(&env, "codex");
-    let workspace = env.resolve_workspace(&env.project_root);
-    let transcript = env.project_root.join("source.jsonl");
-    env.store().record_workspace(&workspace).unwrap();
-    std::fs::write(&transcript, "{}\n").unwrap();
-    let mut observation =
-        AgentLifecycleObservation::new(Some("sess-source".into()), LifecycleSignal::Registered);
-    observation.agent_name = Some("source".to_owned());
-    observation.worktree_path = Some(env.project_root.display().to_string());
-    observation.transcript_path = Some(transcript.display().to_string());
-    env.store()
-        .append_event(&EventEnvelope::agent_lifecycle(
-            workspace.workspace_id.clone(),
-            &workspace.session_name,
-            "codex",
-            "SessionStart",
-            &observation,
-        ))
-        .unwrap();
-    let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
-    let log = env.home_root.join("mux.log");
-
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "agents", "fork", "@source"])
-        .env("PATH", path_with_front(&shim))
-        .env(
-            "RIMZ_ZELLIJ_BIN",
-            crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+fn agent_fork_hook_trust_depends_on_the_starter() {
+    for agent in [true, false] {
+        let env = Env::new();
+        env.install_agent_hooks("codex");
+        std::fs::create_dir_all(env.rimz_home()).unwrap();
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
         )
-        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 1s ago]\n", workspace.session_name),
-        )
-        .bounded_output()
         .unwrap();
+        let shim = write_env_dump_shim(&env, "codex");
+        let workspace = env.resolve_workspace(&env.project_root);
+        let transcript = env.project_root.join("source.jsonl");
+        env.store().record_workspace(&workspace).unwrap();
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let mut observation =
+            AgentLifecycleObservation::new(Some("sess-source".into()), LifecycleSignal::Registered);
+        observation.agent_name = Some("source".to_owned());
+        observation.worktree_path = Some(env.project_root.display().to_string());
+        observation.transcript_path = Some(transcript.display().to_string());
+        env.store()
+            .append_event(&EventEnvelope::agent_lifecycle(
+                workspace.workspace_id.clone(),
+                &workspace.session_name,
+                "codex",
+                "SessionStart",
+                &observation,
+            ))
+            .unwrap();
+        let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+        let log = env.home_root.join("mux.log");
+        let original = std::fs::read_to_string(env.agent_config_path("codex")).unwrap();
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "{stderr}");
-    assert!(
-        stderr.contains("RimZ hooks for codex account `default` at"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("run /hooks inside codex and trust the RimZ hooks"),
-        "{stderr}"
-    );
-    assert_eq!(
-        serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
-        before
-    );
-    assert!(!log.exists(), "a refused fork must not reach the mux");
+        let mut command = env.rimz();
+        if agent {
+            command
+                .env("RIMZ_AGENT_KIND", "codex")
+                .env("RIMZ_AGENT_ID", "sess-source");
+        }
+        let output = command
+            .args(["--mux", "zellij", "agents", "fork", "@source"])
+            .env("PATH", path_with_front(&shim))
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .bounded_output()
+            .unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.success(), !agent, "{stderr}");
+        if agent {
+            for expected in [
+                "agent-started launch refused",
+                "only the user can trust them",
+                "ask the user to run `rimz agents fork @source` once",
+                "choose \"Trust all and continue\"",
+            ] {
+                assert!(stderr.contains(expected), "{stderr}");
+            }
+            for excluded in [
+                "SessionStart",
+                "CODEX_HOME",
+                env.home_root.to_str().unwrap(),
+            ] {
+                assert!(!stderr.contains(excluded), "{stderr}");
+            }
+            assert_eq!(
+                serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+                before
+            );
+            assert!(!log.exists(), "a refused fork must not reach the mux");
+        } else {
+            assert!(
+                stderr.contains("Codex will ask you to trust them in the new pane"),
+                "{stderr}"
+            );
+            assert!(
+                stderr.contains("choose \"Trust all and continue\""),
+                "{stderr}"
+            );
+            assert!(std::fs::read_to_string(log).unwrap().contains("new-tab"));
+        }
+        assert_eq!(
+            std::fs::read_to_string(env.agent_config_path("codex")).unwrap(),
+            original
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fresh_launch_hook_trust_depends_on_the_starter() {
+    for (team, agent, spec) in [
+        (false, false, "codex"),
+        (false, false, "sol"),
+        (false, true, "codex"),
+        (true, false, "solo"),
+    ] {
+        let env = Env::new();
+        env.install_agent_hooks("codex");
+        crate::common::trust_codex_project(&env, &env.project_root);
+        std::fs::write(
+            env.rimz_home().join("config.toml"),
+            "[agents]\nisolation = 'host'\n",
+        )
+        .unwrap();
+        crate::common::write_definition(
+            &env,
+            "agents",
+            "sol",
+            "description: Worker\nagent: codex\ntools: []",
+            "",
+        );
+        crate::common::write_definition(
+            &env,
+            "teams",
+            "solo",
+            "layout: lead\nleader: lead\nstages: [Build]\nroles:\n  - {role: lead, agent: sol, owns: [Build]}",
+            "Complete the work.",
+        );
+        let shim = write_env_dump_shim(&env, "codex");
+        let workspace = env.resolve_workspace(&env.project_root);
+        env.store().record_workspace(&workspace).unwrap();
+        if agent {
+            crate::common::wait::register_calling_agent(&env);
+        }
+        let before = serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap();
+        let original = std::fs::read_to_string(env.agent_config_path("codex")).unwrap();
+        let log = env.home_root.join("mux.log");
+        let mut command = env.rimz();
+        if agent {
+            command
+                .env("RIMZ_AGENT_KIND", "claude")
+                .env("RIMZ_AGENT_ID", "launch-session");
+        }
+        command.args(["--mux", "zellij"]);
+        if team {
+            command.args(["teams", spec, "--bg"]);
+        } else {
+            command.args(["agents", spec, "--bg", "--new-pane"]);
+        }
+        let output = command
+            .env("PATH", path_with_front(&shim))
+            .env("ZELLIJ_PANE_ID", "1")
+            .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .bounded_output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.success(), !team && !agent, "{stderr}");
+        if team || agent {
+            assert!(
+                stderr.contains(if team {
+                    "team launch refused"
+                } else {
+                    "agent-started launch refused"
+                }),
+                "{stderr}"
+            );
+            assert!(stderr.contains("only the user can trust them"), "{stderr}");
+            assert!(
+                stderr.contains(if team {
+                    "ask the user to run `rimz agents sol` once"
+                } else {
+                    "ask the user to run `rimz agents codex` once"
+                }),
+                "{stderr}"
+            );
+            assert_eq!(
+                serde_json::to_value(env.store().snapshot_cached().unwrap().agents).unwrap(),
+                before
+            );
+            assert!(!log.exists(), "a refused launch must not reach the mux");
+        } else {
+            assert!(
+                stderr.contains("Codex will ask you to trust them in the new pane"),
+                "{stderr}"
+            );
+            assert!(std::fs::read_to_string(log).unwrap().contains("new-pane"));
+        }
+        assert!(
+            stderr.contains("choose \"Trust all and continue\""),
+            "{stderr}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(env.agent_config_path("codex")).unwrap(),
+            original
+        );
+    }
 }
 
 #[cfg(unix)]

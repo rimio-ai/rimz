@@ -1,4 +1,4 @@
-//! Shared folder-trust collection and consent presentation.
+//! Shared folder- and hook-trust launch policy and consent presentation.
 
 use std::io::Write;
 
@@ -27,6 +27,45 @@ impl std::fmt::Display for Unattended {
             Self::Agent => "agent-started",
         })
     }
+}
+
+pub(super) fn preflight_hooks(
+    health: Result<(), rimz::agents::BirthLoginErr>,
+    unattended: impl FnOnce() -> Option<Unattended>,
+    fix_command: impl FnOnce() -> String,
+    noticed: &mut std::collections::HashSet<rimz::ids::LoginKey>,
+    out: &mut impl Write,
+) -> Result<()> {
+    let Err(error) = health else {
+        return Ok(());
+    };
+    let rimz::agents::BirthLoginErr::HooksUntrusted {
+        kind,
+        name,
+        choice: Some(choice),
+        ..
+    } = error
+    else {
+        return Err(error.into());
+    };
+    if let Some(context) = unattended() {
+        let fix_command = fix_command();
+        anyhow::bail!(
+            "{context} launch refused: {kind} account `{name}` has untrusted RimZ hooks, and only the user can trust them.\nIf this blocks your task, ask the user to run `{fix_command}` once and {choice}."
+        );
+    }
+    if noticed.insert(rimz::ids::LoginKey {
+        kind: kind.clone(),
+        name: name.clone(),
+    }) {
+        let provider = rimz::agents::find_definition(kind.as_str())
+            .map_or(kind.as_str(), |adapter| adapter.spec().display_name);
+        writeln!(
+            out,
+            "rimz: {kind} account `{name}` has untrusted RimZ hooks. {provider} will ask you to trust them in the new pane: {choice}, or RimZ cannot track this agent."
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn preflight(
@@ -250,6 +289,198 @@ fn grant_error(kind: &str, error: &rimz::agents::FolderTrustErr, subject: &str) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hook_relaunch_fix_keeps_team_members_out_of_solo_resume() {
+        let mut agent = rimz::testkit::agent_state("codex", "session", jiff::Timestamp::UNIX_EPOCH);
+        agent.name = Some("worker".into());
+        agent.profile = Some("sol".into());
+        for action in ["resume", "restart", "fork"] {
+            assert_eq!(
+                rimz::config::definitions::hook_trust_fix(
+                    &agent.kind,
+                    agent.profile.as_deref(),
+                    Some((&agent, action))
+                ),
+                format!("rimz agents {action} @worker")
+            );
+        }
+        agent.team = Some("forge".into());
+        agent.role = Some("coder".into());
+        for action in ["resume", "restart", "fork"] {
+            assert_eq!(
+                rimz::config::definitions::hook_trust_fix(
+                    &agent.kind,
+                    agent.profile.as_deref(),
+                    Some((&agent, action))
+                ),
+                "rimz agents sol"
+            );
+        }
+        agent.profile = None;
+        assert_eq!(
+            rimz::config::definitions::hook_trust_fix(
+                &agent.kind,
+                agent.profile.as_deref(),
+                Some((&agent, "resume"))
+            ),
+            "rimz agents codex"
+        );
+        agent.profile = Some("missing.worker".into());
+        assert_eq!(
+            rimz::config::definitions::hook_trust_fix(
+                &agent.kind,
+                agent.profile.as_deref(),
+                Some((&agent, "resume"))
+            ),
+            "rimz agents codex"
+        );
+    }
+
+    fn untrusted_hooks(choice: Option<&'static str>) -> rimz::agents::BirthLoginErr {
+        rimz::agents::BirthLoginErr::HooksUntrusted {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            name: "team-1".parse().unwrap(),
+            home: Box::new("/private/codex-home".into()),
+            env_key: Some("CODEX_HOME"),
+            hooks: "SessionStart, UserPromptSubmit".into(),
+            fix: "run /hooks inside codex and trust the RimZ hooks".into(),
+            choice,
+        }
+    }
+
+    #[test]
+    fn hook_trust_verdict_depends_on_the_command() {
+        for (kind, provider, choice) in [
+            ("hermes", "Hermes", "answer y to each RimZ hook prompt"),
+            ("codex", "Codex", "choose \"Trust all and continue\""),
+        ] {
+            for unattended in [
+                None,
+                Some(super::Unattended::Team),
+                Some(super::Unattended::Loop),
+                Some(super::Unattended::Subagent),
+                Some(super::Unattended::Agent),
+            ] {
+                let mut out = Vec::new();
+                let mut error = untrusted_hooks(Some(choice));
+                if let rimz::agents::BirthLoginErr::HooksUntrusted {
+                    kind: agent_kind, ..
+                } = &mut error
+                {
+                    *agent_kind = rimz::ids::AgentKind::new_unchecked(kind);
+                }
+                let result = super::preflight_hooks(
+                    Err(error),
+                    || unattended,
+                    || {
+                        assert!(unattended.is_some(), "watched launches need no fix lookup");
+                        "rimz agents sol".into()
+                    },
+                    &mut Default::default(),
+                    &mut out,
+                );
+                if let Some(context) = unattended {
+                    let text = result
+                        .expect_err("an unwatched trust prompt must refuse")
+                        .to_string();
+                    for expected in [
+                        context.to_string().as_str(),
+                        "only the user can trust them",
+                        "ask the user to run `rimz agents sol` once",
+                        choice,
+                    ] {
+                        assert!(text.contains(expected), "{text}");
+                    }
+                    for excluded in [
+                        "/private/codex-home",
+                        "SessionStart",
+                        "UserPromptSubmit",
+                        "CODEX_HOME",
+                    ] {
+                        assert!(!text.contains(excluded), "{text}");
+                    }
+                    assert!(out.is_empty());
+                } else {
+                    assert!(result.is_ok(), "{result:?}");
+                    assert_eq!(
+                        String::from_utf8(out).unwrap(),
+                        format!(
+                            "rimz: {kind} account `team-1` has untrusted RimZ hooks. {provider} will ask you to trust them in the new pane: {choice}, or RimZ cannot track this agent.\n"
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hook_notice_is_once_per_account_per_command() {
+        let mut out = Vec::new();
+        let mut noticed = Default::default();
+        for name in ["team-1", "team-1", "team-2"] {
+            let mut error = untrusted_hooks(Some("choose \"Trust all and continue\""));
+            if let rimz::agents::BirthLoginErr::HooksUntrusted { name: account, .. } = &mut error {
+                *account = name.parse().unwrap();
+            }
+            super::preflight_hooks(
+                Err(error),
+                || None,
+                || panic!("watched launches need no fix lookup"),
+                &mut noticed,
+                &mut out,
+            )
+            .unwrap();
+        }
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.contains("`team-1`"));
+        assert!(text.contains("`team-2`"));
+    }
+
+    #[test]
+    fn hook_trust_without_a_pane_choice_and_other_errors_pass_through() {
+        super::preflight_hooks(
+            Ok(()),
+            || panic!("healthy launches need no caller lookup"),
+            || panic!("healthy launches need no fix lookup"),
+            &mut Default::default(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        for unattended in [None, Some(super::Unattended::Agent)] {
+            let error = untrusted_hooks(None);
+            let expected = error.to_string();
+            let mut out = Vec::new();
+            let result = super::preflight_hooks(
+                Err(error),
+                || unattended,
+                || panic!("non-opted-in providers keep their original error"),
+                &mut Default::default(),
+                &mut out,
+            );
+            assert_eq!(result.unwrap_err().to_string(), expected);
+            assert!(out.is_empty());
+        }
+        let error = rimz::agents::BirthLoginErr::MissingHome {
+            kind: rimz::ids::AgentKind::new_unchecked("codex"),
+            name: rimz::ids::LoginName::default_login(),
+            home: "/missing".into(),
+        };
+        let expected = error.to_string();
+        assert_eq!(
+            super::preflight_hooks(
+                Err(error),
+                || panic!("other health errors need no caller lookup"),
+                || panic!("other health errors need no fix lookup"),
+                &mut Default::default(),
+                &mut Vec::new()
+            )
+            .unwrap_err()
+            .to_string(),
+            expected
+        );
+    }
+
     #[test]
     fn restricted_launch_verdict_depends_on_the_command() {
         for unattended in [
