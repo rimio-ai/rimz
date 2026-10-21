@@ -305,6 +305,7 @@ fn open_attempt_pane(
             .map_err(anyhow::Error::from)
     };
     let mut subagent_zone_guard = None;
+    let mut open_started = std::time::Instant::now();
     let open_result = match run_placement(request.force_new_tab, target.is_some(), request.subagent)
     {
         RunPlacement::Split => room
@@ -325,6 +326,7 @@ fn open_attempt_pane(
             Ok(guard) => {
                 subagent_zone_guard = Some(guard);
                 let sidebar = room.sidebar_options(&prepared.launch.cwd);
+                open_started = std::time::Instant::now();
                 match supervised::pane::split_into_subagent_zone(
                     room.backend(),
                     &prepared.store,
@@ -351,6 +353,7 @@ fn open_attempt_pane(
             &launch_identity.kind,
         )),
     };
+    let open = open_started.elapsed();
     if let Err(err) = open_result {
         let err = err.context("opening run pane");
         let _ = rimz::harness::run::fail_if_nonterminal(
@@ -364,8 +367,14 @@ fn open_attempt_pane(
     if request.subagent {
         supervised::pane::wait_for_subagent_pane_bind(
             &prepared.store,
-            &launch_identity.kind,
-            &launch_identity.agent_id,
+            &prepared.workspace,
+            supervised::pane::PaneBindWait {
+                run_id,
+                launch_id: &launch_identity.agent_id,
+                kind: &launch_identity.kind,
+                caller: rimz::diag::record::SubagentPaneBindCaller::Launch,
+                open,
+            },
         );
     }
     drop(subagent_zone_guard);

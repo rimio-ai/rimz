@@ -197,6 +197,7 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         return Ok(());
     }
     let sidebar = room.sidebar_options(&cwd);
+    let open_started = std::time::Instant::now();
     match supervised::pane::split_into_subagent_zone(
         room.backend(),
         store,
@@ -213,7 +214,18 @@ fn resume_resolved(ctx: &Ctx, child: &AgentState, caller: &AgentState) -> Result
         supervised::pane::SubagentZoneOpen::Opened => {}
         supervised::pane::SubagentZoneOpen::Failed(err) => return Err(err.into()),
     }
-    if !supervised::pane::wait_for_subagent_pane_bind(store, &child.kind, launch_id) {
+    let open = open_started.elapsed();
+    if !supervised::pane::wait_for_subagent_pane_bind(
+        store,
+        &parent_workspace,
+        supervised::pane::PaneBindWait {
+            run_id: &run.run_id,
+            launch_id,
+            kind: &child.kind,
+            caller: rimz::diag::record::SubagentPaneBindCaller::Resume,
+            open,
+        },
+    ) {
         return Err(resume_bind_timeout(child));
     }
     Ok(())

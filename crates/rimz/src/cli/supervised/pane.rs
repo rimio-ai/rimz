@@ -8,7 +8,10 @@ use anyhow::Result;
 
 use crate::cli::GlobalFlags;
 use rimz::agents::AgentState;
-use rimz::diag::record::{DiagEvent, SubagentZoneLookup};
+use rimz::diag::record::{
+    DiagEvent, SubagentPaneBindCaller, SubagentPaneBindRead, SubagentPaneBindRow,
+    SubagentZoneLookup,
+};
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{
     COMPANION_PANE_LIMIT, CompanionPaneAppend, LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions,
@@ -23,6 +26,70 @@ pub(super) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
 const SUBAGENT_PANE_BIND_TIMEOUT: Duration = Duration::from_secs(3);
 const SUBAGENT_PANE_BIND_POLL: Duration = Duration::from_millis(25);
+
+pub(in crate::cli) struct PaneBindWait<'a> {
+    pub run_id: &'a rimz::RunId,
+    pub launch_id: &'a AgentSessionId,
+    pub kind: &'a AgentKind,
+    pub caller: SubagentPaneBindCaller,
+    pub open: Duration,
+}
+
+impl PaneBindWait<'_> {
+    pub(super) fn wait_with(
+        &self,
+        sink: &rimz::diag::DiagSink,
+        mut read: impl FnMut() -> Result<Vec<AgentState>, String>,
+        timeout: Duration,
+        poll: Duration,
+    ) -> bool {
+        let started = Instant::now();
+        let mut polls = 0;
+        let mut last_read = SubagentPaneBindRead::Rows(Vec::new());
+        let bound = wait_for_subagent_pane_bind_with(
+            || {
+                polls += 1;
+                match read() {
+                    Ok(agents) => {
+                        let bound = launch_has_bound_pane(&agents, self.kind, self.launch_id);
+                        last_read = SubagentPaneBindRead::Rows(
+                            agents
+                                .iter()
+                                .filter(|agent| agent.launch_id.as_ref() == Some(self.launch_id))
+                                .map(|agent| SubagentPaneBindRow {
+                                    kind: agent.kind.clone(),
+                                    pane: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                                    ended_at: agent.ended_at,
+                                })
+                                .collect(),
+                        );
+                        bound
+                    }
+                    Err(error) => {
+                        tracing::debug!(agent = %self.launch_id, %error, "subagent pane bind wait could not read durable state");
+                        last_read = SubagentPaneBindRead::Failed { error };
+                        false
+                    }
+                }
+            },
+            timeout,
+            poll,
+        );
+        if !bound {
+            sink.emit(DiagEvent::SubagentPaneBindTimeout {
+                run_id: self.run_id.clone(),
+                launch_id: self.launch_id.clone(),
+                agent_kind: self.kind.clone(),
+                caller: self.caller,
+                open_ms: self.open.as_millis() as u64,
+                waited_ms: started.elapsed().as_millis() as u64,
+                polls,
+                last_read,
+            });
+        }
+        bound
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SubagentZoneStrategy {
@@ -401,29 +468,29 @@ fn list_subagent_zone_panes(
 
 pub(in crate::cli) fn wait_for_subagent_pane_bind(
     store: &rimz::Store,
-    kind: &AgentKind,
-    launch_id: &AgentSessionId,
+    workspace: &rimz::ResolvedWorkspace,
+    wait: PaneBindWait<'_>,
 ) -> bool {
-    let bound = wait_for_subagent_pane_bind_with(
+    let sink = rimz::diag::DiagSink::under(
+        store.paths().root.clone(),
+        workspace.workspace_id.clone(),
+        workspace.session_name.clone(),
+        None,
+    );
+    let bound = wait.wait_with(
+        &sink,
         || {
             store
                 .runtime_projection(rimz::RuntimeScope::Audit)
-                .map(|projection| launch_has_bound_pane(&projection.agents, kind, launch_id))
-                .unwrap_or_else(|err| {
-                    tracing::debug!(
-                        agent = %launch_id,
-                        error = &err as &dyn std::error::Error,
-                        "subagent pane bind wait could not read durable state",
-                    );
-                    false
-                })
+                .map(|projection| projection.agents)
+                .map_err(|err| err.to_string())
         },
         SUBAGENT_PANE_BIND_TIMEOUT,
         SUBAGENT_PANE_BIND_POLL,
     );
     if !bound {
         tracing::debug!(
-            agent = %launch_id,
+            agent = %wait.launch_id,
             timeout_ms = SUBAGENT_PANE_BIND_TIMEOUT.as_millis(),
             "subagent pane bind was not visible before the launch returned",
         );

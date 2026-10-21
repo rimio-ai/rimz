@@ -1353,6 +1353,7 @@ fn classify_diagnostic(
         | DiagEvent::SubagentOrphanReaped { .. }
         | DiagEvent::SubagentOrphanRepairFailed { .. }
         | DiagEvent::SubagentZoneLookupFailed { .. }
+        | DiagEvent::SubagentPaneBindTimeout { .. }
         | DiagEvent::ProviderStartupExit { .. }
         | DiagEvent::PaneCacheDivergence { .. }
         | DiagEvent::SupervisorConvergence { .. }

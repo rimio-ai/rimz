@@ -629,7 +629,9 @@ path = "crates/rimz/src/diag"
 # Hook-feed failures expose hook_feed, Record, and append to the CLI (+3).
 # SubagentZoneLookup names the placement lookup in CLI fallback diagnostics (+1).
 # ViewFitTrigger is the shared sweep/jump geometry-repair diagnostic vocabulary (+1).
-surface-budget = 106
+# SubagentPaneBindRead and SubagentPaneBindRow carry the bind wait's final observation (+2).
+# SubagentPaneBindCaller keeps the diagnostic's launch/resume vocabulary typed (+1).
+surface-budget = 109
 
 [[verdict]]
 kind = "item"
@@ -1785,7 +1787,8 @@ reason = "Host condition probes and task firing share stat-gated, 60-second-boun
 # Ratchet CLI-to-CLI surfaces for future workflow rehomes out of the CLI.
 [[module]]
 path = "crates/rimz/src/cli/supervised"
-surface-budget = 38
+# PaneBindWait carries run identity and open timing from both CLI doorways (+1).
+surface-budget = 39
 
 [[module]]
 path = "crates/rimz/src/cli/agents_cmd/mod.rs"
@@ -3542,6 +3545,21 @@ reason = "Payload type of public DiagEvent::SidebarHostUnavailable; pub is requi
 kind = "item"
 key = "diag::record::SubagentZoneLookup"
 reason = "The CLI stamps projection, caller, or pane-listing failure in the public SubagentZoneLookupFailed diagnostic payload."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::SubagentPaneBindRead"
+reason = "The CLI records the final projection read as either a failure or launch-matching rows in SubagentPaneBindTimeout."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::SubagentPaneBindCaller"
+reason = "Launch and resume callers share the fixed snake_case caller vocabulary of SubagentPaneBindTimeout."
+
+[[verdict]]
+kind = "item"
+key = "diag::record::SubagentPaneBindRow"
+reason = "Public payload of SubagentPaneBindRead, preserving kind, pane and end time from the waiter's final read."
 
 [[verdict]]
 kind = "item"
