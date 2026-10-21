@@ -18,6 +18,9 @@ use tungstenite::error::ProtocolError;
 use tungstenite::handshake::{HandshakeError, client::ClientHandshake};
 use tungstenite::{Message, WebSocket};
 
+use crate::agents::adapters::codex::CodexAdapter;
+use crate::agents::capabilities::LaunchCapability;
+
 /// Names the `codex` binary for every codex process RimZ starts on its own
 /// behalf: the app-server (broker and cold spawn) and `login status`. Set and
 /// non-empty, codex counts as installed only when the value names an executable
@@ -46,6 +49,37 @@ pub(crate) enum AppServerErr {
         #[source]
         source: Box<AppServerErr>,
     },
+}
+
+/// Top-level member a broker adds beside `result` on every successful response
+/// frame, naming the child that produced it.
+const SERVED_BY_MEMBER: &str = "rimzServedBy";
+
+/// The identity of a Codex app-server child: the canonical provider home it
+/// reads and the mtime of that home's `auth.json`. The home selects the account;
+/// the stamp catches credentials rewritten under the same home.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::agents::adapters::codex) struct ServedBy {
+    codex_home: PathBuf,
+    auth_stamp: Option<u64>,
+}
+
+impl ServedBy {
+    /// `None` when the login has no home or the home cannot be canonicalized.
+    pub(in crate::agents::adapters::codex) fn of(
+        login_env: &BTreeMap<String, String>,
+        auth_stamp: Option<u64>,
+    ) -> Option<Self> {
+        Some(Self {
+            codex_home: CodexAdapter.config_home(login_env)?.canonicalize().ok()?,
+            auth_stamp,
+        })
+    }
+
+    pub(in crate::agents::adapters::codex) fn insert_into(&self, frame: &mut Value) {
+        frame[SERVED_BY_MEMBER] =
+            json!({"codexHome": self.codex_home.to_str(), "authStamp": self.auth_stamp});
+    }
 }
 
 /// One JSON-RPC round-trip surface. The production impl spawns `codex
