@@ -472,12 +472,6 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) -> Result<()> {
-        if let Some((target, until)) = self.jump_hold() {
-            if let Some(peers) = &self.focus_peers {
-                peers.wait(&target, until, || inbox.has_input());
-            }
-            return self.advance(inbox, fetch, terminal).map(|_| ());
-        }
         self.report_baseline();
         let (_, mut timeout) = self.frame_timing();
         timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), self.clock.now());
@@ -500,21 +494,9 @@ impl LoopState {
         } else {
             false
         };
-        if self.jump_hold().is_some() {
-            if !pushed {
-                inbox.dispatch_input(self, fetch, terminal)?;
-            }
-            let deadline = self
-                .jump_hold()
-                .map_or_else(|| self.clock.now(), |(_, until)| until);
-            return Ok((self.paints != paints, deadline));
-        }
         self.report_baseline();
         if !pushed {
             inbox.dispatch_next(self, fetch, terminal, Duration::ZERO)?;
-        }
-        if let Some((_, until)) = self.jump_hold() {
-            return Ok((self.paints != paints, until));
         }
         // A pane the mux had not laid out at attach gets its title
         // with its first size.
@@ -1159,11 +1141,6 @@ impl LoopState {
                 .is_some_and(|own_view| !self.result_rx.has_pending_own_view_change(own_view))
     }
 
-    fn jump_hold(&self) -> Option<(PaneId, Instant)> {
-        let active = self.focus_peers.as_ref()?.active(self.clock.now())?;
-        self.known_non_owner(&active.0).then_some(active)
-    }
-
     fn retire_superseded_push(&mut self) -> bool {
         if self
             .pending_focus_push
@@ -1525,11 +1502,9 @@ impl LoopState {
             self.caps_refresh_deadline = Some(self.clock.now() + RESIZE_CAPS_SETTLE);
         }
         self.optimistic_watch_until = Some(self.clock.now() + FOCUS_RESUME_WATCH_WINDOW);
-        // A resize may reveal a hidden pane: outside a jump hold, paint the newest fold.
-        if self.jump_hold().is_none() {
-            self.drain_snapshot(fetch, false);
-            self.adopt_viewport(fetch, terminal);
-        }
+        // A resize may reveal a hidden pane: paint the newest fold.
+        self.drain_snapshot(fetch, false);
+        self.adopt_viewport(fetch, terminal);
         // Once a sibling has been seen, hold only a grow beyond the configured
         // cap or room override: that is the shape of space freed by a closing
         // sibling. Startup and attach relayouts land at the legitimate width
@@ -1649,12 +1624,8 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         fetch: &mut FetchDispatcher,
     ) -> Result<()> {
-        if self.jump_hold().is_some() {
-            self.result_rx.invalidate();
-        } else {
-            self.prepare_action(fetch);
-            self.adopt_viewport(fetch, terminal);
-        }
+        self.prepare_action(fetch);
+        self.adopt_viewport(fetch, terminal);
         let applied = match self.apply_input(wakeups, terminal) {
             Ok(applied) => applied,
             Err(error) => {
@@ -2089,7 +2060,7 @@ impl LoopState {
         terminal: &mut Terminal<PaneBackend>,
         active: bool,
     ) -> Result<()> {
-        if self.retire_superseded_push() || self.jump_hold().is_some() {
+        if self.retire_superseded_push() {
             return Ok(());
         }
         let now = self.clock.now();
@@ -2185,7 +2156,6 @@ impl LoopState {
             self.paint
                 .refresh_view(&mut self.ui, &self.current, alert_active);
             if self.retire_superseded_push()
-                || self.jump_hold().is_some()
                 || self.focus_peers.as_ref().is_some_and(|peers| {
                     !peers.accepts(self.last_folded_focus_intent, self.clock.now())
                 })
@@ -3005,16 +2975,13 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) {
-        if self.jump_hold().is_some() || self.adoptable_viewport(false).is_none() {
+        if self.adoptable_viewport(false).is_none() {
             return;
         }
         self.drain_snapshot(fetch, false);
         let Some(publication) = self.adoptable_viewport(false) else {
             return;
         };
-        if self.jump_hold().is_some() {
-            return;
-        }
         self.install_viewport(publication, Some(terminal.get_frame().area()));
     }
 

@@ -57,37 +57,6 @@ fn lease_superseded_while_waiting_for_anchor_lock_never_dispatches() {
 }
 
 #[test]
-fn held_wait_wakes_for_input_before_the_lease_deadline() {
-    let rig = TraceRig::new();
-    let lease = rig.peers.arm(rig.anchor().pane_id, Instant::now());
-    let (pane, until) = lease.active(Instant::now()).unwrap();
-    let (input_tx, input_rx) = std::sync::mpsc::sync_channel(64);
-    let (started_tx, started_rx) = channel();
-    let waiter = rig.peers.clone();
-    std::thread::scope(|scope| {
-        let waiting = scope.spawn(move || {
-            started_tx.send(()).unwrap();
-            let mut consumed = false;
-            waiter.wait(&pane, until, || {
-                consumed |= input_rx.try_recv().is_ok();
-                consumed
-            });
-            (consumed, waiter.active(Instant::now()).is_some())
-        });
-        started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        input_tx
-            .send(Wakeup::MouseClick { column: 2, row: 3 })
-            .unwrap();
-        rig.peers.wake_input();
-        assert_eq!(
-            waiting.join().unwrap(),
-            (true, true),
-            "the held wait must observe input while the lease is still active"
-        );
-    });
-}
-
-#[test]
 fn pre_push_stops_keep_the_click_sequence_and_stage() {
     let rig = TraceRig::new();
     let clicked = Instant::now();
@@ -231,10 +200,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
             anchor.clone(),
             clicked,
             || {
-                assert!(
-                    rig.peers.active(clicked).is_some(),
-                    "hold lasts through dispatch"
-                );
+                assert!(last.is_current(), "lease lasts through dispatch");
                 dispatches.set(dispatches.get() + 1);
             },
             || clicked,
@@ -250,10 +216,7 @@ fn request_threads_in_reverse_order_cannot_overwrite_the_latest_click() {
         assert_eq!(result.is_some(), std::ptr::eq(peers, &last));
     }
     assert_eq!((dispatches.get(), landings.get()), (1, 1));
-    assert!(
-        rig.peers.active(clicked).is_none(),
-        "dispatch releases before late reports"
-    );
+    assert!(!last.is_current(), "dispatch releases before late reports");
 
     for during_fit in [false, true] {
         let rig = TraceRig::new();
@@ -309,11 +272,11 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
     let rig = TraceRig::new();
     let now = Instant::now();
     let first = rig.peers.arm(rig.anchor().pane_id, now);
-    assert!(rig.peers.active(now).is_some());
+    assert!(first.is_current());
     let newest = rig.peers.arm(rig.anchor().pane_id, now);
     first.release();
     assert!(
-        rig.peers.active(now).is_some(),
+        newest.is_current(),
         "stale release must not clear the newest click"
     );
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -321,8 +284,8 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
         panic!("injected dispatch panic");
     }));
     assert!(
-        rig.peers.active(now).is_none(),
-        "unwinding must release the lease"
+        rig.peers.accepts(None, now),
+        "unwinding must release the nonce fence"
     );
 
     let lease = rig.peers.arm(rig.anchor().pane_id, Instant::now());
@@ -333,28 +296,19 @@ fn stale_release_and_unwinding_cannot_leave_or_clear_the_wrong_lease() {
     let target = rig
         .plane
         .focus_peers(destination.instance_id, DiagSink::disabled());
-    let (pane, until) = lease.active(Instant::now()).unwrap();
-    std::thread::scope(|scope| {
-        let waiter = scope.spawn(|| {
-            target.wait(&pane, until, || false);
-            target
-                .take_push()
-                .expect("a held waiter must wake for its priority slot")
-                .finish(PushVerdict::NotDestination);
-        });
-        let (_, _, _, ack, _) = lease
-            .push(&rig.anchor(), lease.clicked().unwrap(), Instant::now)
-            .unwrap();
-        let report = ack
-            .recv_timeout(PAINT_WAIT)
-            .expect("a full ordinary inbox must not block the held peer");
-        assert_eq!(report.verdict, Some(PushVerdict::NotDestination));
-        assert!(
-            report.finished_ms.unwrap() < duration_millis(PAINT_WAIT),
-            "push receipt must not wait for the lease deadline"
-        );
-        waiter.join().unwrap();
-    });
+    let (_, _, _, ack, _) = lease
+        .push(&rig.anchor(), lease.clicked().unwrap(), Instant::now)
+        .unwrap();
+    target
+        .take_push()
+        .expect("a full ordinary inbox cannot lose the priority slot")
+        .finish(PushVerdict::NotDestination);
+    let report = ack.recv_timeout(PAINT_WAIT).expect("priority push receipt");
+    assert_eq!(report.verdict, Some(PushVerdict::NotDestination));
+    assert!(
+        report.finished_ms.unwrap() < duration_millis(PAINT_WAIT),
+        "push receipt must not wait for the lease deadline"
+    );
 }
 
 #[test]

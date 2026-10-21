@@ -999,7 +999,7 @@ fn stream_input_ignores_unknown_lines_and_delivers_keys() {
     let room = Room::new();
     let (attachment, live) = room.host.admit(&hello(&SidebarInstanceId::new())).unwrap();
     let (mut supervisor, host) = UnixStream::pair().unwrap();
-    read_input(&host, live.close, || {});
+    read_input(&host, live.close);
     supervisor
         .write_all(b"unknown\nsnapshot\nreload\npress:-:char:q\nresize\n")
         .unwrap();

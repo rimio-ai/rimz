@@ -233,7 +233,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
         matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
     );
     assert!(
-        peers.active(Instant::now()).is_none(),
+        !lease.is_current(),
         "rollback consumer must see the lease released"
     );
     for dispatched in [Err(FocusActionError::Superseded), Ok(false), Ok(true)] {
@@ -241,16 +241,10 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
         let requested = Some(fenced_request(&rig, &expected, expected.clone()));
         let lease = peers.arm(target.clone(), Instant::now());
         finish_focus_request(&target, Some(&tx), requested, Some(&lease), |_| {
-            assert!(
-                peers.active(Instant::now()).is_some(),
-                "hold lasts through dispatch"
-            );
+            assert!(lease.is_current(), "lease lasts through dispatch");
             dispatched
         });
-        assert!(
-            peers.active(Instant::now()).is_none(),
-            "dispatch return releases the lease"
-        );
+        assert!(!lease.is_current(), "dispatch return releases the lease");
         if failed {
             assert!(
                 matches!(rx.try_recv(), Ok(Wakeup::FocusFailed { pane, error }) if pane == target && !error.is_empty())
@@ -264,7 +258,7 @@ fn focus_worker_reports_request_and_dispatch_errors_but_not_superseded_dispatch(
     }
     let lease = peers.arm(target.clone(), Instant::now());
     finish_focus_request(&target, None, None, Some(&lease), |_| unreachable!());
-    assert!(peers.active(Instant::now()).is_none());
+    assert!(!lease.is_current());
 }
 
 fn assert_failed_dispatch_restores_baseline(mux: MuxName) {
@@ -1432,15 +1426,6 @@ fn only_cross_tab_or_unknown_ownership_jumps_use_the_host_push() {
     assert!(
         rig.state.focus_peers_for(&zellij("terminal_9")).is_none(),
         "same-tab jumps stay synchronous"
-    );
-    assert!(
-        rig.state
-            .focus_peers
-            .as_ref()
-            .unwrap()
-            .active(rig.state.clock.now())
-            .is_none(),
-        "same-tab routing arms no lease"
     );
     rig.state.current.own_view = None;
     assert!(

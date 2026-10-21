@@ -468,10 +468,7 @@ impl Host {
                 return;
             }
         };
-        let peers = self
-            .plane
-            .focus_peers(hello.instance_id.clone(), self.diag.clone());
-        read_input(&stream, live.close.clone(), move || peers.wake_input());
+        read_input(&stream, live.close.clone());
 
         // One pane's panic closes that pane: its runtime files go as its frame loop unwinds, and its supervisor shows a notice and reattaches.
         let events = self.events.clone();
@@ -631,11 +628,6 @@ impl Host {
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => PushDelivery::InboxClosed,
             }
         };
-        if delivery == PushDelivery::Sent {
-            self.plane
-                .focus_peers(instance_id.clone(), self.diag.clone())
-                .wake_input();
-        }
         self.diag.for_renderer(instance_id).trace_focus(
             FocusTraceEvent::ClickDelivery {
                 column,
@@ -662,7 +654,7 @@ impl Host {
 }
 
 /// Input words share the attach stream; EOF still releases the pane.
-fn read_input(stream: &UnixStream, close: CloseHandle, wake_input: impl Fn() + Send + 'static) {
+fn read_input(stream: &UnixStream, close: CloseHandle) {
     let Ok(stream) = stream.try_clone() else {
         return;
     };
@@ -677,7 +669,6 @@ fn read_input(stream: &UnixStream, close: CloseHandle, wake_input: impl Fn() + S
                 break;
             }
             let _ = close.wake.try_send(Wakeup::Tick);
-            wake_input();
         }
         close.close();
     });

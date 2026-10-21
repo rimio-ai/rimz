@@ -1,4 +1,4 @@
-//! Input stays live during jump holds; queued wheel ticks share one paint and retain the wakeup that ends their run.
+//! Bounded input and room lanes; queued wheel ticks share one paint and retain the wakeup that ends their run.
 
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
@@ -104,7 +104,7 @@ impl WakeupInbox {
             return self.dispatch_input(state, fetch, terminal);
         }
         let mut wakeup = self.recv_timeout(timeout);
-        // Publication hints must not delay already queued work.
+        // Wake hints must not delay already queued work.
         while matches!(wakeup, Wakeup::Tick) {
             let Ok(next) = self.receiver.try_recv() else {
                 break;
