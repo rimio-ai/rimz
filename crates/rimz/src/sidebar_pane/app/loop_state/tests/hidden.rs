@@ -191,6 +191,29 @@ fn skipped_final_completes_requests_and_refreshes_backstops() {
 }
 
 #[test]
+fn retained_hidden_content_does_not_postpone_polling_or_the_watchdog() {
+    for tick_seconds in [1, 60] {
+        let mut rig = hidden_rig();
+        let clock = LoopClock::play(Timestamp::now());
+        rig.state.clock = clock.clone();
+        rig.state.config.tick_seconds = tick_seconds;
+        defer_name(&mut rig, "pending");
+        let projections = rig.state.projections;
+        let deadline = tick_for(tick_seconds).min(SELF_CLOSE_WATCHDOG);
+        clock.advance(deadline / 2);
+        rig.maintenance();
+        assert!(rig.next_request().is_none(), "backstop is not due yet");
+        clock.advance(deadline / 2);
+        rig.maintenance();
+        assert!(
+            rig.next_request().is_some(),
+            "retained content must not suppress the {tick_seconds}s tick's backstop"
+        );
+        assert_eq!(rig.state.projections, projections, "content stays deferred");
+    }
+}
+
+#[test]
 fn reveal_never_skips() {
     assert_reveal_or_changed_own_view(true);
 }
