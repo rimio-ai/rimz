@@ -1394,10 +1394,10 @@ impl crate::agents::capabilities::ContextCapability for CodexAdapter {
         );
         let realtime_usage = observation
             .as_ref()
-            .map(AppServerObservation::account_usage);
+            .map(|(identity, observation)| (identity.clone(), observation.account_usage()));
         Some(SessionContextRefresh {
             local,
-            observed: observation.map(|observation| observation.context),
+            observed: observation.map(|(_, observation)| observation.context),
             realtime_usage,
         })
     }
@@ -1509,14 +1509,14 @@ impl crate::agents::capabilities::AccountCapability for CodexAdapter {
         &self,
         runtime: &crate::RuntimePaths,
         login_env: &BTreeMap<String, String>,
-    ) -> Option<AccountUsageSnapshot> {
+    ) -> Option<(super::AccountUsageIdentity, AccountUsageSnapshot)> {
         refresh_app_server_enrichment(
             None,
             None,
             Some(&runtime.codex_app_server_socket_path()),
             login_env,
         )
-        .map(|observation| observation.account_usage())
+        .map(|(identity, observation)| (identity, observation.account_usage()))
     }
 }
 
@@ -2070,20 +2070,26 @@ fn build_codex_observation(
 /// and version.
 /// Transcript-derived tokens and cost are refreshed separately from the local
 /// rollout tail, so an unreachable app-server never suppresses them.
+///
+/// The reading comes with the identity of the credentials read before it. When
+/// `auth.json` moved during the read the reading is dropped whole, since the
+/// identity no longer says whose it is.
 fn refresh_app_server_enrichment(
     session_id: Option<&str>,
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
     login_env: &BTreeMap<String, String>,
-) -> Option<AppServerObservation> {
-    CodexAppServer::observe_login(
-        broker_socket,
-        login_env,
-        "codex",
-        session_id,
-        model_hint,
-        Timestamp::now(),
-    )
+) -> Option<(super::AccountUsageIdentity, AppServerObservation)> {
+    oauth_usage::read_under_identity(login_env, || {
+        CodexAppServer::observe_login(
+            broker_socket,
+            login_env,
+            "codex",
+            session_id,
+            model_hint,
+            Timestamp::now(),
+        )
+    })
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,

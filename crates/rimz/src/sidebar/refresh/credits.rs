@@ -201,12 +201,14 @@ pub(super) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
 pub(super) fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
     key: &LoginKey,
-    scope: ProviderAccountScope,
+    identity: AccountUsageIdentity,
     snapshot: AccountUsageSnapshot,
 ) {
     let (plan, extra_credits, reset_credits) = account_usage_credit_fields(Some(&snapshot));
     let mut entry = ProviderCreditsEntry {
-        scope,
+        scope: identity.scope,
+        account_key: identity.account_key,
+        credentials_stamp: identity.credentials_stamp,
         observed_at_ms: unix_now_ms(),
         ok: plan.is_some() || extra_credits.is_some() || reset_credits.is_some(),
         plan,
@@ -223,20 +225,22 @@ pub(super) fn merge_provider_realtime_usage(
         return;
     };
     let mut cache = read_credits_cache(&path);
-    if let Some(prior) = cache.logins.get(key) {
-        entry.entitlement = prior.entitlement;
-    }
     if let Some(prior) = cache
         .logins
         .get(key)
         .filter(|prior| prior.scope == entry.scope)
     {
-        entry.oauth_read_at_ms = prior.oauth_read_at_ms;
-        entry.auth_settled = prior.auth_settled;
-        entry.credentials_stamp = prior.credentials_stamp;
-        entry.account_key = prior.account_key.clone();
         entry.direct_query_claim = prior.direct_query_claim.clone();
-        fill_missing_display_fields(&mut entry, prior);
+        if prior.account_key == entry.account_key {
+            entry.entitlement = prior.entitlement;
+            fill_missing_display_fields(&mut entry, prior);
+            // The last direct read describes the credentials it saw; new ones
+            // leave the entry unread, so the next claim re-reads them.
+            if prior.credentials_stamp == entry.credentials_stamp {
+                entry.oauth_read_at_ms = prior.oauth_read_at_ms;
+                entry.auth_settled = prior.auth_settled;
+            }
+        }
     }
     cache.refreshed_at_ms = unix_now_ms();
     cache.logins.insert(key.to_owned(), entry);

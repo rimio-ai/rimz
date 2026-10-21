@@ -1024,12 +1024,14 @@ pub trait AccountCapability: CoreCapability {
     /// Probe the provider's own realtime account channel while idle.
     /// Producer-only, best-effort, and read-only: no store writes happen in the
     /// adapter, and the caller owns every cache merge. `RuntimePaths` lets the
-    /// adapter locate its local sockets.
+    /// adapter locate its local sockets. The reading carries the identity of the
+    /// credentials it was read under, so the cache never files it under another
+    /// account.
     fn probe_realtime_account_usage(
         &self,
         _runtime: &crate::RuntimePaths,
         _login_env: &BTreeMap<String, String>,
-    ) -> Option<AccountUsageSnapshot> {
+    ) -> Option<(AccountUsageIdentity, AccountUsageSnapshot)> {
         None
     }
 

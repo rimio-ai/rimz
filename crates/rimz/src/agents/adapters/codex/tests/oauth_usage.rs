@@ -72,6 +72,60 @@ fn named_login_env_reads_account_credentials_under_the_named_home() {
 }
 
 #[test]
+fn credentials_identity_names_the_account_and_stamp_of_the_login_home() {
+    let temp = tempfile::tempdir().unwrap();
+    let login_env = BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    assert_eq!(
+        credentials_identity(&login_env),
+        crate::agents::AccountUsageIdentity::default()
+    );
+    let path = temp.path().join("auth.json");
+    std::fs::write(
+        &path,
+        br#"{ "tokens": { "access_token": "token", "account_id": "acc_123" } }"#,
+    )
+    .unwrap();
+    let identity = credentials_identity(&login_env);
+    assert_eq!(identity.account_key.as_deref(), Some("acc_123"));
+    assert_eq!(identity.credentials_stamp, file_mtime_ms(&path));
+    assert_eq!(
+        identity.scope,
+        crate::agents::ProviderAccountScope::KindWide
+    );
+}
+
+#[test]
+fn a_reading_is_dropped_when_the_credentials_move_during_the_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let login_env = BTreeMap::from([(
+        "CODEX_HOME".to_owned(),
+        temp.path().to_string_lossy().into_owned(),
+    )]);
+    let path = temp.path().join("auth.json");
+    std::fs::write(
+        &path,
+        br#"{ "tokens": { "access_token": "token", "account_id": "acc_123" } }"#,
+    )
+    .unwrap();
+
+    let (identity, reading) = read_under_identity(&login_env, || Some("steady")).unwrap();
+    assert_eq!(identity.account_key.as_deref(), Some("acc_123"));
+    assert_eq!(reading, "steady");
+
+    let moved = read_under_identity(&login_env, || {
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+        Some("stale")
+    });
+    assert_eq!(moved, None);
+    assert_eq!(read_under_identity(&login_env, || None::<()>), None);
+}
+
+#[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
     assert!(
         !CodexOauthUsageErr::NoCredentials

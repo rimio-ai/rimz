@@ -212,21 +212,16 @@ fn realtime_invalidation_and_claim_writers_preserve_lapse() {
             serde_json::json!({"lapsed":{"since_ms":100}})
         )
     };
-    for scope in [
-        ProviderAccountScope::KindWide,
-        ProviderAccountScope::sub_provider("anthropic", "oauth"),
-    ] {
-        merge_provider_realtime_usage(
-            &runtime,
-            &key,
-            scope,
-            AccountUsageSnapshot {
-                plan: Some("max".to_owned()),
-                ..Default::default()
-            },
-        );
-        check();
-    }
+    merge_provider_realtime_usage(
+        &runtime,
+        &key,
+        identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
+        AccountUsageSnapshot {
+            plan: Some("max".to_owned()),
+            ..Default::default()
+        },
+    );
+    check();
     invalidate_oauth_read(&runtime, &key);
     check();
     let claim_nonce = nonce(204);
@@ -1348,7 +1343,7 @@ fn realtime_write_preserves_attempt_and_claim() {
     merge_provider_realtime_usage(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        ProviderAccountScope::KindWide,
+        identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
         AccountUsageSnapshot {
             plan: Some(" pro ".to_owned()),
             ..Default::default()
@@ -1359,6 +1354,8 @@ fn realtime_write_preserves_attempt_and_claim() {
     assert_eq!(entry.oauth_read_at_ms, 55);
     assert!(entry.auth_settled);
     assert_eq!(entry.direct_query_claim.as_ref(), Some(&claim));
+    assert_eq!(entry.account_key.as_deref(), Some("owner"));
+    assert_eq!(entry.credentials_stamp, Some(7));
     assert_eq!(entry.plan.as_deref(), Some("pro"));
     assert_eq!(
         entry.extra_credits,
@@ -1372,7 +1369,7 @@ fn realtime_write_preserves_attempt_and_claim() {
     merge_provider_realtime_usage(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        ProviderAccountScope::KindWide,
+        identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
         AccountUsageSnapshot {
             reset_credits: Some(ResetCredits {
                 count: 0,
@@ -1395,6 +1392,186 @@ fn realtime_write_preserves_attempt_and_claim() {
         entry.reset_credits.as_ref().map(|credits| credits.count),
         Some(0)
     );
+}
+
+fn merged_over(
+    prior: Option<ProviderCreditsEntry>,
+    incoming: AccountUsageIdentity,
+    snapshot: AccountUsageSnapshot,
+) -> ProviderCreditsEntry {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "codex@rimio".parse().unwrap();
+    if let Some(prior) = prior {
+        write_credits_cache(
+            &runtime.shared_credits_path(),
+            &CreditsCache {
+                refreshed_at_ms: 1,
+                logins: BTreeMap::from([(key.clone(), prior)]),
+            },
+        );
+    }
+    merge_provider_realtime_usage(&runtime, &key, incoming, snapshot);
+    read_credits_cache(&runtime.shared_credits_path()).logins[&key].clone()
+}
+
+fn prior_with_state(
+    account_key: Option<&str>,
+    scope: ProviderAccountScope,
+) -> ProviderCreditsEntry {
+    let mut prior = with_lapse(claimed_entry(nonce(301), scope), 100);
+    prior.account_key = account_key.map(ToOwned::to_owned);
+    prior.oauth_read_at_ms = 55;
+    prior.auth_settled = true;
+    prior
+}
+
+fn plan_reading(plan: &str) -> AccountUsageSnapshot {
+    AccountUsageSnapshot {
+        plan: Some(plan.to_owned()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn realtime_merge_same_scope_and_account_carries_oauth_state_and_fills_display() {
+    let prior = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    let merged = merged_over(
+        Some(prior),
+        identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
+        AccountUsageSnapshot::default(),
+    );
+    assert_eq!(merged.oauth_read_at_ms, 55);
+    assert!(merged.auth_settled);
+    assert_eq!(
+        entitlement(&merged),
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+    assert!(merged.direct_query_claim.is_some());
+    assert_eq!(merged.plan.as_deref(), Some("pro"));
+    assert_eq!(merged.reset_credits.as_ref().map(|c| c.count), Some(3));
+    assert_eq!(merged.credentials_stamp, Some(7));
+}
+
+#[test]
+fn realtime_merge_same_account_with_new_credentials_resets_only_the_oauth_read() {
+    let prior = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    let merged = merged_over(
+        Some(prior),
+        identity(Some(9), Some("owner"), ProviderAccountScope::KindWide),
+        AccountUsageSnapshot::default(),
+    );
+    assert_eq!(merged.credentials_stamp, Some(9));
+    assert_eq!(merged.oauth_read_at_ms, 0);
+    assert!(!merged.auth_settled);
+    assert_eq!(
+        entitlement(&merged),
+        serde_json::json!({"lapsed":{"since_ms":100}})
+    );
+    assert_eq!(merged.plan.as_deref(), Some("pro"));
+    assert!(merged.direct_query_claim.is_some());
+}
+
+#[test]
+fn realtime_write_after_a_credentials_rewrite_leaves_the_direct_read_due() {
+    let (_dir, runtime) = runtime();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let mut settled = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    settled.direct_query_claim = None;
+    settled.oauth_read_at_ms = 1_000;
+    write_credits_cache(
+        &runtime.shared_credits_path(),
+        &CreditsCache {
+            refreshed_at_ms: 1,
+            logins: BTreeMap::from([(key.clone(), settled)]),
+        },
+    );
+    let rewritten = identity(Some(9), Some("owner"), ProviderAccountScope::KindWide);
+    merge_provider_realtime_usage(&runtime, &key, rewritten.clone(), plan_reading("pro"));
+    assert!(
+        claim_provider_account_usage_with_hint_at(&runtime, &key, Some(rewritten), 2_000, nonce(9))
+            .is_some()
+    );
+}
+
+#[test]
+fn realtime_merge_same_scope_both_unbound_counts_as_the_same_account() {
+    let mut prior = prior_with_state(None, ProviderAccountScope::KindWide);
+    prior.credentials_stamp = None;
+    let merged = merged_over(
+        Some(prior),
+        identity(None, None, ProviderAccountScope::KindWide),
+        AccountUsageSnapshot::default(),
+    );
+    assert_eq!(merged.oauth_read_at_ms, 55);
+    assert!(merged.auth_settled);
+    assert_eq!(merged.plan.as_deref(), Some("pro"));
+    assert_eq!(merged.account_key, None);
+}
+
+#[test]
+fn realtime_merge_other_account_resets_oauth_state_and_display_but_keeps_the_claim() {
+    let prior = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    let merged = merged_over(
+        Some(prior),
+        identity(Some(8), Some("other"), ProviderAccountScope::KindWide),
+        plan_reading("plus"),
+    );
+    assert_eq!(merged.account_key.as_deref(), Some("other"));
+    assert_eq!(merged.credentials_stamp, Some(8));
+    assert_eq!(merged.oauth_read_at_ms, 0);
+    assert!(!merged.auth_settled);
+    assert_eq!(entitlement(&merged), serde_json::json!("ok"));
+    assert_eq!(merged.plan.as_deref(), Some("plus"));
+    assert_eq!(merged.extra_credits, None);
+    assert_eq!(merged.reset_credits, None);
+    assert!(merged.direct_query_claim.is_some());
+}
+
+#[test]
+fn realtime_merge_other_scope_resets_everything_including_the_claim() {
+    let prior = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let merged = merged_over(
+        Some(prior),
+        identity(Some(7), Some("owner"), scope.clone()),
+        plan_reading("plus"),
+    );
+    assert_eq!(merged.scope, scope);
+    assert_eq!(merged.oauth_read_at_ms, 0);
+    assert!(!merged.auth_settled);
+    assert_eq!(entitlement(&merged), serde_json::json!("ok"));
+    assert_eq!(merged.direct_query_claim, None);
+    assert_eq!(merged.extra_credits, None);
+}
+
+#[test]
+fn realtime_merge_without_a_prior_writes_the_reading_under_its_identity() {
+    let merged = merged_over(
+        None,
+        identity(Some(7), Some("owner"), ProviderAccountScope::KindWide),
+        plan_reading("pro"),
+    );
+    assert_eq!(merged.account_key.as_deref(), Some("owner"));
+    assert_eq!(merged.credentials_stamp, Some(7));
+    assert_eq!(merged.plan.as_deref(), Some("pro"));
+    assert!(merged.ok);
+    assert_eq!(merged.oauth_read_at_ms, 0);
+    assert_eq!(merged.direct_query_claim, None);
+}
+
+#[test]
+fn realtime_merge_unbound_reading_over_a_bound_team_prior_inherits_nothing() {
+    let mut prior = prior_with_state(Some("owner"), ProviderAccountScope::KindWide);
+    prior.plan = Some("team".to_owned());
+    let merged = merged_over(
+        Some(prior),
+        identity(None, None, ProviderAccountScope::KindWide),
+        AccountUsageSnapshot::default(),
+    );
+    assert_eq!(merged.account_key, None);
+    assert_eq!(merged.plan, None);
+    assert_eq!(merged.oauth_read_at_ms, 0);
+    assert!(!merged.auth_settled);
 }
 
 fn spare_room() -> (LoginKey, RoomLoginSet) {

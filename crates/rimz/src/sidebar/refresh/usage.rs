@@ -179,7 +179,7 @@ fn refresh_claimed_account_usage_with(
         &crate::agents::AgentDefinition,
         &RuntimePaths,
         &std::collections::BTreeMap<String, String>,
-    ) -> Option<AccountUsageSnapshot>,
+    ) -> Option<(AccountUsageIdentity, AccountUsageSnapshot)>,
     probe: impl FnOnce(
         &crate::agents::AgentDefinition,
         &std::collections::BTreeMap<String, String>,
@@ -244,10 +244,9 @@ fn refresh_claimed_account_usage_with(
     }
     let mut wrote = false;
     let mut cache_publication_ms = 0;
-    if let Some(usage) = realtime {
+    if let Some((identity, usage)) = realtime {
         let publication_started = Instant::now();
-        wrote |=
-            publish_account_usage_snapshot(runtime, key, AccountUsageIdentity::default(), usage);
+        wrote |= publish_account_usage_snapshot(runtime, key, identity, usage);
         cache_publication_ms += duration_ms(publication_started.elapsed());
     }
     if !renew_provider_account_usage_claim(runtime, key, claim_id) {
@@ -318,7 +317,7 @@ pub fn complete_realtime_account_usage(
     runtime: &RuntimePaths,
     login: &ProviderLogin,
     logins: &RoomLoginSet,
-    realtime: AccountUsageSnapshot,
+    realtime: (AccountUsageIdentity, AccountUsageSnapshot),
 ) -> bool {
     complete_realtime_account_usage_with(runtime, &login.key(), realtime, |runtime, _| {
         merge_account_usage_if_due(runtime, login, logins)
@@ -357,7 +356,7 @@ fn refresh_provider_usage_with(
 fn complete_realtime_account_usage_with(
     runtime: &RuntimePaths,
     key: &LoginKey,
-    realtime: AccountUsageSnapshot,
+    (identity, realtime): (AccountUsageIdentity, AccountUsageSnapshot),
     complete_direct: impl FnOnce(&RuntimePaths, &LoginKey) -> bool,
 ) -> bool {
     if crate::agents::credits::oauth_usage_offline() {
@@ -371,8 +370,7 @@ fn complete_realtime_account_usage_with(
         || realtime.rate_limits.is_none();
     let mut wrote = false;
     if publish {
-        wrote |=
-            publish_account_usage_snapshot(runtime, key, AccountUsageIdentity::default(), realtime);
+        wrote |= publish_account_usage_snapshot(runtime, key, identity, realtime);
     }
     if run_direct {
         wrote |= complete_direct(runtime, key);
@@ -445,7 +443,7 @@ pub fn publish_account_usage_snapshot(
         || snapshot.extra_credits.is_some()
         || snapshot.reset_credits.is_some();
     if has_credits {
-        merge_provider_realtime_usage(runtime, key, identity.scope.clone(), snapshot);
+        merge_provider_realtime_usage(runtime, key, identity.clone(), snapshot);
     }
     let has_windows = publish_account_usage_windows(runtime, key, identity, windows);
     has_credits || has_windows
