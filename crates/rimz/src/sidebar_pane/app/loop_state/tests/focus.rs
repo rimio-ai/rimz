@@ -57,6 +57,35 @@ fn click_child(rig: &mut Rig, child: &PaneId) {
 }
 
 #[test]
+fn delegation_header_focuses_parent_while_a_child_pane_is_focused() {
+    let (mut rig, _, [child, _]) = child_focus_rig();
+    let mut snapshot = rig.state.current.clone();
+    let parent_row = snapshot.row_owning_pane(&child).unwrap().clone();
+    snapshot.focused_pane = Some(child);
+    let parent = parent_row.pane.as_ref().unwrap().pane_id.clone();
+    rig.fold(snapshot, SnapshotSource::Produced);
+    rig.state
+        .paint_now(&mut rig.terminal, Instant::now())
+        .unwrap();
+    rig.state.click_guard = None;
+    let (column, row) = rig
+        .state
+        .ui
+        .interactions
+        .line_for_target(&render::HitTarget::ToggleDelegation {
+            row: parent_row.id,
+            open: false,
+        })
+        .unwrap();
+    let applied = rig
+        .state
+        .apply_input([Wakeup::MouseClick { column, row }], &mut rig.terminal)
+        .unwrap();
+    assert_eq!(applied.effects, vec![InputEffect::Focus(parent.clone())]);
+    assert_eq!(rig.state.ui.selected_pane, Some(parent));
+}
+
+#[test]
 fn stale_sibling_focus_failure_preserves_the_latest_pick_and_rollback() {
     let (mut rig, baseline, [first, second]) = child_focus_rig();
     click_child(&mut rig, &first);

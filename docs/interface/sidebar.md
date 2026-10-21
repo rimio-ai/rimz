@@ -263,7 +263,7 @@ A room with no agents has no make-up line:
 
 The body holds one card per pane, grouped under the worktree the pane works in. When the cards outgrow the space they scroll between the cockpit and the dashboard, and a scrollbar shows on the right edge while the view moves, fading about a second after it stops (`[theme.display] scrollbar` pins or removes it). The selected card keeps its screen row while any line of it is visible; otherwise the topmost visible card holds the view. Cards above it growing, shrinking, expanding, collapsing, or re-sorting, and the unread banner appearing or disappearing, leave it in place. Previous selections stay open while the layout freeze is armed, even when there is room to collapse them. Only data or configuration changes with no room to absorb them still move the card at the top or bottom.
 
-Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip is the one toggle that scrolls, and only far enough to show the first receipt it reveals.
+Selecting a card already on screen, even partially, scrolls nothing. Selecting an off-screen card with this sidebar's keys or mouse brings it into view with the least motion; a card taller than the view lands by its first line. Native tab switches, outside focus commands, and the initial focus on attach move the highlight without scrolling. A click into another tab places the card on the same row within that tab's card view. A toggle (`+K more`, a delegation header, or `+K older`) preserves the viewport instead of pulling it toward the selection. Opening the landed chip scrolls only far enough to show the first receipt it reveals. Unfolding a finished group also brings the member it focuses into view with the least motion.
 
 A mouse wheel tick glides the cards to their new position over about a tenth of a second without moving the selection; under load the glide drops frames rather than slowing down. The view then stays anchored to what it shows, without the unchanged selection pulling it back. Only the wheel glides: selection reveals, the unread-banner click, jumps, and corrections for changes above land in one frame. Those corrections alone do not wake the scrollbar.
 
@@ -364,7 +364,7 @@ A card with waits uses the same entry layout:
 
 `⧉ subagents (N)` counts every child the session has spawned, both the provider's native subagents and children launched with [`rimz subagents`](../reference/cli/subagents.md), for as long as RimZ retains the session's history. Their known cost sits on the right. The card's cost on the identity line already includes it, so do not add the two. `⧖ waits (N)` counts armed one-shot [waits](../reference/cli/wait.md), a pending [`stop --when-idle`](../reference/cli/agents.md#stop) request, and, for Claude, the shell commands it left running in the background. Either half shows alone when only one applies, and below 46 columns the line shortens to `⧉ N · ⧖ M`.
 
-Selecting a card opens the section. Clicking the line opens or closes it without focusing the pane, on any card where it appears, and that choice outranks selection and `card_density` until the sidebar restarts, and follows the viewed sidebar into unviewed tabs. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
+Selecting a card opens the section. Clicking the line opens or closes it and focuses the card's own live pane, even when one of its child panes is focused. The open or closed choice outranks selection and `card_density` until the sidebar restarts, and follows the viewed sidebar into unviewed tabs. Select an idle or done card first to reach the line unless it is already open, held, a teammate, or under `expanded` density. In `compact` density, select the card first.
 
 Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 
@@ -390,7 +390,7 @@ Entries list in a fixed order, and opening more of the list only appends rows:
 1. Live subagents, including paused children, in the order they started. They are never capped.
 2. Finished subagents, newest first, that finished within `recent_subagent_secs` (900 seconds by default), up to `max_recent_subagents` (5 by default).
 3. Waits: timers by due time, then watches, then background shells, then signals. A wait leaves the list when it fires or its job ends.
-4. `+K older`, which folds every other finished subagent. Click it to append them. When no subagent is running or recent, opening the section lists the older ones directly.
+4. `+K older`, which folds every other finished subagent. Click it to append them and focus the parent's live pane. When no subagent is running or recent, opening the section lists the older ones directly.
 
 The listed subagents plus `K` equal the count in the line. `K` can exceed the rows it reveals, because a native subagent that was replaced while still running is counted and has no row. The older list folds again when you close the section, send the parent a new prompt, or run `/clear` or `/compact`. Messages from other agents and RimZ's own deliveries leave it open.
 
@@ -583,7 +583,7 @@ A group is finished when its pull request merged or closed, or the trunk contain
 
 The first line lists the team name when the members share one, each member's final status and name, `+n` for members and shells that do not fit, and the group's lifetime cost. The second shows its lifetime tokens and cache hit, with plain muted active duration on the right, or an age with a clock face since it finished once that record expires. Both cover every session the team ran in this worktree, resumed sessions and subagents included. When the line is too narrow for one member it reads `▸ +K done`.
 
-Click the header or either receipt line, or focus a member to show the cards, and click the header to collapse them again. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
+Click a folded group's header or either receipt line to show the cards and focus the first receipt member's live pane, bringing its card into view. Focusing any member also shows the cards. The expanded header only collapses them; it does not move focus. The `s` lens excludes results in finished groups. Each revealed card shows that member's lifetime cost, so the cards add up to the receipt. A single-agent receipt uses the same status-and-handle chip; until lifetime totals arrive, the receipt pins the hidden agents' current session costs instead. A group with only process rows stays open.
 
 Finished groups follow all unfinished project work and precede `external`. At 54 columns, the closed landed chip replaces their headers and receipts:
 
@@ -860,7 +860,7 @@ The right-edge count is matching visible rows over all rows, processes included.
 
 Every printable key pressed without `Ctrl` or `Alt` enters the draft, including `n`, `j`, `q`, `r`, `?`, `A`, and digits. `Backspace` removes one character; on an empty draft it cancels. `↑` / `↓` and `Ctrl+p` / `Ctrl+n` move among matches; every other `Ctrl` or `Alt` chord does nothing, whether or not `[sidebar.keys]` binds it. Every edit selects the first match again. `Enter` commits the query and focuses the selected match, or ends typing without focus when the draft is empty. A zero-match query stays set and shows `no match` in the body.
 
-`Esc` clears the text search, whether typing or committed, leaving any status, unread, or open-PR pick intact. It also works during a health alert; while help is open it only closes help. Clicking a card or subagent entry while typing focuses its pane and drops the search. Other clicks commit the draft and then act normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, clicks keep the query, ordinary movement stays inside the matches, and `n` / `N` keep their needs-you meaning. Press `A` to clear both narrowings.
+`Esc` clears the text search, whether typing or committed, leaving any status, unread, or open-PR pick intact. It also works during a health alert; while help is open it only closes help. Any click that focuses a pane while typing also drops the search, including a subagents and waits line or `+K older`. Other clicks commit the draft and then act normally; the wheel scrolls without ending typing. Focus leaving the sidebar, or the sidebar degrading, discards only the draft. The committed query follows you across tabs and survives a sidebar reload; the draft is local to the sidebar where you type and does not survive a reload. After `Enter`, clicks keep the query, ordinary movement stays inside the matches, and `n` / `N` keep their needs-you meaning. Press `A` to clear both narrowings.
 
 ### Mouse
 
@@ -871,10 +871,12 @@ Every printable key pressed without `Ctrl` or `Alt` enters the draft, including 
 | click a make-up bucket or `⑃ N` | filter the cards |
 | click `↑ N need you` / `↓ N need you` | reveal the lead card where it sits, or scroll to the top if the filter hides it |
 | click `↑ <name>` / `↓ <name>` | reveal the focused card without changing selection |
-| click a subagents and waits line | open or close its entries |
+| click a subagents and waits line | toggle its entries, select the card and focus its own live pane |
 | click either line of a subagent entry | select the parent card and focus the child's live pane, else the parent's pane |
-| click `+K older`, `+K more`, `− less` | unfold or fold rows |
-| click a finished group's header or receipt | show or collapse its cards |
+| click `+K older` | append older entries, select the card and focus the parent's live pane |
+| click `+K more`, `− less` | expand or cap the group without moving focus |
+| click a folded finished group's header or either receipt line | show its cards and focus the first receipt member's live pane, revealing its card |
+| click an expanded finished group's header | collapse its cards without moving focus |
 | click `[ ▸ N landed ]` / `[ ▾ N landed ]` | show or hide landed receipts, also in unviewed sidebars; opening scrolls to the first receipt it reveals |
 | click a dashboard tab | switch provider |
 | wheel | scroll the cards without moving the selection |

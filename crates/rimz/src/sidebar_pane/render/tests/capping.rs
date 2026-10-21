@@ -287,22 +287,31 @@ fn finished_group_collapses_unread_success_until_revealed() {
     assert_eq!(more_hits[0].rows, 0..1);
     assert_eq!(
         more_hits[0].target,
-        HitTarget::ToggleGroup(group.key.clone())
+        HitTarget::ExpandGroup {
+            key: group.key.clone(),
+            row: "success-unread".into()
+        }
     );
     assert_eq!(more_hits[1].rows, 1..2);
     assert_eq!(
         more_hits[1].target,
-        HitTarget::ToggleGroup(group.key.clone())
+        HitTarget::ExpandGroup {
+            key: group.key.clone(),
+            row: "success-unread".into()
+        }
     );
     assert_eq!(more_hits[2].rows, 2..3);
     assert_eq!(
         more_hits[2].target,
-        HitTarget::ToggleGroup(group.key.clone())
+        HitTarget::ExpandGroup {
+            key: group.key.clone(),
+            row: "success-unread".into()
+        }
     );
     assert_eq!(
         map,
         [None, None, None],
-        "finished header and both receipt lines have only the toggle meaning"
+        "finished header and both receipt lines target the first member by identity"
     );
 }
 
@@ -783,8 +792,12 @@ fn lone_finished_agent_collapses_but_process_stays_visible() {
             for line in 0..texts.len() {
                 assert!(
                     hits.iter().any(|hit| hit.rows.contains(&line)
-                        && hit.target == HitTarget::ToggleGroup(finished.key.clone())),
-                    "header and receipt toggle: {hits:?}"
+                        && hit.target
+                            == HitTarget::ExpandGroup {
+                                key: finished.key.clone(),
+                                row: "solo".into()
+                            }),
+                    "header and receipt expand and focus: {hits:?}"
                 );
             }
             let (expanded, map, _) = render_group(&finished, true);
@@ -808,6 +821,35 @@ fn lone_finished_agent_collapses_but_process_stays_visible() {
             )),
             "lone finished {kind} header has no collapse target: {hits:?}"
         );
+    }
+}
+
+#[test]
+fn narrow_finished_receipt_still_targets_first_member_before_the_shell() {
+    let mut finished = group(vec![
+        process_row("shell"),
+        agent_row("first-long-name", AgentStatus::Success),
+        agent_row("second", AgentStatus::Success),
+    ]);
+    finished.finished = true;
+    finished.pr_url = Some("https://example.test/pull/91".into());
+    finished.pr_number = Some(91);
+    finished.cohort_effort = Some(crate::store::snapshot::SidebarCohortEffort {
+        active_secs: Some(60),
+        ..Default::default()
+    });
+    let (texts, map, hits) = render_group_at_width(&finished, false, 12);
+    assert!(texts[1].contains("▸ +3 done"), "{texts:?}");
+    assert_eq!(map, vec![None; 3]);
+    let expected = HitTarget::ExpandGroup {
+        key: finished.key.clone(),
+        row: "first-long-name".into(),
+    };
+    let interactions = FrameInteractions::from_parts(map, hits);
+    for line in 0..3 {
+        for column in [0, 5, 11] {
+            assert_eq!(interactions.target_at(column, line), Some(expected.clone()));
+        }
     }
 }
 

@@ -112,13 +112,13 @@ pub(in crate::sidebar_pane) struct UiState {
     /// The last draw showed the directional `↑/↓ N need you` banner.
     pub(in crate::sidebar_pane) banner_shown: bool,
     /// Wheel, banner, and toggles bypass anchoring and selection reveal for one
-    /// paint; banner and landed-chip reveals can still nudge their target into view.
+    /// paint; explicit row and landed-chip reveals can still nudge their target into view.
     pub(in crate::sidebar_pane) offset_authoritative: bool,
     /// Armed only by opening the landed chip. The next draw reveals its first
     /// newly shown receipt while keeping the chip visible, then consumes it.
     pub(in crate::sidebar_pane) landed_reveal: bool,
-    /// The row the banner (its full-roster lead) or the focus marker (the
-    /// selected card) reveals minimally on the next draw, then consumed.
+    /// The row a banner, focus marker, or finished-group click reveals minimally
+    /// on the next draw, then consumed.
     pub(in crate::sidebar_pane) reveal_row: Option<String>,
     /// A fresh shared click placement and its source opening set for the next
     /// draw to land, then consumed.

@@ -578,14 +578,33 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
     let snapshot = clickable_block_snapshot(&workspace());
     let keymap = super::super::super::NavKeymap::from_config(&Default::default());
     let pane = PaneId::from_parts(MuxName::Zellij, "terminal_10");
-    for target in [HitTarget::Row(0), HitTarget::SubAgentPane(pane.clone())] {
+    for target in [
+        HitTarget::Row(0),
+        HitTarget::SubAgentPane(pane.clone()),
+        HitTarget::ToggleDelegation {
+            row: "agent-1".into(),
+            open: true,
+        },
+        HitTarget::ToggleDelegationHistory("agent-1".into()),
+        HitTarget::ExpandGroup {
+            key: "/repo/main".into(),
+            row: "agent-1".into(),
+        },
+    ] {
         for query in [None, Some("cla".to_owned())] {
             let mut ui = UiState {
                 make_up_filter: BodyLens {
                     query: query.clone(),
                     ..Default::default()
                 },
-                search_draft: Some("zsh".to_owned()),
+                search_draft: Some(
+                    if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
+                        "zsh"
+                    } else {
+                        "cla"
+                    }
+                    .to_owned(),
+                ),
                 ..Default::default()
             };
             let theme = ui.theme(&snapshot.theme);
@@ -593,8 +612,7 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
                 render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
             let row = ui.interactions.line_for_row(0).unwrap();
             remember_roster(&mut ui, &snapshot);
-            // Child entries carry pane identities, not roster ordinals.
-            if matches!(target, HitTarget::SubAgentPane(_)) {
+            if !matches!(target, HitTarget::Row(_)) {
                 ui.interactions = render::FrameInteractions::from_parts(
                     Vec::new(),
                     vec![render::HitRegion::whole_line(row, target.clone())],
@@ -616,7 +634,12 @@ fn draft_focus_click_clears_query_after_resolving_painted_target() {
             if query.is_some() {
                 effects.push(InputEffect::SyncFilter(BodyLens::default()));
             }
-            effects.push(InputEffect::Focus(pane.clone()));
+            let expected = if matches!(target, HitTarget::Row(_) | HitTarget::SubAgentPane(_)) {
+                pane.clone()
+            } else {
+                PaneId::from_parts(MuxName::Zellij, "terminal_9")
+            };
+            effects.push(InputEffect::Focus(expected));
             assert_eq!(outcome.effects, effects);
             assert!(outcome.redraw);
         }
@@ -659,6 +682,7 @@ fn nonfocus_clicks_commit_draft_and_committed_row_clicks_keep_query() {
     for target in [
         HitTarget::BodyFilter(filter),
         HitTarget::Hyperlink("https://example.test".into()),
+        HitTarget::ToggleGroup("/repo/main".into()),
     ] {
         let mut ui = UiState {
             search_draft: Some("cla".to_owned()),
