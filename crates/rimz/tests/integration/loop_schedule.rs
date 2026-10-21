@@ -5936,7 +5936,7 @@ fn loop_watch_requires_a_terminal() {
 #[test]
 fn loop_watch_refuses_without_an_open_room() {
     let env = Env::new();
-    let (output, status) = loop_watch_pty(&env, false, true);
+    let (output, status) = loop_watch_pty(&env, false, true, &[]);
     let mut plain = anstream::StripStream::new(Vec::new());
     plain.write_all(output.as_bytes()).unwrap();
     assert_eq!(
@@ -5950,7 +5950,12 @@ fn loop_watch_refuses_without_an_open_room() {
 #[test]
 fn loop_watch_pinned_room_paints_before_its_first_heartbeat() {
     let env = Env::new();
-    let (output, _) = loop_watch_pty(&env, true, false);
+    let (output, _) = loop_watch_pty(
+        &env,
+        true,
+        false,
+        &["no loop tasks; add one with `rimz loop add …`"],
+    );
     assert!(
         output.contains("no loop tasks") && output.contains("\x1b[J"),
         "{output}"
@@ -6010,19 +6015,19 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0; 4096];
+        let mut terminal = vt100::Parser::new(24, 100, 0);
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;
             }
             output.extend_from_slice(&buffer[..count]);
-            if let Some(end) = output.windows(3).rposition(|bytes| bytes == b"\x1b[J") {
+            terminal.process(&buffer[..count]);
+            let frame = terminal.screen().contents();
+            if frame.contains("no loop tasks; add one with `rimz loop add …`") {
                 let _ = startup_tx.try_send(());
-                if output[..end]
-                    .windows(14)
-                    .any(|bytes| bytes == b"watch-reloaded")
-                {
-                    let _ = reload_tx.try_send(());
-                }
+            }
+            if frame.contains("watch-reloaded") && frame.contains("never fired") {
+                let _ = reload_tx.try_send(());
             }
         }
         output
@@ -8689,7 +8694,15 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
     }
     write_loop_run_records(&env, &records);
 
-    let output = loop_watch_frames(&env);
+    let output = loop_watch_frames(
+        &env,
+        &[
+            "✓ 10m ago",
+            "✗ failed 10m ago",
+            "✗ 1 needs you",
+            "heard ci.passed 5m ago",
+        ],
+    );
     let good = output.lines().find(|line| line.contains("good")).unwrap();
     assert!(good.contains("✓ 10m ago"), "{output}");
     let bad = output.lines().find(|line| line.contains("bad")).unwrap();
@@ -8752,7 +8765,7 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
         .unwrap(),
     );
 
-    let output = loop_watch_frames(&env);
+    let output = loop_watch_frames(&env, &["local", "bound"]);
     assert!(
         output.contains("local") && output.contains("bound"),
         "{output}"
@@ -8774,7 +8787,7 @@ fn loop_watch_shows_a_run_whose_task_row_is_gone() {
     };
     let _lock = hold_loop_run_lock(&loop_run_lock_path(&env, "later"), &holder);
 
-    let output = loop_watch_frames(&env);
+    let output = loop_watch_frames(&env, &["▸ 1 running", "later", "▸ running 3m"]);
 
     assert!(
         output.contains("▸ 1 running")
@@ -8797,7 +8810,7 @@ fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
     // A directory where the run lock file belongs makes opening the lock fail.
     std::fs::create_dir_all(loop_run_lock_path(&env, "probe")).unwrap();
 
-    let output = loop_watch_frames(&env);
+    let output = loop_watch_frames(&env, &["probe", "never fired"]);
 
     assert!(
         output.contains("probe")
@@ -8828,7 +8841,7 @@ fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
     std::fs::create_dir_all(locks.parent().expect("runtime root")).unwrap();
     std::fs::write(locks, "").unwrap();
 
-    let output = loop_watch_frames(&env);
+    let output = loop_watch_frames(&env, &["no loop tasks; add one with `rimz loop add …`"]);
 
     assert!(
         output.starts_with("loop\n\nno loop tasks")
@@ -11512,9 +11525,9 @@ fn seed_loop_watch_room(env: &Env) {
     );
 }
 
-/// Run `loop watch --hold` in a pty through its first complete repaint, and return everything it wrote, stderr included.
-fn loop_watch_frames(env: &Env) -> String {
-    let (output, _) = loop_watch_pty(env, false, false);
+/// Run `loop watch --hold` in a pty until the expected content paints, and return the visible frame.
+fn loop_watch_frames(env: &Env, expected: &'static [&'static str]) -> String {
+    let (output, _) = loop_watch_pty(env, false, false, expected);
     assert!(
         output.contains("\x1b[J"),
         "loop watch did not repaint:\n{output}"
@@ -11524,7 +11537,12 @@ fn loop_watch_frames(env: &Env) -> String {
     terminal.screen().contents()
 }
 
-fn loop_watch_pty(env: &Env, pinned: bool, refusal: bool) -> (String, u32) {
+fn loop_watch_pty(
+    env: &Env,
+    pinned: bool,
+    refusal: bool,
+    expected: &'static [&'static str],
+) -> (String, u32) {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -11554,19 +11572,23 @@ fn loop_watch_pty(env: &Env, pinned: bool, refusal: bool) -> (String, u32) {
     let reader_thread = std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut buffer = [0; 4096];
+        let mut terminal = vt100::Parser::new(24, 100, 0);
         while let Ok(count) = reader.read(&mut buffer) {
             if count == 0 {
                 break;
             }
             output.extend_from_slice(&buffer[..count]);
-            // The refusal stays on the normal screen; a repaint ends with Clear(FromCursorDown).
-            let marker: &[u8] = if refusal {
-                b"or use `rimz loop list`"
+            terminal.process(&buffer[..count]);
+            let ready = if refusal {
+                let marker = b"or use `rimz loop list`";
+                output.windows(marker.len()).any(|bytes| bytes == marker)
             } else {
-                b"\x1b[J"
+                let frame = terminal.screen().contents();
+                expected.iter().all(|text| frame.contains(*text))
             };
-            if output.windows(marker.len()).any(|bytes| bytes == marker) {
+            if ready {
                 let _ = ready_tx.send(());
+                break;
             }
         }
         output
