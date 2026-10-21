@@ -543,7 +543,7 @@ impl IdleCycleFixture {
     pub fn new(
         state: StatePaths,
         runtime: RuntimePaths,
-        frame: PaneFrame,
+        mut frame: PaneFrame,
         subscribers: usize,
     ) -> Self {
         let config = ServeConfig {
@@ -565,6 +565,9 @@ impl IdleCycleFixture {
             producer,
             None,
         );
+        if !frame.client_views.is_empty() {
+            frame.client_view_fresh = true;
+        }
         let host_data = Arc::new(Mutex::new(HostData {
             inputs: Some(HostInputs::from_frame(frame)),
             ..Default::default()
@@ -607,6 +610,7 @@ impl IdleCycleFixture {
     /// Include each subscriber's real renderer application, but no painting.
     pub fn enable_renderer_apply(&mut self) {
         self.sink.begin_cycle();
+        let views = self.sink.host_data.lock().expect("host data").views.clone();
         self.renderers = self
             .receivers
             .drain(..)
@@ -620,27 +624,29 @@ impl IdleCycleFixture {
                 let mut config = self.worker.config.clone();
                 config.instance_id = subscriber.instance_id.clone();
                 config.own_pane = subscriber.own_pane.clone();
+                let mut renderer = super::loop_state::LoopState::new(
+                    crate::sidebar_pane::app::clock::LoopClock::wall(),
+                    config,
+                    None,
+                    self.worker.runtime.clone(),
+                    std::path::PathBuf::new(),
+                    crate::diag::DiagSink::disabled(),
+                    rx,
+                    None,
+                    std::sync::mpsc::sync_channel(1).0,
+                    Default::default(),
+                    None,
+                );
+                renderer.share_views(views.clone());
                 (
-                    super::loop_state::LoopState::new(
-                        crate::sidebar_pane::app::clock::LoopClock::wall(),
-                        config,
-                        None,
-                        self.worker.runtime.clone(),
-                        std::path::PathBuf::new(),
-                        crate::diag::DiagSink::disabled(),
-                        rx,
-                        None,
-                        std::sync::mpsc::sync_channel(1).0,
-                        Default::default(),
-                        None,
-                    ),
+                    renderer,
                     FetchDispatcher::for_plane(std::sync::mpsc::channel().0, Covered::default()),
                 )
             })
             .collect();
     }
 
-    /// Paint every consumer once and verify the single-view benchmark topology.
+    /// Paint the watched consumer and verify the single-view benchmark topology.
     pub fn paint_fanout(&mut self) {
         let mut watched = 0;
         let mut prior = None;

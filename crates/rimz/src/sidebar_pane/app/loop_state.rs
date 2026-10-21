@@ -697,10 +697,10 @@ impl LoopState {
 
     #[cfg(feature = "testkit")]
     pub(super) fn bench_frame_timing(&mut self, paint: bool) -> bool {
-        if paint {
-            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(40, 60))
-                .expect("benchmark terminal");
-            render::draw_to_terminal(&mut terminal, &self.view.current, None, &mut self.ui)
+        if paint && self.watched() {
+            let mut terminal =
+                Terminal::new(PaneBackend::captured(40, 60)).expect("benchmark terminal");
+            self.draw_frame(&mut terminal, self.clock.now(), false)
                 .expect("benchmark paint");
             assert!(self.ui.theme_cache.is_some());
         }

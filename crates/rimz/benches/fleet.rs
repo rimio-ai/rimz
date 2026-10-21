@@ -372,24 +372,7 @@ fn idle_cycle_hidden_fanout(bencher: Bencher) {
                 },
             )
             .expect("scale room");
-            let mut panes = frame.to_pane_refs();
-            let mut sidebars = Vec::new();
-            for (index, pane) in panes.iter_mut().enumerate() {
-                pane.view_id = Some(format!("tab_{index}"));
-                let mut sidebar = pane.clone();
-                sidebar.pane_id =
-                    rimz::PaneId::from_parts(rimz::MuxName::Zellij, format!("sidebar_{index}"));
-                sidebar.command = Some("rimz-sidebar".to_owned());
-                sidebars.push(sidebar);
-            }
-            let viewed = panes[0].pane_id.clone();
-            panes.extend(sidebars);
-            let mut frame = rimz::sidebar::frame::assemble_frame(
-                panes,
-                frame.produced_at_ms,
-                &frame.session_name,
-            );
-            frame.viewed_panes = vec![viewed];
+            let frame = idle_client_frame(frame);
             let mut cycle =
                 rimz::sidebar_pane::app::IdleCycleFixture::new(paths, runtime, frame, 57);
             cycle.enable_renderer_apply();
@@ -416,6 +399,29 @@ fn idle_cycle_hidden_fanout(bencher: Bencher) {
     .expect("benchmark counts");
 }
 
+fn idle_client_frame(frame: rimz::sidebar::frame::PaneFrame) -> rimz::sidebar::frame::PaneFrame {
+    let mut panes = frame.to_pane_refs();
+    let mut sidebars = Vec::new();
+    for (index, pane) in panes.iter_mut().enumerate() {
+        pane.view_id = Some(format!("tab_{index}"));
+        let mut sidebar = pane.clone();
+        sidebar.pane_id =
+            rimz::PaneId::from_parts(rimz::MuxName::Zellij, format!("sidebar_{index}"));
+        sidebar.command = Some("rimz-sidebar".to_owned());
+        sidebars.push(sidebar);
+    }
+    let viewed = sidebars[0].pane_id.clone();
+    panes.extend(sidebars);
+    let mut frame =
+        rimz::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, &frame.session_name);
+    frame.viewed_panes = vec![viewed.clone()];
+    frame.client_views = vec![rimz::pane::ClientPaneView {
+        client_id: rimz::ids::MuxClientId::Zellij(1),
+        pane_id: viewed,
+    }];
+    frame
+}
+
 fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
     let mut counts = (0, 0);
     let mut durations = Vec::new();
@@ -433,6 +439,7 @@ fn bench_idle_cycle(bencher: Bencher, orphans: usize, apply: bool) {
                 },
             )
             .expect("scale room");
+            let frame = idle_client_frame(frame);
             let mut cycle =
                 rimz::sidebar_pane::app::IdleCycleFixture::new(paths, runtime, frame, 100);
             if apply {

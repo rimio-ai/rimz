@@ -165,6 +165,77 @@ fn parked_workflows_are_content_not_a_clock_only_change() {
 }
 
 #[test]
+fn renderer_fixture_moves_the_clients_presentation_without_reducing_hidden_views() {
+    let fixture = FetchFixture::new();
+    let mut panes = Vec::new();
+    for index in 0..2 {
+        let tab = format!("tab_{index}");
+        panes.push(pane(&format!("terminal_{index}"), &tab, false));
+        let mut chrome = pane(&format!("sidebar_{index}"), &tab, false);
+        chrome.command = Some("rimz-sidebar".into());
+        panes.push(chrome);
+    }
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        panes,
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    frame.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_0")];
+    frame.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: frame.viewed_panes[0].clone(),
+    }];
+    frame.client_view_fresh = true;
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 2);
+    cycles.enable_renderer_apply();
+    cycles.run_cycle();
+    let source = cycles
+        .renderers
+        .iter()
+        .position(|(renderer, _)| {
+            renderer.current.own_view.as_ref().unwrap().working_pane_ids[0].raw() == "terminal_0"
+        })
+        .unwrap();
+    let destination = 1 - source;
+    let mut terminal =
+        ratatui::Terminal::new(super::super::backend::PaneBackend::captured(40, 60)).unwrap();
+    let (renderer, dispatcher) = &mut cycles.renderers[source];
+    renderer
+        .on_input(
+            super::super::input::Wakeup::Key(super::super::input::KeyAction::Help),
+            &mut terminal,
+            dispatcher,
+        )
+        .unwrap();
+    let before = cycles.renderers[destination].0.content_applications;
+    for _ in 0..3 {
+        cycles.run_cycle();
+    }
+    assert_eq!(cycles.renderers[destination].0.content_applications, before);
+    {
+        let mut data = cycles.sink.host_data.lock().unwrap();
+        let frame = Arc::make_mut(&mut data.inputs.as_mut().unwrap().frame);
+        frame.viewed_panes = vec![PaneId::from_parts(MuxName::Zellij, "terminal_1")];
+        frame.client_views[0].pane_id = frame.viewed_panes[0].clone();
+    }
+    cycles.run_cycle();
+    assert!(
+        cycles
+            .sink
+            .host_data
+            .lock()
+            .unwrap()
+            .views
+            .lock()
+            .unwrap()
+            .peek(&PaneId::from_parts(MuxName::Zellij, "sidebar_1"))
+            .is_some_and(|(state, _)| state.help_visible),
+        "the fixture must carry the client's presentation, not independent pane copies"
+    );
+}
+
+#[test]
 fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
     let fixture = FetchFixture::new();
     let frame = crate::testkit::fleet::seed_scale_room(
@@ -179,22 +250,37 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
     )
     .unwrap();
     let mut panes = frame.to_pane_refs();
-    for pane in &mut panes {
+    let mut sidebars = Vec::new();
+    for (index, pane) in panes.iter_mut().enumerate() {
         pane.first_seen_at_ms = Some(frame.produced_at_ms - 60_000);
+        pane.view_id = Some(format!("tab_{index}"));
+        let mut sidebar = pane.clone();
+        sidebar.pane_id = PaneId::from_parts(MuxName::Zellij, format!("sidebar_{index}"));
+        sidebar.command = Some("rimz-sidebar".into());
+        sidebars.push(sidebar);
     }
-    let frame =
+    let viewed = sidebars[0].pane_id.clone();
+    panes.extend(sidebars);
+    let mut frame =
         crate::sidebar::frame::assemble_frame(panes, frame.produced_at_ms, frame.session_name);
+    frame.viewed_panes = vec![viewed.clone()];
+    frame.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Zellij(1),
+        pane_id: viewed,
+    }];
     let mut cycles =
         IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 57);
     cycles.enable_renderer_apply();
     cycles.run_cycle();
     cycles.run_cycle();
+    let before = cycles
+        .renderers
+        .iter()
+        .map(|(renderer, _)| renderer.content_applications)
+        .collect::<Vec<_>>();
     assert!(
-        cycles
-            .renderers
-            .iter()
-            .all(|(renderer, _)| renderer.content_applications == 1),
-        "fixture is idle before the nudge"
+        before.iter().all(|count| *count > 0),
+        "every consumer has its initial content"
     );
     for event in [
         SidebarEvent::StoreDelta {
@@ -207,14 +293,16 @@ fn identity_free_nudges_keep_every_idle_consumer_clock_only() {
             command: None,
         },
     ] {
-        cycles.deliver_event(event);
+        cycles.deliver_event(event.clone());
         cycles.run_cycle();
-        assert!(
+        assert_eq!(
             cycles
                 .renderers
                 .iter()
-                .all(|(renderer, _)| renderer.content_applications == 1),
-            "identity-free nudges must not force content onto idle consumers"
+                .map(|(renderer, _)| renderer.content_applications)
+                .collect::<Vec<_>>(),
+            before,
+            "{event:?}: identity-free nudges must not force content onto idle consumers"
         );
     }
 }
@@ -2034,6 +2122,47 @@ fn one_cycle_projects_only_the_eldest_on_the_worker() {
 }
 
 #[test]
+fn a_failed_final_is_not_replaced_by_its_projected_interim() {
+    let fixture = FetchFixture::new();
+    let frame = crate::sidebar::frame::assemble_frame(Vec::new(), 0, "rimz-test");
+    let mut cycles =
+        IdleCycleFixture::new(fixture.state.clone(), fixture.runtime.clone(), frame, 1);
+    cycles.enable_renderer_apply();
+    let snapshot = crate::sidebar_pane::app::fixtures::snapshot(&fixture.workspace_id);
+    cycles.sink.context = Some(Arc::new(FoldShared::default()));
+    cycles.sink.staged = Some((
+        WorkspaceFold {
+            workspace: WorkspaceSnapshot(snapshot.clone()),
+            frame: None,
+        },
+        None,
+    ));
+    cycles.sink.publish(FetchUpdate::Snapshot {
+        snapshot: Box::new(snapshot),
+        phase: FetchPhase::Interim,
+        source: SnapshotSource::Cached,
+    });
+    cycles.sink.publish(FetchUpdate::Failed {
+        error: "producer failed after the interim fold".into(),
+    });
+    let views = cycles.sink.host_data.lock().unwrap().views.clone();
+    let (renderer, dispatcher) = &mut cycles.renderers[0];
+    renderer.on_snapshot(dispatcher);
+    assert_eq!(
+        views
+            .lock()
+            .unwrap()
+            .peek(&PaneId::from_parts(MuxName::Zellij, "sidebar_0"))
+            .unwrap()
+            .1
+            .health
+            .failure_streak,
+        1,
+        "the latest final failure must reach the view despite the shared fold context"
+    );
+}
+
+#[test]
 fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     let fixture = FetchFixture::new();
     let frame = crate::testkit::fleet::seed_scale_room(
@@ -2119,7 +2248,7 @@ fn hidden_lazy_folds_project_only_on_reveal_and_count_only_takes() {
     cycles.run_cycle();
     assert_eq!(
         cycles.renderers[hidden].0.projections, 2,
-        "reveal projects immediately"
+        "reveal reduces the projected mailbox without projecting the same fold again"
     );
     assert!(
         cycles.renderers[hidden]
