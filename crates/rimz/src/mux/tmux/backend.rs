@@ -484,8 +484,11 @@ impl MuxBackend for TmuxBackend {
         // `-d` keeps focus on the splitting pane; omit it to land in the new
         // pane (the focused launch path).
         let flag = match opts.placement {
-            SplitPlacement::Directional(SplitDirection::Right) => "-h",
-            SplitPlacement::Directional(SplitDirection::Down) | SplitPlacement::Stacked => "-v",
+            SplitPlacement::Directional(SplitDirection::Right)
+            | SplitPlacement::Rejoin(SplitDirection::Right) => "-h",
+            SplitPlacement::Directional(SplitDirection::Down)
+            | SplitPlacement::Rejoin(SplitDirection::Down)
+            | SplitPlacement::Stacked => "-v",
         };
         let title = opts.title;
         let mut spec =

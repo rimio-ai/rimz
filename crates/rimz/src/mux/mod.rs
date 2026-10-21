@@ -755,7 +755,10 @@ impl SplitTarget {
 /// Placement of a new pane relative to its target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitPlacement {
+    /// A new neighbour beside the target, or its whole stack. Defaults to `Right`.
     Directional(SplitDirection),
+    /// A replacement or lane resume: rejoin a tmux stack; directional on Zellij.
+    Rejoin(SplitDirection),
     /// One expanded member: a native Zellij stack or tmux pane marks and hooks.
     Stacked,
 }
@@ -769,7 +772,7 @@ impl Default for SplitPlacement {
 /// Where a new pane lands relative to the pane it splits.
 ///
 /// `Right` creates side-by-side panes separated by a vertical divider. `Down`
-/// creates stacked panes separated by a horizontal divider.
+/// creates rows separated by a horizontal divider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SplitDirection {
     #[default]

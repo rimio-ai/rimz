@@ -639,7 +639,7 @@ pub(super) fn resume_lane(
                     env: rimz::room::pane_identity_env(&workspace, &cwd, channel.as_deref(), false),
                     title: pane.name,
                     close_on_exit: false,
-                    placement: SplitPlacement::Directional(direction),
+                    placement: SplitPlacement::Rejoin(direction),
                     focus: focus.takes_focus(),
                 })?;
             }

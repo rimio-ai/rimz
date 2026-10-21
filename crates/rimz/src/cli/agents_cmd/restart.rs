@@ -198,7 +198,7 @@ pub(in crate::cli) fn restart_resolved(
             title: Some(pane_name),
             close_on_exit: false,
             env,
-            placement: rimz::mux::SplitPlacement::Directional(direction),
+            placement: rimz::mux::SplitPlacement::Rejoin(direction),
             focus: focus.takes_focus(),
         })
         .context("opening the replacement agent pane")
