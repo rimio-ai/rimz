@@ -445,7 +445,7 @@ mod tests {
         let now = rows[8].last_activity;
         rows[8].as_agent_mut().unwrap().sub_agents.push(
             serde_json::from_value(serde_json::json!({
-                "id": "child", "name": "explorer", "status": "running",
+                "id": "child", "kind": "claude", "name": "explorer", "status": "running",
                 "last_activity": now, "pane": child,
             }))
             .unwrap(),

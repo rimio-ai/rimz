@@ -67,6 +67,7 @@ mod tests {
     ) -> SidebarSubAgent {
         serde_json::from_value(serde_json::json!({
             "id": id,
+            "kind": "claude",
             "name": id,
             "status": status,
             "last_activity": now - SignedDuration::from_secs(landed_secs_ago),

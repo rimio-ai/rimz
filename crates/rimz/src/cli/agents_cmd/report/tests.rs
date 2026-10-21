@@ -55,7 +55,7 @@ fn card_projection_delegation_only_for_idle_running_parent() {
     parent.status = AgentStatus::Running;
     parent.description = Some("coordinate".into());
     let child = serde_json::from_value(serde_json::json!({
-        "id": "child", "name": "codex", "petname": "swift-otter",
+        "id": "child", "kind": "codex", "name": "codex", "petname": "swift-otter",
         "status": "running", "last_activity": now,
     }))
     .unwrap();
@@ -476,6 +476,7 @@ fn full_entry_has_a_stable_projection() {
                 pane: None,
                 turn_error_label: None,
                 id: "child".to_owned(),
+                kind: rimz::ids::AgentKind::new_unchecked("claude"),
                 prior_turn: false,
                 name: "explorer".to_owned(),
                 petname: Some("swift-otter".to_owned()),
@@ -490,6 +491,7 @@ fn full_entry_has_a_stable_projection() {
                 description: None,
                 tokens: Some(SubAgentTokens::Window(1_200)),
                 context_window: None,
+                compaction_count: 0,
                 cost_usd: None,
                 elapsed_secs: Some(12),
                 started_at: None,

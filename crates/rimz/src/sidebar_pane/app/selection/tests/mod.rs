@@ -59,7 +59,7 @@ fn inbox_walk_targets_the_waiting_launched_child_only_for_lifted_attention() {
         card.status = own_status;
         card.sub_agents = vec![
             serde_json::from_value(serde_json::json!({
-                "id": "child", "name": "child", "status": "waiting",
+                "id": "child", "kind": "claude", "name": "child", "status": "waiting",
                 "last_activity": now, "provider_native": native, "pane": child_pane,
             }))
             .unwrap(),
@@ -107,7 +107,7 @@ fn inbox_walk_advances_after_focusing_the_first_current_waiting_child() {
     .into_iter()
     .map(|(id, prior)| {
         serde_json::from_value(serde_json::json!({
-            "id": id, "name": id, "status": "waiting", "last_activity": now,
+            "id": id, "kind": "claude", "name": id, "status": "waiting", "last_activity": now,
             "pane": (id != "paneless").then(|| format!("zellij:terminal_{id}")),
             "prior_turn": prior,
         }))

@@ -5,7 +5,7 @@ use super::*;
 pub(super) struct Entry {
     pub(super) focused: bool,
     pub(super) lead: Span<'static>,
-    pub(super) kind: String,
+    pub(super) kind: Span<'static>,
     pub(super) headline: Option<Span<'static>>,
     pub(super) right: Vec<Span<'static>>,
     pub(super) detail: Option<Line<'static>>,
@@ -14,11 +14,7 @@ pub(super) struct Entry {
 pub(super) fn push_entry(ctx: &RowCtx<'_>, lines: &mut Vec<Line<'static>>, entry: Entry) {
     let theme = ctx.theme;
     let mut left = entry_indent(theme, entry.focused);
-    left.extend([
-        entry.lead,
-        Span::raw(" "),
-        Span::styled(entry.kind, theme.body()),
-    ]);
+    left.extend([entry.lead, Span::raw(" "), entry.kind]);
     if let Some(headline) = entry
         .headline
         .filter(|headline| !headline.content.is_empty())

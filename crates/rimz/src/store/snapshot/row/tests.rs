@@ -28,7 +28,7 @@ fn card_open_ask_round_trips_and_follows_display_status() {
 #[test]
 fn subagent_context_window_round_trips_and_accepts_legacy_json() {
     let mut value = serde_json::json!({
-        "id": "child", "name": "Explore", "status": "running",
+        "id": "child", "name": "Explore", "kind": "claude", "status": "running",
         "last_activity": row_time(), "tokens": {"window": 190_000}
     });
     let legacy: SidebarSubAgent = serde_json::from_value(value.clone()).unwrap();
@@ -59,6 +59,24 @@ fn subagent_context_window_round_trips_and_accepts_legacy_json() {
 }
 
 #[test]
+fn subagent_compaction_count_defaults_to_zero_and_round_trips_when_positive() {
+    let mut value = serde_json::json!({
+        "id": "child", "name": "Explore", "kind": "claude", "status": "running",
+        "last_activity": row_time()
+    });
+    let child: SidebarSubAgent = serde_json::from_value(value.clone()).unwrap();
+    assert!(
+        serde_json::to_value(child)
+            .unwrap()
+            .get("compaction_count")
+            .is_none()
+    );
+    value["compaction_count"] = serde_json::json!(2);
+    let child: SidebarSubAgent = serde_json::from_value(value).unwrap();
+    assert_eq!(serde_json::to_value(child).unwrap()["compaction_count"], 2);
+}
+
+#[test]
 fn serde_keeps_cards_flat_with_row_kind_key() {
     let agent = SidebarRow {
         checkout: None,
@@ -80,6 +98,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
             sub_agents: vec![
                 serde_json::from_value(serde_json::json!({
                     "id": "prior-child",
+                    "kind": "claude",
                     "name": "Explore",
                     "status": "success",
                     "prior_turn": true,

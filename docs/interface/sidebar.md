@@ -347,7 +347,7 @@ Selecting an engaged card inserts its stats line below the meter and appends ent
 ▌    ⠁ review · audit the trust hash                 ▐
 ▌      ◇  3k · Haiku 4.5                          <1m▐
 ▌    ✓ Explore · locate the render seam         $0.42▐
-▌      ▤ 12k · Opus 4.8  · high                    1m▐
+▌      ▤ 12k · Opus 4.8  · high · ↻ 2              1m▐
 ```
 
 A card with waits uses the same entry layout:
@@ -368,14 +368,14 @@ Selecting a card opens the section. Clicking the line opens or closes it and foc
 
 Click either line of a launched child's entry to focus its live pane, across tabs when needed. Entries without a live pane, including provider-native children, still focus the parent; a click never resumes an ended child. A current waiting child counts its parent in the cockpit's `?` bucket without changing the parent's displayed status or lead glyph. When the parent's attention comes from a waiting launched child, `n`/`N`/`Space` focuses the first such child's live pane in entry order; with no such pane it focuses the parent. The parent's own waiting or failed status takes precedence. While a child's pane is focused, the parent card carries the selection band and both lines of that child's entry show `▌` in the indent beside the lead icon. The mark disappears when you browse to another card; with the section closed, only the parent band shows. Focusing a child does not mark the parent read; the parent clears as any card does, by focusing it or dwelling on a tab that shows its pane.
 
-Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. Without a headline, the separator disappears too. A launched child's displayed error label replaces the description or task in italics, for both paused and failed states. Detail sits on a muted, indented second line.
+Each entry starts with its live state or wait icon, then a type word and a ` · ` separator before the headline. A subagent's type word wears its own provider's brand color at the soft weight of a calm card's handle, even when it runs on a different provider from its parent; wait type words keep the body tone. Without a headline, the separator disappears too. A launched child's displayed error label replaces the description or task in italics, for both paused and failed states. Detail sits on an indented second line; model names stay muted.
 
 | entry | lead | type · headline | right side | second line |
 |-------|------|------|------------|-------------|
-| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and plain muted runtime; from five minutes quiet, a face and quiet age heated toward the configured stall threshold instead |
-| parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | tokens, model, effort, and plain muted runtime, counting while parked and frozen once failed |
-| stalled subagent | `!` | launch profile or kind · `silent Nm` | cost, when known | tokens, model, effort, and quiet age with a face, in alarm at and past the stall threshold |
-| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort, and plain muted runtime frozen at the child's last activity |
+| running subagent | `⠁` while it reasons, `⢿` while it acts | launch profile or kind · description, else task if different from the type | cost, when known | `▤` tokens in the child's window when the child reports its context, else `◇` tokens over its whole run, then model, effort, and `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, replaced from five minutes quiet by a face and quiet age heated toward the configured stall threshold |
+| parked subagent | `⏸︎`, or `!` once it can no longer resume | launch profile or kind · limit label in italics, else description or task | cost, when known | tokens, model, effort, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, counting while parked and frozen once failed |
+| stalled subagent | `!` | launch profile or kind · `silent Nm` | cost, when known | tokens, model, effort, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; quiet age pins right with a face, in alarm at and past the stall threshold |
+| finished subagent | `✓` or `!` | launch profile or kind · description, else task if different from the type | cost, when known, after frozen runtime when there is no second line | tokens, model, effort, then `↻ N` completed compactions when above zero, dropped whole when the line is too narrow; plain muted runtime pins right, frozen at the child's last activity |
 | timer | `◷` | `timer · in 12m`, or `timer · due` once the time passes | time since armed | never |
 | PID | working spinner | `pid · 16776` | time since armed | never |
 | command | working spinner | `command · cargo` (program name) | time since armed | full command, with the program path trimmed |

@@ -184,7 +184,7 @@ fn child_focus_baseline_selects_the_parent_and_requires_own_view() {
     .sub_agents
     .push(
         serde_json::from_value(serde_json::json!({
-            "id": "child", "name": "explorer", "status": "running",
+            "id": "child", "kind": "claude", "name": "explorer", "status": "running",
             "last_activity": snapshot.now, "pane": child,
         }))
         .unwrap(),
@@ -771,7 +771,7 @@ fn viewed_child_focus_leaves_parent_unread_without_a_receipt() {
     row.unread = true;
     row.as_agent_mut().unwrap().sub_agents.push(
         serde_json::from_value(serde_json::json!({
-            "id": "child", "name": "explorer", "status": "running",
+            "id": "child", "kind": "claude", "name": "explorer", "status": "running",
             "last_activity": snapshot.now, "pane": child,
         }))
         .unwrap(),
