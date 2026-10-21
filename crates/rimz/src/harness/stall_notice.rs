@@ -250,6 +250,7 @@ mod tests {
         let mut sleeping = agents.clone();
         sleeping[1].status = AgentStatus::Idle;
         sleeping[1].pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),

@@ -15,6 +15,7 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
         None,
     );
     parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Inert,
         name: "calm-fox".into(),
         trigger: PendingWaitTrigger::Subagent {
             active_at: fixed_now(),
@@ -33,15 +34,24 @@ fn subagent_wait_uses_the_child_row_without_a_wait_count_or_entry() {
     );
     child.parent_agent_id = Some("parent".into());
     let snapshot = snapshot_with(vec![parent, child]);
-    let screen = snapshot_to_screen(&snapshot, 64, 30);
-    assert!(screen.contains("wakes when calm-fox reports"), "{screen}");
+    let screen = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: Some(0),
+            ..Default::default()
+        },
+        64,
+        30,
+    );
+    assert!(!screen.contains("wakes when calm-fox reports"), "{screen}");
     assert_eq!(screen.matches("child-result").count(), 1, "{screen}");
     assert!(!screen.contains('⧖'), "{screen}");
     assert!(!screen.contains("reporting"), "{screen}");
 }
 
 #[test]
-fn team_wait_draws_a_static_counted_stage_entry_and_sleeping_description() {
+fn team_wait_draws_a_static_counted_stage_entry_and_working_description() {
     let mut parent = agent(
         "parent",
         "claude",
@@ -51,6 +61,7 @@ fn team_wait_draws_a_static_counted_stage_entry_and_sleeping_description() {
         None,
     );
     parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
         name: "forge#feat-x".into(),
         trigger: PendingWaitTrigger::Team {
             stage: Some("Review".into()),
@@ -175,6 +186,7 @@ fn pending_waits_line_counts_armed_waits() {
     );
     parent.pending_waits = vec![
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "timer".to_owned(),
             trigger: PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
@@ -183,6 +195,7 @@ fn pending_waits_line_counts_armed_waits() {
             armed_at: Some(fixed_now()),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "make check".to_owned(),
@@ -244,7 +257,7 @@ fn pending_waits_line_counts_armed_waits() {
     assert!(
         !collapsed_text
             .iter()
-            .any(|line| line.contains("◷ timer · in") || line.contains("make check"))
+            .any(|line| line.contains("◷ timer · in") || line.contains("command · make"))
     );
     assert_snapshot(
         "pending_waits_line",
@@ -317,6 +330,7 @@ fn pending_waits_line_counts_armed_waits() {
     .unwrap()
     .pending_waits
     .push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "signal".to_owned(),
         trigger: PendingWaitTrigger::Signal {
             selector: "pr.merged".to_owned(),
@@ -376,6 +390,7 @@ fn wait_entries_show_trigger_program_and_command() {
     );
     parent.pending_waits = vec![
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "timer".to_owned(),
             trigger: PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
@@ -384,11 +399,13 @@ fn wait_entries_show_trigger_program_and_command() {
             armed_at: Some(fixed_now() - Duration::from_secs(1080)),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "pid".to_owned(),
             trigger: PendingWaitTrigger::Pid { pid: 16776 },
             armed_at: Some(fixed_now() - Duration::from_secs(180)),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "/usr/bin/cargo xtask gate --name foo_test".to_owned(),
@@ -396,6 +413,7 @@ fn wait_entries_show_trigger_program_and_command() {
             armed_at: Some(fixed_now() - Duration::from_secs(240)),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "signal".to_owned(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
@@ -528,6 +546,7 @@ fn wait_entry_without_armed_at_has_no_clock() {
         Some("working"),
     );
     parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "signal".to_owned(),
         trigger: PendingWaitTrigger::Signal {
             selector: "pr.merged".to_owned(),
@@ -574,6 +593,7 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
     );
     parent.pending_waits = vec![
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "check".to_owned(),
             trigger: PendingWaitTrigger::Check {
                 command: "/usr/bin/test -f ready".to_owned(),
@@ -581,6 +601,7 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
             armed_at: None,
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "negated".to_owned(),
             trigger: PendingWaitTrigger::Check {
                 command: "! systemctl is-active --quiet abyssal-verify-boros".to_owned(),
@@ -588,6 +609,7 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
             armed_at: None,
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "file".to_owned(),
             trigger: PendingWaitTrigger::File {
                 path: "app.log".into(),
@@ -596,6 +618,7 @@ fn check_and_file_waits_have_type_specific_detail_lines() {
             armed_at: None,
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "match".to_owned(),
             trigger: PendingWaitTrigger::File {
                 path: "app.log".into(),
@@ -631,6 +654,7 @@ fn long_wait_clocks_and_child_runtimes_stay_muted() {
     );
     let started = fixed_now() - Duration::from_secs(7200);
     parent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "timer".to_owned(),
         trigger: PendingWaitTrigger::Timer {
             due: fixed_now() + Duration::from_secs(7200),
@@ -682,6 +706,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
     );
     parent.pending_waits = vec![
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "timer".to_owned(),
             trigger: PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
@@ -690,6 +715,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
             armed_at: Some(fixed_now()),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "make check".to_owned(),
@@ -697,6 +723,7 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
             armed_at: Some(fixed_now()),
         },
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "signal".to_owned(),
             trigger: PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
@@ -729,7 +756,12 @@ fn background_shells_join_the_shell_jobs_and_the_count() {
 
     let collapsed = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
     assert!(collapsed.iter().any(|line| line.contains("⧖ waits (6)")));
-    assert!(!collapsed.iter().any(|line| line.contains("make check")));
+    assert!(
+        collapsed
+            .iter()
+            .any(|line| line.contains("wakes after make check"))
+    );
+    assert!(!collapsed.iter().any(|line| line.contains("command · make")));
 
     let lines = group_lines(&snapshot, &theme, 0);
     let rows = line_texts(&lines);

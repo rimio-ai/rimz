@@ -220,6 +220,7 @@ fn sleeping_card_describes_its_wait_using_the_snapshot_clock() {
         Some("finished work"),
     );
     sleeper.pending_waits.push(crate::agents::PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "wait-test".to_owned(),
         trigger: crate::agents::PendingWaitTrigger::Timer {
             due: fixed_now() + jiff::SignedDuration::from_mins(12),

@@ -11,6 +11,7 @@ fn sleeping() -> AgentState {
     agent.turn_started_at = Some(ts(0));
     agent.turn_ended_at = Some(ts(10));
     agent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
         name: "gate".into(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo xtask gate".into(),
@@ -239,6 +240,7 @@ fn keepalive_prompt_is_neutral_and_includes_each_wait() {
     agent.pending_waits.insert(
         0,
         PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "forge#feat-x".into(),
             trigger: serde_json::from_value(serde_json::json!({"kind": "team", "stage": "Review"}))
                 .unwrap(),
@@ -249,6 +251,7 @@ fn keepalive_prompt_is_neutral_and_includes_each_wait() {
         agent.pending_waits.insert(
             0,
             PendingWait {
+                class: crate::agents::PendingWaitClass::Sleeping,
                 name: name.into(),
                 trigger: serde_json::from_value(serde_json::json!({
                     "kind": "subagent", "active_at": ts(3280),
@@ -260,6 +263,7 @@ fn keepalive_prompt_is_neutral_and_includes_each_wait() {
         );
     }
     agent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "ci".into(),
         trigger: PendingWaitTrigger::Signal {
             selector: "pr.checks".into(),
@@ -267,6 +271,7 @@ fn keepalive_prompt_is_neutral_and_includes_each_wait() {
         armed_at: None,
     });
     agent.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "nap".into(),
         trigger: PendingWaitTrigger::Timer {
             due: ts(4240),

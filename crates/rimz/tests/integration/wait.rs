@@ -1869,7 +1869,7 @@ fn watch_checkin_delivers_once_without_consuming_or_killing_command() {
         let report: serde_json::Value =
             serde_json::from_str(&wait_ok(&env, &["agents", "show", "@planner", "--json"]))
                 .unwrap();
-        assert_eq!(report["agent"]["status"], "sleeping");
+        assert_eq!(report["agent"]["status"], "running");
         assert_eq!(
             report["agent"]["pending_waits"][0]["trigger"]["kind"],
             "command"

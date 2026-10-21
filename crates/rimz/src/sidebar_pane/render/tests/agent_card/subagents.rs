@@ -387,6 +387,7 @@ fn delegation_bands_keep_live_children_and_fold_older_ones() {
     .unwrap()
     .pending_waits
     .push(PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "deploy".to_owned(),
         trigger: PendingWaitTrigger::Signal {
             selector: "deploy.done".to_owned(),

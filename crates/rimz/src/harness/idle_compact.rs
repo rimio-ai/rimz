@@ -555,6 +555,7 @@ mod tests {
     fn predicate_skips_busy_parked_compacting_and_child_agents() {
         let mut sleeping = agent(AgentStatus::Idle, 6_000, 50_000);
         sleeping.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo xtask gate".to_owned(),

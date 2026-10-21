@@ -32,6 +32,7 @@ fn fleet(count: usize) -> SidebarSnapshot {
         parent.usage.context_window = Some(200_000);
         if index % 5 == 0 {
             parent.pending_waits.push(PendingWait {
+                class: crate::agents::PendingWaitClass::Sleeping,
                 name: "build".into(),
                 trigger: PendingWaitTrigger::Signal {
                     selector: "build.done".into(),

@@ -2639,6 +2639,7 @@ pub(super) fn apply_verb(row: &mut SidebarRow, verb: &Verb, now: jiff::Timestamp
         Verb::Waits { duration, what } => {
             card.status = AgentStatus::Sleeping;
             card.pending_waits.push(PendingWait {
+                class: crate::agents::PendingWaitClass::Sleeping,
                 name: what.clone().unwrap_or_else(|| "scenario wait".to_owned()),
                 trigger: PendingWaitTrigger::Timer {
                     due: now + *duration,

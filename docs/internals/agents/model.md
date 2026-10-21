@@ -42,8 +42,8 @@ The statuses rank by a base weight, most attention-hungry first ([`status_weight
 | `failed` | 560 | the last turn errored, stalled, or looped |
 | `paused` | 400 | stopped on a provider limit, a dollar cap, or a transient API error (display only) |
 | `success` | 300 | the last turn completed cleanly |
-| `running` | 200 | working a turn |
-| `sleeping` | 150 | at rest with a pending one-shot wait armed (display only) |
+| `running` | 200 | working a turn, an in-flight wait, or a background shell |
+| `sleeping` | 150 | at rest on a timer, signal, condition, or file watch, including through a child (display only) |
 | `idle` | 100 | wired in, nothing in flight |
 
 `waiting` and `failed` sit close enough that the time curve can lift an older failure above a fresh ask, and the lowest attention weight still starts above the highest calm one. A finished `success` outranks a working `running` row because a result deserves one look and work in progress does not. The time curve that multiplies the base weight is [sidebar.md](../sidebar/sidebar.md#attention-ranking-and-the-cap).
@@ -231,7 +231,7 @@ Hook ingestion dispatches envelopes through a static reactor table. Each reactor
 
 The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot` reports it unchanged in `snapshot.agents`. The displayed status is a projection over it, computed in two layers.
 
-[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap projection every read path shares, so `rimz pane list`, message delivery gates, and the sidebar agree about state no hook reported. It reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
+[`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap operational projection used by message delivery, reply waits, keepalive, and idle stop. The sidebar applies a separate display-rest projection for in-flight work. Effective status reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
 
 1. A `waiting` agent whose keyless ask was answered reads as `running` in the `reasoning` phase: `waiting_since` is present, `last_activity` is newer, and no interruption marker applies. Every later step sees it as `running`. A keyed ask or a wait without that evidence stays `waiting`. A local-session observation that still reports `waiting` stamps the ask no earlier than its last observed write, so that write cannot masquerade as an answer; a later activity heartbeat can still release it.
 2. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
@@ -263,7 +263,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 | 10 | a clean turn parked on background work | `success`, keeping the `parked` phase |
 | 11 | identical consecutive tool calls reach the attention threshold | `failed`, labelled `loop: <tool> ×<count>` |
 | 12 | a `running` row silent past the stall window | `paused` when the kind has a spent window, otherwise `failed` |
-| 13 | none of the above | `effective_status` |
+| 13 | none of the above | the rested lifecycle/context status |
 
 A `waiting` row that fails rung 1 first resolves by the shared waiting rule: with an interruption marker it becomes `idle` and continues down the ladder skipping rung 3; an answered keyless ask continues as `running` in the `reasoning` phase until a durable clear lands. The interruption check uses the row's child-folded activity clock, while proof of an answer uses the source agent's own activity. A wait without `waiting_since`, or without a source agent, holds at rung 1 unless interrupted. An answered row is eligible for either child rung after normalization, including a delegated park; a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
 
@@ -285,15 +285,15 @@ A projection to any status other than `running` drops the phase, except `success
 
 ### Sleeping
 
-[Hibernation](../harness/hibernate.md) attaches metadata without changing displayed status, ranking, unread episodes, notifications, or turn-completion waits. A frozen resting row with an armed wait still reads `sleeping`; frozen rows receive neither cache keepalive pings nor idle compaction.
+[Hibernation](../harness/hibernate.md) attaches metadata without changing displayed status, ranking, unread episodes, notifications, or turn-completion waits. A frozen resting row with a sleeping wait still reads `sleeping`; frozen rows receive neither cache keepalive pings nor idle compaction.
 
-After the ladder settles, an `idle` or `success` result with `pending_waits` displays `sleeping`; `running`, `waiting`, `failed`, and `paused` never do. Running-child delegation and delegated parks take precedence over sleep. A parked clean turn can therefore display `sleeping` while keeping its `parked` phase. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, PID waits, watched commands, polled checks, file watches, and one-shot signal deliveries count; standing subscriptions and recurring clocks do not, even when a recurring row has a deadline.
+After the ladder settles, `AgentState::display_rest_status` lifts an `idle` or `success` result to `running` for a Working-class wait or a non-empty folded `background_shells` list, otherwise to `sleeping` for a Sleeping-class wait. Inert waits contribute nothing. Attention statuses and live-child delegation keep precedence. This lift follows the stall rung, so a resting row working through a wait or shell does not stall on its own quiet clock; a foreground turn still does. A parked clean turn keeps its `parked` phase, but that phase alone proves no shell is running. Enrichment reads pending waits from instance-sourced, one-shot delivery rows in the loop catalog that match the workspace root and the target kind and session, without writing a store event. Timers, signals, conditions, and file watches are Sleeping; PIDs, watched commands, and polled checks are Working while their catalog row exists. The elder consumes lost watches after its watcher grace window. Standing subscriptions and recurring clocks do not count, even when a recurring row has a deadline.
 
 A pending catalog wait needs a parsed trigger. A self-wait timer's due time anchors at `wait_meta.armed_at`. A human one-shot `loop add --wait --at HH:MM` row has no arm timestamp, so its due time is the next occurrence after the snapshot clock in the configured timezone.
 
-Enrichment also reads the runs directory when launched fleet members or agent-launched team seats exist. It prepends a `Subagent` wait per unsettled launched child or peer run, then a `Team` wait per open team run belonging to the launcher. These waits remain enrich-only, not catalog rows or store events; the [keepalive rules](../harness/loops.md#prompt-cache-keepalive) define settlement and the resulting pings.
+Enrichment also reads the runs directory when launched fleet members or agent-launched team seats exist. It prepends a `Subagent` wait per unsettled launched child or peer run, then a `Team` wait per open team run belonging to the launcher. A Team wait is Working until the board is Done. A terminal Subagent wait is Inert; an open one follows its target's turn, wait chain, and shells. A silent running child contributes no work, and a cycle is Inert. These waits and their classes remain enrich-only, not catalog rows or store events; the [keepalive rules](../harness/loops.md#prompt-cache-keepalive) define settlement and the resulting pings. Operational `effective_status` still treats every pending one-shot wait as Sleeping so delivery and wake accounting are unchanged.
 
-`sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → idle`. The `Done` and `Any` delivery gates open for a sleeping agent, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits treat it as completed. Sleeping agents are not idle-compacted; eligible unfrozen sleepers receive prompt-cache keepalive pings instead. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
+`sleeping` is neither attention nor actionable, so `needs_a_look` is false: the unread episode and any configured success notification open when the wait cycle finishes at `success`, not on the intermediate rest, and an existing unread episode persists across sleep. The cockpit tally orders `waiting → failed → paused → success → running → sleeping → idle`. The `Done` and `Any` delivery gates open for an operationally sleeping agent, even when its card displays working, so a message can start a turn without consuming the armed wait; `Resume` does not open. Reply waits do not treat sleep as completed. Operationally sleeping agents are not idle-compacted; eligible unfrozen sleepers receive prompt-cache keepalive pings instead. `--when` still reads the raw lifecycle status and does not accept `sleeping`, and `agent.idle` remains a turn-boundary event.
 
 ## Activity clocks
 

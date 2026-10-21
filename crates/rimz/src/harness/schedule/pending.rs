@@ -1,10 +1,10 @@
 //! Read-only pending wakes: catalog deliveries and unsettled launched runs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::agents::{PendingWait, PendingWaitTrigger};
+use crate::agents::{AgentState, AgentStatus, PendingWait, PendingWaitClass, PendingWaitTrigger};
 use crate::config::{MachineConfig, WatchSpec};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::SidebarSnapshot;
@@ -75,7 +75,14 @@ fn pending_wait(name: &str, task: &LoadedTask, now: &jiff::Zoned) -> Option<Pend
             selector: selector.to_string(),
         },
     };
+    let class = match trigger {
+        PendingWaitTrigger::Pid { .. }
+        | PendingWaitTrigger::Command { .. }
+        | PendingWaitTrigger::Check { .. } => PendingWaitClass::Working,
+        _ => PendingWaitClass::Sleeping,
+    };
     Some(PendingWait {
+        class,
         name: name.to_owned(),
         trigger,
         armed_at,
@@ -162,23 +169,37 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
     };
     let peers = crate::address::addressable_agents(snapshot);
     let fleets = FleetRunIndex::new(&snapshot.agents, &runs);
-    let projected: Vec<Vec<PendingWait>> = (0..snapshot.agents.len())
+    let agent_indices: BTreeMap<_, _> = snapshot
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| ((&agent.kind, &agent.agent_id), index))
+        .collect();
+    let projected: Vec<Vec<(PendingWait, Option<usize>)>> = (0..snapshot.agents.len())
         .map(|index| {
             let mut waits: Vec<_> = fleets
                 .of(index)
                 .unsettled()
                 .into_iter()
-                .map(|(child, run)| PendingWait {
-                    name: crate::address::agent_handle(child, &peers, false),
-                    armed_at: Some(run.started_at),
-                    trigger: PendingWaitTrigger::Subagent {
-                        active_at: child.last_activity,
-                        deadline_at: run.deadline_at,
-                        settled: run
-                            .status
-                            .is_terminal()
-                            .then(|| run.status.label().to_owned()),
-                    },
+                .map(|(child, run)| {
+                    (
+                        PendingWait {
+                            class: PendingWaitClass::Inert,
+                            name: crate::address::agent_handle(child, &peers, false),
+                            armed_at: Some(run.started_at),
+                            trigger: PendingWaitTrigger::Subagent {
+                                active_at: child.last_activity,
+                                deadline_at: run.deadline_at,
+                                settled: run
+                                    .status
+                                    .is_terminal()
+                                    .then(|| run.status.label().to_owned()),
+                            },
+                        },
+                        (!run.status.is_terminal())
+                            .then(|| agent_indices.get(&(&child.kind, &child.agent_id)).copied())
+                            .flatten(),
+                    )
                 })
                 .collect();
             for run in fleets.owed_team_runs(index) {
@@ -188,13 +209,40 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
                 if !fleet::team_stage_pending(stage.as_deref()) {
                     continue;
                 }
-                waits.push(PendingWait {
-                    name: team.instance.clone(),
-                    armed_at: Some(run.started_at),
-                    trigger: PendingWaitTrigger::Team { stage },
-                });
+                waits.push((
+                    PendingWait {
+                        class: PendingWaitClass::Working,
+                        name: team.instance.clone(),
+                        armed_at: Some(run.started_at),
+                        trigger: PendingWaitTrigger::Team { stage },
+                    },
+                    None,
+                ));
             }
             waits
+        })
+        .collect();
+    let projected: Vec<Vec<PendingWait>> = projected
+        .iter()
+        .enumerate()
+        .map(|(index, waits)| {
+            waits
+                .iter()
+                .map(|(wait, target)| {
+                    let mut wait = wait.clone();
+                    if let Some(target) = target {
+                        wait.class = target_work_class(
+                            *target,
+                            &snapshot.agents,
+                            &projected,
+                            &mut BTreeSet::from([index]),
+                            snapshot.now,
+                            snapshot.attention.stalled_after_secs.get(),
+                        );
+                    }
+                    wait
+                })
+                .collect()
         })
         .collect();
     for (agent, mut waits) in Arc::make_mut(&mut snapshot.agents)
@@ -204,6 +252,52 @@ fn project_run_waits(snapshot: &mut SidebarSnapshot, paths: &crate::StatePaths) 
         waits.append(&mut agent.pending_waits);
         agent.pending_waits = waits;
     }
+}
+
+fn target_work_class(
+    index: usize,
+    agents: &[AgentState],
+    projected: &[Vec<(PendingWait, Option<usize>)>],
+    visiting: &mut BTreeSet<usize>,
+    now: jiff::Timestamp,
+    stalled_after_secs: u32,
+) -> PendingWaitClass {
+    if !visiting.insert(index) {
+        return PendingWaitClass::Inert;
+    }
+    let agent = &agents[index];
+    let status = agent.rowless_status(&Default::default()).0;
+    let class = if agent.silent_child_for(now, stalled_after_secs).is_some() {
+        PendingWaitClass::Inert
+    } else if status == AgentStatus::Running {
+        PendingWaitClass::Working
+    } else if matches!(
+        status,
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Sleeping
+    ) {
+        let mut class = if status == AgentStatus::Sleeping {
+            PendingWaitClass::Sleeping
+        } else {
+            PendingWaitClass::Inert
+        };
+        for (wait, target) in &projected[index] {
+            let next = target.map_or(wait.class, |target| {
+                target_work_class(target, agents, projected, visiting, now, stalled_after_secs)
+            });
+            if next == PendingWaitClass::Working {
+                class = next;
+                break;
+            }
+            if next == PendingWaitClass::Sleeping {
+                class = next;
+            }
+        }
+        class
+    } else {
+        PendingWaitClass::Inert
+    };
+    visiting.remove(&index);
+    class
 }
 
 /// Armed one-shot deliveries keyed by the session they wake. Turn-completion
@@ -257,455 +351,4 @@ impl SessionWaits {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::TaskEntry;
-
-    #[test]
-    fn runs_are_read_only_when_an_agent_launched_children_or_a_team() {
-        use crate::agents::{AgentState, AgentStatus, LaunchedBy};
-        let parent = AgentState::stub("claude", "parent", AgentStatus::Idle);
-        let mut peer = AgentState::stub("claude", "peer", AgentStatus::Idle);
-        assert!(!has_launched_work(&[parent.clone(), peer.clone()]));
-
-        let mut child = AgentState::stub("claude", "child", AgentStatus::Idle);
-        child.parent_agent_id = Some(parent.agent_id.clone());
-        child.parent_agent_kind = Some(parent.kind.clone());
-        child.launch_depth = Some(1);
-        assert!(has_launched_work(&[parent.clone(), child]));
-
-        peer.team = Some("forge".into());
-        assert!(
-            !has_launched_work(&[parent.clone(), peer.clone()]),
-            "a team seat nobody launched is not launched work"
-        );
-        peer.launched_by = Some(LaunchedBy {
-            kind: parent.kind.clone(),
-            agent_id: parent.agent_id.clone(),
-        });
-        assert!(has_launched_work(&[parent, peer]));
-    }
-
-    #[test]
-    fn run_waits_keep_launcher_member_and_turn_order() {
-        use crate::agents::{AgentState, AgentStatus, LaunchedBy, PermissionMode};
-        use crate::store::run::{self, PeerRun, ReportTo, RunRecord, RunStatus, TeamRun};
-        let dir = tempfile::tempdir().unwrap();
-        let paths = crate::StatePaths::under(
-            crate::ids::WorkspaceId::from_project_root(dir.path()),
-            dir.path(),
-        )
-        .unwrap();
-        let now = jiff::Timestamp::from_second(4_000).unwrap();
-        let mut first = AgentState::stub("claude", "first", AgentStatus::Idle);
-        first.launch_id = Some("first-launch".into());
-        let second = AgentState::stub("codex", "second", AgentStatus::Idle);
-        let mut children: Vec<_> = ["plain", "peer", "other", "leader"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, name)| {
-                let launcher = if index >= 2 { &second } else { &first };
-                let mut child = AgentState::stub(launcher.kind.as_str(), name, AgentStatus::Idle);
-                child.name = Some(name.into());
-                child.registered_at = Some(jiff::Timestamp::from_second(index as i64).unwrap());
-                child.launched_by = Some(LaunchedBy {
-                    kind: launcher.kind.clone(),
-                    agent_id: launcher
-                        .launch_id
-                        .as_ref()
-                        .unwrap_or(&launcher.agent_id)
-                        .clone(),
-                });
-                child
-            })
-            .collect();
-        children[1].launch_id = Some("peer-launch".into());
-        children[3].launch_id = Some("leader-launch".into());
-        children[3].team = Some("forge".into());
-        let make_run = |child: &AgentState, started| {
-            let mut record = RunRecord::new(
-                paths.workspace_id.clone(),
-                child.kind.clone(),
-                PermissionMode::Auto,
-                "task".into(),
-                dir.path().into(),
-            );
-            record.agent_id = Some(child.agent_id.clone());
-            record.started_at = jiff::Timestamp::from_second(started).unwrap();
-            record.updated_at = record.started_at;
-            record
-        };
-        let mut runs = vec![
-            make_run(&children[0], 1),
-            make_run(&children[0], 2),
-            make_run(&children[1], 3),
-            make_run(&children[1], 4),
-            make_run(&children[2], 5),
-            make_run(&children[3], 6),
-        ];
-        runs[0].status = RunStatus::Completed;
-        runs[1].deadline_at = Some(now);
-        runs[2].peer = Some(PeerRun {
-            launch_id: "peer-launch".into(),
-            opened_by: Vec::new(),
-        });
-        runs[2].agent_id = None;
-        runs[3].peer = runs[2].peer.clone();
-        runs[3].status = RunStatus::Completed;
-        runs[4].agent_id = None;
-        runs[4].agent_name = children[2].name.clone();
-        runs[5].team = Some(TeamRun {
-            launch_id: "leader-launch".into(),
-            instance: "forge#work".into(),
-        });
-        let mut detached = make_run(&children[1], 7);
-        detached.peer = runs[2].peer.clone();
-        detached.report_to = ReportTo::Nobody;
-        runs.push(detached);
-        for run in &runs {
-            run::write(&paths.runs_dir, run).unwrap();
-        }
-        let mut agents = vec![first, second];
-        agents.extend(children);
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
-        project_run_waits(&mut snapshot, &paths);
-        let first = &snapshot.agents[0].pending_waits;
-        assert_eq!(
-            first
-                .iter()
-                .map(|wait| wait.name.as_str())
-                .collect::<Vec<_>>(),
-            ["@plain", "@peer", "@peer"]
-        );
-        assert_eq!(
-            first
-                .iter()
-                .map(|wait| wait.armed_at.unwrap().as_second())
-                .collect::<Vec<_>>(),
-            [2, 4, 3]
-        );
-        let second = &snapshot.agents[1].pending_waits;
-        assert_eq!(
-            second
-                .iter()
-                .map(|wait| wait.name.as_str())
-                .collect::<Vec<_>>(),
-            ["@other", "forge#work"]
-        );
-        assert!(matches!(second[1].trigger, PendingWaitTrigger::Team { .. }));
-        assert!(
-            snapshot.agents[2..]
-                .iter()
-                .all(|agent| agent.pending_waits.is_empty())
-        );
-    }
-
-    #[test]
-    fn launched_run_waits_precede_catalog_and_disappear_after_settlement() {
-        use crate::agents::{AgentState, AgentStatus, PermissionMode};
-        use crate::store::run::{self, RunRecord, RunStatus, TeamRun};
-        let dir = tempfile::tempdir().unwrap();
-        let paths = crate::StatePaths::under(
-            crate::ids::WorkspaceId::from_project_root(dir.path()),
-            dir.path(),
-        )
-        .unwrap();
-        let now = jiff::Timestamp::from_second(4_000).unwrap();
-        let parent = AgentState::stub("claude", "parent", AgentStatus::Idle);
-        let children = ["calm-fox", "bright-owl"].map(|name| {
-            let mut child = AgentState::stub("claude", name, AgentStatus::Idle);
-            child.name = Some(name.into());
-            child.parent_agent_id = Some(parent.agent_id.clone());
-            child.parent_agent_kind = Some(parent.kind.clone());
-            child.launch_depth = Some(1);
-            child.last_activity = now;
-            child
-        });
-        let mut leader = AgentState::stub("claude", "leader", AgentStatus::Idle);
-        leader.team = Some("forge".into());
-        leader.launch_id = Some("leader-launch".into());
-        leader.launched_by = Some(crate::agents::LaunchedBy {
-            kind: parent.kind.clone(),
-            agent_id: parent.agent_id.clone(),
-        });
-        let mut runs: Vec<_> = children
-            .iter()
-            .chain([&leader])
-            .map(|child| {
-                let mut run = RunRecord::new(
-                    paths.workspace_id.clone(),
-                    child.kind.clone(),
-                    PermissionMode::Auto,
-                    "work".into(),
-                    dir.path().into(),
-                );
-                run.agent_id = Some(child.agent_id.clone());
-                run.started_at = jiff::Timestamp::UNIX_EPOCH;
-                run.deadline_at = Some(now);
-                run
-            })
-            .collect();
-        runs[1].status = RunStatus::Completed;
-        runs[2].team = Some(TeamRun {
-            launch_id: "leader-launch".into(),
-            instance: "forge#feat-x".into(),
-        });
-        for run in &runs {
-            run::write(&paths.runs_dir, run).unwrap();
-        }
-        let agents = [vec![parent], children.to_vec(), vec![leader]].concat();
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), agents, now);
-        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
-        assert_eq!(
-            snapshot.agents[0].pending_waits.len(),
-            3,
-            "two fleet rows and one team run"
-        );
-        assert_eq!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
-        for wait in &snapshot.agents[0].pending_waits[..2] {
-            assert_eq!(wait.armed_at, Some(jiff::Timestamp::UNIX_EPOCH));
-            let PendingWaitTrigger::Subagent {
-                active_at,
-                deadline_at,
-                settled,
-            } = &wait.trigger
-            else {
-                panic!("subagent comes before team")
-            };
-            assert_eq!(*active_at, now);
-            assert_eq!(*deadline_at, Some(now));
-            assert_eq!(
-                settled.as_deref(),
-                (wait.name == "@bright-owl").then_some("completed")
-            );
-            assert!(["@calm-fox", "@bright-owl"].contains(&wait.name.as_str()));
-        }
-        assert_eq!(
-            snapshot.agents[0].pending_waits[2].trigger,
-            PendingWaitTrigger::Team { stage: None }
-        );
-        std::fs::write(
-            dir.path().join("blackboard.md"),
-            "Stage: Review (@reviewer)\n",
-        )
-        .unwrap();
-        let catalog_wait = PendingWait {
-            name: "ci".into(),
-            trigger: PendingWaitTrigger::Signal {
-                selector: "pr.checks".into(),
-            },
-            armed_at: None,
-        };
-        Arc::make_mut(&mut snapshot.agents)[0].pending_waits = vec![catalog_wait.clone()];
-        project_run_waits(&mut snapshot, &paths);
-        assert_eq!(
-            snapshot.agents[0].pending_waits[2].trigger,
-            PendingWaitTrigger::Team {
-                stage: Some("Review".into())
-            }
-        );
-        assert_eq!(snapshot.agents[0].pending_waits[3], catalog_wait);
-        std::fs::write(dir.path().join("blackboard.md"), "Stage: Done\n").unwrap();
-        Arc::make_mut(&mut snapshot.agents)[0].pending_waits.clear();
-        project_run_waits(&mut snapshot, &paths);
-        assert!(
-            snapshot.agents[0]
-                .pending_waits
-                .iter()
-                .all(|wait| !matches!(wait.trigger, PendingWaitTrigger::Team { .. })),
-            "a board at Done projects no team wait"
-        );
-        std::fs::remove_file(dir.path().join("blackboard.md")).unwrap();
-        for run in &mut runs {
-            run.report_to = run::ReportTo::Nobody;
-            run::write(&paths.runs_dir, run).unwrap();
-        }
-        Arc::make_mut(&mut snapshot.agents)[0].pending_waits.clear();
-        project_run_waits(&mut snapshot, &paths);
-        assert_eq!(
-            snapshot.agents[0].pending_waits,
-            Vec::new(),
-            "detached launches leave their launcher waiting on nothing"
-        );
-        for run in &mut runs {
-            run.report_to = run::ReportTo::Launcher;
-        }
-        for (index, run) in runs.iter_mut().enumerate() {
-            run.status = RunStatus::Completed;
-            if index == 0 {
-                run.joined_at = Some(now);
-            } else {
-                run.report_message_id = Some(crate::MessageId::new());
-            }
-            run::write(&paths.runs_dir, run).unwrap();
-        }
-        project_pending_waits(&mut snapshot, &paths, None, &MachineConfig::default());
-        assert!(snapshot.agents[0].pending_waits.is_empty());
-        assert_ne!(snapshot.agents[0].effective_status(), AgentStatus::Sleeping);
-    }
-
-    #[test]
-    fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
-        let deadline = "2026-06-01T12:00:00Z".parse().unwrap();
-        let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
-        for entry in [
-            TaskEntry {
-                signal: Some("pr.merged".into()),
-                ..TaskEntry::default()
-            },
-            TaskEntry {
-                watch: Some(crate::config::WatchSpec::Command(String::new())),
-                ..TaskEntry::default()
-            },
-            TaskEntry {
-                every: Some("1h".into()),
-                deadline: Some(deadline),
-                ..TaskEntry::default()
-            },
-        ] {
-            let task = LoadedTask::new("wait", entry, TaskSource::Instance);
-            assert!(pending_wait("wait", &task, &now).is_none());
-        }
-        let task = LoadedTask::new(
-            "signal",
-            TaskEntry {
-                signal: Some("pr.merged".into()),
-                once: Some(true),
-                ..TaskEntry::default()
-            },
-            TaskSource::Instance,
-        );
-        assert_eq!(
-            pending_wait("signal", &task, &now).unwrap().trigger,
-            PendingWaitTrigger::Signal {
-                selector: "pr.merged".into(),
-            }
-        );
-    }
-
-    #[test]
-    fn pending_waits_preserve_pid_and_delay() {
-        let now = "2026-06-01T10:00:00Z[UTC]".parse().unwrap();
-        let armed_at = "2026-06-01T09:42:00Z".parse().unwrap();
-        let meta = crate::config::WaitMeta {
-            armed_at,
-            delay: Some("30m".into()),
-            reader: None,
-        };
-        let timer = LoadedTask::new(
-            "timer",
-            TaskEntry {
-                at: Some("10:12".into()),
-                wait_meta: Some(meta.clone()),
-                ..TaskEntry::default()
-            },
-            TaskSource::Instance,
-        );
-        let wait = pending_wait("timer", &timer, &now).unwrap();
-        assert_eq!(wait.armed_at, Some(armed_at));
-        assert_eq!(
-            wait.trigger,
-            PendingWaitTrigger::Timer {
-                due: "2026-06-01T10:12:00Z".parse().unwrap(),
-                delay: Some("30m".into()),
-            }
-        );
-        for (spec, expected) in [
-            (
-                WatchSpec::Command("cargo test".into()),
-                PendingWaitTrigger::Command {
-                    command: "cargo test".into(),
-                },
-            ),
-            (
-                WatchSpec::Pid { pid: 16776 },
-                PendingWaitTrigger::Pid { pid: 16776 },
-            ),
-            (
-                WatchSpec::Check {
-                    check: "nc -z localhost 3000".into(),
-                    every: "1s".into(),
-                    on: crate::config::CheckOn::Success,
-                },
-                PendingWaitTrigger::Check {
-                    command: "nc -z localhost 3000".into(),
-                },
-            ),
-        ] {
-            let task = LoadedTask::new(
-                "watch",
-                TaskEntry {
-                    watch: Some(spec),
-                    wait_meta: Some(crate::config::WaitMeta {
-                        delay: None,
-                        ..meta.clone()
-                    }),
-                    ..TaskEntry::default()
-                },
-                TaskSource::Instance,
-            );
-            assert_eq!(
-                pending_wait("watch", &task, &now).unwrap().trigger,
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn clock_due_uses_arm_time_or_the_snapshot_clock() {
-        let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
-        for (armed_at, expected) in [
-            (Some("2026-06-01T10:00:00Z"), "2026-06-01T12:00:00Z"),
-            (None, "2026-06-02T12:00:00Z"),
-        ] {
-            let task = LoadedTask::new(
-                "timer",
-                TaskEntry {
-                    at: Some("12:00".into()),
-                    wait_meta: armed_at.map(|at| crate::config::WaitMeta {
-                        armed_at: at.parse().unwrap(),
-                        delay: None,
-                        reader: None,
-                    }),
-                    ..TaskEntry::default()
-                },
-                TaskSource::Instance,
-            );
-            assert_eq!(
-                pending_wait("timer", &task, &now).unwrap().trigger,
-                PendingWaitTrigger::Timer {
-                    due: expected.parse().unwrap(),
-                    delay: None,
-                },
-            );
-        }
-    }
-
-    #[test]
-    fn fire_at_due_is_its_instant_even_when_armed_at_it() {
-        let now = "2026-06-02T10:00:00Z[UTC]".parse().unwrap();
-        let at: jiff::Timestamp = "2026-06-02T10:00:00Z".parse().unwrap();
-        let task = LoadedTask::new(
-            "reset",
-            TaskEntry {
-                fire_at: Some(at),
-                wait_meta: Some(crate::config::WaitMeta {
-                    armed_at: at,
-                    delay: None,
-                    reader: None,
-                }),
-                ..TaskEntry::default()
-            },
-            TaskSource::Instance,
-        );
-        assert_eq!(
-            pending_wait("reset", &task, &now).unwrap().trigger,
-            PendingWaitTrigger::Timer {
-                due: at,
-                delay: None,
-            },
-        );
-    }
-}
+mod tests;

@@ -111,7 +111,7 @@ Each engaged agent is a small stacked card, three lines at rest plus a shared li
 
 The identity line leads with the state glyph, animated while the agent works, then the agent's handle (its team role, name, or profile, so a team reads `planner` / `coder` / `reviewer`), the model, its reasoning setting (an effort level such as `xhigh`, or `thinking`), and the size of its context window. The session's dollar cost pins right once it rounds to a cent, counts up live, and already includes what the children it launched through `rimz subagents` spent.
 
-The second line says what the session is on: its name or task, falling back to its first prompt so the card stays stable between turns, with a provider-supplied title taking over as soon as one is available. While waiting for an answer, it leads with the question instead when one is available, wrapping over at most two lines so you can read more before switching panes. When a turn fails or pauses on a provider error, this line quotes the reason in italics (`API Error: Overloaded`), so the card says why without a jump. A sleeping card instead names its first armed wait when no error reason is present.
+The second line says what the session is on: its name or task, falling back to its first prompt so the card stays stable between turns, with a provider-supplied title taking over as soon as one is available. While waiting for an answer, it leads with the question instead when one is available, wrapping over at most two lines so you can read more before switching panes. When a turn fails or pauses on a provider error, this line quotes the reason in italics (`API Error: Overloaded`), so the card says why without a jump. A working-through-wait card names its first working wait; a sleeping card names its first sleeping wait when no error reason is present.
 
 The context meter is how full the agent's context window is, as a bar and a percentage. The fill also shows where the window went, painting cache reads, cache writes, and fresh input as distinct runs, and its tone shifts from calm toward red as the window fills. An expired prompt cache instead wears one solid greyed-red run: waking that agent re-reads the whole window at full price. The fraction and percentage stay the same, and the `▣` glyph takes the same expired-cache tone. When a compaction finishes, the meter drops to the size the agent reports for its compacted context, or to an empty 0% when the agent reports none, and fills again from the agent's next model call.
 
@@ -148,12 +148,12 @@ Every card wears one state, and seven cover the life of a session:
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
 | `○` | idle | alive, nothing in flight | no |
-| `⢿` | running | working a turn | no |
+| `⢿` | running | working a turn, waiting on in-flight work, or running a background shell | no |
 | `?` | waiting | stopped mid-task for your answer: a permission, a plan approval, a question | **yes** |
 | `!` | failed | the turn errored, died on a provider API error, or tripped one of RimZ's safety nets | **yes** |
 | `⏸` | paused | stopped mid-turn on a provider rate limit or overload; the description quotes the reason | when it recovers |
 | `✓` | done | the turn finished cleanly and holds a result | a look, when convenient |
-| `☾` | sleeping | resting until an armed one-shot wait fires; the description names the wait | nothing yet |
+| `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child; the description names the wait | nothing yet |
 
 The full glyph vocabulary, including the transient heads that ride over a running card (thinking before the first file edit, compacting, waiting on subagents, parked on background work), is the [interface legend](../interface/sidebar.md#reading-the-glyphs).
 
@@ -178,7 +178,7 @@ RimZ also derives states rather than waiting for an agent to report one.
 
 **Failed** also covers two safety nets RimZ raises without a report: a running agent silent past the stall window (30 minutes by default), including any native or [launched child](./subagents.md#deadlines-stopping-and-cleanup), and a running agent that repeats one tool call with identical arguments 20 times, whose description then reads `loop: <tool> ×<count>` until a differing call clears the run. The same stall window covers a launched child given a task whose first turn has not started. A parent quietly waiting on its subagents is exempt from the stall check while a child is still displayed as working. A stalled native child also lifts the parent card's attention because it has no pane of its own. Either net can fire on an agent that is still executing, which is deliberate: silence that long, or a twentieth identical call, usually means something needs a look.
 
-**Sleeping** distinguishes a finished turn from finished work. After an agent arms a [one-shot wait](./loops.md#wake-a-running-agent) and rests, its card wears a static cool-toned moon and a description such as `wakes in 12m` or `wakes after cargo test`. Sleeping cards rank below running and above idle; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
+**Sleeping** means a resting agent awaits a timer, signal, condition, or file change, including through a child. Its card wears a static cool-toned moon and a description such as `wakes in 12m`. A [one-shot wait](./loops.md#wake-a-running-agent) for a PID, command, check, unfinished team, or working child instead keeps the card working, as does a listed background shell. A child resting on another wait follows that chain. A settled child's report does not keep work in flight. Sleeping cards rank below running and above idle; the `☾` bucket on the make-up line counts sleeping units, not individual teammates.
 
 Working, waiting, failed, paused, and waiting on live subagents all take precedence over sleep, and a standing subscription does not make an agent sleep. You can message a sleeping agent now without canceling its future wait. Its last result can still be unread, but sleeping itself needs no answer and sends no notification.
 

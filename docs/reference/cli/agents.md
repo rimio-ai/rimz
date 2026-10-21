@@ -609,17 +609,17 @@ Cards group under lane headers. `⑂` marks a worktree-backed lane, `#` a plain 
 | `TOKENS` | Tokens currently occupying the context window, not cumulative spend. Integer counts use `k`, `M`, and `B`. |
 | `SEEN` | Time since the agent was last seen active. |
 
-Under each row, the sidebar's description rule chooses the error reason, first armed wait while sleeping, or activity, with `-` when none is known. It wraps to at most three indented lines, ending in an ellipsis when cut. A running parent whose own turn is idle adds `· on N subagents (@x, @y)` for its current running children.
+Under each row, the sidebar's description rule chooses the error reason, first working wait while working through a wait or first sleeping wait while sleeping, or activity, with `-` when none is known. It wraps to at most three indented lines, ending in an ellipsis when cut. A running parent whose own turn is idle adds `· on N subagents (@x, @y)` for its current running children.
 
 | Status | Meaning |
 | --- | --- |
-| `running` | A turn is in progress. |
+| `running` | A turn, in-flight wait (PID, command, check, unfinished team, or working child), or listed background shell is in progress. |
 | `waiting` | The agent is waiting on you: a question, a permission prompt, or a plan to approve. |
 | `idle` | At rest, including after an interrupted turn. |
 | `success` | The last turn completed. |
 | `failed` | The last turn failed, or a live launched child's provider park can no longer resume. |
 | `paused` | Parked by a provider limit, overload, or budget cap, or by a live launched child with a provider park. |
-| `sleeping` | At rest with a one-shot delivery armed for its session in this workspace: a timer, PID, watched command, polled check, file watch, or a one-shot signal. Standing subscriptions do not count, and running, waiting, failed, paused, or a live child take precedence. |
+| `sleeping` | At rest on a timer, signal, condition, or file watch, including through a child's wait. Standing subscriptions do not count, and running, waiting, failed, or paused take precedence. |
 
 The status is derived for display. [`rimz message --when`](./message.md) matches the raw lifecycle statuses (`running`, `waiting`, `idle`, `success`, `failed`) and never `paused` or `sleeping`. Hibernation does not change the displayed status. `show` adds the turn phase and, whenever a hibernation record exists, `hibernating since <t>, step <k> of <n>, <bytes> reclaimed` (cumulative bytes for this frozen stretch).
 
@@ -631,7 +631,7 @@ The status is derived for display. [`rimz message --when`](./message.md) matches
 | `login` | The agent's recorded named account as `kind@name`, such as `claude@work`; omitted for the default account. Switching the room default does not change this field for an existing agent. |
 | `me` | `true` on at most one entry: the caller. RimZ matches `TMUX_PANE` or `ZELLIJ_PANE_ID` to the pane binding first, then the `RIMZ_AGENT_KIND`, `RIMZ_AGENT_NAME`, `RIMZ_AGENT_PROFILE`, and `RIMZ_AGENT_ROLE` launch identity. Outside an agent pane every entry is `false`. |
 | `status`, `phase`, `turn_error`, `ask`, `unread`, `attention_score`, `description` | Projected activity. `turn_error` describes the agent's own turn; it remains `null` when only a child's park pauses or fails the parent card. |
-| `pending_waits` | Armed one-shot deliveries, each with its name, trigger, and optional arm timestamp. Trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, and signals. Timers come first by due time, then watches and signals; names break ties. |
+| `pending_waits` | Pending wakes, each with its name, trigger, optional arm timestamp, and `class`: `working`, `sleeping`, or `inert` (a settled report or no in-flight target). Launched child and team waits precede catalog waits. Catalog trigger kinds include `check` with `command` and `file` with `path` and `grep`, alongside timers, PIDs, commands, signals, and conditions. Catalog timers come first by due time, then watches and signals; names break ties. |
 | `idle_stop` | The pending [`stop --when-idle`](#stop) request: `after_secs`, `requested_at`, `requested_by` (the asking agent's handle, omitted from a user shell), and `due_at` while the agent is resting and its clock runs. Omitted when none is pending. |
 | `hibernation` | `frozen_at`, `step`, and cumulative `reclaimed_bytes`; present whenever a hibernation record exists, regardless of displayed status. |
 | `launch_warnings` | Warnings the launch wrapper printed for the current launch, in print order; empty after a clean launch. |
@@ -863,7 +863,7 @@ Once the new tab opens, molt requests that the old session stop after **5m of re
 
 Immediately after a prompted peer launch, `rimz agents wait @peer` resolves the pending launch run even before provider registration. After a later launcher message, it retains the ordinary turn wait until a prompt-correlated turn-start hook enrolls the new run. Use `rimz message --wait @peer '<text>'` for a message-correlated reply wait. A turn-start hook without prompt text acknowledges delivery but opens no reportable turn.
 
-`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. A sleeping agent (one with an armed one-shot wait) and a freshly registered agent that never opened a turn keep the wait blocked. Hibernation does not change turn completion. A reference is a run id, a pet name, or any address.
+`rimz agents wait <REF>...` blocks until supervised runs finish or interactive agents finish a turn: `idle`, `success`, or `failed` after a turn has opened. An agent with an armed one-shot wait keeps the wait blocked, even when its card displays working, as does a freshly registered agent that never opened a turn. Hibernation does not change turn completion. A reference is a run id, a pet name, or any address.
 
 With one reference, `wait` prints the final assistant message: a run's answer (every turn of a [parked run](./subagents.md#launch-one-child) in order), or the message that closed an interactive agent's turn. When a completed turn left no message, stderr says so and stdout stays empty. `--json` prints the same result map described below, with one entry keyed by the reference as typed. For the full run record, use `rimz agents show <ref> --json` and read `run`. `--stream` tails assistant text as it lands, `--stream --json` emits NDJSON run events, and `--from-start` replays the transcript from the top before tailing.
 

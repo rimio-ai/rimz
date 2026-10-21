@@ -11,6 +11,7 @@ use crate::agents::lifecycle::TurnPhase;
 use crate::agents::state::select_activity_description;
 use crate::agents::{
     AgentContext, AgentTokenUsage, AgentUsageSummary, BackgroundShell, PendingWait,
+    PendingWaitClass,
 };
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, compose_channel};
@@ -597,7 +598,7 @@ impl AgentCard {
         self.ask_detail.as_deref()
     }
 
-    /// Error reason, sleeping wait, activity, or no description, at the view's clock.
+    /// Error reason, a resting turn's wait, activity, or no description, at the view's clock.
     pub fn description(&self, now: Timestamp) -> CardDescription {
         if let Some(label) = self
             .turn_error_label
@@ -606,8 +607,17 @@ impl AgentCard {
         {
             return CardDescription::Error(label);
         }
-        if self.status == AgentStatus::Sleeping
-            && let Some(wait) = self.pending_waits.first()
+        let wait_class = match self.status {
+            AgentStatus::Running if matches!(self.phase, TurnPhase::Idle | TurnPhase::Parked) => {
+                Some(PendingWaitClass::Working)
+            }
+            AgentStatus::Sleeping => Some(PendingWaitClass::Sleeping),
+            _ => None,
+        };
+        if let Some(wait) = self
+            .pending_waits
+            .iter()
+            .find(|wait| Some(wait.class) == wait_class)
         {
             return CardDescription::Wait(wait.label(now));
         }

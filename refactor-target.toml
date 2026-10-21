@@ -234,7 +234,9 @@ upward-dependencies = ["address"]
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
 # LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
 # WaitingResolution and its resolver share answered-ask proof with the sidebar (+2).
-surface-budget = 1106
+# PendingWaitClass (including its re-export), rested_status and display_rest_status replace sleeping_over (+3 net).
+# InstallationCapability::hook_trust_choice adds main's provider hook-consent choice (+1).
+surface-budget = 1109
 
 [[verdict]]
 kind = "item"
@@ -245,6 +247,21 @@ reason = "Agent and sidebar projections share held, answered, and interrupted wa
 kind = "item"
 key = "agents::state::WaitingResolution::resolve"
 reason = "The sidebar supplies its child-folded interruption clock while answer proof uses the source agent's own activity."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::PendingWaitClass"
+reason = "Pending wakes carry one shared display-work class across harness, snapshot, and CLI projections."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::AgentState::display_rest_status"
+reason = "Rows and child summaries lift resting display status without changing operational delivery gates."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::AgentState::rested_status"
+reason = "The sidebar runs stall checks before adding display-only wait and shell work to the rested status."
 
 [[verdict]]
 kind = "item"

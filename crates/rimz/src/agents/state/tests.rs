@@ -34,6 +34,7 @@ fn silent_child_excludes_rested_unprompted_and_nonworking_children() {
             5 => child.status = AgentStatus::Waiting,
             6 => child.status = AgentStatus::Paused,
             7 => child.pending_waits.push(PendingWait {
+                class: crate::agents::PendingWaitClass::Working,
                 name: "wait-command".to_owned(),
                 trigger: PendingWaitTrigger::Command {
                     command: "cargo test".to_owned(),
@@ -176,6 +177,7 @@ fn hibernation_preserves_real_status_and_armed_waits() {
         });
         assert_eq!(agent.effective_status(), status);
         agent.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "watch".into(),
             trigger: PendingWaitTrigger::Command {
                 command: "true".into(),
@@ -406,6 +408,7 @@ fn agent_status_labels_are_stable() {
 #[test]
 fn effective_status_projects_pending_wait_to_sleeping() {
     let wait = PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
         name: "watch".into(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".into(),
@@ -472,6 +475,7 @@ fn turn_completion_requires_a_rested_turn_without_armed_waits() {
         TurnCompletion::Completed
     );
     sleeping.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
         name: "timer".into(),
         trigger: PendingWaitTrigger::Command {
             command: "sleep 60".into(),
@@ -496,6 +500,7 @@ fn team_wait_wire_sleeps_until_the_named_instance_reaches_done() {
         assert_eq!(trigger.headline(now), headline);
         assert_eq!(trigger.detail(), None);
         let wait = PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "forge#feat-x".into(),
             trigger,
             armed_at: Some(now),
@@ -666,6 +671,7 @@ fn pending_wait_labels_and_wire_preserve_trigger_details() {
             );
         }
         let wait = PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "calm-fox".into(),
             trigger,
             armed_at: Some(now),
