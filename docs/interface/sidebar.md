@@ -63,8 +63,8 @@ A running or waiting card with async questions adds a yellow `?` line below its 
 | `!` | failed | the turn errored, died on a provider API error, went silent past the stall window (also a launched child whose first turn never started), or repeated one tool call 20 times | yes |
 | `⏸︎` | paused | stopped mid-turn on a provider rate limit, overload, or dropped connection, or one of the children it launched is; the description quotes the reason in italics while the provider recovers; a pause that can no longer resume becomes `!` | after recovery: prompt the parked agent to continue, or let [auto-continue](../guide/loops.md#auto-continue) do it (off by default) |
 | `✓` | done | the turn finished cleanly | a look |
-| `⢿` | working | running a turn; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
-| `☾` | sleeping | resting until an armed one-shot wait fires | no |
+| `⢿` | working | running a turn, waiting on in-flight work, or running a background shell; the cell animates through braille frames (`⣾`, `⣽`, ...), and any of them reads as working | no |
+| `☾` | sleeping | resting on a timer, signal, condition, or file watch, including through a child | no |
 | `○` | idle | alive, nothing in flight | no |
 
 `?` is always yellow, `!` always red, and `⏸︎` always blue, whatever the card's age. What each status means in an agent's life is [the agent lifecycle](../guide/sidebar.md#the-agent-lifecycle). The mux tab bar reuses `!`, `?`, `⏸︎`, `⢿`, and `✓` as a static suffix on the tab name ([the sidebar guide](../guide/sidebar.md#glance-jump-answer)). A suffix always draws in these compact Unicode shapes, even when the column runs a configured [glyph set](../guide/theme.md#glyphs). A tab RimZ named after its agents goes back to the shell's name once they all exit; a tab you named yourself keeps its name.
@@ -297,7 +297,7 @@ The selected card includes its stats line:
 | line | shows |
 |------|-------|
 | identity | The status glyph, then the agent's handle in its provider's brand color: its team role, explicit name, or profile, else the agent kind. Then, dimmer, the model, the agent's reasoning setting as its provider names it (an effort level such as `high` or `xhigh`, or `thinking`), and the context window size. The session's cost sits on the right once it rounds to at least `$0.01`, and counts up like the cockpit spend. |
-| description | The open ask while waiting for input, when available, led by its first question and wrapped over at most two lines. Otherwise the displayed error or pause reason in italics, else the first armed wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
+| description | The open ask while waiting for input, when available, led by its first question and wrapped over at most two lines. Otherwise the displayed error or pause reason in italics, else the first working wait's label while working through a wait or first sleeping wait's label while sleeping, else what the session is on: the first of the session name, the provider's thread preview, the launch description, the agent's task, the session's first prompt, and its latest prompt. Codex's automatic title and Claude's `--name` or `/rename` count as the session name; a name that only repeats the start of the prompt is skipped. |
 | context meter | The percent of the context window in use, as a bar. The fill shows where the window went: a run of cache reads first, then a segment each for cache writes and fresh input, each starting with `╺`. The bar runs from green toward red as the window fills, at the stops set in [`[theme.display.context_meter]`](../guide/theme.md#display). Once the prompt cache expires, the fill becomes one solid greyed-red run with no segments or caps; the measured fraction and percent stay the same, and `▣` wears the same expired-cache tone. After a compaction completes, the meter shows the provider's post-compaction figure where it reports one and an empty `0%` otherwise, until the next model call reports usage. |
 | stats line | On a selected or held engaged card, or under `expanded` density: `▤` tokens in the window, the latest API call's cache-read, cache-write, and fresh input added together, which is the amount the meter's percent measures. Then the same split in numbers, the session cache hit, `↻ N` compactions, and `⟲ N` repeated tool calls. From 46 columns the age is on the meter; below that it pins right on this line. |
 | cache line | Wherever the stats line shows, after stats: a countdown in the last ten minutes before expiry, then the expired-cache notice and available rebuild estimate. |
@@ -422,7 +422,7 @@ When a turn dies on a provider API error, the description shows the provider's e
 
 Two checks raise `!` without a report from the agent. A working agent that stays silent for 30 minutes becomes `!`, or `⏸︎` when its provider budget window is spent. Any open native or launched child can also become `!`, labelled `silent Nm`; sleep, pause, and displayed errors exclude it from this check. A parent waiting on a child still displayed as working is exempt. A stalled child no longer holds its turn, and a native child's failure lifts the parent card's attention because it has no pane of its own. A working agent that repeats one tool call with the same arguments shows `⟲ N` from the third call on the selected or held card's stats line, or under `expanded` density; at 20 it becomes `!` and the description reads `loop: <tool> ×<count>`. Any different call clears the run. All three thresholds are under [`[agents.attention]`](../guide/sidebar.md#tuning).
 
-A sleeping card names its first pending wait in the description:
+A sleeping card names its first sleeping wait in the description:
 
 ```
 ▌☾ claude                                  ▐
@@ -445,9 +445,9 @@ A sleeping card names its first pending wait in the description:
 
 Subagent waits draw no separate entry and do not count in `⧖`: the child is already visible, as a row under `⧉` or, for a peer launched with `rimz agents`, as its own root card. A team wait counts in `⧖` and draws a static `team · stage Review` entry with its elapsed age, or `stage unknown` when its board is unavailable.
 
-`☾` replaces only an idle or done status. Working, waiting, failed, paused (including a launched child's provider park), and waiting on running subagents all take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
+`☾` replaces only an idle or done status, for timers, signals, conditions, and file watches, including a child's sleeping wait. A PID, command, check, unfinished team, working child, or listed background shell instead keeps the card working. A working-through-wait card names its first working wait. Waiting, failed, and paused (including a launched child's provider park) take precedence, and a standing subscription does not make an agent sleep. Sleeping opens no unread mark and sends no notification, and an earlier unread result stays unread through the sleep.
 
-Hibernation does not change a card's state, glyph, ranking, or unread result. A frozen agent with a wait armed still reads `☾`; otherwise it keeps its idle or done state. `rimz agents show` carries the hibernation details.
+Hibernation does not change a card's state, glyph, ranking, or unread result. A frozen agent keeps the same working or sleeping wait classification, or its idle or done state when nothing is pending. `rimz agents show` carries the hibernation details.
 
 ### Process rows
 

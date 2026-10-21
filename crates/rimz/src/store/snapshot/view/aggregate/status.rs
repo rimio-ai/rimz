@@ -106,7 +106,7 @@ pub(super) fn project_display_status(
         // Keep the source agent's own activity clock for this fallback; the
         // row clock above is child-folded and drives the other ladder rungs.
         let effective_status = source_agent
-            .map(AgentState::effective_status)
+            .map(AgentState::rested_status)
             .unwrap_or(status);
         let budget_park_label = source_agent
             .and_then(|state| state.budget_park.as_ref())
@@ -146,7 +146,13 @@ pub(super) fn project_display_status(
             tool_repeat: agent.tool_repeat.as_ref(),
             tool_repeat_attention_after,
         });
-        let projected = source_agent.map_or(projected, |state| state.sleeping_over(projected));
+        let projected =
+            source_agent.map_or(projected, |state| state.display_rest_status(projected));
+        if matches!(effective_status, AgentStatus::Idle | AgentStatus::Success)
+            && agent.phase != TurnPhase::Parked
+        {
+            agent.phase = TurnPhase::Idle;
+        }
         if let Some(label) = turn_error_label {
             agent.turn_error_label = label;
         }
@@ -222,7 +228,7 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         // misread it as failed.
         Some(TurnSettleOutcome::Interrupted) => return Settled::status(AgentStatus::Idle),
         // Plan and native-wait markers raise `waiting` through
-        // `AgentState::effective_status`, which already fed `effective_status`.
+        // `AgentState::rested_status`, which already fed `effective_status`.
         Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {}
     }
 

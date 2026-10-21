@@ -3,6 +3,7 @@ use crate::agents::{PendingWait, PendingWaitTrigger};
 
 fn pending_wait() -> PendingWait {
     PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "wait-soon".to_owned(),
         trigger: PendingWaitTrigger::Timer {
             due: ago(-60),
@@ -41,7 +42,7 @@ fn hibernation_preserves_sleeping_in_consumer_tallies_and_ranking() {
 }
 
 #[test]
-fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
+fn parked_working_wait_projects_running_and_keeps_phase() {
     for age_secs in [60, default_stall_secs() + 60] {
         let mut session = agent("claude", "sleeper", AgentStatus::Running, 0)
             .worktree("/repo/main")
@@ -50,6 +51,7 @@ fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
         session.pending_waits = vec![
             pending_wait(),
             PendingWait {
+                class: crate::agents::PendingWaitClass::Working,
                 name: "wait-later".to_owned(),
                 trigger: PendingWaitTrigger::Command {
                     command: "cargo test".to_owned(),
@@ -61,7 +63,7 @@ fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
         let expected_waits = session.pending_waits.clone();
         let snapshot = room_with_agent_panes(vec![session]);
         let projected = row(&snapshot, "sleeper");
-        assert_eq!(projected.status(), Some(AgentStatus::Sleeping));
+        assert_eq!(projected.status(), Some(AgentStatus::Running));
         assert_eq!(projected.phase(), TurnPhase::Parked);
         assert_eq!(projected.as_agent().unwrap().pending_waits, expected_waits);
         assert_eq!(
@@ -70,7 +72,7 @@ fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
         );
 
         let json = serde_json::to_value(projected).unwrap();
-        assert_eq!(json["status"], "sleeping");
+        assert_eq!(json["status"], "running");
         assert_eq!(json["pending_waits"][0]["name"], "wait-soon");
         assert_eq!(json["pending_waits"][1]["name"], "wait-later");
         assert_eq!(
@@ -78,6 +80,111 @@ fn parked_pending_wait_projects_sleeping_and_keeps_phase() {
             *projected
         );
     }
+}
+
+#[test]
+fn completed_turn_working_wait_keeps_its_wait_description() {
+    let mut session = agent("codex", "review", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .turn_started_ago(120)
+        .active_ago(60)
+        .settle(10, TurnSettleOutcome::Complete);
+    session.phase = TurnPhase::Reasoning;
+    let mut wait = pending_wait();
+    wait.class = crate::agents::PendingWaitClass::Working;
+    wait.trigger = PendingWaitTrigger::Command {
+        command: "cargo test".into(),
+    };
+    session.pending_waits.push(wait);
+
+    let snapshot = room_with_agent_panes(vec![session.clone()]);
+    let card = row(&snapshot, "review").as_agent().unwrap();
+    assert_eq!(card.status, AgentStatus::Running);
+    assert_eq!(
+        card.description(snapshot.now),
+        crate::store::snapshot::CardDescription::Wait("wakes after cargo test".into())
+    );
+    let (status, phase) = session.rowless_status(&Default::default());
+    let fallback = crate::store::snapshot::AgentCard {
+        status,
+        phase,
+        ..crate::store::snapshot::AgentCard::from_agent(&session, snapshot.now)
+    };
+    assert_eq!(
+        fallback.description(snapshot.now),
+        card.description(snapshot.now)
+    );
+}
+
+#[test]
+fn resting_shell_displays_running_without_changing_delivery_status() {
+    let mut session = agent("claude", "shell", AgentStatus::Success, 0).worktree("/repo/main");
+    session
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "gate".into(),
+            command: Some("cargo xtask gate".into()),
+            description: None,
+            started_at: ago(60),
+        });
+    let snapshot = room_with_agent_panes(vec![session]);
+    assert_eq!(row(&snapshot, "shell").status(), Some(AgentStatus::Running));
+    assert_eq!(
+        rollup_agent(&snapshot, "shell").effective_status(),
+        AgentStatus::Success
+    );
+}
+
+#[test]
+fn launched_child_resting_on_shell_holds_parent_turn() {
+    let parent = agent("claude", "root", AgentStatus::Success, 0).worktree("/repo/main");
+    let mut child = child_state("root", "child", AgentStatus::Success, 60);
+    child.launch_depth = Some(1);
+    child
+        .background_shells
+        .push(crate::agents::BackgroundShell {
+            id: "gate".into(),
+            command: Some("cargo xtask gate".into()),
+            description: None,
+            started_at: ago(60),
+        });
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    let parent = row(&snapshot, "root");
+    assert_eq!(parent.status(), Some(AgentStatus::Running));
+    assert!(parent.sub_agents()[0].holds_parent_turn());
+}
+
+#[test]
+fn settled_wait_does_not_hide_the_rested_verdict() {
+    let mut session = agent("claude", "rest", AgentStatus::Success, 0).worktree("/repo/main");
+    session.pending_waits.push(PendingWait {
+        name: "@child".into(),
+        trigger: PendingWaitTrigger::Subagent {
+            active_at: ago(30),
+            deadline_at: None,
+            settled: Some("completed".into()),
+        },
+        armed_at: Some(ago(60)),
+        class: crate::agents::PendingWaitClass::Inert,
+    });
+    let snapshot = room_with_agent_panes(vec![session]);
+    assert_eq!(row(&snapshot, "rest").status(), Some(AgentStatus::Success));
+}
+
+#[test]
+fn file_wait_displays_sleeping() {
+    let mut session = agent("claude", "rest", AgentStatus::Success, 0).worktree("/repo/main");
+    session.pending_waits.push(PendingWait {
+        name: "file".into(),
+        trigger: PendingWaitTrigger::File {
+            path: "app.log".into(),
+            grep: None,
+        },
+        armed_at: Some(ago(60)),
+        class: crate::agents::PendingWaitClass::Sleeping,
+    });
+    let snapshot = room_with_agent_panes(vec![session]);
+    assert_eq!(row(&snapshot, "rest").status(), Some(AgentStatus::Sleeping));
 }
 
 #[test]

@@ -347,6 +347,7 @@ fn card_description_error_wins_over_sleeping_wait() {
         status: AgentStatus::Sleeping,
         turn_error_label: Some(" API Error:\nOverloaded ".to_owned()),
         pending_waits: vec![crate::agents::PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "wait-test".to_owned(),
             trigger: crate::agents::PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),
@@ -362,13 +363,24 @@ fn card_description_error_wins_over_sleeping_wait() {
 }
 
 #[test]
-fn card_description_sleeping_uses_first_wait_and_view_clock() {
+fn card_description_sleeping_uses_first_sleeping_wait_and_view_clock() {
     let card = AgentCard {
         status: AgentStatus::Sleeping,
         turn_error_label: Some(" \n\t".to_owned()),
         task: Some("finished work".to_owned()),
         pending_waits: vec![
             crate::agents::PendingWait {
+                class: crate::agents::PendingWaitClass::Inert,
+                name: "@child".into(),
+                trigger: crate::agents::PendingWaitTrigger::Subagent {
+                    active_at: row_time(),
+                    deadline_at: None,
+                    settled: Some("completed".into()),
+                },
+                armed_at: Some(row_time()),
+            },
+            crate::agents::PendingWait {
+                class: crate::agents::PendingWaitClass::Sleeping,
                 name: "timer".to_owned(),
                 trigger: crate::agents::PendingWaitTrigger::Timer {
                     due: row_time() + jiff::SignedDuration::from_mins(12),
@@ -377,6 +389,7 @@ fn card_description_sleeping_uses_first_wait_and_view_clock() {
                 armed_at: Some(row_time()),
             },
             crate::agents::PendingWait {
+                class: crate::agents::PendingWaitClass::Sleeping,
                 name: "signal".to_owned(),
                 trigger: crate::agents::PendingWaitTrigger::Signal {
                     selector: "pr.merged".to_owned(),
@@ -397,10 +410,61 @@ fn card_description_sleeping_uses_first_wait_and_view_clock() {
 }
 
 #[test]
+fn card_description_running_uses_working_wait_ahead_of_timer() {
+    let mut card = AgentCard {
+        status: AgentStatus::Running,
+        task: Some("old activity".into()),
+        pending_waits: vec![
+            crate::agents::PendingWait {
+                name: "timer".into(),
+                trigger: crate::agents::PendingWaitTrigger::Timer {
+                    due: row_time(),
+                    delay: None,
+                },
+                armed_at: Some(row_time()),
+                class: crate::agents::PendingWaitClass::Sleeping,
+            },
+            crate::agents::PendingWait {
+                name: "gate".into(),
+                trigger: crate::agents::PendingWaitTrigger::Command {
+                    command: "cargo xtask gate".into(),
+                },
+                armed_at: Some(row_time()),
+                class: crate::agents::PendingWaitClass::Working,
+            },
+        ],
+        ..AgentCard::default()
+    };
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes after cargo xtask gate".into())
+    );
+    for phase in [TurnPhase::Reasoning, TurnPhase::Acting] {
+        card.phase = phase;
+        assert_eq!(
+            card.description(row_time()),
+            CardDescription::Activity("old activity".into()),
+            "{phase:?}"
+        );
+    }
+    card.phase = TurnPhase::Parked;
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Wait("wakes after cargo xtask gate".into())
+    );
+    card.pending_waits.pop();
+    assert_eq!(
+        card.description(row_time()),
+        CardDescription::Activity("old activity".into())
+    );
+}
+
+#[test]
 fn card_description_activity_ignores_wait_unless_sleeping_and_falls_to_none() {
     let mut card = AgentCard {
         task: Some(" ship\nwide ".to_owned()),
         pending_waits: vec![crate::agents::PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "wait-test".to_owned(),
             trigger: crate::agents::PendingWaitTrigger::Signal {
                 selector: "pr.merged".to_owned(),

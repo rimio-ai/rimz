@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn wait_and_shell_lifts_are_exempt_from_the_foreground_stall_window() {
+    for shell in [false, true] {
+        let mut resting = agent("claude", "rest", AgentStatus::Success, 0)
+            .worktree("/repo/main")
+            .active_ago(default_stall_secs() + 60);
+        if shell {
+            resting
+                .background_shells
+                .push(crate::agents::BackgroundShell {
+                    id: "gate".into(),
+                    command: None,
+                    description: None,
+                    started_at: ago(3600),
+                });
+        } else {
+            resting.pending_waits.push(crate::agents::PendingWait {
+                name: "gate".into(),
+                trigger: crate::agents::PendingWaitTrigger::Command {
+                    command: "cargo xtask gate".into(),
+                },
+                armed_at: Some(ago(3600)),
+                class: crate::agents::PendingWaitClass::Working,
+            });
+        }
+        let foreground = agent("claude", "foreground", AgentStatus::Running, 1)
+            .worktree("/repo/main")
+            .active_ago(default_stall_secs() + 60);
+        let snapshot = room_with_agent_panes(vec![resting, foreground]);
+        assert_eq!(
+            row(&snapshot, "rest").status(),
+            Some(AgentStatus::Running),
+            "shell={shell}"
+        );
+        assert_eq!(
+            row(&snapshot, "foreground").status(),
+            Some(AgentStatus::Failed)
+        );
+    }
+}
+
+#[test]
 fn exhausted_default_does_not_pause_a_live_named_login() {
     let default = agent("claude", "default", AgentStatus::Running, 0)
         .worktree("/repo/main")

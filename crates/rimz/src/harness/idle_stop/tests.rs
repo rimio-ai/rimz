@@ -292,6 +292,7 @@ fn each_rollup_term_holds_the_stop_alone_and_a_clear_agent_stops() {
     });
     hold("sleeping on a wait", Hold::Busy, &|agent| {
         agent.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo xtask gate".to_owned(),

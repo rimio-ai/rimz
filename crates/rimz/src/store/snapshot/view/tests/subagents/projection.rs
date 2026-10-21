@@ -125,18 +125,19 @@ fn child_stall_uses_the_configured_window_but_not_sleep_or_errors() {
     );
     child.last_activity = ago(3_600);
     for status in [AgentStatus::Idle, AgentStatus::Success] {
-        let mut sleeping = child.clone();
-        sleeping.status = status;
-        sleeping.pending_waits.push(PendingWait {
+        let mut resting = child.clone();
+        resting.status = status;
+        resting.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),
             },
             armed_at: Some(ago(3_600)),
         });
-        let snapshot = project(sleeping);
+        let snapshot = project(resting);
         let projected = &row(&snapshot, "root").sub_agents()[0];
-        assert_eq!(projected.status, AgentStatus::Sleeping);
+        assert_eq!(projected.status, AgentStatus::Running);
         assert_eq!(projected.turn_error_label, None);
         assert!(
             serde_json::to_value(projected)
@@ -457,6 +458,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     assert_eq!(sub.elapsed_secs, Some(40));
 
     finished.pending_waits.push(PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
         name: "wait-command".to_owned(),
         trigger: PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
@@ -464,7 +466,7 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
         armed_at: Some(ago(60)),
     });
     let sub = sub_agent_from_state(&finished, now, false, 1_800);
-    assert_eq!(sub.status, AgentStatus::Sleeping);
+    assert_eq!(sub.status, AgentStatus::Running);
     assert_eq!(sub.elapsed_secs, Some(40));
     assert_eq!(finished.status, AgentStatus::Success);
     finished.pending_waits.clear();

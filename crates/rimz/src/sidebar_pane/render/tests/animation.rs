@@ -441,6 +441,7 @@ fn open_delegation_motion_drives_the_animation_gate_under_a_sleeping_parent() {
         .as_agent_mut()
         .unwrap();
         agent.pending_waits = vec![crate::agents::PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: "wait".to_owned(),
             trigger,
             armed_at: None,

@@ -88,7 +88,7 @@ pub(super) fn attach_sub_agents_indexed(
             let prior_turn = !child_is_current(child, parent_user_turn_started_at, now);
             if prior_turn
                 && !matches!(
-                    child.sleeping_over(child.status),
+                    child.display_rest_status(child.status),
                     AgentStatus::Success | AgentStatus::Failed
                 )
             {
@@ -319,7 +319,7 @@ fn project_sub_agent(
         let (status, phase) = child.rowless_status(demotion);
         (status, phase, child.displayed_turn_error_label())
     } else {
-        (child.sleeping_over(child.status), child.phase, None)
+        (child.display_rest_status(child.status), child.phase, None)
     };
     let elapsed_secs = started_at.map(|started| {
         let until = if child.status == AgentStatus::Running

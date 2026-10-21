@@ -178,6 +178,16 @@ pub struct PendingWait {
     pub name: String,
     pub trigger: PendingWaitTrigger,
     pub armed_at: Option<Timestamp>,
+    pub class: PendingWaitClass,
+}
+
+/// Whether a pending wake represents in-flight work, an external wake, or only an owed report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingWaitClass {
+    Working,
+    Sleeping,
+    Inert,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,7 +238,7 @@ pub enum PendingWaitTrigger {
 }
 
 impl PendingWait {
-    /// The sleeping card's sentence: `wakes in 12m`, `wakes now`, `wakes after cargo test`, `wakes when app.log changes`, or `wakes on pr.merged`.
+    /// The waiting-for-work card's sentence: `wakes in 12m`, `wakes now`, `wakes after cargo test`, `wakes when app.log changes`, or `wakes on pr.merged`.
     pub fn label(&self, now: Timestamp) -> String {
         let headline = self.trigger.headline(now);
         match &self.trigger {
@@ -359,8 +369,8 @@ pub enum AgentStatus {
     /// provider recovers or its window resets. Projected from a `Running`
     /// status, never reported by the agent.
     Paused,
-    /// Resting (`idle`/`success`) with a one-shot delivery armed in the loop
-    /// catalog: a wait timer, watched command, or one-shot subscription.
+    /// Resting on a timer, signal, condition, or file watch for display;
+    /// operational reads include every pending one-shot wake.
     /// Projected from `pending_waits`, never reported by a hook.
     Sleeping,
 }
@@ -1523,10 +1533,7 @@ impl AgentState {
     /// still upgrade a paused projection to `failed`. Resting rows with an
     /// armed one-shot delivery read as `sleeping`.
     pub fn effective_status(&self) -> AgentStatus {
-        self.sleeping_over(self.rested_status())
-    }
-
-    pub fn sleeping_over(&self, status: AgentStatus) -> AgentStatus {
+        let status = self.rested_status();
         if matches!(status, AgentStatus::Idle | AgentStatus::Success)
             && !self.pending_waits.is_empty()
         {
@@ -1548,7 +1555,29 @@ impl AgentState {
         }
     }
 
-    fn rested_status(&self) -> AgentStatus {
+    pub(crate) fn display_rest_status(&self, status: AgentStatus) -> AgentStatus {
+        if !matches!(status, AgentStatus::Idle | AgentStatus::Success) {
+            return status;
+        }
+        if !self.background_shells.is_empty()
+            || self
+                .pending_waits
+                .iter()
+                .any(|wait| wait.class == PendingWaitClass::Working)
+        {
+            return AgentStatus::Running;
+        }
+        if self
+            .pending_waits
+            .iter()
+            .any(|wait| wait.class == PendingWaitClass::Sleeping)
+        {
+            return AgentStatus::Sleeping;
+        }
+        status
+    }
+
+    pub(crate) fn rested_status(&self) -> AgentStatus {
         let (status, phase) = self.resolved_status_phase();
         let settled = settled_outcome(status, self.context.as_ref(), self.last_activity);
         if matches!(
@@ -1731,7 +1760,7 @@ impl AgentState {
     /// (a launched child nests under its parent's card). A displayed fatal or
     /// unknown marker reads `failed`, on a raw-`failed` row too, and so does a
     /// displayed pausing marker the card's [`super::ParkDemotion`] counts as
-    /// spent; otherwise this is [`Self::effective_status`].
+    /// spent; otherwise this is the rested status lifted by in-flight waits or shells.
     pub fn rowless_status(&self, demotion: &super::ParkDemotion) -> (AgentStatus, TurnPhase) {
         let class = self.displayed_turn_error().map(|(class, _)| class);
         match class {
@@ -1749,9 +1778,13 @@ impl AgentState {
                 | TurnErrorClass::PausedOverloaded,
             )
             | None => {
-                let status = self.effective_status();
-                let phase = if status == AgentStatus::Running {
-                    self.resolved_status_phase().1
+                let rested = self.rested_status();
+                let status = self.display_rest_status(rested);
+                let (_, resolved_phase) = self.resolved_status_phase();
+                let phase = if status == AgentStatus::Running
+                    && (rested == AgentStatus::Running || resolved_phase == TurnPhase::Parked)
+                {
+                    resolved_phase
                 } else {
                     TurnPhase::Idle
                 };

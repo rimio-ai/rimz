@@ -206,6 +206,7 @@ mod tests {
     fn each_status_either_settles_or_blocks() {
         let mut sleeping = agent("a", AgentStatus::Idle, "/repo/wt");
         sleeping.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Working,
             name: "wait-command".to_owned(),
             trigger: PendingWaitTrigger::Command {
                 command: "cargo test".to_owned(),

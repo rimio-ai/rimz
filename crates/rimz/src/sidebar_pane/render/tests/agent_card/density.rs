@@ -192,6 +192,7 @@ fn no_selection_preserves_expanded_density_and_sticky_delegation_overrides() {
         let mut parent = density_agent(handle, "claude", AgentStatus::Idle, None, 0);
         parent.prompt = Some("delegated sweep".to_owned());
         parent.pending_waits.push(crate::agents::PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
             name: format!("{handle} timer"),
             trigger: crate::agents::PendingWaitTrigger::Timer {
                 due: fixed_now() + Duration::from_secs(720),
@@ -474,6 +475,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     );
     parent.prompt = Some("delegated sweep".to_owned());
     parent.pending_waits.push(crate::agents::PendingWait {
+        class: crate::agents::PendingWaitClass::Sleeping,
         name: "timer".to_owned(),
         trigger: crate::agents::PendingWaitTrigger::Timer {
             due: fixed_now() + Duration::from_secs(720),

@@ -913,6 +913,7 @@ fn child_reports_name_each_parent_and_channel() {
     first.launch_depth = Some(1);
     first.channel = Some("feat-x".to_owned());
     first.pending_waits.push(rimz::agents::PendingWait {
+        class: rimz::agents::PendingWaitClass::Working,
         name: "wait-command".to_owned(),
         trigger: rimz::agents::PendingWaitTrigger::Command {
             command: "cargo test".to_owned(),
@@ -954,7 +955,7 @@ fn child_reports_name_each_parent_and_channel() {
     assert_eq!(reports[2].parent, "@missing-parent");
     assert_eq!(reports[0].channel.as_deref(), Some("feat-x"));
     assert_eq!(reports[0].run_status.as_deref(), Some("completed"));
-    assert_eq!(reports[0].status, "sleeping");
+    assert_eq!(reports[0].status, "running");
     assert!(reports[1].run_status.is_none());
     let value = serde_json::to_value(&reports[0]).expect("serialize child report");
     assert_eq!(value["parent"], "@planner");
