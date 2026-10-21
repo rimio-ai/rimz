@@ -853,7 +853,7 @@ impl LoopState {
         {
             self.projections += projections;
         }
-        if deferred {
+        if deferred && pending.completed {
             self.fetched_at = self.clock.now();
             self.last_self_close_check = self.fetched_at;
         }
