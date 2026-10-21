@@ -207,7 +207,7 @@ fn painted(pty: &mut Pty) -> Vec<u8> {
 #[test]
 fn a_replacement_host_seats_only_the_carried_live_baseline() {
     use crate::ids::PaneId;
-    use crate::sidebar_pane::app::fixtures::agent_snapshot;
+    use crate::sidebar_pane::app::fixtures::{agent_snapshot, remember_fold};
 
     let mut room = Room::new();
     let own = PaneId::from_parts(MuxName::Tmux, "%7");
@@ -240,9 +240,27 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
     });
     snapshot.focused_pane = Some(selected.clone());
     snapshot.viewed_panes = vec![own.clone()];
+    let mut sidebar = snapshot.rows().next().unwrap().pane.clone().unwrap();
+    sidebar.pane_id = own.clone();
+    sidebar.command = Some("rimz-sidebar".into());
+    let mut frame = crate::sidebar::frame::assemble_frame(
+        snapshot
+            .rows()
+            .filter_map(|row| row.pane.clone())
+            .chain([sidebar])
+            .collect(),
+        crate::utils::time::unix_now_ms(),
+        "rimz-test",
+    );
+    frame.client_views = vec![crate::pane::ClientPaneView {
+        client_id: crate::ids::MuxClientId::Tmux("client-1".into()),
+        pane_id: selected.clone(),
+    }];
+    frame.client_view_fresh = true;
     let mut pty = Pty::open(54, 30);
     let mut pane = room.attach_as(&pty, Some(own.clone()));
     painted(&mut pty);
+    remember_fold(&room.host.plane, snapshot.clone(), frame.clone());
     room.host
         .plane
         .publish_snapshot(&pane.instance_id, snapshot.clone());
@@ -273,6 +291,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
     room.replace_host();
     drop(pane);
     snapshot.focused_pane = Some(own.clone());
+    frame.client_views[0].pane_id = own.clone();
 
     for baseline in [Some("tmux:%6"), None, Some("tmux:%9")] {
         let mut greeting = hello(&instance);
@@ -281,6 +300,7 @@ fn a_replacement_host_seats_only_the_carried_live_baseline() {
         let mut pty = Pty::open(54, 30);
         let mut pane = room.attach_hello(&pty, greeting, room.connect());
         painted(&mut pty);
+        remember_fold(&room.host.plane, snapshot.clone(), frame.clone());
         room.host
             .plane
             .publish_snapshot(&instance, snapshot.clone());
