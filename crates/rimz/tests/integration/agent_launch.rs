@@ -6696,6 +6696,191 @@ fn an_unparseable_startup_relaunch_wait_refuses_the_launch() {
     assert!(stderr.contains("s/m/h/d"), "{stderr}");
 }
 
+#[cfg(unix)]
+fn close_held_subagent(parent_ends: bool, interrupt_provider: bool) {
+    use nix::sys::termios::LocalFlags;
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::io::{Read as _, Write as _};
+
+    let env = Env::new();
+    env.record(&env.project_root);
+    let launch_log = env.home_root.join("launches.log");
+    let shim_dir = write_counting_dead_agent(&env, &launch_log);
+    if interrupt_provider {
+        crate::common::write_path_shim(
+            &shim_dir,
+            "codex",
+            "if [ \"${1:-}\" = --version ]; then echo 0.163.0; exit 0; fi\ntrap 'exit 130' INT\nprintf 'provider ready\\n'\nwhile :; do sleep 1; done",
+        );
+    }
+    std::os::unix::fs::symlink(crate::common::zellij_trace_shim(), shim_dir.join("zellij"))
+        .expect("zellij trace shim");
+    write_startup_relaunch_config(&env, "startup-relaunches = 0");
+    let store = env.store();
+    let workspace = env.resolve_workspace(&env.project_root);
+    let kind = AgentKind::new_unchecked("codex");
+    let parent = |hook, signal| {
+        store
+            .append_event(&EventEnvelope::agent_lifecycle(
+                env.workspace_id.clone(),
+                &workspace.session_name,
+                "codex",
+                hook,
+                &AgentLifecycleObservation::new(Some("parent".into()), signal),
+            ))
+            .expect("parent lifecycle");
+    };
+    parent("SessionStart", LifecycleSignal::Registered);
+    let launch_id = "launch_held_child";
+    seed_launch(
+        &env,
+        launch_id,
+        "otter",
+        LaunchParams {
+            parent_agent_id: Some("parent".into()),
+            parent_agent_kind: Some(kind.clone()),
+            launch_depth: Some(1),
+            ..LaunchParams::default()
+        },
+    );
+    let mut run = rimz::store::run::RunRecord::new(
+        env.workspace_id.clone(),
+        kind,
+        rimz::agents::PermissionMode::Auto,
+        "inspect".into(),
+        env.project_root.clone(),
+    );
+    run.subagent = true;
+    run.keep = true;
+    rimz::harness::run::create(store.paths(), &run).expect("pending run");
+    let mut request = fresh_exec("codex", Some("inspect"));
+    request.run_id = Some(run.run_id.clone());
+    request.subagent = true;
+    request.exit_on_run_completion = true;
+    request.close_pane_on_exit = false;
+    request.identity.name = Some("otter".to_owned());
+    request.identity.launch_id = Some(launch_id.to_owned());
+    let mux_log = env.home_root.join("mux.log");
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    env.pin_pty_command(&mut cmd);
+    cmd.args(["--mux", "zellij"]);
+    cmd.args(exec_args(&env, &request));
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]));
+    cmd.env("PATH", path_with_front(&shim_dir));
+    cmd.env("ZELLIJ_PANE_ID", "4");
+    cmd.env("RIMZ_TEST_ZELLIJ_LOG", &mux_log);
+    cmd.env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", &workspace.session_name);
+    cmd.env("RIMZ_TEST_SUBAGENT_PARENT_PROBE_INTERVAL_MS", "250");
+    if !interrupt_provider {
+        cmd.env("RIMZ_TEST_STARTUP_STTY", "1");
+    }
+    let mut wrapper = pair.slave.spawn_command(cmd).expect("spawn exec wrapper");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("pty reader");
+    let mut writer = pair.master.take_writer().expect("pty writer");
+    let (tx, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        while reader.read(&mut byte).is_ok_and(|read| read == 1) {
+            if tx.send(byte[0]).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = String::new();
+    let mut read_until = |needle: &str| {
+        let start = seen.len();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !seen[start..].contains(needle) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match output.recv_timeout(remaining) {
+                Ok(byte) => seen.push(byte as char),
+                Err(_) => {
+                    let _ = wrapper.kill();
+                    panic!("the wrapper never printed {needle:?}: {seen}");
+                }
+            }
+        }
+    };
+    if interrupt_provider {
+        read_until("provider ready\r\n");
+        writer.write_all(b"\x03").expect("interrupt the provider");
+    }
+    read_until("; --keep holds ");
+    read_until("\n");
+    let settled = rimz::harness::run::load(store.paths(), &run.run_id).expect("settled run");
+    if parent_ends {
+        parent("SessionEnd", LifecycleSignal::Ended);
+    } else {
+        writer.write_all(b"\x03").expect("close the held pane");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while wrapper.try_wait().expect("poll wrapper").is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = wrapper.kill();
+            panic!("the held pane did not close: {seen}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let mux = std::fs::read_to_string(&mux_log).unwrap_or_default();
+    assert!(mux.contains("close-pane"), "{mux}");
+    assert!(
+        seen.contains("; --keep holds this pane until its parent ends; press Ctrl-C to close it"),
+        "{seen}"
+    );
+    assert_eq!(
+        serde_json::to_value(rimz::harness::run::load(store.paths(), &run.run_id).unwrap())
+            .unwrap(),
+        serde_json::to_value(settled).unwrap(),
+        "closing a hold must neither decline nor otherwise change the answer"
+    );
+    let snapshot = store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("child history");
+    let child = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("otter"))
+        .expect("child card");
+    assert!(child.ended_at.is_some(), "the wrapper stamps its own end");
+    let tty = std::fs::File::open(pair.master.tty_name().expect("pty path")).expect("open pty");
+    let modes = nix::sys::termios::tcgetattr(&tty).expect("pty modes");
+    assert!(
+        modes
+            .local_flags
+            .contains(LocalFlags::ISIG | LocalFlags::ICANON | LocalFlags::ECHO),
+        "the held pane restores the provider's starting modes: {:?}",
+        modes.local_flags
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrl_c_closes_a_held_subagent_without_declining_its_answer() {
+    close_held_subagent(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn parent_end_closes_a_held_subagent_and_ends_its_card() {
+    close_held_subagent(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_ctrl_c_that_exits_a_provider_does_not_skip_its_subagents_hold() {
+    close_held_subagent(false, true);
+}
+
 /// The wrapper would refuse the same value inside the pane; the entry point
 /// refuses it first, so no pane opens and no receipt or launch row appears.
 #[cfg(unix)]

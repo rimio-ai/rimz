@@ -38,7 +38,6 @@ struct ParkState {
     fresh_launch: bool,
     termios: Option<SavedTermios>,
     keep: bool,
-    survives_parent: bool,
     awaiting_reopen: Option<u32>,
     watchdog: Option<WatchdogSeed>,
     entered_worktree: Option<PathBuf>,
@@ -223,7 +222,6 @@ impl ParkState {
             fresh_launch: startup.fresh_launch,
             termios: SavedTermios::capture(startup.terminal),
             keep: startup.keep,
-            survives_parent: startup.survives_parent,
             awaiting_reopen: startup.awaiting_reopen,
             watchdog: startup.watchdog,
             entered_worktree: startup.entered_worktree.map(Path::to_owned),
@@ -238,6 +236,7 @@ impl ParkState {
         outcome: ExecOutcome,
         terminal_grace: Duration,
         startup_deaths: Option<u32>,
+        terminal: ProviderTerminal,
     ) -> ParkExit {
         ParkExit {
             request: self.request,
@@ -246,6 +245,7 @@ impl ParkState {
             isolation: self.isolation,
             entered_worktree: self.entered_worktree,
             keep: self.keep,
+            terminal,
             outcome,
             terminal_grace,
             startup_deaths,
@@ -259,6 +259,8 @@ pub(super) fn park(
     child: Child,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<ParkExit> {
+    #[cfg(unix)]
+    let terminal = startup.terminal.clone();
     let state = ParkState::capture(startup, workspace);
     #[cfg(unix)]
     {
@@ -291,7 +293,7 @@ pub(super) fn park(
             outcome.status = ExitStatus::from_raw(1 << 8);
         }
         let _ = workspace;
-        Ok(state.into_exit(outcome, RUN_EXIT_TERMINAL_GRACE, None))
+        Ok(state.into_exit(outcome, RUN_EXIT_TERMINAL_GRACE, None, terminal))
     }
     #[cfg(not(unix))]
     {
@@ -530,13 +532,14 @@ fn run_loop(
             &mut drainer_lease,
         )
         .context("supervising agent process")?;
+        let provider_interrupted = interrupt_signal_flag().swap(false, Ordering::SeqCst);
         let startup = spawned_at.elapsed();
         let exit_code = outcome.status.code();
         let exit = rimz::harness::run::ProviderExit {
             fresh_launch,
             success: outcome.status.success(),
             abrupt: outcome.abrupt,
-            signaled: cleanup_signal_received() || interrupt_signal_flag().load(Ordering::SeqCst),
+            signaled: cleanup_signal_received() || provider_interrupted,
             relaunches,
             startup,
         };
@@ -602,6 +605,7 @@ fn run_loop(
             let exit = rimz::harness::run::ProviderExit {
                 abrupt: outcome.abrupt || parent_ended(),
                 signaled: cleanup_signal_received()
+                    || provider_interrupted
                     || interrupt_signal_flag().load(Ordering::SeqCst),
                 ..exit
             };
@@ -716,7 +720,7 @@ fn run_loop(
     };
 
     drop(drainer_lease);
-    Ok(state.into_exit(outcome, terminal_grace, startup_deaths))
+    Ok(state.into_exit(outcome, terminal_grace, startup_deaths, provider_terminal))
 }
 
 fn record_provider_process_paths(context: &RunPaths, pid: u32) {

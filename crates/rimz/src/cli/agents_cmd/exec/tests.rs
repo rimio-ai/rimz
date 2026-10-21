@@ -259,7 +259,7 @@ fn only_terminal_subagent_resumes_await_reopening() {
 }
 
 #[test]
-fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
+fn parent_watchdog_covers_every_subagent_but_not_peers() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = test_workspace(dir.path());
     let paths = rimz::StatePaths::under(workspace.workspace_id.clone(), dir.path()).unwrap();
@@ -297,7 +297,7 @@ fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
         prompt: None,
     };
     assert!(
-        subagent_parent_watchdog(&request, Some(&context), Some(&identity), false).is_some(),
+        subagent_parent_watchdog(&request, Some(&context), Some(&identity)).is_some(),
         "an unresolved parent must keep its watchdog backstop"
     );
     for id in ["parent", "child-launch"] {
@@ -322,20 +322,23 @@ fn parent_watchdog_is_admitted_only_for_a_child_that_dies_with_its_parent() {
             .unwrap();
     }
     let admitted = |record: &rimz::store::run::RunRecord| {
-        subagent_parent_watchdog(
-            &request,
-            Some(&context),
-            Some(&identity),
-            record.survives_parent(),
-        )
-        .is_some()
+        rimz::harness::run::create(context.store.paths(), record).unwrap();
+        subagent_parent_watchdog(&request, Some(&context), Some(&identity)).is_some()
     };
     assert!(admitted(&record), "an attached child watches its parent");
     record.report_to = rimz::store::run::ReportTo::Nobody;
-    assert!(!admitted(&record), "a detached child outlives its parent");
+    assert!(
+        admitted(&record),
+        "a legacy nobody child watches its parent"
+    );
     record.report_to = rimz::store::run::ReportTo::Launcher;
     record.keep = true;
-    assert!(!admitted(&record), "a kept child outlives its parent");
+    assert!(admitted(&record), "a kept child watches its parent");
+    request.subagent = false;
+    assert!(
+        subagent_parent_watchdog(&request, Some(&context), Some(&identity)).is_none(),
+        "a peer keeps its independent lifecycle"
+    );
 }
 
 fn parse_exec_request(input: &ExecRequest) -> ExecRequest {
@@ -722,6 +725,30 @@ mod pane_exec {
     use super::*;
 
     #[test]
+    fn hold_requires_a_kept_subagent_with_a_live_watch_and_no_exit_signal() {
+        for bits in 0..64 {
+            let subagent = bits & 1 != 0;
+            let keep = bits & 2 != 0;
+            let live_watch = bits & 4 != 0;
+            let parent_ended = bits & 8 != 0;
+            let cleanup = bits & 16 != 0;
+            let interrupted = bits & 32 != 0;
+            assert_eq!(
+                should_linger_subagent(
+                    subagent,
+                    keep,
+                    live_watch,
+                    parent_ended,
+                    cleanup,
+                    interrupted
+                ),
+                bits == 7,
+                "subagent={subagent} keep={keep} watch={live_watch} parent_ended={parent_ended} cleanup={cleanup} interrupted={interrupted}"
+            );
+        }
+    }
+
+    #[test]
     fn exit_hint_policy_covers_every_interactive_wrapper() {
         let mut run_owned = bare_exec_args();
         run_owned.run_id = Some(rimz::RunId::new());
@@ -737,6 +764,8 @@ mod pane_exec {
         subagent_completion_owned.subagent = true;
         let mut close_owned = bare_exec_args();
         close_owned.close_pane_on_exit = true;
+        let mut child_without_run = close_owned.clone();
+        child_without_run.subagent = true;
 
         for (name, args, hint, record_end, drop_to_shell) in [
             ("bare", bare_exec_args(), true, true, false),
@@ -752,10 +781,10 @@ mod pane_exec {
                 false,
             ),
             ("close", close_owned, true, true, true),
+            ("child without run", child_without_run, true, true, false),
         ] {
-            assert_eq!(should_print_exit_hint(&args, false, false), hint, "{name}");
-            assert!(!should_print_exit_hint(&args, true, false), "{name}");
-            assert!(!should_print_exit_hint(&args, false, true), "{name}");
+            assert_eq!(should_print_exit_hint(&args, false), hint, "{name}");
+            assert!(!should_print_exit_hint(&args, true), "{name}");
             assert_eq!(should_record_end_trace(&args), record_end, "{name}");
             assert_eq!(should_drop_to_shell(&args, false), drop_to_shell, "{name}");
             assert!(!should_drop_to_shell(&args, true), "{name}");
@@ -774,7 +803,7 @@ mod pane_exec {
         ] {
             let mut args = bare_exec_args();
             args.action = action;
-            assert!(should_print_exit_hint(&args, false, false));
+            assert!(should_print_exit_hint(&args, false));
         }
     }
 
@@ -907,7 +936,7 @@ mod pane_exec {
         };
 
         park(serde_json::json!([["claude", "alpha"]]));
-        let parked = stamp_own_end_if_deliberate(&invocation, &request, true, false, || true);
+        let parked = stamp_own_end_if_deliberate(&invocation, &request, true, || true);
         assert_eq!(
             parked,
             (false, None),
@@ -916,7 +945,7 @@ mod pane_exec {
         assert_eq!(ends(), 0, "no end stamp for a parked agent");
 
         park(serde_json::json!([]));
-        let closed = stamp_own_end_if_deliberate(&invocation, &request, true, false, || true);
+        let closed = stamp_own_end_if_deliberate(&invocation, &request, true, || true);
         assert_eq!(
             closed,
             (
