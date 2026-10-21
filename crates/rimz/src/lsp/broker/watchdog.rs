@@ -30,19 +30,16 @@ pub(super) fn check(policy: &crate::config::LspConfig) -> Result<()> {
         if !pressured(before, floor) {
             break;
         }
-        let victim_rss_kb = entry
+        let reading = entry
             .server_pid
-            .and_then(crate::proc::tree_totals)
-            .map_or(0, |totals| totals.rss_kb);
-        entry.peak_rss_kb = entry
-            .peak_rss_kb
-            .max(entry.server_pid.map_or(0, memory::tree_peak_kb));
+            .map_or_else(memory::Reading::default, memory::tree);
+        entry.peak_rss_kb = entry.peak_rss_kb.max(reading.peak_kb);
         stop_victim(&entry, StopReason::MemoryPressure, true)?;
         crate::diag::lsp::append(&kill_record(
             &entry,
             before,
             memory::sample()?,
-            victim_rss_kb,
+            reading.rss_kb,
             floor,
             crate::proc::memory::pressure(),
         ));

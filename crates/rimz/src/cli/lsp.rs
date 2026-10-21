@@ -740,10 +740,8 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     }
     render::finish(
         list_table(&entries, rimz::utils::time::unix_now_ms(), |pid| {
-            (
-                rimz::proc::tree_totals(pid).map_or(0, |totals| totals.rss_kb),
-                rimz::lsp::memory::tree_peak_kb(pid),
-            )
+            let reading = rimz::lsp::memory::tree(pid);
+            (reading.rss_kb, reading.peak_kb)
         })
         .render(&mut out),
     )

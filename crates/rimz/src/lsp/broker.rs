@@ -491,7 +491,7 @@ fn lifetime(shared: &Arc<Shared>, request: &ServeRequest, epoch: u64) -> Result<
     let mut server = server::spawn(&request.root, &request.config)?;
     model.entry.server_pid = Some(server.child.id());
     model.entry.server_start_token = crate::proc::process_start_token(server.child.id());
-    model.lifetime_peak_kb = memory::tree_peak_kb(server.child.id());
+    model.lifetime_peak_kb = memory::tree(server.child.id()).peak_kb;
     let published = registry::publish(&model.entry);
     drop(model);
     let result = published.and_then(|()| initialize_and_run(shared, request, epoch, &mut server));
@@ -501,7 +501,7 @@ fn lifetime(shared: &Arc<Shared>, request: &ServeRequest, epoch: u64) -> Result<
     let mut model = shared.model.lock().unwrap_or_else(|e| e.into_inner());
     model.lifetime_peak_kb = model
         .lifetime_peak_kb
-        .max(memory::tree_peak_kb(server.child.id()));
+        .max(memory::tree(server.child.id()).peak_kb);
     model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
     if matches!(
         model.entry.state,
@@ -781,9 +781,12 @@ fn housekeeping(shared: &Shared, request: &ServeRequest) -> Result<()> {
             .retain(&mut model.entry.leases, shared.elapsed(), |lease| {
                 crate::proc::process_is_live(lease.pid, Some(&lease.start_token))
             });
-        model.lifetime_peak_kb = model
-            .lifetime_peak_kb
-            .max(model.entry.server_pid.map_or(0, memory::tree_peak_kb));
+        model.lifetime_peak_kb = model.lifetime_peak_kb.max(
+            model
+                .entry
+                .server_pid
+                .map_or(0, |pid| memory::tree(pid).peak_kb),
+        );
         model.entry.peak_rss_kb = model.entry.peak_rss_kb.max(model.lifetime_peak_kb);
         let reason = if !request.root.exists() {
             Some(StopReason::CheckoutRemoved)

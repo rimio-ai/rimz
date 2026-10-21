@@ -944,49 +944,64 @@ pub fn tree_totals(root_pid: u32) -> Option<TreeTotals> {
     tree_totals_with(root_pid, &stat_metrics, &children, &io_bytes)
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TreeMemory {
+    pub peak_rss_kb: u64,
+    pub swap_kb: u64,
+}
+
 #[cfg(target_os = "linux")]
-fn parse_peak_rss_kb(status: &str) -> Option<u64> {
-    status.lines().find_map(|line| {
-        let (key, value) = line.split_once(':')?;
-        (key == "VmHWM")
-            .then_some(value.trim())?
-            .strip_suffix(" kB")?
-            .parse()
-            .ok()
+fn parse_tree_memory(status: &str) -> Option<TreeMemory> {
+    let field = |name| {
+        status.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key == name)
+                .then_some(value.trim())?
+                .strip_suffix(" kB")?
+                .parse()
+                .ok()
+        })
+    };
+    Some(TreeMemory {
+        peak_rss_kb: field("VmHWM")?,
+        swap_kb: field("VmSwap").unwrap_or(0),
     })
 }
 
-/// Sum kernel resident-memory high-water marks over the live process tree, in KiB.
+/// Sum kernel resident-memory high-water marks and current swap over the live process tree, in KiB.
 #[cfg(target_os = "linux")]
-pub fn tree_peak_rss_kb(root_pid: u32) -> Option<u64> {
-    tree_peak_rss_kb_with(
+pub fn tree_memory_kb(root_pid: u32) -> Option<TreeMemory> {
+    tree_memory_kb_with(
         root_pid,
-        &|pid| parse_peak_rss_kb(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?),
+        &|pid| parse_tree_memory(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?),
         &children,
     )
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn tree_peak_rss_kb(_root_pid: u32) -> Option<u64> {
+pub fn tree_memory_kb(_root_pid: u32) -> Option<TreeMemory> {
     None
 }
 
 #[cfg(target_os = "linux")]
-fn tree_peak_rss_kb_with(
+fn tree_memory_kb_with(
     root_pid: u32,
-    peak: &dyn Fn(u32) -> Option<u64>,
+    memory: &dyn Fn(u32) -> Option<TreeMemory>,
     children: &dyn Fn(u32) -> Vec<u32>,
-) -> Option<u64> {
+) -> Option<TreeMemory> {
     let mut stack = vec![root_pid];
     let mut seen = std::collections::BTreeSet::new();
-    let mut total = 0_u64;
+    let mut total = TreeMemory::default();
     while let Some(pid) = stack.pop() {
         if !seen.insert(pid) {
             continue;
         }
         stack.extend(children(pid));
-        match peak(pid) {
-            Some(peak) => total = total.saturating_add(peak),
+        match memory(pid) {
+            Some(memory) => {
+                total.peak_rss_kb = total.peak_rss_kb.saturating_add(memory.peak_rss_kb);
+                total.swap_kb = total.swap_kb.saturating_add(memory.swap_kb);
+            }
             None if pid == root_pid => return None,
             None => {}
         }
@@ -1093,10 +1108,23 @@ mod tests {
     #[test]
     fn tree_peak_reads_high_water_and_rejects_missing_key() {
         assert_eq!(
-            super::parse_peak_rss_kb("VmHWM:\t    1800 kB\n"),
-            Some(1800)
+            super::parse_tree_memory("VmHWM:\t    1800 kB\nVmSwap: 400 kB\n"),
+            Some(super::TreeMemory {
+                peak_rss_kb: 1800,
+                swap_kb: 400
+            })
         );
-        assert_eq!(super::parse_peak_rss_kb("VmRSS: 100 kB\n"), None);
+        assert_eq!(
+            super::parse_tree_memory("VmHWM: 100 kB\n"),
+            Some(super::TreeMemory {
+                peak_rss_kb: 100,
+                swap_kb: 0
+            })
+        );
+        assert_eq!(
+            super::parse_tree_memory("VmRSS: 100 kB\nVmSwap: 20 kB\n"),
+            None
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -1107,13 +1135,22 @@ mod tests {
             2 => vec![1, 4],
             _ => vec![],
         };
-        let peak = |pid| match pid {
-            1 => Some(100),
-            4 => Some(300),
-            _ => None,
+        let memory = |pid| {
+            let status = match pid {
+                1 => "VmHWM: 100 kB\nVmSwap: 20 kB\n",
+                4 => "VmHWM: 300 kB\nVmSwap: 40 kB\n",
+                _ => "VmSwap: 1000 kB\n",
+            };
+            super::parse_tree_memory(status)
         };
-        assert_eq!(super::tree_peak_rss_kb_with(1, &peak, &children), Some(400));
-        assert_eq!(super::tree_peak_rss_kb_with(2, &peak, &children), None);
+        assert_eq!(
+            super::tree_memory_kb_with(1, &memory, &children),
+            Some(super::TreeMemory {
+                peak_rss_kb: 400,
+                swap_kb: 60
+            })
+        );
+        assert_eq!(super::tree_memory_kb_with(2, &memory, &children), None);
     }
 
     #[test]
