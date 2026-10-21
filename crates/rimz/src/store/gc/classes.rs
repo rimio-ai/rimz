@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use super::collect::Sweep;
 use super::{GcErr, GcPolicy, GcReport, Result, read_dir_if_exists};
-use crate::config::TranscriptRetention;
+use crate::config::HistoryRetention;
 use crate::disk::paths::Class;
 use crate::disk::retention;
 
@@ -40,6 +40,14 @@ pub(super) fn collect_state<Owner: Fn(&crate::agents::AgentState) -> Option<Stri
             ),
             Class::Audit => collect_audit(paths, &mut sweep, &mut report)
                 .map(|bytes| bytes_retained = Some(bytes)),
+            Class::TeamNotes => collect_team_notes(
+                paths,
+                policy.team_notes_retention,
+                &mut sweep,
+                &mut report,
+                &mut newest_entry_modified,
+            )
+            .map(|bytes| bytes_retained = Some(bytes)),
             Class::Locks => {
                 super::collect::collect_locks(&paths.lock_path(""), &mut sweep, &mut report)
             }
@@ -146,7 +154,7 @@ fn collect_audit(
 
 fn collect_transcript(
     paths: &crate::StatePaths,
-    retention: TranscriptRetention,
+    retention: HistoryRetention,
     sweep: &mut Sweep,
     report: &mut GcReport,
 ) -> Result<u64> {
@@ -163,7 +171,7 @@ fn collect_transcript(
                 });
             }
         }
-        if let TranscriptRetention::Duration(ttl) = retention {
+        if let HistoryRetention::Duration(ttl) = retention {
             super::collect::collect_ttl(dir, ttl, sweep, report)?;
         }
         bytes += sweep.retained_bytes(dir)?;
@@ -173,6 +181,84 @@ fn collect_transcript(
 
 fn expired(modified: SystemTime, now: SystemTime, grace: Duration) -> bool {
     now.duration_since(modified).is_ok_and(|age| age > grace)
+}
+
+fn collect_team_notes(
+    paths: &crate::StatePaths,
+    retention: HistoryRetention,
+    sweep: &mut Sweep,
+    report: &mut GcReport,
+    newest: &mut impl FnMut(&Path) -> Result<Option<SystemTime>>,
+) -> Result<u64> {
+    let dir = &paths.team_notes_dir;
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if !metadata.is_dir() => return Ok(0),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(source) => {
+            return Err(GcErr::Io {
+                path: dir.clone(),
+                source,
+            });
+        }
+    }
+    let mut bytes = sweep.retained_bytes(dir)?;
+    let HistoryRetention::Duration(ttl) = retention else {
+        return Ok(bytes);
+    };
+    let now = SystemTime::now();
+    for entry in read_dir_if_exists(dir)?.into_iter().flatten() {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(GcErr::Io { path, source }),
+        }
+        if newest(&path)?.is_none_or(|modified| !expired(modified, now, ttl)) {
+            continue;
+        }
+        let files = sweep.files_under(&path)?;
+        if sweep.remove_tree_if(&path, files.len(), report, || {
+            Ok(newest(&path)?.is_some_and(|modified| expired(modified, SystemTime::now(), ttl)))
+        })? {
+            bytes = bytes.saturating_sub(files.iter().map(|(_, _, bytes)| bytes).sum());
+        }
+    }
+    Ok(bytes)
+}
+
+fn newest_entry_modified(path: &Path) -> Result<Option<SystemTime>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(GcErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let mut newest = metadata.modified().map_err(|source| GcErr::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if metadata.is_dir() {
+        for entry in read_dir_if_exists(path)?.into_iter().flatten() {
+            let entry = entry.map_err(|source| GcErr::ReadDir {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if let Some(modified) = newest_entry_modified(&entry.path())? {
+                newest = newest.max(modified);
+            }
+        }
+    }
+    Ok(Some(newest))
 }
 
 fn owned_expired(

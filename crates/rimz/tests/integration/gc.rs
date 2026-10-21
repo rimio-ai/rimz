@@ -74,9 +74,79 @@ fn gc_transcript_retention_expires_both_histories_independently_of_older_than() 
     for class in actual["rooms"][0]["classes"].as_array().unwrap() {
         assert_eq!(
             class.get("bytes_retained").is_some(),
-            class["class"] == "audit" || class["class"] == "transcript"
+            matches!(
+                class["class"].as_str(),
+                Some("audit" | "transcript" | "team-notes")
+            )
         );
     }
+}
+
+#[test]
+fn team_notes_retention_removes_whole_runs_without_following_links() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let root = env
+        .state_path_for(&env.project_root)
+        .root
+        .join("team-notes");
+    let old = SystemTime::now() - Duration::from_secs(2 * 86_400);
+    for run in ["stale", "fresh", "empty-fresh"] {
+        std::fs::create_dir_all(root.join(run).join("nested")).unwrap();
+        if run == "empty-fresh" {
+            continue;
+        }
+        for file in ["blackboard.md", "nested/plan-notes.md"] {
+            let path = root.join(run).join(file);
+            std::fs::write(&path, b"notes").unwrap();
+            std::fs::File::open(path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        for dir in [root.join(run).join("nested"), root.join(run)] {
+            std::fs::File::open(dir).unwrap().set_modified(old).unwrap();
+        }
+    }
+    std::fs::File::open(root.join("fresh/nested/plan-notes.md"))
+        .unwrap()
+        .set_modified(SystemTime::now())
+        .unwrap();
+    let outside = env.project_root.join("outside");
+    std::fs::write(&outside, b"keep").unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("foreign")).unwrap();
+    let read = |dry_run| {
+        let mut command = env.rimz();
+        command.args(["gc", "--json"]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["rooms"][0]["classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["class"] == "team-notes")
+            .expect("team-notes row")
+            .clone()
+    };
+    assert!(read(false)["bytes_retained"].as_u64().unwrap() >= 20);
+    assert!(
+        root.join("stale/blackboard.md").exists(),
+        "forever retains stale runs"
+    );
+    write_machine_config(&env, "[gc]\nteam_notes_retention = \"1d\"\n");
+    let preview = read(true);
+    assert!(preview["files_removed"].as_u64().unwrap() >= 2);
+    assert!(root.join("stale/blackboard.md").exists());
+    let actual = read(false);
+    assert_eq!(actual, preview);
+    assert!(!root.join("stale").exists());
+    assert!(root.join("fresh/blackboard.md").exists());
+    assert!(root.join("empty-fresh").exists());
+    assert_eq!(std::fs::read(outside).unwrap(), b"keep");
 }
 
 fn stale_room_files(env: &Env, root: &Path) -> [std::path::PathBuf; 3] {

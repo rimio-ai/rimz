@@ -27,6 +27,7 @@ runtime dir      /run/user/1000/rimz/ws/myrepo-f89e
 room tmp         /home/me/.rimz/ws/myrepo-f89e/tmp
 shared           /home/me/.rimz/ws/myrepo-f89e/shared
 out              /home/me/.rimz/ws/myrepo-f89e/out
+team notes       /home/me/.rimz/ws/myrepo-f89e/team-notes
 handoffs         /home/me/.rimz/handoffs
 runtime root     /run/user/1000/rimz
 logs             /home/me/.rimz/logs
@@ -49,6 +50,7 @@ builds           /home/me/.rimz/builds
 | `room tmp` | The room's temp root, holding one `<handle>/` directory per agent and `_unnamed/` for launches without a handle. |
 | `shared` | The room's shared directory, where agents hand each other files. |
 | `out` | Where RimZ writes results: subagent and peer responses and watched-command output, under `out/<reader>/` for the agent that reads them. |
+| `team notes` | Archived team runs, each holding its manifest, board, and scratch files. A checkout's `.rimz/team` link points to its current run. |
 | `runtime root` | `$XDG_RUNTIME_DIR/rimz`, else `/tmp/rimz-<uid>/rimz`. `~/.rimz/run` links here once a room is born; RimZ itself never reads through the link. The tmux server RimZ rooms run on has its socket here, at `<runtime root>/tmux/server`, which is the `-S` argument for reaching a room's server by hand. |
 | `handoffs` | Reserved for agent hand-off notes. |
 | `accounts` | Provider homes RimZ placed for named accounts, `accounts/<kind>/<name>/`: credentials and transcripts that nothing regenerates and no RimZ command removes. |
@@ -57,7 +59,7 @@ builds           /home/me/.rimz/builds
 
 ## JSON
 
-`--json` prints one object with schema `rimz.paths.v2`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `shared`, `out`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
+`--json` prints one object with schema `rimz.paths.v2`. Its keys are `schema`, `home`, `config`, `theme`, `loop_config`, `remote`, `agents_home`, `workspace_id`, `workspace_dir`, `project_root`, `state_dir`, `runtime_dir`, `room_tmp`, `shared`, `out`, `team_notes`, `handoffs`, `runtime_root`, `logs`, `loops`, `web`, `accounts`, `cache`, `providers_cache`, and `builds`, each a string with the row's meaning above.
 
 ```sh
 cd "$(rimz paths --json | jq -r .state_dir)"

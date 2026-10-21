@@ -107,6 +107,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
         older_than: args.older_than.unwrap_or(gc_config.older_than),
         tmp_grace: gc_config.tmp_grace,
         transcript_retention: gc_config.transcript_retention,
+        team_notes_retention: gc_config.team_notes_retention,
     };
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the room for gc; run inside a room or pass --root")?;

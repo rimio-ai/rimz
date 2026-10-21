@@ -2,6 +2,60 @@ use super::*;
 use std::fs;
 use std::time::{Duration, SystemTime};
 
+#[test]
+fn team_notes_walk_ignores_disappeared_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    assert!(
+        newest_entry_modified(&temp.path().join("renamed-away.tmp")).is_ok(),
+        "a disappearing atomic temp sibling must not abort the sweep"
+    );
+}
+
+#[test]
+fn team_notes_sweep_keeps_a_run_written_after_the_first_expiry_read() {
+    for dry_run in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::StatePaths::under(
+            crate::WorkspaceId::from_project_root(temp.path()),
+            temp.path(),
+        )
+        .unwrap();
+        let run = paths.team_notes_dir.join("active");
+        fs::create_dir_all(&run).unwrap();
+        let board = run.join("blackboard.md");
+        fs::write(&board, "old").unwrap();
+        let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+        for path in [&board, &run] {
+            fs::File::open(path).unwrap().set_modified(old).unwrap();
+        }
+        let mut reads = 0;
+        let mut newest = |_: &Path| {
+            let modified = fs::metadata(&board).unwrap().modified().unwrap();
+            reads += 1;
+            if reads == 1 {
+                fs::write(&board, "new").unwrap();
+            }
+            Ok(Some(modified))
+        };
+        let mut report = GcReport::default();
+        let bytes = collect_team_notes(
+            &paths,
+            HistoryRetention::Duration(Duration::from_secs(86_400)),
+            &mut Sweep::new(dry_run),
+            &mut report,
+            &mut newest,
+        )
+        .unwrap();
+        assert!(
+            board.exists(),
+            "a write after the expiry read must keep the run"
+        );
+        assert_eq!(report.sidecar_files_removed, 0);
+        assert_eq!(bytes, 3);
+        assert_eq!(reads, 2, "expiry must be read again at removal");
+    }
+}
+
 fn temp_owner(agent: &crate::agents::AgentState) -> Option<String> {
     match agent.name.as_deref() {
         Some("child") => Some("parent".to_owned()),
@@ -133,7 +187,8 @@ fn output_sweep_does_not_hold_the_store_lock() {
         GcPolicy {
             older_than: retention::DEFAULT_OLDER_THAN,
             tmp_grace: retention::DEFAULT_TMP_GRACE,
-            transcript_retention: TranscriptRetention::Forever,
+            transcript_retention: HistoryRetention::Forever,
+            team_notes_retention: HistoryRetention::Forever,
         },
         false,
         &|_| {
@@ -632,7 +687,8 @@ fn default_sweep_preserves_transcript_and_messages_outside_the_audit_cap() {
             GcPolicy {
                 older_than: retention::DEFAULT_OLDER_THAN,
                 tmp_grace: retention::DEFAULT_TMP_GRACE,
-                transcript_retention: TranscriptRetention::Forever,
+                transcript_retention: HistoryRetention::Forever,
+                team_notes_retention: HistoryRetention::Forever,
             },
             dry_run,
             &|_| Ok(false),

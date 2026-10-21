@@ -117,7 +117,8 @@ pub struct TempSweepReport {
 pub struct GcPolicy {
     pub older_than: Duration,
     pub tmp_grace: Duration,
-    pub transcript_retention: crate::config::TranscriptRetention,
+    pub transcript_retention: crate::config::HistoryRetention,
+    pub team_notes_retention: crate::config::HistoryRetention,
 }
 
 /// Sweep one room's state and runtime classes without visiting other rooms or shared runtime files.
@@ -305,7 +306,8 @@ fn complete_room_reports(report: &mut GcReport) {
             if !room.classes.iter().any(|entry| entry.class == name) {
                 room.classes.push(ClassReport {
                     class: name.to_owned(),
-                    bytes_retained: matches!(name, "audit" | "transcript").then_some(0),
+                    bytes_retained: matches!(name, "audit" | "transcript" | "team-notes")
+                        .then_some(0),
                     ..ClassReport::default()
                 });
             }
@@ -346,7 +348,8 @@ mod tests {
         GcPolicy {
             older_than,
             tmp_grace: crate::disk::retention::DEFAULT_TMP_GRACE,
-            transcript_retention: crate::config::TranscriptRetention::Forever,
+            transcript_retention: crate::config::HistoryRetention::Forever,
+            team_notes_retention: crate::config::HistoryRetention::Forever,
         }
     }
 
