@@ -355,6 +355,8 @@ The sandbox's `claude` is a stub (`xtask/assets/sandbox-room/claude`), so no rea
 
 **Transcripts.** Pick one Claude session that launched a subagent and copy exactly two files from `~/.claude/projects/<project>/` into the room's `tmp/replay/`, keeping their relative layout: `<session>.jsonl` and `<session>/subagents/agent-<child>.jsonl`. The adapter derives the child directory from the parent transcript's path (`subagents_dir` in `agents/adapters/claude/subagents.rs`), so a flattened copy reads no child. Copy nothing else from `~/.claude`: no credentials, no settings.
 
+When no session there holds a `subagents/` child file, run the replay without transcripts: drop `transcript_path` and `agent_transcript_path` from the payloads below, and give the model on `SessionStart` (`"model":"claude-sonnet-4-6"`) and the child's `model` and `effort` on its `tasks[]` entry. The child's line then shows status, model, effort, compactions, and its clock, but no token figure, so the token pass rules below do not apply.
+
 ```sh
 mkdir -p "$ROOT/tmp/replay/$SESSION/subagents"
 cp ~/.claude/projects/<project>/"$SESSION".jsonl "$ROOT/tmp/replay/"
@@ -382,6 +384,13 @@ x hooks feed --source claude < child-stop.json
 ```
 
 Each feed exits 0 with no output.
+
+To check a child's `↻ N` compaction count, feed a completed compaction attributed to the child between the status-line feed and the stop: a `PreCompact` then a `PostCompact`, each with the parent's `session_id` and the child's `agent_id`. The closed pair adds one to the child's `compaction_count` in the snapshot and `↻ 1` to the end of its second line.
+
+```json
+{"hook_event_name":"PreCompact","session_id":"<session>","agent_id":"<child>","agent_type":"Explore","cwd":"<root>/home/room-worktrees/probe","trigger":"auto","custom_instructions":null}
+{"hook_event_name":"PostCompact","session_id":"<session>","agent_id":"<child>","agent_type":"Explore","cwd":"<root>/home/room-worktrees/probe","trigger":"auto","compact_summary":"Sidebar compaction replay."}
+```
 
 A payload held in a zsh variable goes to the feed through `printf '%s\n' "$payload" |`, not `echo`: zsh's `echo` expands the `\n` escapes inside JSON strings and the feed reads corrupt JSON.
 
