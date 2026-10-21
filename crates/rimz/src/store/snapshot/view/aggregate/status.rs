@@ -4,6 +4,7 @@ use jiff::Timestamp;
 
 use crate::agent_activity::ToolRepeat;
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::state::WaitingResolution;
 use crate::agents::{
     AgentContext, AgentState, AgentStatus, AgentTurnError, ParkDemotion, TurnErrorClass,
     TurnSettleOutcome, display_turn_error, effective_turn_error_class,
@@ -12,14 +13,6 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::{AgentKey, AgentProjectionIndex};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WaitingResolution {
-    NotWaiting,
-    Interrupted,
-    AwaitingInput,
-    Stale,
-}
 
 struct SettleFacts<'a> {
     status: AgentStatus,
@@ -88,7 +81,7 @@ pub(super) fn project_display_status(
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
-        let (status, waiting_interrupted) = match resolve_waiting(
+        let (status, waiting_interrupted) = match WaitingResolution::resolve(
             agent.status,
             agent.context.as_ref(),
             last_activity,
@@ -96,8 +89,8 @@ pub(super) fn project_display_status(
         ) {
             WaitingResolution::NotWaiting => (agent.status, false),
             WaitingResolution::Interrupted => (AgentStatus::Idle, true),
-            WaitingResolution::AwaitingInput => continue,
-            WaitingResolution::Stale => {
+            WaitingResolution::Held => continue,
+            WaitingResolution::Answered => {
                 agent.phase = TurnPhase::Reasoning;
                 (AgentStatus::Running, false)
             }
@@ -167,29 +160,6 @@ pub(super) fn project_display_status(
             // a resting or attention status drop it.
             agent.phase = TurnPhase::Idle;
         }
-    }
-}
-
-fn resolve_waiting(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-    source_agent: Option<&AgentState>,
-) -> WaitingResolution {
-    if status != AgentStatus::Waiting {
-        return WaitingResolution::NotWaiting;
-    }
-    // An interruption marker proves Esc cancelled the native prompt.
-    // Otherwise a human-blocked prompt outranks every derived state, while
-    // a later activity heartbeat means it was answered in the pane.
-    if crate::agents::settled_outcome(status, context, last_activity)
-        == Some(TurnSettleOutcome::Interrupted)
-    {
-        WaitingResolution::Interrupted
-    } else if source_agent.is_some_and(AgentState::is_awaiting_input) {
-        WaitingResolution::AwaitingInput
-    } else {
-        WaitingResolution::Stale
     }
 }
 

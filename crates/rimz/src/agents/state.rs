@@ -634,6 +634,42 @@ pub fn settled_outcome(
     admitted.then_some(settle.outcome)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitingResolution {
+    NotWaiting,
+    Interrupted,
+    Held,
+    Answered,
+}
+
+impl WaitingResolution {
+    pub(crate) fn resolve(
+        status: AgentStatus,
+        context: Option<&AgentContext>,
+        last_activity: Timestamp,
+        source_agent: Option<&AgentState>,
+    ) -> Self {
+        if status != AgentStatus::Waiting {
+            return Self::NotWaiting;
+        }
+        if settled_outcome(status, context, last_activity) == Some(TurnSettleOutcome::Interrupted) {
+            return Self::Interrupted;
+        }
+        if source_agent.is_some_and(|agent| {
+            agent
+                .open_ask
+                .as_ref()
+                .is_none_or(|ask| ask.native_key.is_none())
+                && agent
+                    .waiting_since
+                    .is_some_and(|since| agent.last_activity > since)
+        }) {
+            return Self::Answered;
+        }
+        Self::Held
+    }
+}
+
 /// How long after its last compaction-start signal an agent still reads as
 /// "compacting". The session's next lifecycle signal clears
 /// [`AgentState::compacting_since`], but a crash mid-compact with no next
@@ -1500,29 +1536,42 @@ impl AgentState {
         }
     }
 
+    fn resolved_status_phase(&self) -> (AgentStatus, TurnPhase) {
+        match WaitingResolution::resolve(
+            self.status,
+            self.context.as_ref(),
+            self.last_activity,
+            Some(self),
+        ) {
+            WaitingResolution::Answered => (AgentStatus::Running, TurnPhase::Reasoning),
+            _ => (self.status, self.phase),
+        }
+    }
+
     fn rested_status(&self) -> AgentStatus {
-        let settled = settled_outcome(self.status, self.context.as_ref(), self.last_activity);
+        let (status, phase) = self.resolved_status_phase();
+        let settled = settled_outcome(status, self.context.as_ref(), self.last_activity);
         if matches!(
             settled,
             Some(TurnSettleOutcome::NativeWait | TurnSettleOutcome::PlanProposed)
         ) {
             return AgentStatus::Waiting;
         }
-        if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
+        if self.budget_park.is_some() && status != AgentStatus::Waiting {
             return AgentStatus::Paused;
         }
-        if self.status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
+        if status == AgentStatus::Waiting && settled == Some(TurnSettleOutcome::Interrupted) {
             return AgentStatus::Idle;
         }
         if let Some((class, _)) = self.displayed_turn_error() {
             return if class.pauses_turn() {
                 AgentStatus::Paused
             } else {
-                self.status
+                status
             };
         }
-        if self.status != AgentStatus::Running {
-            return self.status;
+        if status != AgentStatus::Running {
+            return status;
         }
         match settled {
             Some(TurnSettleOutcome::Complete) => AgentStatus::Success,
@@ -1532,10 +1581,10 @@ impl AgentState {
             // was earned, only the chore hums on (mirrors the sidebar's parked
             // settle).
             Some(TurnSettleOutcome::PlanProposed | TurnSettleOutcome::NativeWait) | None => {
-                if self.phase == TurnPhase::Parked {
+                if phase == TurnPhase::Parked {
                     AgentStatus::Success
                 } else {
-                    self.status
+                    status
                 }
             }
         }
@@ -1668,8 +1717,9 @@ impl AgentState {
     /// returned class includes legacy label remapping; the marker retains the
     /// upstream label and timestamp for display and resume decisions.
     pub fn displayed_turn_error(&self) -> Option<(TurnErrorClass, &AgentTurnError)> {
+        let (status, _) = self.resolved_status_phase();
         let error = display_turn_error(
-            self.status,
+            status,
             self.context.as_ref(),
             self.last_activity,
             self.turn_started_at,
@@ -1701,7 +1751,7 @@ impl AgentState {
             | None => {
                 let status = self.effective_status();
                 let phase = if status == AgentStatus::Running {
-                    self.phase
+                    self.resolved_status_phase().1
                 } else {
                     TurnPhase::Idle
                 };
@@ -1722,10 +1772,11 @@ impl AgentState {
         {
             return None;
         }
+        let (status, _) = self.resolved_status_phase();
         let cause = match self.effective_status() {
             AgentStatus::Running => ChildStall::MidTurn,
             AgentStatus::Idle
-                if self.status == AgentStatus::Idle
+                if status == AgentStatus::Idle
                     && self.is_launched_child()
                     && self.prompt.is_some()
                     && self.turn_ended_at.is_none() =>

@@ -695,7 +695,9 @@ fn apply_local_lifecycle(
         state.observe_prompt(prompt);
     }
     state.usage.context_pct = projection.context_pct;
-    state.waiting_since = projection.waiting_since;
+    state.waiting_since = projection
+        .waiting_since
+        .map(|since| since.max(observation.last_activity));
     // Provider-native approvals are observable but remain pane-only.
     state.open_ask = None;
     state.last_seen = observation.last_activity;

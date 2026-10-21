@@ -233,7 +233,18 @@ upward-dependencies = ["address"]
 # Test fixtures share the native hook trust writer through trust_hook_config_for_test (+1).
 # LaunchCapability::configure_sandbox_settings merges launch-scoped sandbox settings (+1).
 # LaunchCapability::has_native_sandbox declares whether sandbox isolation adds a provider flag (+1).
-surface-budget = 1104
+# WaitingResolution and its resolver share answered-ask proof with the sidebar (+2).
+surface-budget = 1106
+
+[[verdict]]
+kind = "item"
+key = "agents::state::WaitingResolution"
+reason = "Agent and sidebar projections share held, answered, and interrupted waiting verdicts."
+
+[[verdict]]
+kind = "item"
+key = "agents::state::WaitingResolution::resolve"
+reason = "The sidebar supplies its child-folded interruption clock while answer proof uses the source agent's own activity."
 
 [[verdict]]
 kind = "item"

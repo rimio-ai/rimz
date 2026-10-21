@@ -459,6 +459,34 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
 }
 
 #[test]
+fn cursor_open_ask_holds_despite_a_newer_local_session_write() {
+    let pane = pane("%1", "cursor-agent", "/repo/main");
+    let durable = agent("cursor", "cursor-session", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let mut local = observation("cursor-session", 30, Some(10), None);
+    local.kind = AgentKind::new_unchecked("cursor");
+    local.transcript_path = PathBuf::from("/cursor/public/cursor-session.jsonl");
+    let projected = lifecycle_state(&mut local);
+    projected.status = AgentStatus::Waiting;
+    projected.phase = TurnPhase::Idle;
+    projected.native_prompt_detail = Some("Which color?".to_owned());
+    projected.waiting_since = Some(ago(20));
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![local])
+        .with_live_panes(vec![pane], None);
+    assert_eq!(
+        (
+            rollup_agent(&snapshot, "cursor-session").effective_status(),
+            row(&snapshot, "cursor-session").status(),
+        ),
+        (AgentStatus::Waiting, Some(AgentStatus::Waiting)),
+        "the provider still reports an open ask despite the newer session write"
+    );
+}
+
+#[test]
 fn cursor_ask_is_exact_hook_bound_pane_truth_and_clears_transiently() {
     let waiting_since = ago(10);
     let pane = pane("%1", "cursor-agent", "/repo/main");

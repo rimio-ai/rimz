@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::TurnSettle;
+use crate::agents::{ParkDemotion, TurnSettle};
 
 #[test]
 fn silent_child_includes_a_prompted_launch_that_never_started() {
@@ -1446,6 +1446,136 @@ fn open_turn_and_effective_status_are_consistent() {
         background_parked.phase = TurnPhase::Parked;
         assert_consistent(&background_parked, false);
     }
+}
+
+#[test]
+fn answered_waiting_reads_running_and_reasoning() {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+    agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+    assert_eq!(agent.effective_status(), AgentStatus::Running);
+    assert_eq!(
+        agent.rowless_status(&ParkDemotion::default()),
+        (AgentStatus::Running, TurnPhase::Reasoning)
+    );
+}
+
+#[test]
+fn waiting_without_answer_evidence_stays_waiting() {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+    for waiting_since in [None, Some(agent.last_activity)] {
+        agent.waiting_since = waiting_since;
+        assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default()),
+            (AgentStatus::Waiting, TurnPhase::Idle)
+        );
+    }
+    agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+    agent.open_ask = Some(OpenAsk {
+        id: AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: AskKind::Question,
+        detail: None,
+        native_key: Some("ask-call".to_owned()),
+        since: agent.waiting_since.unwrap(),
+    });
+    assert_eq!(agent.effective_status(), AgentStatus::Waiting);
+    assert_eq!(
+        agent.rowless_status(&ParkDemotion::default()),
+        (AgentStatus::Waiting, TurnPhase::Idle)
+    );
+}
+
+#[test]
+fn answered_waiting_admits_running_settle_markers() {
+    for (outcome, expected) in [
+        (TurnSettleOutcome::Complete, AgentStatus::Success),
+        (TurnSettleOutcome::Interrupted, AgentStatus::Idle),
+        (TurnSettleOutcome::NativeWait, AgentStatus::Waiting),
+        (TurnSettleOutcome::PlanProposed, AgentStatus::Waiting),
+    ] {
+        let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+        agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+        agent.context = Some(context_settle(Some(1_020), outcome));
+        assert_eq!(agent.effective_status(), expected, "{outcome:?}");
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default()),
+            (expected, TurnPhase::Idle),
+            "{outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn answered_waiting_admits_running_turn_errors() {
+    for (class, effective, rowless) in [
+        (
+            TurnErrorClass::PausedOverloaded,
+            AgentStatus::Paused,
+            AgentStatus::Paused,
+        ),
+        (
+            TurnErrorClass::Failed,
+            AgentStatus::Running,
+            AgentStatus::Failed,
+        ),
+    ] {
+        let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+        agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+        agent.context = Some(context_error(class, 1_020));
+        assert_eq!(agent.effective_status(), effective, "{class:?}");
+        assert_eq!(
+            agent.displayed_turn_error().map(|(class, _)| class),
+            Some(class)
+        );
+        assert_eq!(
+            agent.rowless_status(&ParkDemotion::default()),
+            (rowless, TurnPhase::Idle),
+            "{class:?}"
+        );
+        if class.pauses_turn() {
+            let demotion = ParkDemotion::new(
+                &BTreeMap::new(),
+                BTreeSet::from([(agent.kind.clone(), agent.agent_id.clone())]),
+                agent.last_activity,
+            );
+            assert_eq!(
+                agent.rowless_status(&demotion),
+                (AgentStatus::Failed, TurnPhase::Idle)
+            );
+        }
+    }
+}
+
+#[test]
+fn answered_waiting_admits_budget_parks() {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+    agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+    agent.budget_park = Some(BudgetPark {
+        cap_usd: 5.0,
+        spend_usd: 5.25,
+        window: BudgetWindow::Session,
+        at: agent.last_activity,
+        scope: BudgetScope::Agent,
+        account_kind: None,
+        resets_at: None,
+    });
+    assert_eq!(agent.effective_status(), AgentStatus::Paused);
+    assert_eq!(
+        agent.rowless_status(&ParkDemotion::default()),
+        (AgentStatus::Paused, TurnPhase::Idle)
+    );
+}
+
+#[test]
+fn answered_waiting_child_stalls_mid_turn() {
+    let mut agent = test_agent(AgentStatus::Waiting, 1_010);
+    agent.waiting_since = Some(Timestamp::from_second(1_000).unwrap());
+    agent.parent_agent_id = Some("parent".into());
+    agent.launch_depth = Some(1);
+    assert_eq!(
+        agent.silent_child_for(Timestamp::from_second(2_810).unwrap(), 1_800),
+        Some((1_800, ChildStall::MidTurn))
+    );
 }
 
 #[test]

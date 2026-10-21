@@ -233,12 +233,13 @@ The rollup holds the agent-reported lifecycle status, and `rimz sidebar snapshot
 
 [`effective_status`](../../../crates/rimz/src/agents/state.rs) is the cheap projection every read path shares, so `rimz pane list`, message delivery gates, and the sidebar agree about state no hook reported. It reads the rollup, the budget park, pending waits, and the context sidecar's markers, in this order:
 
-1. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
-2. A row with a budget park, unless it is `waiting`, reads `paused`.
-3. A `waiting` row with an interruption marker reads `idle`.
-4. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
-5. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
-6. A pending wait makes an `idle` or `success` result read `sleeping`.
+1. A `waiting` agent whose keyless ask was answered reads as `running` in the `reasoning` phase: `waiting_since` is present, `last_activity` is newer, and no interruption marker applies. Every later step sees it as `running`. A keyed ask or a wait without that evidence stays `waiting`. A local-session observation that still reports `waiting` stamps the ask no earlier than its last observed write, so that write cannot masquerade as an answer; a later activity heartbeat can still release it.
+2. A `running` row with a native-wait or plan-proposal marker reads `waiting`.
+3. A row with a budget park, unless it is `waiting`, reads `paused`.
+4. A `waiting` row with an interruption marker reads `idle`.
+5. A `running` or `failed` row with a qualifying turn-error marker of a pausing class reads `paused`.
+6. A `running` row with a completion marker reads `success`; with an interruption marker, `idle`; in the `parked` phase, `success`.
+7. A pending wait makes an `idle` or `success` result read `sleeping`.
 
 That pending wait also holds a supervised run open at a clean turn end. Agent status and run status remain separate: a sleeping card can have a `Running` run with `parked_at` set.
 
@@ -250,7 +251,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 
 | Rung | Condition | Displays |
 | --- | --- | --- |
-| 1 | a `waiting` row that `is_awaiting_input` holds | `waiting` |
+| 1 | a `waiting` row with neither an interruption marker nor proof its keyless ask was answered | `waiting` |
 | 2 | a `running` row with a native-wait or plan-proposal marker | `waiting` |
 | 3 | a budget park | `paused`, with spend against cap |
 | 4 | a turn-error marker of a pausing class | `paused`, with the upstream label; `failed` with the same label once retries are exhausted or the limit window reset with no spent window |
@@ -264,7 +265,7 @@ The sidebar row projection, [`project_display_status`](../../../crates/rimz/src/
 | 12 | a `running` row silent past the stall window | `paused` when the kind has a spent window, otherwise `failed` |
 | 13 | none of the above | `effective_status` |
 
-A `waiting` row that fails rung 1 first resolves: with an interruption marker it becomes `idle` and continues down the ladder skipping rung 3; without one, activity newer than the ask proves it was answered in the pane, so it continues as `running` in the `reasoning` phase until a durable clear lands. That stale-`waiting` row is eligible for either child rung after normalization, including a delegated park; a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
+A `waiting` row that fails rung 1 first resolves by the shared waiting rule: with an interruption marker it becomes `idle` and continues down the ladder skipping rung 3; an answered keyless ask continues as `running` in the `reasoning` phase until a durable clear lands. The interruption check uses the row's child-folded activity clock, while proof of an answer uses the source agent's own activity. A wait without `waiting_since`, or without a source agent, holds at rung 1 unless interrupted. An answered row is eligible for either child rung after normalization, including a delegated park; a raw `failed` parent is not. The [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/store/snapshot/view/tests/status/stall.rs) test stacks the causes against each other, so a reordering fails the suite even when every single-cause test passes.
 
 The rungs that need more than their row:
 
