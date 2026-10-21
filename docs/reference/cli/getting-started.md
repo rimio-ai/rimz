@@ -241,13 +241,13 @@ rimz doctor [--audit] [--json] [--no-log-text] [--output <PATH>] [--clear]
 
 | Flag | Effect |
 | --- | --- |
-| `--audit` | Widen every section to all its rows: observed agent sessions, loop tasks, language servers, and retained message failures. Also measure disk use for `STORAGE` and `TEMP UNITS`, walking every file under the RimZ home. For a bug report: `rimz doctor --audit --no-log-text --output doctor.txt`. |
+| `--audit` | Widen every section to all its rows: observed agent sessions, loop tasks, language servers, and retained message failures. Also measure disk use for `STORAGE` and `TEMP UNITS`, walking every file under the RimZ home. For a bug report: `rimz doctor --audit --no-log-text --output doctor.txt`. The audit can take minutes; an agent runs it under [`rimz wait --run`](./wait.md). |
 | `--json` | Print the report as one `rimz.doctor.v1` JSON document, including top-level `audit: false` or `true`. |
 | `--no-log-text` | Omit multiplexer log record text from summaries, samples, and excerpts in either output format; retain severity, timestamps, counts, Zellij module targets, and RimZ-authored diagnoses. |
 | `--output <PATH>` | Write the report to `PATH` atomically instead of stdout. Human output is written without color. |
 | `--clear` | Before reporting, dismiss this workspace's recorded diagnostics, last incident, message failures, and multiplexer log records up to now. |
 
-On a terminal, a delayed stderr progress line names the oldest check still running and counts the others. It clears before the report prints, and is absent with `--json`, `--output`, or piped stdout. The usual `RIMZ_NO_PROGRESS` and agent-environment gates also apply.
+When stderr is a terminal, a delayed stderr progress line names the oldest check still running and counts the others, including with `--json`, `--output`, or piped stdout. It clears before the report prints. The usual `RIMZ_NO_PROGRESS` and agent-environment gates also apply.
 
 The room section also lists each configuration setting skipped at its latest start or attach, with the recorded warning and fix. In JSON the room object carries `skipped: [{"setting": "...", "message": "..."}]`, or an empty array. These recorded warnings remain until the next room entry judges the configuration again.
 

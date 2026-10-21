@@ -12,7 +12,6 @@
 //! section and never replaces data the section already showed. A broken config
 //! is exactly when someone runs doctor.
 
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread::{Scope, ScopedJoinHandle};
@@ -41,7 +40,7 @@ use model::DoctorReport;
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure), and measure disk use for STORAGE and TEMP UNITS by walking every file under the RimZ home: the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>.
+    /// Widen every section to every row it has (every agent session, loop task, language server, and message failure), and measure disk use for STORAGE and TEMP UNITS by walking every file under the RimZ home: the bug-report flag, as in rimz doctor --audit --no-log-text --output <file>. The audit can take minutes; an agent runs it under rimz wait --run.
     #[arg(long)]
     audit: bool,
     /// Emit machine-readable JSON instead of the human report.
@@ -73,8 +72,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
         mux_log::LogText::Include
     };
     let progress = Progress {
-        spinner: (!args.json && args.output.is_none() && std::io::stdout().is_terminal())
-            .then(|| Spinner::delayed(progress_label(&[]), Duration::from_millis(150))),
+        spinner: Spinner::delayed(progress_label(&[]), Duration::from_millis(150)),
         in_flight: Mutex::new(Vec::new()),
     };
     let report = collect_report(globals, args.audit, log_text, &progress);
@@ -191,7 +189,7 @@ fn collected<T>(check: ScopedJoinHandle<'_, T>) -> T {
 }
 
 struct Progress {
-    spinner: Option<Spinner>,
+    spinner: Spinner,
     in_flight: Mutex<Vec<&'static str>>,
 }
 
@@ -222,9 +220,7 @@ impl Progress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         update(&mut checks);
-        if let Some(spinner) = &self.spinner {
-            spinner.set(progress_label(&checks));
-        }
+        self.spinner.set(progress_label(&checks));
     }
 }
 
