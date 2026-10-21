@@ -264,8 +264,12 @@ pub struct SessionContextRefresh {
     /// A rich out-of-band reading, folded onto the record through
     /// [`ContextCapability::merge_session_context`](super::capabilities::ContextCapability::merge_session_context).
     pub observed: Option<AgentContext>,
-    /// Provider account usage read during the same pass.
-    pub realtime_usage: Option<crate::AccountUsageSnapshot>,
+    /// Provider account usage read during the same pass, with the identity of
+    /// the credentials it was read under.
+    pub realtime_usage: Option<(
+        crate::agents::AccountUsageIdentity,
+        crate::AccountUsageSnapshot,
+    )>,
 }
 
 /// Explicit update for one optional local-context field.

@@ -392,7 +392,7 @@ fn account_usage_completion_publishes_complete_realtime_without_fallback() {
     let wrote = complete_realtime_account_usage_with(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        realtime,
+        (AccountUsageIdentity::default(), realtime),
         |_, _| unreachable!("complete realtime usage needs no direct fallback"),
     );
 
@@ -430,7 +430,7 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
     let wrote = complete_realtime_account_usage_with(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        realtime,
+        (AccountUsageIdentity::default(), realtime),
         |runtime, kind| {
             publish_account_usage_snapshot(
                 runtime,
@@ -463,6 +463,74 @@ fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
     );
 }
 
+fn owner_identity() -> AccountUsageIdentity {
+    AccountUsageIdentity {
+        account_key: Some("owner".to_owned()),
+        credentials_stamp: Some(7),
+        ..Default::default()
+    }
+}
+
+fn assert_published_under_owner(runtime: &RuntimePaths, key: &LoginKey, used: u8) {
+    let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+    assert_eq!(credits.logins[key].account_key.as_deref(), Some("owner"));
+    assert_eq!(credits.logins[key].credentials_stamp, Some(7));
+    assert_eq!(credits.logins[key].plan.as_deref(), Some("pro"));
+    let windows = &read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries[key];
+    assert_eq!(windows.account_key.as_deref(), Some("owner"));
+    assert_eq!(windows.limits.windows[0].used_percentage, Some(used));
+}
+
+fn same_account_direct_read() -> crate::agents::AccountUsageProbe {
+    crate::agents::AccountUsageProbe::Found {
+        identity: owner_identity(),
+        snapshot: AccountUsageSnapshot::default(),
+    }
+}
+
+#[test]
+fn claimed_realtime_reading_publishes_under_its_own_identity_and_survives_the_direct_read() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let set = RoomLoginSet::new(Some(Default::default()), None, BTreeMap::new());
+    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
+    let mut realtime = complete_realtime();
+    realtime.rate_limits = Some(usage_windows(12));
+    assert!(refresh_claimed_account_usage_with(
+        &runtime,
+        &key,
+        claim,
+        &set,
+        |_, _, _| Some((owner_identity(), realtime)),
+        |_, _| same_account_direct_read(),
+    ));
+    assert_published_under_owner(&runtime, &key, 12);
+}
+
+#[test]
+fn completed_realtime_reading_publishes_under_its_own_identity_and_survives_the_direct_read() {
+    let (_dir, runtime) = account_usage_runtime();
+    let key: LoginKey = "codex@default".parse().unwrap();
+    let mut realtime = complete_realtime();
+    realtime.rate_limits = Some(usage_windows(12));
+    assert!(complete_realtime_account_usage_with(
+        &runtime,
+        &key,
+        (owner_identity(), realtime),
+        |_, _| unreachable!("a complete reading needs no direct read"),
+    ));
+    assert_published_under_owner(&runtime, &key, 12);
+
+    let claim = claim_provider_account_usage(&runtime, &key, None).unwrap();
+    assert!(complete_direct_account_usage(
+        &runtime,
+        &key,
+        claim,
+        same_account_direct_read(),
+    ));
+    assert_published_under_owner(&runtime, &key, 12);
+}
+
 #[test]
 fn account_usage_completion_offline_skips_publication_and_probe() {
     if !crate::agents::credits::oauth_usage_offline() {
@@ -488,7 +556,7 @@ fn account_usage_completion_offline_skips_publication_and_probe() {
     let wrote = complete_realtime_account_usage_with(
         &runtime,
         &crate::ids::LoginKey::default_for(crate::ids::AgentKind::new_unchecked("codex")),
-        complete_realtime(),
+        (AccountUsageIdentity::default(), complete_realtime()),
         |_, _| {
             called.set(true);
             true

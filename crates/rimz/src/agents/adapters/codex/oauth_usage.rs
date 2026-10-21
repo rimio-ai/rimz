@@ -156,8 +156,37 @@ pub(super) fn probe_usage(
     crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
 
+/// The identity `probe_usage` reports for `login_env`'s credentials, from the
+/// local `auth.json` alone: the account id it names and its mtime.
+pub(super) fn credentials_identity(
+    login_env: &BTreeMap<String, String>,
+) -> crate::agents::AccountUsageIdentity {
+    let credentials_stamp = credentials_stamp(login_env);
+    let account_key = CodexAdapter
+        .config_home(login_env)
+        .and_then(|home| load_credentials_from(&home.join("auth.json")).ok())
+        .and_then(|credentials| credentials.account_id);
+    crate::agents::AccountUsageIdentity {
+        account_key,
+        credentials_stamp,
+        ..Default::default()
+    }
+}
+
 pub(super) fn credentials_stamp(login_env: &BTreeMap<String, String>) -> Option<u64> {
     file_mtime_ms(&CodexAdapter.config_home(login_env)?.join("auth.json"))
+}
+
+/// Run `read` under the identity of `login_env`'s credentials, taken before it.
+/// The reading is dropped when `auth.json` moved during the read, since the
+/// identity then no longer says whose it is.
+pub(super) fn read_under_identity<T>(
+    login_env: &BTreeMap<String, String>,
+    read: impl FnOnce() -> Option<T>,
+) -> Option<(crate::agents::AccountUsageIdentity, T)> {
+    let identity = credentials_identity(login_env);
+    let reading = read()?;
+    (credentials_stamp(login_env) == identity.credentials_stamp).then_some((identity, reading))
 }
 
 pub(super) fn load_configured_credentials(
