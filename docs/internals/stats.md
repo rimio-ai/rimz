@@ -1,6 +1,6 @@
 # The stats panel
 
-`rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, the spend by model and by agent, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)).
+`rimz stats` renders account-global token and dollar history: a heatmap of daily use, a windows row of totals, spend by model, provider and profile, activity insights, and the assists RimZ performed for the user. It touches no agent and writes nothing to any session, and it runs in or out of a room and in or out of a project. Its only writes are the shared state directories and, on a cold run, the spending cache it computes ([where the figures come from](#where-the-figures-come-from)).
 
 The command has two homes. A one-shot `rimz stats` prints the spend-first report and returns to the shell. `rimz stats --refresh` holds the compact dashboard open as a live screen, and that held pane is the default middle-column content of the `rimzd` view ([rimzd.md](./rimzd.md#what-the-view-contains)).
 
@@ -8,13 +8,13 @@ The code is [`crates/rimz/src/cli/stats/`](../../crates/rimz/src/cli/stats/mod.r
 
 ## What it renders
 
-The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then selected-window Models, Agents and Subagents, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Every dollar figure in the panel shares one format: whole dollars from $10 up, cents below (`$0.12`), so a small fleet never reads `$0`. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
+The one-shot panel leads with dollars and tokens for Today, Week, Month, and Year, then selected-window Models, Providers, Agents, then Subagents, the local-day heatmap, and publication time. The wordmark belongs only to the held view. Every dollar figure in the panel shares one format: whole dollars from $10 up, cents below (`$0.12`), so a small fleet never reads `$0`. Empty sections and zero-dollar rows are omitted; unpriced tokens still contribute to window totals and the heatmap.
 
-`panel::render_spend` owns one-shot and unfolded subagent text. `panel::render_panel` owns held frames, with terminal fitting, wordmark, activity insights and assist counts.
+`panel::render_spend` owns one-shot and unfolded profile text. `panel::render_panel` owns held frames, with terminal fitting, wordmark, activity insights and assist counts.
 
 ## Where the figures come from
 
-Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `spending.by_provider` become `by_day`, `by_model`, and `by_agent`; subagent profile tallies, the first retained role-record time, timezone and publication time travel with them.
+Stats owns no spend arithmetic. It reads `provider-spending.json` under the shared state root (`RuntimePaths::shared_provider_spending_path`), the aggregate the spending walk publishes with per-day buckets, per-model and per-provider tallies, and the trailing windows ([spending.md](./agents/spending.md#what-reads-the-totals)). `Stats::from_provider` is the whole translation: the cache's `days`, `models`, and `spending.by_provider` become `by_day`, `by_model`, and `by_provider`; agent and subagent profile tallies, the first retained role-record time, timezone and publication time travel with them.
 
 Three load paths in `mod.rs` answer a run:
 
@@ -54,21 +54,23 @@ The month row labels the column where each month begins, and the `Less · ░ �
 
 ## The breakdowns
 
-One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a counted tail (`N other models`, `N other agents`, `N other subagents`); `--subagents` and JSON are unfolded. All shares divide by the selected window's fleet dollars. Agents includes all provider spend; Subagents is a profile-attributed subset, not an exclusive partition. Role semantics and native-child attribution belong to [spending](./agents/spending.md). Both text surfaces show a muted recorded-since note when the selected window starts before `recorded_since_secs`: `Window::assist_since` anchors Today at local midnight and the trailing windows at publication time minus 7/30/365 days. One-shot text keeps the note even with no profile rows. A held frame with usage history shows it only with the Subagents section; the empty-history frame keeps its explanatory note.
+One-shot sections rank non-zero spend by dollars. Each keeps three rows plus a counted tail named for the section; `--agents`, `--subagents` and JSON are unfolded. All shares divide by the selected window's fleet dollars. Providers includes all provider spend; both profile sections are subsets, not exclusive partitions of Providers. Role semantics and native-child attribution belong to [spending](./agents/spending.md). One hide predicate, `show_agents`, serves both panels: Agents shows only when the asking panel would list a selected-window profile whose key is absent from `by_provider`. It takes that panel's row admission, spend for one-shot text and dollars or work tokens for the held view. When shown, provider-named rows remain included. Subagents hides only when empty. Explicit views and JSON never apply the hide predicate.
 
-The held view keeps its compact rows and geometry budget, with dollar shares for Models, Agents, and Subagents. Agent names come from provider descriptors; model names use `model_display::display_model`. Both use provider identity colours, with each model's published producing kind supplying its colour. Unknown and folded model names stay muted; profile names and bullets are muted. Token units are uppercase.
+Both text surfaces show a muted recorded-since note below the last visible profile section when the selected window starts before `recorded_since_secs`: `Window::assist_since` anchors Today at local midnight and the trailing windows at publication time minus 7/30/365 days. It explains that earlier spend appears in Providers only. Neither a panel without visible profile sections nor the held empty-history frame shows the note. Explicit profile views keep the note's window rule even with no rows, and print a named-window empty-spend line.
 
-Held rows enter with dollars or work tokens. Work tokens are `SpendWindow::tokens`: input (including cache writes) plus output, excluding cache reads, unlike displayed token totals. Each section measures both shares against its own admitted rows; a share against a zero total is zero. A row stays named at 1% of either measure, except the empty model id always folds into `Other`. `crates/rimz/src/cli/stats/panel.rs::fold_breakdown` applies this rule to all three sections, and `crates/rimz/src/cli/stats/panel.rs::natural_size` runs it with no cap to size them for `fit`. When the cap requires more folding, the least significant rows fold first, ranked by the greater of their dollar and work-token shares; ties fold the later display row first. Display order stays dollars, then work tokens, then key, with a muted `Other` last carrying the merged window, its share of fleet dollars computed like any row's.
+The held view keeps its compact rows and geometry budget, with dollar shares for all four sections. Provider names come from provider descriptors; model names use `model_display::display_model`. Both use provider identity colours, with each model's published producing kind supplying its colour. Unknown and folded model names stay muted; profile names and bullets are muted. Profile folding is measured against the section's own dollars and work tokens, not fleet totals. Token units are uppercase. One-shot columns, count headers and tail nouns follow a typed section, never its display label.
+
+Held rows enter with dollars or work tokens. Work tokens are `SpendWindow::tokens`: input (including cache writes) plus output, excluding cache reads, unlike displayed token totals. Each section measures both shares against its own admitted rows; a share against a zero total is zero. A row stays named at 1% of either measure, except the empty model id always folds into `Other`. `crates/rimz/src/cli/stats/panel.rs::fold_breakdown` applies this rule to all four sections, and `crates/rimz/src/cli/stats/panel.rs::natural_size` runs it with no cap to size them for `fit`. When the cap requires more folding, the least significant rows fold first, ranked by the greater of their dollar and work-token shares; ties fold the later display row first. Display order stays dollars, then work tokens, then key, with a muted `Other` last carrying the merged window, its share of fleet dollars computed like any row's.
 
 The cache-hit column is `SpendWindow::cache_hit_percent`: `cache_read / (cache_read + input)`, where `input` already includes cache writes, rounded half up and absent for a zero denominator. `CacheHealth::classify` colors it green at 90% and above, yellow from 70% to 89%, and red below.
 
-The final Models and Agents column uses `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; in the held view, when every row is untimed the column disappears. Held Subagents omits the rate. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
+The final Models and Providers column, and the compact one-shot profile columns, use `SpendWindow::tokens_per_sec`: rounded `timed_output * 1000 / timed_ms` for the selected window. An untimed row shows `-`; in the held view, when every row is untimed the column disappears. Held profile sections omit the rate. `SpendWindow::merge` sums both counters, so `Other` keeps the ratio of sums. The number uses the row's normal foreground and `tok/s` the muted unit tone. Timing boundaries and filters belong to [spending](./agents/spending.md#response-timing).
 
-All three sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
+All four sections share one column layout (`stat_section_layout`), chosen by what fits the panel width:
 
 1. The full left column, the percentage, and a share bar of at least 10 cells.
 2. The full left column and the percentage, with no bar.
-3. The compact left column: models keep only dollars, agents and subagents drop cache-hit and rate columns.
+3. The compact left column: models keep only dollars; provider and profile rows drop cache-hit and rate columns.
 
 ## Fitting the terminal
 
@@ -81,7 +83,7 @@ The panel is plain strings. `render_panel` builds a `Vec<String>` and `emit` wri
 1. With room for everything, each breakdown gets its natural row count (named rows plus `Other` when present), capped at 6.
 2. With less room, the breakdowns shrink toward 3 rows each (or their natural count, if smaller), and `allocate_breakdown_rows` splits the space in proportion to each section's natural size. The 9-row wordmark header stays.
 3. When even those floors do not fit beside the header, the header drops, each section's cap becomes its 3-row floor, and each can shrink to 1 row.
-4. If the three 1-row sections still do not fit, Subagents drops, including its chrome and recorded-since note. Models and Agents retain their rows. A visible note reserves enough rows for wrapping at the panel width.
+4. If the four 1-row sections still do not fit, Subagents drops, then Agents. Models and Providers retain their rows. The recorded-since note reserves enough rows for wrapping at the panel width while either profile section remains, and drops with the last one.
 
 One-shot text is a scrollable report and does not use the held screen's row budget.
 
@@ -119,7 +121,7 @@ Reload re-execs `reload::current_reexec_target()` with the original arguments. T
 
 Molt records project to `molts` in the assist rollup and the `Molts:` dashboard category. They count as recorded after placement, retaining both agents' provider, identity, and label plus the inherited generation in timeline JSON and forensic text. The successor identity is a launch id, not a provider session id.
 
-`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, `window`, optional local-date `subagents_since`, selected-window sessions, streak fields, `windows.today/week/month/year`, unfolded selected-window `models`, provider `agents`, profile `subagents`, local-date `days`, and the selected-window assist rollup only. Models, agents, and profiles include every row with dollars or work tokens in the selected window, without a row cap. Activity fields keep the full-history computation so `active_days_28` retains its meaning. Agents gains optional `tokens_per_sec`; profiles carry no model. `--subagents --json` emits `{as_of, window, subagents, subagents_since?}` with the same profile admission.
+`--json` emits publication `as_of` (RFC 3339 with offset), `timezone`, `unit`, `window`, optional local-date `roles_since`, selected-window sessions, streak fields, `windows.today/week/month/year`, unfolded selected-window `models`, `providers`, profile `agents` and `subagents`, local-date `days`, and the selected-window assist rollup only. Models, providers, and profiles include every row with dollars or work tokens in the selected window, without a row cap. All three provider/profile arrays are present even when empty. Activity fields keep the full-history computation so `active_days_28` retains its meaning. Providers keeps optional `tokens_per_sec`; profiles carry no model. Agent rows count `sessions`, subagent rows `runs`. Explicit JSON emits `{as_of, window, agents, roles_since?}` or `{as_of, window, subagents, roles_since?}` with the same profile admission. These keys replace the former provider-named agents array and the former subagent-only date key.
 
 `--assists` filters through `AssistEvent::took_effect`, then limits the newest-first timeline to 50 by default. `-n 0` selects all retained; `--all` includes ineffective attempts. JSON uses the same selection and emits `{as_of, rollup, events, older}`, with `as_of` the read time in the configured zone that spend history uses (`MachineConfig::time_zone`). The rollup covers all retained records, not just the displayed page.
 
@@ -132,7 +134,7 @@ Every attempt that did not take effect increments `held` under the count it woul
 | File | Owns |
 | --- | --- |
 | `mod.rs` | `StatsArgs`, `Window`, `Stats`, the three load paths, the shared constants, and the wordmark |
-| `panel.rs` | geometry, `fit`, the heatmap, the windows row, all three breakdowns, the insights, the unavailable and empty frames, and `emit` |
+| `panel.rs` | geometry, `fit`, the heatmap, the windows row, all four breakdowns, the insights, the unavailable and empty frames, and `emit` |
 | `hold.rs` | the `--refresh` loop, key handling, the reload signal and re-exec, and the cold-walk spinner |
 | `assists.rs` | the assist fold, its panel rows, and the `--assists` timeline |
 | `json.rs` | the `--json` document |
