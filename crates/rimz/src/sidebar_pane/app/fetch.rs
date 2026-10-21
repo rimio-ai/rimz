@@ -1492,13 +1492,15 @@ impl ResultReceiver {
             .0
     }
 
-    pub(super) fn has_pending_snapshot(&self) -> bool {
+    pub(super) fn preview(&self) -> Option<(Option<SidebarOwnView>, Vec<PaneId>)> {
         self.0
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .snapshot
-            .is_some()
+            .as_ref()
+            .and_then(FetchUpdate::preview)
+            .map(|(own_view, viewed)| (own_view, viewed.to_vec()))
     }
 
     pub(super) fn has_pending_own_view_change(&self, current: &SidebarOwnView) -> bool {

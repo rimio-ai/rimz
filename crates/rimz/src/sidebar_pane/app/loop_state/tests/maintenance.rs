@@ -20,7 +20,8 @@ fn resize_does_not_arm_or_retime_a_layout_freeze() {
 
 #[test]
 fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
-    let (snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
+    let (mut snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
+    snapshot.viewed_panes = vec![own.clone()];
     let mut rig = Rig::new();
     rig.state.config.own_pane = Some(own.clone());
     rig.fold(snapshot, SnapshotSource::Produced);
@@ -54,7 +55,8 @@ fn parked_freeze_waits_past_five_seconds_and_unfocus_releases_in_the_fold() {
 
 #[test]
 fn frame_timing_caps_idle_wait_at_the_parked_deadline() {
-    let (snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
+    let (mut snapshot, own, _, _) = super::super::super::fixtures::focus_fixture();
+    snapshot.viewed_panes = vec![own.clone()];
     let mut rig = Rig::new();
     rig.state.config.own_pane = Some(own);
     rig.fold(snapshot, SnapshotSource::Produced);

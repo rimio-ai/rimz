@@ -218,7 +218,6 @@ pub(super) struct LoopState {
     input_jump: Option<FocusPeers>,
     pub(super) viewport: Arc<Mutex<Option<ViewportPublication>>>,
     viewport_seen: u64,
-    pub(super) viewport_peers: Option<super::fetch::Subscribers>,
     last_published_viewport: Option<ViewportState>,
     viewport_pending: bool,
     pub(super) wake: Option<SyncSender<Wakeup>>,
@@ -226,7 +225,6 @@ pub(super) struct LoopState {
     paint_hold: PaintHold,
     next_frame: Instant,
     fetched_at: Instant,
-    last_content_fold: Instant,
     last_self_close_check: Instant,
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
@@ -443,7 +441,6 @@ impl LoopState {
             input_jump: None,
             viewport: Arc::default(),
             viewport_seen: 0,
-            viewport_peers: None,
             last_published_viewport: None,
             viewport_pending: false,
             wake: None,
@@ -451,7 +448,6 @@ impl LoopState {
             paint_hold: PaintHold::default(),
             next_frame: now,
             fetched_at: now,
-            last_content_fold: now,
             last_self_close_check: now,
             last_heartbeat: None,
             prev_width: initial_width,
@@ -534,8 +530,9 @@ impl LoopState {
         let now = self.clock.now();
         let timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), now);
         let mut deadline = now + timeout;
-        if let Some(remaining) =
-            self.freeze_remaining(self.clock.timestamp_at(now).as_millisecond())
+        if self.watched()
+            && let Some(remaining) =
+                self.freeze_remaining(self.clock.timestamp_at(now).as_millisecond())
         {
             deadline = deadline.min(now + remaining.max(FRAME_MIN_TIMEOUT));
         }
@@ -623,24 +620,16 @@ impl LoopState {
                 .max(FRAME_MIN_TIMEOUT)
         } else {
             // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer. Also wake at layout-freeze expiry:
-            // a fold must run to release the frozen row/group order after idle.
+            // when the data tick is much longer.
             let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(
                 self.clock
                     .now()
                     .saturating_duration_since(self.last_self_close_check),
             );
             let mut timeout = tick_for(self.config.tick_seconds).min(watchdog_due);
-            if !watched && self.result_rx.has_pending_snapshot() {
-                timeout = timeout.min(
-                    tick_for(self.config.tick_seconds).saturating_sub(
-                        self.clock
-                            .now()
-                            .saturating_duration_since(self.last_content_fold),
-                    ),
-                );
-            }
-            if let Some(remaining) = self.freeze_remaining(self.clock.timestamp().as_millisecond())
+            if watched
+                && let Some(remaining) =
+                    self.freeze_remaining(self.clock.timestamp().as_millisecond())
             {
                 timeout = timeout.min(remaining);
             }
@@ -725,18 +714,7 @@ impl LoopState {
         #[cfg(test)]
         let mut projections = 0;
         let (pending, deferred) = self.result_rx.take_unless(
-            |own_view, viewed_panes| {
-                allow_defer
-                    && !self.watched()
-                    && !self.watches_view(own_view, viewed_panes)
-                    && own_view == self.current.own_view.as_ref()
-                    && self.admits_clock_only(false)
-                    && self
-                        .clock
-                        .now()
-                        .saturating_duration_since(self.last_content_fold)
-                        < tick_for(self.config.tick_seconds)
-            },
+            |own_view, viewed_panes| allow_defer && self.skips_hidden(own_view, viewed_panes),
             |fold, own_pane, refresh_override| {
                 #[cfg(test)]
                 {
@@ -774,6 +752,19 @@ impl LoopState {
                 .unwrap_or(crate::sidebar::timing::ACCEPT_REGRESSION_AFTER);
             fetch.defer_until(FetchRequest::default(), self.clock.now() + defer_for);
         }
+    }
+
+    fn skips_hidden(&self, own_view: Option<&SidebarOwnView>, viewed_panes: &[PaneId]) -> bool {
+        !self.watched()
+            && !self.watches_view(own_view, viewed_panes)
+            && own_view == self.current.own_view.as_ref()
+            && !self.should_exit
+            && self.gate == GateState::default()
+            && self.health.failure_streak == 0
+            && self.tab_read_dwell_until.is_none()
+            && !self.self_close.confirming_empty()
+            && self.pending_focus_repair.is_none()
+            && self.pending_input_focus.is_none()
     }
 
     /// Whether the next fold equal to the one just applied may arrive as a
@@ -856,7 +847,6 @@ impl LoopState {
             own_input_since_fold: _,
             // Maintenance stamps, read against `current`.
             fetched_at: _,
-            last_content_fold: _,
             last_self_close_check: _,
             last_heartbeat: _,
             // Exit detail and baseline reporting, set beside `should_exit` or
@@ -868,7 +858,6 @@ impl LoopState {
             input_jump: _,
             viewport: _,
             viewport_seen: _,
-            viewport_peers: _,
             last_published_viewport: _,
             viewport_pending: _,
         } = self;
@@ -977,7 +966,6 @@ impl LoopState {
             clock.apply(&mut self.current);
             self.last_focus_observation.panes_observed_at_ms = self.current.panes_observed_at_ms;
             self.fetched_at = self.clock.now();
-            self.last_content_fold = self.fetched_at;
             self.last_self_close_check = self.clock.now();
             self.dirty = true;
             self.fold_inputs = None;
@@ -993,8 +981,6 @@ impl LoopState {
                 phase,
                 source,
             } => {
-                self.own_input_since_fold = false;
-                self.last_content_fold = self.clock.now();
                 #[cfg(test)]
                 {
                     self.content_applications += 1;
@@ -1027,6 +1013,7 @@ impl LoopState {
         self.result_rx.acknowledge(delivered, false);
         self.fold_inputs = None;
         if snapshot_ok {
+            self.own_input_since_fold = false;
             self.last_self_close_check = self.clock.now();
             self.retry_pending_focus_repair();
         }
@@ -1199,6 +1186,7 @@ impl LoopState {
     ) {
         let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
+        let fold = self.event_needs_fold(&envelope.event);
         if matches!(
             &envelope.event,
             SidebarEvent::PaneClosed { .. }
@@ -1211,13 +1199,17 @@ impl LoopState {
         }
         match envelope.event {
             SidebarEvent::WidthTargetChanged => {
-                self.prepare_action(fetch);
+                if fold {
+                    self.prepare_action(fetch);
+                }
                 let measured = terminal.size().ok().map(|size| size.width);
                 self.width_control
                     .reload_target(&self.current.theme, measured, &self.diag);
             }
             SidebarEvent::BodyFilterChanged => {
-                self.prepare_action(fetch);
+                if fold {
+                    self.prepare_action(fetch);
+                }
                 self.filter_observed_at = Some(self.clock.now());
                 let filter = crate::sidebar::body_filter::load(&self.runtime);
                 if set_make_up_filter(&mut self.ui, &self.current, filter) {
@@ -1225,7 +1217,9 @@ impl LoopState {
                 }
             }
             event @ SidebarEvent::Notify { .. } => {
-                self.prepare_action(fetch);
+                if fold {
+                    self.prepare_action(fetch);
+                }
                 self.handle_notification(terminal, event);
             }
             SidebarEvent::FocusStranded {
@@ -1233,11 +1227,11 @@ impl LoopState {
                 generation,
                 clients,
             } => {
-                self.prepare_action(fetch);
                 if self.config.own_pane.as_ref() != Some(&pane_id) {
                     trace!(pane = %pane_id, own_pane = ?self.config.own_pane, generation, "sidebar ignored foreign strand");
                     return;
                 }
+                self.prepare_action(fetch);
                 let repair = PendingFocusRepair {
                     pane_id,
                     generation,
@@ -1255,6 +1249,9 @@ impl LoopState {
                 }
             }
             SidebarEvent::FocusIntent { nonce, .. } => {
+                if !fold {
+                    return;
+                }
                 if self
                     .focus_peers
                     .as_ref()
@@ -1276,8 +1273,10 @@ impl LoopState {
                 }
             }
             event if event.is_overlay() => {
-                self.prepare_action(fetch);
-                self.handle_overlay_event(fetch, event, sent_at_ms);
+                if fold {
+                    self.prepare_action(fetch);
+                }
+                self.handle_overlay_event(fetch, event, sent_at_ms, fold);
             }
             // Identity-free nudges — store deltas, `PanesChanged`, a `PaneOpened` without a command: nothing to fuse, so refetch, bypassing the pane cache when the event says topology moved.
             _ => {
@@ -1290,6 +1289,37 @@ impl LoopState {
                     true,
                 );
             }
+        }
+    }
+
+    fn event_needs_fold(&mut self, event: &SidebarEvent) -> bool {
+        let preview = self.result_rx.preview();
+        let (view, viewed) = preview.as_ref().map_or(
+            (
+                self.current.own_view.as_ref(),
+                self.current.viewed_panes.as_slice(),
+            ),
+            |(view, viewed)| (view.as_ref(), viewed.as_slice()),
+        );
+        if !self.skips_hidden(view, viewed) {
+            return true;
+        }
+        match event {
+            SidebarEvent::FocusChanged { focused, .. } => self.watches_view(view, focused),
+            SidebarEvent::Notify { panes, .. } => view.is_some_and(|view| {
+                panes
+                    .iter()
+                    .any(|pane| view.working_pane_ids.contains(pane))
+            }),
+            SidebarEvent::FocusIntent { nonce, .. } => {
+                let view = view.cloned();
+                self.focus_anchor(self.clock.now())
+                    .filter(|anchor| anchor.nonce == *nonce)
+                    .is_some_and(|anchor| {
+                        self.watches_view(view.as_ref(), std::slice::from_ref(&anchor.pane_id))
+                    })
+            }
+            _ => false,
         }
     }
 
@@ -1448,9 +1478,10 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         event: SidebarEvent,
         sent_at_ms: u64,
+        fold: bool,
     ) {
-        // An overlay event fuses into the in-memory state and paints this
-        // frame. A topology overlay also asks the producer to verify with a
+        // A relevant overlay fuses into the in-memory state and paints this
+        // frame. Every topology overlay asks the producer to verify with a
         // real pull, which supersedes the overlay once its fresh frame
         // folds in. A resize-grow paint hold stays held until a pulled
         // sibling-count verdict releases it.
@@ -1464,7 +1495,9 @@ impl LoopState {
         let requests_verification = event.requests_producer_verification();
         let now_ms = self.clock.now_ms();
         self.events().append(event, sent_at_ms, now_ms);
-        self.fold_fused_now();
+        if fold {
+            self.fold_fused_now();
+        }
         if !self.should_exit && (requests_verification || own_focused) {
             fetch.request(FetchRequest::fresh_panes(), true);
         }
@@ -1968,7 +2001,6 @@ impl LoopState {
         // path still drains pending results so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(fetch);
-        self.adopt_viewport(fetch, terminal);
         fetch.fire_due(self.clock.now());
 
         if gate_remaining(&self.gate, self.clock.timestamp())
@@ -2035,11 +2067,12 @@ impl LoopState {
             fetch.request(request, false);
         }
         let now_ms = self.clock.timestamp().as_millisecond();
-        if self
-            .ui
-            .freeze
-            .as_ref()
-            .is_some_and(|hold| now_ms >= hold.deadline_ms(self.parked(now_ms as u64)))
+        if self.watched()
+            && self
+                .ui
+                .freeze
+                .as_ref()
+                .is_some_and(|hold| now_ms >= hold.deadline_ms(self.parked(now_ms as u64)))
         {
             fetch.request(FetchRequest::default(), false);
         }
@@ -2189,7 +2222,7 @@ impl LoopState {
                 Some(FocusMarker::Dwelling(until)) => now >= until,
                 None => false,
             };
-        let user_input = user_input || self.ui.scroll_ease.in_flight();
+        let user_input = user_input || self.ui.scroll_ease.in_flight() || self.viewport_pending;
         let interactions = std::mem::take(&mut self.ui.interactions);
         let roster = std::mem::take(&mut self.ui.painted_roster);
         let rows = std::mem::take(&mut self.ui.painted_rows);
@@ -2462,13 +2495,22 @@ impl LoopState {
             // Left the tab: a scan, not a read. Drop the pending sweep.
             self.tab_read_dwell_until = None;
         } else if switched_in {
+            if let Some(publication) = self.adoptable_viewport(true) {
+                self.install_viewport(publication, None);
+            }
             self.tab_read_dwell_until = Some(self.clock.now() + TAB_READ_DWELL);
             layout_freeze::arm_freeze(&mut self.ui, now.as_millisecond());
+            self.next_frame = self.clock.now();
+            // Spend that accrued while hidden is not a climb the user watched:
+            // unseeded rolls make this fold's `fold_spend_rolls` snap.
+            self.ui.tally = Default::default();
+            self.ui.cost_rolls = Default::default();
         }
         if now_viewing
             && self
                 .tab_read_dwell_until
                 .is_some_and(|until| self.clock.now() >= until)
+            && let Some(view) = self.current.own_view.as_ref()
         {
             self.tab_read_dwell_until = None;
             clear.merge(read_receipts_for_tab(
@@ -2938,30 +2980,13 @@ impl LoopState {
             });
         }
         self.last_published_viewport = Some(view);
-        if self
-            .focus_peers
-            .as_ref()
-            .and_then(|peers| peers.active(self.clock.now()))
-            .is_some()
-        {
-            return;
-        }
-        if let Some(peers) = &self.viewport_peers {
-            for peer in peers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .values()
-            {
-                if peer.instance_id != self.config.instance_id {
-                    let _ = peer.wake.try_send(Wakeup::Tick);
-                }
-            }
-        }
     }
 
-    fn adoptable_viewport(&self) -> Option<ViewportPublication> {
-        if self.ui.drawn_scroll_max.is_some()
-            && (self.watches_snapshot(&self.current) || self.own_input_since_fold)
+    fn adoptable_viewport(&self, arriving: bool) -> Option<ViewportPublication> {
+        if self.own_input_since_fold
+            || (!arriving
+                && self.ui.drawn_scroll_max.is_some()
+                && self.watches_snapshot(&self.current))
         {
             return None;
         }
@@ -2980,16 +3005,24 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<PaneBackend>,
     ) {
-        if self.jump_hold().is_some() || self.adoptable_viewport().is_none() {
+        if self.jump_hold().is_some() || self.adoptable_viewport(false).is_none() {
             return;
         }
         self.drain_snapshot(fetch, false);
-        let Some(publication) = self.adoptable_viewport() else {
+        let Some(publication) = self.adoptable_viewport(false) else {
             return;
         };
         if self.jump_hold().is_some() {
             return;
         }
+        self.install_viewport(publication, Some(terminal.get_frame().area()));
+    }
+
+    fn install_viewport(
+        &mut self,
+        publication: ViewportPublication,
+        size: Option<ratatui::layout::Rect>,
+    ) {
         let view = publication.view;
         self.ui.scroll_offset = view.scroll_offset;
         self.ui.held_expansions = view.held_expansions;
@@ -3011,8 +3044,9 @@ impl LoopState {
             view.frozen
                 .then_some(self.clock.timestamp().as_millisecond()),
         );
-        if self.ui.drawn_scroll_max.is_none() {
-            let size = terminal.get_frame().area();
+        if self.ui.drawn_scroll_max.is_none()
+            && let Some(size) = size
+        {
             self.ui.anchored_rows.clear();
             let theme = self.ui.theme(&self.current.theme);
             self.ui.scroll_zone_top = render::compose_lines_with_meter(
@@ -3033,7 +3067,7 @@ impl LoopState {
             .map(|(id, row)| (id, row + self.ui.scroll_zone_top as isize))
             .collect();
         self.viewport_seen = publication.sequence;
-        self.viewport_pending = true;
+        self.viewport_pending = self.watched() || self.ui.drawn_scroll_max.is_none();
         self.dirty = true;
     }
 

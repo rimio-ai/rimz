@@ -95,7 +95,56 @@ fn publish_scrolled(source: &mut Rig, offset: usize) {
 }
 
 #[test]
-fn unfrozen_publication_clears_any_hold_and_restores_hidden_deferral() {
+fn publication_wakes_no_peer() {
+    let (mut source, destination, _) = viewport_pair(MuxName::Zellij);
+    let plane = super::super::super::plane::DataPlane::detached();
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let _subscription = plane.subscribe(&destination.state.config, tx);
+    source.state.viewport = plane.viewport.clone();
+    publish_scrolled(&mut source, 12);
+    assert!(plane.viewport.lock().unwrap().is_some());
+    assert!(
+        rx.try_recv().is_err(),
+        "publication must not wake hidden peers"
+    );
+}
+
+#[test]
+fn frozen_viewport_survives_round_trip_on_both_backends() {
+    for mux in [MuxName::Zellij, MuxName::Tmux] {
+        let (mut a, mut b, _) = viewport_pair(mux);
+        Arc::make_mut(&mut Arc::make_mut(&mut a.state.current.worktree_groups)[0].rows).swap(7, 8);
+        a.state.ui.last_order = layout_freeze::capture_order(&a.state.current, &a.state.ui);
+        layout_freeze::arm_freeze(&mut a.state.ui, a.state.clock.now_ms() as i64);
+        publish_scrolled(&mut a, 12);
+        let expected = a.state.ui.last_order.clone();
+        let expected_rows = a.state.ui.anchored_rows.clone();
+        let a_target = a.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
+        let b_target = b.state.current.own_view.as_ref().unwrap().working_pane_ids[0].clone();
+        for back in [false, true] {
+            let (departing, arriving, target) = if back {
+                (&mut b, &mut a, a_target.clone())
+            } else {
+                (&mut a, &mut b, b_target.clone())
+            };
+            departing.event(SidebarEvent::FocusChanged {
+                focused: vec![target.clone()],
+                unfocused: vec![],
+            });
+            arriving.event(SidebarEvent::FocusChanged {
+                focused: vec![target],
+                unfocused: vec![],
+            });
+            arriving.paint(true);
+            assert_eq!(arriving.state.ui.last_order.rows, expected.rows);
+            assert_eq!(arriving.state.ui.painted_rows, expected_rows);
+            assert!(arriving.state.ui.freeze.is_some());
+        }
+    }
+}
+
+#[test]
+fn explicit_unfrozen_adoption_clears_prior_hold() {
     for prior in ["none", "own", "copied"] {
         let (mut source, mut destination, _) = viewport_pair(MuxName::Zellij);
         destination.state.ui.freeze = None;
@@ -145,7 +194,7 @@ fn unfrozen_publication_clears_any_hold_and_restores_hidden_deferral() {
         destination.deliver(destination.lazy_update(content, SnapshotSource::Produced));
         assert_eq!(
             destination.state.projections, before,
-            "a settled hidden adoption must not project within the tick"
+            "a settled hidden adoption must not project until reveal"
         );
         assert_ne!(
             destination.state.current.display_name,
@@ -183,27 +232,7 @@ fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
         );
         publish_scrolled(&mut source, 12);
         let published = source.state.ui.last_order.clone();
-        destination
-            .state
-            .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-        assert!(
-            destination.state.ui.freeze.is_some(),
-            "{mux:?} resized={resized}: a hidden pane must adopt the frozen publication"
-        );
-        let hold = destination.state.ui.freeze.as_ref().unwrap();
-        assert_eq!(hold.armed_ms, clock.timestamp().as_millisecond());
-        assert_eq!(hold.frozen.rows, published.rows);
-        assert!(!destination.state.admits_clock_only(false));
-        destination.state.next_frame = clock.now();
-        destination.paint(true);
-        assert!(!destination.state.viewport_pending);
-        let painted = destination.state.ui.painted_rows.clone();
-        let painted_ids: Vec<_> = painted.iter().map(|(id, _)| id.as_str()).collect();
-        assert!(
-            painted_ids
-                .windows(2)
-                .any(|rows| rows == ["agent-8", "agent-7"])
-        );
+        destination.state.next_frame = clock.now() + Duration::from_secs(10);
         let target = destination
             .state
             .current
@@ -217,10 +246,15 @@ fn frozen_publication_holds_nonproducer_order_through_tab_arrival() {
             unfocused: vec![],
         });
         assert!(destination.state.watched());
-        destination.state.next_frame = clock.now();
         destination.paint(true);
+        let hold = destination.state.ui.freeze.as_ref().unwrap();
+        assert_eq!(hold.armed_ms, clock.timestamp().as_millisecond());
+        assert_eq!(hold.frozen.rows, published.rows);
         assert_eq!(destination.state.ui.last_order.rows, published.rows);
-        assert_eq!(destination.state.ui.painted_rows, painted);
+        assert_eq!(
+            destination.state.ui.painted_rows,
+            source.state.ui.anchored_rows
+        );
     }
 }
 
@@ -274,13 +308,13 @@ fn assert_own_scroll_before_observed_reveal(mux: MuxName) {
     assert_eq!(retained.armed_ms, hold.armed_ms);
     assert_eq!(retained.frozen.rows, hold.frozen.rows);
 
-    // A new observed fold supersedes the input evidence, even if still hidden.
-    destination.fold(destination.state.current.clone(), SnapshotSource::Produced);
-    destination
-        .state
-        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
-    assert_eq!(destination.state.ui.scroll_offset, 3);
-    assert!(destination.state.ui.freeze.is_none());
+    let mut revealed = destination.state.current.clone();
+    revealed.viewed_panes = revealed.own_view.as_ref().unwrap().working_pane_ids.clone();
+    destination.fold(revealed, SnapshotSource::Produced);
+    assert_eq!(
+        destination.state.ui.scroll_offset, offset,
+        "arrival preserves own input evidence"
+    );
 }
 
 #[test]
@@ -597,16 +631,10 @@ fn assert_native_arrival_keeps_shared_frame(mux: MuxName) {
     destination.paint(false);
     assert_eq!(
         paints(&output),
-        1,
-        "the hidden destination paints the publication"
+        0,
+        "the hidden destination leaves the publication untouched"
     );
-    assert_eq!(
-        destination.state.ui.painted_rows,
-        source.state.ui.anchored_rows
-    );
-    assert!(destination.state.ui.landed_open);
-    assert!(destination.state.click_guard.is_none());
-    let before = destination.state.ui.painted_rows.clone();
+    let before = source.state.ui.anchored_rows.clone();
     let target = destination.state.current.worktree_groups[0].rows[19]
         .pane
         .as_ref()
@@ -673,7 +701,7 @@ fn tmux_native_arrival_keeps_the_departing_viewport() {
 }
 
 #[test]
-fn tmux_switch_away_from_the_last_pulled_view_allows_hidden_adoption() {
+fn tmux_switch_away_keeps_the_publication_until_arrival() {
     let (mut source, mut destination, _) = viewport_pair(MuxName::Tmux);
     let source_pane = source.state.current.focused_pane.clone().unwrap();
     let destination_pane = destination
@@ -703,10 +731,6 @@ fn tmux_switch_away_from_the_last_pulled_view_allows_hidden_adoption() {
     destination.maintenance();
     destination.state.next_frame = Instant::now();
     destination.paint(false);
-    assert_eq!(
-        destination.state.ui.painted_rows, source.state.ui.anchored_rows,
-        "a stale pulled client view must not block hidden adoption"
-    );
     assert!(!destination.state.watched());
     for rig in [&mut source, &mut destination] {
         rig.event(SidebarEvent::FocusChanged {
@@ -714,7 +738,7 @@ fn tmux_switch_away_from_the_last_pulled_view_allows_hidden_adoption() {
             unfocused: vec![],
         });
     }
-    let before = destination.state.ui.painted_rows.clone();
+    let before = source.state.ui.anchored_rows.clone();
     paint_at(&mut destination, 0);
     assert_eq!(destination.state.ui.painted_rows, before);
     for target in [source_pane, destination_pane].iter().cycle().take(8) {
@@ -1078,19 +1102,18 @@ fn jump_hold_retains_ordinary_work_until_release_or_virtual_deadline() {
             .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
             .unwrap();
         assert_eq!(
-            rig.state.last_folded_focus_intent,
-            Some(anchor.nonce),
-            "the retained event replays first"
+            rig.state.last_folded_focus_intent, None,
+            "a foreign intent stays unfurled after release"
         );
         for _ in 0..3 {
             rig.state
                 .advance(&mut inbox, &mut rig.fetch, &mut rig.terminal)
                 .unwrap();
         }
-        assert!(rig.state.viewport_seen > before.2);
+        assert_eq!(rig.state.viewport_seen, before.2);
         assert!(
-            rig.state.paints - paints_before <= 1,
-            "catch-up coalesces to one hidden paint"
+            rig.state.paints == paints_before,
+            "hidden catch-up never paints a publication"
         );
     }
 }
@@ -1108,7 +1131,6 @@ fn source_click_arms_before_publication_and_release_wakes_each_peer_once() {
         crate::diag::DiagSink::disabled(),
     );
     source.state.focus_peers = Some(peers.clone());
-    source.state.viewport_peers = Some(plane.subscribers.clone());
     let (_, row) = source.state.ui.painted_rows[1].clone();
     source
         .state
@@ -1253,6 +1275,7 @@ fn existing_attachment_holds_selection_until_a_new_window_has_a_row() {
     row.id = "agent-20".into();
     row.pane.as_mut().unwrap().pane_id = new_pane.clone();
     rows.push(row);
+    admitted.own_view.as_mut().unwrap().working_pane_ids = vec![new_pane.clone()];
     destination.fold(admitted, SnapshotSource::Produced);
     paint_at(&mut destination, 0);
     assert_eq!(destination.state.ui.selected_pane, Some(new_pane));
@@ -1270,13 +1293,13 @@ fn shared_viewport_skips_watched_peers_and_its_source() {
     destination.maintenance();
     destination.state.next_frame = Instant::now();
     destination.paint(false);
-    assert_eq!(paints(&output), 1);
+    assert_eq!(paints(&output), 0);
+    destination.event(SidebarEvent::FocusChanged {
+        focused: vec![destination.state.config.own_pane.clone().unwrap()],
+        unfocused: vec![],
+    });
+    paint_at(&mut destination, 0);
     let held = destination.state.ui.painted_rows.clone();
-    destination
-        .state
-        .current
-        .viewed_panes
-        .push(destination.state.config.own_pane.clone().unwrap());
     assert!(destination.state.watched());
     publish_scrolled(&mut source, 20);
     destination.maintenance();
@@ -1296,7 +1319,7 @@ fn shared_viewport_skips_watched_peers_and_its_source() {
 }
 
 #[test]
-fn shared_viewport_publishes_glide_target_once_and_coalesces_hidden_paints() {
+fn shared_viewport_publishes_glide_target_once_and_waits_for_arrival() {
     let (mut source, mut destination, output) = viewport_pair(MuxName::Zellij);
     source
         .state
@@ -1310,11 +1333,7 @@ fn shared_viewport_publishes_glide_target_once_and_coalesces_hidden_paints() {
     destination.maintenance();
     destination.state.next_frame = Instant::now();
     destination.paint(false);
-    assert_eq!(paints(&output), 1);
-    assert_eq!(
-        destination.state.ui.painted_rows,
-        source.state.ui.anchored_rows
-    );
+    assert_eq!(paints(&output), 0);
     let sequence = source
         .state
         .viewport
@@ -1342,11 +1361,21 @@ fn shared_viewport_publishes_glide_target_once_and_coalesces_hidden_paints() {
         destination.maintenance();
         destination.state.next_frame = Instant::now() + Duration::from_millis(100);
         destination.paint(false);
-        assert_eq!(paints(&output), 1, "hidden paints obey the frame boundary");
+        assert_eq!(paints(&output), 0, "hidden panes never paint publications");
     }
-    destination.state.next_frame = Instant::now();
+    destination.event(SidebarEvent::FocusChanged {
+        focused: destination
+            .state
+            .current
+            .own_view
+            .as_ref()
+            .unwrap()
+            .working_pane_ids
+            .clone(),
+        unfocused: vec![],
+    });
     destination.paint(false);
-    assert_eq!(paints(&output), 2);
+    assert_eq!(paints(&output), 1);
     assert_eq!(
         destination.state.ui.painted_rows,
         source.state.ui.anchored_rows
@@ -1363,11 +1392,6 @@ fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
     destination.deliver(update);
     assert_ne!(destination.state.current.display_name, "deferred content");
     publish_scrolled(&mut source, 12);
-    destination.maintenance();
-    destination.state.next_frame = Instant::now();
-    destination.paint(false);
-    assert_eq!(paints(&output), 1);
-    assert_eq!(destination.state.current.display_name, "deferred content");
     destination.state.ui = UiState {
         selected_pane: destination.state.current.focused_pane.clone(),
         selected_index: Some(0),
@@ -1381,12 +1405,11 @@ fn newborn_viewport_adopts_before_its_first_paint_and_flushes_hidden_content() {
     destination.state.viewport_seen = 0;
     destination
         .state
-        .on_input(
-            Wakeup::Resize,
-            &mut destination.terminal,
-            &mut destination.fetch,
-        )
-        .unwrap();
+        .adopt_viewport(&mut destination.fetch, &mut destination.terminal);
+    destination.state.next_frame = Instant::now();
+    destination.paint(false);
+    assert_eq!(paints(&output), 1, "newborn paints exactly once");
+    assert_eq!(destination.state.current.display_name, "deferred content");
     assert_eq!(
         destination.state.ui.painted_rows, source.state.ui.anchored_rows,
         "newborn uses its own measured cockpit top"
